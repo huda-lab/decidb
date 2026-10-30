@@ -16,6 +16,7 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -39,6 +40,15 @@ void CopyClauseProvenanceTags(const string &from_alias, Expression &to);
 //! Stamp an expression as formulation-generated (a row this layer emitted rather
 //! than one the user wrote), attributed to `source_alias`.
 void MarkFormulationConstraint(Expression &expr, const string &source_alias);
+
+//! Mark `row`, a row a rewrite added for a construct inside a reducer over decisions, as one
+//! that defines that reducer's members: MEMBER_ROW_TAG and each of `member_frames` (the
+//! reducer's MEMBER_FRAME_TAG_PREFIX tags), one tag per call. It then reads the members' rows
+//! alone and is never skipped with its clause's instances (DecideConstraint::defines_members).
+void MarkMemberRow(Expression &row, const vector<idx_t> &member_frames);
+//! The member frames a row added at `path` carries, through its innermost reducer; whether
+//! it is a member row at all is `path.innermost` being set.
+vector<idx_t> MemberFramesAt(const DecideReducerPath &path);
 
 //! Walk down to the nearest source alias on `expr`, falling back to `inherited`.
 string DescendSourceAlias(const Expression &expr, const string &inherited);

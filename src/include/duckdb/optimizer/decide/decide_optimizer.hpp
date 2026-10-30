@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
@@ -179,9 +180,11 @@ private:
 	//! Helper: recursively find bilinear products in expression tree, replace Boolean cases
 	//! with auxiliary variable references, and collect metadata.
 	//! `source_alias` is the alias of the enclosing user comparison, so the rows this
-	//! emits can point back at the clause that produced them.
+	//! emits can point back at the clause that produced them; inside a reducer over
+	//! decisions (`path.innermost`) they define its members (decide_rewrite::MarkMemberRow).
 	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                            vector<LogicalDecide::BilinearLink> &links, const string &source_alias);
+	                            vector<LogicalDecide::BilinearLink> &links, const string &source_alias,
+	                            const DecideReducerPath &path);
 
 	//! Helper: walk a multiplication chain shaped as `coeff * ... * decide_var * ... * coeff`
 	//! around the decide variable with index `var_idx`, and combine all non-variable factors
@@ -205,18 +208,26 @@ private:
 		                     //        inside another ABS). When false aux pins to
 		                     //        |inner| naturally via solver pressure or a
 		                     //        constraint shape that upper-bounds it.
-		//! The envelope rows read only the rows the clause's `when` (a copy, or null) keeps.
+		//! The envelope rows read only the rows the clause's `when` (a copy, or null) keeps,
+		//! and inside a reducer only those its path keeps (every enclosing reducer's own
+		//! `when` too): they define that reducer's members.
 		unique_ptr<Expression> when;
 		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
 		string label;
+		//! Inside a reducer over decisions its envelope defines that reducer's members
+		//! (decide_rewrite::MarkMemberRow), dropped where `member_frames` select nothing.
+		bool member_row = false;
+		vector<idx_t> member_frames;
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect AbsPairInfo entries,
 	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
 	//! TagAbsForBigM left on the node; this pass decides nothing about it.
-	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       vector<AbsPairInfo> &abs_pairs, const string &source_alias, const Expression *when);
+	//! `path` holds the rows an ABS at `expr` reads (DecideReducerPath: its clause's `when`
+	//! and each enclosing reducer's own) and the reducer whose members its rows define.
+	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide, vector<AbsPairInfo> &abs_pairs,
+	                       const string &source_alias, const DecideReducerPath &path);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

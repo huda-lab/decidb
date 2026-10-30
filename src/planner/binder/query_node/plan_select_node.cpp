@@ -4,6 +4,7 @@
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -202,6 +203,14 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                                                std::move(query_wide_table_indexes),
                                                std::move(correlated_subquery_table_indexes));
             canonicalizer.QuoteMessagesWith(message_names);
+            // Each reducer carries the frames that may drop its members (§5.6), which the
+            // shape decision reads, from the clauses as bound.
+            if (statement.decide_constraints) {
+                TagDecideMemberFrames(*statement.decide_constraints, statement.decide_frames);
+            }
+            if (statement.decide_objective) {
+                TagDecideMemberFrames(*statement.decide_objective, statement.decide_frames);
+            }
             if (statement.decide_constraints) {
                 canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
                 statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);

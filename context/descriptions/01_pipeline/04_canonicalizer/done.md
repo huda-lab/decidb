@@ -386,7 +386,7 @@ syntax_reference.md §6.4:
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
 | decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a decision reducer holding a reducer (`syntax_reference.md` §5.5), a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group -- a nested one per path group -- then one row per class |
+| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a decision reducer holding a reducer (`syntax_reference.md` §5.5), a decision reducer a frame may drop a member of (`DropsMembers`, §5.6, D81), a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group -- a nested one per path group -- then one row per class |
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
@@ -418,9 +418,10 @@ form reads as the clause's class key and a diagnosis reports one by one (D28). A
 VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
 
 In the objective, `CanonicalizeObjective` stamps `VALUE_REWRITE_TAG` on the reducer
-itself: each decision reducer that holds a reducer, the outermost of each nest
-(`TagNestedObjectiveReducers`, D75). The value rewrite makes it and every reducer inside
-it a helper decision, which the objective then reads once (stage 05).
+itself: each decision reducer that holds a reducer, the outermost of each nest (D75), or
+that a frame may drop a member of (D81; `TagObjectiveHelperReducers`). The value rewrite
+makes it and every reducer inside it a helper decision, which the objective then reads
+once (stage 05).
 
 ---
 
@@ -551,16 +552,31 @@ otherwise), so a frame with none is the objective's: what tells a comparison's s
 instances (`DecideFrameSpec::SkipsInstancesOf`) from the objective's error
 (`MayLeaveObjectiveUnset`). For a frame a `per` key reads directly — a clause's `per K:` or a
 reducer's own `per` — whose `within` the key (with the path's keys) does not hold, it
-builds the `FRAME_PARTITION` check (D69): each class of the key lies in one timeline. And
-it refuses, until phase 6, a frame that may read nothing (`DecideFrameSpec::
-MaySelectNothing`: a point relative to the anchor, not cyclic, with no `else`; a range
-that may request no position, meet `all`, or find every position missing) inside a reducer
-over decisions, whose member would have to be dropped: *"DECIDE: at(previous: x) over
-(t.period) may select no position inside sum(...), a reducer over decisions, which is not
-supported yet; give it an else, or make its timeline cyclic"*, the remedy worded by what
-makes it read nothing (`DecideFrameAbsenceRemedy`: *"its first end may come after its
-last, which requests no position"*, *"drop all, or make its timeline cyclic"*). A range's
-marker is placed as a point's is; nothing else here knows ranges from points.
+builds the `FRAME_PARTITION` check (D69): each class of the key lies in one timeline. A
+range's marker is placed as a point's is; nothing else here knows ranges from points.
+
+**A frame that may read nothing inside a reducer over decisions** (`DecideFrameSpec::
+MaySelectNothing`: a point relative to the anchor, not cyclic, with no `else`; a range that
+may request no position, meet `all`, or find every position missing) drops that reducer's
+member where it reads nothing (D81, syntax_reference.md §5.6). Before canonicalization the
+planner tags every reducer of the bound clauses and objective with its member frames
+(`TagDecideMemberFrames`, `MEMBER_FRAME_TAG_PREFIX`, one tag per frame; `DecideMemberFrames`
+in `decide_reducer_path.hpp` is the one definition: the frames in its argument, outside the
+reducers nested in it, that may select nothing), and the shape follows (§3.10): such a
+reducer over decisions is a helper decision whose members execution lists, so
+`ClassifyScoped` gives its clause the VALUE shape and `CanonicalizeObjective` tags it for the
+value rewrite in the objective, as a nest is (`DropsMembers` reads the tags, which
+canonicalization keeps on a reducer's alias). A reducer over data keeps its tags for the
+linear form, which joins their PRESENT columns to its own `when`. A reducer under `abs` inside
+another reducer over decisions may not be absent -- its absence would have to drop the
+ABS auxiliary's member, which no frame column states (D82) -- and is refused naming the
+frame that makes it so (`FirstAbsenceFrame`): *"DECIDE: max(at(previous: x) over (t.period
+within t.product)) by (t.product) under abs inside sum(abs(x - max(...) by (t.product)))
+may read no member, as at(previous: x) over (t.period within t.product) may select no
+position, which is not supported yet; give it an else, or make its timeline cyclic"*, the
+remedy worded by what makes the frame read nothing (`DecideFrameAbsenceRemedy`: *"its
+first end may come after its last, which requests no position"*, *"drop all, or make its
+timeline cyclic"*).
 
 ## 5. What this stage does not do
 

@@ -747,9 +747,9 @@ execution keeps it opaque, and execution turns it into data columns and decision
   reducer (`ContainsReducer`, `TryMatchScaledAggregate`): a frame over decisions sits
   left as a tuple term, one over data right; it decides no shape. `PlaceFrames` reads
   each frame's timeline rows off the path rule, builds the D69 check of a frame a `per`
-  reads directly unless the key holds its `within`, and refuses (phase 6) a frame that may
-  select no position inside a reducer over decisions. A frame is a signature field by its
-  keys (D76), never by the data it reads.
+  reads directly unless the key holds its `within`, and refused a frame that may select no
+  position inside a reducer over decisions (phase 6 lifts it). A frame is a signature field
+  by its keys (D76), never by the data it reads.
 - **Optimizer** (`../01_pipeline/05_optimizer/done.md` §1a). The rewrites carry the marker
   as a term (the value rewrite lifts no frame). The linear form lowers it: a payload term
   `c·x` becomes `READ(c)·x` read at the selected row (`DecideTerm::frame_read`), a
@@ -758,7 +758,7 @@ execution keeps it opaque, and execution turns it into data columns and decision
   reducer adds its `PRESENT` column to the reducer's own `when`
   (`DecidePreparedModel::frame_columns`). Like terms compare `frame_read`, so
   `x - at(previous: x)` keeps both. A frame over decisions inside, or beside, a composed
-  MIN/MAX is refused (phase 6). Bound absorption treats a clause whose root frame
+  MIN/MAX was refused (phase 6 lifts the first). Bound absorption treats a clause whose root frame
   may select nothing as it treats a `when`: its bounds hold only where the frame selects,
   so none becomes a column bound (found by the fuzzer: `abs(x - at(previous: x) over
   (...)) <= -1` with every instance skipped was called infeasible).
@@ -835,7 +835,8 @@ row, over decisions a helper decision per **window** — the range several ancho
   `MayMissEveryPosition`): every layer that skips an instance, drops a member, refuses a
   shape or checks the objective reads it, and execution holds every map to it.
 - **Canonicalizer** (`../01_pipeline/04_canonicalizer/done.md`). Nothing new but the
-  remedy of the phase-6 refusal, worded by what makes the frame read nothing.
+  remedy of the refusal phase 6 lifted, worded by what makes the frame read nothing
+  (`DecideFrameAbsenceRemedy`, which the objective's error still reads).
 - **Optimizer** (`../01_pipeline/05_optimizer/done.md`, "Frame selectors").
   `RewriteFrameRanges`, first among the rewrites: each range over decisions becomes a
   helper decision with one instance per window, its link naming the frame, its MIN/MAX
@@ -900,8 +901,7 @@ row, over decisions a helper decision per **window** — the range several ancho
   pinned in the model dump, composition with ABS, `<>`, a reducer around the range, a data
   factor and a point frame, the objective, a keyed payload and a decision `else`, variants
   under `per`, laziness, NULL and `count`, SQL types of a range over data; `TestRangeDeck`:
-  deck examples 2 and 6 under each policy; `TestRangeErrors`: the phase-6 refusals with
-  their remedies, `count` over decisions, the objective, `decide_frame_limit`, EXPLAIN's
+  deck examples 2 and 6 under each policy; `TestRangeErrors`: `count` over decisions, the objective, `decide_frame_limit`, EXPLAIN's
   helper lines, DIAGNOSE), `test_frame_parser.test` (the former gate cases answer),
   `test_decidb_plan_serialization.cpp` (a range's fields round-trip). A differential fuzzer
   against `_anr_oracle` (scratchpad `fuzz/fuzz_ranges.py`: random ranges over data and
@@ -912,6 +912,113 @@ row, over decisions a helper decision per **window** — the range several ancho
   answer, no internal error; its only differences are which of two errors a query
   reports first (the engine runs every scope check, and a domain contradiction, before the
   peer check).
+
+## The full algorithm — phase 6: composition
+
+Shipped 2026-10-30. A frame that may select no position inside a reducer over decisions
+drops that member (deck p. 50, example 3), under every shape a reducer takes -- rows, easy
+and hard MIN/MAX, composed MIN/MAX, nests, the objective -- and under `abs` and `norm` (D81,
+D82); a frame over decisions is formulated inside a composed MIN/MAX. The design is the
+plan's phase-6 section: such a reducer is a helper decision whose members execution lists
+where the frame selects, so members are dropped in one place.
+
+- **Canonicalizer** (`../01_pipeline/04_canonicalizer/done.md`). Before it runs, the planner
+  tags every reducer with the frames that may drop its members (`TagDecideMemberFrames`,
+  `__member_frame_<f>__`, one definition: `DecideMemberFrames`); a reducer over decisions so
+  tagged takes the VALUE shape in a constraint and the value rewrite's tag in the objective
+  (`DropsMembers`). Placement refuses a reducer that may be absent under `abs` inside
+  another reducer (`FirstAbsenceFrame`). The refusal of a frame that may select nothing
+  inside a reducer over decisions is gone.
+- **Optimizer** (`../01_pipeline/05_optimizer/done.md`). The rows the ABS, Boolean-product
+  and L0 rewrites add for a construct inside a reducer over decisions are its **member
+  rows** (`MarkMemberRow`: `__member_row__` and the reducer's member-frame tags); an ABS's
+  read the rows the reducer's path keeps, every enclosing reducer's own `when` included. A
+  helper's link records at plan time, as a frame does, what makes it absent and where it is
+  read (`ReducerValueLink::member_frames`, `absence_frame`, `read_at_root`; `MayBeAbsent`,
+  `SkipsInstancesOf`, `MayLeaveObjectiveUnset`). Bound absorption leaves a clause that may
+  skip an instance as rows (`ClauseMaySkipInstances`). `InlineSumOfGroupSums` keeps such a
+  reducer a helper. The linear form joins each member frame's PRESENT column to the link's
+  own `when` and to a member row's (`DecideConstraint::defines_members`), and the composed
+  refusal (RefuseComposedFrameRead) is gone; it holds the routing to two internal checks (no
+  frame that may select nothing, and no helper that may be absent, inside a reducer summed
+  in place).
+- **Formulation** (`../01_pipeline/06_model_formulation/done.md`). Composed MIN/MAX reads
+  `ComposedMinMaxTermData::variables`, the variable execution numbers each term by, so a
+  frame read lands on its selected row; a helper instance with no listed group has no
+  definition.
+- **Execution** (`../01_pipeline/08_execution/done.md`). Helpers are evaluated before the
+  clauses, innermost first: a member stands where its member frames select and every helper
+  it reads is present, and each helper's present instances are recorded
+  (`DecideGlobalSinkState::helper_present`), held to the plan (an absent instance of a link
+  that cannot be absent is internal). A clause's instance rows skip an instance where a
+  helper the plan marks (`SkipsInstancesOf`) is absent (`InstancesPresent`), never its member
+  rows; the objective reading one absent (`MayLeaveObjectiveUnset`) is an error. The
+  interrupt is polled while members are listed.
+- **Defects found while designing and fuzzing it**, fixed, each with a test in
+  `test_anr_composition.py` (`TestDefects`), or `test_error_binder.py` for the last: a frame at a comparison's root that selected nothing skipped every row of
+  its clause at that anchor, the rows an ABS or a Boolean product inside one of the clause's
+  reducers adds to define its members included, so `sum(abs(x - 3)) + at(previous: x) over
+  (t.period) <= 4` answered x = (4, 3, 3), which breaks the second period's instance (phase
+  4); and the rows of an ABS inside a reducer were read on every row the clause keeps, not
+  only the reducer's own, so `sum(when t.w is not null: abs(x - t.w)) <= 3` raised a NULL
+  error the language rules out (older than the ANR work). Found by the fuzzer: an ABS
+  pinned exactly read its argument short -- a frame's `else` read as data is a term of no
+  decision, which the native row and the Big-M left out, so `abs(x - at(previous else 50:
+  x) over (t.period)) >= 1` was called infeasible on both arms, and where a frame selects
+  the row itself (`x - at(last: x)`) the native row named one column twice, which Gurobi
+  refused (phase 4; `../01_pipeline/06_model_formulation/done.md`, "The argument whole");
+  and a comparison whose reducer side reads no decision under arithmetic (`sum(t.v) by
+  (t.g) + 1 <= 30`) reached the linear form as an internal error (older; now the binder's
+  *"... reads no DECIDE variable"*).
+- **Choices beyond the plan's text.** A reducer whose members a frame may drop is a helper
+  even where the aggregate shape would have summed it in place (deck example 3 costs a
+  helper and a definition per product, `TestMembersDropped::test_a_helper_holds_each_group`)
+  -- the user's call of 2026-10-30, for one place that drops members; phase 7 folds such
+  helpers back in. A member row carries its innermost reducer's member frames even where
+  the frame stands beside the construct (`sum(abs(x - 3) + at(previous: t.v))`): its
+  auxiliary is then read by no member there, and leaving the rows out is exact. A decision
+  or frame beside a MIN or MAX in the objective stays refused, as for any decision there
+  (§10.2), not as a frame's limit. The two new refusals carry the frame's remedy.
+- **Architecture review** (a `decidb-architect` pass over the phase-6 diff, no wrong answer
+  found). Adopted: a helper's link carries its absence and where it is read as plan-time
+  facts, as a frame does (`absence_frame`, `read_at_root`, `SkipsInstancesOf`,
+  `MayLeaveObjectiveUnset`), where execution had rebuilt them from the rows' terms (and the
+  objective's check took a row with no clause id for one serving the objective) -- so
+  inlining a helper (phase 7) cannot silently stop a skip; member frames are tagged once,
+  before canonicalization, by one definition, where placement had tagged them by a second
+  walk the shape decision could not see; member rows are marked by one helper off the
+  reducer path (`MarkMemberRow`, `DecideReducerPath::innermost`), where four rewrites built
+  the tag string by hand; a data reducer's PRESENT conditions read the same tags
+  (`JoinPresence`); a generic `ParseDecideIndexTags`; execution's helper lookups by table.
+  Kept, with the reason: a Boolean product's rows inside a reducer keep no `when` (they read
+  decisions alone, and scoping them would change model dumps for nothing); which stage owns
+  phase 7's inlining is phase 7's call, the review's advice recorded there (keep the link as
+  what lists members; inline at stage 06; one inliner beside `InlineSumOfGroupSums`).
+- Tests: `test_anr_composition.py` (`TestMembersDropped`: every reducer shape over a member
+  frame on both solvers, with a product of one period to make a reducer absent, ranges that
+  read nothing, nests, the helper pinned in the model dump; `TestUnderAbs`: sums and maxima
+  of `abs`, `norm` of order 1, `inf` and 0, the smoothing objective, the two refusals;
+  `TestObjective`: sum, avg, min, nests, composed MIN/MAX with a frame, the objective error;
+  `TestComposition`: §6.7 of the plan -- a frame inside a nested operand, a nest beside a
+  frame, ABS over a range sum, `norm`, composed MIN/MAX with frames, `per K` with a `by`
+  reducer, variants with frames on F3's depots, duplicate joined rows; `TestDefects`),
+  `test_anr_diagnostics.py` (§6.8: F17 judged by the oracle, the structural rows never
+  offered for repair, the expanded groups of a member helper, the unbounded remedy through
+  a helper, F1 with its limits lowered, an atomic DROP that keeps another clause's helper,
+  EXPLAIN's accounts), `test_frame_parser.test` (the former refusal answers). A
+  differential fuzzer against `_anr_oracle` (scratchpad `fuzz/fuzz_compose.py`: members over
+  points and ranges that may select nothing, under `abs`, nested, beside a decision, under
+  `abs` at the root, in a composed MIN/MAX and in the objective; three solver settings) ran
+  10,000 cases. The first 2,000 found the defects above beside two of this phase's own (the
+  spare entity of a helper's scope counted as an absent instance, so a range read inside a
+  reducer summed in place tripped the guard; a helper read only by the objective's member
+  rows was taken for one its root reads, an error where the oracle answers); the next 4,000
+  the exact ABS's constant terms; the last 4,000, on the final binary, no wrong answer and
+  no internal error. What remains are which of two errors a query reports first (a domain
+  contradiction before a data error), an existing refusal of an unbounded member under a
+  hard MIN, and three models HiGHS 1.11.0's presolve answers wrongly -- a suboptimal point
+  called optimal, two feasible models called infeasible -- which HiGHS 1.12.0 solves right
+  (`../01_pipeline/07_solver/todo.md`).
 
 ## Decisions
 
@@ -985,6 +1092,8 @@ not the code.
 | D78 | A NULL payload read at a selected row is a NULL coefficient or bound, the §3 error |
 | D79 | Under the tightest-bound collapse an anchor whose frame selects nothing bounds nothing; a group with no such anchor present has no row |
 | D80 | `else NULL` written, or a fallback that is NULL before the query runs, is no fallback |
+| D81 | A reducer over decisions whose members a frame may drop is a helper decision: execution lists its members where the frame selects, and an instance left with none is absent -- its comparison skips that instance, a reducer around it drops that member, the objective is an error |
+| D82 | Under `abs` or `norm` inside a reducer, a member a frame drops goes with the rows that would define it; a reducer that may be absent under `abs` inside another reducer is refused |
 
 | # | Call |
 |---|---|

@@ -209,10 +209,12 @@ struct Helpers {
 //! argument are replaced first, each by a helper keyed by its path (syntax_reference.md §5.5), so that what the
 //! helper holds is affine in helpers, decisions and data. `push` is how the row pushes
 //! the reducer's value; `comparison` is the row's, for a reducer at the top of its side,
-//! and COMPARE_EQUAL for a nested one, whose own value no comparison steps.
-void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const DecideReducerPath &path,
-                    ExtremumPush push, ExpressionType comparison, idx_t source_clause_id, idx_t removal_group_id,
-                    bool objective_row, ClientContext &context, const ReducerSite &site) {
+//! and COMPARE_EQUAL for a nested one, whose own value no comparison steps. `at_root`: a row
+//! stating its clause's instance reads it outside its reducers (ReducerValueLink::
+//! read_at_root). Returns the helper's link.
+idx_t ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const DecideReducerPath &path,
+                     ExtremumPush push, ExpressionType comparison, idx_t source_clause_id, idx_t removal_group_id,
+                     bool objective_row, bool at_root, ClientContext &context, const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
@@ -226,12 +228,24 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	if (!agg.children.empty()) {
 		CollectDecisionSites(agg.children[0], 1, DecisionSiteKind::REDUCERS, context, decide, nested);
 	}
+	// The frames that drop a member where they select nothing (syntax_reference.md §5.6),
+	// tagged on the reducer before canonicalization. A reducer may be left with no member
+	// through one of them -- a range among them, whose helper reads nothing there -- or
+	// through a nested helper that may be absent.
+	vector<idx_t> member_frames;
+	ParseMemberFrameTags(agg.GetAlias(), member_frames);
+	idx_t absence_frame = member_frames.empty() ? DConstants::INVALID_INDEX : member_frames[0];
 	auto below = path.Below(agg);
 	for (auto &inner : nested) {
 		const auto inner_push = extremum ? ExtremumPush::NONE : ExtremumPushOf(push, inner.sign);
-		ReplaceReducer(helpers, names, below, inner_push, ExpressionType::COMPARE_EQUAL, source_clause_id,
-		               removal_group_id, objective_row, context, inner);
+		const auto inner_link = ReplaceReducer(helpers, names, below, inner_push, ExpressionType::COMPARE_EQUAL,
+		                                       source_clause_id, removal_group_id, objective_row, false, context,
+		                                       inner);
+		if (absence_frame == DConstants::INVALID_INDEX) {
+			absence_frame = decide.reducer_value_links[inner_link].absence_frame;
+		}
 	}
+
 	// syntax_reference.md §10.2: a product or square of decisions inside a reducer is
 	// accepted only where the reducer's own row sums it -- the aggregate shape. Here its
 	// definition would be a quadratic equality. The test is on what survives the rewrites
@@ -239,6 +253,14 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	// column, both linear; what remains nonlinear is a square or a product of two
 	// non-Boolean decisions.
 	if (!DecideExpressionDegree(*agg.children[0], decide.decide_index).IsLinear()) {
+		// A member a frame may drop is listed, by a helper whose definition is linear: the
+		// reducer holds a helper whatever its shape was.
+		if (!member_frames.empty()) {
+			auto &frame = decide.frames[member_frames[0]];
+			throw BinderException("DECIDE: '%s' squares or multiplies decisions in a member %s may drop, which is not "
+			                      "supported yet; %s",
+			                      label, frame.text, DecideFrameAbsenceRemedy(frame));
+		}
 		// Among nested reducers every one is a helper, so none is ever summed in place (D74).
 		if (!path.keys.empty() || !nested.empty()) {
 			throw BinderException("DECIDE: '%s' squares or multiplies decisions inside nested reducers, which is not "
@@ -285,8 +307,9 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 		auto &link = decide.reducer_value_links[link_idx];
 		link.need_envelope = link.need_envelope || need_envelope;
 		link.need_closing = link.need_closing || need_closing;
+		link.read_at_root = link.read_at_root || at_root;
 		*site.slot = MakeDecisionRef(decide, link.value_var);
-		return;
+		return link_idx;
 	}
 
 	LogicalDecide::ReducerValueLink link;
@@ -305,6 +328,9 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	link.removal_group_id = removal_group_id;
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
+	link.member_frames = std::move(member_frames);
+	link.read_at_root = at_root;
+	link.absence_frame = absence_frame;
 
 	// The helper decision: whole-numbered when the reducer's value is, so a strict bound on
 	// the rewritten row still steps on the integer lattice; a query-wide decision when its
@@ -324,6 +350,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	helpers.links.push_back(link_idx);
 	helpers.objective.push_back(objective_row);
 	*site.slot = MakeDecisionRef(decide, decide.reducer_value_links[link_idx].value_var);
+	return link_idx;
 }
 
 //! The key a reducer's own `per` names, as expressions: its key scope's columns, or for a
@@ -368,6 +395,13 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 	    StringUtil::CIEquals(inner.function.name, "sum") || StringUtil::CIEquals(inner.function.name, "avg");
 	if (!sum_or_avg || inner.children.size() != 1 || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
 	    TryParseQualifiedReducerTag(inner.GetAlias(), inner_qualifier)) {
+		return false;
+	}
+	// A member a frame may drop is a helper's listed member (syntax_reference.md §5.6).
+	vector<idx_t> member_frames;
+	ParseMemberFrameTags(inner.GetAlias(), member_frames);
+	ParseMemberFrameTags(outer.GetAlias(), member_frames);
+	if (!member_frames.empty()) {
 		return false;
 	}
 	vector<unique_ptr<Expression>> no_key;
@@ -435,9 +469,12 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		if (scope.when) {
 			path.conditions.push_back(scope.when);
 		}
+		// A row defining a reducer's members reads its reducers as members; any other states
+		// its clause's instance (or, for the objective, serves its root).
+		const bool at_root = !HasDecideTag(cmp.GetAlias(), MEMBER_ROW_TAG);
 		for (auto &site : sites) {
 			ReplaceReducer(helpers, names, path, ExtremumPushOf(ExtremumPushOf(cmp.type), site.sign), cmp.type,
-			               source_clause_id, removal_group_id, objective_row, optimizer.context, site);
+			               source_clause_id, removal_group_id, objective_row, at_root, optimizer.context, site);
 		}
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
@@ -476,7 +513,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		ReplaceReducer(helpers, names, path, ExtremumPushOf(sense, site.sign), ExpressionType::COMPARE_EQUAL,
 		               DConstants::INVALID_INDEX, DConstants::INVALID_INDEX, /*objective_row=*/true,
-		               optimizer.context, site);
+		               /*at_root=*/true, optimizer.context, site);
 	}
 	if (rewritten) {
 		auto objective = std::move(decide.decide_objective);

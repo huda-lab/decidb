@@ -510,6 +510,13 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 			return reducer_result;
 		}
 		if (ContainsDecideAggregate(expr)) {
+            // A reducer under arithmetic decides nothing unless something in it reads a
+            // decision: `sum(t.v) by (t.g) + 1` is data, as a bare column is.
+            if (!ExpressionContainsDecideVariable(expr, variables)) {
+                error_msg = StringUtil::Format(
+                    "SUCH THAT clause: '%s' reads no DECIDE variable; compare a decision with it", expr.ToString());
+                return DecideExpression::INVALID;
+            }
             return DecideExpression::SUM;
 		} else if (ExpressionContainsDecideVariable(expr, variables)) {
             // Operator/function expressions containing DECIDE variables

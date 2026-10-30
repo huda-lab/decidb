@@ -1976,6 +1976,14 @@ public:
     //! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
     //! a decision and a frame once, the variable after the plan's decisions.
     vector<std::pair<idx_t, idx_t>> frame_reads;
+    //! Per helper decision of the value rewrite (PhysicalDecide::reducer_value_links), which
+    //! of its instances are present -- a reducer's group with a member left, a range's
+    //! window that reads something (syntax_reference.md §5.6) -- by entity of its scope, one
+    //! entry for a query-wide helper. Filled by EvaluateReducerValueLinks, innermost first,
+    //! before any clause reads a helper.
+    vector<vector<bool>> helper_present;
+    //! Per variable, the link whose helper decision it is; INVALID_INDEX for any other.
+    vector<idx_t> helper_link_of;
 
     //! The variable a term reads at each row: its own, or -- for a frame's payload term --
     //! the read of it at the row the frame selects. A query-wide decision has one column,
@@ -2352,6 +2360,60 @@ vector<bool> PhysicalDecide::FramesPresent(const DecideGlobalSinkState &gstate, 
     return present;
 }
 
+bool PhysicalDecide::HelperPresentAt(const DecideGlobalSinkState &gstate, const vector<EntityMapping> &entity_mappings,
+                                     idx_t link, idx_t row) const {
+    if (link >= gstate.helper_present.size()) {
+        throw InternalException("DECIDE: a helper decision is read before its members are listed");
+    }
+    auto &present = gstate.helper_present[link];
+    const auto var = reducer_value_links[link].value_var;
+    idx_t instance = 0;
+    if (var < variable_scopes.size() && variable_scopes[var].IsEntity()) {
+        instance = entity_mappings[variable_scopes[var].entity_scope_idx].row_to_entity[row];
+    }
+    return instance < present.size() && present[instance];
+}
+
+vector<bool> PhysicalDecide::InstancesPresent(const DecideGlobalSinkState &gstate, const DecideConstraint &constraint,
+                                              const vector<EntityMapping> &entity_mappings,
+                                              unordered_map<idx_t, vector<bool>> &helper_masks,
+                                              idx_t num_rows) const {
+    if (constraint.defines_members) {
+        return vector<bool>();
+    }
+    auto present = FramesPresent(gstate, constraint.source_clause_id, num_rows);
+    const auto clause = constraint.source_clause_id;
+    auto cached = helper_masks.find(clause);
+    if (cached == helper_masks.end()) {
+        // The helpers the clause reads outside its reducers that may be absent, as the plan
+        // recorded them (ReducerValueLink::SkipsInstancesOf).
+        vector<bool> mask;
+        for (idx_t link = 0; link < reducer_value_links.size(); link++) {
+            if (!reducer_value_links[link].SkipsInstancesOf(clause)) {
+                continue;
+            }
+            if (mask.empty()) {
+                mask.assign(num_rows, true);
+            }
+            for (idx_t row = 0; row < num_rows; row++) {
+                mask[row] = mask[row] && HelperPresentAt(gstate, entity_mappings, link, row);
+            }
+        }
+        cached = helper_masks.emplace(clause, std::move(mask)).first;
+    }
+    auto &helpers = cached->second;
+    if (helpers.empty()) {
+        return present;
+    }
+    if (present.empty()) {
+        return helpers;
+    }
+    for (idx_t row = 0; row < num_rows; row++) {
+        present[row] = present[row] && helpers[row];
+    }
+    return present;
+}
+
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 1.5 — Build Entity Mappings for Keyed Decisions
 //===--------------------------------------------------------------------===//
@@ -2526,22 +2588,23 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // PHASE 2: Evaluate Coefficient Expressions
     //===--------------------------------------------------------------------===//
 
-    // 1. Evaluate constraints
+    // 1. Evaluate the value rewrite's helper decisions (their reducers' members) first: a
+    // helper left with no member is absent, and the clauses reading it skip that instance.
+    phase.Next("execution.evaluate_value_links");
+    EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+
+    // 2. Evaluate constraints
     phase.Next("execution.evaluate_constraints");
     EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
-    // 2. Evaluate objective
+    // 3. Evaluate objective
     phase.Next("execution.evaluate_objective");
     EvaluatedClauses evaluated =
         EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
-    // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
+    // 4. Evaluate composed MIN/MAX clauses (constraint and objective)
     phase.Next("execution.evaluate_composed");
     EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings, evaluated);
-
-    // 4. Evaluate the value rewrite's helper decisions (their reducers' members)
-    phase.Next("execution.evaluate_value_links");
-    EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
@@ -2935,6 +2998,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
     // only the repair model emits their rows.
     const idx_t num_constraints = gstate.constraints.size();
     const idx_t num_evaluated = num_constraints + (diagnose ? gstate.absorbed_constraints.size() : 0);
+    // The helpers' absent instances, read off their listed members (EvaluateReducerValueLinks
+    // ran first): per clause, the rows at which it states an instance (InstancesPresent).
+    unordered_map<idx_t, vector<bool>> helper_masks;
     for (idx_t c = 0; c < num_evaluated; c++) {
         DecideProfileScope clause_profile("extraction.constraint");
         DecideProfileScope::Counter("constraint.ordinal", c);
@@ -2991,11 +3057,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         }
         // The instances are fewer than the kept rows where the comparison reads a value that
         // is absent there (syntax_reference.md §5.6): a frame outside its reducers that
-        // selects no position, or a bound-side reducer left with no member. Such a row is no
-        // instance and nothing is read on it -- but a reducer still reads every kept row of
-        // its group, so `scoped_kept` stays what the `when` keeps.
+        // selects no position, a helper decision left with no member, or a bound-side reducer
+        // left with none. Such a row is no instance and nothing is read on it -- but a reducer
+        // still reads every kept row of its group, so `scoped_kept` stays what the `when`
+        // keeps, and a row defining a reducer's members is never one of them.
         vector<bool> instance_kept = scoped_kept;
-        auto present = FramesPresent(gstate, constraint->source_clause_id, num_rows);
+        auto present = InstancesPresent(gstate, *constraint, entity_mappings, helper_masks, num_rows);
         bool skips_instances = !present.empty();
         for (idx_t row = 0; row < present.size(); row++) {
             instance_kept[row] = instance_kept[row] && present[row];
@@ -3759,6 +3826,19 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                                             frame.text, DecideFrameAbsenceRemedy(frame));
             }
         }
+        // So does a helper it reads outside its reducers (ReducerValueLink::
+        // MayLeaveObjectiveUnset) left with no member there: every frame that may drop one
+        // selected nothing.
+        for (idx_t link = 0; link < reducer_value_links.size() && objective_row < num_rows; link++) {
+            auto &helper = reducer_value_links[link];
+            if (!helper.MayLeaveObjectiveUnset() || HelperPresentAt(gstate, entity_mappings, link, objective_row)) {
+                continue;
+            }
+            auto &frame = frames[helper.absence_frame];
+            throw InvalidInputException("DECIDE objective: %s selects no position on any member of %s; the objective "
+                                        "is produced once and cannot be skipped; %s.",
+                                        frame.text, helper.label, DecideFrameAbsenceRemedy(frame));
+        }
 
         // DecidB: evaluate both the linear and quadratic-inner term lists so that
         // mixed objectives (e.g. SUM(POWER(x-t, 2) + penalty * x)) emit coefficients
@@ -4146,7 +4226,9 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
                 ta.label = term.agg_name + "(" +
                            RenderDecideSource(*term.inner_expr, source_fragments, entity_scopes, &group_keys) + ")";
             }
-            ta.inner_terms = &term.inner_terms;
+            for (auto &inner_t : term.inner_terms) {
+                ta.variables.push_back(gstate.ReadVariable(inner_t));
+            }
             if (term.filter) {
                 ta.filter_mask = std::move(masks[mask_slot++]);
             } else {
@@ -4301,8 +4383,34 @@ static void ListRowMembers(const EvaluatedConstraint &ec, idx_t num_rows, Reduce
 void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                                ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                                const vector<EntityMapping> &entity_mappings) const {
-    for (auto &link : reducer_value_links) {
+    gstate.helper_present.clear();
+    gstate.helper_link_of.assign(decide_variables.size(), DConstants::INVALID_INDEX);
+    for (idx_t link_idx = 0; link_idx < reducer_value_links.size(); link_idx++) {
+        gstate.helper_link_of[reducer_value_links[link_idx].value_var] = link_idx;
+    }
+    // A link's instances present, held to the plan: only a link the plan says may be absent
+    // has an absent instance -- else a clause reading it may have been folded into a column
+    // bound (bound absorption) and the skip lost.
+    auto record_present = [&](const LogicalDecide::ReducerValueLink &link, vector<bool> present) {
+        if (!link.MayBeAbsent() && std::find(present.begin(), present.end(), false) != present.end()) {
+            throw InternalException("DECIDE: %s has an instance with no member, which the plan rules out",
+                                    link.label);
+        }
+        gstate.helper_present.push_back(std::move(present));
+    };
+    for (idx_t link_idx = 0; link_idx < reducer_value_links.size(); link_idx++) {
+        auto &link = reducer_value_links[link_idx];
+        if (context.interrupted) {
+            throw InterruptException();
+        }
         DecideProfileScope clause_profile("extraction.value_link");
+        // Its instances, one per entity of its scope (one for a query-wide helper): each
+        // present once a member stands in it.
+        const auto &scope = variable_scopes[link.value_var];
+        const idx_t instances = scope.IsEntity() ? entity_mappings[scope.entity_scope_idx].num_entities : 1;
+        auto instance_of = [&](idx_t row) {
+            return scope.IsEntity() ? entity_mappings[scope.entity_scope_idx].row_to_entity[row] : idx_t(0);
+        };
         ReducerValueLinkSpec spec;
         spec.value_var = link.value_var;
         spec.agg_name = link.agg_name;
@@ -4313,6 +4421,15 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
         spec.removal_group_id = link.removal_group_id;
         if (link.frame != DConstants::INVALID_INDEX) {
             EvaluateFrameLink(context, gstate, num_rows, chunk_expr_cache, link, spec.members);
+            // A window is an instance (BuildEntityMappings); one that reads nothing is absent.
+            // The spare entity of the rows outside the frame's is read by no row, so it is no
+            // instance a reader could lose.
+            auto &map = gstate.frame_maps[link.frame];
+            vector<bool> present(instances, true);
+            for (idx_t w = 0; w < map.WindowCount() && w < instances; w++) {
+                present[w] = !map.WindowAbsent(w);
+            }
+            record_present(link, std::move(present));
             gstate.evaluated_value_links.push_back(std::move(spec));
             continue;
         }
@@ -4325,6 +4442,26 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
         }
         vector<bool> read = link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept)
                                         : kept;
+        // Its own `when` holds where the frames that may drop a member select (the linear
+        // form joined their PRESENT columns); a member reading a helper absent there -- a
+        // nested reducer left with no member -- is dropped as well (syntax_reference.md §5.6).
+        for (auto &term : link.inner_terms) {
+            const auto inner = term.variable_index < gstate.helper_link_of.size()
+                                   ? gstate.helper_link_of[term.variable_index]
+                                   : DConstants::INVALID_INDEX;
+            if (inner == DConstants::INVALID_INDEX) {
+                continue;
+            }
+            if (inner >= link_idx) {
+                throw InternalException("DECIDE: %s's helper reads one listed after it", link.label);
+            }
+            if (!reducer_value_links[inner].MayBeAbsent()) {
+                continue;
+            }
+            for (idx_t row = 0; row < num_rows; row++) {
+                read[row] = read[row] && HelperPresentAt(gstate, entity_mappings, inner, row);
+            }
+        }
 
         // One group per `by` value among the kept rows (NULL a value); a member row
         // stands in its group, every other row outside. The scope checks have passed, so
@@ -4367,6 +4504,18 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
             }
         }
         ListRowMembers(ec, num_rows, spec.members);
+        // Each listed group is an instance with a member; every other group of the rows the
+        // link keeps is absent. The spare entity of the rows outside them is read by no row.
+        vector<bool> present(instances, true);
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (kept[row]) {
+                present[instance_of(row)] = false;
+            }
+        }
+        for (auto row : spec.members.group_rows) {
+            present[instance_of(row)] = true;
+        }
+        record_present(link, std::move(present));
         gstate.evaluated_value_links.push_back(std::move(spec));
     }
 }
@@ -4403,6 +4552,9 @@ void PhysicalDecide::EvaluateFrameLink(ClientContext &context, DecideGlobalSinkS
     for (idx_t w = 0; w < map.WindowCount(); w++) {
         if (map.WindowAbsent(w)) {
             continue;
+        }
+        if (context.interrupted) {
+            throw InterruptException();
         }
         const idx_t values = map.ValueCount(w);
         if (values == 0) {

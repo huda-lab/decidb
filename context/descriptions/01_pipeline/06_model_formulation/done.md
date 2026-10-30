@@ -81,8 +81,9 @@ wherever the read lands; a bound implied on the read alone is dropped, never app
 base, whose other instances it does not cover. `VarIndexer::Build` checks each read names a
 plan decision at every row. A table of the plan's decisions is looked up through
 `SolverInput::BaseVariable`, which maps a read to its base. The composed MIN/MAX
-formulation reads each term at its own row, so it refuses a frame read as an internal error
-(stage 05 refuses one there until the ANR plan's phase 6).
+formulation reads each term through the variable execution numbers it by
+(`ComposedMinMaxTermData::variables`), so a frame read inside one lands on its selected row
+like any other term.
 
 ---
 
@@ -650,8 +651,10 @@ and terms, each a decision read at a row with its coefficient (an inner helper a
 read at the member's row through its own entity mapping; an AVG's coefficients already
 carry the 1/n). Listed rather than as rows each in one group because a range frame's
 windows share rows, where a `by` key's groups partition them; stage 08 lists a reducer's
-too, so the three passes below read one form. A group with no member defines nothing.
-Links arrive innermost first. The helper's own column enters only here
+too, so the three passes below read one form. A group with no member defines nothing,
+and an instance with no group listed -- a window that reads nothing, a `by` group every
+frame left with no member (`syntax_reference.md` §5.6) -- is absent: no row reads it, so
+it has no definition and its column stands in the box alone. Links arrive innermost first. The helper's own column enters only here
 (`linearization_reducer_value.cpp`).
 
 `DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
@@ -927,6 +930,14 @@ free. A slack continuous column is a measured cost at the root LP relaxation, wh
 why this is worth doing rather than a tidiness. A column is left free only where
 nothing at all is derivable — which is exactly the query the native arm exists to
 answer.
+
+**The argument whole.** `k_r` is C1's bound with its constant terms moved across
+(`DecideRowEffectiveBound`), in the row `t = inner`, in the renaming test and in phase 1's
+`M`: a frame's `else` read as data is a term of no decision on the left of C1, and left out
+it read `abs(x - at(previous else 50: x) over (...))` at the first period as `|x1|`, which
+called a feasible query infeasible on both arms. And the row states each column once
+(`MinMaxLinkRow`): two of C1's terms land on one column where a frame selects the row
+itself (`x - at(last: x) over (...)` at the last period), which Gurobi refused as a row.
 
 The lowering arm also **narrows the auxiliary's column box** to the `M` it derives. The rows it
 emits pin `aux = |inner|`, so `M` is a valid upper bound — and the only one anything

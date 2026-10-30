@@ -115,6 +115,40 @@ bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
 	return BoundExpressionReferencesDecide(expr, decide_index);
 }
 
+bool DecideCanonicalizer::DropsMembers(const BoundAggregateExpression &reducer) {
+	vector<idx_t> frames;
+	ParseMemberFrameTags(reducer.GetAlias(), frames);
+	return !frames.empty();
+}
+
+idx_t DecideCanonicalizer::FirstAbsenceFrame(const BoundAggregateExpression &reducer) const {
+	vector<idx_t> frames;
+	ParseMemberFrameTags(reducer.GetAlias(), frames);
+	if (!frames.empty()) {
+		return frames[0];
+	}
+	// A nested reducer left with no member drops the member reading it, in turn.
+	idx_t found = DConstants::INVALID_INDEX;
+	std::function<void(const Expression &)> visit = [&](const Expression &expr) {
+		idx_t frame;
+		if (found != DConstants::INVALID_INDEX || TryGetDecideFrame(expr, frame)) {
+			return;
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			auto &nested = expr.Cast<BoundAggregateExpression>();
+			if (ReferencesDecideVar(nested)) {
+				found = FirstAbsenceFrame(nested);
+			}
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr, visit);
+	};
+	for (auto &child : reducer.children) {
+		visit(*child);
+	}
+	return found;
+}
+
 bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame)) {
@@ -807,13 +841,15 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 }
 
 //! Tags every reducer over decisions in `expr` that holds another reducer -- the outermost
-//! of each nest -- for the value rewrite: in the objective it is a helper decision, and so
-//! is every reducer inside it (D75).
-static void TagNestedObjectiveReducers(Expression &expr, idx_t decide_index) {
+//! of each nest -- or whose members a frame may drop for the value rewrite: in the
+//! objective it is a helper decision, and so is every reducer inside it (D75). A helper's
+//! members are listed, so a member is dropped there (syntax_reference.md §5.6).
+static void TagObjectiveHelperReducers(Expression &expr, idx_t decide_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &reducer = expr.Cast<BoundAggregateExpression>();
-		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
-		    DecideCanonicalizer::ContainsReducer(*reducer.children[0]) &&
+		const bool helper =
+		    DecideCanonicalizer::ContainsReducer(*reducer.children[0]) || DecideCanonicalizer::DropsMembers(reducer);
+		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) && helper &&
 		    !HasDecideTag(reducer.GetAlias(), VALUE_REWRITE_TAG)) {
 			auto alias = reducer.GetAlias();
 			AddDecideTag(alias, VALUE_REWRITE_TAG);
@@ -822,7 +858,7 @@ static void TagNestedObjectiveReducers(Expression &expr, idx_t decide_index) {
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](Expression &child) { TagNestedObjectiveReducers(child, decide_index); });
+	                                      [&](Expression &child) { TagObjectiveHelperReducers(child, decide_index); });
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
@@ -892,9 +928,10 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expressi
 		    "decision-bearing term");
 	}
 	auto result = BuildAdditive(decision_atoms, false);
-	// A reducer holding a reducer takes the value rewrite, as in a constraint: the shape is
-	// decided here, once, and the rewrite reads the tag.
-	TagNestedObjectiveReducers(*result, decide_index);
+	// A reducer holding a reducer, or one a frame may drop a member of, takes the value
+	// rewrite, as in a constraint: the shape is decided here, once, and the rewrite reads
+	// the tag.
+	TagObjectiveHelperReducers(*result, decide_index);
 	return result;
 }
 
@@ -964,6 +1001,9 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		auto &reducer = root->Cast<BoundAggregateExpression>();
 		if (!reducer.children.empty() && ContainsReducer(*reducer.children[0])) {
 			value = true; // a reducer inside it: a helper at every level (syntax_reference.md §5.5)
+		}
+		if (DropsMembers(reducer)) {
+			value = true; // a frame may drop a member: a helper's listed members (§5.6)
 		}
 		idx_t qualifier;
 		bool is_avg =
@@ -1738,7 +1778,8 @@ bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
 
 void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideReducerPath &path,
                                         const BoundAggregateExpression *reducer, idx_t source_clause_id,
-                                        const FramePerKey *per, DecideFramePlacement &placement) const {
+                                        const FramePerKey *per, DecideFramePlacement &placement,
+                                        const Expression *under_abs) const {
 	idx_t frame_idx;
 	if (TryGetDecideFrame(expr, frame_idx)) {
 		if (frame_idx >= placement.frames.size()) {
@@ -1759,13 +1800,6 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		vector<string> path_names;
 		auto path_key = DecidePathKeyExpressions(path.keys, placement.group_keys, &path_names);
 		frame.timeline_names.insert(frame.timeline_names.begin(), path_names.begin(), path_names.end());
-		// A position missing inside a reducer over decisions drops the member, decisions and
-		// all, and may leave the reducer with none: the ANR plan's phase 6.
-		if (reducer && ReferencesDecideVar(*reducer) && frame.MaySelectNothing()) {
-			throw BinderException("DECIDE: %s may select no position inside %s, a reducer over decisions, which is "
-			                      "not supported yet; %s",
-			                      frame.text, QuoteAsWritten(*reducer), DecideFrameAbsenceRemedy(frame));
-		}
 		if (!per) {
 			return;
 		}
@@ -1816,10 +1850,30 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		for (auto &child : inner.children) {
 			PlaceFramesIn(*child, below, &inner, source_clause_id, has_per ? &own : nullptr, placement);
 		}
+		// Under `abs` inside another reducer, a reducer left with no member would have to
+		// drop the ABS auxiliary's member: an absence a decision carries, which no frame
+		// column states. Its own frames are placed, and its members tagged, by now.
+		if (under_abs && ReferencesDecideVar(inner)) {
+			const auto absence = FirstAbsenceFrame(inner);
+			if (absence != DConstants::INVALID_INDEX) {
+				auto &frame = placement.frames[absence];
+				throw BinderException("DECIDE: %s under abs inside %s may read no member, as %s may select no "
+				                      "position, which is not supported yet; %s",
+				                      QuoteAsWritten(inner), QuoteAsWritten(*reducer), frame.text,
+				                      DecideFrameAbsenceRemedy(frame));
+			}
+		}
 		return;
 	}
+	// An `abs` inside a reducer over decisions: what stands under it is the argument of its
+	// auxiliary, whose rows define the reducer's members (MEMBER_ROW_TAG).
+	if (!under_abs && reducer && ReferencesDecideVar(*reducer) &&
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	    StringUtil::CIEquals(expr.Cast<BoundFunctionExpression>().function.name, "abs")) {
+		under_abs = &expr;
+	}
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		PlaceFramesIn(child, path, reducer, source_clause_id, per, placement);
+		PlaceFramesIn(child, path, reducer, source_clause_id, per, placement, under_abs);
 	});
 }
 

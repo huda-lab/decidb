@@ -11,10 +11,12 @@
 // row on every enclosing `by` key and on its own. An instance of it is therefore named
 // by a tuple of key values, its path key, and no relation is ever built per scope.
 //
-// Three passes read a path and must read the same one: the canonicalizer, for a nested
-// reducer's D8 check and the rows its variants are counted over; and the value rewrite,
-// which keys and filters a nested reducer's helper decision by it. So it is stated here,
-// once, beside the canonicalizer that owns scope.
+// Every pass that reads a path must read the same one: the canonicalizer, for a nested
+// reducer's D8 check, the rows its variants are counted over and where its frames stand;
+// the value rewrite, which keys and filters a nested reducer's helper decision by it; and
+// the rewrites that add rows for a construct inside a reducer, which read the reducer's
+// member rows (the ABS envelope) and name the reducer whose members they define
+// (`innermost`). So it is stated here, once, beside the canonicalizer that owns scope.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,6 +41,10 @@ struct DecideReducerPath {
 	unique_ptr<Expression> Rows() const;
 	//! The keys a reducer on this path whose own `by` key is `own` groups by.
 	vector<idx_t> KeysOf(idx_t own) const;
+
+	//! The innermost reducer of the path (the last `Below`), or null at a comparison's root.
+	//! Valid while the tree it was read from stands.
+	const BoundAggregateExpression *innermost = nullptr;
 };
 
 //! The `by` key index of `reducer`, or INVALID_INDEX for `by ()`.
@@ -55,6 +61,15 @@ bool ContainsDecideFrame(const Expression &expr);
 //! MaySelectNothing) ends on, in lower case: the remedy, or for a range that may request
 //! no position, the cause, which no `else` cures.
 string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame);
+//! The frames that drop a member of `reducer` where they select nothing (syntax_reference.md
+//! §5.6): each frame in its argument, outside the reducers nested in it, that may select no
+//! position (DecideFrameSpec::MaySelectNothing), appended to `out` in written order.
+void DecideMemberFrames(const BoundAggregateExpression &reducer, const vector<DecideFrameSpec> &frames,
+                        vector<idx_t> &out);
+//! Tags every reducer in `expr` with its member frames (MEMBER_FRAME_TAG_PREFIX, one tag each):
+//! the one record of DecideMemberFrames every layer reads. Run on the bound tree before
+//! canonicalization, which decides shape off the tags and keeps a reducer's alias.
+void TagDecideMemberFrames(Expression &expr, const vector<DecideFrameSpec> &frames);
 
 //! The expressions of `keys`, each once, with their names when `names` is given.
 vector<unique_ptr<Expression>> DecidePathKeyExpressions(const vector<idx_t> &keys,

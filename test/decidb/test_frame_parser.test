@@ -73,10 +73,21 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from 1 previous to 3 next 
 2	0.0
 3	0.0
 
+# over one timeline, period 1 holds two rows: the message prints the frame without its
+# defaults
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(at(1 next else NULL: x) over (T.period desc within ())) <= 3 MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: at(next: x) over (T.period desc) may select no position inside
+Invalid Input Error: DECIDE: at(next: x) over (T.period desc) finds 2 rows at T.period = 1; a position must hold one row.
+
+# within each product, a missing position drops its member: A's sum reads x1 alone, and
+# B's, which reads nothing, is skipped
+query II
+SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= 9 AND sum(at(1 next else NULL: x) over (T.period desc within T.product)) <= 3 MAXIMIZE sum(x) ORDER BY id;
+----
+1	3.0
+2	9.0
+3	9.0
 
 # A view holding a range plans, and runs
 statement ok

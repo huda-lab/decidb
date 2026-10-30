@@ -146,6 +146,19 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"must reference at least one DECIDE variable")
 
+    @pytest.mark.parametrize("lhs", ["SUM(l_quantity) + 1", "2 * MAX(l_quantity)", "ABS(SUM(l_quantity) - 3)"])
+    def test_no_decide_variable_under_arithmetic(self, decidb_cli, lhs):
+        """A reducer under arithmetic reads no decision either: refused by name, where it
+        reached the model builder as an internal error."""
+        result = decidb_cli.execute_raw(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT)
+                SUCH THAT x <= 1 AND {lhs} <= 500
+                MAXIMIZE SUM(x*l_quantity) LIMIT 1
+            """)
+        assert "reads no DECIDE variable; compare a decision with it" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a comparison with no decision")
+
     def test_multiple_decide_variables_in_sum(self, decidb_cli):
         """Cubic (x*x*x) in SUM is not supported — must reject."""
         decidb_cli.assert_error("""

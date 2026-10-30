@@ -48,8 +48,50 @@ string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame) {
 	return "give it an else, or make its timeline cyclic";
 }
 
+void DecideMemberFrames(const BoundAggregateExpression &reducer, const vector<DecideFrameSpec> &frames,
+                        vector<idx_t> &out) {
+	std::function<void(const Expression &)> visit = [&](const Expression &expr) {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			if (frame < frames.size() && frames[frame].MaySelectNothing()) {
+				out.push_back(frame);
+			}
+			return; // a payload holds no frame (D74)
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			return; // a nested reducer's frames drop its own members
+		}
+		ExpressionIterator::EnumerateChildren(expr, visit);
+	};
+	for (auto &child : reducer.children) {
+		visit(*child);
+	}
+}
+
+void TagDecideMemberFrames(Expression &expr, const vector<DecideFrameSpec> &frames) {
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame)) {
+		return; // a payload holds no frame (D74)
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		auto &reducer = expr.Cast<BoundAggregateExpression>();
+		vector<idx_t> members;
+		DecideMemberFrames(reducer, frames, members);
+		auto alias = reducer.GetAlias();
+		for (auto member : members) {
+			auto tag = MakeMemberFrameTag(member);
+			if (!HasDecideTag(alias, tag)) {
+				AddDecideTag(alias, tag);
+			}
+		}
+		reducer.SetAlias(std::move(alias));
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { TagDecideMemberFrames(child, frames); });
+}
+
 DecideReducerPath DecideReducerPath::Below(const BoundAggregateExpression &reducer) const {
 	auto below = *this;
+	below.innermost = &reducer;
 	if (reducer.filter) {
 		below.conditions.push_back(reducer.filter.get());
 	}

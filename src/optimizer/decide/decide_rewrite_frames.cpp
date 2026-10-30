@@ -58,6 +58,10 @@ void LiftRange(LogicalDecide &decide, const DecisionSite &site, ExtremumPush pus
 	link.frame = frame_idx;
 	link.source_clause_id = source_clause_id;
 	link.removal_group_id = removal_group_id;
+	// A window that reads nothing is an absent instance (syntax_reference.md §5.6), which
+	// skips an instance where the range stands at its comparison's root.
+	link.read_at_root = !frame.reduced;
+	link.absence_frame = frame.MaySelectNothing() ? frame_idx : DConstants::INVALID_INDEX;
 	ExtremumSides(link.agg_name, push, link.need_envelope, link.need_closing);
 	// One entity per window, named by what splits the windows: the timeline's keys, and the
 	// order key when a window is a position on one.

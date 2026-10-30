@@ -111,6 +111,13 @@ struct DecideConstraint {
 	//! when it has none, so one row per class.
 	idx_t signature = DConstants::INVALID_INDEX;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+	//! A row a rewrite added to define the members of a reducer of its clause (MEMBER_ROW_TAG:
+	//! an ABS envelope, a Boolean product's rows, an L0 link inside a reducer's argument). It
+	//! reads the reducer's member rows -- its `when_condition` holds their path and the PRESENT
+	//! columns of the frames that may drop them -- and serves every instance reading the
+	//! reducer, so an instance of its clause that is skipped (a frame or a helper absent at
+	//! the clause's root) never removes it.
+	bool defines_members = false;
 	//! Stable origin in LogicalDecide::constraint_sources.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! Atomic DROP identity, independent of display and elastic grouping provenance.

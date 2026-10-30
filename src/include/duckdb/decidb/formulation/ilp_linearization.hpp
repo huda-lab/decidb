@@ -524,9 +524,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
 
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
-//! physical layer. `inner_terms` is non-owning: the flattened terms live on the logical
-//! operator's `ComposedMinMaxTerm`, prepared at stage 05, and `per_term_coefs[t][row]`
-//! is that term's evaluated coefficient. `z_idx` is filled in by the linearizer.
+//! physical layer: inner term t reads `variables[t]` (INVALID_INDEX for a constant) with
+//! coefficient `per_term_coefs[t][row]` at each row. `z_idx` is filled in by the linearizer.
 struct ComposedMinMaxTermData {
     //! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
     bool is_minmax = false;
@@ -544,8 +543,10 @@ struct ComposedMinMaxTermData {
     //! Rows this term reduces over: the term's `WHEN` mask, folded with the relation
     //! qualifier's de-duplication mask. Sized `SolverInput::num_rows`.
     vector<bool> filter_mask;
-    //! Non-owning; the flattened inner terms live on the logical operator.
-    const vector<DecideTerm> *inner_terms = nullptr;
+    //! The variable each inner term reads, as execution numbers it: a decision, or the read
+    //! of one at the row a frame selects (SolverInput::frame_reads), which the indexer
+    //! resolves at each row. INVALID_INDEX for a constant term.
+    vector<idx_t> variables;
     //! Evaluated per-row coefficient of each inner term, already scaled by its sign.
     vector<vector<double>> per_term_coefs;
     //! Flat column of this term's global auxiliary; assigned by the linearizer.

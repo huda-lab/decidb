@@ -238,12 +238,18 @@ public:
 	//! (DecideFrameSpec::rows, scope_key, source_clause_id, reduced). Builds the
 	//! FRAME_PARTITION check (D69) of each frame a `per` key reads directly -- a clause's
 	//! `per K:`, or a reducer's own `per` -- unless the key determines its timeline already.
-	//! Called once, by the planner, after CanonicalizeTree.
+	//! Refuses a reducer that may be absent under `abs` inside another reducer over
+	//! decisions (D82). Called once, by the planner, after CanonicalizeTree.
 	void PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const;
 	//! The same for the objective, after CanonicalizeObjective. Its root has one class
 	//! (D66), whose fields the objective's signature checks, so only a reducer's own `per`
 	//! gets a FRAME_PARTITION check there.
 	void PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const;
+
+	//! Whether a frame in `reducer`'s argument, outside the reducers nested in it, may
+	//! select nothing, and so drop a member (syntax_reference.md §5.6): the
+	//! MEMBER_FRAME_TAG_PREFIX tags TagDecideMemberFrames stamped before canonicalization.
+	static bool DropsMembers(const BoundAggregateExpression &reducer);
 
 	//! Quote expressions in the scope refusals as the query writes them, from
 	//! these names, rather than through the bound tree's own names. Set by the planner,
@@ -474,9 +480,15 @@ private:
 	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
 	//! members -- `reducer` is the innermost reducer around `expr`, null at the root. `per`
 	//! is the key of the scoped expression `expr` is the body of; null for `per row`, which
-	//! no frame's timeline can span.
+	//! no frame's timeline can span. `under_abs` is the `abs` `expr` stands under inside
+	//! `reducer`, if any: a reducer there that may be absent is refused.
 	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const BoundAggregateExpression *reducer,
-	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement) const;
+	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement,
+	                   const Expression *under_abs = nullptr) const;
+	//! The first frame that may leave `reducer` -- a reducer over decisions -- with no
+	//! member: one of its own member frames, else one of a reducer nested in it that may
+	//! be absent; INVALID_INDEX when none can.
+	idx_t FirstAbsenceFrame(const BoundAggregateExpression &reducer) const;
 	//! The key of a reducer's own `per` (or of the colon form), when it has one.
 	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<EntityScopeInfo> &entity_scopes,
 	                   FramePerKey &out) const;

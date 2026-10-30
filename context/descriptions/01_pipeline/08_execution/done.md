@@ -53,7 +53,7 @@ separate objective-side copy.
 | 2a | `Finalize` → `BuildFrames` | Each frame selector's timelines, selections and windows, and the values frames read appended to the input as columns (§3a) |
 | 3 | `Finalize` → `BuildEntityMappings` | Build the row → class maps of the key scopes |
 | 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | Run the scope checks (§4a), then the frames' peer check (D67); the first failure stops the query |
-| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
+| 4 | `Finalize` → `EvaluateReducerValueLinks` / `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` | Evaluate the helper decisions' members first (an instance with none is absent, which the clauses read), then coefficients, `when` filters, `by` groups and `per` classes, RHS values |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
 | 7 | `GetData` | Project solution values back onto rows |
@@ -270,7 +270,14 @@ data:
 **Presence.** A comparison reading a frame outside its reducers that selects nothing at a
 row has no instance there (`FramesPresent`, keyed by the comparison's clause id through
 `DecideFrameSpec::SkipsInstancesOf`, never matching a comparison with none, so every
-row a rewrite derived from it — an ABS envelope, a `<>` disjunction — is skipped with it).
+row a rewrite derived from it to state it — an ABS envelope at its root, a `<>`
+disjunction — is skipped with it), nor where a helper its instance rows read outside
+their reducers is absent (`ReducerValueLink::SkipsInstancesOf`, as the plan recorded it;
+both through `InstancesPresent`, which computes each clause's helper mask once). A
+row defining a reducer's members (`DecideConstraint::defines_members`: an ABS, a Boolean
+product or an L0 link inside a reducer's argument) is never skipped with the instances: it
+serves every instance reading the reducer, and stands where its own `when` -- the
+reducer's path and member frames -- keeps it.
 `EvaluateConstraints` keeps two masks: `scoped_kept`, what the `when` keeps, which a
 reducer reads its group from; and `instance_kept`, without the absent rows, which the
 instances, the classes and variants of `per K`, the per-row terms and the bound read. So a
@@ -294,6 +301,25 @@ missing position -- and an AVG divides by their number; a MIN or MAX reads each 
 link's members are handed to stage 06 listed (`ReducerValueMembers`), a reducer's too:
 `EvaluateReducerValueLinks` builds a reducer's per `by` group over the rows as before and
 lists them (`ListRowMembers`).
+
+**Members a frame drops** (syntax_reference.md §5.6, D81). The helpers are evaluated before
+any clause, in link order -- innermost first, a range's before the reducers reading it (a
+link reading one listed after it is an internal error). A reducer's member rows are the rows
+its own `when` keeps, which the linear form joined to the `PRESENT` column of each frame
+that may drop a member, and among them those where every helper it reads is present: a
+nested reducer left with no member drops the member reading it (only a nested link the plan
+says may be absent is consulted, `helper_link_of` naming each helper's link). Each link
+records which of its instances are present (`DecideGlobalSinkState::helper_present`, by
+entity of its scope): a reducer's `by` group with a member listed, a range's window that
+reads something; the spare entity of the rows outside its scope is read by no row and
+counts as present. An absent instance of a link the plan says cannot be absent is an
+internal error: its clause may have become a column bound. The clauses read the links the
+plan marked (`SkipsInstancesOf`), and the objective reading an absent helper outside its
+reducers (`MayLeaveObjectiveUnset`) is an error naming the frame (*"DECIDE objective:
+at(previous: x) over (...) selects no position on any member of sum(...); the objective is
+produced once and cannot be skipped; give it an else, or make its timeline cyclic."*). The
+interrupt is polled per link and per window while members are listed, as while frame maps
+are built.
 
 **Frame reads.** A payload term (`DecideTerm::frame_read`) names, at every row, the
 variable `DecideGlobalSinkState::ReadVariable` gives it: one per decision and frame, after

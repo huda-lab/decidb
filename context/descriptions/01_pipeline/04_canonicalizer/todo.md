@@ -80,28 +80,3 @@ model.
 
 **Update.** `done.md` §3.10, `../05_optimizer/done.md` (the value rewrite no longer sees
 the clause), `../06_model_formulation/done.md`.
-
-## 4. A frame that may select no position inside a reducer over decisions
-
-**Why.** `sum(at(previous: x) over (t.period)) <= 4` drops the first period's member,
-decisions and all, and a group left with no member makes the reducer absent, which skips
-its instance (`syntax_reference.md` §5.6, plan §3.5). Phase 4 states neither, so
-`PlaceFrames` refuses it: *"DECIDE: at(previous: x) over (t.period) may select no
-position inside sum(at(previous: x) over (t.period)), a reducer over decisions, which is
-not supported yet; give it an else, or make its timeline cyclic"* — in the objective too.
-Deck example 3 (`per T.productID: sum(at(previous: inventory) over (...)) by
-(T.productID) <= P.priorInventoryLimit`) is this shape. A range that may read nothing is
-refused the same way (`sum(sum(from 2 next to 3 next: x) over (t.period))`), its remedy
-worded by what makes it read nothing (`DecideFrameAbsenceRemedy`).
-
-**What lifting it needs.** The reducer's members masked by the frame's presence (its
-`PRESENT` column joined to the terms' filter, as a bound-side reducer's `when` already is),
-AVG dividing by the members left, a MIN/MAX's members dropped, and an absent reducer
-skipping its instance or dropping the outer member; for a range, whose helper has no
-definition at a window that reads nothing, the same presence on the members reading it —
-phase 6 of `09_anr_language/anr_algorithm_and_frames_plan.md`.
-
-**Test.** Deck example 3 and slide 50's `per (): sum(at(previous: inventory) over (...))
->= 10`, judged by `_anr_oracle`; `test_anr_frames.py::TestPointErrors::
-test_phase_6_shapes_are_refused` and `TestRangeErrors::
-test_a_range_that_may_read_nothing_inside_a_reducer_over_decisions` become answer tests.

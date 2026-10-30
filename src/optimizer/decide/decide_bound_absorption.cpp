@@ -273,10 +273,9 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		// reducers selects a position (syntax_reference.md §5.6) -- a condition, as a `when`
 		// is -- so it must not become a global bound either. The row an ABS lowers from
 		// `abs(x - at(previous: x) over (...)) <= K` carries its clause's id, not the frame.
-		for (auto &frame : decide.frames) {
-			if (frame.SkipsInstancesOf(source_clause_id)) {
-				return;
-			}
+		// A helper read there that may be absent skips an instance alike.
+		if (decide.ClauseMaySkipInstances(source_clause_id)) {
+			return;
 		}
 		AbsorptionTarget target;
 		if (!TryMatchAbsorptionTarget(optimizer.context, *comp.left, decide, target) &&

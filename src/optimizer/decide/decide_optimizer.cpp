@@ -154,6 +154,34 @@ void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expressi
 		AddDecideTag(alias, OBJECTIVE_ROW_TAG);
 	}
 	to.SetAlias(std::move(alias));
+	// A row derived from a row that defines a reducer's members defines them too.
+	if (HasDecideTag(from_alias, MEMBER_ROW_TAG)) {
+		vector<idx_t> member_frames;
+		ParseMemberFrameTags(from_alias, member_frames);
+		MarkMemberRow(to, member_frames);
+	}
+}
+
+void decide_rewrite::MarkMemberRow(Expression &row, const vector<idx_t> &member_frames) {
+	auto alias = row.GetAlias();
+	if (!HasDecideTag(alias, MEMBER_ROW_TAG)) {
+		AddDecideTag(alias, MEMBER_ROW_TAG);
+	}
+	for (auto frame : member_frames) {
+		auto tag = MakeMemberFrameTag(frame);
+		if (!HasDecideTag(alias, tag)) {
+			AddDecideTag(alias, tag);
+		}
+	}
+	row.SetAlias(std::move(alias));
+}
+
+vector<idx_t> decide_rewrite::MemberFramesAt(const DecideReducerPath &path) {
+	vector<idx_t> member_frames;
+	if (path.innermost) {
+		ParseMemberFrameTags(path.innermost->GetAlias(), member_frames);
+	}
+	return member_frames;
 }
 
 void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &source_alias) {

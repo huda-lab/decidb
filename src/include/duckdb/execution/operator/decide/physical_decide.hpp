@@ -288,6 +288,19 @@ private:
     //! reducers selects a position (DecideFrameSpec::SkipsInstancesOf); empty when none may
     //! miss one. A row where one does not is no instance (syntax_reference.md §5.6).
     vector<bool> FramesPresent(const DecideGlobalSinkState &gstate, idx_t source_clause_id, idx_t num_rows) const;
+    //! The rows at which `constraint` states an instance: where every frame its clause reads
+    //! outside its reducers selects (FramesPresent) and every helper decision it reads there
+    //! is present (ReducerValueLink::SkipsInstancesOf), each clause's helper mask computed
+    //! once into `helper_masks`. Empty when no instance is skipped; always empty for a row
+    //! defining a reducer's members (DecideConstraint::defines_members), which serves every
+    //! instance.
+    vector<bool> InstancesPresent(const DecideGlobalSinkState &gstate, const DecideConstraint &constraint,
+                                  const vector<EntityMapping> &entity_mappings,
+                                  unordered_map<idx_t, vector<bool>> &helper_masks, idx_t num_rows) const;
+    //! Whether the instance of helper `link` (into reducer_value_links) read at `row` is
+    //! present (DecideGlobalSinkState::helper_present).
+    bool HelperPresentAt(const DecideGlobalSinkState &gstate, const vector<EntityMapping> &entity_mappings,
+                         idx_t link, idx_t row) const;
 
     //! PHASE 1.5: one row→entity mapping per key scope -- a keyed decision's key columns,
     //! or a helper decision's `by` key over the rows its clause keeps
@@ -364,11 +377,14 @@ private:
                                  const vector<EntityMapping> &entity_mappings,
                                  EvaluatedClauses &evaluated) const;
 
-    //! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
-    //! reducer it holds, among those the clause and the reducer keep, grouped by its `by`
+    //! PHASE 2, before the clauses: evaluate every helper decision's members -- the rows of
+    //! the reducer it holds, among those the clause and the reducer keep, grouped by its `by`
     //! key, or what each window of a range frame reads -- listed onto
-    //! gstate.evaluated_value_links (ReducerValueMembers). The formulation pass states the
-    //! definition over them.
+    //! gstate.evaluated_value_links (ReducerValueMembers), innermost first. A member stands
+    //! where the frames that may drop it select (its link's `when`) and every helper it
+    //! reads is present; an instance left with no member is absent (gstate.helper_present),
+    //! which the clauses and the objective read. The formulation pass states the
+    //! definition over the members.
     void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                    const vector<EntityMapping> &entity_mappings) const;

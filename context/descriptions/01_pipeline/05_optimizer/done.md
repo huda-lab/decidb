@@ -288,12 +288,42 @@ MIN/MAX member holds the frame where the clause did. Flattening lowers it
   `frame_payload_terms` lists each frame's payload terms (decision, `READ` column, sign),
   recorded once, for the peer check (D67); `frame_fallback_decisions` lists its fallback's
   decisions, for the signature field (D76).
-- Refused: a frame over decisions inside a MIN or MAX composed with other terms
-  (*"DECIDE: at(first: x) over (t.period) inside MAX beside another term is not supported
-  yet"*), whose stage-06 path reads its terms' decisions at their own rows (phase 6); one
-  beside a MIN or MAX in the objective (*"DECIDE: 'at(first: x) over (t.period)' beside MIN
-  or MAX is not supported yet"*), for the same reason. Stage 06 holds composed MIN/MAX to
-  it with an internal check.
+- A frame over decisions inside a composed MIN or MAX is flattened like any term: stage 06
+  reads each term's variable as execution numbers it, a frame read included. One beside a
+  MIN or MAX in the objective is refused as any decision there is (*"DECIDE: 'at(first: x)
+  over (t.period)' beside MIN or MAX is not supported yet"*, syntax_reference.md §10.2).
+- **Members a frame drops** (D81, D82). A reducer over decisions a frame may drop a member
+  of is a helper (the canonicalizer's VALUE shape and objective tag). As `DecideFrameSpec`
+  does for a frame, its link records, at plan time, what makes it absent and where it is
+  read: `member_frames` (the reducer's `MEMBER_FRAME_TAG_PREFIX` tags), `absence_frame` (a
+  member frame, else a nested helper's -- `ReplaceReducer` returns each nested link -- or,
+  for a range's link (`LiftRange`), its frame where it may read nothing) and `read_at_root`
+  (a row stating the clause's instance reads it outside its reducers: a top-level site of
+  a row that is no member row, a range not inside a reducer), whence `MayBeAbsent`,
+  `SkipsInstancesOf` and `MayLeaveObjectiveUnset`. The linear form joins each member frame's
+  `PRESENT` column to the link's own `when` (`JoinPresence`), so execution lists a member
+  only where its frames select. A nonlinear operand beside a member frame has no linear
+  definition and is refused naming the frame; `InlineSumOfGroupSums` keeps such a reducer a
+  helper. Two internal checks hold the routing: a reducer summed in place has no frame in its
+  argument that may select nothing (`AssertMembersListed`, read off the argument), and no
+  term inside a reducer summed in place reads a helper that may be absent
+  (`AssertNoAbsentHelperSummed`).
+- **Member rows.** The rows the ABS, Boolean-product and L0 rewrites add for a construct
+  inside a reducer over decisions define its members: each rewrite walks with a
+  `DecideReducerPath`, whose `innermost` names that reducer, and `MarkMemberRow` tags the
+  row `MEMBER_ROW_TAG` and with the reducer's member frames (`CopyClauseProvenanceTags`
+  carries both onto a row derived from a member row). An ABS's envelope reads the rows the
+  path keeps (the clause's `when` and every enclosing reducer's own), where it read every
+  row its clause keeps and so evaluated data the reducer's own `when` excludes; a Boolean
+  product's rows read decisions alone and keep no `when`. The linear form makes each a
+  `DecideConstraint::defines_members` row whose `when` joins its member frames' `PRESENT`
+  columns: it is never skipped with its clause's instances, which skipped the members a
+  reducer beside a root frame reads (phase 4's wrong answer for `sum(abs(x - 3)) +
+  at(previous: x) over (t.period) <= 4`).
+- **Absorption.** A clause that may skip an instance -- a frame at its root that may select
+  nothing, or a helper it reads there that may be absent (`LogicalDecide::
+  ClauseMaySkipInstances`) -- holds only where it does not, so `AbsorbBoundsInExpression`
+  leaves it a row.
 
 ### Like-term collection
 

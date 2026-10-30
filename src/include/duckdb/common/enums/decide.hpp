@@ -10,6 +10,7 @@
 
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/to_string.hpp"
+#include "duckdb/common/vector.hpp"
 
 namespace duckdb {
 
@@ -328,6 +329,19 @@ inline string MakeFrameTag(idx_t frame_idx) {
 	return string(FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
 }
 
+//! Tag prefix naming a frame that drops a member where it selects nothing (syntax_reference.md
+//! §5.6): "__member_frame_<i>__", one per such frame, on the reducer whose argument holds
+//! frame i outside the reducers nested in it (DecideMemberFrames). Stamped on the bound tree
+//! before canonicalization (TagDecideMemberFrames), so the shape decision reads it; the
+//! reducer's members are the rows where every frame it names selects, and the rows a rewrite
+//! adds to define them carry the same tags (MEMBER_ROW_TAG).
+static constexpr const char *MEMBER_FRAME_TAG_PREFIX = "__member_frame_";
+
+inline string MakeMemberFrameTag(idx_t frame_idx) {
+	return string(MEMBER_FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
+}
+
+
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
@@ -359,6 +373,13 @@ static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_co
 //! corner rows, an L0 link), which no clause owns: the rewrites start the objective's
 //! walk with it as the source alias, and EXPLAIN prints such rows under the objective.
 static constexpr const char *OBJECTIVE_ROW_TAG = "__objective_row__";
+
+//! Tag marking a row a rewrite added to define a reducer's members -- an ABS envelope, a
+//! Boolean product's rows, an L0 link -- for a construct inside the reducer's argument. It
+//! reads the rows the reducer's path keeps, where its member frames select (it carries the
+//! reducer's MEMBER_FRAME_TAG_PREFIX tags), and it serves every instance reading the
+//! reducer, so no instance its clause skips removes it (DecideConstraint::defines_members).
+static constexpr const char *MEMBER_ROW_TAG = "__member_row__";
 
 //! Tag on the placeholder coefficient of an automatic L0 link (`norm(e, 0)` with no
 //! bound written): stage 06 replaces it with a bound derived from the column box, so a
@@ -450,6 +471,22 @@ inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
 
 inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
 	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
+}
+
+//! Appends to `out` the index of every `prefix` tag in `alias`, in order: TryParseDecideIndexTag
+//! for a tag that stands more than once on one node.
+inline void ParseDecideIndexTags(const string &alias, const string &prefix, vector<idx_t> &out) {
+	for (auto start = alias.find(prefix); start != string::npos; start = alias.find(prefix, start + 1)) {
+		idx_t value;
+		if (TryParseDecideIndexTag(alias.substr(start), prefix, value)) {
+			out.push_back(value);
+		}
+	}
+}
+
+//! Appends to `out` every frame a MEMBER_FRAME_TAG_PREFIX tag in `alias` names, in order.
+inline void ParseMemberFrameTags(const string &alias, vector<idx_t> &out) {
+	ParseDecideIndexTags(alias, MEMBER_FRAME_TAG_PREFIX, out);
 }
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when

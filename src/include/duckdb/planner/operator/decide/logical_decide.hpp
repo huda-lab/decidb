@@ -502,7 +502,9 @@ public:
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
         //! Γ, into `group_keys`; INVALID_INDEX for `by ()`, every kept row.
         idx_t group_key = DConstants::INVALID_INDEX;
-        unique_ptr<Expression> when; //!< the clause's `when`, or null
+        //! The rows its path keeps -- the clause's `when` and every enclosing reducer's own
+        //! (DecideReducerPath::Rows) -- or null for every row.
+        unique_ptr<Expression> when;
         //! MIN/MAX: the sides that pin the helper (ExtremumLinkSpec), read from the way the
         //! clause pushes it; both when the sign of its factor is not known before the query
         //! runs or the comparison is `=` or `<>`. Unused for SUM/AVG, whose row is an equality.
@@ -520,8 +522,52 @@ public:
         idx_t frame = DConstants::INVALID_INDEX;
         //! The frame's `else` flattened, each coefficient its FALLBACK column (stage 05).
         vector<DecideTerm> fallback_terms;
+        //! The frames that drop a member where they select nothing (MEMBER_FRAME_TAG_PREFIX
+        //! on the reducer, syntax_reference.md §5.6): the member stands where each selects.
+        //! The linear form joins their PRESENT columns to `filter`.
+        vector<idx_t> member_frames;
+        //! Whether a row stating its clause's instance reads the helper outside its reducers
+        //! -- the comparison, or a row a rewrite derived from it there (an ABS envelope at the
+        //! root) -- rather than a reducer's member reading it (a nested helper, a member row).
+        bool read_at_root = false;
+        //! A frame whose missing positions may leave an instance with no member, absent: the
+        //! range's own frame, a member frame, or a nested helper's; INVALID_INDEX when none
+        //! can (D81).
+        idx_t absence_frame = DConstants::INVALID_INDEX;
+
+        bool MayBeAbsent() const {
+            return absence_frame != DConstants::INVALID_INDEX;
+        }
+        //! Whether an absent instance skips one of `clause_id`'s instances, as
+        //! DecideFrameSpec::SkipsInstancesOf does for a frame at a comparison's root.
+        bool SkipsInstancesOf(idx_t clause_id) const {
+            return clause_id != DConstants::INVALID_INDEX && source_clause_id == clause_id && read_at_root &&
+                   MayBeAbsent();
+        }
+        //! Whether the objective reads it outside its reducers and it may be absent, which the
+        //! objective, produced once, cannot skip.
+        bool MayLeaveObjectiveUnset() const {
+            return source_clause_id == DConstants::INVALID_INDEX && read_at_root && MayBeAbsent();
+        }
     };
+    //! Innermost first: a link reads only helpers of links before it -- a range's, made
+    //! first, and the reducers nested in it -- which execution and stage 06 rely on.
     vector<ReducerValueLink> reducer_value_links;
+    //! Whether an instance of `clause_id` may be skipped where it reads nothing: a frame at
+    //! its root that may select nothing, or a helper it reads there that may be absent.
+    bool ClauseMaySkipInstances(idx_t clause_id) const {
+        for (auto &frame : frames) {
+            if (frame.SkipsInstancesOf(clause_id)) {
+                return true;
+            }
+        }
+        for (auto &link : reducer_value_links) {
+            if (link.SkipsInstancesOf(clause_id)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     //! What a rewrite made of a construct, for EXPLAIN: the construct as a plan prints it
     //! (`subject`) and what it became (`kind`), worded by the renderer in one place

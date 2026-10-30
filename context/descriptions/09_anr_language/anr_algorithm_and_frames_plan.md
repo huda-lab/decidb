@@ -1,7 +1,7 @@
 # The full ANR algorithm and frame selectors — implementation plan
 
-Status: phases 0, 1 and 2 shipped (2026-10-28), 3 (2026-10-29), 4 and 5 (2026-10-30);
-phases 6 and 7 to build. Baseline commit
+Status: phases 0, 1 and 2 shipped (2026-10-28), 3 (2026-10-29), 4, 5 and 6 (2026-10-30);
+phase 7 to build. Baseline commit
 38275dde6f (branch `Sami-Active`), reviewed
 27 October 2026 against `~/Desktop/Capstone/ANR.pdf` (the "DeciQL proposals" deck, 119
 pages) and `ANR Implementation.pdf`. It supersedes the first draft, which was never
@@ -329,10 +329,11 @@ language" line for variants and frames in §10.2.
 | `norm(e, p) [by]` | at the root, as today | no (P11) | at the root, as today |
 | ABS, POWER, a product of decisions | at the root, as today; over a helper as today | no (as item 5) | as today |
 | point frame, data payload | yes (a value) | yes | yes |
-| point frame, decision payload | yes (read in place, D72) | yes, read in place; one that may miss from phase 6 | yes |
+| point frame, decision payload | yes (read in place, D72) | yes: read in place, or, where it may miss, the member dropped through a helper (phase 6) | yes |
 | range frame SUM/AVG/MIN/MAX/COUNT, data payload | yes (a value) | yes | yes |
-| range frame SUM/AVG/MIN/MAX, decision payload | yes (helper per row) | yes | yes |
-| ABS over a frame term, `norm` over a frame term | yes (the frame term is a linear term) | no | yes |
+| range frame SUM/AVG/MIN/MAX, decision payload | yes (helper per window) | yes; one that may read nothing drops the member (phase 6) | yes |
+| ABS over a frame term, `norm` over a frame term | yes (the frame term is a linear term) | yes, the member and the rows defining it dropped together where the frame selects nothing (phase 6); a reducer that may be absent under `abs` inside another: no | yes |
+| a frame over decisions inside a composed MIN/MAX | yes (phase 6) | — | yes (phase 6) |
 | a frame term times a decision, a frame inside a frame or a reducer inside a payload | no | no | no |
 | strict `<`, `>`, `<>` over a fractional helper | refused, as today | — | — |
 | quadratic / bilinear | today's limits unchanged | — | today's limits unchanged |
@@ -799,14 +800,67 @@ Choices beyond the text above, recorded as such:
   x) over (t.period)` is one value; one relative to the anchor is produced once per
   position and refused.
 
-### Phase 6 — Composition, diagnostics, guards
+### Phase 6 — Composition, diagnostics, guards (shipped 2026-10-30)
+
+Built as the design below says; the record, with the choices made beyond it, is
+`done.md`, "phase 6".
 
 - Frames inside nested reducer operands and reducers over frames (deck example 3);
   frames and nested reducers in one clause; `norm` and ABS over a frame term; the AND
-  split regression; DIAGNOSE labels and DROP groups for every new row kind; `decide_frame_limit`;
-  cancellation during map construction and membership evaluation.
+  split regression; DIAGNOSE labels and DROP groups for every new row kind; `decide_frame_limit`
+  (shipped in phase 5); cancellation during map construction and membership evaluation.
 - Tests: `test_anr_composition.py`, `test_anr_diagnostics.py` (§6.7, §6.8).
 - Exit: every row of the capability matrix (§3.7) has a passing test or a pinned refusal.
+
+**Design (written 2026-10-30, before the code; the two choices below were the user's,
+2026-10-30).** Words used below: a reducer's **member** is one value it combines (one per
+kept row of its group, or per class under its own `per`); a frame **drops** a member when
+it stands in that member and selects nothing there (§3.5); a reducer left with no member
+is **absent**, and an absent value read outside every reducer skips its comparison's
+instance, and inside a reducer drops that reducer's member in turn.
+
+What phase 6 lifts, and the two defects found while designing it:
+
+1. *A frame that may select nothing inside a reducer over decisions* — refused by phases
+   4 and 5 — is accepted, with the deck's meaning (p. 50): the member is dropped, an AVG
+   divides by the members left, and absence propagates as above. Deck example 3 is this.
+2. *A frame over decisions inside a composed MIN/MAX* (`max(at(first: x) over (...)) +
+   sum(x) <= 12`) is formulated: stage 06's composed path reads each term's variable as
+   execution numbers it (a frame read is its own variable), not the base decision.
+3. *Defect, phase 4*: a frame at a comparison's root that selects nothing skipped every
+   row of the clause at that anchor — including the rows an ABS, a Boolean product or an
+   L0 count inside one of the clause's reducers adds to define that reducer's members. So
+   `sum(abs(x - 3)) + at(previous: x) over (t.period) <= 4` lost the member `abs(x1 - 3)`
+   and answered x = (4, 3, 3), which breaks the period-2 instance.
+4. *Defect, older*: the rows an ABS inside a reducer adds are read on every row the
+   clause keeps, not only on the rows the reducer's own `when` keeps, so
+   `sum(when t.w is not null: abs(x - t.w)) <= 3` raised a NULL error the language says
+   cannot happen.
+
+Choices (asked 2026-10-30): **a reducer whose members may be dropped becomes a helper
+decision** (the value rewrite), so members are dropped in one place — the listing of a
+helper's members — for every shape a reducer takes (rows, easy and hard MIN/MAX,
+composed MIN/MAX, nesting, the objective); the price is one helper and one definition per
+group where the aggregate shape would have had none, until phase 7 inlines it. And **a
+frame under ABS or `norm` inside a reducer is supported**, not refused: the rows that
+define such a member carry the frames that drop it.
+
+| Layer | Owns in phase 6 | Contract it hands down |
+|---|---|---|
+| 4 canonicalizer | Every reducer is tagged, before canonicalization, with the frames that may drop its members (`__member_frame_<f>__`, one tag per frame: the frames in its argument, outside the reducers nested in it, that may select nothing). A reducer over decisions so tagged takes the VALUE shape in a constraint, and in the objective is tagged for the value rewrite, as a nest is. Refused, with its own message: a reducer that may be absent under `abs` inside another reducer (its absence would have to cross the ABS auxiliary as a decision, not a frame) | the tags; the VALUE shape |
+| 5 ABS, product and norm rewrites | The rows they add for a construct inside a reducer define that reducer's members: they read the rows its path keeps (the clause's `when` and every enclosing reducer's own `when`, which fixes defect 4), are tagged `__member_row__`, and carry the innermost reducer's member-frame tags | member rows |
+| 5 value rewrite | A helper's link records, as a frame does, what may leave an instance absent and where it is read (`ReducerValueLink::member_frames`, `absence_frame`: a member frame or a nested helper's; `read_at_root`); a range's link may be absent where its frame may select nothing. `InlineSumOfGroupSums` keeps a reducer with member frames a helper. A nonlinear operand beside a member frame is refused naming the frame | the link |
+| 5 bound absorption | A clause one of whose helpers may be absent holds only where it is present, so it is never a column bound (as a skipping frame, phase 4) | — |
+| 5 linear form | Lowers the tags: each member frame's PRESENT column joins the link's own `when`, and a member row's `when`; a member row is `DecideConstraint::defines_members`. A reducer flattened in place (aggregate shape, composed, objective) with a member frame is an internal error. The composed refusal (RefuseComposedFrameRead) is gone | `DecideConstraint::defines_members` |
+| 6 formulation | Composed MIN/MAX reads `ComposedMinMaxTermData::variables`, the variable execution reads each term through (a frame read redirects). A helper instance with no listed group is absent: no definition, no consumer | `ComposedMinMaxTermData::variables` |
+| 8 execution | Helpers are evaluated before the clauses, innermost first. A member is listed only where its member frames select (PRESENT, through the link's `when`) and every helper it reads is present; an instance with no member left is absent (`DecideGlobalSinkState::helper_present`). A clause's instance is absent where a frame it reads outside its reducers selects nothing (phase 4) or where a helper the plan marks as read there is absent (`SkipsInstancesOf`); its instance rows are skipped there, its member rows never. An objective reading an absent helper outside its reducers is the objective error. The interrupt is polled while members are listed | the model |
+
+Two consequences recorded as such: an instance that a helper's absence skips is skipped in
+every row of its clause that states it (the comparison, an ABS envelope at the root, a `<>`
+pair), exactly as a frame at the root skips it; and a member row is never skipped with its
+clause's instances, because it serves every instance that reads the reducer. Out of scope,
+kept refused: a decision or frame beside a MIN or MAX in the objective (`MINIMIZE max(x) -
+at(first: x) over (...)`), the existing limit for any decision there (§10.2), not a frame's.
 
 ### Phase 7 — Inlining, performance, closure
 
@@ -817,6 +871,12 @@ Choices beyond the text above, recorded as such:
   accumulates them like like-terms) — only with a model dump showing the smaller model
   and the suites unchanged. Singleton MIN/MAX groups
   collapse to their member (deck p. 112: `c2 → x3`).
+- Inlining keeps the link as what lists a helper's members and records its absence (phase
+  6): a root row that read an inlined helper's members instead of its column must still be
+  skipped where the helper is absent, which `ReducerValueLink::SkipsInstancesOf` states at
+  plan time, and bound absorption reads the links. The phase-6 review's advice: inline at
+  stage 06, after execution has listed the members, and extend `InlineSumOfGroupSums`
+  rather than add a second inliner at another stage (§7, "two paths").
 - Benchmarks (§6.10); profile counters; docs: `done.md` per stage, `09_anr_language/done.md`
   items 8–10, `04_testing/scope/done.md`, `README.md`; delete this file's shipped parts.
 - Exit: measured no regression on the flat workloads; the nested and frame workloads

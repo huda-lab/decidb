@@ -229,20 +229,38 @@ public:
 		for (auto &spec : op.composed_minmax_constraints) {
 			for (auto &term : spec.terms) {
 				ExtractTerms(*term.inner_expr, term.inner_terms);
-				RefuseComposedFrameRead(term);
 			}
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
 			ExtractTerms(*term.inner_expr, term.inner_terms);
-			RefuseComposedFrameRead(term);
 		}
 		// The reducers the value rewrite lifted into helper decisions, the same way; a range
-		// frame's helper also reads its `else`, at the window's anchor.
+		// frame's helper also reads its `else`, at the window's anchor. A member stands where
+		// each frame that may drop it selects: their PRESENT columns join the reducer's own
+		// `when` (syntax_reference.md §5.6).
 		for (auto &link : op.reducer_value_links) {
 			ExtractTerms(*link.inner_expr, link.inner_terms);
 			if (link.frame != DConstants::INVALID_INDEX) {
 				ExtractFallbackTerms(link.frame, link.fallback_terms);
 			}
+			JoinPresence(link.member_frames, link.filter);
+		}
+		for (auto &constraint : op.prepared.constraints) {
+			AssertNoAbsentHelperSummed(constraint->lhs_terms, constraint->was_minmax_easy);
+			for (auto &group : constraint->quadratic_groups) {
+				AssertNoAbsentHelperSummed(group.inner_terms, constraint->lhs_is_aggregate);
+			}
+		}
+		if (op.prepared.objective) {
+			AssertNoAbsentHelperSummed(op.prepared.objective->terms, false);
+		}
+		for (auto &spec : op.composed_minmax_constraints) {
+			for (auto &term : spec.terms) {
+				AssertNoAbsentHelperSummed(term.inner_terms, true);
+			}
+		}
+		for (auto &term : op.composed_minmax_objective_terms) {
+			AssertNoAbsentHelperSummed(term.inner_terms, true);
 		}
 
 		// Group like terms, once, over every list that becomes a linear solver row.
@@ -900,24 +918,29 @@ private:
 		return true;
 	}
 
-	//! The composed MIN/MAX formulation reads its terms' decisions at their own rows (stage
-	//! 06), so a frame over decisions inside one has no reading there yet.
-	void RefuseComposedFrameRead(const LogicalDecide::ComposedMinMaxTerm &term) const {
-		for (auto &inner : term.inner_terms) {
-			if (inner.frame_read != DConstants::INVALID_INDEX) {
-				throw BinderException("DECIDE: %s inside %s beside another term is not supported yet",
-				                      op.frames[inner.frame_read].text, StringUtil::Upper(term.agg_name));
+	//! `condition`, joined by each frame of `frames`'s PRESENT column: the rows where every
+	//! one of them selects (each once).
+	void JoinPresence(const vector<idx_t> &frames, unique_ptr<Expression> &condition) {
+		vector<idx_t> joined;
+		for (auto frame : frames) {
+			if (std::find(joined.begin(), joined.end(), frame) != joined.end()) {
+				continue;
 			}
+			joined.push_back(frame);
+			auto present = FrameColumnRef(DecideFrameColumn::Kind::PRESENT, frame, nullptr);
+			condition = condition ? make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
+			                                                              std::move(condition), std::move(present))
+			                      : std::move(present);
 		}
 	}
 
 	//! Replace each frame over data in `expr` by the column it reads, VALUE: its payload at
 	//! the selected row, or its `else` at the anchor. One in a reducer's argument whose
-	//! position may be missing drops that member there (syntax_reference.md §5.6): its
-	//! PRESENT column joins the innermost reducer's own `when`, appended to `member_frames`.
-	//! A frame outside every reducer skips the instance instead, which execution reads off
-	//! the frame map.
-	void LowerDataFrames(unique_ptr<Expression> &expr, vector<idx_t> *member_frames) {
+	//! position may be missing drops that member there (syntax_reference.md §5.6): the
+	//! reducer's member frames (MEMBER_FRAME_TAG_PREFIX) join its own `when` as their PRESENT
+	//! columns. A frame outside every reducer skips the instance instead, which execution
+	//! reads off the frame map.
+	void LowerDataFrames(unique_ptr<Expression> &expr) {
 		idx_t frame;
 		if (TryGetDecideFrame(*expr, frame)) {
 			if (FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
@@ -930,36 +953,27 @@ private:
 			auto value = op.frames[frame].range
 			                 ? FrameColumnRef(DecideFrameColumn::Kind::REDUCED, frame, &marker)
 			                 : FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
-			if (member_frames && op.frames[frame].MaySelectNothing()) {
-				member_frames->push_back(frame);
-			}
 			// The marker's parent was bound to the marker's type.
 			expr = BoundCastExpression::AddCastToType(context, std::move(value), marker.return_type);
 			return;
 		}
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			auto &reducer = expr->Cast<BoundAggregateExpression>();
-			vector<idx_t> members;
 			for (auto &child : reducer.children) {
-				LowerDataFrames(child, &members);
+				LowerDataFrames(child);
 			}
-			for (auto member : members) {
-				auto present = FrameColumnRef(DecideFrameColumn::Kind::PRESENT, member, nullptr);
-				reducer.filter = reducer.filter ? make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
-				                                                                        std::move(reducer.filter),
-				                                                                        std::move(present))
-				                                : std::move(present);
-			}
+			vector<idx_t> member_frames;
+			ParseMemberFrameTags(reducer.GetAlias(), member_frames);
+			JoinPresence(member_frames, reducer.filter);
 			return;
 		}
-		ExpressionIterator::EnumerateChildren(
-		    *expr, [&](unique_ptr<Expression> &child) { LowerDataFrames(child, member_frames); });
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { LowerDataFrames(child); });
 	}
 
 	void LowerFramesIn(vector<DecideTerm> &terms) {
 		for (auto &term : terms) {
 			if (term.coefficient) {
-				LowerDataFrames(term.coefficient, nullptr);
+				LowerDataFrames(term.coefficient);
 			}
 		}
 	}
@@ -967,11 +981,11 @@ private:
 	void LowerFramesIn(DecideConstraint &constraint) {
 		LowerFramesIn(constraint.lhs_terms);
 		if (constraint.rhs_expr) {
-			LowerDataFrames(constraint.rhs_expr, nullptr);
+			LowerDataFrames(constraint.rhs_expr);
 		}
 		for (auto &term : constraint.bilinear_terms) {
 			if (term.coefficient) {
-				LowerDataFrames(term.coefficient, nullptr);
+				LowerDataFrames(term.coefficient);
 			}
 		}
 		for (auto &group : constraint.quadratic_groups) {
@@ -995,7 +1009,7 @@ private:
 			LowerFramesIn(op.prepared.objective->squared_terms);
 			for (auto &term : op.prepared.objective->bilinear_terms) {
 				if (term.coefficient) {
-					LowerDataFrames(term.coefficient, nullptr);
+					LowerDataFrames(term.coefficient);
 				}
 			}
 		}
@@ -1004,7 +1018,7 @@ private:
 				LowerFramesIn(term.inner_terms);
 			}
 			if (spec.rhs_expr) {
-				LowerDataFrames(spec.rhs_expr, nullptr);
+				LowerDataFrames(spec.rhs_expr);
 			}
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
@@ -1133,6 +1147,38 @@ private:
 		idx_t scope_idx = DConstants::INVALID_INDEX;
 		TryParseQualifiedReducerTag(agg.alias, scope_idx);
 		return scope_idx;
+	}
+
+	//! A reducer whose members a frame may drop is a helper decision, whose members execution
+	//! lists before anything reads them (syntax_reference.md §5.6): the canonicalizer gave its
+	//! clause the VALUE shape and the objective's the value rewrite's tag, so a reducer summed
+	//! here holds no such frame -- read off its argument, not its tags.
+	void AssertMembersListed(const BoundAggregateExpression &agg) const {
+		vector<idx_t> member_frames;
+		DecideMemberFrames(agg, op.frames, member_frames);
+		if (!member_frames.empty()) {
+			throw InternalException("DECIDE: a reducer whose members %s may drop is summed in place, its members "
+			                        "never listed: %s",
+			                        op.frames[member_frames[0]].text, agg.ToString());
+		}
+	}
+
+	//! A helper decision that may be absent is read outside every reducer, or by another
+	//! helper's listed members: never inside a reducer summed in place, where nothing could
+	//! drop the member reading an absent instance (ReducerValueLink::SkipsInstancesOf).
+	void AssertNoAbsentHelperSummed(const vector<DecideTerm> &terms, bool reduced) const {
+		for (auto &term : terms) {
+			if (!reduced && term.reduction != LinearTermReduction::SUM) {
+				continue;
+			}
+			for (auto &link : op.reducer_value_links) {
+				if (link.value_var == term.variable_index && link.MayBeAbsent()) {
+					throw InternalException("DECIDE: %s, which may be absent, is read inside a reducer summed in "
+					                        "place",
+					                        link.label);
+				}
+			}
+		}
 	}
 
 	static void ApplyAggregateMetadata(vector<DecideTerm> &terms, idx_t begin, const BoundAggregateExpression &agg) {
@@ -1383,6 +1429,7 @@ private:
 			throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
 			                        agg.function.name);
 		}
+		AssertMembersListed(agg);
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
 
@@ -1431,6 +1478,7 @@ private:
 		}
 		D_ASSERT(constraint.lhs_terms.empty() && constraint.bilinear_terms.empty() &&
 		         constraint.quadratic_groups.empty());
+		AssertMembersListed(*agg);
 		ExtractConstraintTerms(*agg->children[0], constraint, 1);
 		AttachReducerFilter(constraint, 0, 0, 0, agg->filter.get());
 		if (scale_match.aggregate) {
@@ -1615,6 +1663,14 @@ private:
 
 			if (when_condition) {
 				constraint->when_condition = std::move(when_condition);
+			}
+			// A row defining a reducer's members stands where they do: where each frame that
+			// may drop one selects (syntax_reference.md §5.6).
+			if (HasDecideTag(comp.alias, MEMBER_ROW_TAG)) {
+				constraint->defines_members = true;
+				vector<idx_t> member_frames;
+				ParseMemberFrameTags(comp.alias, member_frames);
+				JoinPresence(member_frames, constraint->when_condition);
 			}
 			TryParseGroupKeyTag(comp.alias, constraint->group_key);
 			if (per_class) {
@@ -1925,6 +1981,7 @@ private:
 			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
 			    agg.function.name);
 		}
+		AssertMembersListed(agg);
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
 		idx_t avg_group_key = is_avg ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;

@@ -260,7 +260,11 @@ gates the operator set (`=`, `<`, `<=`, `>`, `>=`, `<>`, plus `BETWEEN` via
 `BindBetween`).
 
 The binder asks only whether *either* side bears a decision. It does not flip
-`5 >= x` into `x <= 5` — the canonicalizer does that on the bound tree.
+`5 >= x` into `x <= 5` — the canonicalizer does that on the bound tree. A side holding a
+reducer bears one only when a decision stands in it: `sum(t.v) by (t.g) + 1`, `2 *
+max(t.v)` and `abs(sum(t.v) - 3)` are data, refused as a bare column is (*"SUCH THAT clause:
+'(sum(t.v) BY (t.g) + 1)' reads no DECIDE variable; compare a decision with it"*), where
+they reached the linear form as an internal error.
 
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 `BindConjunction`, `BindScopedConstraint` (§4a).

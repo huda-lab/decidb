@@ -123,10 +123,14 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			}
 			return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
 		};
+		// Each indicator is a member of the norm's sum: its links define it, where the norm's
+		// member frames select, and no instance its clause skips removes them.
+		const auto member_frames = MemberFramesAt(DecideReducerPath().Below(aggregate));
 		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
 			MarkFormulationConstraint(*link, clause_alias);
+			MarkMemberRow(*link, member_frames);
 			links.push_back(ScopeHelperRow(std::move(link), scope));
 		};
 		add_link(make_mz(), aggregate.children[0]->Copy());

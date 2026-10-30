@@ -206,7 +206,10 @@ reads once per class (SR §7.1; deck pp. 34–40):
   §5.6), by its keys, never by the data it reads (D76): its timeline, and its peer when a
   position is relative to the anchor; plus its fallback where the fallback is reached. A
   first/last frame whose `within` columns the key holds is covered and splits nothing
-  (`../../09_anr_language/done.md`, phases 4 and 5).
+  (`../../09_anr_language/done.md`, phases 4 and 5). Absence is no field: inside a
+  reducer a frame that selects nothing drops that member, and a reducer left with none
+  is absent -- its instance skipped, the member reading it dropped, the objective an
+  error (D81, D82; phase 6).
 
 An inner `per` key, and the `D` of the colon form, hand their reducer one value per
 variant of each of its classes the same way (D65). Where the key fixes every field —
@@ -421,7 +424,7 @@ constraint-to-bound conversion, skyband pruning, drop-solve-validate-refine — 
 
 The scope suites, the `_scope_oracle.py` reference model and the brute-force
 enumerator are described in `../../04_testing/scope/done.md`:
-`test/decide/tests/test_scope_{bare_clauses,combinations,deck_examples,declare,explain_diagnose,generation,objective,reducer_by,reducer_inner,removed_syntax,value_rewrite,variants}.py`, `test_anr_variants.py`,
+`test/decide/tests/test_scope_{bare_clauses,combinations,deck_examples,declare,explain_diagnose,generation,objective,reducer_by,reducer_inner,removed_syntax,value_rewrite,variants}.py`, `test_anr_variants.py`, `test_anr_composition.py`, `test_anr_diagnostics.py`,
 with `test/decidb/test_scope_parser.test` for the parser cases.
 `test_no_old_spellings_remain.py` keeps the refused spellings out of every test surface
 except `test_scope_removed_syntax.py`.

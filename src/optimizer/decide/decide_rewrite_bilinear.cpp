@@ -44,11 +44,11 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	vector<LogicalDecide::BilinearLink> links;
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceBilinear(objective, decide, links, OBJECTIVE_ROW_TAG);
+		FindAndReplaceBilinear(objective, decide, links, OBJECTIVE_ROW_TAG, DecideReducerPath());
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 	if (decide.decide_constraints) {
-		FindAndReplaceBilinear(decide.decide_constraints, decide, links, string());
+		FindAndReplaceBilinear(decide.decide_constraints, decide, links, string(), DecideReducerPath());
 	}
 	decide.bilinear_links = std::move(links);
 }
@@ -124,9 +124,19 @@ bool DecideOptimizer::ExtractMultiplicativeCoefficient(const Expression &expr, i
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                               vector<LogicalDecide::BilinearLink> &links,
-                                              const string &source_alias) {
+                                              const string &source_alias, const DecideReducerPath &path) {
 	if (!expr) return;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	// The rows of a product inside a reducer over decisions define that reducer's members.
+	idx_t frame;
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(*expr, frame) &&
+	    BoundExpressionReferencesDecide(*expr, decide.decide_index)) {
+		auto below = path.Below(expr->Cast<BoundAggregateExpression>());
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+			FindAndReplaceBilinear(child, decide, links, clause_alias, below);
+		});
+		return;
+	}
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -175,7 +185,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					// Non-Boolean × Non-Boolean: leave for Q matrix (Phase 2)
 					// Still recurse into children for nested bilinear
 					ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-						FindAndReplaceBilinear(child, decide, links, clause_alias);
+						FindAndReplaceBilinear(child, decide, links, clause_alias, path);
 					});
 					return;
 				}
@@ -276,6 +286,9 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
 					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding));
 					MarkFormulationConstraint(*c1, clause_alias);
+					if (path.innermost) {
+						MarkMemberRow(*c1, MemberFramesAt(path));
+					}
 					AppendConstraint(decide, std::move(c1));
 
 					// w <= b2
@@ -284,6 +297,9 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
 					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
 					MarkFormulationConstraint(*c2, clause_alias);
+					if (path.innermost) {
+						MarkMemberRow(*c2, MemberFramesAt(path));
+					}
 					AppendConstraint(decide, std::move(c2));
 
 					// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
@@ -300,6 +316,9 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    std::move(b1_plus_b2_minus_w),
 					    make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
 					MarkFormulationConstraint(*c3, clause_alias);
+					if (path.innermost) {
+						MarkMemberRow(*c3, MemberFramesAt(path));
+					}
 					AppendConstraint(decide, std::move(c3));
 				} else {
 					// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
@@ -367,7 +386,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceBilinear(child, decide, links, clause_alias);
+		FindAndReplaceBilinear(child, decide, links, clause_alias, path);
 	});
 }
 
