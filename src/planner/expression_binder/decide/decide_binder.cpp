@@ -482,14 +482,12 @@ static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression
 }
 
 //! `columns` as key elements, for FindOrCreateDecideKey to order and de-duplicate.
-static vector<DecideKeyElement> KeyElements(const KeyColumns &columns) {
+static vector<DecideKeyElement> KeyElements(ClientContext &context, const KeyColumns &columns) {
 	vector<DecideKeyElement> elements;
 	for (auto &column : columns) {
-		DecideKeyElement element;
-		element.expression = make_uniq<BoundColumnRefExpression>(column.column_name, column.type, column.binding);
-		element.name = column.name;
-		element.null_mode = column.null_mode;
-		elements.push_back(std::move(element));
+		elements.push_back(DecideKeyElement::Bind(
+		    context, make_uniq<BoundColumnRefExpression>(column.column_name, column.type, column.binding), column.name,
+		    column.null_mode));
 	}
 	return elements;
 }
@@ -507,16 +505,16 @@ static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) 
 	return keyed_scopes.size() - 1;
 }
 
-idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
+idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes) {
-	auto key = BindKey(bind_context, per, decision_names, key_text, keys);
+	auto key = BindKey(context, bind_context, per, decision_names, key_text, keys);
 	return FindOrCreateScope(key, keyed_scopes);
 }
 
-idx_t BindKey(BindContext &bind_context, const FunctionExpression &per, const case_insensitive_set_t &decision_names,
-              const string &key_text, vector<DecideKey> &keys) {
-	return FindOrCreateDecideKey(KeyElements(ResolveKey(bind_context, per, decision_names)), key_text, keys);
+idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
+              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys) {
+	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(bind_context, per, decision_names)), key_text, keys);
 }
 
 //! The relation `element` names when it names no column of the FROM clause: `by (D)`
@@ -543,10 +541,10 @@ static optional_ptr<Binding> ResolveRelationName(BindContext &bind_context, cons
 }
 
 //! A relation's stored columns as key elements, registered with the scan.
-static vector<DecideKeyElement> BindRelationColumns(Binding &relation) {
+static vector<DecideKeyElement> BindRelationColumns(ClientContext &context, Binding &relation) {
 	KeyColumns columns;
 	AddRelationColumns(relation, columns);
-	return KeyElements(columns);
+	return KeyElements(context, columns);
 }
 
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
@@ -1679,8 +1677,8 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	}
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
 	// classes and the same check that the key determines the body.
-	auto scope_idx =
-	    FindOrCreateScope(FindOrCreateDecideKey(KeyElements(key), relation_list, *ctx.keys), *ctx.keyed_scopes);
+	auto scope_idx = FindOrCreateScope(FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys),
+	                                   *ctx.keyed_scopes);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1776,8 +1774,8 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 		}
 		auto &marker = per->Cast<FunctionExpression>();
 		auto scope_idx =
-		    FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables), DecideKeyToString(marker),
-		                         *qualifier_context->keys, *qualifier_context->keyed_scopes);
+		    FindOrCreateKeyScope(context, binder.bind_context, marker, DecisionNames(variables),
+		                         DecideKeyToString(marker), *qualifier_context->keys, *qualifier_context->keyed_scopes);
 		AddDecideTag(aggregate->alias,
 		             MakeQualifiedReducerTag(scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER)));
 	}
@@ -1808,14 +1806,13 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		if (element->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 			auto relation = ResolveRelationName(binder.bind_context, element->Cast<ColumnRefExpression>());
 			if (relation) {
-				for (auto &column : BindRelationColumns(*relation)) {
+				for (auto &column : BindRelationColumns(context, *relation)) {
 					key.push_back(std::move(column));
 				}
 				continue;
 			}
 		}
-		DecideKeyElement key_element;
-		key_element.name = element->ToString();
+		auto name = element->ToString();
 		ErrorData key_error;
 		binding_when_condition = true;
 		try {
@@ -1828,8 +1825,8 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		if (key_error.HasError()) {
 			return BindResult(std::move(key_error));
 		}
-		key_element.expression = std::move(BoundExpression::GetExpression(*element));
-		key.push_back(std::move(key_element));
+		key.push_back(DecideKeyElement::Bind(context, std::move(BoundExpression::GetExpression(*element)),
+		                                     std::move(name), DecideKeyNullMode::NO_GROUP));
 	}
 	// The key as the user wrote it, when the parser kept it.
 	auto text_fragment = qualifier_context->WrittenFragment(by, DecideSpanRole::BY);

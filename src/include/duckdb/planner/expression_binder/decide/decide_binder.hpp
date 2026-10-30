@@ -27,7 +27,7 @@ struct DecideSourceNames;
 //! repetition aside -- share one key (BindKey) and one scope. `key_text` is the key as
 //! written, kept for display. A reducer's `per ()` is the empty key: one scope every row
 //! belongs to.
-idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
+idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes);
 
@@ -35,8 +35,8 @@ idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &
 //! created when no key so far has them: a column element compares NULL as SQL's `=`
 //! does, a relation element stands for its stored columns, which compare NULL as a
 //! value. `key_text` is the key as written, kept for display.
-idx_t BindKey(BindContext &bind_context, const FunctionExpression &per, const case_insensitive_set_t &decision_names,
-              const string &key_text, vector<DecideKey> &keys);
+idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
+              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys);
 
 //! What a reducer's own key (`sum(per K: e)`, `SUM(D: e)`) and `by` need in order to
 //! resolve. Owned by the declarations binder, which is still filling `keyed_scopes` when

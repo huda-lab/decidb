@@ -380,7 +380,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		for (auto &variable : variables) {
 			decision_names.insert(variable.first);
 		}
-		key = BindKey(binder.bind_context, *per, decision_names, key_text, *qualifier_context->keys);
+		key = BindKey(context, binder.bind_context, *per, decision_names, key_text, *qualifier_context->keys);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and

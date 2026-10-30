@@ -60,6 +60,46 @@ def test_a_collated_per_key_determines_its_own_by_group(decidb_cli, scope_solver
     assert sum(row["x"] for row in result) == 2
 
 
+def test_a_by_key_under_another_collation_is_another_key(decidb_cli):
+    """`per g: sum(x) by (g COLLATE noaccent) <= 1` over a NOCASE g: the two collations group differently, so they are
+    two keys (DecideGroupsAlike: the collations differ) and the class {a, A} holds two `by` groups."""
+    sql = f"""
+        SELECT id, x {_source()}
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE noaccent) <= 1 MAXIMIZE SUM(t.p * x)"""
+    decidb_cli.assert_error(sql, match=r"per t\.g does not determine t\.g COLLATE noaccent")
+
+
+@pytest.mark.correctness
+def test_a_by_key_written_under_the_columns_collation_is_the_same_key(decidb_cli, scope_solver):
+    """`per g: sum(x) by (g COLLATE nocase) <= 1` over a NOCASE g: one collation, so one key (DecideGroupsAlike: the
+    collations are equal) and no check is planned."""
+    sql = f"""
+        SELECT id, x {_source()}
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE nocase) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN {sql}")
+    assert plan.returncode == 0, plan.stderr
+    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
+    _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
+
+
+@pytest.mark.correctness
+def test_the_default_collation_and_the_same_written_collation_are_one_key(decidb_cli, scope_solver):
+    """Under `default_collation='nocase'`, a plain g and `g COLLATE NOCASE` group under one collation function, though
+    their types name different collations, so they are one key (Grouping: equal) and no check is planned."""
+    sql = f"""
+        SET default_collation='nocase';
+        SELECT id, x {_source(collation="")}
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE NOCASE) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(
+        sql.replace("SELECT", "EXPLAIN SELECT", 1)
+    )
+    assert plan.returncode == 0, plan.stderr
+    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
+    _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
+
+
 @pytest.mark.correctness
 def test_a_bound_side_reducer_reads_its_group_under_the_collation(decidb_cli, scope_solver):
     """`sum(x) by (g) <= min(cap) by (g)`: the bound is read over 'a' and 'A' together, as the sum is."""

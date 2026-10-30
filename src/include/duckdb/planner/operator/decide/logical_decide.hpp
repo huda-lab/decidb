@@ -28,8 +28,13 @@ struct DecideKeyElement {
     string name;
     DecideKeyNullMode null_mode = DecideKeyNullMode::NO_GROUP;
 	//! `expression` under its collation, as GROUP BY groups (`PushCollation`); null when
-	//! its type has none. Rows group on it, and a label quotes `expression`.
+	//! its type has none, or when `expression` holds a subquery and so took its collation
+	//! in place (Bind). Rows group on it, and a label quotes `expression`.
 	unique_ptr<Expression> collated;
+
+	//! `expression` as a key element, its grouping form built as GROUP BY builds a group's.
+	static DecideKeyElement Bind(ClientContext &context, unique_ptr<Expression> expression, string name,
+	                             DecideKeyNullMode null_mode);
 
 	//! The expression rows group on: `collated`, else `expression`.
 	const Expression &Grouping() const {
@@ -67,9 +72,10 @@ struct DecideKey {
     static DecideKey Deserialize(Deserializer &deserializer);
 };
 
-//! The entry of `keys` holding `elements` as a set -- order and repetition aside --
-//! appending it, as written, when no key so far holds them; INVALID_INDEX for no
-//! elements. An element written on its own and through its relation is the written one.
+//! The entry of `keys` holding `elements` as a set -- order and repetition aside, elements
+//! compared as rows group on them (Grouping) -- appending it, as written, when no key so
+//! far holds them; INVALID_INDEX for no elements. An element written on its own and
+//! through its relation is the written one.
 idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys);
 //! The elements of `keys[key]`; none for INVALID_INDEX, the empty key.
 const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys, idx_t key);

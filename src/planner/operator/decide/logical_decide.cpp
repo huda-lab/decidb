@@ -1,5 +1,6 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
@@ -17,6 +18,24 @@ DecideKeyElement DecideKeyElement::Copy() const {
 	if (collated) {
 		result.collated = collated->Copy();
 	}
+	return result;
+}
+
+DecideKeyElement DecideKeyElement::Bind(ClientContext &context, unique_ptr<Expression> expression, string name,
+                                        DecideKeyNullMode null_mode) {
+	DecideKeyElement result;
+	result.name = std::move(name);
+	result.null_mode = null_mode;
+	// A bound subquery cannot be copied, so it groups and is labelled under its collation, as a GROUP BY group is.
+	if (expression->HasSubquery()) {
+		ExpressionBinder::PushCollation(context, expression, expression->return_type);
+	} else {
+		auto collated = expression->Copy();
+		if (ExpressionBinder::PushCollation(context, collated, collated->return_type)) {
+			result.collated = std::move(collated);
+		}
+	}
+	result.expression = std::move(expression);
 	return result;
 }
 
@@ -56,7 +75,7 @@ idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &tex
 	vector<DecideKeyElement> unique;
 	for (auto &element : elements) {
 		auto kept = std::find_if(unique.begin(), unique.end(), [&](const DecideKeyElement &member) {
-			return member.expression->Equals(*element.expression);
+			return member.Grouping().Equals(element.Grouping());
 		});
 		if (kept == unique.end()) {
 			unique.push_back(std::move(element));
@@ -70,7 +89,7 @@ idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &tex
 	std::stable_sort(unique.begin(), unique.end(), ElementBefore);
 	auto holds = [](const vector<DecideKeyElement> &set, const DecideKeyElement &element) {
 		for (auto &member : set) {
-			if (member.null_mode == element.null_mode && member.expression->Equals(*element.expression)) {
+			if (member.null_mode == element.null_mode && member.Grouping().Equals(element.Grouping())) {
 				return true;
 			}
 		}

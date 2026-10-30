@@ -176,8 +176,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 variable_scopes.push_back(DecideVarScopeInfo::Global());
             } else if (declaration.per) {
                 auto key_text = DecideKeyToString(*declaration.per);
-			    auto scope_idx =
-			        FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text, keys, keyed_scopes);
+			    auto scope_idx = FindOrCreateKeyScope(context, bind_context, *declaration.per, declared_names, key_text,
+			                                          keys, keyed_scopes);
 			    keyed_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
                 variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
             } else {

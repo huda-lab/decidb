@@ -103,15 +103,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			}
 		}
 		is_outside_flattened = outer_flatten_state;
-		// A key groups rows as GROUP BY does: under its column's collation.
-		for (auto &key : statement.decide_keys) {
-			for (auto &element : key.elements) {
-				auto collated = element.expression->Copy();
-				if (ExpressionBinder::PushCollation(context, collated, collated->return_type)) {
-					element.collated = std::move(collated);
-				}
-			}
-		}
 
 		// Read back what every scalar subquery became. The table-index sets give the
 		// strict canonicalizer its planning-time evidence. The expression tags carry
