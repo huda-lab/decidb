@@ -532,7 +532,13 @@ The first check to fail stops the query, so this order picks the message. Litera
 Nor does one of the key's own elements as rows group on it (`KeyHolds`, reflexivity): a key determines its
 grouping expression by construction, so `per a: sum(x) by (a)` builds no check for `a`. A function of a key column
 still gets one, since rows that group together can differ under it (0.0 and -0.0 under `atan2(a, -1)`, '1 month'
-and '30 days' under `date_part('day', a)`). The message texts are rendered
+and '30 days' under `date_part('day', a)`). Key elements compare as rows group on them, collation included: a key
+element is bound as GROUP BY binds a group (`DecideKeyElement::Bind`, `PushCollation` at binding, so
+`default_collation` applies), and `FindOrCreateDecideKey` and `KeyHolds` compare `Grouping()`. `per t.g` over a NOCASE
+column and `by (t.g COLLATE noaccent)` are two keys, so the check runs and stops the query when 'a' and 'A' differ
+under `noaccent`; `by (t.g COLLATE NOCASE)` over that column is the same key. Collation names are never compared:
+`nocase.noaccent` and `noaccent.nocase` lower to different expressions and are two keys, as GROUP BY's duplicate-group
+removal sees them. The message texts are rendered
 here, through `RenderDecideSource`, from source fragments and relation aliases
 (`DecideScopeChecks`), since only planning still knows them.
 
