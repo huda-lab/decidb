@@ -186,27 +186,27 @@ HighsScaleResult ChooseHighsScale(double lo, double hi, double bound, int &expon
 }
 
 //! Multiply each out-of-window row of the constraint matrix through by its own power of
-//! two, bounds included. Applied to the COO matrix before it is packed into CSR, so the
-//! scaled values are what reaches `passModel`.
-void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_rows, vector<double> &a_vals,
-                              vector<double> &row_lower, vector<double> &row_upper) {
-    idx_t num_rows = row_lower.size();
+//! two, bounds included. Applied to the row-wise matrix `passModel` receives (`start`, `value`).
+void ScaleRowsIntoHighsWindow(const SolverModel &model, const std::vector<HighsInt> &start, std::vector<double> &value,
+                              std::vector<double> &row_lower, std::vector<double> &row_upper) {
+	idx_t num_rows = row_lower.size();
     vector<double> lo(num_rows, std::numeric_limits<double>::infinity());
     vector<double> hi(num_rows, 0.0);
-    for (idx_t i = 0; i < a_vals.size(); i++) {
-        double v = std::fabs(a_vals[i]);
-        if (v == 0.0) {
-            // The model builder strips exact zeros; one that slips through carries no
-            // information, so HiGHS dropping it silently is correct and it must not drag
-            // the row's `lo` to zero.
-            continue;
-        }
-        idx_t r = static_cast<idx_t>(a_rows[i]);
-        lo[r] = std::min(lo[r], v);
-        hi[r] = std::max(hi[r], v);
-    }
+	for (idx_t r = 0; r < num_rows; r++) {
+		for (auto i = start[r]; i < start[r + 1]; i++) {
+			double v = std::fabs(value[i]);
+			if (v == 0.0) {
+				// The model builder strips exact zeros; one that slips through carries no
+				// information, so HiGHS dropping it silently is correct and it must not drag
+				// the row's `lo` to zero.
+				continue;
+			}
+			lo[r] = std::min(lo[r], v);
+			hi[r] = std::max(hi[r], v);
+		}
+	}
 
-    vector<int> exponent(num_rows, 0);
+	vector<int> exponent(num_rows, 0);
     bool any = false;
     for (idx_t r = 0; r < num_rows; r++) {
         if (hi[r] == 0.0) {
@@ -237,18 +237,18 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
         return;
     }
 
-    for (idx_t i = 0; i < a_vals.size(); i++) {
-        int k = exponent[static_cast<idx_t>(a_rows[i])];
-        if (k != 0) {
-            a_vals[i] = std::ldexp(a_vals[i], k);
-        }
-    }
     for (idx_t r = 0; r < num_rows; r++) {
-        const auto &constr = model.constraints[r];
-        if (exponent[r] == 0 || !std::isfinite(constr.rhs)) {
-            continue;
-        }
-        double scaled = std::ldexp(constr.rhs, exponent[r]);
+		if (exponent[r] == 0) {
+			continue;
+		}
+		for (auto i = start[r]; i < start[r + 1]; i++) {
+			value[i] = std::ldexp(value[i], exponent[r]);
+		}
+		const auto &constr = model.constraints[r];
+		if (!std::isfinite(constr.rhs)) {
+			continue;
+		}
+		double scaled = std::ldexp(constr.rhs, exponent[r]);
         if (constr.sense == '>') {
             row_lower[r] = scaled;
         } else if (constr.sense == '<') {
@@ -441,67 +441,50 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
     // entries, which the row and objective scaling below then place.
     column_exponent = ChooseHighsColumnScales(model);
 
-    //===--------------------------------------------------------------------===//
-    // 2. Convert SolverModel constraints to HiGHS range format + COO matrix
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 2. The rows, straight into the row-wise matrix HiGHS takes
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("highs.rows_to_coo");
-    vector<int> a_rows;
-    vector<int> a_cols;
-    vector<double> a_vals;
-    vector<double> row_lower;
-    vector<double> row_upper;
-
-    // Precompute total nnz to avoid repeated vector reallocation
-    idx_t total_nnz = 0;
+	// The model's rows are already row-wise, so they pack into HiGHS's compressed rows with no
+	// coordinate list between, and `lp` moves into `passModel`: the matrix is held once.
+	phase.Next("highs.pack_rows");
+	HighsLp lp;
+	auto &matrix = lp.a_matrix_;
+	matrix.format_ = MatrixFormat::kRowwise;
+	idx_t total_nnz = 0;
     for (auto &constr : model.constraints) {
         total_nnz += constr.indices.size();
     }
-    a_rows.reserve(total_nnz);
-    a_cols.reserve(total_nnz);
-    a_vals.reserve(total_nnz);
-    row_lower.reserve(model.constraints.size());
-    row_upper.reserve(model.constraints.size());
-
-    idx_t constraint_idx = 0;
-    for (auto &constr : model.constraints) {
+	matrix.start_.reserve(model.constraints.size() + 1);
+	matrix.index_.reserve(total_nnz);
+	matrix.value_.reserve(total_nnz);
+	lp.row_lower_.reserve(model.constraints.size());
+	lp.row_upper_.reserve(model.constraints.size());
+	matrix.start_.assign(1, 0);
+	for (auto &constr : model.constraints) {
         for (idx_t j = 0; j < constr.indices.size(); j++) {
-            a_rows.push_back(static_cast<int>(constraint_idx));
-            a_cols.push_back(constr.indices[j]);
-            a_vals.push_back(std::ldexp(constr.coefficients[j], column_exponent[constr.indices[j]]));
-        }
+			matrix.index_.push_back(constr.indices[j]);
+			matrix.value_.push_back(std::ldexp(constr.coefficients[j], column_exponent[constr.indices[j]]));
+		}
+		matrix.start_.push_back(static_cast<HighsInt>(matrix.index_.size()));
+		lp.row_lower_.push_back(constr.sense == '<' ? -DECIDE_SOLVER_INFINITY : constr.rhs);
+		lp.row_upper_.push_back(constr.sense == '>' ? DECIDE_SOLVER_INFINITY : constr.rhs);
+	}
 
-        if (constr.sense == '>') {
-            row_lower.push_back(constr.rhs);
-            row_upper.push_back(DECIDE_SOLVER_INFINITY);
-        } else if (constr.sense == '<') {
-            row_lower.push_back(-DECIDE_SOLVER_INFINITY);
-            row_upper.push_back(constr.rhs);
-        } else {
-            row_lower.push_back(constr.rhs);
-            row_upper.push_back(constr.rhs);
-        }
+	// Bring every row inside HiGHS's coefficient window. Each out-of-window row is multiplied
+	// through by its own power of two, bounds included, which leaves the constraint — and
+	// therefore the answer — exactly intact.
+	phase.Next("highs.scale_rows");
+	ScaleRowsIntoHighsWindow(model, matrix.start_, matrix.value_, lp.row_lower_, lp.row_upper_);
 
-        constraint_idx++;
-    }
+	//===--------------------------------------------------------------------===//
+	// 3. The columns
+	//===--------------------------------------------------------------------===//
 
-    // Bring every row inside HiGHS's coefficient window before the matrix is packed.
-    // Each out-of-window row is multiplied through by its own power of two, bounds
-    // included, which leaves the constraint — and therefore the answer — exactly intact.
-    phase.Next("highs.scale_rows");
-    ScaleRowsIntoHighsWindow(model, a_rows, a_vals, row_lower, row_upper);
-
-    idx_t num_constraints = static_cast<idx_t>(row_lower.size());
-
-    //===--------------------------------------------------------------------===//
-    // 3. Build HighsLp and convert COO to CSR
-    //===--------------------------------------------------------------------===//
-
-    phase.Next("highs.pack_csr");
-    HighsLp lp;
-    lp.num_col_ = total_vars;
-    lp.num_row_ = num_constraints;
-    lp.sense_ = sense;
+	phase.Next("highs.pack_columns");
+	lp.num_col_ = total_vars;
+	lp.num_row_ = model.constraints.size();
+	lp.sense_ = sense;
     lp.offset_ = 0.0;
     lp.col_lower_ = model.col_lower;
     lp.col_upper_ = model.col_upper;
@@ -535,42 +518,10 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 			return false;
         }
     }
-    lp.row_lower_ = row_lower;
-    lp.row_upper_ = row_upper;
+	lp.integrality_ = std::move(var_types);
 
-    lp.a_matrix_.format_ = MatrixFormat::kRowwise;
-    vector<HighsInt> row_starts(num_constraints + 1, 0);
-
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        row_starts[a_rows[i] + 1]++;
-    }
-    for (idx_t i = 0; i < num_constraints; i++) {
-        row_starts[i + 1] += row_starts[i];
-    }
-
-    vector<HighsInt> col_indices(a_vals.size());
-    vector<double> values(a_vals.size());
-    vector<HighsInt> current_pos = row_starts;
-
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        idx_t row = a_rows[i];
-        idx_t pos = current_pos[row];
-        col_indices[pos] = a_cols[i];
-        values[pos] = a_vals[i];
-        current_pos[row]++;
-    }
-
-    lp.a_matrix_.start_ = row_starts;
-    lp.a_matrix_.index_ = col_indices;
-    lp.a_matrix_.value_ = values;
-
-    lp.integrality_.resize(total_vars);
-    for (idx_t i = 0; i < total_vars; i++) {
-        lp.integrality_[i] = var_types[i];
-    }
-
-    phase.Next("highs.pass_model");
-    HighsStatus status = highs.passModel(lp);
+	phase.Next("highs.pass_model");
+	HighsStatus status = highs.passModel(std::move(lp));
 	// `passModel` returns kWarning for conditions it expects the caller to proceed
 	// through — a matrix entry dropped for being sub-tolerance, an inconsistent bound
 	// pair left in place so the solve can deduce infeasibility from it. Treating those as
