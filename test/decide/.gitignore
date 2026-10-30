@@ -3,6 +3,6 @@ results/matrix_*/
 __pycache__/
 *.pyc
 .pytest_cache/
-.venv/
+.venv
 _tpch_oracle.duckdb
 _tpch_oracle.duckdb.wal

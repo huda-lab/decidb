@@ -1,0 +1,85 @@
+# name: test/sql/optimizer/test_materialized_cte_column_pruning.test
+# description: A materialized CTE keeps the columns its references read, whatever the definition's root is
+# group: [optimizer]
+
+statement ok
+CREATE TABLE t AS SELECT i AS kept_a, i * 2 AS kept_b, 'p' || i AS payload_unused, 'q' || i AS other_unused FROM range(5) r(i);
+
+# two references read different columns: the definition holds the union, and the unused columns are gone
+query II
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM t) SELECT w1.kept_a, w2.kept_b FROM w w1 JOIN w w2 ON w1.kept_a = w2.kept_a;
+----
+physical_plan	<REGEX>:.*kept_b.*
+
+query II
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM t) SELECT w1.kept_a, w2.kept_b FROM w w1 JOIN w w2 ON w1.kept_a = w2.kept_a;
+----
+physical_plan	<!REGEX>:.*(payload_unused|other_unused).*
+
+query II
+WITH w AS MATERIALIZED (SELECT * FROM t) SELECT w1.kept_a, w2.kept_b FROM w w1 JOIN w w2 ON w1.kept_a = w2.kept_a ORDER BY 1;
+----
+0	0
+1	2
+2	4
+3	6
+4	8
+
+# a definition whose root is not a projection (a UNION ALL) is narrowed the same way
+query II
+EXPLAIN WITH w AS MATERIALIZED (SELECT kept_a, payload_unused FROM t UNION ALL SELECT kept_b, other_unused FROM t) SELECT w1.kept_a FROM w w1, w w2;
+----
+physical_plan	<!REGEX>:.*(payload_unused|other_unused).*
+
+query I
+WITH w AS MATERIALIZED (SELECT kept_a, payload_unused FROM t UNION ALL SELECT kept_b, other_unused FROM t) SELECT count(w1.kept_a) FROM w w1, w w2;
+----
+100
+
+# references that read nothing still have a column to scan
+query I
+WITH w AS MATERIALIZED (SELECT * FROM t) SELECT count(*) FROM w w1, w w2;
+----
+25
+
+# a column one reference reads and the other does not stays for both: the layout is shared
+query II
+WITH w AS MATERIALIZED (SELECT * FROM t) SELECT (SELECT max(payload_unused) FROM w), sum(w2.kept_a) FROM w w2;
+----
+p4	10
+
+# a reference the pass does not reach (the child of a table in-out function) reads columns it did not see: the CTE keeps
+# every column then, and the answer is the query's
+statement ok
+CREATE TABLE tio AS SELECT i AS inout_a, 'x' || i AS inout_b, i * 2 AS inout_c FROM range(5) r(i);
+
+query III
+WITH w AS MATERIALIZED (SELECT * FROM tio) SELECT (SELECT max(inout_c) FROM w), s.summary, s.inout_a FROM summary((SELECT inout_a FROM w)) s ORDER BY 3;
+----
+8	[0]	0
+8	[1]	1
+8	[2]	2
+8	[3]	3
+8	[4]	4
+
+query II
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM tio) SELECT (SELECT max(inout_c) FROM w), s.* FROM summary((SELECT inout_a FROM w)) s;
+----
+physical_plan	<REGEX>:.*SEQ_SCAN.*inout_a.*inout_c.*
+
+# a filter with an IN list of constants passes on the columns of a mark join through a positional projection map, which
+# a narrowed reference below it would leave pointing past the end of its child's output
+statement ok
+CREATE TABLE tin AS SELECT i AS a, i % 7 AS b, 'x' || i AS c, i * 2 AS d, i * 3 AS e FROM range(50) r(i);
+
+query I
+WITH w AS MATERIALIZED (SELECT * FROM tin) SELECT a FROM w WHERE b IN (1,2,3,4,5,6) AND a IN (SELECT e FROM w) ORDER BY 1 LIMIT 3;
+----
+3
+6
+9
+
+query I
+WITH w AS MATERIALIZED (SELECT * FROM tin) SELECT count(*) FROM w WHERE b NOT IN (1,2,3,4,5,6) AND a IN (SELECT e FROM w);
+----
+3

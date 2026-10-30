@@ -1,4 +1,4 @@
 results/
 bench.db
-databases/
+databases
 queries/manual.sql

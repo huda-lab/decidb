@@ -49,21 +49,46 @@ protected:
 	                                  vector<idx_t> &indexes);
 };
 
-//! The RemoveUnusedColumns optimizer traverses the logical operator tree and removes any columns that are not required
+//! The RemoveUnusedColumns optimizer traverses the logical operator tree and removes any columns that are not required.
+//! A materialized CTE keeps only the columns its references read (projection pushdown across the CTE boundary, the
+//! column twin of the CTE filter pusher): every reference takes the same narrowed layout, because a CTE scan reads the
+//! materialized columns by position.
 class RemoveUnusedColumns : public BaseColumnPruner {
 public:
-	RemoveUnusedColumns(Binder &binder, ClientContext &context, bool is_root = false)
-	    : binder(binder), context(context), everything_referenced(is_root) {
-	}
+	RemoveUnusedColumns(Binder &binder, ClientContext &context, bool is_root = false);
 
 	void VisitOperator(LogicalOperator &op) override;
 
 private:
+	//! What the pass learned of one materialized CTE: its width, the columns its references read, how many references
+	//! it visited, and the columns it kept (empty when it kept all).
+	struct CTEReads {
+		idx_t width = 0;
+		vector<bool> read;
+		idx_t visited = 0;
+		vector<idx_t> kept;
+	};
+	using cte_reads_map_t = unordered_map<idx_t, CTEReads>;
+
+	//! A pass nested in `parent`'s, which shares what it learned of the CTEs.
+	explicit RemoveUnusedColumns(RemoveUnusedColumns &parent, bool is_root = false);
+
 	Binder &binder;
 	ClientContext &context;
 	//! Whether or not all the columns are referenced. This happens in the case of the root expression (because the
 	//! output implicitly refers all the columns below it)
 	bool everything_referenced;
+	//! Set until the outermost call starts: that call narrows the CTE references once the whole plan is pruned.
+	bool outermost;
+	//! Shared by every pass nested in this one, keyed by the CTE's table index.
+	shared_ptr<cte_reads_map_t> cte_reads;
+
+	//! `child` under a projection of its `columns` (the first column when there are none, which is added to `columns`).
+	unique_ptr<LogicalOperator> ProjectColumns(unique_ptr<LogicalOperator> child, vector<idx_t> &columns);
+	//! Narrows the definition of the materialized CTE `op` to the columns its references read.
+	void NarrowMaterializedCTE(LogicalOperator &op, CTEReads &reads);
+	//! Gives every reference to a narrowed CTE the narrowed layout and re-points the plan's reads of it.
+	void NarrowCTEReferences(LogicalOperator &plan);
 
 private:
 	template <class T>

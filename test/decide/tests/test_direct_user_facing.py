@@ -905,6 +905,32 @@ def test_a_scan_below_a_row_check_reads_only_the_columns_the_plan_needs(decidb_c
 
 
 @pytest.mark.correctness
+def test_a_copy_of_a_joined_source_holds_only_the_columns_the_plan_reads(decidb_cli):
+    # A join cannot be re-scanned, so the source is materialized once and every read scans the copy. The copy is a
+    # materialized CTE: it keeps the columns its reads use, and the payload only when the parent reads it.
+    setup = """
+        CREATE TEMP TABLE joined_src AS
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5) AS cap, i % 5 AS g,
+               repeat('p', 200) AS payload
+        FROM range(5000) t(i);
+        CREATE TEMP TABLE joined_one AS SELECT i AS k FROM range(5) t(i);
+    """
+    decide = (
+        "FROM (SELECT s.* FROM joined_src s JOIN joined_one o ON o.k = s.g) s "
+        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    )
+    plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
+    assert "S1_UNIFORM_MATROID" in plan and "direct_source" in plan, plan
+    assert "payload" not in plan, plan
+    wide = _raw(decidb_cli, setup + f"EXPLAIN SELECT SUM(length(payload)), SUM(x) FROM ({decide}) q").stdout
+    assert "direct_source" in wide and "payload" in wide, wide
+    for query in (f"SELECT COUNT(*), SUM(x::INT) FROM ({decide}) q", f"SELECT SUM(length(payload)) FROM ({decide}) q"):
+        rows, _ = _run(decidb_cli, setup + query)
+        solver, _ = _run(decidb_cli, setup + query, mode="off")
+        assert rows == solver
+
+
+@pytest.mark.correctness
 def test_a1_pipelined_plan_does_not_read_twice(decidb_cli):
     setup = _late_materialization_setup("a1")
     # Every row sees the same bounds and coefficients, so the plan holds nothing and a late materialization would only add a join.
