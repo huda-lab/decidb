@@ -361,31 +361,42 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	return out;
 }
 
-//! The amount each slack's edit prints, rounded in `direction`; zero for a slack that is no
-//! edit. The amount is the slack value (`=` reports the net s⁺ − s⁻).
+//! One way to read a repair's amounts off the solver's point: the direction each rounds in,
+//! and whether an amount at or below the noise floor is dropped.
+struct AmountReading {
+	RoundDirection direction;
+	bool floored;
+};
+
+//! The readings a repair can print, tidiest first (certify-then-report): each one rounds no
+//! amount closer to zero than the one before, and the last, at least the solver's own
+//! amounts, repairs whenever the solver's point did. The candidate solve keeps the distinct
+//! ones; the report prints the first that a solve certifies.
+static constexpr AmountReading AMOUNT_READINGS[] = {
+    {RoundDirection::NEAREST, true}, {RoundDirection::OUTWARD, true}, {RoundDirection::OUTWARD, false}};
+
+//! The amount each slack's edit prints under `reading`; zero for a slack that is no edit.
+//! The amount is the slack value (`=` reports the net s⁺ − s⁻), each slack column read
+//! within its bound of 0: a negative value is the backend's tolerance past that bound.
 static vector<double> PrintedAmounts(const vector<BlockSlackRef> &slacks, const vector<double> &solution,
-                                     RoundDirection direction) {
+                                     AmountReading reading) {
+	auto slack = [&](idx_t col) {
+		return std::max(solution[col], 0.0);
+	};
 	vector<double> amounts;
 	for (const auto &sl : slacks) {
-		double amount = sl.sense == '=' ? solution[sl.pos_col] - solution[sl.neg_col] : solution[sl.pos_col];
+		double amount = sl.sense == '=' ? slack(sl.pos_col) - slack(sl.neg_col) : slack(sl.pos_col);
 		// What counts as an edit rather than a backend's own rounding. A widened box is
 		// worse conditioned than the model it came from, so a solver can return its
 		// feasibility tolerance as a slack and turn it into a straight-faced
-		// `x <= 1` → `x <= 1.000001`. The floor that removes it is ABSOLUTE and small — a
-		// few multiples of the backend tolerance itself.
-		//
-		// It must not be relative to anything. A floor taken from the model's scale erases
-		// every small edit in a model that happens to contain one large-coefficient row;
-		// a floor taken from the largest edit in the same repair erases the `x <= 0.001`
-		// half of a repair whose other half is `y <= 20000`. Both were measured, and both
-		// are worse than the noise they remove: an extra hairline edit is cosmetic, while a
-		// dropped one makes the reported repair not work when the user applies it. When in
-		// doubt this reports the edit.
+		// `x <= 1` → `x <= 1.000001`. A floored reading drops an amount at or below an
+		// ABSOLUTE floor of a few multiples of the backend tolerance, never one relative to
+		// the model's scale or to the other edits: either erases a needed small edit beside
+		// a large one. The last reading keeps every amount, so a needed edit below the floor
+		// is printed whenever no floored reading repairs the query.
 		double edit_floor = 1e-5;
-		if (std::fabs(amount) > edit_floor) {
-			amount = SnapToPrecision(amount, direction);
-		}
-		amounts.push_back(std::fabs(amount) > edit_floor ? amount : 0.0);
+		bool noise = reading.floored && std::fabs(amount) <= edit_floor;
+		amounts.push_back(noise ? 0.0 : SnapToPrecision(amount, reading.direction));
 	}
 	return amounts;
 }
@@ -810,15 +821,18 @@ static ClauseEdit MakeDropEdit(const SolverModel &model, const RemovalGroupInfo 
 
 enum class CandidateStatus : uint8_t { FEASIBLE, INFEASIBLE, ABORT };
 
+//! A repair's edits under one amount reading.
+struct PrintedRepair {
+	vector<ClauseEdit> edits;
+	//! The query repaired by `edits` (ApplyEdits), solved only for the reported candidate;
+	//! empty for the last reading, which needs no certificate.
+	SolverModel certificate;
+};
+
 struct RemovalCandidate {
 	CandidateStatus status = CandidateStatus::ABORT;
-	//! The edits at their nearest printed amounts.
-	vector<ClauseEdit> edits;
-	//! The edits at their outward amounts, when any differs from its nearest one; empty
-	//! when `edits` needs no certificate.
-	vector<ClauseEdit> outward_edits;
-	//! The query repaired by `edits` (ApplyEdits), solved only for the reported candidate.
-	SolverModel certificate;
+	//! The repair under each distinct reading (AMOUNT_READINGS), tidiest first.
+	vector<PrintedRepair> readings;
 	double data_cost = 0.0;
 	double editable_cost = 0.0;
 	bool objective_unbounded = false;
@@ -935,22 +949,28 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		}
 	}
 
-	// Certify-then-report: an amount rounded to nearest reads as the user would write it but
-	// can fall short of a repair; rounded outward it repairs whenever the solver's amount did.
-	// When the two readings differ, the caller solves the query with the nearest edits applied
-	// once, for the candidate it reports, and prints them only if that solve finds it feasible.
-	vector<double> nearest = PrintedAmounts(slacks, repair_solution, RoundDirection::NEAREST);
-	vector<double> outward = PrintedAmounts(slacks, repair_solution, RoundDirection::OUTWARD);
-	result.edits = ReadElasticEdits(slacks, nearest, candidate_model, columns, input.params.slack_scope);
-	if (nearest != outward) {
-		result.outward_edits = ReadElasticEdits(slacks, outward, candidate_model, columns, input.params.slack_scope);
-		result.certificate = ApplyEdits(elastic.model, slacks, nearest);
-	}
-	for (idx_t index : selected_indices) {
-		result.edits.push_back(MakeDropEdit(input.model, all_groups[index]));
-		if (!result.outward_edits.empty()) {
-			result.outward_edits.push_back(MakeDropEdit(input.model, all_groups[index]));
+	// Certify-then-report: the tidiest reading (to nearest, noise dropped) reads as the user
+	// would write it but can fall short of a repair; the last (outward, every amount) repairs
+	// whenever the solver's point did. A reading equal to the one before adds nothing, so one
+	// that needs no rounding costs no solve. The caller certifies the readings in order, for
+	// the candidate it reports only, and prints the first the query accepts.
+	vector<vector<double>> distinct;
+	for (const auto &reading : AMOUNT_READINGS) {
+		vector<double> amounts = PrintedAmounts(slacks, repair_solution, reading);
+		if (distinct.empty() || amounts != distinct.back()) {
+			distinct.push_back(std::move(amounts));
 		}
+	}
+	for (idx_t i = 0; i < distinct.size(); i++) {
+		PrintedRepair printed;
+		printed.edits = ReadElasticEdits(slacks, distinct[i], candidate_model, columns, input.params.slack_scope);
+		for (idx_t index : selected_indices) {
+			printed.edits.push_back(MakeDropEdit(input.model, all_groups[index]));
+		}
+		if (i + 1 < distinct.size()) {
+			printed.certificate = ApplyEdits(elastic.model, slacks, distinct[i]);
+		}
+		result.readings.push_back(std::move(printed));
 	}
 	result.status = CandidateStatus::FEASIBLE;
 	return result;
@@ -1038,19 +1058,22 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		if (!found) {
 			continue;
 		}
-		if (!best.outward_edits.empty() && input.solve_model(best.certificate).status != SolverStatus::OPTIMAL) {
-			// Infeasible, out of time or unsolved: the outward amounts repair by construction.
-			best.edits = std::move(best.outward_edits);
+		// The first reading a solve certifies prints. A certificate that is infeasible, out of
+		// time or unsolved moves on; the last reading repairs by construction.
+		idx_t printed = 0;
+		while (printed + 1 < best.readings.size() &&
+		       input.solve_model(best.readings[printed].certificate).status != SolverStatus::OPTIMAL) {
+			printed++;
 		}
-		if (best.edits.empty()) {
+		const auto &edits = best.readings[printed].edits;
+		if (edits.empty()) {
 			return DecideDiagnostic();
 		}
 		if (best.objective_unbounded) {
-			return BuildInfeasibleDiagnostic(best.edits, "", /*unbounded_after_fix=*/true);
+			return BuildInfeasibleDiagnostic(edits, "", /*unbounded_after_fix=*/true);
 		}
 		return BuildInfeasibleDiagnostic(
-		    best.edits,
-		    best.has_objective ? FormatNum(SnapDiagnosticValue(best.objective_value)) : string());
+		    edits, best.has_objective ? FormatNum(SnapDiagnosticValue(best.objective_value)) : string());
 	}
 	return BuildElasticInfeasibleDiagnostic();
 }

@@ -63,7 +63,9 @@ double SnapDiagnosticValue(double v) {
 //! `4.5` comes back as `4.499999`. Round to the last decimal that is meaningful at this
 //! value's OWN magnitude. Relative, never absolute: an edit of 2 and an edit of 30000 in
 //! the same model are each trustworthy to about six figures of themselves, and a grid
-//! taken from the model's largest number would erase the small one entirely.
+//! taken from the model's largest number would erase the small one entirely. Never
+//! coarser than a whole number: `12345678.90123` → `12345679`, and a whole number keeps
+//! every digit, which a user can read as data (`1234567889`).
 //!
 //! NEAREST is the tidy reading (`4.499999` → `4.5`, a backend's `7.00000028` → `7`), which
 //! can fall short of what the solver found. OUTWARD never does (`4.3333333` → `4.33334`),
@@ -74,15 +76,11 @@ double SnapToPrecision(double v, RoundDirection direction) {
 		return v;
 	}
 	double mag = std::fabs(v);
-	double grid = 1e-6 * mag;
-	double decimals = std::floor(-std::log10(grid));
-	if (!std::isfinite(decimals) || decimals < 0.0 || decimals > 15.0) {
+	double decimals = std::max(0.0, std::floor(-std::log10(1e-6 * mag)));
+	if (decimals > 15.0) {
 		return v;
 	}
 	double scale = std::pow(10.0, decimals);
-	if (!std::isfinite(scale) || scale <= 0.0) {
-		return v;
-	}
 	double ticks = std::round(mag * scale);
 	if (direction == RoundDirection::OUTWARD && ticks / scale < mag) {
 		ticks += 1.0;

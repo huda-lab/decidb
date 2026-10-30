@@ -2019,14 +2019,15 @@ class TestInfeasibleHeadlineAndRendering:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_repair_amount_is_never_rounded_below_the_gap(self, request, cli_fixture):
-        """A gap of 1000000.34 is not reported as 1000000: the pasted bound must still be met."""
+        """A gap of 1000000.34 is not reported as 1000000: the pasted bound must still be met. An
+        amount in the millions prints whole, so it reads outward as 1000001."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id,x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x <= 1000000.16 AND SUM(x) >= 2000000.5 MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attrs(rows, "clause", "x <= 1000000.16")["suggested_change"] == "x <= 2000000.5"
+        assert _attrs(rows, "clause", "x <= 1000000.16")["suggested_change"] == "x <= 2000001.16"
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -3039,6 +3040,16 @@ class TestPrintedRepairIsTrue:
                 "x <= 100000",
                 id="bound_longer_than_amount",
             ),
+            # The floor falls 3.33333...: to nearest that is short of a repair. HiGHS also leaves
+            # a slack of its own tolerance on the group cap, which the query does not need: the
+            # outward amounts with that noise dropped repair the query and print, the cap unedited.
+            pytest.param(
+                "SELECT p, s, ship FROM (SELECT i // 3 AS p, i % 3 AS s, 1 + (i * 37) % 1000 AS cost, "
+                "100 + (i * 13) % 9000 AS avail FROM range(2400) r(i)) DECIDE ship(REAL) "
+                "SUCH THAT ship BETWEEN 10 AND avail AND SUM(ship) BY (p) <= 20 MAXIMIZE SUM(cost * ship)",
+                "ship BETWEEN 10 AND avail",
+                id="noise_beside_an_amount_short_to_nearest",
+            ),
         ],
     )
     def test_the_printed_repair_restores_feasibility(self, request, cli_fixture, sql, clause):
@@ -3083,4 +3094,66 @@ class TestPrintedRepairIsTrue:
         assert float(edits[0]["amount"]) == float(f"{10.0 - expected.objective_value:.6g}"), edits
 
         repaired, _ = cli.execute(sql.replace("ship BETWEEN 10 AND avail", edits[0]["suggested_change"]))
+        assert repaired
+
+    @pytest.mark.correctness
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_needed_amount_below_the_noise_floor_prints(self, request, cli_fixture, oracle_solver):
+        """BUG-35: six rows each 5e-6 short of `SUM(x) >= 6.00003`. Read to nearest, an amount at or
+        below the backend's noise floor (1e-5) is dropped, which here leaves the query infeasible, so
+        the certificate fails and the outward amount prints: the oracle's least loosening, and the
+        edit pasted back solves."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = "SELECT i, x FROM range(6) r(i) DECIDE x(REAL) SUCH THAT x <= 1 AND SUM(x) >= 6.00003 MAXIMIZE SUM(x)"
+        edits = [r for r in _flat(_diagnose(cli, sql)) if r["edit_source"] == "source_literal"]
+        assert [r["clause"] for r in edits] == ["x <= 1"], edits
+
+        oracle_solver.create_model("least_loosening_of_a_common_cap")
+        oracle_solver.add_variable("loosen", VarType.CONTINUOUS)
+        names = [f"x_{i}" for i in range(6)]
+        for name in names:
+            oracle_solver.add_variable(name, VarType.CONTINUOUS)
+            oracle_solver.add_constraint({name: 1.0, "loosen": -1.0}, "<=", 1.0)
+        oracle_solver.add_constraint({name: 1.0 for name in names}, ">=", 6.00003)
+        oracle_solver.set_objective({"loosen": 1.0}, ObjSense.MINIMIZE)
+        expected = oracle_solver.solve()
+        assert expected.status == SolverStatus.OPTIMAL
+        assert float(edits[0]["amount"]) == float(f"{expected.objective_value:.6g}"), edits
+
+        repaired, _ = cli.execute(sql.replace("x <= 1", edits[0]["suggested_change"]))
+        assert repaired
+
+    @pytest.mark.correctness
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_large_amount_prints_as_a_whole_number(self, request, cli_fixture, oracle_solver):
+        """BUG-36: an amount in the millions is read to a whole number, never to every digit the
+        backend returns. The floor falls 3333333.33...: to nearest that is short of a repair, so
+        the outward 3333334 prints, the oracle's least whole-number loosening, and the edit pasted
+        back solves."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = [(i // 3, 100000000 + (i * 13) % 9000) for i in range(240)]
+        sql = (
+            "SELECT p, s, ship FROM (SELECT i // 3 AS p, i % 3 AS s, "
+            "1 + (i * 37) % 1000 AS cost, 100000000 + (i * 13) % 9000 AS avail FROM range(240) r(i)) "
+            "DECIDE ship(REAL) SUCH THAT ship BETWEEN 10000000 AND avail AND SUM(ship) BY (p) <= 20000000 "
+            "MAXIMIZE SUM(cost * ship)"
+        )
+        edits = [r for r in _flat(_diagnose(cli, sql)) if r["edit_source"] == "source_literal"]
+        assert [r["clause"] for r in edits] == ["ship BETWEEN 10000000 AND avail"], edits
+
+        oracle_solver.create_model("least_whole_loosening_of_a_common_floor")
+        oracle_solver.add_variable("loosen", VarType.INTEGER)
+        groups = {}
+        for i, (group, avail) in enumerate(rows):
+            oracle_solver.add_variable(f"ship_{i}", VarType.CONTINUOUS, ub=float(avail))
+            oracle_solver.add_constraint({f"ship_{i}": 1.0, "loosen": 1.0}, ">=", 10000000.0)
+            groups.setdefault(group, []).append(f"ship_{i}")
+        for names in groups.values():
+            oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 20000000.0)
+        oracle_solver.set_objective({"loosen": 1.0}, ObjSense.MINIMIZE)
+        expected = oracle_solver.solve()
+        assert expected.status == SolverStatus.OPTIMAL
+        assert float(edits[0]["amount"]) == round(expected.objective_value), edits
+
+        repaired, _ = cli.execute(sql.replace("ship BETWEEN 10000000 AND avail", edits[0]["suggested_change"]))
         assert repaired
