@@ -14,8 +14,7 @@ at a time.
 Every filed bug is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on both
 backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
 found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that sorted every
-input row). What remains: two slowdowns left from September (§ 2), posting the HiGHS report (§ 3), and the original
-measurement work (§ 4).
+input row). What remains: two slowdowns left from September (§ 2) and the original measurement work (§ 3).
 
 ## 1. Bugs
 
@@ -29,13 +28,7 @@ Every filed bug is fixed.
 Q8's keyed mapping (PERF-9) is back to 257 ms and Q3/Q10's memory peak (PERF-11) is Gurobi's own
 (`performance/findings.md` § Regressions since 2026-09-09).
 
-## 3. The owner's actions
-
-- [ ] Post the HiGHS upstream issue (seven loops, on 1.15.1) — issues/highs_upstream.md
-  - Before posting: attach an MPS file for Q1, Q2, Q3 and Q10 at `large`; every loop is still missing its check in
-    1.15.1.
-
-## 4. Measurement (last; the owner runs them)
+## 3. Measurement (last; the owner runs them)
 
 - [ ] PERF-1 Measurement overhead, a correctness check, a second host — performance/todo.md § PERF-1
 - [ ] PERF-2 Backend discovery versus parsing and planning — performance/todo.md § PERF-2
