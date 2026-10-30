@@ -202,6 +202,10 @@ reads once per class (SR §7.1; deck pp. 34–40):
 - every decision outside reducers, by instance — its row if it is per row, its class
   if it is keyed; a query-wide decision splits nothing;
 - every reducer's `by` key, by value.
+- every point frame (`at(...) over (...)`, SR §5.6), by its keys, never by the data it
+  reads (D76): its timeline, and its peer when the position is relative; plus its
+  fallback where the fallback is reached. A first/last frame whose `within` columns the
+  key holds is covered and splits nothing (`../../09_anr_language/done.md`, phase 4).
 
 An inner `per` key, and the `D` of the colon form, hand their reducer one value per
 variant of each of its classes the same way (D65). Where the key fixes every field —
@@ -238,8 +242,10 @@ objective's check stops the query on a second variant (`RunScopeChecks`). The ag
 shape and the easy MIN/MAX already emit one row per `by` group under its tightest bound,
 which covers every variant of the group, so their signature only names classes.
 
-The remaining checks are `DecideScopeCheck`s of two kinds — `KEEPS_A_ROW` (D4) and
-`READS_A_ROW` (D8) — built on the bound tree (`BuildConstraintScopeChecks`,
+The remaining checks are `DecideScopeCheck`s of three kinds — `KEEPS_A_ROW` (D4),
+`READS_A_ROW` (D8) and `FRAME_PARTITION` (D69: a `per` that reads a frame directly must
+determine the frame's `within` columns, built by the canonicalizer's `PlaceFrames`) —
+built on the bound tree (`BuildConstraintScopeChecks`,
 `BuildClauseScopeChecks`, `BuildReducerScopeChecks`, `BuildObjectiveScopeChecks`),
 carried on `LogicalDecide::scope_checks` and run by `PhysicalDecide::RunScopeChecks`
 before any clause is evaluated; the objective's variant check runs with them. They also

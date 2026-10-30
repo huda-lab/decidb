@@ -196,6 +196,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->variable_scopes = std::move(op.variable_scopes);
     // Resolved like every other expression the operator owns (EnumerateExpressions).
     decide_op->group_keys = std::move(op.group_keys);
+    decide_op->frames = std::move(op.frames);
     decide_op->scope_checks = std::move(op.scope_checks);
     decide_op->signatures = std::move(op.signatures);
     decide_op->objective_signature = op.objective_signature;

@@ -523,7 +523,40 @@ gets a signature.
   checked at execution to have one variant (D66).
 
 A signature also carries what EXPLAIN ANALYZE calls the expression (`per D.depotID`, the
-reducer as written) and its clause id.
+reducer as written) and its clause id. A frame selector is a `FRAME` field, compared by its
+keys (D76): its timeline, and the anchor's position there when it reads relative to the
+anchor; no field at all when its key holds a `first`/`last` frame's `within`. Its marker
+is not walked into, and a data subtree holding a frame is no `VALUE` field: its frame and
+its data are fields apart.
+
+### Frame selectors
+
+A frame's marker (`first(e)` tagged `__frame_<i>__`, `../02_binder/done.md` §4a) is a
+**tuple term read at another row**, never a reducer: `ContainsReducer`,
+`CollectOuterReducers`, `TryMatchScaledAggregate` and the lone-negated-reducer spelling
+skip it (`TryGetDecideFrame`, `decide_reducer_path.hpp`). So a frame over decisions sits
+left and a frame over data
+right, like a decision and a column; beside a reducer a frame over decisions makes the
+VALUE shape, alone it is the rows shape; a factor on one is a coefficient, not a scale.
+The like-atom merge compares tags, so two frames over one payload stay two atoms.
+
+`PlaceFrames` and `PlaceObjectiveFrames`, called by `Binder::CreatePlan` right after the
+canonical tree and objective, write where each frame stands into its `DecideFrameSpec`
+(`../03_logical_plan/done.md` §4): the rows its timelines read — its scoped expression's
+path rows, the clause's `when` and every enclosing reducer's own — the path's `by` keys
+they are split by before `within` (a `group_keys` entry, created when new), its clause, and
+whether it is in a reducer's argument. A frame stands in one place; the planner checks
+every one was placed. A constraint holding a frame must carry its clause id (internal
+otherwise), so a frame with none is the objective's: what tells a comparison's skipped
+instances (`DecideFrameSpec::SkipsInstancesOf`) from the objective's error
+(`MayLeaveObjectiveUnset`). For a frame a `per` key reads directly — a clause's `per K:` or a
+reducer's own `per` — whose `within` the key (with the path's keys) does not hold, it
+builds the `FRAME_PARTITION` check (D69): each class of the key lies in one timeline. And
+it refuses, until phase 6, a frame that may select no position (relative, not cyclic, no
+`else`) inside a reducer over decisions, whose member would have to be dropped:
+*"DECIDE: at(previous: x) over (t.period) may select no position inside sum(...), a
+reducer over decisions, which is not supported yet; give it an else, or make its timeline
+cyclic"*.
 
 ## 5. What this stage does not do
 

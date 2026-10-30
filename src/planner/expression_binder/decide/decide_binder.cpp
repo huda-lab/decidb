@@ -26,6 +26,7 @@
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include <unordered_set>
 #include <algorithm>
 #include <cmath>
@@ -272,6 +273,35 @@ static void ValidateFramePayload(const ParsedExpression &expr, const DecideFrame
 	    expr, [&](const ParsedExpression &child) { ValidateFramePayload(child, frame); });
 }
 
+//! The first node of `expr` that holds a decision and reads it other than linearly: a call
+//! other than `+`, `-`, `*` and `/` over one (`abs(x - 3)`), or a decision divisor. A data
+//! subtree, whatever it computes, is a coefficient. Null when `expr` is linear.
+static optional_ptr<const ParsedExpression> FindNonlinearDecisionUse(const ParsedExpression &expr,
+                                                                    const case_insensitive_map_t<idx_t> &variables) {
+	if (!ExpressionContainsDecideVariable(expr, variables) ||
+	    expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		return nullptr;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return &expr;
+	}
+	auto &func = expr.Cast<FunctionExpression>();
+	auto name = func.function_name;
+	if (!func.is_operator || (name != "+" && name != "-" && name != "*" && name != "/")) {
+		return &expr;
+	}
+	if (name == "/" && func.children.size() == 2 && ExpressionContainsDecideVariable(*func.children[1], variables)) {
+		return &expr;
+	}
+	for (auto &child : func.children) {
+		auto found = FindNonlinearDecisionUse(*child, variables);
+		if (found) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
 static void ValidateFrame(const DecideFrameExpression &frame, const case_insensitive_map_t<idx_t> &variables) {
 	ValidateFrameKey(*frame.order, variables);
 	for (auto &key : frame.within) {
@@ -289,7 +319,25 @@ static void ValidateFrame(const DecideFrameExpression &frame, const case_insensi
 				                      "yet",
 				                      value->ToString(), FrameHead(frame));
 			}
+			// So is anything else over a decision a rewrite would lower into rows of its own:
+			// those rows stand at the anchor, while the frame reads its payload elsewhere.
+			auto nonlinear = FindNonlinearDecisionUse(*value, variables);
+			if (nonlinear) {
+				throw BinderException(*nonlinear,
+				                      "DECIDE: '%s' inside %s is not linear in the decisions, which is not supported "
+				                      "yet; write it outside the frame",
+				                      nonlinear->ToString(), FrameHead(frame));
+			}
 		}
+	}
+	// A frame reads a decision through its payload: the layers below see a frame's payload,
+	// not its fallback, so one whose fallback alone reads a decision is not formulated yet.
+	if (frame.fallback && ExpressionContainsDecideVariable(*frame.fallback, variables) &&
+	    !ExpressionContainsDecideVariable(*frame.payload, variables)) {
+		throw BinderException(*frame.fallback,
+		                      "DECIDE: in %s, else %s reads a decision while the payload reads none, which is not "
+		                      "supported yet",
+		                      frame.ToString(), frame.fallback->ToString());
 	}
 }
 
@@ -2016,6 +2064,34 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 	return result;
 }
 
+ErrorData DecideBinder::BindFrameFallback(DecideFrameExpression &frame, const DecideFrameSpec &spec,
+                                          const string &fallback_text, idx_t depth, unique_ptr<Expression> &out) {
+	if (!frame.fallback) {
+		return ErrorData();
+	}
+	// The fallback stands in for the payload at a missing position: a number, as the
+	// payload is a number to the model.
+	ErrorData fallback_error;
+	BindChild(frame.fallback, depth, fallback_error);
+	if (fallback_error.HasError()) {
+		return fallback_error;
+	}
+	auto fallback = std::move(BoundExpression::GetExpression(*frame.fallback));
+	auto &type = fallback->return_type;
+	if (!type.IsNumeric() && type.id() != LogicalTypeId::BOOLEAN && type.id() != LogicalTypeId::SQLNULL) {
+		throw BinderException(frame, "DECIDE: in %s, else %s is not a number", spec.text, fallback_text);
+	}
+	// A fallback that is NULL before the query runs is the default, `else NULL` (D80): a
+	// missing position selects nothing.
+	Value value;
+	if (fallback->IsFoldable() && ExpressionExecutor::TryEvaluateScalar(context, *fallback, value) &&
+	    value.IsNull()) {
+		return ErrorData();
+	}
+	out = std::move(fallback);
+	return ErrorData();
+}
+
 BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t depth) {
 	if (!qualifier_context || !qualifier_context->frames) {
 		throw InternalException("DECIDE: a frame selector needs the clause's frames");
@@ -2033,6 +2109,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	spec.descending = frame.descending;
 	spec.cyclic = frame.cyclic;
 	spec.text = frame.ToString();
+	spec.order_name = frame.order->ToString();
 	auto fallback_text = frame.fallback ? frame.fallback->ToString() : string();
 
 	// The payload, under the aggregate that reads it at the selected rows: the range's
@@ -2061,6 +2138,23 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		}
 		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(BoundExpression::GetExpression(*frame.payload)));
+		// The point reads its payload where it selects a row and its fallback where it does
+		// not, so its value takes a type that holds both: `else 0.5` over a whole-numbered
+		// payload is 0.5 there. The fallback is bound first for that reason.
+		unique_ptr<Expression> fallback;
+		auto fallback_error = BindFrameFallback(frame, spec, fallback_text, depth, fallback);
+		if (fallback_error.HasError()) {
+			return BindResult(std::move(fallback_error));
+		}
+		if (fallback) {
+			auto &payload_type = children[0]->return_type;
+			LogicalType common;
+			if (!LogicalType::TryGetMaxLogicalType(context, payload_type, fallback->return_type, common)) {
+				throw BinderException(frame, "DECIDE: in %s, else %s is not a number", spec.text, fallback_text);
+			}
+			children[0] = BoundCastExpression::AddCastToType(context, std::move(children[0]), common);
+			spec.fallback = BoundCastExpression::AddCastToType(context, std::move(fallback), common);
+		}
 		auto &first =
 		    Catalog::GetEntry<AggregateFunctionCatalogEntry>(context, SYSTEM_CATALOG, DEFAULT_SCHEMA, "first");
 		FunctionBinder function_binder(binder);
@@ -2094,24 +2188,16 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	}
 	spec.order = std::move(BoundExpression::GetExpression(*frame.order));
 	// The within key resolves as a per key does: columns, and relations standing for theirs.
+	// Messages name both as written (DecideFrameSpec::timeline_names, order_name).
 	for (auto &column : ResolveKey(binder.bind_context, frame.within, 0, DecisionNames(variables), "within")) {
 		spec.within.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
+		spec.timeline_names.push_back(column.name);
 	}
-	// The fallback stands in for the payload at a missing position: a number, as the
-	// payload is a number to the model. It keeps its own type -- `else 0.5` over a whole-
-	// numbered payload is 0.5 there, and a model reads both as numbers.
-	if (frame.fallback) {
-		ErrorData fallback_error;
-		BindChild(frame.fallback, depth, fallback_error);
+	if (frame.IsRange()) {
+		auto fallback_error = BindFrameFallback(frame, spec, fallback_text, depth, spec.fallback);
 		if (fallback_error.HasError()) {
 			return BindResult(std::move(fallback_error));
 		}
-		auto fallback = std::move(BoundExpression::GetExpression(*frame.fallback));
-		auto &type = fallback->return_type;
-		if (!type.IsNumeric() && type.id() != LogicalTypeId::BOOLEAN && type.id() != LogicalTypeId::SQLNULL) {
-			throw BinderException(frame, "DECIDE: in %s, else %s is not a number", spec.text, fallback_text);
-		}
-		spec.fallback = std::move(fallback);
 	}
 
 	// The aggregate prints as the frame written, a source fragment of its own. Tagged here

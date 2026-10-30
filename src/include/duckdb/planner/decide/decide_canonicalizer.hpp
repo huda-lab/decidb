@@ -153,9 +153,22 @@ struct DecideSignatures {
 	//! A relation-qualified reducer whose body has a field gets a scope of its own,
 	//! appended here (EntityScopeInfo::signature), and its tag names it.
 	vector<EntityScopeInfo> &entity_scopes;
+	//! The frames a field may name (LogicalDecide::frames).
+	const vector<DecideFrameSpec> &frames;
 	vector<DecideSignature> signatures;
 	//! The objective's, or INVALID_INDEX.
 	idx_t objective = DConstants::INVALID_INDEX;
+};
+
+//! What placing the frame selectors of the user's clauses writes (PlaceFrames): the
+//! frames, the path keys their timelines are split by (appended to `group_keys` when new),
+//! and their FRAME_PARTITION checks (into `scope`).
+struct DecideFramePlacement {
+	vector<DecideFrameSpec> &frames;
+	vector<DecideGroupKey> &group_keys;
+	DecideScopeChecks &scope;
+	//! Which frames are placed: each stands in exactly one place.
+	vector<bool> placed;
 };
 
 class DecideCanonicalizer {
@@ -218,6 +231,19 @@ public:
 	//! execution refuses a field with a second value -- and its qualified reducers', after
 	//! CanonicalizeObjective.
 	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
+	//! Where every frame selector of the canonical SUCH THAT tree stands
+	//! (syntax_reference.md §5.6): the rows its timelines read, which are its scoped
+	//! expression's path rows (§5.5); the path's `by` keys they are split by before
+	//! `within`; the comparison it is written in; and whether it is inside a reducer
+	//! (DecideFrameSpec::rows, scope_key, source_clause_id, reduced). Builds the
+	//! FRAME_PARTITION check (D69) of each frame a `per` key reads directly -- a clause's
+	//! `per K:`, or a reducer's own `per` -- unless the key determines its timeline already.
+	//! Called once, by the planner, after CanonicalizeTree.
+	void PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const;
+	//! The same for the objective, after CanonicalizeObjective. Its root has one class
+	//! (D66), whose fields the objective's signature checks, so only a reducer's own `per`
+	//! gets a FRAME_PARTITION check there.
+	void PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
 	//! these names, rather than through the bound tree's own names. Set by the planner,
@@ -434,6 +460,26 @@ private:
 	void SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause,
 	                           idx_t source_clause_id, DecideSignatures &out) const;
 	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
+
+	//! The `per` key a scoped expression is read under, for its frames' FRAME_PARTITION
+	//! checks: its expressions, how a message names each, and the key as written.
+	struct FramePerKey {
+		vector<unique_ptr<Expression>> key;
+		vector<string> names;
+		string text;
+	};
+	void PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
+	                       DecideFramePlacement &placement) const;
+	//! The frames of `expr` along `path`: one outside every reducer of its comparison
+	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
+	//! members -- `reducer` is the innermost reducer around `expr`, null at the root. `per`
+	//! is the key of the scoped expression `expr` is the body of; null for `per row`, which
+	//! no frame's timeline can span.
+	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const BoundAggregateExpression *reducer,
+	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement) const;
+	//! The key of a reducer's own `per` (or of the colon form), when it has one.
+	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<EntityScopeInfo> &entity_scopes,
+	                   FramePerKey &out) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`
 	//! is set (used for the terms that crossed the relation).

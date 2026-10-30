@@ -665,9 +665,29 @@ struct SolverInput {
     //! `per K:` or colon-form qualifier, a helper decision's `by` key)
     vector<EntityMapping> entity_mappings;
 
-    //! Per-variable scope (row / keyed / query-wide).
+    //! Per-variable scope (row / keyed / query-wide / frame read).
     //! For a keyed variable, entity_scope_idx indexes entity_mappings.
     vector<DecideVarScopeInfo> variable_scopes;
+
+    //! A decision read at the row a frame selector selects (syntax_reference.md §5.6):
+    //! variable `first_frame_read + i` is decision `base` read, at each row, at `rows[row]`
+    //! -- the selected row, or the row itself where the frame selects none, where every term
+    //! reading it has coefficient 0. It owns no column (DecideVarScope::FRAME_READ); its
+    //! type and box are its base's, so a pass reading a term's box reads a sound one.
+    struct FrameRead {
+        idx_t base = DConstants::INVALID_INDEX;
+        vector<idx_t> rows;
+    };
+    vector<FrameRead> frame_reads;
+    //! The first frame read's variable index: the plan's decisions come first.
+    idx_t first_frame_read = 0;
+    //! The plan's decision variable `var` reads: itself, or a frame read's base. What a
+    //! table of the plan's decisions (a name, a domain) is looked up by.
+    idx_t BaseVariable(idx_t var) const {
+        return var >= first_frame_read && var - first_frame_read < frame_reads.size()
+                   ? frame_reads[var - first_frame_read].base
+                   : var;
+    }
 
     //! When set (infeasible diagnosis armed), SolverModel::Build does NOT throw on an
     //! inverted column box (col_lower > col_upper). The model is built and retained so the

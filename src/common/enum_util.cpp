@@ -1196,19 +1196,20 @@ const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideScopeCheckKind::KEEPS_A_ROW), "KEEPS_A_ROW" },
 		{ static_cast<uint32_t>(DecideScopeCheckKind::DETERMINES), "DETERMINES" },
-		{ static_cast<uint32_t>(DecideScopeCheckKind::READS_A_ROW), "READS_A_ROW" }
+		{ static_cast<uint32_t>(DecideScopeCheckKind::READS_A_ROW), "READS_A_ROW" },
+		{ static_cast<uint32_t>(DecideScopeCheckKind::FRAME_PARTITION), "FRAME_PARTITION" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value) {
-	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 3, "DecideScopeCheckKind", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 4, "DecideScopeCheckKind", static_cast<uint32_t>(value));
 }
 
 template<>
 DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value) {
-	return static_cast<DecideScopeCheckKind>(StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 3, "DecideScopeCheckKind", value));
+	return static_cast<DecideScopeCheckKind>(StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 4, "DecideScopeCheckKind", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideFrameAnchorValues() {
@@ -1235,19 +1236,20 @@ const StringUtil::EnumStringLiteral *GetDecideSignatureFieldKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideSignatureFieldKind::VALUE), "VALUE" },
 		{ static_cast<uint32_t>(DecideSignatureFieldKind::DECISION), "DECISION" },
-		{ static_cast<uint32_t>(DecideSignatureFieldKind::BY_KEY), "BY_KEY" }
+		{ static_cast<uint32_t>(DecideSignatureFieldKind::BY_KEY), "BY_KEY" },
+		{ static_cast<uint32_t>(DecideSignatureFieldKind::FRAME), "FRAME" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value) {
-	return StringUtil::EnumToString(GetDecideSignatureFieldKindValues(), 3, "DecideSignatureFieldKind", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDecideSignatureFieldKindValues(), 4, "DecideSignatureFieldKind", static_cast<uint32_t>(value));
 }
 
 template<>
 DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value) {
-	return static_cast<DecideSignatureFieldKind>(StringUtil::StringToEnum(GetDecideSignatureFieldKindValues(), 3, "DecideSignatureFieldKind", value));
+	return static_cast<DecideSignatureFieldKind>(StringUtil::StringToEnum(GetDecideSignatureFieldKindValues(), 4, "DecideSignatureFieldKind", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
@@ -1273,19 +1275,20 @@ const StringUtil::EnumStringLiteral *GetDecideVarScopeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideVarScope::ROW), "ROW" },
 		{ static_cast<uint32_t>(DecideVarScope::ENTITY), "ENTITY" },
-		{ static_cast<uint32_t>(DecideVarScope::SCALAR), "SCALAR" }
+		{ static_cast<uint32_t>(DecideVarScope::SCALAR), "SCALAR" },
+		{ static_cast<uint32_t>(DecideVarScope::FRAME_READ), "FRAME_READ" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value) {
-	return StringUtil::EnumToString(GetDecideVarScopeValues(), 3, "DecideVarScope", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDecideVarScopeValues(), 4, "DecideVarScope", static_cast<uint32_t>(value));
 }
 
 template<>
 DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value) {
-	return static_cast<DecideVarScope>(StringUtil::StringToEnum(GetDecideVarScopeValues(), 3, "DecideVarScope", value));
+	return static_cast<DecideVarScope>(StringUtil::StringToEnum(GetDecideVarScopeValues(), 4, "DecideVarScope", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDefaultOrderByNullTypeValues() {

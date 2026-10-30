@@ -129,12 +129,11 @@ written (`declared_key`). `group_keys` holds every `by (G)` key of the clauses
 reducer's `__group_key_<i>__` tag names entry `i`. `frames` (id 220) holds every frame
 selector (`DecideFrameSpec`: point or range, the positions and their `k`, `every`, `all`,
 the fallback, the order key and its direction, `cyclic`, the `within` key's columns, the
-frame as written); the aggregate a frame binds to carries `__frame_<i>__` naming entry `i`
-(`../02_binder/done.md` §4a). In phase 3 no plan holds one: `CreatePlan` plans a frame's
-subqueries, then refuses the query (*"DECIDE: frame selectors are not supported yet:
-<frame>"*) before canonicalization, the first layer that would read a frame, so no layer
-after it can refuse the clause for a reason of its own first. The property's round trip
-is tested once frames reach the plan (phase 4). A constraint's `per K:` key lives in
+frame as written and the names its messages use); the aggregate a frame binds to carries
+`__frame_<i>__` naming entry `i` (`../02_binder/done.md` §4a). The canonicalizer fills in
+where each stands (below). `CreatePlan` plans a frame's subqueries, then refuses a range
+(*"DECIDE: a range frame selector is not supported yet: <frame>"*) before
+canonicalization, until phase 5. A constraint's `per K:` key lives in
 its `PER_CLASS_TAG` wrapper, as bound column references. A scope the optimizer creates for a
 helper decision of the value rewrite names the link it holds instead of key columns
 (`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
@@ -147,11 +146,16 @@ bindings.
 
 **From the canonicalizer** — `objective_constant_offset`; `scope_checks`, the
 run-time checks of every clause and of the objective (`DecideScopeCheck`: kind, the
-rows it looks at, the key, a reducer's own `when`, and the texts its message quotes);
-and `signatures` (id 221) with `objective_signature` (id 222), the variant signature of
-every scoped expression with a field (`DecideSignature`: the rows it reads, its key, its
-fields — `DecideSignatureField`, a `VALUE` expression, a `DECISION` index or a `BY_KEY`
-index — the text EXPLAIN ANALYZE names it by and its clause id; D64). A `per K:` wrapper
+rows it looks at, the key, a reducer's own `when`, a frame for `FRAME_PARTITION` (D69),
+and the texts its message quotes); `signatures` (id 221) with `objective_signature` (id
+222), the variant signature of every scoped expression with a field (`DecideSignature`:
+the rows it reads, its key, its fields — `DecideSignatureField`, a `VALUE` expression, a
+`DECISION` index, a `BY_KEY` index or a `FRAME` index (D76) — the text EXPLAIN ANALYZE
+names it by and its clause id; D64); and, on each `DecideFrameSpec`, where the frame
+stands: the rows its timelines read (`rows`, its scoped expression's path rows), the
+path's `by` keys they are split by first (`scope_key`), the comparison it is written in
+(`source_clause_id`, INVALID_INDEX in the objective) and whether it is in a reducer's
+argument (`reduced`), each serialized (ids 113–118 with the names). A `per K:` wrapper
 names its signature with `__signature_<i>__`. `PlanSubqueries` runs on the `by` keys and
 on each frame's order key and fallback as on the trees, and `EnumerateExpressions` visits
 every list, so binding resolution and column pruning see their columns.

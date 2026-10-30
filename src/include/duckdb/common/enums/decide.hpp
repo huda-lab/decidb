@@ -29,13 +29,17 @@ enum class DecideExpression : uint8_t {
 };
 
 //! How one DECIDE declaration maps onto solver columns.
-//!   ROW    — `x(INT)`, `per row: x(INT)` one column per result row
-//!   ENTITY — `per K: x(INT)`             one column per distinct value of the key
-//!   SCALAR — `per (): x(INT)`            one column for the whole query
+//!   ROW        — `x(INT)`, `per row: x(INT)` one column per result row
+//!   ENTITY     — `per K: x(INT)`             one column per distinct value of the key
+//!   SCALAR     — `per (): x(INT)`            one column for the whole query
+//!   FRAME_READ — never declared: a decision read at the row a frame selector selects for
+//!                each row (SolverInput::frame_reads). It owns no column; at a row it is
+//!                its base decision's column at the selected row. Execution creates it.
 enum class DecideVarScope : uint8_t {
     ROW = 0,
     ENTITY = 1,
-    SCALAR = 2
+    SCALAR = 2,
+    FRAME_READ = 3
 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
@@ -88,18 +92,23 @@ struct DecideVarScopeInfo {
 };
 
 //! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
-//!   KEEPS_A_ROW — a `when` keeps a row of a non-empty input
-//!   DETERMINES  — retired (D64): a value that varies within a class is a variant, not an
-//!                 error (LogicalDecide::signatures). No builder emits it; the value stays
-//!                 so the numbering of the others is unchanged.
-//!   READS_A_ROW — every group of a reducer's `by` key has a row passing its own `when`
-enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, READS_A_ROW = 2 };
+//!   KEEPS_A_ROW     — a `when` keeps a row of a non-empty input
+//!   DETERMINES      — retired (D64): a value that varies within a class is a variant, not
+//!                     an error (LogicalDecide::signatures). No builder emits it; the value
+//!                     stays so the numbering of the others is unchanged.
+//!   READS_A_ROW     — every group of a reducer's `by` key has a row passing its own `when`
+//!   FRAME_PARTITION — every class of a `per` key lies in one timeline of a frame its body
+//!                     holds (D69)
+enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, READS_A_ROW = 2, FRAME_PARTITION = 3 };
 
 //! What one field of a variant signature (LogicalDecide::signatures) compares, at a row:
 //!   VALUE    — a data expression, by value (NULL a value)
 //!   DECISION — a decision, by instance: a per-row one by its row, a keyed one by its class
 //!   BY_KEY   — a reducer's `by` key, by the value of each of its expressions
-enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2 };
+//!   FRAME    — a frame selector, by its keys (D76): its timeline, the anchor's order key
+//!              when its position is relative to the anchor, and its fallback where the
+//!              anchor reaches it
+enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2, FRAME = 3 };
 
 //! A frame selector's position on the anchor row's timeline (syntax_reference.md §5.6):
 //! the first or last peer, or k peers before or after the anchor's.

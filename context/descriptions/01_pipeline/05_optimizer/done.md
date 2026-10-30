@@ -232,6 +232,39 @@ product of decisions left there is refused (*"... multiplies decisions outside a
 which is not supported yet"*), since it has no once-only reading in the model.
 `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
 
+### Frame selectors
+
+The passes before this one carry a frame's marker as one term (the value rewrite lifts
+none: `CollectReducerSites` skips it), so an ABS envelope, a `<>` disjunction or a
+MIN/MAX member holds the frame where the clause did. Flattening lowers it
+(`../../00_project_overview/syntax_reference.md` §5.6; D72):
+
+- **A frame over decisions** is its terms (`ExtractFrameTerms`): each term `c·x` of its
+  payload becomes `READ(c)·x` with `DecideTerm::frame_read` set — the decision read at
+  the row the frame selects — and each term `c'·y` of its fallback becomes
+  `FALLBACK(c')·y`, read at the row itself. A data factor on the frame multiplies every
+  coefficient (`ExtractScaledFrameTerms`). Inside a reducer the frame's terms take the
+  reducer's filter and scale like any; no helper is made.
+- **A frame over data**, wherever execution evaluates an expression — a bound, a constant
+  term, a coefficient (`LowerFramesInPreparedModel`) — becomes one `VALUE` column of the
+  marker's type: the payload at the selected row, the fallback at the anchor, so no
+  arithmetic joins them and a DATE or BOOLEAN payload reads as itself. One in a bound-side
+  reducer's argument that may select no position
+  adds its `PRESENT` column to that reducer's own `when`, so execution drops the member as
+  it drops any its `when` drops.
+- `VALUE`, `READ`, `FALLBACK` and `PRESENT` are chunk columns after the input's
+  (`DecidePreparedModel::frame_columns`, from `frame_column_base`), which execution
+  computes; a coefficient or bound reading one is an ordinary expression.
+  `frame_payload_terms` lists each frame's payload terms (decision, `READ` column, sign),
+  recorded once, for the peer check (D67); `frame_fallback_decisions` lists its fallback's
+  decisions, for the signature field (D76).
+- Refused: a frame over decisions inside a MIN or MAX composed with other terms
+  (*"DECIDE: at(first: x) over (t.period) inside MAX beside another term is not supported
+  yet"*), whose stage-06 path reads its terms' decisions at their own rows (phase 6); one
+  beside a MIN or MAX in the objective (*"DECIDE: 'at(first: x) over (t.period)' beside MIN
+  or MAX is not supported yet"*), for the same reason. Stage 06 holds composed MIN/MAX to
+  it with an internal check.
+
 ### Like-term collection
 
 After flattening, every list that becomes a **linear** solver row is grouped:
@@ -252,6 +285,7 @@ across any of that:
 | `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
 | `qualifier_scope_idx` | Selects a de-duplication mask (the reducer's own `per`, or `SUM(D: ...)`) — again a statement about which rows contribute |
 | `avg_group_key` | An inlined `sum(per K: avg(e) by (G))` divides each term by its G group's size, another AVG of the same decision by the relation's: merged, one divisor stood for both (`sum(per t.g: avg(x) by (t.g)) - avg(x)` cancelled to 0) |
+| `frame_read` | A frame's payload term reads its decision at another row: `x - at(previous: x)` names one decision at two rows, and merged would cancel to 0 |
 
 Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS is
 not a repeated column. Quadratic and bilinear terms are left alone too — they feed
@@ -685,7 +719,11 @@ Recursion goes through `AND` and a `per K:` wrapper, whose key children hold no
 comparison, so `per row: x >= -5` is absorbed like `x >= -5`. **A `when`-guarded
 comparison is never absorbed**: `when c: x <= 0` is conditional per row, not a domain,
 so the pass stops at the wrapper. This is why it keeps its own descent rather than
-`ForEachConstraintLeaf`.
+`ForEachConstraintLeaf`. Nor is a comparison of a clause that reads, outside its reducers,
+a frame that may select no position (`syntax_reference.md` §5.6): it holds only where the
+frame selects, a condition as a `when` is. The row an ABS lowers from `abs(x - at(previous:
+x) over (...)) <= -1` is the case: absorbed, its empty box called the query infeasible even
+where every instance is skipped and none holds it.
 
 An easy `max(x) <= K` / `min(x) >= K` over one decision, with no filter on the reducer
 (`TryMatchEasyExtremumTarget`, `MINMAX_EASY_REWRITE_TAG`), bounds every row its reducer

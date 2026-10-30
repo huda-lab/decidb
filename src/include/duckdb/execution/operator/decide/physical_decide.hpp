@@ -174,6 +174,10 @@ public:
     //! Every `by (key)` of the clause, its expressions resolved against the input chunk.
     vector<DecideGroupKey> group_keys;
 
+    //! The frame selectors (LogicalDecide::frames), their expressions resolved against the
+    //! input chunk.
+    vector<DecideFrameSpec> frames;
+
     //! The run-time checks of the clauses, run first.
     vector<DecideScopeCheck> scope_checks;
     //! The variant signatures (LogicalDecide::signatures), their expressions resolved
@@ -270,6 +274,20 @@ private:
     //! where a solve is about to run — the primary one and every diagnostic re-solve.
     //! Layer 8 never re-selects: it looks up the name stage 05 recorded.
     SolverBackend PlannedSolverBackend() const;
+
+    //! PHASE 1.4: each frame selector's timelines and selections (gstate.frame_maps), then
+    //! the values the frames read appended to the input as columns
+    //! (DecidePreparedModel::frame_columns), so every later phase reads them as data.
+    void BuildFrames(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                     ChunkExprCache &chunk_expr_cache) const;
+    //! D67, after the scope checks: the rows of a selected position read one payload
+    //! (CheckDecideFramePeers).
+    void CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                         ChunkExprCache &chunk_expr_cache, const vector<EntityMapping> &entity_mappings) const;
+    //! The rows at which every frame the comparison `source_clause_id` reads outside its
+    //! reducers selects a position (DecideFrameSpec::SkipsInstancesOf); empty when none may
+    //! miss one. A row where one does not is no instance (syntax_reference.md §5.6).
+    vector<bool> FramesPresent(const DecideGlobalSinkState &gstate, idx_t source_clause_id, idx_t num_rows) const;
 
     //! PHASE 1.5: one row→entity mapping per key scope -- a keyed decision's key columns,
     //! or a helper decision's `by` key over the rows its clause keeps

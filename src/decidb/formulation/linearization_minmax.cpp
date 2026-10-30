@@ -749,6 +749,17 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
                                           NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
 
+    // Every formulation below reads a term's decision at the term's own row. A frame's
+    // payload term reads it at another (DecideTerm::frame_read), which stage 05 refuses
+    // here until the ANR plan's phase 6 (RefuseComposedFrameRead).
+    for (auto &ta : terms) {
+        for (auto &term : *ta.inner_terms) {
+            if (term.frame_read != DConstants::INVALID_INDEX) {
+                throw InternalException("DECIDE: a frame read reached composed MIN/MAX");
+            }
+        }
+    }
+
     // Every `z_k` first, so one clause's auxiliaries occupy a contiguous run of the
     // global block whatever formulation each term then turns out to need. The range is
     // computed once here and reused as the closing Big-M and as the box of any column a

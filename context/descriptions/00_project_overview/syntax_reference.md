@@ -755,26 +755,57 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   relations, as a `per` key does. `e` is read at the selected row, `v` at the anchor row;
   `v` is a number (`else true`, `else 0.5`, `else c` all are), and keeps its own type.
 - **A frame's term is linear**: its payload and fallback square or multiply no decision.
-- **A missing position** (before the first row, after the last): `else v` supplies `v`;
-  `all` makes the whole range select nothing; otherwise a range keeps the positions that
-  exist, and a point frame that selects nothing is absent: its comparison skips that
-  instance, a reducer drops that member.
-  The full contract — peers, cyclic repeats, absence, NULL — is
-  `09_anr_language/anr_algorithm_and_frames_plan.md` §3.4–3.5.
+- **A missing position** (before the first row, after the last): `else v` supplies `v`,
+  read at the anchor row and only there — an `else` no row reaches is never evaluated;
+  `else NULL` written is no `else` (D80). `all` makes the whole range select nothing;
+  otherwise a range keeps the positions that exist, and a point frame that selects nothing
+  is absent: its comparison skips that instance — and only that comparison: `x <= 10 AND
+  at(previous: x) over (...) >= 10` keeps the cap on the first period, and a `BETWEEN` is
+  its two comparisons, so a frame absent in one bound skips that half alone (§3) — and a
+  reducer drops that member.
+- **The timeline** is the rows its scoped expression reads: a frame at a comparison's root
+  reads the rows the `when` keeps, one inside a reducer the rows of that reducer's group
+  (its path, §5.5). Under `per K` each class must lie in one timeline (D69: *"DECIDE: per
+  t.category does not determine the timeline t.product of at(first: t.v) over (t.period
+  within t.product). t.category = 'Food' spans t.product = 'A', 'B'."*). Peers are ordered
+  as `ORDER BY` orders them, NULL where `default_null_order` puts it (D68).
+- **A selected position holds one row**, or rows that read one payload — the same value
+  of data, the same linear form over decisions: one constant and one coefficient on each
+  decision instance, so `0 * x` reads no instance of `x` — else *"DECIDE: at(previous: x) over (t.period within
+  t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one
+  row."* (D67). A NULL payload read at the selected row is a NULL bound or coefficient, as
+  one read at the row is (D78).
+- **Under `per K`** a frame is compared by its keys, not by the value it reads (D76): its
+  timeline, the anchor's position there when it reads relative to the anchor (`previous`,
+  `next`), and its fallback where it is reached. `per t.product: x <= at(previous: t.v)
+  over (t.period within t.product)` is one instance per period with a previous one.
+- **In the objective** a frame at the root must read one position (D66): `at(first: x)
+  over (t.period)` does; `at(previous: x) over (...)` reads one per anchor, *"... would be
+  produced more than once"*; one that selects nothing there is *"DECIDE objective: ...
+  selects no position; the objective is produced once and cannot be skipped. Give the
+  frame an else."*
 - **Refused** (D74, §10.2): a frame in a `when`, a `per`, a `by`, a `within` or an order
   key; a reducer or another frame inside a frame's payload or fallback; a frame term
-  multiplied or divided by a decision (a data factor on a frame over decisions is linear).
+  multiplied or divided by a decision (a data factor on a frame over decisions is linear);
+  a payload or fallback not linear in the decisions (`abs(x - 3)` inside: write `abs`
+  outside the frame).
+  The full contract — peers, cyclic repeats, absence, NULL — is
+  `09_anr_language/anr_algorithm_and_frames_plan.md` §3.4–3.5.
 
-**Status.** Every spelling parses and binds, and its subqueries are planned; a query that
-holds a frame then stops, from one place, before canonicalization reads a frame, with
-*"DECIDE: frame selectors are not supported yet: at(previous: x) over (t.period)"* —
-`EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` included, since each plans the query, and before
-any later layer could refuse the clause for a reason of its own. Formulating frames is
-phase 4 (point frames) and phase 5 (ranges) of the plan above.
+**Status.** Point frames are formulated (the ANR plan's phase 4): a frame over decisions
+reads the decision's own column at the selected row, so `inventory >= at(previous:
+inventory) over (t.period within t.product)` over six rows is six columns and one row per
+instance, with no helper. Not yet (§10.2): a range (*"DECIDE: a range frame selector is
+not supported yet: sum(from first to last: x) over (t.period)"*, phase 5, which stops
+before canonicalization, as every frame did in phase 3); inside a reducer over decisions,
+a frame that may select no position (relative, not cyclic, no `else`), and a frame inside
+a MIN or MAX composed with other terms (phase 6); a fallback that reads a decision beside a
+payload that reads none.
 
-Tests: `test/decidb/test_frame_parser.test` (parse and bind errors, the echo, ordinary SQL
-windows), `test/decide/tests/test_anr_frames.py` (`TestSyntax`: every frame fixture binds),
-`test/common/test_decidb_plan_serialization.cpp` (round trips).
+Tests: `test/decidb/test_frame_parser.test` (parse and bind errors, the echo, answers,
+ordinary SQL windows), `test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint`:
+every phase-4 fixture, the deck's point examples 1, 4, 5 and the DeQL comparison, judged by
+`_anr_oracle`), `test/common/test_decidb_plan_serialization.cpp` (round trips).
 
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
@@ -1016,6 +1047,8 @@ scope grid (`test_scope_combinations.py`).
 | a `when` in front of a constraint or the objective keeps no row | error (D4) |
 | a key value has no kept row | no class, no constraint, no error |
 | a reducer's own `when` empties a group of a generated class | error naming the class (D8) |
+| a frame selects no position (§5.6) | its comparison's instance is skipped, its reducer's member dropped; no error, except at the objective's root |
+| a reducer over data whose frames left it no member | absent: its instance is skipped (`count` is 0) |
 | the query's input has no rows at all | empty result |
 
 ### 7.3 Data checks
@@ -1027,9 +1060,14 @@ Run before solving, on every run:
 | A `when` keeps no row of a non-empty input (constraint or objective) | `DECIDE: when S.status = 'actve' matches no rows.` |
 | The objective's one class holds one variant over its kept rows (§4, D66): every value and decision outside its reducers, every top-level `by` key | `DECIDE objective: 'w' takes more than one value over the kept rows (3, 5), so the objective would be produced more than once; move it inside a reducer or fix it with when.` · `... the decision 'x' (declared per row) has more than one instance over the kept rows, ...` · `... 'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), ...` |
 | A reducer's own `when` leaves a `by` group of the kept rows empty | `DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D2'.` · `... has no rows.` for `by ()` |
+| A class of a `per` key spans two timelines of a frame its body reads (§5.6, D69) | `DECIDE: per t.category does not determine the timeline t.product of at(first: t.v) over (t.period within t.product). t.category = 'Food' spans t.product = 'A', 'B'.` |
+| A frame's selected position holds rows that read different payloads (§5.6, D67), checked after the others | `DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row.` |
+| A frame at the objective's root selects no position (§5.6) | `DECIDE objective: at(previous: x) over (t.period) selects no position; the objective is produced once and cannot be skipped. Give the frame an else.` |
 
-The phrases `would be produced more than once`, `matches no rows` and `has no rows for`
-are fixed; the names and values around them are quoted from the query and the data.
+The phrases `would be produced more than once`, `matches no rows`, `has no rows for`,
+`does not determine the timeline`, `a position must hold one row` and `selects no
+position` are fixed; the names and values around them are quoted from the query and the
+data.
 NULL counts as one value in a check; a NULL coefficient or bound is still the NULL error of §3,
 which names a subquery by its text as DuckDB prints it (*"DECIDE: the subquery
 (SELECT ...) is NULL. ..."*). An input with no rows at all is not an error. The checks
@@ -1243,7 +1281,11 @@ Each shape below is refused with a message, never answered wrongly.
 | A decision beside a `MIN` or `MAX` in the objective | `DECIDE: 's' beside MIN or MAX is not supported yet` |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | `DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet` |
 | A scope inside an ordinary SQL subquery written in the clause | `DECIDE: 'WHEN condition:' is not supported yet` |
-| A frame selector anywhere (§5.6), until phase 4 formulates it | `DECIDE: frame selectors are not supported yet: at(previous: x) over (t.period)` |
+| A range frame selector (§5.6), until phase 5 formulates it | `DECIDE: a range frame selector is not supported yet: sum(from first to last: x) over (t.period)` |
+| Inside a reducer over decisions, a frame that may select no position: relative, not cyclic, with no `else` (phase 6) | `DECIDE: at(previous: x) over (t.period) may select no position inside sum(at(previous: x) over (t.period)), a reducer over decisions, which is not supported yet; give it an else, or make its timeline cyclic` |
+| A frame over decisions inside a MIN or MAX composed with other terms (phase 6) | `DECIDE: at(first: x) over (t.period) inside MAX beside another term is not supported yet` |
+| A frame's payload or fallback that is not linear in the decisions | `DECIDE: 'abs((x - 3))' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
+| A fallback that reads a decision beside a payload that reads none | `DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the payload reads none, which is not supported yet` |
 | A frame in a `when`, a `by` or an order key (a `per` key and `within` take names only: a parse error) | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
 | A reducer in a frame's order key | `DECIDE: a reducer such as 'count_star()' is not allowed in a frame's order key` |
 | A square or a product of decisions in a frame's payload or fallback | `DECIDE: '(x * x)' squares or multiplies decisions inside at(...), which is not supported yet` |

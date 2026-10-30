@@ -61,14 +61,23 @@ struct VarIndexer {
     //! Owned entity mappings. The indexer can therefore outlive its SolverInput.
     vector<EntityMapping> entity_mappings;
 
+    //! Owned frame reads (SolverInput::frame_reads), variables `first_frame_read` on.
+    vector<SolverInput::FrameRead> frame_reads;
+    idx_t first_frame_read = 0;
+
     //! Get the flat solver variable index for a given decide variable at a given row.
-    //! A scalar variable ignores `row` — every row resolves to the same column.
+    //! A scalar variable ignores `row` — every row resolves to the same column. A frame
+    //! read is its base decision's column at the row its frame selects.
     inline idx_t Get(idx_t var_idx, idx_t row) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return row * num_row_vars + row_var_offset[var_idx];
         case DecideVarScope::SCALAR:
             return scalar_var_index[var_idx];
+        case DecideVarScope::FRAME_READ: {
+            auto &read = frame_reads[var_idx - first_frame_read];
+            return Get(read.base, read.rows[row]);
+        }
         default: {
             auto &mapping = entity_mappings[var_entity_mapping_idx[var_idx]];
             idx_t entity_id = mapping.row_to_entity[row];
@@ -87,18 +96,23 @@ struct VarIndexer {
             return inst * num_row_vars + row_var_offset[var_idx];
         case DecideVarScope::SCALAR:
             return scalar_var_index[var_idx];
+        case DecideVarScope::FRAME_READ:
+            throw InternalException("DECIDE: a frame read has no instance of its own");
         default:
             return entity_var_base[var_idx] + inst;
         }
     }
 
-    //! Get the number of instances (copies) for a given decide variable
+    //! Get the number of instances (copies) for a given decide variable; none for a frame
+    //! read, whose columns are its base's.
     inline idx_t NumInstances(idx_t var_idx) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return num_rows;
         case DecideVarScope::SCALAR:
             return 1;
+        case DecideVarScope::FRAME_READ:
+            return 0;
         default: {
             return entity_mappings[var_entity_mapping_idx[var_idx]].num_entities;
         }

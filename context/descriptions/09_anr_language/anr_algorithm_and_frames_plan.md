@@ -255,8 +255,9 @@ constant on the partition" (deck p. 71).
 **Point selection** returns the payload at the selected peer. A selected peer holding
 more than one row with distinct payloads is an error (P4): *"DECIDE: at(previous:
 inventory) over (T.period within T.productID) finds 2 rows at T.productID = 'A',
-T.period = 1; a position must hold one row."* Identical payloads (the same decision
-instance, the same value) select once.
+T.period = 1; a position must hold one row."* Identical payloads select once: the same
+value of data, the same linear form over decisions (one constant and one coefficient on
+each decision instance, so `0 * x` reads none).
 
 **Range aggregation** reads the payload on every row of every selected peer, repeated
 visits included, and combines them with `agg` as §3.3 (SUM, AVG, MIN, MAX, COUNT).
@@ -304,7 +305,7 @@ New or changed (fixed phrases in bold are what tests pin):
 | objective with more than one signature | `DECIDE objective: 'w' takes more than one value over the kept rows (3, 5), so the objective **would be produced more than once**; move it inside a reducer or fix it with when` |
 | frame partition | `DECIDE: per <K> **does not determine the timeline** <P> of <frame>. <class> spans <P> = <a>, <b>.` |
 | ambiguous peer | `DECIDE: <frame> finds <n> rows at <partition>, <S> = <v>; **a position must hold one row**.` |
-| objective with an absent frame | `DECIDE objective: <frame> **selects no position**; the objective is produced once and cannot be skipped. Write an else, or reduce the frame.` |
+| objective with an absent frame | `DECIDE objective: <frame> **selects no position**; the objective is produced once and cannot be skipped. Give the frame an else.` (phase 4 refuses a frame that may miss inside a reducer over decisions, so "reduce the frame" is no remedy yet) |
 | bad `k` / `d` | `DECIDE: in <frame>, <k> **must be a positive whole number**` |
 | reducer or frame in a payload | `DECIDE: a reducer **inside at(...)** is not supported; reduce outside the frame` (and the `over` form) |
 | frame in a key or condition | `DECIDE: a frame selector **is not allowed in** when, per, by, within or an order key` |
@@ -327,7 +328,7 @@ language" line for variants and frames in §10.2.
 | `norm(e, p) [by]` | at the root, as today | no (P11) | at the root, as today |
 | ABS, POWER, a product of decisions | at the root, as today; over a helper as today | no (as item 5) | as today |
 | point frame, data payload | yes (a value) | yes | yes |
-| point frame, decision payload | yes (helper per row) | yes | yes |
+| point frame, decision payload | yes (read in place, D72) | yes, read in place; one that may miss from phase 6 | yes |
 | range frame SUM/AVG/MIN/MAX/COUNT, data payload | yes (a value) | yes | yes |
 | range frame SUM/AVG/MIN/MAX, decision payload | yes (helper per row) | yes | yes |
 | ABS over a frame term, `norm` over a frame term | yes (the frame term is a linear term) | no | yes |
@@ -678,16 +679,66 @@ its case, not keywords; a fallback is any number, in its own type; a frame's pay
 linear in the decisions. Tests: `test_frame_parser.test`, the C++ round trips,
 `test_anr_frames.py::TestSyntax`. Record: `done.md`, "phase 3".
 
-### Phase 4 — Point selectors (layers 4, 5, 6, 8)
+### Phase 4 — Point selectors (layers 4, 5, 6, 8) (shipped 2026-10-30)
+
+Built as the design below says; the record, with the choices made beyond it, is
+`done.md`, "phase 4".
 
 - Frame maps; data-only point frames as values; decision point frames as redirected
-  terms in a Rows-shape clause and as per-row helpers inside a reducer operand (P9);
-  absence propagation; `else`; `cyclic`; `desc`; `k`; peer error (P4); the objective;
-  the `FRAME_PARTITION` check (P6, moved from phase 3) and the gate lifted for points.
-- Tests: `test_anr_frames.py::TestPoint` (§6.6): F2, F4, F7–F9, F15, F19, deck examples 1,
-  4, 5, the DeQL comparison (pp. 73–75); F2's model-size pin (6 columns, 4 rows).
+  terms (P9); absence propagation; `else`; `cyclic`; `desc`; `k`; peer error (P4); the
+  objective; the `FRAME_PARTITION` check (P6, moved from phase 3) and the gate lifted for
+  points.
+- Tests: `test_anr_frames.py::TestPoint` (§6.6): F2, F4, F7–F9, F15, F18, F19, F21, the
+  laziness and partition cases, deck examples 1, 4, 5, the DeQL comparison (pp. 73–75);
+  F2's model-size pin (6 columns, 4 rows).
 - Exit: F2's four comparisons and two skips, hand-pinned, at the pinned model size; both
   solvers.
+
+**Design (written 2026-10-29, before the code).** One idea carries the phase: *a point
+frame is a tuple term read at another row*, so every layer above execution keeps it as
+one opaque term, and execution turns it into two things the rest of the engine already
+handles — data columns beside the input's, and decision instances read at another row.
+
+| Layer | Owns in phase 4 | Contract it hands down |
+|---|---|---|
+| 2 binder | `else NULL` written (a fallback NULL before the query runs) is no fallback (D80) | the `first(e)` marker of phase 3 |
+| 3 plan | `DecideFrameSpec` gains `rows`, `scope_key`, `source_clause_id`, `reduced` (serialized, filled by layer 4); `DecideScopeCheckKind::FRAME_PARTITION` and `DecideSignatureFieldKind::FRAME`, each naming a frame | the frame's timeline and placement |
+| 4 canonicalizer | A frame marker is a tuple term, never a reducer (`ContainsReducer` skips it): a decision-bearing one sits left, a data-only one right; it decides no shape of its own. Places every frame: its timeline rows are its scoped expression's path rows (§3.1, `DecideReducerPath`), its timelines the path's `by` keys and then `within`. Builds `FRAME_PARTITION` (D69) for a frame under `per K`, and the frame's signature field (D76) in place of descending into it. Refuses, until phase 6, a frame that may select no position (relative, not cyclic, no `else`) inside a reducer over decisions: placement is where a frame is known to stand inside one. Holds every constraint's frame to a clause id, so a frame with none is the objective's | placed frames, checks, fields |
+| 5 rewrites | Treat the marker as an opaque tuple term (ABS, `<>`, the value rewrite and MIN/MAX copy it with the term) | the marker, in every row a rewrite derives |
+| 5 linear form | Lowers each marker it meets. A payload decision term `c·x` becomes `READ(f, c)·x` read at the selected row (`DecideTerm::frame_read = f`); the payload's data `d` becomes `READ(f, d)`; a fallback's terms `c'·y` and data `d'` become `FALLBACK(f, c')·y` and `FALLBACK(f, d')`, read at the anchor. A data-only frame on the bound side becomes one column of its own type, `VALUE(f, e, v)`: the payload at the selected row, the fallback at the anchor (no arithmetic joins them, so a DATE or BOOLEAN payload reads as one); inside a bound-side reducer, `PRESENT(f)` joins the reducer's own `when`, so an absent member is dropped by the machinery that drops a filtered one | `DecidePreparedModel::frame_columns`: each `{kind, frame, value[, decision]}`, read by the expressions as chunk column `input_columns + j` |
+| 6 formulation | A frame read is a variable of its own scope, `FRAME_READ`: `VarIndexer::Get(v, r) = Get(base, rows[r])`; it owns no column, its type is its base's, and its box is its base's, re-intersected after implied bounds. The per-row fast path never takes one | `SolverInput::frame_reads` |
+| 8 execution | Frame maps (timelines sorted by DuckDB sort keys under `default_null_order`, D68), D67, the frame columns appended to the materialized input (lazily: a payload is computed on each selected peer's first row only, a fallback on the anchors that reach it only; where neither stands a coefficient is 0 and a value NULL), `FRAME_PARTITION`, the signature `FRAME` field, frame-read variables, and **presence**: an instance whose comparison holds a frame directly (outside reducers) that selects nothing is skipped — its rows, and every row a rewrite derived from the same comparison, at that anchor; under the tightest-bound collapse an absent anchor gives no bound and a group with none has no row (D79); a bound-side reducer left with no member is absent, which absents the instance; the objective's root frame selecting nothing is the §3.6 error | the model; readback reads the input's own columns only |
+
+Why this split, rather than the plan's earlier "redirect inside the model builder":
+column resolution has some thirty call sites in stage 06, and a site that forgot a
+redirect would read the anchor's own column silently. `VarIndexer::Get` is the one place
+every one of them already calls, and a frame read's per-variable arrays are copied from
+its base, so a site that reads a box or a type by variable gets a sound value without
+knowing frames exist. The same reasoning makes frame values data columns: every
+expression evaluator (`when`, coefficients, bounds, reducers, signatures) reads chunk
+columns, so none learns a new node.
+
+Choices beyond the text above, recorded as such:
+
+- **Inside a reducer operand a point frame is read in place too** (D72 said a helper per
+  anchor row there): `sum(at(previous else 0: x))` is a sum of redirected terms, which
+  needs no helper and no definition row; a MIN/MAX reads each member at its selected row
+  the same way. Ranges still lower to helpers (phase 5).
+- **A frame that may select no position inside a reducer over decisions is refused until
+  phase 6**, which owns members dropped from decision reducers and absent reducers; data
+  reducers drop absent members from phase 4 (F19).
+- `else NULL` written is the default (D80); a fallback that evaluates to NULL where it is
+  reached is a NULL bound or coefficient, as a present NULL payload is (D78).
+- A frame in the objective follows D66: `at(previous: x)` at the objective's root reads
+  one position per anchor, so it takes more than one value and is refused as produced
+  more than once; `at(first: x) over (S)` with no `within` is one value.
+
+Slices, each green before the next: (1) the plan fields, placement, `ContainsReducer`,
+the gate on ranges only, frame maps and columns, data frames on the bound side, presence,
+laziness, `FRAME_PARTITION`, D67 — F8, F21, `lazy_*`, `partition_*`, F7; (2) the signature
+field — F19; (3) frame reads — F2, F9, F18, F4, F15, deck examples 1, 4, 5, the DeQL
+query, keyed and query-wide payloads and fallbacks; (4) the refusals, EXPLAIN and DIAGNOSE
+pins, docs, the full verification list.
 
 ### Phase 5 — Range selectors
 

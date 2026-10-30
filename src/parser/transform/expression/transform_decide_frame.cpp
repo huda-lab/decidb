@@ -1,5 +1,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/decide_frame_expression.hpp"
 #include "duckdb/parser/transformer.hpp"
 
@@ -58,6 +59,12 @@ unique_ptr<ParsedExpression> Transformer::TransformDecideFrame(duckdb_libpgquery
 		result->payload = TransformExpression(root.body);
 	}
 	result->fallback = TransformExpression(root.fallback);
+	// `else NULL` is the default written out (D80), as `asc` and `every 1` are: the frame
+	// holds no fallback, so it prints without one.
+	if (result->fallback && result->fallback->GetExpressionClass() == ExpressionClass::CONSTANT &&
+	    result->fallback->Cast<ConstantExpression>().value.IsNull()) {
+		result->fallback.reset();
+	}
 	result->order = TransformExpression(root.order);
 	result->descending = root.descending;
 	result->cyclic = root.cyclic;

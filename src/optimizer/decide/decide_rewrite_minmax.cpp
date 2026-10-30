@@ -29,6 +29,7 @@
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
@@ -194,6 +195,11 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 	auto scale = scale_match.scale;
 	bool scale_divides = scale_match.divides;
 
+	// A frame's marker is a tuple term (syntax_reference.md §5.6), not a reducer.
+	idx_t frame;
+	if (TryGetDecideFrame(u, frame) && frame < decide.frames.size()) {
+		throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet", decide.frames[frame].text);
+	}
 	if (!scaled_agg && u.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet", RenderDecideSource(e, names));
 	}

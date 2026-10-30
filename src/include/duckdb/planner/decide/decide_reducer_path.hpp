@@ -44,6 +44,14 @@ struct DecideReducerPath {
 //! The `by` key index of `reducer`, or INVALID_INDEX for `by ()`.
 idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer);
 
+//! The frame selector `expr` is the marker of -- the aggregate the binder binds a frame to,
+//! tagged with its index into LogicalDecide::frames -- or false. A frame is a tuple term
+//! read at another row (syntax_reference.md §5.6): no layer reads its marker as a reducer,
+//! and its payload holds none (D74).
+bool TryGetDecideFrame(const Expression &expr, idx_t &frame);
+//! Whether `expr` holds a frame marker anywhere, itself included.
+bool ContainsDecideFrame(const Expression &expr);
+
 //! The expressions of `keys`, each once, with their names when `names` is given.
 vector<unique_ptr<Expression>> DecidePathKeyExpressions(const vector<idx_t> &keys,
                                                         const vector<DecideGroupKey> &group_keys,

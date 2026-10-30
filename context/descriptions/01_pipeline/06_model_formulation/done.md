@@ -65,6 +65,25 @@ Construction and ownership:
 There is no non-owning constructor. Focused tests use the same owning path as
 production, so entity-mapping lifetime has one contract everywhere.
 
+**Frame reads** (`syntax_reference.md` §5.6). A decision a frame reads at another row is a
+variable of its own, after the plan's (`SolverInput::frame_reads`, from
+`first_frame_read`), of scope `FRAME_READ`: decision `base` read, at each row, at
+`rows[row]` — the row the frame selects, the row itself where it selects none, where every
+term reading it has coefficient 0. It owns no column: `Get` resolves it to
+`Get(base, rows[row])`, `NumInstances` is 0, `OwnerOf` never names it. Every column
+resolution already passes through `Get`, so the model builder, the linearizers and the
+readback learn nothing; the per-row fast path takes only ROW variables, so a row reading
+one, where two terms may land on one column (`x - at(previous: x) over (t.period cyclic)`
+on a timeline of one row), is accumulated by column. Its type and box are its base's
+(`SyncFrameReadBoxes` in stage 08, after implied bounds and after a diagnosis widens the
+boxes), so a pass that reads a term's box — a Big-M, a row's range — reads one that holds
+wherever the read lands; a bound implied on the read alone is dropped, never applied to its
+base, whose other instances it does not cover. `VarIndexer::Build` checks each read names a
+plan decision at every row. A table of the plan's decisions is looked up through
+`SolverInput::BaseVariable`, which maps a read to its base. The composed MIN/MAX
+formulation reads each term at its own row, so it refuses a frame read as an internal error
+(stage 05 refuses one there until the ANR plan's phase 6).
+
 ---
 
 ## 2. Variable types and bounds

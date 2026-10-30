@@ -11,6 +11,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
@@ -18,6 +19,22 @@ idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer) {
 	idx_t group_key = DConstants::INVALID_INDEX;
 	TryParseGroupKeyTag(reducer.GetAlias(), group_key);
 	return group_key;
+}
+
+bool TryGetDecideFrame(const Expression &expr, idx_t &frame) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && TryParseFrameTag(expr.GetAlias(), frame);
+}
+
+bool ContainsDecideFrame(const Expression &expr) {
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		found = found || ContainsDecideFrame(child);
+	});
+	return found;
 }
 
 DecideReducerPath DecideReducerPath::Below(const BoundAggregateExpression &reducer) const {

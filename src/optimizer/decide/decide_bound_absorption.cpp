@@ -269,6 +269,15 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
+		// A comparison holds only at the rows where every frame it reads outside its
+		// reducers selects a position (syntax_reference.md §5.6) -- a condition, as a `when`
+		// is -- so it must not become a global bound either. The row an ABS lowers from
+		// `abs(x - at(previous: x) over (...)) <= K` carries its clause's id, not the frame.
+		for (auto &frame : decide.frames) {
+			if (frame.SkipsInstancesOf(source_clause_id)) {
+				return;
+			}
+		}
 		AbsorptionTarget target;
 		if (!TryMatchAbsorptionTarget(optimizer.context, *comp.left, decide, target) &&
 		    !TryMatchEasyExtremumTarget(optimizer.context, comp, decide, target)) {

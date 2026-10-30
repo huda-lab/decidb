@@ -723,6 +723,101 @@ at(previous: x) over (t.period)"*.
   `test_anr_frames.py::TestSyntax` (every frame fixture of `_anr_cases` binds and stops at
   the gate; the refusals; a window in a subquery of the clause answers).
 
+## The full algorithm — phase 4: point selectors
+
+Shipped 2026-10-30. A point frame `at(F [else v]: e) over (S [desc] [cyclic] [within K])`
+is formulated wherever phase 4 places it (`syntax_reference.md` §5.6; deck pp. 43–56,
+73–75, 99–108); a range still stops at the gate, now its own (*"DECIDE: a range frame
+selector is not supported yet: ..."*), until phase 5. The design is the plan's phase-4
+section; in short, a frame is a tuple term read at another row, so every layer above
+execution keeps it opaque, and execution turns it into data columns and decision reads.
+
+- **Binder** (`../01_pipeline/02_binder/done.md` §4a). `else NULL` written is no fallback
+  (D80; the transformer drops the literal, the binder a fallback that folds to NULL). A
+  point's marker takes the common type of payload and fallback (`else 0.5` over a whole
+  payload). Refused: a payload or fallback not linear in the decisions (`abs(x - 3)`
+  inside), whose rewrite rows would stand at the anchor while the frame reads elsewhere;
+  a fallback that reads a decision beside a payload that reads none, which no layer below
+  would see (the marker's children are the payload's).
+- **Plan** (`../01_pipeline/03_logical_plan/done.md` §4). `DecideFrameSpec` gains `rows`,
+  `scope_key`, `source_clause_id`, `reduced`, `timeline_names`, `order_name` (ids
+  113–118); `DecideScopeCheckKind::FRAME_PARTITION` with `DecideScopeCheck::frame` (110);
+  `DecideSignatureFieldKind::FRAME` with `DecideSignatureField::frame` (105).
+- **Canonicalizer** (`../01_pipeline/04_canonicalizer/done.md`). A frame's marker is no
+  reducer (`ContainsReducer`, `TryMatchScaledAggregate`): a frame over decisions sits
+  left as a tuple term, one over data right; it decides no shape. `PlaceFrames` reads
+  each frame's timeline rows off the path rule, builds the D69 check of a frame a `per`
+  reads directly unless the key holds its `within`, and refuses (phase 6) a frame that may
+  select no position inside a reducer over decisions. A frame is a signature field by its
+  keys (D76), never by the data it reads.
+- **Optimizer** (`../01_pipeline/05_optimizer/done.md` §1a). The rewrites carry the marker
+  as a term (the value rewrite lifts no frame). The linear form lowers it: a payload term
+  `c·x` becomes `READ(c)·x` read at the selected row (`DecideTerm::frame_read`), a
+  fallback's `c'·y` becomes `FALLBACK(c')·y` at the anchor, a frame over data one `VALUE`
+  column of its own type (a DATE or BOOLEAN payload too), and one inside a bound-side
+  reducer adds its `PRESENT` column to the reducer's own `when`
+  (`DecidePreparedModel::frame_columns`). Like terms compare `frame_read`, so
+  `x - at(previous: x)` keeps both. A frame over decisions inside, or beside, a composed
+  MIN/MAX is refused (phase 6). Bound absorption treats a clause whose root frame
+  may select nothing as it treats a `when`: its bounds hold only where the frame selects,
+  so none becomes a column bound (found by the fuzzer: `abs(x - at(previous: x) over
+  (...)) <= -1` with every instance skipped was called infeasible).
+- **Formulation** (`../01_pipeline/06_model_formulation/done.md` §1). A frame read is a
+  variable of scope `FRAME_READ` (`SolverInput::frame_reads`): `VarIndexer::Get` returns
+  its base's column at the selected row; it owns no column, and its type and box are its
+  base's, re-copied after implied bounds and after a diagnosis widens the boxes.
+- **Execution** (`../01_pipeline/08_execution/done.md`). `BuildFrames` builds each frame's
+  timelines (DuckDB sort keys, `default_null_order`, D68), selections and columns, appended
+  to the materialized input, a payload computed on each selected peer's first row only and
+  a fallback on the anchors that reach it only. `FRAME_PARTITION` runs with the scope
+  checks, and the peer error (D67) after them. A comparison whose root frame selects
+  nothing skips that instance (`FramesPresent`, by its clause id through
+  `DecideFrameSpec::SkipsInstancesOf`, so a rewrite's rows of it too) while its
+  reducers still read every kept row; under the tightest-bound collapse an absent anchor
+  bounds nothing and a group with none has no row (D79); a bound-side reducer left with
+  no member is absent. The objective's root frame selecting nothing is an error. Readback
+  reads the input's own columns.
+- **Choices beyond the plan's text.** A point frame inside a reducer operand is read in
+  place too, not through a helper per anchor row (D72 as shipped): `sum(at(previous else
+  0: x))` is a sum of redirected terms. The redirect lives in `VarIndexer::Get`, where
+  every column resolution already passes, rather than at the model builder's thirty call
+  sites. The peer error is raised after the scope checks, so a spanned timeline (D69) is
+  reported first, as the oracle reports it. A `BETWEEN` is its two comparisons: a frame
+  absent in one bound skips that half alone.
+- Tests: `test_anr_frames.py` (`TestSyntax` on phase-4 terms; `TestPoint`: the 21 phase-4
+  fixtures of `_anr_cases` and F2's model pinned at six columns and one row per instance;
+  `TestPointDeck`: deck examples 1, 4, 5 and the DeQL comparison as written;
+  `TestPointShapes`, `TestPointErrors`), `test_frame_parser.test` (answers, the gate on
+  ranges, the new refusals), `test_decidb_plan_serialization.cpp` (a placed frame, its
+  check and its field round-trip). A differential fuzzer against `_anr_oracle` (random
+  timelines with peers and NULL keys, every placement above, three solver settings) ran
+  2,000 cases: no wrong answer and no internal error; one absorption bug (above), and
+  differences only in which of two errors a query reports first — the engine runs every
+  scope check before the peer check, and a domain contradiction before either, where the
+  oracle goes clause by clause. A second run of 1,000 cases on the final binary found one
+  more disagreement: the peer check demanded one decision instance where the coefficient
+  was 0 at both rows. D67 now compares payloads as linear forms, as the oracle does
+  (`test_peers_with_one_linear_form_select_once`). A third run of 1,000 found only
+  error-order differences.
+- **Architecture review** (a `decidb-architect` pass over the phase-4 diff). Fixed: an L0
+  `norm` over a decision frame was an internal error (its Big-M named a frame read by the
+  plan's decision table; `SolverInput::BaseVariable` now maps a read to its base); a frame
+  over data of a DATE payload was a cast error and one with `else true` an internal error
+  (`READ + FALLBACK` joined them by arithmetic and a 0 default; one `VALUE` column of the
+  payload's type replaces it); a decision frame beside MAX in the objective named the
+  internal `first` aggregate (now refused as itself); the skip test was written three
+  times, and a comparison with no id would have read the objective's frames (now
+  `SkipsInstancesOf` and `MayLeaveObjectiveUnset`, and placement holds every
+  constraint's frame to an id); a lone negated frame took a reducer's spelling. Guards
+  added: stage 06's composed MIN/MAX refuses a frame read internally (it reads terms at
+  their own rows), a frame marker reaching execution's reducer collector is internal,
+  and the frame columns must follow exactly the input's. Kept, with the reason: frame
+  reads are numbered by execution, not by stage 05, since model variables are the
+  formulation contract's (`ReadVariable` is the one place a term's variable is read, at
+  all four evaluation sites); the input is widened by moving segments into the emptied
+  collection rather than by holding it through a pointer; a sort key is a short string
+  for the usual order types, held inline.
+
 ## Decisions
 
 Settled while the language was built; the code and the tests cite them by number. A
@@ -781,11 +876,19 @@ not the code.
 | D64 | Variant signatures replace the determination errors: a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands |
 | D65 | An inner `per` and the colon form follow D64 too: a tuple whose body varies is one value per variant, which EXPLAIN ANALYZE counts |
 | D66 | The objective is produced once: a second variant is an error saying it would be produced more than once |
+| D67 | A frame's selected position holding rows that read different payloads is an error naming the position; rows reading one payload — one value of data, one linear form over decisions — select once |
+| D68 | A frame's order key orders peers as `ORDER BY` does, NULL where `default_null_order` puts it |
+| D69 | Under `per K`, each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines |
 | D71 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
+| D72 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range lowers to helpers (phase 5) |
 | D73 | A nested MIN/MAX is pinned on the side its readers push it through SUM and AVG levels, and on both sides under any other reader |
 | D74 | Stays refused, each by name: `norm` inside a reducer and a reducer inside `norm`, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone (`count` included) added inside one over decisions, inside a reducer a reducer times a decision and `abs` over a reducer on a path that keeps rows; a frame in `when`/`per`/`by`/`within`/an order key, a reducer or frame inside a frame's payload, a square or product of decisions in it, a frame term times a decision |
 | D75 | The two-level objective keeps its spelling and loses its special path: it is a nested reducer, its four refusals lifted |
+| D76 | A frame is a signature field by its keys: its timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached; not by the value it reads |
 | D77 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |
+| D78 | A NULL payload read at a selected row is a NULL coefficient or bound, the §3 error |
+| D79 | Under the tightest-bound collapse an anchor whose frame selects nothing bounds nothing; a group with no such anchor present has no row |
+| D80 | `else NULL` written, or a fallback that is NULL before the query runs, is no fallback |
 
 | # | Call |
 |---|---|

@@ -52,6 +52,11 @@ struct DecideTerm {
 	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! A frame selector's payload term (syntax_reference.md §5.6): the variable is read at
+	//! the row frame `frame_read` (into LogicalDecide::frames) selects for each row, not at
+	//! the row itself. Its coefficient is a READ frame column, 0 where nothing is selected.
+	//! INVALID_INDEX for every other term.
+	idx_t frame_read = DConstants::INVALID_INDEX;
 
 	DecideTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
 	    : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {
@@ -182,6 +187,39 @@ struct DecideObjective {
 	DecideObjective() = default;
 };
 
+//! A value a frame selector reads, which stage 08 computes as a column beside the input's:
+//! every expression that reads a frame reads it as chunk column
+//! `DecidePreparedModel::frame_column_base + j` for entry j, so no evaluator learns a new
+//! node. `value` is evaluated on the rows `kind` names only, which is what makes an unused
+//! fallback never evaluated (syntax_reference.md §5.6). A frame over data reads one value:
+//!   VALUE    — `value`, its payload, at the row the frame selects for the row; `fallback`,
+//!              its `else`, at the row itself where it selects none; NULL where neither
+//!              stands, which no consumer reads (the instance is skipped, the member dropped)
+//! A frame over decisions reads its terms' coefficients, 0 where a term does not stand:
+//!   READ     — `value` at the row the frame selects for the row; 0 where it selects none
+//!   FALLBACK — `value` at the row itself where the frame selects none and has an `else`;
+//!              0 everywhere else
+//! And either may drop a reducer's member:
+//!   PRESENT  — whether the frame selects a row (BOOLEAN; `value` is null)
+struct DecideFrameColumn {
+	enum class Kind : uint8_t { VALUE, READ, FALLBACK, PRESENT };
+	Kind kind = Kind::READ;
+	idx_t frame = DConstants::INVALID_INDEX;
+	unique_ptr<Expression> value;
+	//! VALUE: the frame's `else`, of `value`'s type; null when it has none.
+	unique_ptr<Expression> fallback;
+	LogicalType type;
+};
+
+//! One term of a frame's payload over decisions: `sign * coefficient * decision`, its
+//! coefficient the READ column `column` (into DecidePreparedModel::frame_columns);
+//! `decision` is INVALID_INDEX for a constant term.
+struct DecideFramePayloadTerm {
+	idx_t decision = DConstants::INVALID_INDEX;
+	idx_t column = DConstants::INVALID_INDEX;
+	int sign = 1;
+};
+
 //! Everything DecideLinearFormBuilder (stage 05) produces, carried on
 //! LogicalDecide and moved into PhysicalDecide at physical planning.
 //!
@@ -196,6 +234,18 @@ struct DecidePreparedModel {
 	//! one the way its clause scopes it (D28). Evaluated under DIAGNOSE only.
 	vector<unique_ptr<DecideConstraint>> absorbed_constraints;
 	unique_ptr<DecideObjective> objective;
+	//! The values the frame selectors read, as columns after the input's: the first is
+	//! chunk column `frame_column_base`, the number of columns the input has.
+	vector<DecideFrameColumn> frame_columns;
+	idx_t frame_column_base = 0;
+	//! Per frame (LogicalDecide::frames) over decisions, its payload's terms. The rows of a
+	//! selected peer must hold one payload -- one constant and one coefficient on each
+	//! decision instance -- or the position is ambiguous (D67). Empty for a frame over data,
+	//! whose one READ column is its whole payload.
+	vector<vector<DecideFramePayloadTerm>> frame_payload_terms;
+	//! Per frame, the decisions its fallback reads at the row itself: with its FALLBACK
+	//! columns, what tells two anchors that reach the fallback apart (D76).
+	vector<vector<idx_t>> frame_fallback_decisions;
 };
 
 } // namespace duckdb

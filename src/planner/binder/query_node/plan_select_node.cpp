@@ -171,13 +171,13 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         };
         tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
         tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
-        // Frame selectors parse, bind and have their subqueries planned (ANR plan phase
-        // 3). Canonicalization is the first layer that would read one, and it does not
-        // yet (phase 4): every frame query stops here, before any later layer can refuse
-        // it for a reason of its own.
-        if (!statement.decide_frames.empty()) {
-            throw BinderException("DECIDE: frame selectors are not supported yet: %s",
-                                  statement.decide_frames[0].text);
+        // A range frame parses, binds and has its subqueries planned; formulating one is
+        // the ANR plan's phase 5. It stops here, before canonicalization -- the first layer
+        // that would read it -- so no later layer refuses it for a reason of its own.
+        for (auto &frame : statement.decide_frames) {
+            if (frame.range) {
+                throw BinderException("DECIDE: a range frame selector is not supported yet: %s", frame.text);
+            }
         }
         // Canonicalization: the single point at which the shape of a user-written
         // constraint is decided (decision terms left, data right). Runs here rather
@@ -199,7 +199,11 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                                          scope_checks.group_keys, scope_checks.relations};
         // The variant signatures (D64), from the canonical clauses: one instance per class
         // and distinct value of each scoped expression's fields.
-        DecideSignatures signatures {statement.decide_group_keys, statement.entity_scopes, {}};
+        DecideSignatures signatures {statement.decide_group_keys, statement.entity_scopes, statement.decide_frames,
+                                     {}};
+        // Where each frame stands, from the canonical clauses: the rows its timelines read.
+        DecideFramePlacement frame_placement {statement.decide_frames, statement.decide_group_keys, scope_checks,
+                                              {}};
         {
             DecideCanonicalizer canonicalizer(context, statement.decide_index,
                                                statement.variable_scopes,
@@ -209,6 +213,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             if (statement.decide_constraints) {
                 canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
                 statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+                canonicalizer.PlaceFrames(*statement.decide_constraints, frame_placement);
                 canonicalizer.BuildConstraintSignatures(*statement.decide_constraints, signatures);
                 canonicalizer.VerifyCanonical(*statement.decide_constraints);
                 FinalizeConstraintSourceInfo(*statement.decide_constraints,
@@ -231,11 +236,20 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
                 statement.decide_objective = canonicalizer.CanonicalizeObjective(
                     *statement.decide_objective, statement.objective_constant_offset);
+                canonicalizer.PlaceObjectiveFrames(*statement.decide_objective, frame_placement);
                 canonicalizer.BuildObjectiveSignatures(*statement.decide_objective, signatures);
                 canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
                 canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
                 if (canonical_objective == written_objective) {
                     canonical_objective.clear();
+                }
+            }
+            // A frame stands in one clause or in the objective, never nowhere: one the walks
+            // above missed would read every row as its timeline.
+            frame_placement.placed.resize(statement.decide_frames.size(), false);
+            for (idx_t i = 0; i < statement.decide_frames.size(); i++) {
+                if (!frame_placement.placed[i]) {
+                    throw InternalException("DECIDE: frame %s is in no clause", statement.decide_frames[i].text);
                 }
             }
         }

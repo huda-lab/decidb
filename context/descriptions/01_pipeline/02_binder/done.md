@@ -504,9 +504,17 @@ scopes, then bound like a reducer whose rows are the ones the frame selects.
   frame's order key and `within` key to data (*"DECIDE: x is a decision; a frame's order
   key and within may only use data"*; a frame, a window or a reducer there is refused
   too) and its payload and fallback to one row, linear in the decisions (*"DECIDE: '(x *
-  x)' squares or multiplies decisions inside at(...), which is not supported yet"*) (*"DECIDE: a reducer inside at(...) is not supported;
-  reduce outside the frame"*, *"DECIDE: a frame selector inside at(...) is not
-  supported"*; a range names itself `sum(from ...)`). `ValidateFrameProduct` refuses a
+  x)' squares or multiplies decisions inside at(...), which is not supported yet"*;
+  `FindNonlinearDecisionUse`: any call over a decision but `+`, `-`, `*` and `/`, or a
+  decision divisor, *"DECIDE: 'abs((x - 3))' inside at(...) is not linear in the
+  decisions, which is not supported yet; write it outside the frame"* — a rewrite would
+  lower it into rows standing at the anchor, while the frame reads its payload at
+  another row) (*"DECIDE: a reducer inside at(...) is not supported; reduce outside the
+  frame"*, *"DECIDE: a frame selector inside at(...) is not supported"*; a range names
+  itself `sum(from ...)`). A fallback that reads a decision beside a payload that reads
+  none is refused (*"DECIDE: in at(previous else s: t.demand) over (t.period), else s
+  reads a decision while the payload reads none, which is not supported yet"*): the
+  marker's children are the payload's, so no layer below would see the decision. `ValidateFrameProduct` refuses a
   `*` or `/` with a frame in one factor and a decision in another, and a square of a frame
   over decisions (`power`, `pow`, `**` or `^` with an exponent other than 1): *"DECIDE:
   '(x * at(previous: t.demand) over (t.period))' multiplies a decision by a value from
@@ -529,17 +537,23 @@ scopes, then bound like a reducer whose rows are the ones the frame selects.
   which holds the rest: the positions, `every`, `all`, the order key bound as data, the
   `within` key resolved as a `per` key is (`ResolveKey`: columns, and relations standing
   for their stored columns), and the fallback. The fallback binds like the payload, as a
-  number of any numeric or boolean type, kept in its own type: `else 0.5` over a
-  whole-numbered payload is 0.5 there, and a model reads both as numbers (*"DECIDE: in
-  at(previous else 'none': x) over (t.period), else 'none' is not a number"*). The frame's text is a source
+  number of any numeric or boolean type (*"DECIDE: in at(previous else 'none': x) over
+  (t.period), else 'none' is not a number"*), and a point's payload and fallback are cast
+  to their common type, the marker's: `else 0.5` over a whole-numbered payload is 0.5
+  there, and an expression around the frame is bound for a type that holds both. A
+  fallback that is NULL before the query runs is no fallback (D80; the transformer drops
+  a written `else NULL`, so the frame prints without it). The frame's text, and the names
+  of its `within` columns and its order key as written (`timeline_names`, `order_name`,
+  for messages), are recorded too. The frame's text is a source
   fragment on the aggregate, so every message and plan prints it as written; the fragment
   is recorded while binding, not by `TagDecideSourceFragments`, for the reason the `per`
   key's is (§4a above).
 - An aggregate-shaped marker, rather than a wrapper around the payload, keeps every later
-  layer from reading the payload as a term of the anchor row: a reducer is already an
-  opaque unit to the canonicalizer. Nothing past the plan's inputs reads a frame yet: the
-  planner refuses one just before canonicalization (*"DECIDE: frame selectors are not
-  supported yet: <frame>"*, `plan_select_node.cpp`) until phase 4 formulates it.
+  layer from reading the payload as a term of the anchor row; the layers that read
+  reducers tell a frame's marker from one (`TryGetDecideFrame`,
+  `../04_canonicalizer/done.md`). The planner refuses a range just before
+  canonicalization (*"DECIDE: a range frame selector is not supported yet: <frame>"*,
+  `plan_select_node.cpp`) until phase 5 formulates it.
 
 ---
 

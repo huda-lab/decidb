@@ -50,8 +50,9 @@ separate objective-side copy.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
+| 2a | `Finalize` → `BuildFrames` | Each frame selector's timelines and selections, and the values frames read appended to the input as columns (§3a) |
 | 3 | `Finalize` → `BuildEntityMappings` | Build the row → class maps of the key scopes |
-| 3a | `Finalize` → `RunScopeChecks` | Run the scope checks (§4a); the first failure stops the query |
+| 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | Run the scope checks (§4a), then the frames' peer check (D67); the first failure stops the query |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
@@ -197,6 +198,69 @@ produces them, and why it cannot live here, is
 [`../05_optimizer/done.md`](../05_optimizer/done.md) §1a.
 
 ---
+
+## 3a. PHASE 1.4 — frame selectors
+
+A point frame (`syntax_reference.md` §5.6) reads, at each row of its timeline, a value at
+the row its position selects. `BuildFrames` (`physical_decide_frames.cpp`,
+`decide_frame_map.hpp`) reads each `LogicalDecide::frames` entry into a `DecideFrameMap`
+before anything else reads the data:
+
+1. **Timelines.** Its anchors are the rows its `rows` condition keeps (its scoped
+   expression's path rows, stage 04); `BuildGroupIds` splits them by its path's `by` keys
+   and its `within`. Each timeline is ordered by its order key through DuckDB's sort keys
+   (`CreateSortKeyHelpers`, in its direction, NULL where `default_null_order` puts it,
+   D68) and cut into peers, the rows of one order-key value; `context.interrupted` is
+   polled per timeline.
+2. **Selections.** An anchor at peer `a` of `n` selects `0`, `n - 1`, `a - k` or `a + k`,
+   wrapped modulo `n` when cyclic, else missing outside `[0, n)`; the selected peer's
+   first row is the one read.
+3. **Columns** (`AppendDecideFrameColumns`). Every `DecidePreparedModel::frame_columns`
+   entry is computed over the rows its kind names only — a payload (`VALUE`, `READ`) on
+   the first row of each selected peer, the row its anchors read, a fallback (`VALUE`'s
+   `else`, `FALLBACK`) on the anchors whose position is missing, which is what keeps an
+   unused `else` unevaluated — and gathered to each anchor; where neither stands a
+   coefficient (`READ`, `FALLBACK`) is 0 and a value (`VALUE`) NULL, which nothing reads.
+   The input is rebuilt with them after its own columns, which must number
+   `frame_column_base` as stage 05 counted them. Every later phase reads them as data: a
+   `when`, a coefficient, a bound, a reducer, a signature (a reached fallback keys a
+   variant only on the anchors that reach it, D76).
+4. **Peers** (D67, `CheckDecideFramePeers`, after the scope checks). The rows of a selected
+   peer of several rows must read one payload: a frame over data one value of its payload;
+   a frame over decisions one linear form of its payload's terms
+   (`DecidePreparedModel::frame_payload_terms`) — one constant, and one coefficient on each
+   decision instance (the row for a per-row decision, the class for a keyed one), zeros
+   dropped, so `0 * x` at two rows reads no instance. A peer holding a NULL coefficient is
+   compared by its values, and the NULL fails where it is read (D78). Else it names
+   the position: *"... finds 2 rows at t.product = 'A', t.period = 1; a position must hold
+   one row."* Raised after the scope checks so a spanned timeline (D69) is reported first.
+
+**Presence.** A comparison reading a frame outside its reducers that selects nothing at a
+row has no instance there (`FramesPresent`, keyed by the comparison's clause id through
+`DecideFrameSpec::SkipsInstancesOf`, never matching a comparison with none, so every
+row a rewrite derived from it — an ABS envelope, a `<>` disjunction — is skipped with it).
+`EvaluateConstraints` keeps two masks: `scoped_kept`, what the `when` keeps, which a
+reducer reads its group from; and `instance_kept`, without the absent rows, which the
+instances, the classes and variants of `per K`, the per-row terms and the bound read. So a
+reducer still reads every kept row of its group, and nothing is read on an absent row (a
+NULL there raises nothing). Under the tightest-bound collapse an absent anchor bounds
+nothing, a group none of whose rows is an instance has no row (D79), and a row of a group
+that reads no bound carries the group's (`ReduceAggregateRhsPerGroup`). A bound-side
+reducer whose frames left a group no member is absent (`EvaluateRhsReducerPerGroup`'s
+`absent`, `count` excepted, which is 0), and so is the instance reading it; an inner one
+drops the outer member. The objective's root frame selecting nothing at its first kept row
+is an error (*"DECIDE objective: ... selects no position; ... Give the frame an else."*).
+
+**Frame reads.** A payload term (`DecideTerm::frame_read`) names, at every row, the
+variable `DecideGlobalSinkState::ReadVariable` gives it: one per decision and frame, after
+the plan's decisions (a query-wide decision is its own read), which `BuildSolverInput`
+hands stage 06 as `SolverInput::frame_reads` with each anchor's selected row, the
+variable's type and box its base's (`SyncFrameReadBoxes`). `ReadVariable` is the one place
+an evaluated term's variable is read; a table of the plan's decisions (a name, the L0
+indicator test) is looked up through `SolverInput::BaseVariable`. The signature's `FRAME`
+field splits by the map's timeline or peer, and where an `else` is reached by what it reads
+there — a `VALUE` column, or `FALLBACK` columns and its decisions' instances
+(`BuildSignatureIds`, D76).
 
 ## 4. PHASE 1.5 — entity mappings
 
@@ -737,8 +801,9 @@ data rows and solution values is exact.
 The source state also owns a `scan_chunk`, sized to `gstate.data.Types()` via
 `InitializeScanChunk` — narrower than the operator's output chunk by exactly
 `total_decide_vars`, since DECIDE columns are appended after the buffered input.
-`GetData` scans into `scan_chunk`, then `Vector::Reference`s each scanned column
-into the output chunk's matching leading column (zero-copy). Scanning directly
+`GetData` scans into `scan_chunk`, then `Vector::Reference`s each of the input's
+columns into the output chunk's matching leading column (zero-copy); the columns frames
+read, after the input's (§3a), are no output. Scanning directly
 into the wider output chunk would violate `ColumnDataCollectionSegment::
 ReadChunk`'s `chunk.ColumnCount() == column_ids.size()` contract.
 

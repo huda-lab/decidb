@@ -450,6 +450,12 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(110, "cyclic", cyclic);
 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(111, "within", within);
 	serializer.WritePropertyWithDefault<string>(112, "text", text);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(113, "rows", rows);
+	serializer.WritePropertyWithDefault<idx_t>(114, "scope_key", scope_key, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<idx_t>(115, "source_clause_id", source_clause_id, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<bool>(116, "reduced", reduced);
+	serializer.WritePropertyWithDefault<vector<string>>(117, "timeline_names", timeline_names);
+	serializer.WritePropertyWithDefault<string>(118, "order_name", order_name);
 }
 
 DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
@@ -467,6 +473,12 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<bool>(110, "cyclic", result.cyclic);
 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(111, "within", result.within);
 	deserializer.ReadPropertyWithDefault<string>(112, "text", result.text);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(113, "rows", result.rows);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(114, "scope_key", result.scope_key, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(115, "source_clause_id", result.source_clause_id, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithDefault<bool>(116, "reduced", result.reduced);
+	deserializer.ReadPropertyWithDefault<vector<string>>(117, "timeline_names", result.timeline_names);
+	deserializer.ReadPropertyWithDefault<string>(118, "order_name", result.order_name);
 	return result;
 }
 
@@ -495,6 +507,7 @@ void DecideScopeCheck::Serialize(Serializer &serializer) const {
 	/* [Deleted] (string) "object" */
 	/* [Deleted] (string) "context" */
 	serializer.WritePropertyWithDefault<vector<string>>(109, "key_names", key_names);
+	serializer.WritePropertyWithDefault<idx_t>(110, "frame", frame, DConstants::INVALID_INDEX);
 }
 
 DecideScopeCheck DecideScopeCheck::Deserialize(Deserializer &deserializer) {
@@ -509,6 +522,7 @@ DecideScopeCheck DecideScopeCheck::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadDeletedProperty<string>(107, "object");
 	deserializer.ReadDeletedProperty<string>(108, "context");
 	deserializer.ReadPropertyWithDefault<vector<string>>(109, "key_names", result.key_names);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(110, "frame", result.frame, DConstants::INVALID_INDEX);
 	return result;
 }
 
@@ -536,6 +550,7 @@ void DecideSignatureField::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<idx_t>(102, "decision", decision, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<idx_t>(103, "group_key", group_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<string>(104, "text", text);
+	serializer.WritePropertyWithDefault<idx_t>(105, "frame", frame, DConstants::INVALID_INDEX);
 }
 
 DecideSignatureField DecideSignatureField::Deserialize(Deserializer &deserializer) {
@@ -545,6 +560,7 @@ DecideSignatureField DecideSignatureField::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(102, "decision", result.decision, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(103, "group_key", result.group_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<string>(104, "text", result.text);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(105, "frame", result.frame, DConstants::INVALID_INDEX);
 	return result;
 }
 

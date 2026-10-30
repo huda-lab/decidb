@@ -214,6 +214,10 @@ protected:
     //! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the
     //! order key, the `within` key's columns, the positions and the fallback.
     BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
+    //! A frame's `else`, bound into `out`: a number, and none when it is NULL before the
+    //! query runs (D80).
+    ErrorData BindFrameFallback(DecideFrameExpression &frame, const DecideFrameSpec &spec,
+                                const string &fallback_text, idx_t depth, unique_ptr<Expression> &out);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     //! The dispatch itself. `BindExpression` wraps it so every bound node this binder

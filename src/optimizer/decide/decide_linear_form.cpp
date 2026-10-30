@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -17,9 +18,12 @@
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <unordered_map>
 
@@ -208,6 +212,8 @@ public:
 			auto &colref = op.decide_variables[i]->Cast<BoundColumnRefExpression>();
 			decide_variable_map[colref.binding] = i;
 		}
+		// A frame's values are columns after the input's (DecideFrameColumn).
+		op.prepared.frame_column_base = op.children.empty() ? 0 : op.children[0]->types.size();
 	}
 
 	void Build() {
@@ -223,10 +229,12 @@ public:
 		for (auto &spec : op.composed_minmax_constraints) {
 			for (auto &term : spec.terms) {
 				ExtractTerms(*term.inner_expr, term.inner_terms);
+				RefuseComposedFrameRead(term);
 			}
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
 			ExtractTerms(*term.inner_expr, term.inner_terms);
+			RefuseComposedFrameRead(term);
 		}
 		// The reducers the value rewrite lifted into helper decisions, the same way.
 		for (auto &link : op.reducer_value_links) {
@@ -251,6 +259,10 @@ public:
 		for (auto &link : op.reducer_value_links) {
 			CollectLikeTerms(link.inner_terms);
 		}
+
+		// Every frame left in an expression execution evaluates is over data -- a decision
+		// frame became its terms above -- and becomes the columns it reads.
+		LowerFramesInPreparedModel();
 
 		// A recorded bound's repair rows come from its clause, so the repair model would
 		// open its column with nothing enforcing it were its clause not flattened above.
@@ -417,7 +429,12 @@ private:
 		// Constants, data columns, etc.: no DECIDE vars
 	}
 
+	//! Whether `expr` holds a reducer -- a frame's marker is none.
 	static bool BoundExpressionContainsAggregate(const Expression &expr) {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			return false;
+		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			return true;
 		}
@@ -597,7 +614,12 @@ private:
 	// Linear flattening
 	//===------------------------------------------------------------------===//
 
-	void ExtractTerms(const Expression &expr, vector<DecideTerm> &out_terms) const {
+	void ExtractTerms(const Expression &expr, vector<DecideTerm> &out_terms) {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame) && FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+			ExtractFrameTerms(expr.Cast<BoundAggregateExpression>(), frame, out_terms);
+			return;
+		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 			auto &func = expr.Cast<BoundFunctionExpression>();
 
@@ -647,6 +669,9 @@ private:
 							}
 						}
 					}
+					return;
+				}
+				if (ExtractScaledFrameTerms(func, out_terms)) {
 					return;
 				}
 
@@ -725,6 +750,249 @@ private:
 	}
 
 	//===------------------------------------------------------------------===//
+	// Frame selectors (syntax_reference.md §5.6)
+	//===------------------------------------------------------------------===//
+
+	//! The frame column holding `value` read the way `kind` says for frame `frame`
+	//! (DecideFrameColumn), registered once per distinct value; its index. A VALUE column
+	//! also reads the frame's `else`.
+	idx_t FrameColumnSlot(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
+		auto &columns = op.prepared.frame_columns;
+		idx_t slot = columns.size();
+		for (idx_t i = 0; i < columns.size(); i++) {
+			auto &column = columns[i];
+			if (column.kind == kind && column.frame == frame &&
+			    (column.value ? value && column.value->Equals(*value) : !value)) {
+				slot = i;
+				break;
+			}
+		}
+		if (slot == columns.size()) {
+			DecideFrameColumn column;
+			column.kind = kind;
+			column.frame = frame;
+			column.value = value ? value->Copy() : nullptr;
+			column.type = value ? value->return_type : LogicalType::BOOLEAN;
+			auto &fallback = op.frames[frame].fallback;
+			if (kind == DecideFrameColumn::Kind::VALUE && fallback) {
+				// The binder gave payload and fallback one type (BindDecideFrame).
+				if (fallback->return_type != column.type) {
+					throw InternalException("DECIDE: %s reads a payload of type %s and an else of type %s",
+					                        op.frames[frame].text, column.type.ToString(),
+					                        fallback->return_type.ToString());
+				}
+				column.fallback = fallback->Copy();
+			}
+			columns.push_back(std::move(column));
+		}
+		return slot;
+	}
+
+	//! The chunk column holding frame column `slot`.
+	unique_ptr<Expression> FrameColumnRef(idx_t frame, idx_t slot) {
+		return make_uniq<BoundReferenceExpression>(op.frames[frame].text, op.prepared.frame_columns[slot].type,
+		                                           op.prepared.frame_column_base + slot);
+	}
+
+	//! The chunk column holding `value` read the way `kind` says for frame `frame`.
+	unique_ptr<Expression> FrameColumnRef(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
+		return FrameColumnRef(frame, FrameColumnSlot(kind, frame, value));
+	}
+
+	//! A frame over decisions, as its terms: each term of its payload read at the row the
+	//! frame selects -- the decision's instance there, its coefficient a READ column, 0 where
+	//! nothing is selected -- and each term of its fallback read at the row itself, its
+	//! coefficient a FALLBACK column, 0 where something is.
+	void ExtractFrameTerms(const BoundAggregateExpression &marker, idx_t frame, vector<DecideTerm> &out) {
+		if (frame >= op.frames.size() || marker.children.size() != 1) {
+			throw InternalException("DECIDE: a frame marker names no frame of the plan");
+		}
+		auto &spec = op.frames[frame];
+		auto &payload_terms = op.prepared.frame_payload_terms;
+		auto &fallback_decisions = op.prepared.frame_fallback_decisions;
+		payload_terms.resize(op.frames.size());
+		fallback_decisions.resize(op.frames.size());
+		// Every read of the frame extracts the same terms: the payload is recorded once.
+		const bool record = payload_terms[frame].empty();
+		vector<DecideTerm> payload;
+		ExtractTerms(*marker.children[0], payload);
+		for (auto &term : payload) {
+			if (term.frame_read != DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE: a frame selector inside a frame's payload reached term extraction");
+			}
+			auto slot = FrameColumnSlot(DecideFrameColumn::Kind::READ, frame, term.coefficient.get());
+			if (record) {
+				payload_terms[frame].push_back(DecideFramePayloadTerm {term.variable_index, slot, term.sign});
+			}
+			DecideTerm read(term.variable_index, FrameColumnRef(frame, slot), term.sign);
+			if (term.variable_index != DConstants::INVALID_INDEX) {
+				read.frame_read = frame;
+			}
+			out.push_back(std::move(read));
+		}
+		if (!spec.fallback) {
+			return;
+		}
+		vector<DecideTerm> fallback;
+		ExtractTerms(*spec.fallback, fallback);
+		for (auto &term : fallback) {
+			auto &into = fallback_decisions[frame];
+			if (term.variable_index != DConstants::INVALID_INDEX &&
+			    std::find(into.begin(), into.end(), term.variable_index) == into.end()) {
+				into.push_back(term.variable_index);
+			}
+			out.push_back(DecideTerm(term.variable_index,
+			                         FrameColumnRef(DecideFrameColumn::Kind::FALLBACK, frame, term.coefficient.get()),
+			                         term.sign));
+		}
+	}
+
+	//! `c * at(F: e)`, a frame over decisions under data factors (D74 refuses a decision
+	//! factor beside it): the frame's terms, each coefficient multiplied by the factors.
+	//! False when the product holds no frame over decisions.
+	bool ExtractScaledFrameTerms(const BoundFunctionExpression &func, vector<DecideTerm> &out) {
+		if (!ContainsDecideFrame(func) || FindDecideVariable(func) == DConstants::INVALID_INDEX) {
+			return false;
+		}
+		vector<const Expression *> factors;
+		CollectMultiplicativeFactors(func, decide_index, factors);
+		const Expression *term = nullptr;
+		vector<const Expression *> data;
+		for (auto *factor : factors) {
+			if (FindDecideVariable(*factor) == DConstants::INVALID_INDEX) {
+				data.push_back(factor);
+			} else if (term) {
+				throw InternalException("DECIDE: a frame term times a decision reached term extraction: %s",
+				                        func.ToString());
+			} else {
+				term = factor;
+			}
+		}
+		idx_t before = out.size();
+		ExtractTerms(*term, out);
+		if (!data.empty()) {
+			auto factor = BuildCoefficientFromFactors(context, data);
+			for (idx_t i = before; i < out.size(); i++) {
+				out[i].coefficient = RebindMultiply(context, factor->Copy(), std::move(out[i].coefficient));
+			}
+		}
+		return true;
+	}
+
+	//! The composed MIN/MAX formulation reads its terms' decisions at their own rows (stage
+	//! 06), so a frame over decisions inside one has no reading there yet.
+	void RefuseComposedFrameRead(const LogicalDecide::ComposedMinMaxTerm &term) const {
+		for (auto &inner : term.inner_terms) {
+			if (inner.frame_read != DConstants::INVALID_INDEX) {
+				throw BinderException("DECIDE: %s inside %s beside another term is not supported yet",
+				                      op.frames[inner.frame_read].text, StringUtil::Upper(term.agg_name));
+			}
+		}
+	}
+
+	//! Replace each frame over data in `expr` by the column it reads, VALUE: its payload at
+	//! the selected row, or its `else` at the anchor. One in a reducer's argument whose
+	//! position may be missing drops that member there (syntax_reference.md §5.6): its
+	//! PRESENT column joins the innermost reducer's own `when`, appended to `member_frames`.
+	//! A frame outside every reducer skips the instance instead, which execution reads off
+	//! the frame map.
+	void LowerDataFrames(unique_ptr<Expression> &expr, vector<idx_t> *member_frames) {
+		idx_t frame;
+		if (TryGetDecideFrame(*expr, frame)) {
+			if (FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE: a frame over decisions reached evaluation unextracted: %s",
+				                        op.frames[frame].text);
+			}
+			auto &marker = expr->Cast<BoundAggregateExpression>();
+			auto value = FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
+			if (member_frames && op.frames[frame].MaySelectNothing()) {
+				member_frames->push_back(frame);
+			}
+			// The marker's parent was bound to the marker's type.
+			expr = BoundCastExpression::AddCastToType(context, std::move(value), marker.return_type);
+			return;
+		}
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			auto &reducer = expr->Cast<BoundAggregateExpression>();
+			vector<idx_t> members;
+			for (auto &child : reducer.children) {
+				LowerDataFrames(child, &members);
+			}
+			for (auto member : members) {
+				auto present = FrameColumnRef(DecideFrameColumn::Kind::PRESENT, member, nullptr);
+				reducer.filter = reducer.filter ? make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
+				                                                                        std::move(reducer.filter),
+				                                                                        std::move(present))
+				                                : std::move(present);
+			}
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(
+		    *expr, [&](unique_ptr<Expression> &child) { LowerDataFrames(child, member_frames); });
+	}
+
+	void LowerFramesIn(vector<DecideTerm> &terms) {
+		for (auto &term : terms) {
+			if (term.coefficient) {
+				LowerDataFrames(term.coefficient, nullptr);
+			}
+		}
+	}
+
+	void LowerFramesIn(DecideConstraint &constraint) {
+		LowerFramesIn(constraint.lhs_terms);
+		if (constraint.rhs_expr) {
+			LowerDataFrames(constraint.rhs_expr, nullptr);
+		}
+		for (auto &term : constraint.bilinear_terms) {
+			if (term.coefficient) {
+				LowerDataFrames(term.coefficient, nullptr);
+			}
+		}
+		for (auto &group : constraint.quadratic_groups) {
+			LowerFramesIn(group.inner_terms);
+		}
+	}
+
+	//! Every expression execution evaluates, over the columns frames read (LowerDataFrames).
+	void LowerFramesInPreparedModel() {
+		if (op.frames.empty()) {
+			return;
+		}
+		for (auto &constraint : op.prepared.constraints) {
+			LowerFramesIn(*constraint);
+		}
+		for (auto &constraint : op.prepared.absorbed_constraints) {
+			LowerFramesIn(*constraint);
+		}
+		if (op.prepared.objective) {
+			LowerFramesIn(op.prepared.objective->terms);
+			LowerFramesIn(op.prepared.objective->squared_terms);
+			for (auto &term : op.prepared.objective->bilinear_terms) {
+				if (term.coefficient) {
+					LowerDataFrames(term.coefficient, nullptr);
+				}
+			}
+		}
+		for (auto &spec : op.composed_minmax_constraints) {
+			for (auto &term : spec.terms) {
+				LowerFramesIn(term.inner_terms);
+			}
+			if (spec.rhs_expr) {
+				LowerDataFrames(spec.rhs_expr, nullptr);
+			}
+		}
+		for (auto &term : op.composed_minmax_objective_terms) {
+			LowerFramesIn(term.inner_terms);
+		}
+		for (auto &link : op.reducer_value_links) {
+			LowerFramesIn(link.inner_terms);
+		}
+		op.prepared.frame_payload_terms.resize(op.frames.size());
+		op.prepared.frame_fallback_decisions.resize(op.frames.size());
+	}
+
+	//===------------------------------------------------------------------===//
 	// Like-term collection
 	//===------------------------------------------------------------------===//
 
@@ -752,8 +1020,10 @@ private:
 		}
 		// `avg_group_key` too: an inlined `sum(per K: avg(e) by (G))` divides by each G
 		// group's size, another AVG of the same decision by the whole relation's.
+		// `frame_read` too: `x - at(previous: x)` names one decision at two rows.
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
-		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.avg_group_key != b.avg_group_key) {
+		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.avg_group_key != b.avg_group_key ||
+		    a.frame_read != b.frame_read) {
 			return false;
 		}
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {
@@ -1172,6 +1442,15 @@ private:
 						return;
 					}
 				}
+				// A frame term under data factors is linear (D74 refuses a decision beside it).
+				if (ContainsDecideFrame(func)) {
+					idx_t before = constr.lhs_terms.size();
+					ExtractTerms(expr, constr.lhs_terms);
+					for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
+						constr.lhs_terms[i].sign *= sign;
+					}
+					return;
+				}
 				NormalizedProductTerm product;
 				if (ClassifyNormalizedProduct(func, product)) {
 					if (product.decide_factors.size() == 2) {
@@ -1469,7 +1748,7 @@ private:
 					}
 				}
 				NormalizedProductTerm product;
-				if (ClassifyNormalizedProduct(func, product)) {
+				if (!ContainsDecideFrame(func) && ClassifyNormalizedProduct(func, product)) {
 					if (product.decide_factors.size() == 2) {
 						DecideObjective::BilinearTerm bt;
 						bt.var_a = product.decide_factors[0];
@@ -1573,8 +1852,7 @@ private:
 		// A product of decisions has no once-only reading in the model -- except a product
 		// of two query-wide decisions (`s * u`), one `NONE` term execution counts once
 		// (CountOnce in physical_decide.cpp).
-		if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && !BoundExpressionContainsAggregate(expr) &&
-		    FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+		if (!BoundExpressionContainsAggregate(expr) && FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
 			idx_t bilinear_before = obj.bilinear_terms.size();
 			idx_t squared_before = obj.squared_terms.size();
 			ExtractLinearAndBilinearTerms(expr, obj, sign, nullptr);
@@ -1644,7 +1922,8 @@ private:
 		}
 
 		auto &objective = op.prepared.objective;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		idx_t frame;
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(*expr, frame)) {
 			auto &agg = expr->Cast<BoundAggregateExpression>();
 
 			objective = make_uniq<DecideObjective>();

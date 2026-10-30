@@ -63,18 +63,21 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 		return false;
 	}
 
+	// A reducer, not a frame's marker: a frame is a tuple term, scaled as one.
+	auto is_reducer = [&](const Expression &child) {
+		auto *node = UnwrapDecideCasts(child, decide_index);
+		idx_t frame;
+		return node->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(*node, frame);
+	};
 	idx_t aggregate_child;
-	if (is_div && UnwrapDecideCasts(*func.children[0], decide_index)->GetExpressionClass() ==
-	                  ExpressionClass::BOUND_AGGREGATE) {
+	if (is_div && is_reducer(*func.children[0])) {
 		aggregate_child = 0;
-	} else if (is_mult && UnwrapDecideCasts(*func.children[1], decide_index)->GetExpressionClass() ==
-	                         ExpressionClass::BOUND_AGGREGATE) {
+	} else if (is_mult && is_reducer(*func.children[1])) {
 		aggregate_child = 1;
 	} else {
 		return false;
 	}
-	if (UnwrapDecideCasts(*func.children[1 - aggregate_child], decide_index)->GetExpressionClass() ==
-	    ExpressionClass::BOUND_AGGREGATE) {
+	if (is_reducer(*func.children[1 - aggregate_child])) {
 		return false;
 	}
 
@@ -113,6 +116,10 @@ bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
 }
 
 bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame)) {
+		return false; // a tuple term read at another row, whose payload holds no reducer (D74)
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return true;
 	}
@@ -653,8 +660,12 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 }
 
 bool DecideCanonicalizer::IsLoneNegatedReducer(const vector<Atom> &atoms) const {
-	return atoms.size() == 1 && atoms[0].sign < 0 &&
-	       UnwrapDecideCasts(*atoms[0].expr, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
+	if (atoms.size() != 1 || atoms[0].sign >= 0) {
+		return false;
+	}
+	auto root = UnwrapDecideCasts(*atoms[0].expr, decide_index);
+	idx_t frame;
+	return root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(*root, frame);
 }
 
 bool DecideCanonicalizer::IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const {
@@ -1278,6 +1289,10 @@ void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constrain
 //! The reducers `expr` reads outside every reducer: a reducer's body is read per group, so
 //! the reducers inside it are not the clause's.
 static void CollectOuterReducers(const Expression &expr, vector<const BoundAggregateExpression *> &reducers) {
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame)) {
+		return; // no reducer: a frame reads one row
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		reducers.push_back(&expr.Cast<BoundAggregateExpression>());
 		return;
@@ -1400,6 +1415,11 @@ static bool HasSignatureField(const vector<DecideSignatureField> &fields, const 
 				return true;
 			}
 			break;
+		case DecideSignatureFieldKind::FRAME:
+			if (existing.frame == field.frame) {
+				return true;
+			}
+			break;
 		}
 	}
 	return false;
@@ -1422,6 +1442,29 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, const D
 		}
 		return false;
 	};
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame) && frame < out.frames.size()) {
+		// A frame is compared by its keys, not by the value it reads (D76): its timeline, the
+		// anchor's place on it when its position is relative to the anchor's, and its
+		// fallback where the anchor reaches it. `first` and `last` read one value per
+		// timeline, so a key that holds the timeline's splits nothing further.
+		auto &spec = out.frames[frame];
+		if (!spec.Relative()) {
+			bool covered = true;
+			for (auto &part : spec.within) {
+				covered = covered && in_key(*part);
+			}
+			if (covered) {
+				return;
+			}
+		}
+		DecideSignatureField field;
+		field.kind = DecideSignatureFieldKind::FRAME;
+		field.frame = frame;
+		field.text = spec.text;
+		add(std::move(field));
+		return;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		// A reducer reads a group, not the row: its `by` key is the field, and its body is
 		// a scoped expression of its own.
@@ -1470,7 +1513,7 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, const D
 		add(std::move(field));
 		return;
 	}
-	if (!ReferencesDecideVar(expr) && !ContainsReducer(expr)) {
+	if (!ReferencesDecideVar(expr) && !ContainsReducer(expr) && !ContainsDecideFrame(expr)) {
 		// A literal or a query-wide value has one value everywhere.
 		if (!expr.IsFoldable() && !IsQueryWideConstant(expr)) {
 			DecideSignatureField field;
@@ -1492,7 +1535,7 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, const D
 	// one field (D77), so written associativity never changes the count.
 	vector<Atom> data;
 	for (auto &atom : atoms) {
-		if (!ReferencesDecideVar(*atom.expr) && !ContainsReducer(*atom.expr)) {
+		if (!ReferencesDecideVar(*atom.expr) && !ContainsReducer(*atom.expr) && !ContainsDecideFrame(*atom.expr)) {
 			if (!atom.expr->IsFoldable() && !IsQueryWideConstant(*atom.expr)) {
 				data.push_back(std::move(atom));
 			}
@@ -1671,5 +1714,182 @@ void DecideCanonicalizer::BuildObjectiveSignatures(Expression &objective, Decide
 	}
 }
 
+
+//===--------------------------------------------------------------------===//
+// Frame placement (syntax_reference.md §5.6)
+//===--------------------------------------------------------------------===//
+
+bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
+                                        const vector<EntityScopeInfo> &entity_scopes, FramePerKey &out) const {
+	idx_t scope_idx;
+	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= entity_scopes.size()) {
+		return false;
+	}
+	auto &key_scope = entity_scopes[scope_idx];
+	for (idx_t i = 0; i < key_scope.entity_key_bindings.size(); i++) {
+		auto name = i < key_scope.key_names.size() ? key_scope.key_names[i] : string();
+		out.key.push_back(make_uniq<BoundColumnRefExpression>(name, key_scope.entity_key_column_types[i],
+		                                                      key_scope.entity_key_bindings[i]));
+		out.names.push_back(std::move(name));
+	}
+	out.text = key_scope.table_alias;
+	return true;
+}
+
+void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideReducerPath &path,
+                                        const BoundAggregateExpression *reducer, idx_t source_clause_id,
+                                        const FramePerKey *per, DecideFramePlacement &placement) const {
+	idx_t frame_idx;
+	if (TryGetDecideFrame(expr, frame_idx)) {
+		if (frame_idx >= placement.frames.size()) {
+			throw InternalException("DECIDE: a frame marker names frame %llu of %llu", frame_idx,
+			                        placement.frames.size());
+		}
+		if (placement.placed[frame_idx]) {
+			throw InternalException("DECIDE: frame %llu stands in two places", frame_idx);
+		}
+		placement.placed[frame_idx] = true;
+		auto &frame = placement.frames[frame_idx];
+		frame.rows = path.Rows();
+		frame.scope_key = FindOrCreateDecidePathKey(path.keys, placement.group_keys);
+		frame.source_clause_id = source_clause_id;
+		frame.reduced = reducer != nullptr;
+		// Its timelines are split by the path's `by` keys, then by `within`, whose names the
+		// binder recorded as written.
+		vector<string> path_names;
+		auto path_key = DecidePathKeyExpressions(path.keys, placement.group_keys, &path_names);
+		frame.timeline_names.insert(frame.timeline_names.begin(), path_names.begin(), path_names.end());
+		// A position missing inside a reducer over decisions drops the member, decisions and
+		// all, and may leave the reducer with none: the ANR plan's phase 6.
+		if (reducer && ReferencesDecideVar(*reducer) && frame.MaySelectNothing()) {
+			throw BinderException("DECIDE: %s may select no position inside %s, a reducer over decisions, which is "
+			                      "not supported yet; give it an else, or make its timeline cyclic",
+			                      frame.text, QuoteAsWritten(*reducer));
+		}
+		if (!per) {
+			return;
+		}
+		// D69: the classes of the `per` key read one timeline each. Each is inside one group
+		// of the path's keys, so only `within` can split one -- unless the key holds it.
+		auto determined = [&](const Expression &part) {
+			for (auto &column : per->key) {
+				if (column->Equals(part)) {
+					return true;
+				}
+			}
+			for (auto &column : path_key) {
+				if (column->Equals(part)) {
+					return true;
+				}
+			}
+			return false;
+		};
+		bool spans = false;
+		for (auto &part : frame.within) {
+			spans = spans || !determined(*part);
+		}
+		if (!spans) {
+			return;
+		}
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::FRAME_PARTITION;
+		check.rows = path.Rows();
+		check.frame = frame_idx;
+		check.key = std::move(path_key);
+		check.key_names = std::move(path_names);
+		for (idx_t i = 0; i < per->key.size(); i++) {
+			check.key.push_back(per->key[i]->Copy());
+			check.key_names.push_back(per->names[i]);
+		}
+		check.subject = "per " + per->text + " does not determine the timeline " +
+		                StringUtil::Join(frame.timeline_names, ", ") + " of " + frame.text;
+		placement.scope.checks.push_back(std::move(check));
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		// A reducer's argument is a scoped expression of its own: its frames read the rows of
+		// the reducer's members, along its path, under its own `per`.
+		auto &inner = expr.Cast<BoundAggregateExpression>();
+		auto below = path.Below(inner);
+		FramePerKey own;
+		bool has_per = ReducerPerKey(inner, placement.scope.entity_scopes, own);
+		for (auto &child : inner.children) {
+			PlaceFramesIn(*child, below, &inner, source_clause_id, has_per ? &own : nullptr, placement);
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		PlaceFramesIn(child, path, reducer, source_clause_id, per, placement);
+	});
+}
+
+void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
+                                            DecideFramePlacement &placement) const {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		auto inner = enclosing;
+		if (IsPerClassWrapper(conj)) {
+			inner.per = &conj;
+		} else if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			inner.when = conj.children[1].get();
+		} else if (!IsConstraintWrapper(conj)) {
+			inner = DecideEnclosingScope(); // a plain AND: each child is its own clause
+		}
+		for (idx_t i = 0; i < conj.children.size(); i++) {
+			if (IsConstraintChild(conj, i)) {
+				PlaceClauseFrames(*conj.children[i], inner, placement);
+			}
+		}
+		return;
+	}
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	TryParseSourceClauseTag(expr.GetAlias(), source_clause_id);
+	// A frame reached at no id would read as the objective's (DecideFrameSpec).
+	if (source_clause_id == DConstants::INVALID_INDEX && ContainsDecideFrame(expr)) {
+		throw InternalException("DECIDE: a constraint holding a frame selector has no clause id: %s",
+		                        expr.ToString());
+	}
+	DecideReducerPath path;
+	if (enclosing.when) {
+		path.conditions.push_back(enclosing.when);
+	}
+	FramePerKey per;
+	if (enclosing.per) {
+		auto &wrapper = *enclosing.per;
+		for (idx_t i = 1; i < wrapper.children.size(); i++) {
+			per.key.push_back(wrapper.children[i]->Copy());
+			per.names.push_back(StripDecideTags(wrapper.children[i]->GetName())); // as written
+		}
+		// The key as written (`per D.depotID`), which the binder recorded as a fragment.
+		idx_t fragment;
+		per.text = "()";
+		if (message_names && TryParseSourceFragmentTag(wrapper.GetAlias(), fragment) &&
+		    fragment < message_names->fragments.size()) {
+			per.text = message_names->fragments[fragment];
+		} else if (!per.names.empty()) {
+			per.text = StringUtil::Join(per.names, ", ");
+		}
+	}
+	PlaceFramesIn(expr, path, nullptr, source_clause_id, enclosing.per ? &per : nullptr, placement);
+}
+
+void DecideCanonicalizer::PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const {
+	placement.placed.resize(placement.frames.size(), false);
+	PlaceClauseFrames(constraints, DecideEnclosingScope(), placement);
+}
+
+void DecideCanonicalizer::PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const {
+	placement.placed.resize(placement.frames.size(), false);
+	const Expression *body = &objective;
+	DecideReducerPath path;
+	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = body->Cast<BoundConjunctionExpression>();
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			path.conditions.push_back(conj.children[1].get());
+			body = conj.children[0].get();
+		}
+	}
+	PlaceFramesIn(*body, path, nullptr, DConstants::INVALID_INDEX, nullptr, placement);
+}
 
 } // namespace duckdb

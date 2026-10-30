@@ -1,5 +1,5 @@
 # name: test/decidb/test_frame_parser.test
-# description: Frame selectors (syntax_reference.md §5.6) parse, bind and print back as written; they are not formulated yet, and say so from one place; ordinary SQL windows are unchanged
+# description: Frame selectors (syntax_reference.md §5.6) parse, bind and print back as written; a point frame is formulated, a range says it is not yet from one place; ordinary SQL windows are unchanged
 # group: [decidb]
 
 statement ok
@@ -9,66 +9,88 @@ statement ok
 INSERT INTO T VALUES (1, 'A', 'Food', 1, 5, 2.5, TIMESTAMP '2026-01-01 00:00:00'), (2, 'A', 'Food', 2, 6, 1.5, TIMESTAMP '2026-01-02 00:00:00'), (3, 'B', 'Toys', 1, 7, 0.5, TIMESTAMP '2026-01-01 00:00:00');
 
 # ---------------------------------------------------------------------------
-# Every spelling parses and binds, in a clause, a reducer and the objective, and
-# stops at the one place that refuses frames until they are formulated (phase 4).
+# Every spelling parses and binds, in a clause, a reducer and the objective. A point
+# frame is formulated (phase 4); a range stops at the one place that refuses it until it
+# is (phase 5).
 # ---------------------------------------------------------------------------
 
-# a point frame over a decision, with its timeline partitioned
-statement error
-SELECT id, inventory FROM T DECIDE inventory(INT) SUCH THAT inventory >= at(previous: inventory) over (T.period within T.product) MAXIMIZE sum(inventory);
+# a point frame over a decision, with its timeline partitioned: each product's first
+# period has no previous one, so its comparison is skipped
+query II
+SELECT id, inventory FROM T DECIDE inventory(INT) SUCH THAT inventory <= T.demand AND inventory >= at(previous: inventory) over (T.period within T.product) MAXIMIZE sum(inventory) ORDER BY id;
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous: inventory) over (T.period within T.product)
+1	5
+2	6
+3	7
 
-# first, last and k next, a fallback, desc and cyclic, one timeline
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= at(first: T.demand) over (T.period desc) AND x >= at(2 next else 0: x) over (T.period cyclic within ()) AND x <= at(last: T.demand) over (T.period within T) MAXIMIZE sum(x);
+# first, last and k next, a fallback, desc and cyclic, one timeline and one per row
+query II
+SELECT id, x FROM T DECIDE x(INT) SUCH THAT x <= at(first: T.demand) over (T.period desc) AND x >= at(2 next else 0: x) over (T.period cyclic within T.product) AND x <= at(last: T.demand) over (T.period within T) MAXIMIZE sum(x) ORDER BY id;
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(first: T.demand) over (T.period desc)
+1	5
+2	6
+3	6
 
 # a range frame: every, all, else, each reducer
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(from 2 previous to previous every 2: x) over (T.period within T.product) <= 4 AND avg(from first to last all: x) over (T.period) >= 1 AND min(from previous to next else 0: x) over (T.period) >= 0 AND max(from first to last: x) over (T.period) <= 9 AND x <= count(from first to last: T.demand) over (T.period) MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: sum(from 2 previous to previous every 2: x) over (T.period within T.product)
+Binder Error: DECIDE: a range frame selector is not supported yet: sum(from 2 previous to previous every 2: x) over (T.period within T.product)
 
 # a frame inside a reducer, and in the objective
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= 3 MINIMIZE sum(abs(x - at(previous else 0: x) over (T.period within T.product)));
+query II
+SELECT id, x FROM T DECIDE x(INT) SUCH THAT x <= 3 AND x >= T.id MINIMIZE sum(abs(x - at(previous else 0: x) over (T.period within T.product)) + x) ORDER BY id;
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous else 0: x) over (T.period within T.product)
+1	1
+2	2
+3	3
 
 # a data frame on the bound side of a reducer
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT per T.product: sum(x) by (T.product) <= at(last: T.demand) over (T.period within T.product) MAXIMIZE sum(x);
+query II
+SELECT id, x FROM T DECIDE x(INT) SUCH THAT per T.product: sum(x) by (T.product) <= at(last: T.demand) over (T.period within T.product) MAXIMIZE sum(x) ORDER BY id;
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(last: T.demand) over (T.period within T.product)
+1	6
+2	0
+3	7
 
-# EXPLAIN plans the query, and so meets the same refusal
-statement error
-EXPLAIN SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(previous: x) over (T.period) MAXIMIZE sum(x);
-----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous: x) over (T.period)
+# EXPLAIN plans the query and prints the frame as written
+statement ok
+EXPLAIN SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= 9 AND x >= at(previous: x) over (T.period) MAXIMIZE sum(x);
 
 # ---------------------------------------------------------------------------
-# A frame prints back as written, the defaults left out: asc, k = 1, every 1,
-# and within () for one timeline.
+# A frame prints back as written, the defaults left out: asc, k = 1, every 1, `else
+# NULL` (D80), and within () for one timeline.
 # ---------------------------------------------------------------------------
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from 1 previous to 3 next every 1 all: x) over (T.period asc cyclic within T.product, T) MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: sum(from previous to 3 next all: x) over (T.period cyclic within T.product, T)
+Binder Error: DECIDE: a range frame selector is not supported yet: sum(from previous to 3 next all: x) over (T.period cyclic within T.product, T)
 
 statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= at(1 next else 0: x) over (T.period desc within ()) MAXIMIZE sum(x);
+SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(at(1 next else NULL: x) over (T.period desc within ())) <= 3 MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(next else 0: x) over (T.period desc)
+Binder Error: DECIDE: at(next: x) over (T.period desc) may select no position inside
 
-# A view plans its query, so one holding a frame stops at the same place.
+# A view plans its query, so one holding a range stops at the same place.
 statement error
-CREATE VIEW frames AS SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= at(previous: x) over (T.period) MAXIMIZE sum(x);
+CREATE VIEW frames AS SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(from first to last: x) over (T.period) <= 3 MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous: x) over (T.period)
+Binder Error: DECIDE: a range frame selector is not supported yet: sum(from first to last: x) over (T.period)
+
+# A view holding a point frame plans, and runs
+statement ok
+CREATE VIEW point_frames AS SELECT id, x FROM T DECIDE x(INT) SUCH THAT x <= T.demand AND x >= at(previous: x) over (T.period within T.product) MAXIMIZE sum(x);
+
+query II
+SELECT * FROM point_frames ORDER BY id;
+----
+1	5
+2	6
+3	7
+
+statement ok
+DROP VIEW point_frames;
 
 # ---------------------------------------------------------------------------
 # The exact parse errors.
@@ -183,10 +205,12 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT power(at(previous: x) over (T.perio
 Binder Error: DECIDE: 'power(at(previous: x) over (T.period), 2)' multiplies a decision by a value from another row, which is not supported yet
 
 # ... while a data coefficient on a decision frame is a linear term
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT T.price * at(previous: x) over (T.period) <= 3 MAXIMIZE sum(x);
+query II
+SELECT id, x FROM T DECIDE x(INT) SUCH THAT x <= 9 AND T.price * at(previous: x) over (T.period within T.product) <= 3 MAXIMIZE sum(x) ORDER BY id;
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous: x) over (T.period)
+1	2
+2	9
+3	9
 
 # a range reduces with SUM, AVG, MIN, MAX or COUNT, and COUNT over data
 statement error
@@ -205,10 +229,14 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT at(previous else 'none': x) over (T
 ----
 Binder Error: DECIDE: in at(previous else 'none': x) over (T.period), else 'none' is not a number
 
+statement ok
+SELECT id, b FROM T DECIDE b(BOOL), x(INT) SUCH THAT b >= at(previous else true: b) over (T.period within T.product) AND x <= 3 AND x <= at(previous else 0.5: x) over (T.period within T.product) MAXIMIZE sum(b);
+
+# a fallback that reads a decision beside a payload that reads none is not formulated yet
 statement error
-SELECT id, b FROM T DECIDE b(BOOL), x(INT), per (): c(REAL) SUCH THAT b >= at(previous else true: b) over (T.period) AND x <= at(previous else 0.5: x) over (T.period) AND x >= at(previous else c: T.demand) over (T.period) MAXIMIZE sum(b);
+SELECT id, x FROM T DECIDE x(INT), per (): c(REAL) SUCH THAT x >= at(previous else c: T.demand) over (T.period) MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous else CAST('t' AS BOOLEAN): b) over (T.period)
+Binder Error: DECIDE: in at(previous else c: T.demand) over (T.period), else c reads a decision while the payload reads none, which is not supported yet
 
 # a frame alone is no constraint, as a bare decision is none
 statement error
@@ -248,7 +276,7 @@ Parser Error: DECIDE: sum(from first to last: e) takes its expression without a 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= AT(PREVIOUS ELSE 0: x) OVER (T.period DESC CYCLIC) AND SUM(FROM FIRST TO LAST EVERY 2: x) OVER (T.period) <= 5 MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: frame selectors are not supported yet: at(previous else 0: x) over (T.period desc cyclic)
+Binder Error: DECIDE: a range frame selector is not supported yet: sum(from first to last every 2: x) over (T.period)
 
 # a frame in a correlated DECIDE subquery, re-bound by the outer query
 statement error
