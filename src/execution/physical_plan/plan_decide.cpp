@@ -275,8 +275,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         harvest(*decide_op->decide_objective);
     }
     // A `by` key and a scope check read the clause's data too; an aggregate-shape clause
-    // keeps its `per` key only in its checks. A key only a declaration writes names no
-    // column: a column the clauses never name stays unnamed.
+    // keeps its `per` wrapper (DecideCanonicalizer::CanonicalizeTreeInternal), so its key
+    // is named above. A key only a declaration writes names no column: a column the
+    // clauses never name stays unnamed.
     for (idx_t key = 0; key < decide_op->keys.size(); key++) {
         if (decide_op->keys[key].written_as_by) {
             harvest_key(key);

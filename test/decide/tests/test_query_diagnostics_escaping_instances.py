@@ -191,6 +191,28 @@ class TestEscapingInstances:
         assert _escape(rows, "buy") == [(25, 25, "row", "zone = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_per_key_column_is_named_from_the_clause(self, request, cli_fixture, oracle_solver):
+        """`lane` and `channel` pick out the same escaping rows (id % 5 = 0), and a column the clause names wins the
+        tie over the leftmost. `channel` is only in the `per` key of an aggregate-shape clause, which builds no scope
+        check -- the key holds its `by (grp)` by construction -- so it is named from the clause's `per` wrapper
+        alone; without it in the clause, `lane` wins."""
+        _assert_oracle_unbounded(oracle_solver, "diagnostic_per_key_column", 100, range(5, 101, 5))
+        cli = request.getfixturevalue(cli_fixture)
+        source = (
+            "(SELECT i AS id, CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS lane, "
+            "CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS channel, i % 2 AS grp, "
+            "i * 1.0 AS margin FROM range(1, 101) t(i))"
+        )
+        for key, named in (("grp, channel", "channel"), ("grp", "lane")):
+            sql = (
+                f"SELECT id, buy FROM {source} DECIDE buy(REAL) "
+                f"SUCH THAT when id % 5 <> 0: buy <= 100 AND per {key}: sum(buy) by (grp) >= 0 "
+                "MAXIMIZE SUM(buy * margin)"
+            )
+            rows = _rows(_diagnose(cli, sql))
+            assert _escape(rows, "buy") == [(20, 20, "row", f"{named} = 'export'")]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_unaliased_computed_column_stays_suppressed(
         self, request, cli_fixture, oracle_solver
     ):
