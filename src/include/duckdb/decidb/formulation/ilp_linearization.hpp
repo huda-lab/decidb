@@ -26,6 +26,7 @@
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 #include <cmath>
+#include <functional>
 #include <unordered_map>
 
 namespace duckdb {
@@ -469,12 +470,16 @@ struct MinMaxLinkRow {
     }
 };
 
-//! One member of an extremum family: `(result - expr)` as a half-row — `MinMaxLinkRow`
-//! already stores the expression negated, with its constant part separate — plus the
-//! reach of `expr` on its own, which is the box a column pinned to it deserves.
-struct ExtremumMember {
-    MinMaxLinkRow link;
-    AuxRange range;
+//! The members of an extremum family, produced one at a time (late materialization). A member is `(result - expr)` as
+//! a half-row — `MinMaxLinkRow` already stores the expression negated, with its constant part separate — and no member
+//! is kept: `fill_link` writes member `i` into one scratch row the emitter reuses, so a family of n members costs one
+//! row of storage rather than n. `range` is the reach of `expr` on its own, which is the box a column pinned to it
+//! deserves; it is asked only by the arm that pins one, so no other arm pays for it.
+struct ExtremumMemberSource {
+	idx_t count = 0;
+	//! Fills `link`, which is empty, with member `i` of `count`. Called once per member and pass over the family.
+	std::function<void(idx_t, MinMaxLinkRow &)> fill_link;
+	std::function<AuxRange(idx_t)> range;
 };
 
 //! `result = MIN/MAX(members)`, in flat columns. Every MIN/MAX auxiliary in the model is
@@ -528,10 +533,10 @@ struct ExtremumLinkSpec {
 //! per member, needs no constant to dominate anything, and is implied by the general
 //! constraint on the native arm. The closing side is where the two formulations part:
 //! `result = MIN/MAX(cols)` stated for the backend, or the Big-M family that encodes it.
-//! `members` is consumed.
-void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
-                      const ExtremumLinkSpec &spec, vector<ExtremumMember> &members,
-                      const vector<string> &var_names, NativeConstructPolicy policy);
+//! The envelope rows come first and the closing rows after, so a link that needs both draws on `members` twice.
+void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const ExtremumLinkSpec &spec,
+                      const ExtremumMemberSource &members, const vector<string> &var_names,
+                      NativeConstructPolicy policy);
 
 //! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
 //! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;

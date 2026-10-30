@@ -132,9 +132,10 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 		// A member is a row's expression negated with its constant apart, the shape the
 		// extremum link takes; the equality reads it the same way.
 		// A helper serves every clause that reads its reducer, so a sum past a DOUBLE names the reducer as written.
-		auto groups = BuildMinMaxGroups(input, indexer, link.rows, link.label);
+		auto groups = BuildMinMaxGroups(input, link.rows, link.label);
+		MinMaxRowMembers row_members(input, indexer, link.rows, link.label);
 		for (auto &group : groups) {
-			if (group.members.empty()) {
+			if (group.rows.empty()) {
 				continue;
 			}
 			if (!IsExtremum(link)) {
@@ -145,11 +146,15 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				// several rows of the group, and a row states each column once.
 				sum_terms.BeginForDecisions(indexer, 0, link.label);
 				double constants = 0.0;
-				for (auto &member : group.members) {
-					for (idx_t i = 0; i < member.link.indices.size(); i++) {
-						sum_terms.Add(member.link.indices[i], member.link.coefficients[i]);
+				MinMaxLinkRow member;
+				for (idx_t row : group.rows) {
+					member.indices.clear();
+					member.coefficients.clear();
+					row_members.FillLink(row, member);
+					for (idx_t i = 0; i < member.indices.size(); i++) {
+						sum_terms.Add(member.indices[i], member.coefficients[i]);
 					}
-					AddCoefficient(constants, member.link.constant, link.label);
+					AddCoefficient(constants, member.constant, link.label);
 				}
 				MinMaxLinkRow sum;
 				sum_terms.Flush(sum.indices, sum.coefficients);
@@ -186,7 +191,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			spec.label = link.label;
 			spec.envelope_kind = ConstraintKind::STRUCTURAL;
 			spec.closing_kind = ConstraintKind::STRUCTURAL;
-			EmitExtremumLink(input, indexer, spec, group.members, var_names, policy);
+			EmitExtremumLink(input, indexer, spec, row_members.Source(group), var_names, policy);
 		}
 	}
 	input.reducer_value_links.clear();
