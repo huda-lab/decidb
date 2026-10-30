@@ -307,6 +307,21 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
+	// A bound left to a direct-solve rule reads the source, and the reducers other bounds record, through these.
+	for (auto &bound : reduced_bounds) {
+		for (auto &input : bound.group->inputs) {
+			for (auto *expr : {&input.argument, &input.filter, &input.invalid}) {
+				if (*expr) {
+					callback(expr);
+				}
+			}
+		}
+		for (auto *expr : {&bound.group->upper, &bound.group->lower, &bound.group->invalid}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+	}
 }
 
 void LogicalDecide::RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings) {

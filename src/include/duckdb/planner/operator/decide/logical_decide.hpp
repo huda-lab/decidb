@@ -229,6 +229,37 @@ struct DecideReducedBound {
 	idx_t check_position = 0;
 };
 
+//! A reducer a bound reads from the data (`sum(cap) by (g)`), recorded by the bound-side rewrite
+//! (DecideOptimizer::RewriteRhsAggregates) and not yet computed. The bound's expressions read its result at the
+//! placeholder `column`, which no operator produces until the aggregate is installed (InstallBoundAggregates). The
+//! value is the aggregate over the rows of each group of `key` that the reducer reads, on every row of the group.
+//! Not serialized: the optimizer makes it, and an optimized plan is never serialized.
+struct DecideBoundAggregate {
+	//! The placeholder the bound reads.
+	ColumnBinding column;
+	//! The BoundAggregateExpression with its function and result type bound; its argument and filter are the members
+	//! below.
+	unique_ptr<Expression> function;
+	//! The value aggregated; null for COUNT(*).
+	unique_ptr<Expression> argument;
+	//! The rows the reducer reads: the clause's kept rows that pass its own `when`; null for every row.
+	unique_ptr<Expression> reads;
+	//! Whether the clause's `when` keeps the row; null when it has none.
+	unique_ptr<Expression> kept;
+	//! The reducer's `by` key (an index into `keys`), INVALID_INDEX for the whole query.
+	idx_t key = DConstants::INVALID_INDEX;
+	//! Whether the reducer is `sum(per K: body)`, which counts each class of K in its group once, and its key K
+	//! (INVALID_INDEX for `per ()`: one class).
+	bool counts_classes = false;
+	idx_t class_key = DConstants::INVALID_INDEX;
+
+	bool Equals(const DecideBoundAggregate &other) const {
+		return key == other.key && counts_classes == other.counts_classes && class_key == other.class_key &&
+		       Expression::Equals(function, other.function) && Expression::Equals(argument, other.argument) &&
+		       Expression::Equals(reads, other.reads) && Expression::Equals(kept, other.kept);
+	}
+};
+
 //! A source column's logical identity and the name the user wrote for it.
 //! Keeping these together makes it impossible for the binding/name association to
 //! drift through mismatched parallel vectors.
@@ -567,6 +598,11 @@ public:
 	//! The bounds RewriteRhsAggregates left to a rule, in clause order; see DecideReducedBound. Empty once the solver
 	//! path has built their windows.
 	vector<DecideReducedBound> reduced_bounds;
+
+	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them, and the table index
+	//! of their placeholder columns. Empty once their windows are installed (InstallBoundWindows).
+	vector<DecideBoundAggregate> bound_aggregates;
+	idx_t bound_index = DConstants::INVALID_INDEX;
 
 	//! The registered name ("gurobi", "highs") of the solver this query will run on,
     //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here

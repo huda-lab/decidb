@@ -206,6 +206,7 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
+	InstallBoundWindows(optimizer, decide);
 	auto ir = DirectIR::Read(optimizer.context, decide);
 	if (ir.bound_windows_needed) {
 		InstallReducedBoundWindows(optimizer, decide);
