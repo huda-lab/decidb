@@ -7,6 +7,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
 
@@ -144,6 +145,44 @@ LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> 
 }
 
 LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE) {
+}
+
+LogicalOperator *DecideBindingProducer(LogicalOperator &plan, idx_t table_index) {
+	for (auto index : plan.GetTableIndex()) {
+		if (index == table_index) {
+			return &plan;
+		}
+	}
+	for (auto &child : plan.children) {
+		if (auto *producer = DecideBindingProducer(*child, table_index)) {
+			return producer;
+		}
+	}
+	return nullptr;
+}
+
+ColumnBinding DecideSourceColumnKey(LogicalOperator &source, const ColumnBinding &binding) {
+	auto *producer = DecideBindingProducer(source, binding.table_index);
+	if (producer && producer->type == LogicalOperatorType::LOGICAL_PROJECTION &&
+	    binding.column_index < producer->expressions.size()) {
+		auto &expr = *producer->expressions[binding.column_index];
+		auto forwards = expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+		                expr.GetExpressionClass() == ExpressionClass::BOUND_REF;
+		return forwards || expr.HasAlias() ? binding : ColumnBinding(binding.table_index, DConstants::INVALID_INDEX);
+	}
+	if (!producer || producer->type != LogicalOperatorType::LOGICAL_GET) {
+		return binding;
+	}
+	auto &get = producer->Cast<LogicalGet>();
+	auto &column_ids = get.GetColumnIds();
+	idx_t slot = binding.column_index;
+	if (!get.projection_ids.empty()) {
+		// A column past the projection is a projected input of a table-in-out function.
+		slot = slot < get.projection_ids.size() ? get.projection_ids[slot] : column_ids.size();
+	}
+	auto ordinal = slot >= column_ids.size() || column_ids[slot].IsRowIdColumn() ? DConstants::INVALID_INDEX
+	                                                                             : column_ids[slot].GetPrimaryIndex();
+	return ColumnBinding(binding.table_index, ordinal);
 }
 
 vector<ColumnBinding> LogicalDecide::GetColumnBindings() {

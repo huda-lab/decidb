@@ -4,8 +4,6 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
-#include "duckdb/planner/operator/logical_projection.hpp"
-#include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
@@ -26,21 +24,6 @@ static string QuoteColumnName(const string &name) {
 		return KeywordHelper::WriteQuoted(name, '"');
 	}
 	return name;
-}
-
-//! The operator in `plan` whose own output carries `table_index`, or null.
-static LogicalOperator *FindBindingProducer(LogicalOperator &plan, idx_t table_index) {
-	for (auto index : plan.GetTableIndex()) {
-		if (index == table_index) {
-			return &plan;
-		}
-	}
-	for (auto &child : plan.children) {
-		if (auto *producer = FindBindingProducer(*child, table_index)) {
-			return producer;
-		}
-	}
-	return nullptr;
 }
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
@@ -108,58 +91,22 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Captured BEFORE CreatePlan for the same reason as `child_bindings`: several
     // operators move their contents out during planning.
     //
-    // The map is keyed by the binding's own column ordinal. For most operators that is
-    // the output position, so the child binding can be used directly. A scan is the
-    // exception: projection pushdown makes its bindings index `column_ids`, so the
-    // surviving columns must be mapped back to their table ordinals first, exactly as
-    // LogicalGet::ResolveTypes walks them. Getting this wrong silently mislabels one
-    // column as another rather than failing.
+    // The map is keyed by DecideSourceColumnKey: a scan's column by its table ordinal, any other by its binding.
+    // Getting this wrong silently mislabels one column as another rather than failing.
     //
-    // Each binding is read off the operator that produced it, found by its table index (`GetTableIndex`), whatever
-    // operators an optimizer pass has put above it.
-    vector<idx_t> binding_column_index(child_bindings.size(), DConstants::INVALID_INDEX);
-    // Which columns may be named at all. The binder's map answers "what is this column
-    // called", not "did the user write that name": a projection expression with no alias
-    // is recorded under its own `ToString`, so an unaliased computed column would be
-    // labelled `CASE WHEN ((i <= 25)) THEN ('A') ELSE 'B' END`. The plan is the right
-    // place to judge that — it still holds the expression — so the structural gate stays
-    // here while the spelling comes from the binder. A column under any other operator
-    // (a scan, most of all) has no such expression and is always eligible.
-    vector<bool> nameable(child_bindings.size(), true);
-    for (idx_t i = 0; i < child_bindings.size(); i++) {
-        binding_column_index[i] = child_bindings[i].column_index;
-        auto *producer = FindBindingProducer(*op.children[0], child_bindings[i].table_index);
-        if (!producer) {
-            continue;
-        }
-        if (producer->type == LogicalOperatorType::LOGICAL_GET) {
-            auto &get = producer->Cast<LogicalGet>();
-            auto &column_ids = get.GetColumnIds();
-            idx_t slot = binding_column_index[i];
-            if (!get.projection_ids.empty()) {
-                // A column past the projection is a projected input of a table-in-out function.
-                slot = slot < get.projection_ids.size() ? get.projection_ids[slot] : column_ids.size();
-            }
-            // A row id is synthetic and unnamed.
-            binding_column_index[i] = slot >= column_ids.size() || column_ids[slot].IsRowIdColumn()
-                                          ? DConstants::INVALID_INDEX
-                                          : column_ids[slot].GetPrimaryIndex();
-        } else if (producer->type == LogicalOperatorType::LOGICAL_PROJECTION) {
-            auto &projection = producer->Cast<LogicalProjection>();
-            if (binding_column_index[i] < projection.expressions.size()) {
-                auto &expr = *projection.expressions[binding_column_index[i]];
-                nameable[i] = expr.HasAlias() || expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
-            }
-        }
-    }
+    // The binder's map answers "what is this column called", not "did the user write that
+    // name": a projection expression with no alias is recorded under its own `ToString`, so
+    // an unaliased computed column would be labelled `CASE WHEN ((i <= 25)) THEN ('A') ELSE
+    // 'B' END`. The plan is the right place to judge that — it still holds the expression —
+    // so the key names no column for it, while the spelling comes from the binder.
     vector<string> child_userwritten_names(child_bindings.size(), string());
     for (idx_t i = 0; i < child_bindings.size(); i++) {
-        if (!nameable[i] || binding_column_index[i] == DConstants::INVALID_INDEX) {
+        auto key = DecideSourceColumnKey(*op.children[0], child_bindings[i]);
+        if (key.column_index == DConstants::INVALID_INDEX) {
             continue;
         }
         for (const auto &source_column : op.source_columns) {
-            if (source_column.binding.table_index == child_bindings[i].table_index &&
-                source_column.binding.column_index == binding_column_index[i]) {
+            if (source_column.binding == key) {
                 child_userwritten_names[i] = source_column.name;
                 break;
             }

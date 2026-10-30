@@ -241,6 +241,16 @@ struct DecideSourceColumnName {
     static DecideSourceColumnName Deserialize(Deserializer &deserializer);
 };
 
+//! The operator in `plan` whose own output carries `table_index`, or null.
+LogicalOperator *DecideBindingProducer(LogicalOperator &plan, idx_t table_index);
+//! The binding under which LogicalDecide::source_columns names column `binding` of the DECIDE input `source`. A scan's
+//! bindings index its column list, which projection pushdown shortens, so a scan's column is named by its table ordinal
+//! (as LogicalGet::ResolveTypes walks the list). Any other column is named by its binding. A column the user wrote no
+//! name for is named by no column (INVALID_INDEX): a row id, which is synthetic, and a projection's computed column
+//! without an alias, which the binder records under its own ToString. A plain column reference, bound or resolved,
+//! forwards a name.
+ColumnBinding DecideSourceColumnKey(LogicalOperator &source, const ColumnBinding &binding);
+
 class LogicalDecide : public LogicalOperator {
 public:
     static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_DECIDE;
