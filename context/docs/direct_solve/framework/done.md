@@ -189,6 +189,12 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     literal left the DOUBLE range, and the clause is named (TOO_LARGE). Only the first failing row is classified.
   - A number no answer reads is not computed: an objective's per-row constants are checked one term at a time, as the
     solver path reads them, and never summed.
+  - A number that cannot fail gets no check: `DirectIsFiniteWhereKept` (A1, R1 and S1) evaluates a coefficient's
+    signed, scaled sum at plan time, reading each value through its NULL guard (`DecideUnguarded`), and a finite
+    constant plans no `isfinite`. A guard reads a column, so asking the guard instead would treat a literal (the `1` of
+    `x` inside `POWER(x - c, 2)`, the `2` of `2 * x + p * y`) as data. A constant that is not finite keeps its runtime
+    check, so a query over no rows still returns none, and `DirectNamesOf` names the clause (TOO_LARGE), as the solver
+    path does.
   - A number the model computes from finite ones (like coefficients merged across rows, a square, fixed terms moved to
     the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
     path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks and R1's checks of each
