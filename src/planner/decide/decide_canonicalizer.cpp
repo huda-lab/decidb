@@ -1727,6 +1727,22 @@ static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression 
 	return false;
 }
 
+//! Whether `key` determines `decision` by construction: every element of the decision's own key is one of `key`'s
+//! (a key determines itself and every subset of it). A decision for the whole query has the empty key, which every key
+//! determines; one per row has no key of columns.
+static bool KeyHolds(const DecideScopeChecks &scope, idx_t key, const DecideVarScopeInfo &decision) {
+	if (decision.scope == DecideVarScope::ROW) {
+		return false;
+	}
+	auto own = decision.IsKeyed() ? scope.keyed_scopes[decision.keyed_scope_idx].key : DConstants::INVALID_INDEX;
+	for (auto &element : DecideKeyElements(scope.keys, own)) {
+		if (!KeyHolds(scope.keys, key, element.Grouping())) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
 	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
@@ -1735,7 +1751,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	TryParseGroupKeyTag(reducer.GetAlias(), by);
 	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- determines its
 	// body within each `by` group, over the rows its `when` keeps; one of the key's own
-	// elements it determines by construction (KeyHolds).
+	// elements, or a decision keyed by some of them, it determines by construction (KeyHolds).
 	idx_t scope_idx;
 	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.keyed_scopes.size() ||
 	    reducer.children.empty()) {
@@ -1767,7 +1783,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	}
 	for (auto *decision : body.decisions) {
 		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsGlobal()) {
+		if (var_idx < variable_scopes.size() && KeyHolds(scope, key, variable_scopes[var_idx])) {
 			continue;
 		}
 		auto check = make_check();
@@ -1783,8 +1799,8 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
-	// The `per` key determines every tuple term, decision and `by` key of the clause; one of its own elements it
-	// determines by construction (KeyHolds).
+	// The `per` key determines every tuple term, decision and `by` key of the clause; one of its own elements, or a
+	// decision keyed by some of them, it determines by construction (KeyHolds).
 	if (enclosing.per_wrapper) {
 		auto &per = *enclosing.per_wrapper;
 		auto key = enclosing.PerKey();
@@ -1811,7 +1827,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 		}
 		for (auto *decision : parts.decisions) {
 			auto var_idx = decision->binding.column_index;
-			if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsGlobal()) {
+			if (var_idx < variable_scopes.size() && KeyHolds(scope, key, variable_scopes[var_idx])) {
 				continue;
 			}
 			auto check = make_check();
@@ -1882,7 +1898,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	}
 	for (auto *decision : parts.decisions) {
 		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsGlobal()) {
+		if (var_idx < variable_scopes.size() && KeyHolds(scope, DConstants::INVALID_INDEX, variable_scopes[var_idx])) {
 			continue;
 		}
 		auto check = make_check();

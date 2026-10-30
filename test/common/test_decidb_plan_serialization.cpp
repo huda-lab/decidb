@@ -561,11 +561,12 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	SetUp(con);
 
 	// Two `by` keys, the determination checks of a `per` key and of a reducer's own `per`
-	// under its own `when`, and an objective written with a scope.
+	// under its own `when`, and an objective written with a scope. The reducer's body is a
+	// decision per row, which its key must determine (a decision `per region` it would hold).
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 	                            "DECIDE x(INT), per region: open(BOOL) "
 	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= cap "
-	                            "AND sum(when cap > 30 per region: open) by (site.r_key) <= 1 "
+	                            "AND sum(when cap > 30 per region: x) by (site.r_key) <= 1 "
 	                            "MAXIMIZE when cap > 0: sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
@@ -612,4 +613,31 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	for (idx_t i = 0; i < before->keyed_scopes.size(); i++) {
 		REQUIRE(after->keyed_scopes[i].key == before->keyed_scopes[i].key);
 	}
+}
+
+TEST_CASE("A key that holds a keyed decision's own key plans no check that it determines the decision", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+	// Whether the plan checks that a key determines a decision; `open` is declared per region.
+	auto checks_a_decision = [&](const string &clause) {
+		auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
+		                            "DECIDE x(INT), per region: open(BOOL) SUCH THAT " +
+		                            clause + " MAXIMIZE sum(x)");
+		auto *decide = FindDecide(*plan);
+		REQUIRE(decide != nullptr);
+		for (auto &check : decide->scope_checks) {
+			if (check.decision != DConstants::INVALID_INDEX) {
+				return true;
+			}
+		}
+		return false;
+	};
+	// The decision's own key, a key holding it, and a reducer's own key within its `by` groups.
+	REQUIRE_FALSE(checks_a_decision("per region: open <= 1"));
+	REQUIRE_FALSE(checks_a_decision("per region, site.s_key: open <= 1"));
+	REQUIRE_FALSE(checks_a_decision("sum(when cap > 30 per region: open) by (site.r_key) <= 1"));
+	// A key holding part of the decision's key, and a decision per row, which no key of columns holds.
+	REQUIRE(checks_a_decision("per r_name: open <= 1"));
+	REQUIRE(checks_a_decision("per region: x <= 1"));
 }
