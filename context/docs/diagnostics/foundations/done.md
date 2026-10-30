@@ -65,7 +65,9 @@ so callers branch on the outcome. This gates the whole area.
   recession direction) is *necessary but not sufficient* for unboundedness — the
   region must also be feasible (an infeasible problem can still admit an improving
   ray, e.g. `x − y ≤ −10 AND y − x ≤ −10`). So `DisambiguateInfOrUnbd`
-  (`ilp_solver.cpp`) re-solves a zero-objective copy (`MakeZeroObjectiveProbeModel`):
+  (`ilp_solver.cpp`), the one route every solve settles its status through (the primary solve's
+  `SolveModel` and every diagnostic solve's `SolvePreparedModel`),
+  re-solves a zero-objective copy (`MakeZeroObjectiveProbeModel`):
   feasible ⇒ rewrite to `UNBOUNDED`, infeasible ⇒ `INFEASIBLE`. Under `DIAGNOSE`, a
   genuinely-unbounded solve therefore reaches the normal unbounded engine via this
   rewrite; an unprefixed query reports the normalized state without running an engine.

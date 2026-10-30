@@ -779,17 +779,30 @@ objective.
 **Reading the result.** On `OPTIMAL`, the stage-2 slacks are re-read into the edit list
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
 Because the budget is enforced only to the feasibility tolerance, a maximizing re-solve can
-ride that tolerance (a clean `10` arriving as `10.000001`), so stage-2 amounts and the
-objective are snapped by `SnapDiagnosticValue` — snap to the nearest integer when within that
-noise, an absolute `1e-6` plus a relative `1e-9` (recovering integer bounds at **any** magnitude, where significant-figure rounding would turn
-`1234567890` into `1234570001`), else trim to a fixed
-absolute precision. The relative part is that small on purpose: a relative `1e-6` at `1e6`
-would erase a real `0.34` of a repair, and the pasted bound would not repair the query. Separately, both stage reads use one-directional, per-edit precision cleanup
-(`SnapToPrecision`) for noise introduced by the widened formulation: it never rounds down, and a value within the
-feasibility tolerance DeciDB gives both solvers (`DECIDE_FEASIBILITY_TOLERANCE`) of a tidier one reads as it; only stage 2 receives the additional budget-row
-snap described here.
+ride that tolerance (a clean `7` arriving as `7.00000028`). The objective and repair costs are
+snapped by `SnapDiagnosticValue`: to the nearest integer within `DECIDE_FEASIBILITY_TOLERANCE`
+plus a relative `1e-9`, the floating-point error of a value summed over many terms (recovering
+integer values at any magnitude, where significant-figure rounding would turn `1234567890` into
+`1234570001`); a feasibility tolerance bounds a row's violation, not that arithmetic.
 
-**Objective value plumbing.** `SolverResult` carries `objective_value`, populated on
+**A printed amount is certified.** Each edit is rendered two ways at its printed precision
+(`SnapToPrecision`): to nearest and outward (the direction that loosens). When the two agree for
+every edit, they print. Otherwise one solve decides for the whole relation: the elastic model with
+a zero objective and every slack fixed at its nearest amount (`ApplyEdits`), under the diagnosis
+time budget. `OPTIMAL` prints the nearest amounts; any other status prints the outward ones,
+which dominate the solver's own amounts and so restore feasibility by construction. So Gurobi's
+`7.00000028` prints `BETWEEN 3`, and `1/9000` spread over 9,000 rows prints an amount whose sum
+reaches the bound. A rounding rule computed from the numbers alone cannot do this: it cannot tell
+a solver spending its tolerance from a real need. Known edge: an amount whose rows miss the bound by
+exactly the feasibility tolerance passes the certificate's LP and can fail HiGHS's QP path on the
+user's query (`issues/bugs.md` § Limitations).
+
+**Objective value plumbing.** The objective's constant (a data term, the `c²` of
+`POWER(x - c, 2)`, a peeled `+ 3`) is `SolverModel::obj_constant`, passed to the backend as its
+objective offset (Gurobi `ObjCon`, HiGHS `offset_`), so every value read back, the
+`achievable_objective` included, is the objective as written. `SolverModel::ClearObjective()`
+clears it with the rest of the objective for every derived model. `SolverResult` carries
+`objective_value`, populated on
 `OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via
 `GRB_DBL_ATTR_OBJVAL` through the loader's `getdblattr` scalar getter;
 `deterministic_naive.cpp` via HiGHS `getInfo().objective_function_value`). The engine still

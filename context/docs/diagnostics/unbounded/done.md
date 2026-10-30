@@ -32,15 +32,19 @@ the model's columns:
 ```
 maximize    σ · cᵀd            σ = +1 if the model maximizes, −1 if it minimizes
 subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j (its sense preserved, RHS homogenized to 0)
-            0 ≤ dᵢ ≤ 1          where the original upper bound uᵢ ≥ EFFECTIVE_INFINITY
-            dᵢ = 0               otherwise (a finite upper bound ⇒ that column cannot escape)
+            0 ≤ dᵢ ≤ 1          where the upper bound is open (uᵢ ≥ EFFECTIVE_INFINITY)
+            −1 ≤ dᵢ ≤ 0         where the lower bound is open (lᵢ ≤ −EFFECTIVE_INFINITY)
+            −1 ≤ dᵢ ≤ 1         where both are open
+            dᵢ = 0               where both are finite (that column cannot escape)
             d continuous         (integrality relaxed)
 ```
 
 `σ` makes the objective always a *maximize* of the improving direction, so the box-LP
 is sense-agnostic. Homogenizing every row to RHS `0` keeps only the recession cone of
-the feasible region; the `[0,1]` box makes it bounded so the LP terminates, and the
-per-column gate fixes finite-upper-bound columns to `0` so they never appear in `d`.
+the feasible region; the unit box on each open side (the recession cone of the column box) makes
+it bounded so the LP terminates, and a column with both bounds finite is fixed to `0`. A column
+falling toward −∞ is named as one rising toward +∞ is, and its remedy is a floor
+(`buy >= <floor>`) where a rising one's is a cap.
 Quadratic objectives/constraints are declined (the builder returns no model).
 
 A recession ray exists iff this LP is `OPTIMAL` with objective > `DIAGNOSTIC_RAY_EPSILON`;

@@ -11,21 +11,18 @@ at a time.
 
 ## Where things stand (2026-10-30)
 
-Every bug filed up to BUG-28 is fixed and merged. The large benchmark sweep (90 runs, `performance/todo.md` § PERF-1)
-found two regressions, both fixed: HiGHS ran past its time limit on Q1 (BUG-25, then BUG-28 in presolve), and Q8 ran
-five times slower (BUG-26: scope checks that can never fail sorted every input row). Overall, total solve time on
-Gurobi is 3 % lower than in September. What remains: work in progress (§ 1), two slowdowns left from September (§ 2),
+Every bug filed up to BUG-32 is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same
+answer on both backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md`
+§ PERF-1) found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that
+sorted every input row). What remains: three bugs (§ 1; BUG-33 in progress), two slowdowns left from September (§ 2),
 posting the HiGHS report (§ 3), and the original measurement work (§ 4).
 
-## 1. In progress (2026-10-30)
+## 1. Bugs
 
-- [ ] BUG-29..32 DIAGNOSE output the example runner found wrong — issues/bugs.md § BUG-29 to BUG-32
-  - Ruled (owner's delegate, 2026-10-30): `achievable_objective` is the objective as written, constant included; a
-    printed amount rounds outward so the edit as printed restores feasibility. One batch (diagnosis); the report of
-    `benchmark/decide/diagnose_examples/run.py` is the check. Record in `diagnostics/` per kind.
 - [ ] BUG-33 HiGHS fails or answers wrongly on a column bound or objective outside its window — issues/bugs.md § BUG-33
   - Ruled: scale column bounds and the objective into HiGHS's window as rows are. HiGHS is now 1.15.1. Record in
     `pipeline/07_solver/done.md` (HiGHS backend).
+- [ ] BUG-35, BUG-36 Repair amounts below 1e-5 dropped; 1e7 and above unrounded — issues/bugs.md § BUG-35, BUG-36
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 
