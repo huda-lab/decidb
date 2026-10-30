@@ -80,9 +80,9 @@ private:
 	void OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
 	//! Installs the scope checks of the node that a plan can make under its child (DirectAddRowChecks), so the solver
 	//! path and the direct-solve plans make them with one implementation; the operator keeps the rest.
-	void InstallRowChecks(LogicalDecide &decide);
+	void InstallRowChecks(LogicalDecide &decide, LogicalOperator &root);
 	//! The passes that formulate the query for the solver chosen, in order.
-	void RewriteForSolver(LogicalDecide &decide);
+	void RewriteForSolver(LogicalDecide &decide, LogicalOperator &root);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses
 	//! whose formulations may only be removed as an atomic diagnostic repair.
 	void TagAtomicRemovalGroups(LogicalDecide &decide);

@@ -133,6 +133,8 @@ DirectSourceReader::Read DirectSourceReader::ForwardAllColumns(unique_ptr<Logica
 }
 
 DirectSourceReader::Read DirectSourceReader::ReadSource() {
+	// A copy reads the chain, which points into the source.
+	D_ASSERT(source);
 	if (chain_scan) {
 		return ForwardAllColumns(CopyOfChain());
 	}
@@ -142,6 +144,13 @@ DirectSourceReader::Read DirectSourceReader::ReadSource() {
 	}
 	return ForwardAllColumns(make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), cte_index, types,
 	                                                  std::move(names), CTEMaterialize::CTE_MATERIALIZE_ALWAYS));
+}
+
+unique_ptr<LogicalOperator> DirectSourceReader::TakeRecomputedSource() {
+	if (!chain_scan) {
+		return nullptr;
+	}
+	return std::move(source);
 }
 
 unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperator> plan) {

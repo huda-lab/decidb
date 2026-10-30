@@ -51,6 +51,9 @@ public:
 	}
 	//! A new read of the source.
 	Read ReadSource();
+	//! The source itself, as the last read of a recomputed source: that read keeps the source's own bindings. Null for
+	//! a materialized source, every read of which has new bindings. The reader reads nothing after it.
+	unique_ptr<LogicalOperator> TakeRecomputedSource();
 
 	//! The plan built from the reads. A materialized source becomes the definition of a LogicalMaterializedCTE whose
 	//! child is `plan`, which is the root every read needs above it; a recomputed source needs nothing, and `plan`

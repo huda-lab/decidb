@@ -220,18 +220,14 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers with the DECIDE node's outputs: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
-	auto output_bindings = source.GetColumnBindings();
 	auto output_types = source.types;
-	D_ASSERT(output_bindings.size() == output_types.size());
 	vector<uint8_t> prunable_sources;
-	for (auto &binding : output_bindings) {
+	for (auto &binding : source.GetColumnBindings()) {
 		prunable_sources.push_back(DirectCanSkipSourceOutput(source, binding) ? 1 : 0);
 	}
-	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
-		output_bindings.emplace_back(decide.decide_index, i);
-		output_types.push_back(decide.decide_variables[i]->return_type);
+	for (auto &variable : decide.decide_variables) {
+		output_types.push_back(variable->return_type);
 	}
-	D_ASSERT(output_bindings == decide.GetColumnBindings());
 	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again
 	// later, past the plan that holds rows. The rule passes it along like any other source column.
 	auto source_columns = prunable_sources.size();
@@ -240,7 +236,25 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	decide.children[0] = DirectAddRowChecks(optimizer, ir.row_checks, std::move(decide.children[0]));
+	if (DirectAddRowChecks(optimizer, *root, ir.row_checks, decide)) {
+		// A row id rides a recomputed scan chain, which keeps its bindings.
+		D_ASSERT(!carries_rowid);
+		// The node reads its source under new bindings: the rule applies to the IR read from them.
+		ir = DirectIR::Read(optimizer.context, decide);
+		selected.condition = selected.rule->CheckCondition(ir, optimizer.context);
+		if (!selected.condition) {
+			throw InternalException("Direct solve rule %s does not apply once the row checks are installed",
+			                        selected.rule->Name());
+		}
+	}
+	// The source's columns, under the bindings the gate passes them on with.
+	auto output_bindings = decide.children[0]->GetColumnBindings();
+	output_bindings.resize(source_columns);
+	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
+		output_bindings.emplace_back(decide.decide_index, i);
+	}
+	D_ASSERT(output_bindings.size() == output_types.size());
+	D_ASSERT(carries_rowid || output_bindings == decide.GetColumnBindings());
 	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
 	if (carries_rowid) {
 		if (substitute.slot_map.size() != output_bindings.size() + 1) {

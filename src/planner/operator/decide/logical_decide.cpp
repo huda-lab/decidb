@@ -306,6 +306,16 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
+	// What the aggregates of a bound left to a rule read per row. Its limits read placeholders no operator produces.
+	for (auto &bound : reduced_bounds) {
+		for (auto &input : bound.group->inputs) {
+			for (auto *expr : {&input.argument, &input.filter, &input.invalid}) {
+				if (*expr) {
+					callback(expr);
+				}
+			}
+		}
+	}
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {

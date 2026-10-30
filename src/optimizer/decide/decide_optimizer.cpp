@@ -99,7 +99,7 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	bool replaced = false;
 	RunPass("optimizer.choose_answer", [&] { replaced = ChooseDecideAnswer(op, root, optimizer); });
 	if (!replaced) {
-		RewriteForSolver(decide);
+		RewriteForSolver(decide, *root);
 	}
 
 	if (bench) {
@@ -108,15 +108,14 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 }
 
-void DecideOptimizer::InstallRowChecks(LogicalDecide &decide) {
+void DecideOptimizer::InstallRowChecks(LogicalDecide &decide, LogicalOperator &root) {
 	auto checks = DirectTakeRowChecks(optimizer.context, decide);
-	decide.children[0]->ResolveOperatorTypes();
-	decide.children[0] = DirectAddRowChecks(optimizer, checks, std::move(decide.children[0]));
+	DirectAddRowChecks(optimizer, root, checks, decide);
 }
 
-void DecideOptimizer::RewriteForSolver(LogicalDecide &decide) {
+void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
 	RunPass("optimizer.install_bound_windows", [&] { InstallReducedBounds(decide); });
-	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide); });
+	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });

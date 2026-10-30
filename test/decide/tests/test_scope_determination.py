@@ -255,23 +255,24 @@ def test_messages_quote_the_sql_only(decidb_cli):
     )
 
 
-_BOX = re.compile(r"[│┌┐└┘├┤┬┴┼─\s]")
+_SPACE = re.compile(r"\s")
 
 
 def _plan(cli, clause: str) -> str:
     """EXPLAIN of the clause over depots whose capacity is DOUBLE, so a bound or factor reads `D.capacity` itself and
-    not a cast of it; box glyphs and whitespace removed, as the box wraps text mid-token. The solver path plans each
-    scope check as a window under the DECIDE node, and the window prints the check's message."""
+    not a cast of it; whitespace removed. The solver path plans each scope check as an aggregate under the DECIDE node,
+    which prints the check's message. The plan is read as JSON, which prints each expression whole: a box sets
+    operators side by side and interleaves their lines."""
     depots = f"(SELECT * REPLACE (capacity::DOUBLE AS capacity) FROM {values(DEPOTS, 'v', DEPOT_COLUMNS)}) D"
     sql = f"""
-        EXPLAIN SELECT shipmentID, ship
+        EXPLAIN (FORMAT JSON) SELECT shipmentID, ship
         FROM {values(SHIPMENTS, 'S', SHIPMENT_COLUMNS)} JOIN {depots} USING (depotID)
         DECIDE ship(INT)
         SUCH THAT ship <= S.demand AND {clause}
         MAXIMIZE SUM(ship)"""
     out = cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(sql)
     assert out.returncode == 0 and not out.stderr.strip(), out.stderr
-    return _BOX.sub("", out.stdout)
+    return _SPACE.sub("", out.stdout)
 
 
 @pytest.mark.explain
