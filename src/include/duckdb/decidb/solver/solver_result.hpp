@@ -66,9 +66,9 @@ struct SolverResult {
 	//! The primary status is still reported normally; this bit lets the operator say
 	//! diagnosis ran out of time instead of falling back to a misleading static error.
 	bool diagnostic_timed_out = false;
-	//! The backend's own words for the status it stopped at (HiGHS's model-status text), quoted by the OTHER
-	//! catch-all message. Empty when the backend has none: Gurobi names a status only by its number, and a model
-	//! HiGHS refuses to load never reaches a status.
+	//! The backend's own words for why it stopped (HiGHS's model-status text, Gurobi's error message when its
+	//! optimize call fails), quoted by the OTHER catch-all message. Empty when the backend has none: Gurobi names a
+	//! status only by its number, and a model HiGHS refuses to load never reaches a status.
 	string status_text;
 	//! TIME_LIMIT / SUBOPTIMAL: true when the backend found a feasible incumbent
 	//! (TIME_LIMIT by the time limit; SUBOPTIMAL when the solver stopped without a

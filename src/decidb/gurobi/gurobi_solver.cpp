@@ -3,6 +3,7 @@
 #include "duckdb/decidb/solver/solver_session.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 
@@ -150,11 +151,13 @@ void GurobiSession::Load(const SolverModel &ilp) {
     //===--------------------------------------------------------------------===//
 
     int error = api.emptyenv_internal(&guard.env, api.version_major, api.version_minor, api.version_tech);
-    if (error || !guard.env) {
-        throw InternalException("Failed to create Gurobi environment (error %d). "
-                                "Check that GUROBI_HOME is set and license is valid.",
-                                error);
-    }
+	if (error || !guard.env) {
+		// Gurobi's own words when it made an environment to hold them, never its error number.
+		string reason = guard.env ? StringUtil::Format(" (%s)", api.geterrormsg(guard.env)) : string();
+		throw InternalException("Failed to create Gurobi environment%s. "
+		                        "Check that GUROBI_HOME is set and license is valid.",
+		                        reason);
+	}
     api.setintparam(guard.env, "OutputFlag", std::getenv("DECIDB_PROFILE_SOLVER_LOG") ? 1 : 0);
 	// By default a query answers with the optimum (`decide_mip_gap` = 0), not an incumbent within Gurobi's default
 	// relative gap of 1e-4: on a 1.6M-row selection that default returned objectives up to 0.005% short of the
@@ -185,11 +188,11 @@ void GurobiSession::Load(const SolverModel &ilp) {
         api.setintparam(guard.env, "NumericFocus", 2);
     }
     error = api.startenv(guard.env);
-    if (error) {
-        throw InternalException("Failed to start Gurobi environment (error %d). "
-                                "Check that GUROBI_HOME is set and license is valid.",
-                                error);
-    }
+	if (error) {
+		throw InternalException("Failed to start Gurobi environment (%s). "
+		                        "Check that GUROBI_HOME is set and license is valid.",
+		                        api.geterrormsg(guard.env));
+	}
 
     //===--------------------------------------------------------------------===//
     // 2. Create model with variables
@@ -455,10 +458,14 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
     if (interrupt_watcher.joinable()) {
         interrupt_watcher.join();
     }
-    if (error) {
-        throw InvalidInputException("Gurobi optimization call failed: %s",
-                                    api.geterrormsg(guard.env));
-    }
+	if (error) {
+		// A solve Gurobi could not run (a size-limited license, memory): reported as OTHER, as HiGHS reports a kError,
+		// in Gurobi's own words. A model's errors are recorded on the model's environment.
+		SolverResult result;
+		result.status = SolverStatus::OTHER;
+		result.status_text = api.geterrormsg(model_env ? model_env : guard.env);
+		return result;
+	}
 
     //===--------------------------------------------------------------------===//
     // 5. Check status
