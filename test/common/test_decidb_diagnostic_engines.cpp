@@ -1303,13 +1303,15 @@ TEST_CASE("DeciDB range-clause edits", "[decidb][query_diagnostics][range]") {
 
 TEST_CASE("DeciDB repair amounts snap to the precision the model resolves", "[decidb][query_diagnostics][snap]") {
 	using decide_render::SnapToPrecision;
-	// Noise above a clean number is the clean number: it satisfies it within the solvers' feasibility tolerance.
+	// A backend's arithmetic above a clean number is the clean number.
 	CHECK(SnapToPrecision(5.0000000000000853) == 5.0);
-	CHECK(SnapToPrecision(21.0000004) == 21.0);
+	CHECK(SnapToPrecision(-5.0000000000000853) == -5.0);
 	// Noise below it is tidied to it.
 	CHECK(SnapToPrecision(4.499999) == 4.5);
-	// A shortfall beyond the tolerance is still never reported: the value rounds up.
+	// Anything more above a tick rounds up, however small: within the feasibility tolerance on one row, a
+	// shortfall still adds up over the rows an amount covers.
 	CHECK(SnapToPrecision(4.3333333) == Approx(4.33334));
 	CHECK(SnapToPrecision(10.000002) == Approx(10.00001));
-	CHECK(SnapToPrecision(-5.0000000000000853) == -5.0);
+	CHECK(SnapToPrecision(21.0000004) == Approx(21.0001));
+	CHECK(SnapToPrecision(1.0 / 9000.0) == Approx(0.000111112).epsilon(1e-12));
 }

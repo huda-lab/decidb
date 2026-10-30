@@ -309,9 +309,9 @@ public:
 
     // Additive constant peeled from the objective body by
     // DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
-    // `MAXIMIZE SUM(x) + 3`). The solver ignores this — it doesn't change
-    // argmax/argmin — but it's preserved here so a future "report the objective
-    // value" feature can add it back without losing information. SetObjective ADDS
+    // `MAXIMIZE SUM(x) + 3`). It moves no argmax/argmin; it travels to the solver
+    // model's objective constant (SolverModel::obj_constant), so an objective value a
+    // solve reports is the objective as written. SetObjective ADDS
     // to it, so a later optimizer rewrite cannot discard the user's constant.
     // Zero when nothing was peeled.
     double objective_constant_offset = 0.0;

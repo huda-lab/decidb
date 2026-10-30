@@ -23,30 +23,33 @@ namespace duckdb {
 namespace decide_render {
 
 //! Compact numeric formatting for user-facing constraint text (drops trailing
-//! zeros: 12.5 not 12.500000, 10 not 10.0).
+//! zeros: 12.5 not 12.500000, 10 not 10.0). Prints the 15 significant digits every
+//! DOUBLE holds faithfully (DBL_DIG): fewer would round a moved bound to nearest and can
+//! print it short of the amount it moved by (`x <= 100000` loosened by 0.333334 would read
+//! `x <= 100000.3333`); more would print the binary noise of the arithmetic.
 string FormatNum(double v) {
 	if (v == 0.0) {
 		return "0"; // normalize -0.0 (a signed-zero solver read) to a clean "0"
 	}
 	char buf[32];
-	snprintf(buf, sizeof(buf), "%.10g", v);
+	snprintf(buf, sizeof(buf), "%.15g", v);
 	return string(buf);
 }
 
-//! Clean the sub-tolerance noise an I3 stage-2 read carries: the budget freeze is enforced
-//! only to the backend feasibility tolerance, so a maximizing re-solve rides it and a clean
-//! `10` would otherwise print as `10.000001`. Snap to the nearest integer when within that noise:
-//! the absolute tolerance plus a relative part for a backend's arithmetic at large magnitudes
+//! Clean the sub-tolerance noise of a solver-read value that is no edit (the achievable
+//! objective, a repair cost two candidates are compared by): a clean `10` would otherwise
+//! print as `10.000001`. Snap to the nearest integer when within that noise: the absolute
+//! tolerance plus a relative part for a backend's arithmetic at large magnitudes
 //! (`1234567889.0001` → `1234567889`, which significant-figure rounding would have mangled to
-//! `1234570000`). No looser: at `1e6` a relative `1e-6` would erase a real `0.34` of a repair and
-//! report a bound that does not repair. Otherwise trim a genuinely fractional value to a fixed
-//! absolute precision.
+//! `1234570000`). Otherwise trim a genuinely fractional value to a fixed absolute precision.
+//! An edit's amount never comes here: rounding it to nearest can leave it short of repairing
+//! (SnapToPrecision).
 double SnapDiagnosticValue(double v) {
 	if (v == 0.0 || !std::isfinite(v)) {
 		return v;
 	}
 	double nearest_int = std::round(v);
-	if (std::fabs(v - nearest_int) <= 1e-6 + 1e-9 * std::fabs(v)) {
+	if (std::fabs(v - nearest_int) <= 1e-6 + DIAGNOSTIC_ARITHMETIC_NOISE * std::fabs(v)) {
 		return nearest_int;
 	}
 	return std::round(v * 1e6) / 1e6;
@@ -81,10 +84,13 @@ double SnapToPrecision(double v) {
 	// the solver found is not a repair at all — the user pastes `x <= 3.33333`, the sum
 	// lands on 9.99999 against a `>= 10` floor, and the query is still infeasible. When
 	// the tidy value would fall below what was measured, take the next tick up instead.
-	// Over-repairing by one part in a million is invisible; under-repairing is a bug. Under-repairing by no more
-	// than the feasibility tolerance DeciDB gives both solvers is not: the solver accepts the tidy value, and a
-	// value that far above a tick is arithmetic noise (5.0000000000000853), which a whole tick must not answer.
-	if (ticks / scale < mag - DECIDE_FEASIBILITY_TOLERANCE) {
+	// Over-repairing by one part in a million is invisible; under-repairing is a bug, and
+	// one the solver's feasibility tolerance does not excuse: an amount moves a bound on
+	// every row it covers, and a `SUM` over those rows adds up their shortfalls (9,000
+	// rows short by 1.1e-10 each miss `SUM(x) <= -1` by 1e-6). Only the backend's
+	// arithmetic above a tick (5.0000000000000853) is no shortfall, and a whole tick must
+	// not answer it.
+	if (ticks / scale < mag * (1.0 - DIAGNOSTIC_ARITHMETIC_NOISE)) {
 		ticks += 1.0;
 	}
 	double snapped = ticks / scale;

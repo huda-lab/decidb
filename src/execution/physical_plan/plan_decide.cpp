@@ -185,6 +185,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->constraint_sources = std::move(op.constraint_sources);
     decide_op->written_objective = std::move(op.written_objective);
     decide_op->canonical_objective = std::move(op.canonical_objective);
+    decide_op->objective_constant_offset = op.objective_constant_offset;
     decide_op->source_fragments = std::move(op.source_fragments);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);

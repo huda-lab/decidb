@@ -3571,6 +3571,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     }
 #endif
     solver_input.sense = decide_sense;
+    solver_input.objective_constant = objective_constant_offset;
 
     // Quadratic objective (if present)
     if (gstate.has_quadratic_objective) {

@@ -324,7 +324,8 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 }
 
 //! The prescribed remedy for a runaway variable: name what to add, never invent the
-//! cap. DeciDB knows the variable needs a ceiling; only the user knows how high.
+//! bound. DeciDB knows the variable needs a ceiling (a floor, when it falls); only the
+//! user knows where.
 //!
 //! When the reported rules account for every escaping instance (EscapeRule::covers_scope)
 //! the cap is scoped to exactly those rows, so pasting it back does not also restrict
@@ -338,7 +339,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! colon. The column prints as SQL (the harvested names are quoted where needed); the value
 //! is a SQL string, or `IS NULL` for the column's NULL group.
 static string PrescribeCap(const VarEscape &ve) {
-	string cap = ve.name + " <= <cap>";
+	string cap = ve.name + (ve.direction == EscapeDirection::NEGATIVE ? " >= <floor>" : " <= <cap>");
 	vector<string> scope;
 	for (const auto &r : ve.rules) {
 		if (r.covers_scope) {

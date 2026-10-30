@@ -10,6 +10,7 @@ namespace duckdb {
 SolverModel MakeZeroObjectiveProbeModel(const SolverModel &model) {
 	SolverModel probe = model;
 	probe.obj_coeffs.assign(probe.obj_coeffs.size(), 0.0);
+	probe.obj_constant = 0.0;
 
 	probe.q_rows.clear();
 	probe.q_cols.clear();
@@ -36,9 +37,12 @@ bool BuildUnboundedRayFallbackModel(const SolverModel &model, SolverModel &ray_m
 	ray_model = SolverModel();
 	ray_model.num_vars = model.num_vars;
 
-	ray_model.col_lower.assign(model.num_vars, 0.0);
+	// The recession cone of the column box: a column may move along the ray only in a direction its box leaves open,
+	// up to a unit step either way.
+	ray_model.col_lower.resize(model.num_vars, 0.0);
 	ray_model.col_upper.resize(model.num_vars, 0.0);
 	for (idx_t col = 0; col < model.num_vars; col++) {
+		ray_model.col_lower[col] = DecideIsOpenBelow(model.col_lower[col]) ? -1.0 : 0.0;
 		ray_model.col_upper[col] = DecideIsOpenAbove(model.col_upper[col]) ? 1.0 : 0.0;
 	}
 

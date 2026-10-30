@@ -121,6 +121,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	for (auto &c : elastic.obj_coeffs) {
 		c = 0.0;
 	}
+	elastic.obj_constant = 0.0;
 	elastic.q_rows.clear();
 	elastic.q_cols.clear();
 	elastic.q_vals.clear();
@@ -374,10 +375,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 //! folds it into one virtual offset `x <= col + delta`; "expanded" exposes each per-row
 //! slack. Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
 //! appended). Pure in `solution`, so it runs against either the stage-1 or stage-2 solve.
-static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
-                                           const vector<double> &solution,
-                                           const SolverModel &orig_model,
-                                           const vector<ColumnProvenance> &columns, bool snap,
+static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, const vector<double> &solution,
+                                           const SolverModel &orig_model, const vector<ColumnProvenance> &columns,
                                            const string &slack_scope) {
 	// T3 slack-scope policy.
 	//   query (default): each block is ONE SQL literal knob the user edits, folded across
@@ -414,23 +413,12 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		if (std::fabs(amount) <= edit_floor) {
 			continue;
 		}
-		// Round away the conditioning noise a widened box costs. Applied to every read,
-		// stage 1 included: this noise comes from the model's constants, not from the
-		// budget freeze the I3 snap below cleans up.
-		{
-			amount = SnapToPrecision(amount);
-			if (std::fabs(amount) <= edit_floor) {
-				continue;
-			}
-		}
-		// I3: snap the stage-2 read again to absorb the budget cushion's sub-display noise.
-		// The precision cleanup above applies to both stages because it comes from the
-		// widened formulation itself, not from the stage-2 budget row.
-		if (snap) {
-			amount = SnapDiagnosticValue(amount);
-			if (std::fabs(amount) <= DIAGNOSTIC_RAY_EPSILON) {
-				continue;
-			}
+		// Round away the conditioning noise a widened box costs, outward, so the edit as
+		// printed still repairs. The one rounding an amount gets, at either stage: a second
+		// one to a nearer grid would undo the direction this one keeps.
+		amount = SnapToPrecision(amount);
+		if (std::fabs(amount) <= edit_floor) {
+			continue;
 		}
 		// Label the clause from the block's representative ORIGINAL row (orig_model,
 		// before slacks were appended). For a shared-slack block all rows render the
@@ -679,9 +667,10 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 
 	// Restore the user's original objective. The slack columns (appended past the
 	// original variables) get zero objective weight, so the achievable objective the
-	// solver reports is exactly cᵀx over the user's variables.
+	// solver reports is exactly the objective as written over the user's variables.
 	stage2.obj_coeffs = original.obj_coeffs;
 	stage2.obj_coeffs.resize(stage2.num_vars, 0.0);
+	stage2.obj_constant = original.obj_constant;
 	stage2.q_rows = original.q_rows;
 	stage2.q_cols = original.q_cols;
 	stage2.q_vals = original.q_vals;
@@ -710,10 +699,10 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 //! so cross-tier reshuffling is impossible), and the freeze only applies to linear
 //! objectives — a quadratic objective would need a quadratic freeze row, and an exact tie
 //! there is rarer still, so it keeps the stage-2a result. Returns false (skip the extra
-//! solve) otherwise. `freeze_objective` is false on the no-objective path, where there is
-//! nothing to preserve but a repair tie is just as solver-arbitrary.
+//! solve) otherwise. `frozen_point` is the stage-2a solution, null on the no-objective path,
+//! where there is nothing to preserve but a repair tie is just as solver-arbitrary.
 static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef> &slacks,
-                               bool freeze_objective, double objective_value) {
+                               const vector<double> *frozen_point) {
 	idx_t editable_knobs = 0;
 	idx_t data_knobs = 0;
 	for (const auto &sl : slacks) {
@@ -722,30 +711,32 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 	if (editable_knobs < 2 && data_knobs < 2) {
 		return false;
 	}
-	if (freeze_objective) {
+	if (frozen_point) {
 		if (tiebreak.has_quadratic_obj) {
 			return false;
 		}
 		// Freeze the objective at its stage-2a optimum with a one-sided row. The rhs is
 		// EXACT — no tolerance cushion: any eps of objective room is monetized by the
 		// rank objective, which would shave eps of repair onto a lower-ranked slack and
-		// split the edit (`x <= 9.999989` plus a phantom second clause). The stage-2a
-		// point attains the value read from the solver's own solution to machine
-		// precision, well inside both backends' feasibility tolerance; if a rounding
-		// pathology ever makes the row unattainable the pass just returns non-optimal
-		// and the caller keeps the stage-2a repair.
+		// split the edit (`x <= 9.999989` plus a phantom second clause). So the rhs is the
+		// row itself evaluated at the stage-2a point, never the solver's reported objective
+		// value, which carries the objective's constant and the backend's own arithmetic: the
+		// point attains it to machine precision, well inside both backends' feasibility
+		// tolerance; if a rounding pathology ever makes the row unattainable the pass just
+		// returns non-optimal and the caller keeps the stage-2a repair.
 		ModelConstraint freeze;
+		freeze.rhs = 0.0;
 		for (idx_t j = 0; j < tiebreak.obj_coeffs.size(); j++) {
 			if (tiebreak.obj_coeffs[j] != 0.0) {
 				freeze.indices.push_back(static_cast<int>(j));
 				freeze.coefficients.push_back(tiebreak.obj_coeffs[j]);
+				freeze.rhs += tiebreak.obj_coeffs[j] * (*frozen_point)[j];
 			}
 		}
 		if (freeze.indices.empty()) {
 			return false; // constant objective: nothing to preserve, nothing to tie-break against
 		}
 		freeze.sense = tiebreak.maximize ? '>' : '<';
-		freeze.rhs = objective_value;
 		freeze.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
 		tiebreak.constraints.push_back(std::move(freeze));
 	}
@@ -897,8 +888,7 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 			result.objective_value = stage2.objective_value;
 			repair_solution = std::move(stage2.solution);
 			SolverModel tiebreak_model = stage2_model;
-			if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/true,
-			                       result.objective_value)) {
+			if (BuildTieBreakModel(tiebreak_model, slacks, &repair_solution)) {
 				// The tie-break only chooses among repairs that cost the same; stage 2a's is already one of
 				// them, so a pass the solver cannot finish (the frozen objective row is exact, and a barrier
 				// QCP can stop short of it) keeps it.
@@ -910,7 +900,7 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		} else if (stage2.status == SolverStatus::UNBOUNDED) {
 			result.objective_unbounded = true;
 			SolverModel tiebreak_model = stage1_model;
-			if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/false, 0.0)) {
+			if (BuildTieBreakModel(tiebreak_model, slacks, /*frozen_point=*/nullptr)) {
 				SolverResult tiebreak = input.solve_model(tiebreak_model);
 				if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
 					return result;
@@ -924,7 +914,7 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		}
 	} else {
 		SolverModel tiebreak_model = stage1_model;
-		if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/false, 0.0)) {
+		if (BuildTieBreakModel(tiebreak_model, slacks, /*frozen_point=*/nullptr)) {
 			SolverResult tiebreak = input.solve_model(tiebreak_model);
 			if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
 				return result;
@@ -933,9 +923,7 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		}
 	}
 
-	result.edits = ReadElasticEdits(slacks, repair_solution, candidate_model, columns,
-	                                /*snap=*/result.has_objective && !result.objective_unbounded,
-	                                input.params.slack_scope);
+	result.edits = ReadElasticEdits(slacks, repair_solution, candidate_model, columns, input.params.slack_scope);
 	for (idx_t index : selected_indices) {
 		result.edits.push_back(MakeDropEdit(input.model, all_groups[index]));
 	}

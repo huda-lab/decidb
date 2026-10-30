@@ -24,13 +24,16 @@ namespace decide_render {
 //! zeros: 12.5 not 12.500000, 10 not 10.0).
 string FormatNum(double v);
 
-//! Clean the sub-tolerance noise an I3 stage-2 read carries: snap to the nearest
-//! integer when within a relative tolerance of one, otherwise trim a genuinely
-//! fractional value to a fixed absolute precision.
+//! Clean the sub-tolerance noise of a value the diagnosis reports or compares but that
+//! is no edit (the achievable objective, a repair cost): snap to the nearest integer when
+//! within a relative tolerance of one, otherwise trim a genuinely fractional value to a
+//! fixed absolute precision. Never applied to an edit's amount, which SnapToPrecision
+//! alone rounds.
 double SnapDiagnosticValue(double v);
 
-//! Round to the last decimal that is meaningful at this value's own magnitude, so
-//! a reported repair is never one part in a million SHORT of actually repairing.
+//! Round a repair amount to the last decimal that is meaningful at its own magnitude,
+//! outward, so a reported repair is never one part in a million SHORT of actually
+//! repairing. The one rounding an amount gets.
 double SnapToPrecision(double v);
 
 //! Render a row's LHS as the user wrote it when the model carries a source

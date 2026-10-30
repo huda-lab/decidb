@@ -439,24 +439,24 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
     model.maximize = (input.sense == DecideSense::MAXIMIZE);
+    model.obj_constant = input.objective_constant;
 
     if (!input.objective_variable_indices.empty()) {
         for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
             idx_t decide_var_idx = input.objective_variable_indices[term_idx];
-
-            // Skip constant terms (data columns without decide variables).
-            // These don't affect the optimal solution — they add a constant offset
-            // that doesn't change which assignment is optimal.
-            if (decide_var_idx == DConstants::INVALID_INDEX) {
-                continue;
-            }
-
             if (term_idx >= input.objective_coefficients.size()) {
                 continue;
             }
             // Every row's coefficient counts. A term beside the reducers counts once: execution kept its
             // coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
             auto &col = input.objective_coefficients[term_idx];
+            // A term with no decision (a data column) moves no optimum: it is the objective's constant.
+            if (decide_var_idx == DConstants::INVALID_INDEX) {
+                for (idx_t row = 0; row < num_rows && row < col.Size(); row++) {
+                    AddCoefficient(model.obj_constant, col.Get(row), input.objective_written);
+                }
+                continue;
+            }
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
@@ -532,7 +532,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                 }
 
-                // Handle constant term contributions to linear objective
+                // The square's constant c: sign * (a·x + c)^2 adds 2c·a to the linear part and c^2 to the constant.
                 double c_row = 0.0;
                 for (idx_t t = 0; t < num_q_terms; t++) {
                     if (t < input.quadratic_inner_coefficients.size() &&
@@ -546,6 +546,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         AddCoefficient(model.obj_coeffs[vt.flat_idx], q_sign * 2.0 * c_row * vt.coeff,
                                        input.objective_written);
                     }
+                    AddCoefficient(model.obj_constant, q_sign * c_row * c_row, input.objective_written);
                 }
             }
         }

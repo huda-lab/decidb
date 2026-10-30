@@ -22,6 +22,7 @@ import re
 
 import pytest
 
+from solver.types import ObjSense, SolverStatus, VarType
 from . import _diagnose_relation
 from ._diagnostic_invariants import assert_backends_agree, assert_edits_are_users_text
 
@@ -2918,3 +2919,114 @@ class TestRepairsTheModelCanReach:
                 runner.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
             assert float(reported) == pytest.approx(
                 sum(float(r["x"]) for r in solved)), label
+
+
+@pytest.mark.query_diagnostics
+class TestPrintedRepairIsTrue:
+    """Every row a repair prints holds as printed: the objective it reports is the objective
+    the user wrote, and the edit, pasted back, solves."""
+
+    @pytest.mark.correctness
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "objective, linear, square, constant",
+        [
+            # Two rows. (x - 5)^2 expands to x^2 - 10x + 25: the builder folds 25 per row out of Q.
+            pytest.param("SUM(POWER(x - 5, 2))", -10.0, 1.0, 2 * 25.0, id="square_constant"),
+            # A data term inside the reducer: 7 per row, which has no column of its own.
+            pytest.param("SUM(x + 7)", 1.0, 0.0, 2 * 7.0, id="row_constant"),
+            # A constant beside the reducer, which canonicalization peels off the objective.
+            pytest.param("SUM(x) + 3", 1.0, 0.0, 3.0, id="peeled_constant"),
+        ],
+    )
+    def test_achievable_objective_is_the_objective_as_written(
+        self, request, cli_fixture, oracle_solver, objective, linear, square, constant
+    ):
+        """BUG-29: the achievable objective carries the objective's constant, however it was
+        written, on both backends. Checked against an independent solve of the repaired
+        query, constant included."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(REAL) "
+            f"SUCH THAT x BETWEEN 0 AND 10 AND SUM(x) >= 30 MINIMIZE {objective}"
+        )
+        flat = _flat(_diagnose(cli, sql))
+        assert [r["edit_source"] for r in flat] == ["source_literal", "achievable_objective"], flat
+        widened = re.fullmatch(r"x BETWEEN 0 AND (\S+)", flat[0]["suggested_change"])
+        assert widened, flat
+
+        oracle_solver.create_model("repaired_objective_with_constant")
+        names = ["x_0", "x_1"]
+        for name in names:
+            oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=float(widened.group(1)))
+        oracle_solver.add_constraint({name: 1.0 for name in names}, ">=", 30.0)
+        oracle_solver.set_quadratic_objective(
+            {name: linear for name in names},
+            {(name, name): square for name in names if square},
+            ObjSense.MINIMIZE,
+            constant=constant,
+        )
+        expected = oracle_solver.solve()
+        assert expected.status == SolverStatus.OPTIMAL
+        assert float(flat[1]["amount"]) == pytest.approx(expected.objective_value, rel=1e-6)
+
+    @pytest.mark.correctness
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_repair_whose_objective_is_unbounded_says_so_on_both_backends(self, request, cli_fixture, oracle_solver):
+        """BUG-31: once the floor on the BOOL `x` is loosened, the uncapped `y` lets the
+        objective grow without limit. HiGHS states its repaired MIP only as
+        infeasible-or-unbounded; that status is settled as the query's own solve settles it,
+        so both backends report the repair and `unbounded_after_fix`. The loosened floor is
+        the most `x` can sum to (oracle), and the edit as printed leaves the query unbounded."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL), y(REAL) "
+            "SUCH THAT SUM(x) >= 50 MAXIMIZE SUM(x + y)"
+        )
+        flat = _flat(_diagnose(cli, sql))
+        assert [(r["clause"], r["edit_source"]) for r in flat] == [
+            ("sum(x) >= 50", "source_literal"),
+            ("NULL", "unbounded_after_fix"),
+        ], flat
+
+        oracle_solver.create_model("most_x_can_sum_to")
+        names = ["x_0", "x_1", "x_2"]
+        for name in names:
+            oracle_solver.add_variable(name, VarType.BINARY)
+        oracle_solver.set_objective({name: 1.0 for name in names}, ObjSense.MAXIMIZE)
+        reach = oracle_solver.solve()
+        assert reach.status == SolverStatus.OPTIMAL
+        assert flat[0]["suggested_change"] == f"sum(x) >= {round(reach.objective_value)}"
+
+        cli.assert_error(sql.replace("SUM(x) >= 50", flat[0]["suggested_change"]), match="unbounded")
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "sql, clause",
+        [
+            # 300 rows each short by 4e-7 of the 1.0000004 the floor must fall: rounding the
+            # amount to nearest (or to a whole number) misses `SUM(x) <= -300.00012` by 1.2e-4.
+            pytest.param(
+                "SELECT i, x FROM range(300) r(i) DECIDE x(REAL) "
+                "SUCH THAT x BETWEEN 0 AND 10 AND SUM(x) <= -300.00012 MINIMIZE SUM(x)",
+                "x BETWEEN 0 AND 10",
+                id="amount_summed_over_rows",
+            ),
+            # The amount 0.333334 has six figures, the moved bound 100000.333334 twelve:
+            # printing the bound to ten would round it to 100000.3333, short of the sum.
+            pytest.param(
+                "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(REAL) "
+                "SUCH THAT x <= 100000 AND SUM(x) >= 300001 MINIMIZE SUM(x)",
+                "x <= 100000",
+                id="bound_longer_than_amount",
+            ),
+        ],
+    )
+    def test_the_printed_repair_restores_feasibility(self, request, cli_fixture, sql, clause):
+        """BUG-32: a printed amount rounds outward, never to nearest, so the edit as printed
+        repairs: pasted back, the query solves."""
+        cli = request.getfixturevalue(cli_fixture)
+        edits = [r for r in _flat(_diagnose(cli, sql)) if r["edit_source"] == "source_literal"]
+        assert [r["clause"] for r in edits] == [clause], edits
+        rows, _ = cli.execute(sql.replace(clause, edits[0]["suggested_change"]))
+        assert rows

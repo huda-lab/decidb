@@ -365,7 +365,7 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
     lp.num_col_ = total_vars;
     lp.num_row_ = num_constraints;
     lp.sense_ = sense;
-    lp.offset_ = 0.0;
+    lp.offset_ = model.obj_constant;
     lp.col_cost_ = model.obj_coeffs;
     lp.col_lower_ = model.col_lower;
     lp.col_upper_ = model.col_upper;

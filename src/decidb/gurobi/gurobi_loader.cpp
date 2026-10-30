@@ -216,6 +216,7 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	LOAD_SYM(newmodel,          "GRBnewmodel")
 	LOAD_SYM(freemodel,         "GRBfreemodel")
 	LOAD_SYM(setintattr,        "GRBsetintattr")
+	LOAD_SYM(setdblattr,        "GRBsetdblattr")
 	LOAD_SYM(addconstr,         "GRBaddconstr")
 	LOAD_SYM(addqpterms,       "GRBaddqpterms")
 	LOAD_SYM(optimize,          "GRBoptimize")

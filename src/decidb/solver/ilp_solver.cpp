@@ -337,8 +337,8 @@ SolverBackend SelectSolverBackend() {
 	throw InternalException("No DECIDE solver backend is available on this build");
 }
 
-SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
-                                const SolveModelOptions &options) {
+//! One backend solve of a prepared model, its status as the backend states it.
+static SolverResult SolveOnce(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options) {
 	if (model.ProvesInfeasible()) {
 		SolverResult result;
 		result.status = SolverStatus::INFEASIBLE;
@@ -353,10 +353,6 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 	return session->Solve(model, time_limit);
 }
 
-SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
-	return SolvePreparedModel(model, backend, SolveModelOptions());
-}
-
 static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
                                           const SolveModelOptions &diagnostic_options,
                                           const SolverResult &original) {
@@ -364,8 +360,9 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
         return original;
     }
 
+    // A model with no objective cannot be unbounded, so the probe's own status is final.
     SolverModel probe_model = MakeZeroObjectiveProbeModel(model);
-    SolverResult probe_result = SolvePreparedModel(probe_model, backend, diagnostic_options);
+    SolverResult probe_result = SolveOnce(probe_model, backend, diagnostic_options);
 
     SolverResult disambiguated = original;
     if (DidDiagnosticSolveStopEarly(probe_result)) {
@@ -382,6 +379,15 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
     default:
         return original;
     }
+}
+
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options) {
+	return DisambiguateInfOrUnbd(model, backend, MakeDiagnosticSolveOptions(options),
+	                             SolveOnce(model, backend, options));
+}
+
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
+	return SolvePreparedModel(model, backend, SolveModelOptions());
 }
 
 //! No MIP solver can represent an unbounded integer. Both backends silently cap an

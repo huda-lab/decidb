@@ -81,6 +81,8 @@ SolverBackend SelectSolverBackend();
 
 //! Solve an already-built SolverModel with the selected backend. Diagnostic
 //! engines use this to run transformed models without rebuilding SolverInput.
+//! A status the backend leaves ambiguous (INF_OR_UNBD) is settled by the same
+//! zero-objective probe SolveModel applies to the query's own solve.
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend);
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
                                 const SolveModelOptions &options);

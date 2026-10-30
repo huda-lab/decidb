@@ -246,6 +246,10 @@ void GurobiSession::Load(const SolverModel &ilp) {
         throw InternalException("Failed to set Gurobi model sense: %s",
                                 api.geterrormsg(guard.env));
     }
+    error = api.setdblattr(guard.model, GRB_DBL_ATTR_OBJCON, ilp.obj_constant);
+    if (error) {
+        throw InternalException("Failed to set Gurobi objective constant: %s", api.geterrormsg(guard.env));
+    }
 
     //===--------------------------------------------------------------------===//
     // 3. Add constraints

@@ -4,7 +4,7 @@ Every solver column maps back to the user-facing thing it represents: user
 variable name, or (for an auxiliary linearization column) the user's original
 source expression. Folded into the unbounded diagnosis, the DIAGNOSE
 relation reports each escaping variable by NAME with the DIRECTION it escapes
-(always +inf today, since user variables are bounded below at 0).
+(+inf, or -inf for a variable whose floor the query removed).
 
 These tests run `DIAGNOSE <query>`, which is the only thing that starts the engine,
 reading the relation as CSV so single-letter variable names assert unambiguously. Run
@@ -114,6 +114,24 @@ class TestUnboundedVariableDiagnostics:
         result = _diagnose(cli, sql)
         rows = _rows(result)
         assert _attrs(rows, "x")["grows_toward"] == "+inf"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_decision_falling_without_bound_is_named_with_a_floor(self, request, cli_fixture):
+        """BUG-30: `buy >= -1e30` is no floor (a bound of 1e20 or more is none), so MINIMIZE
+        drives every `buy` toward -inf. The ray search reads a column's box in both
+        directions, so it names the variable falling, and the remedy is the floor it lacks."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, buy FROM (VALUES (1), (2)) t(id) "
+            "DECIDE buy(REAL) SUCH THAT buy >= -1e30 AND buy <= 100 MINIMIZE SUM(buy)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        assert _attrs(rows, "buy")["grows_toward"] == "-inf"
+        assert _attrs(rows, "buy")["escaping_instances"] == "2"
+        assert {r["state"] for r in rows} == {"unbounded"}
+        flat = _diagnose_relation.rows(result)
+        assert [f["suggested_change"] for f in flat] == ["buy >= <floor>"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_without_the_prefix_no_variable_is_named(self, request, cli_fixture):

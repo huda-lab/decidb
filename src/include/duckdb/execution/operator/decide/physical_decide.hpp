@@ -99,6 +99,10 @@ public:
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
 
+    //! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset), so the
+    //! objective value a solve reports is the objective as written.
+    double objective_constant_offset = 0.0;
+
     // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
 
