@@ -34,17 +34,23 @@ struct SolverModel;
 //! resumes that same warm solver for another chunk without reloading. Both return
 //! a normalized SolverResult snapshot. Continue() has a precondition that Solve()
 //! ran first on this session.
+//!
+//! Solve() and Continue() are the template methods (non-virtual interface) every caller
+//! goes through; a backend implements the chunks. The backend never sees the objective's
+//! constant (SolverModel::obj_constant): it moves no optimum, and the MIP gap a backend
+//! measures stays the gap of the decisions. These two methods add it to the objective value
+//! and the bound a chunk reads back, so every caller reads the objective as written.
 class SolverSession {
 public:
 	virtual ~SolverSession() = default;
 
 	//! Load `model` into the backend and optimize it with a `time_limit_seconds`
 	//! wall-clock budget for this first chunk.
-	virtual SolverResult Solve(const SolverModel &model, double time_limit_seconds) = 0;
+	SolverResult Solve(const SolverModel &model, double time_limit_seconds);
 
 	//! Resume the live solver for another `time_limit_seconds` chunk. The MIP tree
 	//! and incumbent from the previous chunk are preserved (warm resume).
-	virtual SolverResult Continue(double time_limit_seconds) = 0;
+	SolverResult Continue(double time_limit_seconds);
 
 	//! Install a poll the session checks *during* a solve so a running chunk can be cut
 	//! short (mid-chunk Ctrl-C) instead of only at the chunk boundary. `poll()` returning
@@ -63,7 +69,17 @@ public:
 	}
 
 protected:
+	//! The backend's first chunk: load `model` and optimize it.
+	virtual SolverResult SolveChunk(const SolverModel &model, double time_limit_seconds) = 0;
+	//! The backend's next chunk on the model SolveChunk loaded.
+	virtual SolverResult ContinueChunk(double time_limit_seconds) = 0;
+
 	double mip_gap = 0.0;
+
+private:
+	//! The loaded model's objective constant, added to every chunk's read-back.
+	double objective_constant = 0.0;
+	SolverResult AddObjectiveConstant(SolverResult result) const;
 };
 
 } // namespace duckdb

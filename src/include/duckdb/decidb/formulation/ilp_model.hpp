@@ -345,9 +345,10 @@ struct SolverModel {
     bool maximize;             //!< True = maximize, false = minimize
     //! The objective's constant term (an LP's objective offset): what the objective as written adds whatever the
     //! decisions are -- a constant beside the reducers (`SUM(x) + 3`), a constant inside one (`SUM(x + 7)`), and the
-    //! constant of an expanded square (`POWER(x - 5, 2)`). It moves no optimum, so it never changes an answer; every
-    //! backend takes it as its own objective offset (Gurobi `ObjCon`, HiGHS `offset_`), so the objective value a solve
-    //! reports is the objective as the user wrote it.
+    //! constant of an expanded square (`POWER(x - 5, 2)`). It moves no optimum, so no backend is given it: a session
+    //! adds it to the objective value and bound a solve reads back (SolverSession::Solve), so every caller reads the
+    //! objective as the user wrote it. Summed unchecked: past a DOUBLE it is infinite (NaN when infinities of both
+    //! signs meet), which only the reported value shows.
     double obj_constant = 0.0;
 
     //! Quadratic objective: x^T Q x, added to the linear part. NOT the (1/2) x^T Q x

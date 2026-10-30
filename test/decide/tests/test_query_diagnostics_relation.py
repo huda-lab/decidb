@@ -2970,6 +2970,25 @@ class TestPrintedRepairIsTrue:
         assert expected.status == SolverStatus.OPTIMAL
         assert float(flat[1]["amount"]) == pytest.approx(expected.objective_value, rel=1e-6)
 
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_an_objective_constant_past_a_double_reports_an_infinite_objective(self, request, cli_fixture):
+        """Each `b` is finite and their sum is not. No solve reads the constant (BUG-24), so the
+        repair is found as for any other objective, and the objective as written is reported
+        as what it is: infinite. The edit, pasted back, answers."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (FROM (VALUES (1, 1.0, 1e308::DOUBLE), (2, 2.0, 1e308::DOUBLE)) t(id, a, b) "
+            "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= 10 MAXIMIZE SUM(a * x + b + b)) q"
+        )
+        flat = _flat(_diagnose(cli, sql))
+        assert [(r["clause"], r["edit_source"]) for r in flat] == [
+            ("x <= 5", "source_literal"),
+            ("NULL", "achievable_objective"),
+        ], flat
+        assert float(flat[1]["amount"]) == float("inf"), flat
+        rows, _ = cli.execute(sql.replace("x <= 5", flat[0]["suggested_change"]))
+        assert rows
+
     @pytest.mark.correctness
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_a_repair_whose_objective_is_unbounded_says_so_on_both_backends(self, request, cli_fixture, oracle_solver):

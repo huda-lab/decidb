@@ -234,7 +234,7 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
 //! time-limit stop, so Continue() is just another RunAndReadback() with a fresh chunk.
 class HighsSession : public SolverSession {
 public:
-    SolverResult Solve(const SolverModel &model, double time_limit_seconds) override {
+    SolverResult SolveChunk(const SolverModel &model, double time_limit_seconds) override {
 		SolverResult not_loaded;
 		if (!Load(model, not_loaded)) {
 			return not_loaded;
@@ -242,8 +242,8 @@ public:
 		return RunAndReadback(time_limit_seconds);
     }
 
-    SolverResult Continue(double time_limit_seconds) override {
-        // Precondition: Solve() already loaded the model into `highs`.
+    SolverResult ContinueChunk(double time_limit_seconds) override {
+        // Precondition: SolveChunk() already loaded the model into `highs`.
         return RunAndReadback(time_limit_seconds);
     }
 
@@ -365,7 +365,7 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
     lp.num_col_ = total_vars;
     lp.num_row_ = num_constraints;
     lp.sense_ = sense;
-    lp.offset_ = model.obj_constant;
+    lp.offset_ = 0.0;
     lp.col_cost_ = model.obj_coeffs;
     lp.col_lower_ = model.col_lower;
     lp.col_upper_ = model.col_upper;

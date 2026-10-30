@@ -460,10 +460,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             // Every row's coefficient counts. A term beside the reducers counts once: execution kept its
             // coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
             auto &col = input.objective_coefficients[term_idx];
-            // A term with no decision (a data column) moves no optimum: it is the objective's constant.
+            // A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed
+            // without a check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
             if (decide_var_idx == DConstants::INVALID_INDEX) {
                 for (idx_t row = 0; row < num_rows && row < col.Size(); row++) {
-                    AddCoefficient(model.obj_constant, col.Get(row), input.objective_written);
+                    model.obj_constant += col.Get(row);
                 }
                 continue;
             }
@@ -556,7 +557,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         AddCoefficient(model.obj_coeffs[vt.flat_idx], q_sign * 2.0 * c_row * vt.coeff,
                                        input.objective_written);
                     }
-                    AddCoefficient(model.obj_constant, q_sign * c_row * c_row, input.objective_written);
+                    model.obj_constant += q_sign * c_row * c_row;
                 }
             }
         }

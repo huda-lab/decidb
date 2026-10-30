@@ -114,13 +114,13 @@ namespace {
 //! Continue() is just another RunAndReadback() with a fresh chunk budget.
 class GurobiSession : public SolverSession {
 public:
-    SolverResult Solve(const SolverModel &ilp, double time_limit_seconds) override {
+    SolverResult SolveChunk(const SolverModel &ilp, double time_limit_seconds) override {
         Load(ilp);
         return RunAndReadback(time_limit_seconds);
     }
 
-    SolverResult Continue(double time_limit_seconds) override {
-        // Precondition: Solve() already loaded the model into `guard`.
+    SolverResult ContinueChunk(double time_limit_seconds) override {
+        // Precondition: SolveChunk() already loaded the model into `guard`.
         return RunAndReadback(time_limit_seconds);
     }
 
@@ -245,10 +245,6 @@ void GurobiSession::Load(const SolverModel &ilp) {
     if (error) {
         throw InternalException("Failed to set Gurobi model sense: %s",
                                 api.geterrormsg(guard.env));
-    }
-    error = api.setdblattr(guard.model, GRB_DBL_ATTR_OBJCON, ilp.obj_constant);
-    if (error) {
-        throw InternalException("Failed to set Gurobi objective constant: %s", api.geterrormsg(guard.env));
     }
 
     //===--------------------------------------------------------------------===//
