@@ -3181,6 +3181,45 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 	return result;
 }
 
+//! Each term's coefficient (its sign applied) on the rows `read` keeps, 0 elsewhere, in
+//! one scan: the columns of a lifted reducer's members.
+static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
+                                const vector<DecideTerm> &terms, const vector<bool> &read, idx_t num_rows,
+                                const DecideSourceNames &names, const string &clause,
+                                vector<CoefficientColumn> &columns) {
+	columns.resize(terms.size());
+	if (terms.empty()) {
+		return;
+	}
+	ExpressionExecutor executor(context);
+	vector<LogicalType> types;
+	for (idx_t t = 0; t < terms.size(); t++) {
+		const Expression &cached = CachedTransformToChunkExpression(chunk_expr_cache, *terms[t].coefficient, context);
+		types.push_back(cached.return_type);
+		executor.AddExpression(cached);
+		columns[t].Reserve(num_rows);
+	}
+	DataChunk results;
+	results.Initialize(context, types);
+	ColumnDataScanState scan_state;
+	data.InitializeScan(scan_state);
+	DataChunk chunk;
+	chunk.Initialize(context, data.Types());
+	idx_t row_base = 0;
+	while (data.Scan(scan_state, chunk)) {
+		results.Reset();
+		ExecuteOnReadRows(executor, chunk, row_base, &read, results);
+		for (idx_t t = 0; t < terms.size(); t++) {
+			ValueInputs inputs {terms[t].inputs, chunk, context};
+			ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
+			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause, &inputs}, nullptr,
+			                    &read, row_base);
+			columns[t].SyncSize();
+		}
+		row_base += chunk.size();
+	}
+}
+
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 2, sub-phase 3 -- Evaluate composed MIN/MAX clauses
 //===--------------------------------------------------------------------===//
@@ -3198,47 +3237,6 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	if (composed_minmax_constraints.empty() && composed_minmax_objective_terms.empty()) {
 		return;
 	}
-	// Evaluate a DecideTerm's per-row coefficient (scaled by term.sign). `what` is
-	// "constraint" or "objective", naming the clause in any error. `read_rows` are the rows
-	// the term reads: every other row is 0 and never evaluated for NULL.
-	auto EvaluateTermCoefs = [&](const DecideTerm &term, const char *what, const string &clause,
-	                             const vector<bool> &read_rows) -> vector<double> {
-		vector<double> coefs;
-		coefs.reserve(num_rows);
-		const Expression &transformed =
-            CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
-        ExpressionExecutor exec(context);
-        exec.AddExpression(transformed);
-        ColumnDataScanState scan;
-        gstate.data.InitializeScan(scan);
-        DataChunk chunk;
-        chunk.Initialize(context, gstate.data.Types());
-        while (gstate.data.Scan(scan, chunk)) {
-            DataChunk result;
-            result.Initialize(context, {transformed.return_type});
-			ExecuteOnReadRows(exec, chunk, coefs.size(), &read_rows, result);
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				if (!read_rows[coefs.size()]) {
-					coefs.push_back(0.0);
-					continue;
-				}
-				Value val = result.data[0].GetValue(r);
-				if (val.IsNull()) {
-					// A reducer's `when` tests its data (DecideCanonicalizer::SkipNullData).
-					throw InternalException("Composed MIN/MAX %s: a coefficient is NULL on a row its reducer reads",
-					                        what);
-				}
-				double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                if (!std::isfinite(d)) {
-					ValueInputs inputs {term.inputs, chunk, context};
-					ThrowInvalidValue({DecideValueRole::COEFFICIENT, *term.coefficient, Names(), clause, &inputs}, r);
-				}
-                coefs.push_back(d * term.sign);
-			}
-		}
-		return coefs;
-	};
-
 	//! A factor on a reducer is one value for the whole query by construction (the
 	//! canonicalizer rejects anything row-varying), so evaluate it once and read
 	//! row 0. It goes through the same chunk-expression transform every other
@@ -3346,8 +3344,12 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 					ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
 				}
 			}
-			for (auto &inner_t : term.inner_terms) {
-				ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t, what, clause, ta.filter_mask));
+			// The term's inner coefficients in one scan, on the rows it reads (every other row is 0, never evaluated).
+			vector<CoefficientColumn> coefficients;
+			EvaluateTermColumns(context, gstate.data, chunk_expr_cache, term.inner_terms, ta.filter_mask, num_rows,
+			                    Names(), clause, coefficients);
+			for (auto &column : coefficients) {
+				ta.per_term_coefs.push_back(std::move(column.MutableDense()));
 			}
 			evaluated.push_back(std::move(ta));
 		}
@@ -3406,45 +3408,6 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 2, sub-phase 4 -- the value rewrite's helper decisions
 //===--------------------------------------------------------------------===//
-
-//! Each term's coefficient (its sign applied) on the rows `read` keeps, 0 elsewhere, in
-//! one scan: the columns of a lifted reducer's members.
-static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
-                                const vector<DecideTerm> &terms, const vector<bool> &read, idx_t num_rows,
-                                const DecideSourceNames &names, const string &clause,
-                                vector<CoefficientColumn> &columns) {
-	columns.resize(terms.size());
-	if (terms.empty()) {
-		return;
-	}
-	ExpressionExecutor executor(context);
-	vector<LogicalType> types;
-	for (idx_t t = 0; t < terms.size(); t++) {
-		const Expression &cached = CachedTransformToChunkExpression(chunk_expr_cache, *terms[t].coefficient, context);
-		types.push_back(cached.return_type);
-		executor.AddExpression(cached);
-		columns[t].Reserve(num_rows);
-	}
-	DataChunk results;
-	results.Initialize(context, types);
-	ColumnDataScanState scan_state;
-	data.InitializeScan(scan_state);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
-	idx_t row_base = 0;
-	while (data.Scan(scan_state, chunk)) {
-		results.Reset();
-		ExecuteOnReadRows(executor, chunk, row_base, &read, results);
-		for (idx_t t = 0; t < terms.size(); t++) {
-			ValueInputs inputs {terms[t].inputs, chunk, context};
-			ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
-			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause, &inputs}, nullptr,
-			                    &read, row_base);
-			columns[t].SyncSize();
-		}
-		row_base += chunk.size();
-	}
-}
 
 void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                                ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
