@@ -548,3 +548,18 @@ Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIA
 
 That is not a mode you can turn off, and there is nothing to turn on: a query that is
 never prefixed never runs a diagnostic solve, so it never pays for one.
+
+## Capturing examples
+
+`benchmark/decide/diagnose_examples/run.py` records what a SQL user reads for each query in
+`benchmark/decide/diagnose_examples/queries/`: the plain run's rows or message and the DIAGNOSE relation, on Gurobi
+and on HiGHS, in one Markdown report under `benchmark/decide/results/diagnose_examples/` (gitignored), with a manifest
+of the commit and versions. The report lists the examples whose relations differ between backends. The corpus reaches
+every `edit_source` in `language/guide.md` § 8.1 that SQL can reach, both slack scopes, a feasible query and an
+infeasible variant of each direct-solve rule. `rigid_conflict` has no example: every query tried was repaired. Open
+defects the corpus shows are in `issues/bugs.md` (BUG-29 to BUG-32).
+
+```bash
+python3 benchmark/decide/diagnose_examples/run.py
+python3 benchmark/decide/diagnose_examples/run.py --queries budget remove_only --backends highs
+```

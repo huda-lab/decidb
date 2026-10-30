@@ -38,7 +38,7 @@ caller must branch on `status` / `has_solution`, never on emptiness alone**, to
 know whether a value is proven optimal.
 
 The trailing fields carry what a report needs: `objective_value`, `best_bound`,
-`gap`, `user_interrupted`, `raw_status`, `diagnostic_timed_out`, `ray`, and
+`gap`, `user_interrupted`, `status_text`, `diagnostic_timed_out`, `ray`, and
 `model_constraint_rows` (the post-expansion row count actually handed to the
 backend — the only figure comparable across queries).
 
@@ -50,7 +50,12 @@ attribute read, or a solver infinity sentinel. Report writers must skip them whe
 operator calls it only on an **undiagnosed** terminal — the statement carried no
 `DIAGNOSE` prefix, or the status has no engine (`ITERATION_LIMIT` / `OTHER`). Its text
 names the state and points at the prefix; a diagnosed failure raises nothing at all and
-returns its findings as rows. See
+returns its findings as rows. `OTHER`, a solve the backend could not finish, has no state to name: the text names the
+backend and quotes its own reason (`status_text`), never a status number: "DECIDE optimization failed: HiGHS could not
+solve this model (Solve error)." HiGHS fills `status_text` from `modelStatusToString`; Gurobi, which names a status only
+by its number, fills it only when its optimize call fails, from `GRBgeterrormsg`. A model HiGHS refuses to load
+(`passModel` or `passHessian` returns `kError`) is `OTHER` with no reason text. Gurobi's environment failures stay
+internal errors and quote Gurobi's message, not its error code. See
 [`../../diagnostics/`](../../diagnostics/).
 
 ---
@@ -437,9 +442,9 @@ is a full MIP solver.
 HiGHS has no binary variable type — a binary is an integer with bounds `[0,1]`.
 
 A `kError` from `highs.run()` is a solve HiGHS could not finish, not a DeciDB fault, so
-`HighsSession` returns it as `SolverStatus::OTHER` with the model status in
-`raw_status`, and the operator raises the ordinary `DECIDE optimization failed (solver
-status N).` The known case is HiGHS's QP solver: it is an active-set method that keeps a
+`HighsSession` returns it as `SolverStatus::OTHER` with the model status's text in
+`status_text`, and the operator raises the ordinary "DECIDE optimization failed: HiGHS could
+not solve this model (Solve error)." The known case is HiGHS's QP solver: it is an active-set method that keeps a
 dense matrix over the variables that end strictly inside their bounds, and it stops with
 "Large nullspace" (model status 4) when there are more than its `qp_nullspace_limit` of
 4,000. A box-bounded QP on 9,000 rows with about half the optima inside their range hits
@@ -569,7 +574,7 @@ HiGHS has no thread-safe terminate, so it never sets `user_interrupted`.
 1. Implement `SolverSession` with `Solve(model, time_limit)` and
    `Continue(time_limit)`, both returning a normalized `SolverResult`. Map the
    backend's terminal statuses onto `SolverStatus`; anything unmapped goes to `OTHER`
-   with `raw_status` set. Override a `SolverSession` virtual only for behavior the
+   with `status_text` holding the backend's own words for it, when it has any. Override a `SolverSession` virtual only for behavior the
    backend alone acts on.
 2. Add `IsAvailable()`, `Capabilities()`, and `CreateSession()` statics.
 3. Append one `SolverBackendInfo` row to `REGISTERED_BACKENDS` in

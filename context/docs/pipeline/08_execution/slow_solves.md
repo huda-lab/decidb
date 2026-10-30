@@ -83,6 +83,8 @@ block has two shapes, split on `has_solution`:
     best objective so far: 147235  (within 0.09% of the best possible)
     elapsed 300s · peak memory 1.2 GB
   ```
+  The gap prints with two significant digits (`FormatDecideGapPercent`), so a gap of 2e-6 reads "0.0002%", not a
+  "0.00%" that contradicts "not proven best"; from 1% up it keeps the whole number ("99.9", "100").
 - **No solution yet (path 2):**
   ```
   DECIDE hit the 300s time limit without finding a solution yet.

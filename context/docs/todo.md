@@ -24,14 +24,10 @@ posting the HiGHS report (§ 3), and the original measurement work (§ 4).
   returns a basis primal simplex repairs for 79 s; 1.13.1 solves the same LP in 1.4 s. Record in
   `third_party/highs/README.md`, `pipeline/07_solver/done.md`, `issues/highs_upstream.md`,
   `performance/benchmarking/direct_solve.md`.
-- [ ] Diagnostics ready to capture: no raw solver status in a message, a small gap printed truthfully, and
-  `benchmark/decide/diagnose_examples/run.py` recording DIAGNOSE for a corpus reaching every `edit_source`. Record in
-  `pipeline/07_solver/done.md`, `diagnostics/README.md`.
-
 - [ ] BUG-29..32 DIAGNOSE output the example runner found wrong — issues/bugs.md § BUG-29 to BUG-32
   - Ruled (owner's delegate, 2026-10-30): `achievable_objective` is the objective as written, constant included; a
-    printed amount rounds outward so the edit as printed restores feasibility. One batch (diagnosis), after the
-    diagnostics capture lands; the runner's report is the check. Record in `diagnostics/` per kind.
+    printed amount rounds outward so the edit as printed restores feasibility. One batch (diagnosis); the report of
+    `benchmark/decide/diagnose_examples/run.py` is the check. Record in `diagnostics/` per kind.
 - [ ] BUG-33 HiGHS fails or answers wrongly on a column bound or objective outside its window — issues/bugs.md § BUG-33
   - Ruled: scale column bounds and the objective into HiGHS's window as rows are. After the HiGHS upgrade. Record in
     `pipeline/07_solver/done.md` (HiGHS backend).
