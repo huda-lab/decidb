@@ -541,10 +541,33 @@ dying at `passModel` — and the scaling is capped so a bound that was represent
 representable. A rescue that deletes a row would be the same silent model change the
 dropped coefficient was.
 
+**A column and the objective are placed by the same rule.** A column bound has HiGHS's
+`infinite_bound` too: `x >= 1e25` is a floor Gurobi solves at x = 1e25, and `passModel`
+refuses it. Such a column is scaled, x = 2^e·x' (LP column scaling): its bounds are
+divided by 2^e and its matrix entries, cost and Hessian entries multiplied, before the
+rows are scaled, so the row scaling places the entries the column moved. Only a column
+with a closed bound past `infinite_bound` is scaled, and only as far as that bound needs.
+Its other side is open (a floor past `infinite_bound` leaves no finite ceiling) and is
+passed as HiGHS's infinity, because the 1e30 sentinel divided by 2^e would land inside the
+window as a real bound. The same magnitude on the open side (`x <= 1e25`) means "no bound"
+to DeciDB and to HiGHS alike, and stays as it is. Integer columns scale exactly: every
+double at or above 1e20 is a multiple of any power of two the rule picks.
+
+The objective is multiplied by one power of two, which moves no optimum: the Hessian
+entries play the row's coefficients (`passHessian` refuses one at or above
+`large_matrix_value` and drops one at or below `small_matrix_value`, so `1e-12 *
+POWER(x - 1, 2)` was minimised as 0), and the largest linear cost plays the row's bound
+(HiGHS reads a cost at or above `infinite_cost`, 1e20, as infinite). Readback multiplies
+each column value by its 2^e and divides the objective value and the MIP dual bound by
+the objective's factor; the MIP gap is relative and unchanged. The objective's constant
+is not part of this: it never reaches a solver (§ 6).
+
 Two rows cannot be placed inside the window at all, and both are refused in SQL terms
 naming the clause as the user wrote it, rather than reaching HiGHS: one whose own
 coefficients span more than the window's ~24 orders of magnitude, and one whose bound
-would have to cross `infinite_bound` to get the coefficients in. Scaling gets an extreme
+would have to cross `infinite_bound` to get the coefficients in. An objective whose
+Hessian entries span the window, or whose costs would cross `infinite_cost`, is refused
+the same way, naming the objective. Scaling gets an extreme
 row *loaded*; it does not make it well-conditioned. A Big-M of 4e15 is numerically
 untrustworthy on any solver, which is a separate concern from whether the API accepts it.
 
@@ -555,8 +578,11 @@ exactly, cannot be told from that sentinel by magnitude. Reading it from the cla
 what keeps a real limit from being mistaken for "no bound" and passed through to the
 internal error this exists to prevent.
 
-`passModel` and `passHessian` therefore throw only on `kError`, never on `kWarning` — the
-same split `RunAndReadback` makes at `run()`. `kWarning` is HiGHS reporting a condition it
+`passModel` and `passHessian` therefore stop only on `kError`, never on `kWarning` — the
+same split `RunAndReadback` makes at `run()`. With every row, column and the objective
+placed in the window, no query DeciDB knows reaches a `kError` there; HiGHS's input
+checks are its own and broader than the window, so one is still reported as a solve
+HiGHS could not run (OTHER), never as an internal error. `kWarning` is HiGHS reporting a condition it
 expects the caller to proceed through: a dropped sub-tolerance entry, or an inconsistent
 bound pair left in place so the solve can deduce infeasibility from it. Treating those as
 fatal turned an ordinary query into an `InternalException` with a stack trace, and made a

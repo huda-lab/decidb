@@ -11,18 +11,16 @@ at a time.
 
 ## Where things stand (2026-10-30)
 
-Every bug filed up to BUG-32 is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same
+Every bug filed up to BUG-33 is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same
 answer on both backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md`
 § PERF-1) found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that
-sorted every input row). What remains: three bugs (§ 1; BUG-33 in progress), two slowdowns left from September (§ 2),
+sorted every input row). What remains: three bugs (§ 1), two slowdowns left from September (§ 2),
 posting the HiGHS report (§ 3), and the original measurement work (§ 4).
 
 ## 1. Bugs
 
-- [ ] BUG-33 HiGHS fails or answers wrongly on a column bound or objective outside its window — issues/bugs.md § BUG-33
-  - Ruled: scale column bounds and the objective into HiGHS's window as rows are. HiGHS is now 1.15.1. Record in
-    `pipeline/07_solver/done.md` (HiGHS backend).
 - [ ] BUG-35, BUG-36 Repair amounts below 1e-5 dropped; 1e7 and above unrounded — issues/bugs.md § BUG-35, BUG-36
+- [ ] BUG-37 A refused row quotes a column-scaled coefficient — issues/bugs.md § BUG-37
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 

@@ -1,13 +1,5 @@
 # Known bugs
 
-## BUG-33 — HiGHS fails or answers wrongly on a column bound or objective outside its window
-
-- **Observed:** HiGHS refuses `x >= 1e25` and `MINIMIZE SUM(1e16 * POWER(x - 1, 2))` (a load error), which Gurobi
-  solves; and `x BETWEEN 0 AND 10 MINIMIZE SUM(1e-12 * POWER(x - 1, 2))` (direct solve off) returns x = 0 on HiGHS,
-  1 on Gurobi: the Hessian entries are below HiGHS's small-value threshold and are dropped.
-- **Fix (to rule):** scale column bounds and the objective into HiGHS's window, as `ScaleRowsIntoHighsWindow` does for
-  rows, and unscale the answer. After the HiGHS upgrade (queue § 1), whose thresholds may differ.
-
 ## BUG-35 — A needed repair amount below 1e-5 is dropped
 
 - **Observed:** the absolute edit floor (`diagnostics/infeasible/done.md` § What the widening costs) drops a slack
@@ -20,6 +12,13 @@
 - **Observed:** `SnapToPrecision` returns values at or above 1e7 as they are, so an amount like 12345678.90123 prints
   every digit.
 - **Fix (to rule):** render at the same significant-figure precision as smaller amounts.
+
+## BUG-37 — A refused row quotes a coefficient the user did not write
+
+- **Observed:** on HiGHS, `x >= 1e29` with `SUM(x + w*y) >= 0` and w = 1e-16 is refused correctly (no scaling places
+  the row once `x`'s column is scaled), but the message quotes "1e-16 to 1.07374e+09": the second number is `x`'s
+  coefficient after its column scale. The same can happen in the objective through Hessian entries scaled by 2^2e.
+- **Fix (to rule):** a refusal whose row holds a scaled column names that decision's bound as the cause.
 
 ## Limitations (not bugs)
 
