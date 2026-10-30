@@ -28,14 +28,3 @@ LogicalWindows above the DECIDE source, the shape PERF-3 replaces: each window h
 one value per group. Measure the cost on a 1M-row clause with a data-bound RHS first; if it matters, the fix is
 PERF-3's shape, an aggregate over the columns the bound reads on a second read of the source (`DirectSourceReader`),
 joined back by its group key.
-
-## PERF-16 — DECIDE-built trees miss constant folding
-
-DuckDB folds constants in `EXPRESSION_REWRITER` (`optimizer.cpp:124`), before `DECIDE_OPTIMIZER` (:147), so the
-trees DECIDE builds are never folded. Stage 08 folds the trees it evaluates once (`TransformToChunkExpression`);
-direct-solve plans are not folded. One fold must not run on each `ExpressionBuilder::Out` call: `GuardCoefficients`
-(`direct_ir.cpp:263`) wraps each IR coefficient in a CASE built there, and a message renders through that CASE, so
-folding there prints a written `2 * w` as `2.0 * w`. Proposal: name each coefficient before it is guarded, then fold
-the finished direct plan once (`error()` is volatile and never folds). Measure Q1, Q4 and P4 before and after:
-DuckDB evaluates a constant subtree once per chunk, so the gain may be under a millisecond; if nothing moves, record
-that and close.

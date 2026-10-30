@@ -281,6 +281,12 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   each against the build with BUG-40 fixed: passing 0.98 → 0.56 s and 1,543 → 817 MiB; failing 0.42 → 0.07 s and
   1,476 → 436 MiB, same message. A key that
   holds a decision's own key plans no check of it (FD reflexivity).
+- **Constant folding of direct-solve plans (PERF-16, closed with no change).** DuckDB folds constants before the
+  DECIDE optimizer runs, so the trees a direct rule builds are not folded. A fold over the finished direct plan
+  (`ExpressionRewriter` with `ConstantFoldingRule`, after `Apply`) does fold them (`CAST(100 AS DOUBLE)` → `100.0`)
+  and saves nothing: on 1M lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s
+  and 0.315 → 0.326 s, S1 0.044 → 0.044 s. DuckDB evaluates a constant subtree once per chunk, so per-row cost does not
+  depend on it. Messages are rendered before `Apply`, so a fold there would change none.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data
