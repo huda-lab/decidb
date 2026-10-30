@@ -177,6 +177,26 @@ def run_one(name: str, path: Path, backend: str, repeat: int) -> dict:
     return row
 
 
+def objective_disagreements(rows: list[dict]) -> dict[str, list[tuple]]:
+    """The queries whose solved runs report different optima, with each run's (backend, repeat, objective).
+
+    Every `ok` run of a query solves the same model to optimality (the MIP gap is 0), so its runs on either backend
+    must agree up to DeciDB's feasibility tolerance (DECIDE_FEASIBILITY_TOLERANCE, 1e-6), relative to the objective's
+    size. A run that disagrees answered wrongly, however fast. A model built wrongly on both backends agrees with
+    itself; the oracle suite catches that.
+    """
+    solved = defaultdict(list)
+    for row in rows:
+        if row["status"] == "ok" and row["objective"] not in (None, ""):
+            solved[row["query"]].append((row["backend"], int(row["repeat"]), float(row["objective"])))
+    found = {}
+    for query, runs in solved.items():
+        values = [objective for _, _, objective in runs]
+        if max(values) - min(values) > 1e-6 * max(1.0, *(abs(value) for value in values)):
+            found[query] = runs
+    return found
+
+
 def main() -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
     queries = discover()
@@ -200,6 +220,8 @@ def main() -> None:
                     writer.writeheader()
                     writer.writerows(rows)
     print(f"\n{len(rows)} runs -> {CSV_PATH}")
+    for query, runs in objective_disagreements(rows).items():
+        print(f"  {query}: solved runs disagree on the optimum: {runs}")
 
 
 if __name__ == "__main__":

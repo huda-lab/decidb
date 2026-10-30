@@ -79,6 +79,24 @@ def test_profile_counts_a_span_inside_its_own_name_once():
     assert PROFILE.parse_profile(text)["phases"] == {"canonicalize.objective": 7, "other": 4}
 
 
+def test_objective_check_flags_solved_runs_that_disagree():
+    def run(query, backend, repeat, status, objective):
+        return {"query": query, "backend": backend, "repeat": str(repeat), "status": status, "objective": objective}
+
+    rows = [
+        # Agree within the feasibility tolerance, relative to the objective's size.
+        run("A", "gurobi", 0, "ok", "2734.3439230424947"),
+        run("A", "highs", 0, "ok", 2734.343975828404),
+        # A run stopped at the limit reports an incumbent, not an optimum; a run with no objective has nothing to say.
+        run("A", "highs", 1, "solver_limit", "41948.4"),
+        run("A", "gurobi", 1, "ok", ""),
+        # Disagree by more than the tolerance.
+        run("B", "gurobi", 0, "ok", 5648901157.23),
+        run("B", "highs", 0, "ok", 5648867902.25),
+    ]
+    assert PROFILE.objective_disagreements(rows) == {"B": [("gurobi", 0, 5648901157.23), ("highs", 0, 5648867902.25)]}
+
+
 def test_profile_ignores_events_outside_the_measured_query():
     events = [{"event": "end", "id": 1, "parent": 0, "name": "setup", "duration_ms": 99}]
     noise = "\n".join("DECIDB_PROFILE: " + json.dumps(event) for event in events)
