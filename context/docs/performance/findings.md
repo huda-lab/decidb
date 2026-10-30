@@ -62,6 +62,13 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms. Q8's peak RSS 1,172 → about 860 MiB.
 - **A `when` read once per part (PERF-10, part).** `KeepRowsWhere` scanned the data once per AND or OR part; it now
   scans once. Q1 `when_per_and_qualifiers` 218 → 165-174 ms.
+- **Extraction passes since September (PERF-10).** Measured alone, medians of 3 at `large` on Gurobi, two interleaved
+  rounds against the build before. A NULL-skip filter that keeps every row the clause reads (a NULL test on data with no
+  NULL) now counts as no filter, so an ungrouped clause no longer carries a 1M-row group list or a CSR for it (DuckDB's
+  ValidityMask idea: allocate nothing while every row is valid); a `per K:` class check reads the cached grouping and
+  stops at the first kept row with a class instead of renumbering every row; a clause's term conditions are read in one
+  scan; the kept rows' groups are built only under DIAGNOSE, their one reader. `extraction.constraint` Q1 312 → 217 ms,
+  Q4 210 → 156, P4 134 → 123; `assembly.implied_bounds` Q1 61 → 49, Q4 and P4 unchanged.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

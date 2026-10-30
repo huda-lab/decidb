@@ -22,7 +22,8 @@ Every filed bug is fixed.
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 
-- [ ] PERF-10 Extraction: constraint setup and implied bounds still slower on Q1 — performance/todo.md § PERF-10
+- [ ] PERF-10 Implied bounds, the admitted interval and setup still slower; four proposals to rule —
+  performance/todo.md § PERF-10
 
 Q8's keyed mapping (PERF-9) is back to 257 ms, group keys are formatted only when printed (PERF-12), and Q3/Q10's memory
 peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2026-09-09).

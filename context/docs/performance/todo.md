@@ -53,10 +53,23 @@ the cause with the profile spans (`profile_pipeline.py`
 raw `profile.json`, one query at `large`), fix it if it is a defect, else record why the cost is needed. Record in
 `findings.md`, and in the owning stage's `done.md` if code changes.
 
-### PERF-10 — Extraction grew 40-240 ms on most queries
+### PERF-10 — Implied bounds, the admitted interval and setup still slower than September
 
-Median `extraction_ms` grew on Q4 (+237), Q6 (+161), Q1 (+133), P4 (+116), Q10 (+88), Q2 and P1 (+45). Group ids
-and the `when` scan are fixed (`findings.md` § Regressions since 2026-09-09). Left: `extraction.constraint_setup`
-(Q1 34 → 88 ms) and `assembly.implied_bounds` (Q1 14 → 59 ms, still 61-75 ms after the shared row lists). Rerun Q1,
-Q4 and P4 at `large` alone on the current build (the 2026-10-30 timings ran beside other work, load 8-18). Expected:
-one cause per span, or the work each needs.
+After the extraction fixes (`findings.md` § Regressions since 2026-09-09), measured alone at `large`: implied bounds Q1
+13.6 → 49 ms, Q4 14 → 49, P4 7 → 25; Q4's `extraction.rhs` 74 ms per 1M rows; Q1's linear coefficients 31 ms against
+15.6; a grouped clause's group view 13-19 ms against about 7.5. Causes and proposals, each to rule:
+
+- Implied bounds (78ef6ec5bf): every emitted row goes through `AccumulateClauseRow` and `Flush` (Q1: accumulate 14,
+  flush 10, bound loop 12, instance loop 5 ms); the CSR moved here from the builder, whose time fell about as much.
+  Proposal: build each clause's emitted rows once as a CSR shared by implied bounds, the `<>` expansion and the builder
+  (late materialization). Changes no result.
+- The admitted interval (5fdd4659c5): an easy MAX's `AdmittedInterval` is two CASE trees evaluated per row with
+  nothing shared. Proposal: evaluate both ends in one projection through DuckDB's common-subexpression elimination.
+- The NULL test: about 5 ms per clause scanning for it, and the objective sites still carry identity NULL-test filters
+  (Q1 `evaluate_objective` 24 → 32 ms). Proposal: drop the test at plan time where DuckDB's statistics prove the column
+  never NULL, as `StatisticsPropagator` folds `IS NOT NULL`; the objective sites treat an identity filter as none, as
+  the constraint sites now do.
+- Term filters read on the kept rows only (`KeepChunkRowsWhere` / `ExecuteOnReadRows`, a per-row `vector<bool>`
+  selection): 9-30 ms. A `SelectionVector` path is faster, but DuckDB's conjunction `Select` reorders AND/OR operands
+  adaptively, and DECIDE reads them left to right; a design trade-off.
+- The `masks[i].size() != num_rows` InternalException in `EvaluateConstraints` cannot fire: delete it.
