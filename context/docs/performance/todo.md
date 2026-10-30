@@ -45,6 +45,14 @@ Q4's `execution.evaluate_composed` takes 495 ms on Gurobi and on HiGHS, the larg
 (`findings.md` § Input and extraction). No cause is found yet: find where the time goes inside the evaluation before
 proposing a change.
 
+## PERF-15 — RHS-bound windows hold every source column
+
+The bounds a clause's right-hand side reads from data (`decide_rewrite_rhs_window.cpp`) are a stack of
+LogicalWindows above the DECIDE source, the shape PERF-3 replaces: each window holds every source column to attach
+one value per group. Measure the cost on a 1M-row clause with a data-bound RHS first; if it matters, the fix is
+PERF-3's shape, an aggregate over the columns the bound reads on a second read of the source (`DirectSourceReader`),
+joined back by its group key.
+
 ## Regressions since the 2026-09-09 sweep
 
 The 2026-10-30 large sweep (PERF-1) against the 2026-09-09 one, on Gurobi, where every run finishes in both: total
