@@ -4699,6 +4699,8 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
     if (rowsizeInteger[row] ==
         (model->integrality_[col] == HighsVarType::kInteger ? 1 : 0))
       return Result::kOk;
+    // DeciDB patch (BUG-34)
+    HPRESOLVE_CHECKED_CALL(countRowScan(rowsize[row]));
     // check lhs and rhs for finiteness
     bool lhsFinite = model->row_lower_[row] != -kHighsInf;
     bool rhsFinite = model->row_upper_[row] != kHighsInf;
@@ -5157,6 +5159,11 @@ HPresolve::Result HPresolve::singletonColStuffing(
   auto checkRow = [&](HighsInt row, double rhs, HighsInt direction) {
     // skip row if rhs is not finite
     if (direction * rhs == kHighsInf) return Result::kOk;
+
+    // DeciDB patch (BUG-34): checkCandidates scans the row once, or twice when
+    // it retries without integer candidates; counting one scan keeps the checks
+    // at most 2^21 scanned entries apart
+    HPRESOLVE_CHECKED_CALL(countRowScan(rowsize[row]));
 
     // vectors for candidates and activity bounds
     std::vector<candidate> candidates;
@@ -6109,6 +6116,21 @@ HPresolve::Result HPresolve::checkTimeLimit() {
   assert(timer);
   if (options->time_limit < kHighsInf && timer->read() >= options->time_limit)
     return Result::kStopped;
+  return Result::kOk;
+}
+
+// DeciDB patch (BUG-34): dual fixing's substitution and singleton column
+// stuffing each scan a whole row once per column of it, so a long row makes
+// them quadratic with no reduction, and checkLimits runs only after a
+// reduction; they call this before each scan. Tested by
+// test_highs_limit_bounds_parallel_columns.
+HPresolve::Result HPresolve::countRowScan(HighsInt numEntries) {
+  const int64_t kEntriesPerTimeCheck = int64_t{1} << 20;
+  const int64_t before = numRowEntriesScanned;
+  numRowEntriesScanned += numEntries;
+  if (before / kEntriesPerTimeCheck !=
+      numRowEntriesScanned / kEntriesPerTimeCheck)
+    return checkTimeLimit();
   return Result::kOk;
 }
 

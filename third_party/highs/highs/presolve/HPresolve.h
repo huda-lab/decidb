@@ -123,6 +123,9 @@ class HPresolve {
 
   std::vector<uint16_t> numProbes;
 
+  // DeciDB patch (BUG-34): the row entries counted by countRowScan
+  int64_t numRowEntriesScanned = 0;
+
   int64_t probingContingent;
   HighsInt probingNumDelCol;
   HighsInt numProbed;
@@ -338,6 +341,10 @@ class HPresolve {
   Result removeSlacks(HighsPostsolveStack& postsolve_stack);
 
   Result checkTimeLimit();
+
+  // DeciDB patch (BUG-34): counts numEntries row entries a pass is about to
+  // scan and checks the time limit once per 2^20 counted entries
+  Result countRowScan(HighsInt numEntries);
 
   Result checkLimits(HighsPostsolveStack& postsolve_stack);
 

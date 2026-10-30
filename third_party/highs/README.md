@@ -31,4 +31,7 @@ Each patch's edits are marked `DeciDB patch (<id>)` in the source. Why each exis
 - `0005-BUG-28` (`presolve/HPresolve.cpp`): the parallel rows and columns pass stops at the time limit.
 - `0006-PERF-H1` (`presolve/HPresolve.cpp`): dual fixing's substitution skips a row with no integer column other than
   the one it substitutes for, where its scan finds no binary; per column, that scan made presolve quadratic in a long
-  row.
+  row. It makes the same reductions in the same order.
+- `0007-BUG-34` (`presolve/HPresolve.*`): dual fixing's substitution and singleton column stuffing, which still scan a
+  long row once per column of it when the row has other integer columns, stop at the time limit; they check it once
+  per 2^20 scanned row entries.
