@@ -967,21 +967,33 @@ struct TermFilterSlot {
 
 //! Reads each slot's filter among `read` (every row when null), all in one scan (KeptRowsOfEach), into its state. A
 //! filter that keeps every row it reads (a NULL test on data with no NULL) filters nothing: the state keeps no filter,
-//! and the term reads like one written without it.
+//! and the term reads like one written without it. A filter known to be TRUE before any row is read (a NULL test the
+//! statistics decided, StatisticsPropagator::FoldSkipNullTests) is not read at all.
 static void ReadTermFilters(const vector<TermFilterSlot> &slots, const vector<bool> *read,
                             ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
                             idx_t num_rows) {
+	vector<const TermFilterSlot *> unknown;
 	vector<const Expression *> conditions;
 	for (auto &slot : slots) {
+		Value verdict;
+		if (slot.condition->IsFoldable() && ExpressionExecutor::TryEvaluateScalar(context, *slot.condition, verdict) &&
+		    !verdict.IsNull() && verdict.GetValue<bool>()) {
+			continue;
+		}
+		unknown.push_back(&slot);
 		conditions.push_back(slot.condition);
 	}
+	if (conditions.empty()) {
+		return;
+	}
+	DecideProfileScope profile("extraction.term_filters");
 	auto masks = KeptRowsOfEach(conditions, read, chunk_expr_cache, context, data, num_rows);
-	for (idx_t i = 0; i < slots.size(); i++) {
+	for (idx_t i = 0; i < unknown.size(); i++) {
 		bool keeps_every_read_row =
 		    read ? masks[i] == *read : std::find(masks[i].begin(), masks[i].end(), false) == masks[i].end();
 		if (!keeps_every_read_row) {
-			slots[i].state->mask = std::move(masks[i]);
-			slots[i].state->has_filter = true;
+			unknown[i]->state->mask = std::move(masks[i]);
+			unknown[i]->state->has_filter = true;
 		}
 	}
 }

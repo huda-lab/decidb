@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   propagate_aggregate.cpp
   propagate_cross_product.cpp
+  propagate_decide.cpp
   propagate_filter.cpp
   propagate_get.cpp
   propagate_limit.cpp

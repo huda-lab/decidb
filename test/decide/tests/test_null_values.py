@@ -205,3 +205,33 @@ def test_a_null_factor_on_an_unreduced_objective_term_drops_only_that_term(decid
     optimum = _optimum(oracle_solver, "null_unreduced_objective", [("u", VarType.INTEGER, 0, 3)], build)
     assert len({row[1] for row in rows}) == 1
     assert 2.0 * rows[0][1] == pytest.approx(optimum)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("c_on_row_2, reads_the_test", [(4.0, False), (None, True)], ids=["never_null", "null"])
+def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver, c_on_row_2, reads_the_test):
+    """`SUM(c * x)` skips a row whose `c` is NULL. On a table whose statistics prove `c` never NULL, the test is decided
+    before the query runs and no filter is read (no `extraction.term_filters` span); with a NULL on row 2 it is read
+    and skips that row. Either way the answer reaches the oracle's optimum."""
+    rows = [(i, c_on_row_2 if i == 2 else c, p) for i, c, p in ROWS]
+    values = ", ".join(f"({i}, {'NULL' if c is None else c}::DOUBLE, {p})" for i, c, p in rows)
+    sql = f"""SET decide_direct_solve='off';
+        CREATE TEMP TABLE w AS FROM (VALUES {values}) t(id, c, p);
+        SELECT id, x FROM (FROM w DECIDE x(INT) SUCH THAT x <= 3 AND SUM(c * x) <= 4 MAXIMIZE SUM(p * x)) q
+        ORDER BY id"""
+    cli = decidb_cli.without_verify_serializer()
+    profiled = cli.with_env({"DECIDB_PROFILE": "1"}).execute_raw(sql)
+    assert profiled.returncode == 0, profiled.stderr
+    reads = [line for line in profiled.stderr.splitlines() if '"event":"begin"' in line and "term_filters" in line]
+    assert bool(reads) == reads_the_test, profiled.stderr
+    answer = {row[0]: row[1] for row in cli.execute(sql)[0]}
+
+    def build(oracle):
+        oracle.add_constraint({f"x_{i}": c for i, c, _ in rows if c is not None}, "<=", 4.0)
+        oracle.set_objective({f"x_{i}": p for i, _, p in rows}, ObjSense.MAXIMIZE)
+
+    variables = [(f"x_{i}", VarType.INTEGER, 0, 3) for i, _, _ in rows]
+    optimum = _optimum(oracle_solver, f"null_test_decided_{reads_the_test}", variables, build)
+    assert sum(c * answer[i] for i, c, _ in rows if c is not None) <= 4.0 + TOLERANCE
+    assert sum(p * answer[i] for i, _, p in rows) == pytest.approx(optimum)
