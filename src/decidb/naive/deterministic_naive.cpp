@@ -235,13 +235,11 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
 class HighsSession : public SolverSession {
 public:
     SolverResult Solve(const SolverModel &model, double time_limit_seconds) override {
-        if (!Load(model)) {
-            // An integer column whose bounds hold no whole number: the model is empty.
-            SolverResult result;
-            result.status = SolverStatus::INFEASIBLE;
-            return result;
-        }
-        return RunAndReadback(time_limit_seconds);
+		SolverResult not_loaded;
+		if (!Load(model, not_loaded)) {
+			return not_loaded;
+		}
+		return RunAndReadback(time_limit_seconds);
     }
 
     SolverResult Continue(double time_limit_seconds) override {
@@ -271,13 +269,13 @@ private:
     //! defaults (0 / nan) that must not be read back as a proven bound.
     bool is_mip = false;
 
-    //! Load `model` into `highs`; false, loading nothing, when an integer column's bounds
-    //! hold no whole number.
-    bool Load(const SolverModel &model);
-    SolverResult RunAndReadback(double time_limit_seconds);
+	//! Load `model` into `highs`. False when the model cannot be run, with `not_loaded` holding the solve's result:
+	//! INFEASIBLE when an integer column's bounds hold no whole number, OTHER when HiGHS refuses the model.
+	bool Load(const SolverModel &model, SolverResult &not_loaded);
+	SolverResult RunAndReadback(double time_limit_seconds);
 };
 
-bool HighsSession::Load(const SolverModel &model) {
+bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
     DecideProfileScope profile("highs.load");
     DecideProfileScope phase("highs.variable_types");
     total_vars = model.num_vars;
@@ -382,7 +380,8 @@ bool HighsSession::Load(const SolverModel &model) {
         lp.col_lower_[i] = std::ceil(lp.col_lower_[i] - DECIDE_INTEGRALITY_TOLERANCE);
         lp.col_upper_[i] = std::floor(lp.col_upper_[i] + DECIDE_INTEGRALITY_TOLERANCE);
         if (lp.col_lower_[i] > lp.col_upper_[i]) {
-            return false;
+			not_loaded.status = SolverStatus::INFEASIBLE;
+			return false;
         }
     }
     lp.row_lower_ = row_lower;
@@ -421,19 +420,22 @@ bool HighsSession::Load(const SolverModel &model) {
 
     phase.Next("highs.pass_model");
     HighsStatus status = highs.passModel(lp);
-    // `passModel` returns kWarning for conditions it expects the caller to proceed
-    // through — a matrix entry dropped for being sub-tolerance, an inconsistent bound
-    // pair left in place so the solve can deduce infeasibility from it. Treating those as
-    // fatal turned an ordinary query into an internal error with a stack trace. Throw only
-    // on a genuine kError, the same split `RunAndReadback` already makes at `run()`.
-    //
-    // The dropped-coefficient case should no longer arrive here at all: every row is
-    // scaled into the window above, and the model builder strips exact zeros, so there is
-    // nothing left below the threshold to drop. Proceeding is still the right response if
-    // one appears.
-    if (status == HighsStatus::kError) {
-        throw InternalException("Failed to pass model to HiGHS: status %d", (int)status);
-    }
+	// `passModel` returns kWarning for conditions it expects the caller to proceed
+	// through — a matrix entry dropped for being sub-tolerance, an inconsistent bound
+	// pair left in place so the solve can deduce infeasibility from it. Treating those as
+	// fatal turned an ordinary query into an internal error with a stack trace. Only a
+	// kError stops here, and it is a solve HiGHS could not run — a column bound past its
+	// `infinite_bound`, say — reported as OTHER exactly as `RunAndReadback` reports a
+	// kError from `run()`, with no status text: HiGHS never reached a model status.
+	//
+	// The dropped-coefficient case should no longer arrive here at all: every row is
+	// scaled into the window above, and the model builder strips exact zeros, so there is
+	// nothing left below the threshold to drop. Proceeding is still the right response if
+	// one appears.
+	if (status == HighsStatus::kError) {
+		not_loaded.status = SolverStatus::OTHER;
+		return false;
+	}
 
     //===--------------------------------------------------------------------===//
     // 3b. Add quadratic objective (Hessian) if present
@@ -496,14 +498,15 @@ bool HighsSession::Load(const SolverModel &model) {
         status = highs.passHessian((HighsInt)total_vars, (HighsInt)num_nz,
                                    (HighsInt)HessianFormat::kTriangular,
                                    q_start.data(), q_index.data(), q_value.data());
-        // Same kWarning/kError split as `passModel` above: `assessHessian` drops
-        // sub-tolerance entries of the normalised Hessian and warns, which is a report
-        // rather than a failure. Row scaling does not reach here — it rewrites constraint
-        // rows, and the Hessian is the objective.
-        if (status == HighsStatus::kError) {
-            throw InternalException("Failed to pass quadratic objective (Hessian) to HiGHS: status %d",
-                                    (int)status);
-        }
+		// Same kWarning/kError split as `passModel` above: `assessHessian` drops
+		// sub-tolerance entries of the normalised Hessian and warns, which is a report
+		// rather than a failure. Row scaling does not reach here — it rewrites constraint
+		// rows, and the Hessian is the objective — so an entry past HiGHS's ceiling is a
+		// kError, reported as `passModel`'s is.
+		if (status == HighsStatus::kError) {
+			not_loaded.status = SolverStatus::OTHER;
+			return false;
+		}
     }
     return true;
 }
@@ -540,8 +543,8 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
     // or DIAGNOSE takes it, instead of an INTERNAL error that ends the session.
     if (status == HighsStatus::kError) {
         SolverResult result;
-        result.raw_status = (int)highs.getModelStatus();
-        result.status = SolverStatus::OTHER;
+		result.status_text = highs.modelStatusToString(highs.getModelStatus());
+		result.status = SolverStatus::OTHER;
         return result;
     }
 
@@ -555,7 +558,7 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
         // (no solution). The operator either surfaces the default error for an
         // unprefixed statement or routes it to diagnosis under DIAGNOSE.
         SolverResult result;
-        result.raw_status = (int)model_status;
+		result.status_text = highs.modelStatusToString(model_status);
         switch (model_status) {
         case HighsModelStatus::kInfeasible:
             result.status = SolverStatus::INFEASIBLE;

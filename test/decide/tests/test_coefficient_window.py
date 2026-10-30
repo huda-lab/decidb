@@ -35,7 +35,11 @@ Covers:
   - test_a_bound_no_scaling_can_reach_is_refused: 1e40 is not the 1e30 sentinel
   - test_a_row_spanning_the_window_is_refused_in_sql_terms: scaling has a limit
   - test_a_bound_too_large_to_scale_is_refused_in_sql_terms: so does the bound it carries
+  - test_a_model_highs_refuses_to_load_fails_as_a_solve: a column bound or Hessian entry no row scaling reaches
+  - test_a_repair_model_highs_refuses_to_load_is_reported_as_such: and under DIAGNOSE, no false "no repair"
 """
+
+import re
 
 import pytest
 
@@ -312,3 +316,59 @@ def test_a_bound_too_large_to_scale_is_refused_in_sql_terms(decidb_cli_highs):
         match=r"sets a limit of 1e\+19 .* coefficients as small as 1e-12",
         expect_large_numbers=True,
     )
+
+
+# A column bound and a Hessian entry have windows of their own, and row scaling reaches neither: `passModel` refuses a
+# column lower bound at or above `infinite_bound`, `passHessian` an entry at or above `large_matrix_value`. HiGHS never
+# runs, so there is no status to quote: the query fails as a solve HiGHS could not finish, never as a status number.
+_STATUS_NUMBER = re.compile(r"\((?:solver status )?-?\d+\)|status -?\d")
+
+
+@pytest.mark.edge_case
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "objective_and_clause",
+    [
+        ("SUM(x)", "x >= 1e25"),
+        ("SUM(1e16 * POWER(x - 1, 2))", "x BETWEEN 0 AND 10"),
+    ],
+    ids=["pass_model", "pass_hessian"],
+)
+def test_a_model_highs_refuses_to_load_fails_as_a_solve(decidb_cli_highs, objective_and_clause):
+    """Both load refusals end the query with the ordinary solve-failed message naming HiGHS.
+
+    They used to raise `INTERNAL Error: Failed to pass model to HiGHS: status -1`, which also ended the session. Direct
+    solve is off, or A1 would answer the quadratic one without HiGHS.
+    """
+    objective, clause = objective_and_clause
+    cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    result = cli.execute_raw(
+        f"SELECT id, x FROM (VALUES (1),(2)) t(id) DECIDE x(REAL) SUCH THAT {clause} MINIMIZE {objective}",
+        expect_large_numbers=True,
+    )
+    output = result.stderr + result.stdout
+    assert "DECIDE optimization failed: HiGHS could not solve this model." in output, output[:500]
+    assert "INTERNAL" not in output and not _STATUS_NUMBER.search(output), output[:500]
+
+
+@pytest.mark.edge_case
+@pytest.mark.query_diagnostics
+def test_a_repair_model_highs_refuses_to_load_is_reported_as_such(decidb_cli_highs):
+    """A repair model HiGHS cannot load is no answer about the repair.
+
+    `x BETWEEN 0 AND 5 AND x >= 8` is infeasible on its bounds alone, so the query's own model never reaches HiGHS; the
+    repair model carries the objective, whose Hessian HiGHS refuses. Read as an answer, that refusal reported "no
+    loosening of the clauses you wrote restores feasibility", which `x >= 5` refutes.
+    """
+    rows, cols = decidb_cli_highs.execute(
+        """
+        DIAGNOSE SELECT id, x FROM (VALUES (1),(2)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT x BETWEEN 0 AND 5 AND x >= 8
+        MINIMIZE SUM(1e16 * POWER(x - 1, 2))
+    """,
+        expect_large_numbers=True,
+    )
+    change = cols.index("suggested_change")
+    assert any("could not analyse the repair model" in str(r[change]) for r in rows), rows
+    assert not any("no loosening" in str(r[change]) for r in rows), rows

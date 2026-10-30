@@ -547,7 +547,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	return result;
 }
 
-void ThrowDecideSolveError(const SolverResult &result) {
+void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend) {
     // A query with no DIAGNOSE prefix reports its state and stops. It does not name a
     // clause and does not suggest a repair — working either out means running the
     // diagnosis engines, which is exactly what the prefix asks for and what an
@@ -581,7 +581,11 @@ void ThrowDecideSolveError(const SolverResult &result) {
         // flags any future addition; control still reaches the throw below.)
         break;
     }
-    throw InvalidInputException("DECIDE optimization failed (solver status %d).", result.raw_status);
+	// No state to name: the solver stopped without an answer. Say which solver, in its own words when it has some,
+	// never by a status number the user cannot look up.
+	string reason = result.status_text.empty() ? string() : " (" + result.status_text + ")";
+	throw InvalidInputException("DECIDE optimization failed: %s could not solve this model%s.", backend.DisplayName(),
+	                            reason);
 }
 
 } // namespace duckdb

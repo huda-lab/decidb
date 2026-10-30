@@ -2095,7 +2095,7 @@ def test_highs_qp_it_cannot_finish_is_an_ordinary_error(decidb_cli_highs):
     end strictly inside their bounds: here about half of 9,000 rows have a cap
     above the target of 5,000. ``HighsSession`` reports that ``kError`` as a
     failed solve (``deterministic_naive.cpp``), so the query raises
-    ``DECIDE optimization failed`` and the session survives. Direct solve is off,
+    ``DECIDE optimization failed``, naming HiGHS, and the session survives. Direct solve is off,
     or A1 would answer the query without HiGHS.
     """
     cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
@@ -2110,6 +2110,9 @@ def test_highs_qp_it_cannot_finish_is_an_ordinary_error(decidb_cli_highs):
     output = result.stderr + result.stdout
     assert "DECIDE optimization failed" in output, output[:500]
     assert "INTERNAL" not in output, output[:500]
+    # The solver is named and quoted in its own words (HiGHS's model-status text), never by a status number.
+    assert "HiGHS could not solve this model (" in output, output[:500]
+    assert not re.search(r"\((?:solver status )?-?\d+\)", output), output[:500]
 
 # ---------------------------------------------------------------------------
 # HiGHS-solved QP correctness (require DECIDB_FORCE_SOLVER=highs)

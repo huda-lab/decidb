@@ -37,6 +37,9 @@ struct PerGroupCacheEntry {
     //! each group with its printable key for infeasible diagnosis.
     vector<vector<Value>> unfiltered_rep_keys;
 };
+//! The time-limit report's closeness figure: `gap`, a fraction, as a percentage with two significant digits.
+string FormatDecideGapPercent(double gap);
+
 //! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
 using PerGroupCache = std::unordered_map<idx_t, PerGroupCacheEntry>;
 

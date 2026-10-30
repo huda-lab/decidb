@@ -1740,6 +1740,17 @@ static string FormatDuration(double seconds) {
     return StringUtil::Format("%.1fs", seconds);
 }
 
+string FormatDecideGapPercent(double gap) {
+	// Fixed decimals round a gap of 2e-6 to "0.00%", which beside "not proven best" reads as a contradiction. Two
+	// significant digits keep it (0.0002%); from 1% up, the whole number plus one decimal, so %g never switches a gap
+	// of 100% or more to an exponent.
+	double percent = gap * 100.0;
+	int digits = 2 + (percent >= 1.0 ? static_cast<int>(std::floor(std::log10(percent))) : 0);
+	char buffer[64];
+	snprintf(buffer, sizeof(buffer), "%.*g", digits, percent);
+	return buffer;
+}
+
 //! Print the path-1 (solution found) / path-2 (no solution) status block to stderr.
 //! Info only — the "keep improving it?" prompt lands with the S3 continuation loop.
 static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds,
@@ -1758,10 +1769,10 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
     if (result.has_solution) {
         // gap is a fraction on both backends; render as a percentage. It is NaN when
         // no proven bound exists (LP/QP timeouts, failed reads) — claim nothing then.
-        string closeness = std::isfinite(result.gap)
-                               ? StringUtil::Format("  best objective so far: %g  (within %.2f%% of the best possible)\n",
-                                                    result.objective_value, result.gap * 100.0)
-                               : StringUtil::Format("  best objective so far: %g\n", result.objective_value);
+		string closeness = std::isfinite(result.gap)
+		                       ? StringUtil::Format("  best objective so far: %g  (within %s%% of the best possible)\n",
+		                                            result.objective_value, FormatDecideGapPercent(result.gap))
+		                       : StringUtil::Format("  best objective so far: %g\n", result.objective_value);
         if (result.user_interrupted) {
             fprintf(stderr, "DECIDE stopped at your request with a usable solution (not proven best).\n%s%s",
                     closeness.c_str(), tail.c_str());
@@ -4254,7 +4265,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             // pipes, the C API), so there is no one to answer the offer. Print the
             // checkpoint once and raise: never prompt where no one can answer.
             PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
-            ThrowDecideSolveError(solve_result);
+			ThrowDecideSolveError(solve_result, PlannedSolverBackend());
         } else {
             // The interrupt poll installed on the first solve persists on the retained
             // session into every Continue() chunk, but the prompt below already stops the
@@ -4309,7 +4320,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
                     // A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
                     // incumbent ever existed (an incumbent proves feasibility); surface it
                     // as the plain solver error.
-                    ThrowDecideSolveError(solve_result);
+					ThrowDecideSolveError(solve_result, PlannedSolverBackend());
                 }
                 // else: another time-limit stop — loop and re-report with fresh numbers.
             }
@@ -4333,7 +4344,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             } else {
                 // Stopped with nothing found yet: the plain timeout error, same as the
                 // non-interactive exit above.
-                ThrowDecideSolveError(solve_result);
+				ThrowDecideSolveError(solve_result, PlannedSolverBackend());
             }
         }
     }
@@ -4442,14 +4453,16 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
                 // guard at the callback boundary: exceptions raised by our diagnosis
                 // logic must still surface as bugs instead of being mislabeled as a
                 // solver limitation.
-                diagnostic_solver_failed = true;
                 result.status = SolverStatus::OTHER;
-                return result;
             }
-            if (result.status == SolverStatus::TIME_LIMIT) {
-                diagnostic_solve_timed_out = true;
-            }
-            return result;
+			// OTHER is a solve the backend could not finish, thrown or returned (a model HiGHS refuses
+			// to load returns it): no answer about the repair model, so it must not read as "no repair".
+			if (result.status == SolverStatus::OTHER) {
+				diagnostic_solver_failed = true;
+			} else if (result.status == SolverStatus::TIME_LIMIT) {
+				diagnostic_solve_timed_out = true;
+			}
+			return result;
         };
 
         // The repair model: formulated against the widened box rather than patched onto
@@ -4508,7 +4521,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         // No DIAGNOSE prefix, or a status no engine covers (ITERATION_LIMIT, OTHER).
         // Either way the query reports its status and stops — the second solve that
         // would name a clause only happens when the user asks for it by name.
-        ThrowDecideSolveError(solve_result);
+		ThrowDecideSolveError(solve_result, PlannedSolverBackend());
     }
 
     // Under DIAGNOSE a failure terminal handed off its findings instead of raising: there

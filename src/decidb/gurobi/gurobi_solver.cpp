@@ -510,7 +510,6 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
     // decides whether to deliver it with a caveat or surface the status as an error.
     if (status != GRB_OPTIMAL) {
         SolverResult result;
-        result.raw_status = status;
         switch (status) {
         case GRB_INFEASIBLE:
             result.status = SolverStatus::INFEASIBLE;

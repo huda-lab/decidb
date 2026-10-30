@@ -13,6 +13,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/decidb/solver/solver_registry.hpp"
 
 #include <cmath>
 #include <limits>
@@ -65,8 +66,10 @@ struct SolverResult {
 	//! The primary status is still reported normally; this bit lets the operator say
 	//! diagnosis ran out of time instead of falling back to a misleading static error.
 	bool diagnostic_timed_out = false;
-	//! Backend-native status code, surfaced in the OTHER catch-all message.
-	int raw_status = 0;
+	//! The backend's own words for the status it stopped at (HiGHS's model-status text), quoted by the OTHER
+	//! catch-all message. Empty when the backend has none: Gurobi names a status only by its number, and a model
+	//! HiGHS refuses to load never reaches a status.
+	string status_text;
 	//! TIME_LIMIT / SUBOPTIMAL: true when the backend found a feasible incumbent
 	//! (TIME_LIMIT by the time limit; SUBOPTIMAL when the solver stopped without a
 	//! proof of optimality). Gurobi `SolCount > 0` / HiGHS `primal_solution_status ==
@@ -102,7 +105,8 @@ struct SolverResult {
 //! Single home for the message text that both backends used to duplicate. The
 //! operator calls this on the UNDIAGNOSED terminal only — either the statement was
 //! not prefixed with DIAGNOSE, or the status has no engine (ITERATION_LIMIT / OTHER).
-//! A diagnosed failure returns findings instead of throwing.
-[[noreturn]] void ThrowDecideSolveError(const SolverResult &result);
+//! A diagnosed failure returns findings instead of throwing. `backend` is the one that
+//! ran the solve: a status no state names (OTHER) is reported as that solver's failure.
+[[noreturn]] void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend);
 
 } // namespace duckdb
