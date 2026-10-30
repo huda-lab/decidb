@@ -111,6 +111,28 @@ _CLIQUE_EXTRACTION_SQL = """
         MAXIMIZE SUM((a + c) * x + (b + d) * z))
 """
 
+# One row over 120,000 integers whose coefficients are distinct and lie in [120000, 240000), so no two have an integral
+# ratio. Presolve's parallel-columns pass (``HPresolve::detectParallelRowsAndCols``) puts every column of the row in
+# one hash bucket and compares each pair, merging none: about 25 s.
+_PARALLEL_COLUMNS_SQL = """
+    SELECT count(*) AS n FROM (
+        SELECT i, x FROM (SELECT i, 120000 + i AS a, (i * 7919) % 1000 + 1 AS w FROM range(120000) t(i))
+        DECIDE x(INT)
+        SUCH THAT x <= 3 AND SUM(a * x) <= 1000000000
+        MAXIMIZE SUM(w * x))
+"""
+
+# 110,000 inequalities a * x + b * z <= 1000, each over its own two integers. A row whose columns appear in no other
+# row hashes like every such row, so the same pass's parallel-rows loop puts them all in one bucket and compares each
+# pair, reducing none (two inequalities with two singletons each): about 23 s.
+_PARALLEL_ROWS_SQL = """
+    SELECT count(*) AS n FROM (
+        SELECT i, x, z FROM (SELECT i, (i * 7919) % 1000 + 1 AS a, (i * 104729) % 997 + 1 AS b FROM range(110000) t(i))
+        DECIDE x(INT), z(INT)
+        SUCH THAT a * x + b * z <= 1000
+        MAXIMIZE SUM(x + z))
+"""
+
 
 def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
     """Run ``sql`` on the Gurobi CLI with optional DECIDB_TIME_LIMIT in the env.
@@ -241,6 +263,36 @@ class TestTimeLimit:
         about 1 s in; without it the subprocess timeout kills the solve.
         """
         result = _run_decidb(decidb_cli_highs, _CLIQUE_EXTRACTION_SQL, time_limit=1, subprocess_timeout=5)
+        combined = result.stderr + result.stdout
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
+            f"  stdout: {result.stdout[:400]}\n"
+            f"  stderr: {result.stderr[:400]}"
+        )
+
+    def test_highs_limit_bounds_parallel_columns(self, decidb_cli_highs):
+        """HiGHS stops presolve's parallel-columns pass at DECIDB_TIME_LIMIT.
+
+        Presolve checks the clock once per 1,024 reductions, and this pass compares every pair of the row's 120,000
+        columns and makes none, about 25 s. The vendored patch (BUG-28) checks it once per 2^20 compared pairs, so the
+        solve ends with the time-limit error about 1 s in; without it the subprocess timeout kills the solve.
+        """
+        result = _run_decidb(decidb_cli_highs, _PARALLEL_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
+        combined = result.stderr + result.stdout
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
+            f"  stdout: {result.stdout[:400]}\n"
+            f"  stderr: {result.stderr[:400]}"
+        )
+
+    def test_highs_limit_bounds_parallel_rows(self, decidb_cli_highs):
+        """HiGHS stops presolve's parallel-rows pass at DECIDB_TIME_LIMIT.
+
+        The pass compares every pair of the 110,000 rows and makes no reduction, about 23 s. The vendored patch
+        (BUG-28) checks the clock in that loop once per 2^20 compared pairs, so the solve ends with the time-limit
+        error about 1 s in; without it the subprocess timeout kills the solve.
+        """
+        result = _run_decidb(decidb_cli_highs, _PARALLEL_ROWS_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
         assert re.search(r"(?i)hit the time limit", combined), (
             f"Expected 'hit the time limit' message but got:\n"

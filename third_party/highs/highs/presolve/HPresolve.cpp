@@ -5743,6 +5743,12 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
   std::unordered_multimap<std::uint64_t, HighsInt> buckets;
 
   const bool debug_report = false;
+  // DeciDB patch (BUG-28): the bucket candidates compared so far; both bucket
+  // loops below check the time limit once per 2^20 of them, before a
+  // candidate's work. checkLimits runs only after a reduction, and rows or
+  // columns that share a hash but do not reduce make a loop quadratic with none
+  int64_t numBucketCandidates = 0;
+  const int64_t kCandidatesPerTimeCheck = int64_t{1} << 20;
   for (HighsInt i = 0; i != model->num_col_; ++i) {
     if (colDeleted[i]) continue;
     if (colsize[i] == 0) {
@@ -5756,6 +5762,9 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
     HighsInt parallelColCandidate = -2;
 
     while (it != buckets.end() && it->first == colHashes[i]) {
+      // DeciDB patch (BUG-28)
+      if (++numBucketCandidates % kCandidatesPerTimeCheck == 0)
+        HPRESOLVE_CHECKED_CALL(checkTimeLimit());
       parallelColCandidate = it->second;
       last = it++;
 
@@ -6224,6 +6233,9 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
     HighsInt delRow = -1;
     if (it != buckets.end()) storeRow(i);
     while (it != buckets.end() && it->first == rowHashes[i]) {
+      // DeciDB patch (BUG-28)
+      if (++numBucketCandidates % kCandidatesPerTimeCheck == 0)
+        HPRESOLVE_CHECKED_CALL(checkTimeLimit());
       HighsInt parallelRowCand = it->second;
       last = it++;
 
