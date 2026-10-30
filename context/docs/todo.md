@@ -19,8 +19,7 @@ input row). What remains: the extraction costs the measurements found (§ 3) and
 
 ## 1. Bugs
 
-- [ ] BUG-42 A `CASE` in an aggregate clause's bound gets a message that does not say `CASE` —
-  issues/bugs.md § BUG-42
+Every filed bug is fixed.
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 

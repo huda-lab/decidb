@@ -321,9 +321,12 @@ Below a clause's top, an operand that reads no decision is data, and DuckDB bind
 its own rules (`DecideBinder::IsDataOperand`). The shape does not matter: a comparison
 read as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda and its parameters
 (`sum(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared statement's `$1`. A
-function, a subquery and a CASE keep their DECIDE handling: a function may be a reducer
-or a scope marker, a subquery has the checks below, and a CASE is refused wherever it
-stands (`DecideCaseUnsupportedMessage`).
+function and a subquery keep their DECIDE handling: a function may be a reducer or a
+scope marker, and a subquery has the checks below. A CASE never reaches these walks:
+`ValidateDecideNoCase` refuses one in every operand and term of the constraints and the
+objective, with one message, before any binder classifies a shape (a front-end check on
+the parsed tree, beside `RefuseQualifiedDecisionReferences`). A `when` condition, a key,
+a `by` key and a subquery are SQL over the rows, and a CASE there is not refused.
 
 The rule holds in four places, one per walk that reads an operand:
 

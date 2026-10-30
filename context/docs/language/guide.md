@@ -208,7 +208,8 @@ data and unaffected.
     three or more decisions is refused.
 - **Data operands**: any operand that reads no decision is data, evaluated per row as SQL evaluates it: a comparison
   as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda (`SUM(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared
-  statement's `$1`, a table macro's parameter. `CASE` is the exception and is refused everywhere. A comparison that
+  statement's `$1`, a table macro's parameter. `CASE` is the exception and is refused in every operand and term (a
+  `when` condition, a `by` key and a subquery are SQL over the rows and accept one). A comparison that
   reads a decision, used as a number (`x <= (x > 1)`), is refused: *"SUCH THAT does not support '(x > 1)'"*.
 - **Subqueries**: scalar subqueries, uncorrelated or correlated, may be bounds or factors. A correlated one becomes a
   per-row value and follows the bound rule of §5. A subquery cannot reference the enclosing query's decisions.

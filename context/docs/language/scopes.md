@@ -52,7 +52,8 @@ the clause the user wrote.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
   nothing. `BindTwoLevelObjective` binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a
   `TWO_LEVEL_OBJECTIVE_TAG` wrapper (child 0 the objective) tagged with the key's entry.
-- `CASE WHEN` is refused with one message wherever it sits (`DecideCaseUnsupportedMessage`).
+- `CASE WHEN` is refused with one message in every operand and term (`ValidateDecideNoCase`, before any binder
+  classifies a shape); a `when` condition, a key and a `by` key are SQL over the rows and accept one.
 
 ## Canonicalizer — shape and checks
 

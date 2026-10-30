@@ -19,4 +19,6 @@ span per expression of the DECIDE clause at bind time, carry it on `query_locati
 serialization), let a fold or an implicit cast keep its root's location, and cut a located node's span before
 reprinting anything. Risk: libpg_query keeps only start positions, so span ends need a tokenizer with paren
 balancing or grammar work; messages and goldens that quote a reprint would change. Found 2026-10-30 while scoping
-PERF-16 (architect review).
+PERF-16 (architect review). The same cause shows in two more messages: `if(c, a, b)` and `iif` reach the binder as
+the parser's CASE, so `SUM(x * if(s = 'F', 1, 2))` is refused as a CASE the user never wrote, and `per g: SUM(x) by
+(CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message (lane AW, BUG-42).
