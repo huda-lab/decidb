@@ -80,8 +80,8 @@ idx_t FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<doubl
 //! contributes the floor it does have. `first_row` is the row the group reads its
 //! bound off: group-constant by construction.
 struct MinMaxGroup {
-	vector<idx_t> rows;
-	AuxRange family;
+    vector<idx_t> rows;
+    AuxRange family;
     idx_t first_row = DConstants::INVALID_INDEX;
 };
 
@@ -95,22 +95,22 @@ vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const EvaluatedC
 //! of a row sum in one accumulator the members share; `ec` and `written` outlive this.
 class MinMaxRowMembers {
 public:
-	MinMaxRowMembers(const SolverInput &input, const VarIndexer &indexer, const EvaluatedConstraint &ec,
-	                 const string &written);
+    MinMaxRowMembers(const SolverInput &input, const VarIndexer &indexer, const EvaluatedConstraint &ec,
+                     const string &written);
 
-	//! Writes `row`'s member into `link`, which is empty.
-	void FillLink(idx_t row, MinMaxLinkRow &link);
-	//! The reach of `row`'s expression, its constant part included.
-	AuxRange Range(idx_t row) const;
-	//! The members of `group`, in row order.
-	ExtremumMemberSource Source(const MinMaxGroup &group);
+    //! Writes `row`'s member into `link`, which is empty.
+    void FillLink(idx_t row, MinMaxLinkRow &link);
+    //! The reach of `row`'s expression, its constant part included.
+    AuxRange Range(idx_t row) const;
+    //! The members of `group`, in row order.
+    ExtremumMemberSource Source(const MinMaxGroup &group);
 
 private:
-	const SolverInput &input;
-	const VarIndexer &indexer;
-	const EvaluatedConstraint &ec;
-	const string &written;
-	SparseCoeffAccumulator row_terms;
+    const SolverInput &input;
+    const VarIndexer &indexer;
+    const EvaluatedConstraint &ec;
+    const string &written;
+    SparseCoeffAccumulator row_terms;
 };
 
 } // namespace decide_linearize

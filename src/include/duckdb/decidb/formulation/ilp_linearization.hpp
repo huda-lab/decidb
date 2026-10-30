@@ -476,10 +476,10 @@ struct MinMaxLinkRow {
 //! row of storage rather than n. `range` is the reach of `expr` on its own, which is the box a column pinned to it
 //! deserves; it is asked only by the arm that pins one, so no other arm pays for it.
 struct ExtremumMemberSource {
-	idx_t count = 0;
-	//! Fills `link`, which is empty, with member `i` of `count`. Called once per member and pass over the family.
-	std::function<void(idx_t, MinMaxLinkRow &)> fill_link;
-	std::function<AuxRange(idx_t)> range;
+    idx_t count = 0;
+    //! Fills `link`, which is empty, with member `i` of `count`. Called once per member and pass over the family.
+    std::function<void(idx_t, MinMaxLinkRow &)> fill_link;
+    std::function<AuxRange(idx_t)> range;
 };
 
 //! `result = MIN/MAX(members)`, in flat columns. Every MIN/MAX auxiliary in the model is
