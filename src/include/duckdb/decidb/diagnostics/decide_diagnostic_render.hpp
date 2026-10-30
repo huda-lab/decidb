@@ -31,10 +31,13 @@ string FormatNum(double v);
 //! amount, which SnapToPrecision alone rounds.
 double SnapDiagnosticValue(double v);
 
-//! Round a repair amount to the last decimal that is meaningful at its own magnitude: to
-//! nearest, and one tick outward when the shortfall summed over the `fan_out` rows the
-//! amount moves would exceed the feasibility tolerance. The one rounding an amount gets.
-double SnapToPrecision(double v, double fan_out);
+//! Which way an amount rounds to its printed precision: to the nearest tick, or to the
+//! nearest tick at least as far from zero as the amount.
+enum class RoundDirection : uint8_t { NEAREST, OUTWARD };
+
+//! Round a repair amount to the last decimal that is meaningful at its own magnitude, in
+//! `direction`. The one rounding an amount gets.
+double SnapToPrecision(double v, RoundDirection direction);
 
 //! Render a row's LHS as the user wrote it when the model carries a source
 //! spelling, falling back to rebuilding it from the row's own coefficients.

@@ -5,6 +5,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic_render.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
+#include "duckdb/decidb/solver/probe_models.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -360,59 +361,13 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	return out;
 }
 
-//! The 1-norm of a block's slack columns in the elastic model: how many rows, with their
-//! weights, an amount read from the block moves a bound on (both columns for `=`).
-static double SlackColumnNorm(const SolverModel &elastic_model, const BlockSlackRef &sl) {
-	double norm = 0.0;
-	auto add = [&](const vector<int> &indices, const vector<double> &coefficients) {
-		for (idx_t k = 0; k < indices.size(); k++) {
-			idx_t col = static_cast<idx_t>(indices[k]);
-			if (col == sl.pos_col || col == sl.neg_col) {
-				norm += std::fabs(coefficients[k]);
-			}
-		}
-	};
-	for (idx_t r : sl.rows) {
-		if (sl.quadratic) {
-			const auto &qc = elastic_model.quadratic_constraints[r];
-			add(qc.linear_indices, qc.linear_coefficients);
-		} else {
-			const auto &row = elastic_model.constraints[r];
-			add(row.indices, row.coefficients);
-		}
-	}
-	return norm;
-}
-
-//! Read the slack support of a solved elastic model into the user-facing edit list.
-//! Every block whose slack clears the noise floor is an edit; the amount is the
-//! slack value (`=` reports the net s⁺ − s⁻). A data-RHS clause (`x <= col`) has no
-//! single literal to loosen, so it reads back per the `slack_scope` policy (T3): "query"
-//! folds it into one virtual offset `x <= col + delta`; "expanded" exposes each per-row
-//! slack. Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
-//! appended); amounts are rounded by the slack columns of `elastic_model`. Pure in
-//! `solution`, so it runs against either the stage-1 or stage-2 solve.
-static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, const vector<double> &solution,
-                                           const SolverModel &orig_model, const SolverModel &elastic_model,
-                                           const vector<ColumnProvenance> &columns, const string &slack_scope) {
-	// T3 slack-scope policy.
-	//   query (default): each block is ONE SQL literal knob the user edits, folded across
-	//     groups (BuildElasticModel). Editable literals report `source_literal`, a
-	//     data RHS reports a `virtual_offset` (`x <= col + delta`); both are clause-level,
-	//     so any per-group identity is dropped.
-	//   expanded: aggregate groups get one slack each (`expanded_group`, keeping the
-	//     group key); a data RHS stays per-row (`expanded_row`, keeping the row id); a
-	//     non-grouped literal has nothing to break out and reports `source_literal`.
-	bool expanded = slack_scope == "expanded";
-
-	vector<ClauseEdit> edits;
+//! The amount each slack's edit prints, rounded in `direction`; zero for a slack that is no
+//! edit. The amount is the slack value (`=` reports the net s⁺ − s⁻).
+static vector<double> PrintedAmounts(const vector<BlockSlackRef> &slacks, const vector<double> &solution,
+                                     RoundDirection direction) {
+	vector<double> amounts;
 	for (const auto &sl : slacks) {
-		double amount;
-		if (sl.sense == '=') {
-			amount = solution[sl.pos_col] - solution[sl.neg_col];
-		} else {
-			amount = solution[sl.pos_col];
-		}
+		double amount = sl.sense == '=' ? solution[sl.pos_col] - solution[sl.neg_col] : solution[sl.pos_col];
 		// What counts as an edit rather than a backend's own rounding. A widened box is
 		// worse conditioned than the model it came from, so a solver can return its
 		// feasibility tolerance as a slack and turn it into a straight-faced
@@ -427,13 +382,55 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 		// dropped one makes the reported repair not work when the user applies it. When in
 		// doubt this reports the edit.
 		double edit_floor = 1e-5;
-		if (std::fabs(amount) <= edit_floor) {
-			continue;
+		if (std::fabs(amount) > edit_floor) {
+			amount = SnapToPrecision(amount, direction);
 		}
-		// Round away the conditioning noise a widened box costs, keeping the edit as printed
-		// a repair over every row it moves. The one rounding an amount gets, at either stage.
-		amount = SnapToPrecision(amount, SlackColumnNorm(elastic_model, sl));
-		if (std::fabs(amount) <= edit_floor) {
+		amounts.push_back(std::fabs(amount) > edit_floor ? amount : 0.0);
+	}
+	return amounts;
+}
+
+//! The repaired query: the elastic model with every slack fixed at its printed amount (an
+//! `=` pair at the amount's positive and negative parts) and no objective. Feasible exactly
+//! when the edits as printed repair the query.
+static SolverModel ApplyEdits(const SolverModel &elastic_model, const vector<BlockSlackRef> &slacks,
+                              const vector<double> &amounts) {
+	SolverModel repaired = MakeZeroObjectiveProbeModel(elastic_model);
+	for (idx_t i = 0; i < slacks.size(); i++) {
+		const auto &sl = slacks[i];
+		double pos = sl.neg_col == DConstants::INVALID_INDEX ? amounts[i] : std::max(amounts[i], 0.0);
+		repaired.col_lower[sl.pos_col] = repaired.col_upper[sl.pos_col] = pos;
+		if (sl.neg_col != DConstants::INVALID_INDEX) {
+			repaired.col_lower[sl.neg_col] = repaired.col_upper[sl.neg_col] = std::max(-amounts[i], 0.0);
+		}
+	}
+	return repaired;
+}
+
+//! Read the slack support of a solved elastic model into the user-facing edit list.
+//! Every block with a nonzero printed amount (PrintedAmounts) is an edit. A data-RHS clause (`x <= col`) has no
+//! single literal to loosen, so it reads back per the `slack_scope` policy (T3): "query"
+//! folds it into one virtual offset `x <= col + delta`; "expanded" exposes each per-row
+//! slack. Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
+//! appended).
+static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, const vector<double> &amounts,
+                                           const SolverModel &orig_model, const vector<ColumnProvenance> &columns,
+                                           const string &slack_scope) {
+	// T3 slack-scope policy.
+	//   query (default): each block is ONE SQL literal knob the user edits, folded across
+	//     groups (BuildElasticModel). Editable literals report `source_literal`, a
+	//     data RHS reports a `virtual_offset` (`x <= col + delta`); both are clause-level,
+	//     so any per-group identity is dropped.
+	//   expanded: aggregate groups get one slack each (`expanded_group`, keeping the
+	//     group key); a data RHS stays per-row (`expanded_row`, keeping the row id); a
+	//     non-grouped literal has nothing to break out and reports `source_literal`.
+	bool expanded = slack_scope == "expanded";
+
+	vector<ClauseEdit> edits;
+	for (idx_t i = 0; i < slacks.size(); i++) {
+		const auto &sl = slacks[i];
+		double amount = amounts[i];
+		if (amount == 0.0) {
 			continue;
 		}
 		// Label the clause from the block's representative ORIGINAL row (orig_model,
@@ -815,7 +812,13 @@ enum class CandidateStatus : uint8_t { FEASIBLE, INFEASIBLE, ABORT };
 
 struct RemovalCandidate {
 	CandidateStatus status = CandidateStatus::ABORT;
+	//! The edits at their nearest printed amounts.
 	vector<ClauseEdit> edits;
+	//! The edits at their outward amounts, when any differs from its nearest one; empty
+	//! when `edits` needs no certificate.
+	vector<ClauseEdit> outward_edits;
+	//! The query repaired by `edits` (ApplyEdits), solved only for the reported candidate.
+	SolverModel certificate;
 	double data_cost = 0.0;
 	double editable_cost = 0.0;
 	bool objective_unbounded = false;
@@ -932,10 +935,22 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		}
 	}
 
-	result.edits =
-	    ReadElasticEdits(slacks, repair_solution, candidate_model, elastic.model, columns, input.params.slack_scope);
+	// Certify-then-report: an amount rounded to nearest reads as the user would write it but
+	// can fall short of a repair; rounded outward it repairs whenever the solver's amount did.
+	// When the two readings differ, the caller solves the query with the nearest edits applied
+	// once, for the candidate it reports, and prints them only if that solve finds it feasible.
+	vector<double> nearest = PrintedAmounts(slacks, repair_solution, RoundDirection::NEAREST);
+	vector<double> outward = PrintedAmounts(slacks, repair_solution, RoundDirection::OUTWARD);
+	result.edits = ReadElasticEdits(slacks, nearest, candidate_model, columns, input.params.slack_scope);
+	if (nearest != outward) {
+		result.outward_edits = ReadElasticEdits(slacks, outward, candidate_model, columns, input.params.slack_scope);
+		result.certificate = ApplyEdits(elastic.model, slacks, nearest);
+	}
 	for (idx_t index : selected_indices) {
 		result.edits.push_back(MakeDropEdit(input.model, all_groups[index]));
+		if (!result.outward_edits.empty()) {
+			result.outward_edits.push_back(MakeDropEdit(input.model, all_groups[index]));
+		}
 	}
 	result.status = CandidateStatus::FEASIBLE;
 	return result;
@@ -1022,6 +1037,10 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		}
 		if (!found) {
 			continue;
+		}
+		if (!best.outward_edits.empty() && input.solve_model(best.certificate).status != SolverStatus::OPTIMAL) {
+			// Infeasible, out of time or unsolved: the outward amounts repair by construction.
+			best.edits = std::move(best.outward_edits);
 		}
 		if (best.edits.empty()) {
 			return DecideDiagnostic();

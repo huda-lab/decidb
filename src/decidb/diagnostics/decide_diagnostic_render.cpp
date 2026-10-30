@@ -56,19 +56,20 @@ double SnapDiagnosticValue(double v) {
 	return std::round(v * 1e6) / 1e6;
 }
 
-//! Round a repair amount to the precision the elastic model can actually resolve.
+//! Round a repair amount to the precision the elastic model can actually resolve, in
+//! `direction`.
 //!
 //! Formulating against a widened box costs conditioning: a slack whose exact value is
-//! `4.5` comes back as `4.499999`, and a repair reported one part in a million SHORT is
-//! not a repair at all — the user pastes `ABS(x*0.5) >= 0.500001` and the query is still
-//! infeasible. Round to the last decimal that is meaningful at this value's OWN
-//! magnitude. Relative, never absolute: an edit of 2 and an edit of 30000 in the same
-//! model are each trustworthy to about six figures of themselves, and a grid taken from
-//! the model's largest number would erase the small one entirely.
+//! `4.5` comes back as `4.499999`. Round to the last decimal that is meaningful at this
+//! value's OWN magnitude. Relative, never absolute: an edit of 2 and an edit of 30000 in
+//! the same model are each trustworthy to about six figures of themselves, and a grid
+//! taken from the model's largest number would erase the small one entirely.
 //!
-//! `fan_out` is how many rows the amount moves a bound on, counted with their weights:
-//! the 1-norm of the slack column it was read from.
-double SnapToPrecision(double v, double fan_out) {
+//! NEAREST is the tidy reading (`4.499999` → `4.5`, a backend's `7.00000028` → `7`), which
+//! can fall short of what the solver found. OUTWARD never does (`4.3333333` → `4.33334`),
+//! so it is a repair whenever the solver's amount was. Which one a diagnosis prints is
+//! decided by a solve, not here (the certificate in decide_diagnostic_engines.cpp).
+double SnapToPrecision(double v, RoundDirection direction) {
 	if (v == 0.0 || !std::isfinite(v)) {
 		return v;
 	}
@@ -83,20 +84,7 @@ double SnapToPrecision(double v, double fan_out) {
 		return v;
 	}
 	double ticks = std::round(mag * scale);
-	// Round to nearest, then accept the rounded amount the way a MIP solver accepts a
-	// rounded point: only while what it gives up stays inside the feasibility tolerance.
-	// A loosening printed short of what the solver found leaves every row the slack
-	// covers short by that much, and a row summing those rows adds the shortfalls up:
-	// `fan_out` rows short by 1.1e-10 each miss `SUM(x) <= -1` by fan_out * 1.1e-10. When
-	// that total passes the tolerance, the next tick outward is the amount instead
-	// (`4.333333` prints `4.33334`, never `4.33333`). Below it the shortfall is noise the
-	// solver itself accepts: `21.0000004` prints `21`, and a backend that settled on its
-	// tolerance above the true amount prints the true amount.
-	//
-	// The bound assumes each covered row enters what sums it with weight 1: a
-	// `SUM(1000 * x)` over the edited rows multiplies the shortfall by 1000 again. No
-	// solve certifies the printed edit.
-	if ((mag - ticks / scale) * fan_out > DECIDE_FEASIBILITY_TOLERANCE) {
+	if (direction == RoundDirection::OUTWARD && ticks / scale < mag) {
 		ticks += 1.0;
 	}
 	double snapped = ticks / scale;

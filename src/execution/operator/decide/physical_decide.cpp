@@ -4508,6 +4508,13 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             diag_params,   solve_diagnostic_model,
         };
         diag = DiagnoseInfeasible(diag_input);
+		// The engine reads every status it gets: a solve it can do without (the tie-break, the
+		// certificate of a printed amount) keeps the repair it already has. So a repair it
+		// reports stands, whatever a solve on the way to it returned.
+		if (diag.valid && !diag.findings.empty()) {
+            report(std::move(diag));
+            break;
+        }
         if (diagnostic_solver_failed) {
             // A backend that cannot load or solve the repair model. That is a limit on
             // what can be explained, not a failure of the query itself.
@@ -4517,10 +4524,6 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
                 "least-change repair could be computed."));
             break;
 		}
-		if (diag.valid && !diag.findings.empty()) {
-            report(std::move(diag));
-            break;
-        }
         // The elastic engine can decline to report when no actionable relaxation exists.
         // Say which of the two it was rather than returning an empty relation.
         report(BuildUndiagnosedDiagnostic(

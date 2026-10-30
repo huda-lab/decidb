@@ -342,6 +342,43 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(AmountOf(diag, "x = 5") == "3");
 	}
 
+	SECTION("a printed amount is the nearest one the query accepts, certified by one solve") {
+		// x <= 5 against the rigid x >= `floor`. With no objective and one knob the repair is one solve, and any
+		// second solve is the certificate. `overshoot` is added to the slack the first solve returns, the way a
+		// backend can settle on its tolerance above the amount.
+		idx_t solves = 0;
+		auto diagnose = [&](double floor, double overshoot) {
+			solves = 0;
+			auto solve = [&](const SolverModel &m) {
+				SolverResult r = solve_highs(m);
+				if (solves++ == 0 && r.solution.size() > 1) {
+					r.solution[1] += overshoot; // column 1: the slack of the one relaxable row
+				}
+				return r;
+			};
+			SolverModel model = MakeSingleVarModel({
+			    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
+			    {1.0, '>', floor, ConstraintKind::STRUCTURAL},
+			});
+			InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve};
+			return DiagnoseInfeasible(diag_input);
+		};
+		// An exact amount reads the same both ways: no certificate.
+		auto exact = diagnose(10.0, 0.0);
+		CHECK(Find(exact, "x <= 5").suggested_change == "x <= 10");
+		CHECK(solves == 1);
+		// An overshoot of 2.8e-7 reads 5 to nearest and 5.00001 outward; the query with 5 is feasible, so 5 prints.
+		auto overshoot = diagnose(10.0, 2.8e-7);
+		CHECK(Find(overshoot, "x <= 5").suggested_change == "x <= 10");
+		CHECK(AmountOf(overshoot, "x <= 5") == "5");
+		CHECK(solves == 2);
+		// A need of 5.000003 reads 5 to nearest, which leaves x 3e-6 short of its floor: the outward amount prints.
+		auto shortfall = diagnose(10.000003, 0.0);
+		CHECK(Find(shortfall, "x <= 5").suggested_change == "x <= 10.00001");
+		CHECK(AmountOf(shortfall, "x <= 5") == "5.00001");
+		CHECK(solves == 2);
+	}
+
 	SECTION("elastic-infeasible when loosening cannot fix a rigid conflict") {
 		// The conflict is between two rigid rows (x <= 5, x >= 10); the lone
 		// relaxable row (x <= 100) cannot help, so the elastic program is itself
@@ -1302,19 +1339,22 @@ TEST_CASE("DeciDB range-clause edits", "[decidb][query_diagnostics][range]") {
 }
 
 TEST_CASE("DeciDB repair amounts snap to the precision the model resolves", "[decidb][query_diagnostics][snap]") {
+	using decide_render::RoundDirection;
 	using decide_render::SnapToPrecision;
-	// A backend's arithmetic above a clean number is the clean number.
-	CHECK(SnapToPrecision(5.0000000000000853, 1) == 5.0);
-	CHECK(SnapToPrecision(-5.0000000000000853, 1) == -5.0);
-	// Noise below it is tidied to it.
-	CHECK(SnapToPrecision(4.499999, 1) == 4.5);
-	// A shortfall past the feasibility tolerance takes the next tick outward.
-	CHECK(SnapToPrecision(4.3333333, 1) == Approx(4.33334).epsilon(1e-12));
-	CHECK(SnapToPrecision(10.000002, 1) == Approx(10.0001).epsilon(1e-12));
-	// Within the tolerance on one row it rounds to nearest; the same shortfall over three rows passes it.
-	CHECK(SnapToPrecision(21.0000004, 1) == 21.0);
-	CHECK(SnapToPrecision(21.0000004, 3) == Approx(21.0001).epsilon(1e-12));
-	// 1/9000 short by 1.1e-10 is nothing on one row and the whole tolerance over 9,000.
-	CHECK(SnapToPrecision(1.0 / 9000.0, 1) == Approx(0.000111111).epsilon(1e-12));
-	CHECK(SnapToPrecision(1.0 / 9000.0, 9000) == Approx(0.000111112).epsilon(1e-12));
+	const auto nearest = RoundDirection::NEAREST;
+	const auto outward = RoundDirection::OUTWARD;
+	// To nearest: a backend's arithmetic above a clean number, and noise below it, read as the clean number.
+	CHECK(SnapToPrecision(5.0000000000000853, nearest) == 5.0);
+	CHECK(SnapToPrecision(-5.0000000000000853, nearest) == -5.0);
+	CHECK(SnapToPrecision(4.499999, nearest) == 4.5);
+	CHECK(SnapToPrecision(21.0000004, nearest) == 21.0);
+	CHECK(SnapToPrecision(1.0 / 9000.0, nearest) == Approx(0.000111111).epsilon(1e-12));
+	// Outward: anything above a tick, however small, takes the next one, away from zero.
+	CHECK(SnapToPrecision(5.0000000000000853, outward) == Approx(5.00001).epsilon(1e-12));
+	CHECK(SnapToPrecision(-5.0000000000000853, outward) == Approx(-5.00001).epsilon(1e-12));
+	CHECK(SnapToPrecision(4.3333333, outward) == Approx(4.33334).epsilon(1e-12));
+	CHECK(SnapToPrecision(1.0 / 9000.0, outward) == Approx(0.000111112).epsilon(1e-12));
+	// A value on a tick, or below one, reads the same either way.
+	CHECK(SnapToPrecision(4.499999, outward) == 4.5);
+	CHECK(SnapToPrecision(7.0, outward) == 7.0);
 }

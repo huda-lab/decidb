@@ -3023,10 +3023,45 @@ class TestPrintedRepairIsTrue:
         ],
     )
     def test_the_printed_repair_restores_feasibility(self, request, cli_fixture, sql, clause):
-        """BUG-32: a printed amount rounds outward, never to nearest, so the edit as printed
-        repairs: pasted back, the query solves."""
+        """BUG-32: rounded to nearest, these amounts fall short of a repair, so the solve that
+        certifies them finds the query still infeasible and the outward amounts print: pasted
+        back, the query solves."""
         cli = request.getfixturevalue(cli_fixture)
         edits = [r for r in _flat(_diagnose(cli, sql)) if r["edit_source"] == "source_literal"]
         assert [r["clause"] for r in edits] == [clause], edits
         rows, _ = cli.execute(sql.replace(clause, edits[0]["suggested_change"]))
         assert rows
+
+    @pytest.mark.correctness
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_an_amount_the_query_accepts_prints_to_nearest(self, request, cli_fixture, oracle_solver):
+        """A backend can settle its repair on its feasibility tolerance above the amount the
+        query needs (HiGHS does here, by about 3e-7); rounded outward that would print a floor
+        one tick lower than needed. The nearest amount, certified by one solve, prints instead:
+        the oracle's least loosening at the printed precision, and the edit pasted back solves."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = [(i // 4, 1 + (i * 37) % 1000, 100 + (i * 13) % 9000) for i in range(2400)]
+        sql = (
+            "SELECT p, s, ship FROM (SELECT i // 4 AS p, i % 4 AS s, 1 + (i * 37) % 1000 AS cost, "
+            "100 + (i * 13) % 9000 AS avail FROM range(2400) r(i)) DECIDE ship(REAL) "
+            "SUCH THAT ship BETWEEN 10 AND avail AND SUM(ship) BY (p) <= 20 MAXIMIZE SUM(cost * ship)"
+        )
+        edits = [r for r in _flat(_diagnose(cli, sql)) if r["edit_source"] == "source_literal"]
+        assert [r["clause"] for r in edits] == ["ship BETWEEN 10 AND avail"], edits
+
+        oracle_solver.create_model("highest_common_floor")
+        oracle_solver.add_variable("floor", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        groups = {}
+        for i, (group, _cost, avail) in enumerate(rows):
+            oracle_solver.add_variable(f"ship_{i}", VarType.CONTINUOUS, lb=0.0, ub=float(avail))
+            oracle_solver.add_constraint({f"ship_{i}": 1.0, "floor": -1.0}, ">=", 0.0)
+            groups.setdefault(group, []).append(f"ship_{i}")
+        for names in groups.values():
+            oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 20.0)
+        oracle_solver.set_objective({"floor": 1.0}, ObjSense.MAXIMIZE)
+        expected = oracle_solver.solve()
+        assert expected.status == SolverStatus.OPTIMAL
+        assert float(edits[0]["amount"]) == float(f"{10.0 - expected.objective_value:.6g}"), edits
+
+        repaired, _ = cli.execute(sql.replace("ship BETWEEN 10 AND avail", edits[0]["suggested_change"]))
+        assert repaired
