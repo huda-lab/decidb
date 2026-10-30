@@ -143,23 +143,46 @@ HighsScaleResult ChooseHighsScale(double lo, double hi, double bound, int &expon
 	return HighsScaleResult::OK;
 }
 
-[[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr, HighsScaleResult why,
-                                     double lo, double hi) {
-    string clause = DescribeRowClause(model, constr, StringUtil::Format("%g", constr.rhs));
-    string where = clause.empty() ? string("A constraint in this query")
-                                  : StringUtil::Format("Constraint `%s`", clause);
-    if (why == HighsScaleResult::BOUND_TOO_LARGE) {
-        throw InvalidInputException(
-            "%s sets a limit of %g that HiGHS cannot hold alongside coefficients as small "
-            "as %g. Use a smaller limit, or express the column and its limit in the same "
-            "unit; Gurobi loads this range as written.",
-            where, constr.rhs, lo);
-    }
-    throw InvalidInputException(
-        "%s mixes numbers too far apart in size for HiGHS to load: coefficients run from %g "
-        "to %g in one constraint. Express the columns in the same unit, or install Gurobi, "
-        "which loads this range.",
-        where, lo, hi);
+//! Refuse a row or the objective that fits the window as written and fails only once a column is scaled: a
+//! decision's limit at or past `infinite_bound` is the cause (ChooseHighsColumnScales), and the clause already shows
+//! the user which decisions it holds.
+[[noreturn]] void ThrowDecisionLimitRefusal(const string &where) {
+	throw InvalidInputException("%s cannot be loaded by HiGHS together with a decision limit of %g or more. Use "
+	                            "smaller limits on the decisions in it, or install Gurobi, which loads this range.",
+	                            where, HIGHS_INFINITE_BOUND);
+}
+
+//! Refuse a row no power of two places. The cause is judged on the row as the user wrote it, before any column
+//! scale: if that row cannot be placed, the row is the cause and the refusal quotes its own coefficients; if it can,
+//! a scaled column's limit is (ThrowDecisionLimitRefusal). A row holding no scaled column is the same either way.
+[[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr, double bound) {
+	double lo = std::numeric_limits<double>::infinity();
+	double hi = 0.0;
+	for (auto c : constr.coefficients) {
+		double v = std::fabs(c);
+		if (v != 0.0) {
+			lo = std::min(lo, v);
+			hi = std::max(hi, v);
+		}
+	}
+	int exponent;
+	HighsScaleResult why = ChooseHighsScale(lo, hi, bound, exponent);
+	string clause = DescribeRowClause(model, constr, StringUtil::Format("%g", constr.rhs));
+	string where =
+	    clause.empty() ? string("A constraint in this query") : StringUtil::Format("Constraint `%s`", clause);
+	if (why == HighsScaleResult::OK) {
+		ThrowDecisionLimitRefusal(where);
+	}
+	if (why == HighsScaleResult::BOUND_TOO_LARGE) {
+		throw InvalidInputException("%s sets a limit of %g that HiGHS cannot hold alongside coefficients as small "
+		                            "as %g. Use a smaller limit, or express the column and its limit in the same "
+		                            "unit; Gurobi loads this range as written.",
+		                            where, constr.rhs, lo);
+	}
+	throw InvalidInputException("%s mixes numbers too far apart in size for HiGHS to load: coefficients run from %g "
+	                            "to %g in one constraint. Express the columns in the same unit, or install Gurobi, "
+	                            "which loads this range.",
+	                            where, lo, hi);
 }
 
 //! Multiply each out-of-window row of the constraint matrix through by its own power of
@@ -205,9 +228,8 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
         // to scale.
         const auto &constr = model.constraints[r];
         double bound = std::isfinite(constr.rhs) ? std::fabs(constr.rhs) : 0.0;
-        HighsScaleResult why = ChooseHighsScale(lo[r], hi[r], bound, exponent[r]);
-        if (why != HighsScaleResult::OK) {
-            ThrowUnscalableRow(model, constr, why, lo[r], hi[r]);
+        if (ChooseHighsScale(lo[r], hi[r], bound, exponent[r]) != HighsScaleResult::OK) {
+            ThrowUnscalableRow(model, constr, bound);
         }
         any = any || exponent[r] != 0;
     }
@@ -277,14 +299,10 @@ double HighsHessianValue(const SolverModel &model, idx_t k, const vector<int> &c
 	return std::ldexp(value, column_exponent[row] + column_exponent[col]);
 }
 
-//! Choose the power of two the objective is multiplied by so its Hessian entries land inside
-//! the matrix window and its linear coefficients under `infinite_cost`, and apply it to
-//! `cost`. It is the row rule with the Hessian as the coefficients and the linear
-//! coefficients as the bound. Multiplying an objective by a positive constant moves no
-//! optimum, and readback divides the objective value back. An objective already inside both
-//! windows gets 0 and loads as before; one that cannot be placed is refused, as a row is.
-int ScaleObjectiveIntoHighsWindow(const SolverModel &model, const vector<int> &column_exponent,
-                                  std::vector<double> &cost) {
+//! The row rule for the objective with each column scaled by `column_exponent` and linear coefficients `cost`: the
+//! Hessian entries are the coefficients and the largest linear coefficient is the bound.
+HighsScaleResult ChooseObjectiveScale(const SolverModel &model, const vector<int> &column_exponent,
+                                      const std::vector<double> &cost, int &exponent) {
 	double lo = std::numeric_limits<double>::infinity();
 	double hi = 0.0;
 	if (model.has_quadratic_obj) {
@@ -299,8 +317,23 @@ int ScaleObjectiveIntoHighsWindow(const SolverModel &model, const vector<int> &c
 	for (auto c : cost) {
 		largest_cost = std::max(largest_cost, std::fabs(c));
 	}
+	return ChooseHighsScale(lo, hi, largest_cost, exponent);
+}
+
+//! Choose the power of two the objective is multiplied by so its Hessian entries land inside
+//! the matrix window and its linear coefficients under `infinite_cost`, and apply it to
+//! `cost`. Multiplying an objective by a positive constant moves no optimum, and readback
+//! divides the objective value back. An objective already inside both windows gets 0 and
+//! loads as before; one that cannot be placed is refused, its cause judged as a row's is
+//! (ThrowUnscalableRow): on the objective as written, before any column scale.
+int ScaleObjectiveIntoHighsWindow(const SolverModel &model, const vector<int> &column_exponent,
+                                  std::vector<double> &cost) {
 	int exponent;
-	if (ChooseHighsScale(lo, hi, largest_cost, exponent) != HighsScaleResult::OK) {
+	if (ChooseObjectiveScale(model, column_exponent, cost, exponent) != HighsScaleResult::OK) {
+		if (ChooseObjectiveScale(model, vector<int>(model.num_vars, 0), model.obj_coeffs, exponent) ==
+		    HighsScaleResult::OK) {
+			ThrowDecisionLimitRefusal("The objective");
+		}
 		throw InvalidInputException("The objective mixes numbers too far apart in size for HiGHS to load. Express "
 		                            "the columns in the same unit, or install Gurobi, which loads this range.");
 	}

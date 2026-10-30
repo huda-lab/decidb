@@ -40,7 +40,11 @@ Covers:
   - test_an_objective_spanning_the_window_is_refused_in_sql_terms: the objective's scaling has a limit too
   - test_a_repair_model_outside_the_window_names_the_repair: and under DIAGNOSE, the repair model loads
   - test_a_repair_model_highs_refuses_is_reported_as_such: one it refuses is no answer about the repair
+  - test_a_refusal_a_decision_limit_causes_says_so: a set that fits as written fails only for a scaled limit
+  - test_a_refusal_the_written_numbers_cause_quotes_them: one that does not fit as written quotes its own numbers
 """
+
+import re
 
 import pytest
 
@@ -498,3 +502,87 @@ def test_a_repair_model_highs_refuses_is_reported_as_such(decidb_cli_highs):
     change = cols.index("suggested_change")
     assert any("could not analyse the repair model" in str(r[change]) for r in rows), rows
     assert not any("no loosening" in str(r[change]) for r in rows), rows
+
+
+# A column scaled for a limit past `infinite_bound` multiplies its entries, so a row or objective that fits the window
+# as written can fail once scaled. The cause is judged on the set as written: a set that fits is refused for the
+# decision's limit, one that does not is refused as itself, and either way the message quotes only numbers the user
+# wrote (2^30, the scale `x >= 1e29` takes, turns a coefficient of 1 into 1.07374e+09).
+@pytest.mark.edge_case
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "sql, where",
+    [
+        pytest.param(
+            """
+            SELECT id, x, y FROM (VALUES (1,1e-16),(2,1e-16)) t(id,w)
+            DECIDE x(REAL), y(REAL)
+            SUCH THAT x >= 1e29 AND y BETWEEN 0 AND 5 AND SUM(x + w*y) >= 0
+            MINIMIZE SUM(x)
+            """,
+            r"Constraint `sum\(x \+ w \* y\) >= 0`",
+            id="row",
+        ),
+        pytest.param(
+            """
+            SELECT id, x FROM (VALUES (1,1e29,1.0),(2,0.0,0.0001)) t(id,lb,w)
+            DECIDE x(REAL)
+            SUCH THAT x >= lb
+            MINIMIZE SUM(POWER(w * x - 1, 2))
+            """,
+            r"The objective",
+            id="objective",
+        ),
+    ],
+)
+def test_a_refusal_a_decision_limit_causes_says_so(decidb_cli_highs, sql, where):
+    """As written, each fits the window; a scaled `x` puts a 1.07374e+09 entry beside 1e-16, or a 2.3e+18 Hessian
+    entry beside 2e-8. The decision's limit is the cause, and the scaled numbers appear nowhere."""
+    cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    stderr = cli.execute_raw(sql, expect_large_numbers=True).stderr
+    assert re.search(
+        where + r" cannot be loaded by HiGHS together with a decision limit of 1e\+20 or more\. Use smaller limits on "
+        r"the decisions in it, or install Gurobi",
+        stderr,
+    ), stderr
+    assert "1.07374" not in stderr and "2.30584" not in stderr, stderr
+
+
+@pytest.mark.edge_case
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "clauses, match, scaled",
+    [
+        pytest.param(
+            "SUM(1e-45 * x) <= 1e19",
+            r"sets a limit of 1e\+19 that HiGHS cannot hold alongside coefficients as small as 1e-45\.",
+            "1.07374e-36",
+            id="bound-too-large",
+        ),
+        pytest.param(
+            "y BETWEEN 0 AND 5 AND SUM(1e10 * x + 1e-16 * y) >= 0",
+            r"mixes numbers too far apart in size for HiGHS to load: coefficients run from 1e-16 to 1e\+10 ",
+            "1.07374e+19",
+            id="spread",
+        ),
+    ],
+)
+def test_a_refusal_the_written_numbers_cause_quotes_them(decidb_cli_highs, clauses, match, scaled):
+    """A row that cannot be placed as written is refused as itself, though it holds a scaled `x`.
+
+    - bound-too-large: 1e-45 cannot be scaled up past a limit of 1e19; scaled, it read 1.07374e-36.
+    - spread: 1e-16 and 1e10 span more than the window; scaled, 1e10 read 1.07374e+19. Lowering `x`'s limit would not
+      load this row, so naming it would send the user the wrong way.
+    """
+    cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    stderr = cli.execute_raw(
+        f"""
+        SELECT id, x FROM (VALUES (1),(2)) t(id)
+        DECIDE x(REAL), y(REAL)
+        SUCH THAT x >= 1e29 AND {clauses}
+        MINIMIZE SUM(x)
+    """,
+        expect_large_numbers=True,
+    ).stderr
+    assert re.search(match, stderr), stderr
+    assert scaled not in stderr and "decision limit" not in stderr, stderr
