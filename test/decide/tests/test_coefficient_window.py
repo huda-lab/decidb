@@ -35,11 +35,12 @@ Covers:
   - test_a_bound_no_scaling_can_reach_is_refused: 1e40 is not the 1e30 sentinel
   - test_a_row_spanning_the_window_is_refused_in_sql_terms: scaling has a limit
   - test_a_bound_too_large_to_scale_is_refused_in_sql_terms: so does the bound it carries
-  - test_a_model_highs_refuses_to_load_fails_as_a_solve: a column bound or Hessian entry no row scaling reaches
-  - test_a_repair_model_highs_refuses_to_load_is_reported_as_such: and under DIAGNOSE, no false "no repair"
+  - test_a_column_or_objective_outside_the_window_is_solved: a column bound or objective no row scaling reaches
+  - test_a_scaled_columns_open_side_stays_open: the column's "no bound" side is not scaled into a bound
+  - test_an_objective_spanning_the_window_is_refused_in_sql_terms: the objective's scaling has a limit too
+  - test_a_repair_model_outside_the_window_names_the_repair: and under DIAGNOSE, the repair model loads
+  - test_a_repair_model_highs_refuses_is_reported_as_such: one it refuses is no answer about the repair
 """
-
-import re
 
 import pytest
 
@@ -318,47 +319,147 @@ def test_a_bound_too_large_to_scale_is_refused_in_sql_terms(decidb_cli_highs):
     )
 
 
-# A column bound and a Hessian entry have windows of their own, and row scaling reaches neither: `passModel` refuses a
-# column lower bound at or above `infinite_bound`, `passHessian` an entry at or above `large_matrix_value`. HiGHS never
-# runs, so there is no status to quote: the query fails as a solve HiGHS could not finish, never as a status number.
-_STATUS_NUMBER = re.compile(r"\((?:solver status )?-?\d+\)|status -?\d")
+# A column bound and the objective have windows of their own, and row scaling reaches neither. `passModel` refuses a
+# column floor at or above `infinite_bound` and reads a linear objective coefficient there as an infinite cost;
+# `passHessian` refuses a Hessian entry at or above `large_matrix_value` and drops one at or below `small_matrix_value`,
+# so the objective HiGHS minimised was not the one written. A column is placed by LP column scaling (x = 2^e·x', its
+# bounds divided and its entries multiplied), the objective by one factor over all its coefficients, each a power of
+# two, and the answer is scaled back. Direct solve is off, or A1 would answer the quadratic objectives without HiGHS.
+def _row_pair_oracle(oracle, lb, ub, linear, quadratic):
+    """Two independent rows of `x`, each minimising `quadratic·x² + linear·x`."""
+    oracle.create_model("row_pair")
+    names = [f"x_{i}" for i in range(2)]
+    for v in names:
+        oracle.add_variable(v, VarType.CONTINUOUS, lb=lb, ub=ub)
+    if quadratic:
+        oracle.set_quadratic_objective(
+            {v: linear for v in names}, {(v, v): quadratic for v in names}, ObjSense.MINIMIZE
+        )
+    else:
+        oracle.set_objective({v: linear for v in names}, ObjSense.MINIMIZE)
+    return oracle.solve(), [names]
+
+
+def _cost_pair_oracle(oracle):
+    """Two rows of `x + y >= 5` over `[0, 10]` boxes, `x` costing 1e25 and `y` 2e25."""
+    oracle.create_model("cost_pair")
+    for i in range(2):
+        oracle.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle.add_variable(f"y_{i}", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle.add_constraint({f"x_{i}": 1.0, f"y_{i}": 1.0}, ">=", 5.0, name=f"row_{i}")
+    oracle.set_objective(
+        {**{f"x_{i}": 1e25 for i in range(2)}, **{f"y_{i}": 2e25 for i in range(2)}}, ObjSense.MINIMIZE
+    )
+    return oracle.solve(), [[f"x_{i}" for i in range(2)], [f"y_{i}" for i in range(2)]]
+
+
+@pytest.mark.edge_case
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "decide, build, large",
+    [
+        pytest.param(
+            "x(REAL) SUCH THAT x >= 1e25 MINIMIZE SUM(x)",
+            lambda o: _row_pair_oracle(o, 1e25, None, 1.0, 0.0),
+            True,
+            id="column-bound",
+        ),
+        pytest.param(
+            "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(1e16 * POWER(x - 1, 2))",
+            lambda o: _row_pair_oracle(o, 0.0, 10.0, -2e16, 1e16),
+            True,
+            id="large-objective",
+        ),
+        pytest.param(
+            "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(1e-12 * POWER(x - 1, 2))",
+            lambda o: _row_pair_oracle(o, 0.0, 10.0, -2e-12, 1e-12),
+            False,
+            id="small-objective",
+        ),
+        pytest.param(
+            "x(REAL), y(REAL) SUCH THAT x BETWEEN 0 AND 10 AND y BETWEEN 0 AND 10 AND x + y >= 5 "
+            "MINIMIZE SUM(1e25 * x + 2e25 * y)",
+            _cost_pair_oracle,
+            True,
+            id="large-cost",
+        ),
+    ],
+)
+def test_a_column_or_objective_outside_the_window_is_solved(decidb_cli_highs, oracle_solver, decide, build, large):
+    """HiGHS answers what the oracle answers once each is scaled into its window.
+
+    - column-bound: the column scale. `x >= 1e25` is a floor `passModel` refused.
+    - large-objective: the objective scaled down. A 2e16 Hessian entry was a `passHessian` refusal.
+    - small-objective: the objective scaled up. A 2e-12 Hessian entry was dropped, and HiGHS answered x = 0.
+    - large-cost: the linear coefficients cap the objective's scale. Costs read as infinite failed the solve.
+    """
+    cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    rows, _ = cli.execute(f"SELECT * FROM (VALUES (1),(2)) t(id) DECIDE {decide}", expect_large_numbers=large)
+    result, columns = build(oracle_solver)
+
+    assert result.status == SolverStatus.OPTIMAL
+    for c, names in enumerate(columns):
+        expected = [result.variable_values[v] for v in names]
+        assert [r[1 + c] for r in rows] == pytest.approx(expected, rel=1e-6, abs=1e-6), rows
+
+
+@pytest.mark.edge_case
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clauses, lb, ub, sense",
+    [
+        pytest.param("x >= 9e29", 9e29, None, ("MAXIMIZE", ObjSense.MAXIMIZE), id="open-above"),
+        pytest.param("x <= -9e29 AND x >= -1e30", -1e30, -9e29, ("MINIMIZE", ObjSense.MINIMIZE), id="open-below"),
+    ],
+)
+def test_a_scaled_columns_open_side_stays_open(decidb_cli_highs, oracle_solver, clauses, lb, ub, sense):
+    """A column scaled for one bound keeps "no bound" on its other side.
+
+    The floor of 9e29 needs a scale of 2^34, which would bring the 1e30 "no bound" sentinel on the other side down to
+    5.8e19, inside the window, as a real ceiling: HiGHS would answer x = 1e30 where the oracle finds no optimum.
+    """
+    oracle_solver.create_model("open_side")
+    oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=lb, ub=ub)
+    oracle_solver.set_objective({"x": 1.0}, sense[1])
+    assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
+
+    decidb_cli_highs.assert_error(
+        f"SELECT id, x FROM (VALUES (1),(2)) t(id) DECIDE x(REAL) SUCH THAT {clauses} {sense[0]} SUM(x)",
+        match=r"DECIDE optimization is unbounded",
+        expect_large_numbers=True,
+    )
 
 
 @pytest.mark.edge_case
 @pytest.mark.error
-@pytest.mark.parametrize(
-    "objective_and_clause",
-    [
-        ("SUM(x)", "x >= 1e25"),
-        ("SUM(1e16 * POWER(x - 1, 2))", "x BETWEEN 0 AND 10"),
-    ],
-    ids=["pass_model", "pass_hessian"],
-)
-def test_a_model_highs_refuses_to_load_fails_as_a_solve(decidb_cli_highs, objective_and_clause):
-    """Both load refusals end the query with the ordinary solve-failed message naming HiGHS.
+def test_an_objective_spanning_the_window_is_refused_in_sql_terms(decidb_cli_highs):
+    """No single factor holds an objective whose own coefficients span more than the window.
 
-    They used to raise `INTERNAL Error: Failed to pass model to HiGHS: status -1`, which also ended the session. Direct
-    solve is off, or A1 would answer the quadratic one without HiGHS.
+    The objective is moved, never reshaped, as a row is: `POWER(w*x - 1, 2)` with `w` at 1e-6 and 1e7 puts Hessian
+    entries 1e-12 and 1e14 side by side, and the query is refused naming the objective rather than solved with the small
+    entry dropped.
     """
-    objective, clause = objective_and_clause
     cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
-    result = cli.execute_raw(
-        f"SELECT id, x FROM (VALUES (1),(2)) t(id) DECIDE x(REAL) SUCH THAT {clause} MINIMIZE {objective}",
+    cli.assert_error(
+        """
+        SELECT id, x FROM (VALUES (1,1e-6),(2,1e7)) t(id,w)
+        DECIDE x(REAL)
+        SUCH THAT x BETWEEN 0 AND 10
+        MINIMIZE SUM(POWER(w * x - 1, 2))
+    """,
+        match=r"The objective mixes numbers too far apart in size for HiGHS to load",
         expect_large_numbers=True,
     )
-    output = result.stderr + result.stdout
-    assert "DECIDE optimization failed: HiGHS could not solve this model." in output, output[:500]
-    assert "INTERNAL" not in output and not _STATUS_NUMBER.search(output), output[:500]
 
 
 @pytest.mark.edge_case
 @pytest.mark.query_diagnostics
-def test_a_repair_model_highs_refuses_to_load_is_reported_as_such(decidb_cli_highs):
-    """A repair model HiGHS cannot load is no answer about the repair.
+def test_a_repair_model_outside_the_window_names_the_repair(decidb_cli_highs):
+    """A repair model whose objective is outside HiGHS's window is scaled into it as the query's own is.
 
     `x BETWEEN 0 AND 5 AND x >= 8` is infeasible on its bounds alone, so the query's own model never reaches HiGHS; the
-    repair model carries the objective, whose Hessian HiGHS refuses. Read as an answer, that refusal reported "no
-    loosening of the clauses you wrote restores feasibility", which `x >= 5` refutes.
+    repair model carries the objective, whose 2e16 Hessian entry HiGHS refused, and the diagnosis then said "the solver
+    could not analyse the repair model". `x >= 5` is the repair.
     """
     rows, cols = decidb_cli_highs.execute(
         """
@@ -366,6 +467,31 @@ def test_a_repair_model_highs_refuses_to_load_is_reported_as_such(decidb_cli_hig
         DECIDE x(REAL)
         SUCH THAT x BETWEEN 0 AND 5 AND x >= 8
         MINIMIZE SUM(1e16 * POWER(x - 1, 2))
+    """,
+        expect_large_numbers=True,
+    )
+    clause = cols.index("clause")
+    change = cols.index("suggested_change")
+    assert any(r[clause] == "x >= 8" and r[change] == "x >= 5" for r in rows), rows
+
+
+@pytest.mark.edge_case
+@pytest.mark.query_diagnostics
+def test_a_repair_model_highs_refuses_is_reported_as_such(decidb_cli_highs):
+    """A repair model HiGHS refuses is no answer about the repair: the diagnosis says the solver could not analyse it.
+
+    The repair is found with the objective cleared; the objective spanning the window is refused only when the repair
+    model is solved again with it, and a candidate without its objective cannot be compared with another. Read as an
+    answer, that refusal would report "no loosening of the clauses you wrote restores feasibility", which `x >= 5`
+    refutes.
+    """
+    cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    rows, cols = cli.execute(
+        """
+        DIAGNOSE SELECT id, x FROM (VALUES (1,1e-6),(2,1e7)) t(id,w)
+        DECIDE x(REAL)
+        SUCH THAT x BETWEEN 0 AND 5 AND x >= 8
+        MINIMIZE SUM(POWER(w * x - 1, 2))
     """,
         expect_large_numbers=True,
     )

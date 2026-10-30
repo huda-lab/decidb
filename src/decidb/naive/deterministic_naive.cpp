@@ -77,14 +77,19 @@ string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr
 constexpr double HIGHS_SMALL_MATRIX_VALUE = 1e-9;
 constexpr double HIGHS_LARGE_MATRIX_VALUE = 1e15;
 // |bound| >= `infinite_bound` (1e20) is read by HiGHS as ±infinity, which on the finite
-// side of a row is an error rather than a bound. Scaling carries the bound along with the
-// row, so this is what caps how far a row may be scaled up.
+// side of a row or column is an error rather than a bound. Scaling carries the bound along
+// with the row, so this is what caps how far a row may be scaled up. A linear objective
+// coefficient has the same ceiling (`infinite_cost`, also 1e20): HiGHS reads one at or
+// past it as an infinite cost and fails the solve.
 constexpr double HIGHS_INFINITE_BOUND = 1e20;
-//! Why a row could not be placed inside the window, so the refusal can say which.
-enum class RowScaleResult { OK, SPREAD_TOO_WIDE, BOUND_TOO_LARGE };
+//! Why a row or the objective could not be placed inside the window, so the refusal can say which.
+enum class HighsScaleResult { OK, SPREAD_TOO_WIDE, BOUND_TOO_LARGE };
 
 //! Choose a power of two to multiply one row through by so its coefficients land inside
-//! HiGHS's window. Scaling a row by a positive constant is the one rewrite that leaves a
+//! HiGHS's window. The objective and the columns are placed by the same rule (see
+//! ScaleObjectiveIntoHighsWindow and ChooseHighsColumnScales); a set with no coefficients
+//! (`hi` = 0) is placed by its bound alone, moved only as far as the bound needs.
+//! Scaling a row by a positive constant is the one rewrite that leaves a
 //! constraint's meaning exactly intact — `1e-9x₁ + 1e-9x₂ >= 1` and `x₁ + x₂ >= 1e9` have
 //! identical solution sets — so unlike rounding a sub-tolerance entry to zero it cannot
 //! change an answer. (Rounding can: drop both coefficients of that same row and it becomes
@@ -100,45 +105,50 @@ enum class RowScaleResult { OK, SPREAD_TOO_WIDE, BOUND_TOO_LARGE };
 //! and answer instead of dying at `passModel`. Rows inside both
 //! windows return exponent 0 and are left untouched rather than re-centred, so this
 //! changes nothing about the models that load today.
-RowScaleResult ChooseHighsRowScale(double lo, double hi, double bound, int &exponent) {
-    exponent = 0;
-    if (lo > HIGHS_SMALL_MATRIX_VALUE && hi < HIGHS_LARGE_MATRIX_VALUE && bound < HIGHS_INFINITE_BOUND) {
-        return RowScaleResult::OK;
-    }
-    // Smallest k with 2^k·lo > small; largest k with 2^k·hi < large. Both thresholds are
-    // exclusive on the side HiGHS rejects (it drops at <= small and errors at >= large).
-    int k_min = static_cast<int>(std::floor(std::log2(HIGHS_SMALL_MATRIX_VALUE / lo))) + 1;
-    int k_max = static_cast<int>(std::ceil(std::log2(HIGHS_LARGE_MATRIX_VALUE / hi))) - 1;
-    if (k_min > k_max) {
-        // The row's own coefficients span more than the window's ~24 orders of magnitude.
-        // No single factor can hold both ends, and rescaling is all we are allowed to do.
-        return RowScaleResult::SPREAD_TOO_WIDE;
-    }
-    if (bound > 0.0) {
-        int k_bound = static_cast<int>(std::ceil(std::log2(HIGHS_INFINITE_BOUND / bound))) - 1;
-        if (k_min > k_bound) {
-            // The coefficients fit, but only by scaling the row up so far that its bound
-            // crosses into HiGHS's infinity and stops being a bound at all.
-            return RowScaleResult::BOUND_TOO_LARGE;
-        }
-        k_max = std::min(k_max, k_bound);
-    }
-    // Centre the row in the window rather than shifting it just far enough to clear the
-    // edge: a coefficient sitting a hair above the drop threshold is inside the window but
-    // still badly conditioned.
-    double window_centre = 0.5 * (std::log2(HIGHS_SMALL_MATRIX_VALUE) + std::log2(HIGHS_LARGE_MATRIX_VALUE));
-    double row_centre = 0.5 * (std::log2(lo) + std::log2(hi));
-    int k = static_cast<int>(std::lround(window_centre - row_centre));
-    exponent = std::min(std::max(k, k_min), k_max);
-    return RowScaleResult::OK;
+HighsScaleResult ChooseHighsScale(double lo, double hi, double bound, int &exponent) {
+	exponent = 0;
+	if (lo > HIGHS_SMALL_MATRIX_VALUE && hi < HIGHS_LARGE_MATRIX_VALUE && bound < HIGHS_INFINITE_BOUND) {
+		return HighsScaleResult::OK;
+	}
+	int k_min = std::numeric_limits<int>::min();
+	int k_max = std::numeric_limits<int>::max();
+	int k = 0;
+	if (hi > 0.0) {
+		// Smallest k with 2^k·lo > small; largest k with 2^k·hi < large. Both thresholds are
+		// exclusive on the side HiGHS rejects (it drops at <= small and errors at >= large).
+		k_min = static_cast<int>(std::floor(std::log2(HIGHS_SMALL_MATRIX_VALUE / lo))) + 1;
+		k_max = static_cast<int>(std::ceil(std::log2(HIGHS_LARGE_MATRIX_VALUE / hi))) - 1;
+		if (k_min > k_max) {
+			// The row's own coefficients span more than the window's ~24 orders of magnitude.
+			// No single factor can hold both ends, and rescaling is all we are allowed to do.
+			return HighsScaleResult::SPREAD_TOO_WIDE;
+		}
+		// Centre the row in the window rather than shifting it just far enough to clear the
+		// edge: a coefficient sitting a hair above the drop threshold is inside the window but
+		// still badly conditioned.
+		double window_centre = 0.5 * (std::log2(HIGHS_SMALL_MATRIX_VALUE) + std::log2(HIGHS_LARGE_MATRIX_VALUE));
+		double row_centre = 0.5 * (std::log2(lo) + std::log2(hi));
+		k = static_cast<int>(std::lround(window_centre - row_centre));
+	}
+	if (bound > 0.0) {
+		int k_bound = static_cast<int>(std::ceil(std::log2(HIGHS_INFINITE_BOUND / bound))) - 1;
+		if (k_min > k_bound) {
+			// The coefficients fit, but only by scaling the row up so far that its bound
+			// crosses into HiGHS's infinity and stops being a bound at all.
+			return HighsScaleResult::BOUND_TOO_LARGE;
+		}
+		k_max = std::min(k_max, k_bound);
+	}
+	exponent = std::min(std::max(k, k_min), k_max);
+	return HighsScaleResult::OK;
 }
 
-[[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr, RowScaleResult why,
+[[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr, HighsScaleResult why,
                                      double lo, double hi) {
     string clause = DescribeRowClause(model, constr, StringUtil::Format("%g", constr.rhs));
     string where = clause.empty() ? string("A constraint in this query")
                                   : StringUtil::Format("Constraint `%s`", clause);
-    if (why == RowScaleResult::BOUND_TOO_LARGE) {
+    if (why == HighsScaleResult::BOUND_TOO_LARGE) {
         throw InvalidInputException(
             "%s sets a limit of %g that HiGHS cannot hold alongside coefficients as small "
             "as %g. Use a smaller limit, or express the column and its limit in the same "
@@ -195,8 +205,8 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
         // to scale.
         const auto &constr = model.constraints[r];
         double bound = std::isfinite(constr.rhs) ? std::fabs(constr.rhs) : 0.0;
-        RowScaleResult why = ChooseHighsRowScale(lo[r], hi[r], bound, exponent[r]);
-        if (why != RowScaleResult::OK) {
+        HighsScaleResult why = ChooseHighsScale(lo[r], hi[r], bound, exponent[r]);
+        if (why != HighsScaleResult::OK) {
             ThrowUnscalableRow(model, constr, why, lo[r], hi[r]);
         }
         any = any || exponent[r] != 0;
@@ -226,6 +236,80 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
             row_upper[r] = scaled;
         }
     }
+}
+
+//! The power of two `e` each column is scaled by, x = 2^e·x', so its bounds land inside
+//! HiGHS's window: the bounds are divided by 2^e, and the column's matrix entries, cost and
+//! Hessian entries multiplied. This is LP column scaling, applied only to a column HiGHS
+//! cannot hold as written, so every other column keeps e = 0 and loads exactly as before.
+//! That column has a bound past `infinite_bound` on the side HiGHS cannot read as "no
+//! bound": `x >= 1e25` is a floor (Gurobi answers x = 1e25) that `passModel` refuses. The
+//! same magnitude on the other side (`x <= 1e25`) is open in DeciDB's convention
+//! (DecideIsOpenAbove) and in HiGHS's alike, and stays open. The column moves only as far
+//! as its bound needs; its entries grow by that factor, and the row scaling that runs
+//! after this places the rows they land in. An infinite bound never arrives: a box holding
+//! one is answered infeasible before any backend sees the model.
+vector<int> ChooseHighsColumnScales(const SolverModel &model) {
+	vector<int> exponent(model.num_vars, 0);
+	for (idx_t i = 0; i < model.num_vars; i++) {
+		double lower = model.col_lower[i];
+		double upper = model.col_upper[i];
+		double bound =
+		    std::max(lower >= HIGHS_INFINITE_BOUND ? lower : 0.0, upper <= -HIGHS_INFINITE_BOUND ? -upper : 0.0);
+		if (bound == 0.0) {
+			continue;
+		}
+		// Dividing a bound by 2^e is multiplying it by 2^-e, so the row rule's choice for
+		// a set with no coefficients, negated, is the column's.
+		ChooseHighsScale(std::numeric_limits<double>::infinity(), 0.0, bound, exponent[i]);
+		exponent[i] = -exponent[i];
+	}
+	return exponent;
+}
+
+//! The value HiGHS's Hessian holds for the objective's k-th quadratic term before the
+//! objective's own scale: the diagonal doubled (see the Hessian conversion in Load) and
+//! both columns' scales applied.
+double HighsHessianValue(const SolverModel &model, idx_t k, const vector<int> &column_exponent) {
+	int row = model.q_rows[k];
+	int col = model.q_cols[k];
+	double value = row == col ? 2.0 * model.q_vals[k] : model.q_vals[k];
+	return std::ldexp(value, column_exponent[row] + column_exponent[col]);
+}
+
+//! Choose the power of two the objective is multiplied by so its Hessian entries land inside
+//! the matrix window and its linear coefficients under `infinite_cost`, and apply it to
+//! `cost`. It is the row rule with the Hessian as the coefficients and the linear
+//! coefficients as the bound. Multiplying an objective by a positive constant moves no
+//! optimum, and readback divides the objective value back. An objective already inside both
+//! windows gets 0 and loads as before; one that cannot be placed is refused, as a row is.
+int ScaleObjectiveIntoHighsWindow(const SolverModel &model, const vector<int> &column_exponent,
+                                  std::vector<double> &cost) {
+	double lo = std::numeric_limits<double>::infinity();
+	double hi = 0.0;
+	if (model.has_quadratic_obj) {
+		// The model builder strips exact zeros from Q, and a column scale only multiplies.
+		for (idx_t k = 0; k < model.q_vals.size(); k++) {
+			double v = std::fabs(HighsHessianValue(model, k, column_exponent));
+			lo = std::min(lo, v);
+			hi = std::max(hi, v);
+		}
+	}
+	double largest_cost = 0.0;
+	for (auto c : cost) {
+		largest_cost = std::max(largest_cost, std::fabs(c));
+	}
+	int exponent;
+	if (ChooseHighsScale(lo, hi, largest_cost, exponent) != HighsScaleResult::OK) {
+		throw InvalidInputException("The objective mixes numbers too far apart in size for HiGHS to load. Express "
+		                            "the columns in the same unit, or install Gurobi, which loads this range.");
+	}
+	if (exponent != 0) {
+		for (auto &c : cost) {
+			c = std::ldexp(c, exponent);
+		}
+	}
+	return exponent;
 }
 
 //! Resumable HiGHS handle. Load() builds the model into the `highs` object once
@@ -269,11 +353,27 @@ private:
     //! `mip_dual_bound` / `mip_gap` for MIP solves; on an LP/QP timeout they hold
     //! defaults (0 / nan) that must not be read back as a proven bound.
     bool is_mip = false;
+	//! The powers of two Load placed the model in HiGHS's window with (ChooseHighsColumnScales,
+	//! ScaleObjectiveIntoHighsWindow), so readback can return the model's own values.
+	vector<int> column_exponent;
+	int objective_exponent = 0;
 
 	//! Load `model` into `highs`. False when the model cannot be run, with `not_loaded` holding the solve's result:
 	//! INFEASIBLE when an integer column's bounds hold no whole number, OTHER when HiGHS refuses the model.
 	bool Load(const SolverModel &model, SolverResult &not_loaded);
 	SolverResult RunAndReadback(double time_limit_seconds);
+	//! The model's objective value from HiGHS's: the objective's scale divided out.
+	double UnscaleObjective(double value) const {
+		return std::ldexp(value, -objective_exponent);
+	}
+	//! The model's values of the first `total_vars` columns from HiGHS's: x = 2^e·x'.
+	vector<double> UnscaleColumns(const std::vector<double> &values) {
+		vector<double> result(total_vars);
+		for (idx_t i = 0; i < total_vars; i++) {
+			result[i] = std::ldexp(values[i], column_exponent[i]);
+		}
+		return result;
+	}
 };
 
 bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
@@ -304,6 +404,9 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
     }
 
     ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
+    // Columns first: a column's scale multiplies its matrix entries, cost and Hessian
+    // entries, which the row and objective scaling below then place.
+    column_exponent = ChooseHighsColumnScales(model);
 
     //===--------------------------------------------------------------------===//
     // 2. Convert SolverModel constraints to HiGHS range format + COO matrix
@@ -332,7 +435,7 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
         for (idx_t j = 0; j < constr.indices.size(); j++) {
             a_rows.push_back(static_cast<int>(constraint_idx));
             a_cols.push_back(constr.indices[j]);
-            a_vals.push_back(constr.coefficients[j]);
+            a_vals.push_back(std::ldexp(constr.coefficients[j], column_exponent[constr.indices[j]]));
         }
 
         if (constr.sense == '>') {
@@ -367,9 +470,23 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
     lp.num_row_ = num_constraints;
     lp.sense_ = sense;
     lp.offset_ = 0.0;
-    lp.col_cost_ = model.obj_coeffs;
     lp.col_lower_ = model.col_lower;
     lp.col_upper_ = model.col_upper;
+    lp.col_cost_.resize(total_vars);
+    for (idx_t i = 0; i < total_vars; i++) {
+        lp.col_cost_[i] = std::ldexp(model.obj_coeffs[i], column_exponent[i]);
+        if (column_exponent[i] == 0) {
+            continue;
+        }
+        // A scaled column's bound past its window is divided into it. Its other side is
+        // open (a floor past `infinite_bound` leaves no finite ceiling above it), and stays
+        // open: divided, the 1e30 sentinel could land inside the window as a real bound.
+        lp.col_lower_[i] = DecideIsOpenBelow(model.col_lower[i]) ? -kHighsInf
+                                                                 : std::ldexp(model.col_lower[i], -column_exponent[i]);
+        lp.col_upper_[i] = DecideIsOpenAbove(model.col_upper[i]) ? kHighsInf
+                                                                 : std::ldexp(model.col_upper[i], -column_exponent[i]);
+    }
+    objective_exponent = ScaleObjectiveIntoHighsWindow(model, column_exponent, lp.col_cost_);
     // HiGHS can answer below a fractional bound of an integer column whose other side is
     // open (`x >= -2.5` minimized to -3), so an integer column takes the whole bounds its
     // bounds imply. One left with no whole number cannot be loaded: HiGHS refuses an
@@ -425,14 +542,14 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 	// through — a matrix entry dropped for being sub-tolerance, an inconsistent bound
 	// pair left in place so the solve can deduce infeasibility from it. Treating those as
 	// fatal turned an ordinary query into an internal error with a stack trace. Only a
-	// kError stops here, and it is a solve HiGHS could not run — a column bound past its
-	// `infinite_bound`, say — reported as OTHER exactly as `RunAndReadback` reports a
-	// kError from `run()`, with no status text: HiGHS never reached a model status.
+	// kError stops here, and it is a solve HiGHS could not run, reported as OTHER exactly
+	// as `RunAndReadback` reports a kError from `run()`, with no status text: HiGHS never
+	// reached a model status.
 	//
-	// The dropped-coefficient case should no longer arrive here at all: every row is
-	// scaled into the window above, and the model builder strips exact zeros, so there is
-	// nothing left below the threshold to drop. Proceeding is still the right response if
-	// one appears.
+	// Neither window edge should arrive here at all: every row, column and the objective
+	// is scaled into the window above, and the model builder strips exact zeros, so there
+	// is nothing left below the threshold to drop or past the ceiling to refuse.
+	// Proceeding is still the right response if one appears.
 	if (status == HighsStatus::kError) {
 		not_loaded.status = SolverStatus::OTHER;
 		return false;
@@ -464,7 +581,8 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
         // `0.5*q_ii*x_i^2` over the diagonal but a full `q_ij*x_i*x_j` off it. The 1/2 is
         // there to undo the double-counting of an off-diagonal pair, which appears at both
         // (i,j) and (j,i) of the symmetric matrix; a diagonal entry is never mirrored, so
-        // nothing cancels its 1/2. Double the diagonal on the way in and leave the rest.
+        // nothing cancels its 1/2. HighsHessianValue doubles the diagonal on the way in and
+        // leaves the rest.
         //
         // Doubling every entry instead would not merely rescale the objective: it inflates
         // the cross terms relative to the squares, which turns the PSD Q of a multi-variable
@@ -492,7 +610,7 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
             int col = model.q_cols[k];
             HighsInt pos = current_pos[col];
             q_index[pos] = model.q_rows[k];
-            q_value[pos] = (model.q_rows[k] == col) ? 2.0 * model.q_vals[k] : model.q_vals[k];
+            q_value[pos] = std::ldexp(HighsHessianValue(model, k, column_exponent), objective_exponent);
             current_pos[col]++;
         }
 
@@ -501,9 +619,9 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
                                    q_start.data(), q_index.data(), q_value.data());
 		// Same kWarning/kError split as `passModel` above: `assessHessian` drops
 		// sub-tolerance entries of the normalised Hessian and warns, which is a report
-		// rather than a failure. Row scaling does not reach here — it rewrites constraint
-		// rows, and the Hessian is the objective — so an entry past HiGHS's ceiling is a
-		// kError, reported as `passModel`'s is.
+		// rather than a failure, and an entry past HiGHS's ceiling is a kError, reported as
+		// `passModel`'s is. The objective scale chosen above keeps every entry inside both
+		// edges, so neither should arrive here.
 		if (status == HighsStatus::kError) {
 			not_loaded.status = SolverStatus::OTHER;
 			return false;
@@ -586,7 +704,7 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
             // "unavailable" default there and for non-finite values.
             if (is_mip && std::isfinite(info.mip_dual_bound) &&
                 std::fabs(info.mip_dual_bound) < DECIDE_EFFECTIVE_INFINITY) {
-                result.best_bound = info.mip_dual_bound;
+                result.best_bound = UnscaleObjective(info.mip_dual_bound);
             }
             // Incumbent reads (objective / gap / solution vector) are only valid
             // when HiGHS found a feasible solution; otherwise objective_function_value
@@ -595,14 +713,13 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
             // be meaningful (an LP feasible-at-timeout would read back nan).
             if (info.primal_solution_status == kSolutionStatusFeasible) {
                 result.has_solution = true;
-                result.objective_value = info.objective_function_value;
+                result.objective_value = UnscaleObjective(info.objective_function_value);
                 if (is_mip && std::isfinite(info.mip_gap) && info.mip_gap < DECIDE_EFFECTIVE_INFINITY) {
                     result.gap = info.mip_gap;
                 }
                 const HighsSolution& incumbent = highs.getSolution();
                 if (incumbent.col_value.size() >= total_vars) {
-                    result.solution.assign(incumbent.col_value.begin(),
-                                           incumbent.col_value.begin() + total_vars);
+                    result.solution = UnscaleColumns(incumbent.col_value);
                 }
             }
             break;
@@ -629,22 +746,19 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
             total_vars, (idx_t)solution.col_value.size());
     }
 
-    vector<double> result(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {
-        double val = solution.col_value[i];
-        if (!std::isfinite(val)) {
+        if (!std::isfinite(solution.col_value[i])) {
             throw InternalException(
                 "HiGHS returned invalid solution value (NaN or Infinity) for variable %llu", i);
         }
-        result[i] = val;
     }
 
     SolverResult solve_result;
     solve_result.status = SolverStatus::OPTIMAL;
-    solve_result.solution = std::move(result);
+    solve_result.solution = UnscaleColumns(solution.col_value);
     // Objective value at the optimum, in the model's own sense (the diagnostics
     // stage-2 re-solve reads this as the achievable objective).
-    solve_result.objective_value = highs.getInfo().objective_function_value;
+    solve_result.objective_value = UnscaleObjective(highs.getInfo().objective_function_value);
     return solve_result;
 }
 
