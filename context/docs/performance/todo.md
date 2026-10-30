@@ -24,7 +24,13 @@ Find the point where each workload and backend stops fitting comfortably, and wh
 ## PERF-15 — RHS-bound windows hold every source column
 
 The bounds a clause's right-hand side reads from data (`decide_rewrite_rhs_window.cpp`) are a stack of
-LogicalWindows above the DECIDE source, the shape PERF-3 replaces: each window holds every source column to attach
-one value per group. Measure the cost on a 1M-row clause with a data-bound RHS first; if it matters, the fix is
-PERF-3's shape, an aggregate over the columns the bound reads on a second read of the source (`DirectSourceReader`),
-joined back by its group key.
+LogicalWindows above the DECIDE source; each holds every source column to attach one value per group. Measured
+(lane AS, large.db, 1M-row lineitem JOIN supplier, medians of 3, bound read from data against the same bound written
+as a number): on the direct path R1 and A1 compute a same-key group bound themselves, with no window; the shapes left
+(a bound reducer by a coarser key, a row bound read from a reducer) cost +45 to +121 ms and +135 to +178 MiB on a
+6-column source, +150 to +181 ms and +540 to +580 MiB on a 23-column one. On the solver path a bound costs +24 to +76
+ms before the solve on 6 columns, +136 to +713 ms and 0.56 to 1 GiB on 23, more for each bound on a different key.
+Emulated in SQL, a grouped aggregate on a recomputed read joined back by the null-safe key costs +4 to +10 ms and
+about +30 MiB on a single-table source; on a join source materialized as a CTE it ties the windows. Design under
+review: decorrelate each bound as a scalar-aggregate subquery is unnested (PERF-3's side aggregate on the shared
+reader).
