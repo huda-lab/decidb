@@ -15,15 +15,16 @@
   1,024 binaries, the rounding loop once per rounded point; past the limit each stops and returns what it has. Add
   both to `third_party/highs/README.md` and § 4 of `highs_upstream.md`.
 
-## BUG-26 — A `per` key is checked against its own columns (Q8 at the large tier)
+## BUG-27 — Two collations of one column share a key
 
-- **Observed:** `per o_orderpriority: sum(assign) by (o_orderpriority) >= 20` builds a scope check that
-  `o_orderpriority` determines `o_orderpriority` (`BuildClauseScopeChecks`, `decide_canonicalizer.cpp:1811`). The
-  check always passes yet sorts every input row in a window. Q8's four such checks take it from 0.7 s and 0.7 GiB
-  (2026-09-09) to 3.7 s and 4.3 GiB (2026-10-30); Q1 and P4 carry them too.
-- **Fix (owner's delegate, to confirm):** a key determines every expression over its own columns (reflexivity), so
-  no scope check is built for one. The rule applies at every site that builds a `DETERMINES` check: a clause's values
-  and `by` columns, and a reducer's body.
+- **Observed:** `FindOrCreateDecideKey` matches key elements with `Expression::Equals`, which ignores the collation,
+  so `per t.g` over a NOCASE column and `by (t.g COLLATE noaccent)` share one key. With rows 'a' and 'A' the `per`
+  class holds two `by` values, yet no scope check raises: the query answers `x = 1, 1, 1` instead of stopping with
+  "per t.g does not determine t.g COLLATE noaccent". `KeyHolds` (BUG-26) reads the same equality. Repro:
+  `SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM (VALUES (1,'a'),(2,'A'),(3,'b')) v(id,g)) t DECIDE
+  x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE noaccent) <= 1 MAXIMIZE SUM(x)`.
+- **Fix (to rule):** key elements compare as rows group on them, collation included, in both `FindOrCreateDecideKey`
+  and `KeyHolds`.
 
 ## Limitations (not bugs)
 

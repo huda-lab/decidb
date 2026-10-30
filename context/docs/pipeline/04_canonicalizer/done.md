@@ -528,7 +528,11 @@ instance (D68). The objective: `per ()` over its values and decisions,
 then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
 A `by` key's check reads the key as its rows group (`DecideKeyElement::Grouping()`, D69): over
 a NOCASE column, 'a' and 'A' are one value.
-The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check. The message texts are rendered
+The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check.
+Nor does one of the key's own elements as rows group on it (`KeyHolds`, reflexivity): a key determines its
+grouping expression by construction, so `per a: sum(x) by (a)` builds no check for `a`. A function of a key column
+still gets one, since rows that group together can differ under it (0.0 and -0.0 under `atan2(a, -1)`, '1 month'
+and '30 days' under `date_part('day', a)`). The message texts are rendered
 here, through `RenderDecideSource`, from source fragments and relation aliases
 (`DecideScopeChecks`), since only planning still knows them.
 
