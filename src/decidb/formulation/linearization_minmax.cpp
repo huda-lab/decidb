@@ -138,6 +138,8 @@ vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input
     bool has_groups = !ec.row_group_ids.empty();
     idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
     vector<MinMaxGroup> groups(group_count);
+    SparseCoeffAccumulator row_terms;
+    row_terms.BeginForDecisions(indexer, ec.variable_indices.size(), written);
 
     for (idx_t r = 0; r < num_rows; r++) {
         idx_t g = has_groups ? ec.row_group_ids[r] : 0;
@@ -168,8 +170,9 @@ vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input
             if (coef == 0.0) {
                 continue;
             }
-            member.link.AddColumn(static_cast<int>(indexer.Get(v, r)), -coef, written);
+            row_terms.Add(static_cast<int>(indexer.Get(v, r)), -coef);
         }
+        row_terms.Flush(member.link.indices, member.link.coefficients);
         member.link.constant = constant;
         group.members.push_back(std::move(member));
     }
@@ -377,10 +380,7 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
         return sole_column;
     }
     idx_t t_idx = AddGlobalContinuousAux(input, indexer, member.range, 0.0, label);
-    SolverInput::RawConstraint pin;
-    pin.indices.push_back((int)t_idx);
-    pin.coefficients.push_back(1.0);
-    member.link.AppendTo(pin);
+    auto pin = member.link.LeftHandSide((int)t_idx);
     pin.sense = '=';
     pin.rhs = member.link.constant;
     pin.kind = ConstraintKind::STRUCTURAL;
@@ -405,10 +405,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
     if (spec.need_envelope) {
         char sense = spec.is_max ? '>' : '<';
         for (auto &member : members) {
-            SolverInput::RawConstraint rc;
-            rc.indices.push_back(result_col);
-            rc.coefficients.push_back(1.0);
-            member.link.AppendTo(rc);
+            auto rc = member.link.LeftHandSide(result_col);
             rc.sense = sense;
             rc.rhs = member.link.constant;
             rc.kind = spec.envelope_kind;
@@ -461,10 +458,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
         sum_y.indices.push_back((int)y_idx);
         sum_y.coefficients.push_back(1.0);
 
-        SolverInput::RawConstraint rc;
-        rc.indices.push_back(result_col);
-        rc.coefficients.push_back(1.0);
-        member.link.AppendTo(rc);
+        auto rc = member.link.LeftHandSide(result_col, 1);
         rc.indices.push_back((int)y_idx);
         rc.coefficients.push_back(m_coeff);
         rc.sense = sense;
@@ -488,16 +482,21 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     idx_t num_rows = input.num_rows;
 
     // Save objective data (needed for constraint generation in the two-level MIN/MAX
-    // and flat aggregate paths). Defer the deep copy of objective_coefficients
-    // — which is a vector<vector<double>> sized num_terms * num_rows — until
-    // we know we'll take one of those paths.
+    // and flat aggregate paths). The coefficients — num_terms columns of num_rows — move rather
+    // than copy: each of those paths clears the objective from `input` before it reads anything
+    // else of it, and the one that keeps it (inner SUM, outer SUM) moves it back.
     auto saved_obj_var_indices = input.objective_variable_indices;
     bool need_saved_obj = !saved_obj_var_indices.empty() &&
                           ((spec.per_inner_agg != ObjectiveAggregateType::NONE && input.objective_num_groups > 0) ||
                            spec.flat_agg != ObjectiveAggregateType::NONE);
     vector<CoefficientColumn> saved_obj_coefficients;
     if (need_saved_obj) {
-        saved_obj_coefficients = input.objective_coefficients;
+        saved_obj_coefficients = std::move(input.objective_coefficients);
+    }
+    // The sums of the members' rows, one member at a time (AddObjectiveRowTerms).
+    SparseCoeffAccumulator row_terms;
+    if (need_saved_obj) {
+        row_terms.BeginForDecisions(indexer, saved_obj_var_indices.size(), input.objective_written);
     }
 
     // One row of the saved objective expression, bracketed against every contributing
@@ -611,10 +610,11 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         return link_spec;
     };
 
-    // Accumulate one row of the saved objective expression into `link`, negated:
-    // the linking row is `z - expr op bound`, so the expression's coefficients
-    // enter with the opposite sign and its constant part lands on the bound.
-    // `scale` carries the inner-AVG 1/n_g factor at the two-level sites; 1.0 elsewhere.
+    // Accumulate one row of the saved objective expression, negated: the linking row is
+    // `z - expr op bound`, so the expression's coefficients enter with the opposite sign
+    // and its constant part lands on the bound. The columns collect in `row_terms` until
+    // a member's rows are all in; `link` takes them there. `scale` carries the
+    // inner-AVG 1/n_g factor at the two-level sites; 1.0 elsewhere.
     auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
             double coeff = saved_obj_coefficients[t].Get(row) * scale;
@@ -625,7 +625,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             if (v == DConstants::INVALID_INDEX) {
                 link.AddConstant(coeff, input.objective_written);
             } else {
-                link.AddColumn((int)indexer.Get(v, row), -coeff, input.objective_written);
+                row_terms.Add((int)indexer.Get(v, row), -coeff);
             }
         }
     };
@@ -709,6 +709,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     idx_t row = active_flat_rows[k];
                     ExtremumMember member;
                     AddObjectiveRowTerms(member.link, row, 1.0);
+                    row_terms.Flush(member.link.indices, member.link.coefficients);
                     member.range = row_range_for(row);
                     members.push_back(std::move(member));
                 }
@@ -744,7 +745,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             members.reserve(K);
             for (idx_t g = 0; g < K; g++) {
                 ExtremumMember member;
-                member.link.AddColumn((int)group_value_indices[g], -1.0, input.objective_written);
+                member.link.indices.push_back((int)group_value_indices[g]);
+                member.link.coefficients.push_back(-1.0);
                 member.range = row_family();
                 members.push_back(std::move(member));
             }
@@ -810,6 +812,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     AddObjectiveRowTerms(member.link, obj_flat_rows[k], scale);
                 }
+                row_terms.Flush(member.link.indices, member.link.coefficients);
                 // Boxed by the family over group sums — looser than a per-group bracket,
                 // but sound (it covers every group) and finite whenever any of them is.
                 // The same range `w` itself was boxed by, so the two cannot drift.
@@ -858,6 +861,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         for (idx_t row : active_rows) {
             ExtremumMember member;
             AddObjectiveRowTerms(member.link, row, 1.0);
+            row_terms.Flush(member.link.indices, member.link.coefficients);
             member.range = row_range_for(row);
             members.push_back(std::move(member));
         }
@@ -877,17 +881,19 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
 //! Accumulate one row of a composed term's inner expression into `link`, negated:
 //! the pinning row is `z - expr op bound`, so the expression's coefficients enter
 //! with the opposite sign and its constant part lands on the bound.
-static void AddComposedRowTerms(const VarIndexer &indexer, MinMaxLinkRow &link, const vector<DecideTerm> &inner_terms,
-                                const vector<vector<double>> &per_term_coefs, idx_t row, const string &written) {
+static void AddComposedRowTerms(const VarIndexer &indexer, SparseCoeffAccumulator &row_terms, MinMaxLinkRow &link,
+                                const vector<DecideTerm> &inner_terms, const vector<vector<double>> &per_term_coefs,
+                                idx_t row, const string &written) {
     for (idx_t it = 0; it < inner_terms.size(); it++) {
         double coeff = per_term_coefs[it][row];
         idx_t v = inner_terms[it].variable_index;
         if (v == DConstants::INVALID_INDEX) {
             link.AddConstant(coeff, written);
         } else {
-            link.AddColumn((int)indexer.Get(v, row), -coeff, written);
+            row_terms.Add((int)indexer.Get(v, row), -coeff);
         }
     }
+    row_terms.Flush(link.indices, link.coefficients);
 }
 
 //! The family a composed MIN/MAX term reduces over: one entry per row the term's
@@ -931,6 +937,16 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
     return range;
 }
 
+//! Number of rows a composed term reduces over: its filtered row count. For an AVG term this is the divisor, and zero
+//! means the term is empty and contributes nothing (the caller skips it).
+static idx_t ComposedTermRows(const ComposedMinMaxTermData &ta, idx_t num_rows) {
+    idx_t cnt = 0;
+    for (idx_t r = 0; r < num_rows; r++) {
+        if (ta.filter_mask[r]) cnt++;
+    }
+    return cnt;
+}
+
 //! The auxiliary layer both composed paths share: one global `z_k` per MIN/MAX term,
 //! pinned to that term's extremum over its active rows. Fills in `z_idx` on every
 //! MIN/MAX term, which the caller then references from the outer row or the objective.
@@ -972,12 +988,15 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
             continue;
         }
         vector<ExtremumMember> members;
+        members.reserve(ComposedTermRows(ta, num_rows));
+        SparseCoeffAccumulator row_terms;
+        row_terms.BeginForDecisions(indexer, ta.inner_terms->size(), written);
         for (idx_t row = 0; row < num_rows; row++) {
             if (!ta.filter_mask[row]) {
                 continue;
             }
             ExtremumMember member;
-            AddComposedRowTerms(indexer, member.link, (*ta.inner_terms), ta.per_term_coefs, row, written);
+            AddComposedRowTerms(indexer, row_terms, member.link, (*ta.inner_terms), ta.per_term_coefs, row, written);
             // The TERM's range, not the row's: looser than a per-row bracket, but it is
             // the one the auxiliary itself is boxed by and the one the Big-M comes from,
             // so a pinned column shares it rather than introducing a second answer.
@@ -1017,16 +1036,6 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
     }
 }
 
-//! Number of rows an AVG term divides by: its filtered row count. Zero means the
-//! term is empty and contributes nothing (the caller skips it).
-static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows) {
-    idx_t cnt = 0;
-    for (idx_t r = 0; r < num_rows; r++) {
-        if (ta.filter_mask[r]) cnt++;
-    }
-    return cnt;
-}
-
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val, ExpressionType outer_cmp,
                                        idx_t source_clause_id, idx_t removal_group_id, idx_t repair_group_id,
@@ -1038,17 +1047,25 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
     // Build the outer composed RawConstraint. Its fixed terms move to the bound side as one sum, as the model builder
     // moves a clause's (SumFixedAggregateLhsOffset).
     const string written = DecideWrittenClause(input, source_clause_id);
-    std::unordered_map<int, double> outer_accum;
+    // A term's `z_k` is its own column, so it enters the row as it comes; the decision columns of the SUM/AVG terms
+    // sum per column.
+    SolverInput::RawConstraint outer;
+    SparseCoeffAccumulator outer_terms;
+    outer_terms.BeginForDecisions(indexer, 0, written);
     double outer_fixed = 0.0;
     for (auto &ta : terms) {
         if (ta.is_minmax) {
-            AddCoefficient(outer_accum[(int)ta.z_idx], (double)ta.sign * ta.scale, written);
+            double z_coefficient = (double)ta.sign * ta.scale;
+            if (z_coefficient != 0.0) {
+                outer.indices.push_back((int)ta.z_idx);
+                outer.coefficients.push_back(z_coefficient);
+            }
             continue;
         }
         // SUM/AVG term. For AVG, divide by filtered row count.
         double avg_divisor = 1.0;
         if (ta.agg_name == "avg") {
-            idx_t cnt = ComposedAvgDivisor(ta, num_rows);
+            idx_t cnt = ComposedTermRows(ta, num_rows);
             if (cnt == 0) {
                 // Empty aggregate — contributes 0; skip.
                 continue;
@@ -1063,21 +1080,14 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
                 if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                     AddCoefficient(outer_fixed, coef, written);
                 } else {
-                    int abs_idx = (int)indexer.Get(inner_t.variable_index, row);
-                    AddCoefficient(outer_accum[abs_idx], coef, written);
+                    outer_terms.Add((int)indexer.Get(inner_t.variable_index, row), coef);
                 }
             }
         }
     }
+    outer_terms.Flush(outer.indices, outer.coefficients);
     double outer_rhs = rhs_val - outer_fixed;
 
-    SolverInput::RawConstraint outer;
-    for (auto &p : outer_accum) {
-        if (p.second != 0.0) {
-            outer.indices.push_back(p.first);
-            outer.coefficients.push_back(p.second);
-        }
-    }
     // A strict relation over whole-numbered terms (the bind-time gate's guarantee) is the
     // next value on the lattice, as `ApplyComparisonSense` states it for every other row.
     switch (outer_cmp) {

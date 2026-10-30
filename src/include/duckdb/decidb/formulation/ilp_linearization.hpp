@@ -425,41 +425,39 @@ private:
     static double MaxOf(double a, double b) { return a > b ? a : b; }
 };
 
-//! Accumulator for a MIN/MAX linking row (`z - expr op bound`).
+//! The row of a MIN/MAX link (`z - expr op bound`), once its terms are summed per column.
 //!
 //! DecideTerm arrays are indexed by term, not by variable, so the same solver column
 //! reaches one row more than once in two situations: `(c + 1) * x` distributes
 //! into `c*x + 1*x`, and a keyed or scalar variable resolves to a
 //! single column across every row it spans. A repeated column index is rejected
-//! outright by both Gurobi and HiGHS, so coefficients are summed per column here
-//! rather than pushed per term. Constant terms carry no column at all
-//! (`variable_index == INVALID_INDEX`) and collect into `constant`, which the
-//! caller folds into the bound: `z <= expr + k` is `z - expr <= k`.
+//! outright by both Gurobi and HiGHS, so a row's columns are summed before they land here, by the
+//! SparseCoeffAccumulator the family's rows share (the sum the model builder takes for a clause's rows): a family
+//! has a row per data row, and a hash map per row cost an allocation per member. Constant terms carry no column at
+//! all (`variable_index == INVALID_INDEX`) and collect into `constant`, which the caller folds into the bound:
+//! `z <= expr + k` is `z - expr <= k`.
 //!
-//! Columns keep first-appearance order — emitting straight from the hash map
-//! would hand the solver a different matrix ordering run to run.
+//! The accumulator hands columns over in first-appearance order, or in column order where it sorts instead (past its
+//! dense cap), so the solver is handed the same matrix ordering every run.
 //!
-//! Both sums grow through AddCoefficient: `written` names the clause (or the objective) the row comes from.
+//! The constant grows through AddCoefficient: `written` names the clause (or the objective) the row comes from.
 struct MinMaxLinkRow {
     vector<int> indices;
     vector<double> coefficients;
     double constant = 0.0;
-    std::unordered_map<int, idx_t> column_slot;
-
-    void AddColumn(int column, double coefficient, const string &written) {
-        auto entry = column_slot.emplace(column, indices.size());
-        if (entry.second) {
-            indices.push_back(column);
-            coefficients.push_back(0.0);
-        }
-        AddCoefficient(coefficients[entry.first->second], coefficient, written);
-    }
 
     void AddConstant(double value, const string &written) {
         AddCoefficient(constant, value, written);
     }
 
-    void AppendTo(SolverInput::RawConstraint &rc) const {
+    //! The left-hand side `1 * column + (this row)` of a solver row, sized for `extra` more columns so that nothing
+    //! reallocates as the caller adds them.
+    SolverInput::RawConstraint LeftHandSide(int column, idx_t extra = 0) const {
+        SolverInput::RawConstraint rc;
+        rc.indices.reserve(1 + indices.size() + extra);
+        rc.coefficients.reserve(1 + indices.size() + extra);
+        rc.indices.push_back(column);
+        rc.coefficients.push_back(1.0);
         for (idx_t i = 0; i < indices.size(); i++) {
             if (std::abs(coefficients[i]) < 1e-15) {
                 continue;
@@ -467,6 +465,7 @@ struct MinMaxLinkRow {
             rc.indices.push_back(indices[i]);
             rc.coefficients.push_back(coefficients[i]);
         }
+        return rc;
     }
 };
 

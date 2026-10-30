@@ -125,6 +125,7 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy) {
+	SparseCoeffAccumulator sum_terms;
 	for (auto &link : input.reducer_value_links) {
 		const bool is_max = link.agg_name == "max";
 		const idx_t value_var = link.value_var;
@@ -142,18 +143,17 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				// down, `value <= sum` when up), the equality only when both sides are needed.
 				// The members' columns are accumulated first: a keyed decision may stand in
 				// several rows of the group, and a row states each column once.
-				MinMaxLinkRow sum;
+				sum_terms.BeginForDecisions(indexer, 0, link.label);
 				double constants = 0.0;
 				for (auto &member : group.members) {
 					for (idx_t i = 0; i < member.link.indices.size(); i++) {
-						sum.AddColumn(member.link.indices[i], member.link.coefficients[i], link.label);
+						sum_terms.Add(member.link.indices[i], member.link.coefficients[i]);
 					}
 					AddCoefficient(constants, member.link.constant, link.label);
 				}
-				SolverInput::RawConstraint rc;
-				rc.indices.push_back(static_cast<int>(indexer.Get(value_var, group.first_row)));
-				rc.coefficients.push_back(1.0);
-				sum.AppendTo(rc);
+				MinMaxLinkRow sum;
+				sum_terms.Flush(sum.indices, sum.coefficients);
+				auto rc = sum.LeftHandSide(static_cast<int>(indexer.Get(value_var, group.first_row)));
 				rc.sense = link.need_envelope && link.need_closing ? '=' : link.need_envelope ? '>' : '<';
 				rc.rhs = constants;
 				rc.kind = ConstraintKind::STRUCTURAL;
