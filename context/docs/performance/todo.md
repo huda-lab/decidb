@@ -39,11 +39,11 @@ classes × 9 columns for Q8's `per o`. They cost 143 ms to build in `execution.k
 same query). Proposal: keep each group's representative row (`group_rows`) instead of its values, order the groups
 by a sort over the key columns, and format values only when a message names a group (late materialization).
 
-## PERF-14 — Q4's composed MIN/MAX evaluation
+## PERF-17 — Q4's formulation
 
-Q4's `execution.evaluate_composed` takes 495 ms on Gurobi and on HiGHS, the largest extraction cost on the benchmark
-(`findings.md` § Input and extraction). No cause is found yet: find where the time goes inside the evaluation before
-proposing a change.
+Q4's `execution.formulate` takes about 310 ms, its largest extraction span once PERF-14 is fixed: composed MIN/MAX
+240 ms and the MIN/MAX objective 73 (`findings.md` § Input and extraction). Find where the time goes inside the
+composed linearization before proposing a change.
 
 ## PERF-15 — RHS-bound windows hold every source column
 

@@ -33,7 +33,7 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
 - [ ] PERF-3 A passing determination check materializes every row; in progress (lane AN) —
   performance/todo.md § PERF-3
 - [ ] PERF-13 Q8's key values: keep representative rows, format values late — performance/todo.md § PERF-13
-- [ ] PERF-14 Q4's composed MIN/MAX evaluation, 495 ms, cause unknown — performance/todo.md § PERF-14
+- [ ] PERF-17 Q4's formulation, 310 ms (composed MIN/MAX 240), cause unknown — performance/todo.md § PERF-17
 - [ ] PERF-15 RHS-bound windows hold every source column; measure, then PERF-3's shape —
   performance/todo.md § PERF-15
 - [ ] PERF-16 Constant folding where a tree is built; first, messages quote the source text —

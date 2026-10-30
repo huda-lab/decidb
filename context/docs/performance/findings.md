@@ -74,7 +74,7 @@ Finalize spans separate the keyed-decision mapping (`execution.keyed_mapping`), 
 
 | Query | Top extraction costs |
 |---|---|
-| Q4 | `evaluate_composed` 495; `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
+| Q4 | `evaluate_composed` 495 (21 after PERF-14); `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
 | Q8 | group ids 304 (inside the keyed mapping 255 and the constraints); constraints 152 (`when`/`per` 106) |
 | Q1 | constraints 217: linear coefficients 63, `when`/`per` 63, setup 59, RHS 31, group ids 23; objective 32 |
 | P4 | constraints 121: `when`/`per` 114, of it group ids 95 (250k order-key classes); objective 11.5 |
@@ -244,6 +244,11 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters still select kept rows with a per-row `vector<bool>`: a
   `SelectionVector` path would let DuckDB's conjunction `Select` reorder AND/OR operands, and DECIDE reads them left
   to right.
+- **Composed MIN/MAX coefficients read a chunk at a time (PERF-14, closed).** `EvaluateComposedClauses` read each
+  inner term's coefficient row by row: it boxed a `Value`, cast it to `DOUBLE` through a fresh `Vector` and unboxed
+  it, one scan per inner term (a stack sample put the phase's whole time in the cast). It now reads a term's inner
+  coefficients in one scan through `EvaluateTermColumns`, the vectorized reader every other clause uses. Q4
+  `execution.evaluate_composed` 489 → 21 ms on Gurobi, 21 ms on HiGHS; no other span moved.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data
