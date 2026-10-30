@@ -567,7 +567,11 @@ naming the clause as the user wrote it, rather than reaching HiGHS: one whose ow
 coefficients span more than the window's ~24 orders of magnitude, and one whose bound
 would have to cross `infinite_bound` to get the coefficients in. An objective whose
 Hessian entries span the window, or whose costs would cross `infinite_cost`, is refused
-the same way, naming the objective. Scaling gets an extreme
+the same way, naming the objective. A refusal judges its cause on the row or objective as
+the user wrote it, before any column scale: if that fits, a decision's limit past
+`infinite_bound` is what pushed it out, and the refusal says so instead of quoting the
+scaled entries; if it does not fit, the refusal quotes the coefficients as written. The
+clause shown already names the decisions it holds, so the backend needs no decision names. Scaling gets an extreme
 row *loaded*; it does not make it well-conditioned. A Big-M of 4e15 is numerically
 untrustworthy on any solver, which is a separate concern from whether the API accepts it.
 

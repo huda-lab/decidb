@@ -13,13 +13,6 @@
   every digit.
 - **Fix (to rule):** render at the same significant-figure precision as smaller amounts.
 
-## BUG-37 — A refused row quotes a coefficient the user did not write
-
-- **Observed:** on HiGHS, `x >= 1e29` with `SUM(x + w*y) >= 0` and w = 1e-16 is refused correctly (no scaling places
-  the row once `x`'s column is scaled), but the message quotes "1e-16 to 1.07374e+09": the second number is `x`'s
-  coefficient after its column scale. The same can happen in the objective through Hessian entries scaled by 2^2e.
-- **Fix (to rule):** a refusal whose row holds a scaled column names that decision's bound as the cause.
-
 ## Limitations (not bugs)
 
 - **A repair exactly at the tolerance on HiGHS's QP path.** An edit whose rows miss a summed bound by exactly the
