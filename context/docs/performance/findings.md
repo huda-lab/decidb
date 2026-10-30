@@ -261,7 +261,13 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   and a node per member, millions of allocations on Q4's 1M members, and rows grown from capacity 1. The rows now sum
   in the model builder's `SparseCoeffAccumulator` (dense scatter, first-touch order) and are sized once. Q4, medians
   of 3 (load 11-16): `execution.formulate` 346 → 172 ms; same model (1,000,002 columns, 1,000,010 rows, 6,000,004
-  nonzeros). PERF-18 holds what is left: each member staged before it becomes a row.
+  nonzeros).
+- **A MIN/MAX member built into the row it becomes (PERF-18, closed).** Each member was built as an `ExtremumMember`
+  (two vectors and a copied `AuxRange`) and then copied into the solver row. `EmitExtremumLink` now asks an
+  `ExtremumMemberSource` for each member as it emits the row, into one reused scratch row, and reads a member's range
+  only where the native arm pins a column (late materialization). Q4, medians of 3 (load 15): `execution.formulate`
+  167 → 122 ms; same model. The dense accumulator `BuildMinMaxGroups` assigns per call costs 1.4 ms cold, 0.12 ms
+  warm: left as is.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

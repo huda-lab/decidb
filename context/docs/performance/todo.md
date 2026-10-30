@@ -46,12 +46,3 @@ building it (`ExpressionBuilder::Out`), because messages render the built trees:
 message quotes into `2.0 * w`. Direct-solve plans are not folded. The cause is the message, not the fold: a message
 that names a value should quote the source text the user wrote (as Clang underlines source rather than reprinting its
 tree). Once messages quote source text, the fold moves to `Out` and direct-solve plans get it too.
-
-## PERF-18 — A MIN/MAX member is staged before it becomes a row
-
-Each member of a composed MIN/MAX link is built as an `ExtremumMember` (two vectors and a copied `AuxRange`) and
-then copied into a `RawConstraint`: on Q4, after PERF-17, building about 38 ms, freeing about 15 and per-row
-allocations about 20 of `execution.formulate`'s 156. Proposal (late materialization): `EmitExtremumLink` takes a member
-source, a count and a callback that fills one reused scratch row, and reads the `AuxRange` only for the native arm;
-about 7 call sites change. Also: `BuildMinMaxGroups` assigns its dense accumulator (about 8 MB on Q4) once per
-call, so a query with many hard MIN/MAX clauses on a large table pays it per clause; measure that before changing it.

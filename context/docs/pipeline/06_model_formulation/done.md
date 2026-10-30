@@ -718,7 +718,8 @@ ceiling names the unbounded member, not the helper). Each ABS derivation starts 
 (`range_unbounded` is reset), so a range open on one pass may close on the next.
 
 `LinearizeReducerValueLinks` then states each definition over the groups
-`BuildMinMaxGroups` splits the members into, consuming the evaluated rows. A SUM/AVG
+`BuildMinMaxGroups` splits the evaluated rows into (each group's rows; a member is built only
+when a row is emitted, `MinMaxRowMembers`, late materialization). A SUM/AVG
 helper gets one flat row per group in `global_constraints`, on the side stage 05 recorded
 (the epigraph form): `value - members' expressions >= members' constants` when the clauses
 push the value down (`need_envelope`), `<=` when up (`need_closing`), `=` when both. The
