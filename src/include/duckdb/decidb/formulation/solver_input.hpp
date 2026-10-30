@@ -221,6 +221,26 @@ struct GroupName {
     idx_t row = DConstants::INVALID_INDEX;
 };
 
+//! The rows a clause emits, in compressed sparse row form: row e's decision terms are the solver columns
+//! columns[offsets[e], offsets[e + 1]) with the coefficients at the same positions of `values`. An aggregate clause
+//! emits one row per group (one in all when it has no groups), a per-row clause one per data row, empty where the row
+//! is excluded. A copy of a clause starts without them: a rewrite that copies a clause may change the copy.
+struct EmittedRows {
+    vector<idx_t> offsets;
+    vector<int> columns;
+    vector<double> values;
+
+    EmittedRows() = default;
+    EmittedRows(const EmittedRows &) {
+    }
+    EmittedRows &operator=(const EmittedRows &) {
+        *this = EmittedRows();
+        return *this;
+    }
+    EmittedRows(EmittedRows &&) = default;
+    EmittedRows &operator=(EmittedRows &&) = default;
+};
+
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
     vector<idx_t> variable_indices;           // Which variable for each term
@@ -356,6 +376,10 @@ struct EvaluatedConstraint {
     //! and the model builder to avoid repeated O(num_rows) reconstructions.
     mutable vector<idx_t> group_offsets;
     mutable vector<idx_t> group_row_ids;
+
+    //! The decision terms of each row the clause emits, as solver columns and coefficients (ClauseEmittedRows): built
+    //! once, by the first pass to read them, and taken by the model builder, the last. Empty until then.
+    mutable EmittedRows emitted_rows;
 
     //! The name of group `group` (INVALID_INDEX: none), none for a group of no key.
     GroupName NameOf(idx_t group) const {

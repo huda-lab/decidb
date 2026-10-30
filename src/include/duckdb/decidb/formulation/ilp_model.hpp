@@ -519,6 +519,12 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
 //! per-row `<>` mask) change only clauses implied bounds passes over.
 const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec);
 
+//! The decision terms of every row `ec` emits (EmittedRows), kept on `ec`: each solver column's coefficient summed over
+//! the row's data rows (ClauseRows for a grouped aggregate). Built on the first call, so implied-bound propagation, the
+//! aggregate `<>` expansion and the model builder read one matrix; the builder, the last reader, takes it. Its rows
+//! are final by the first call, as ClauseRows' are. `written` names the clause when a sum grows past a DOUBLE.
+const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer, const string &written);
+
 //! Adds `value` into `target`, a number the model merges from several: like coefficients on one solver column, a
 //! square's products, the fixed terms moved to the bound side. The one place such a sum grows. Every value it adds was
 //! read finite, so a sum that is not finite has grown past a DOUBLE, and the user error names `written`, the clause the
@@ -578,12 +584,5 @@ struct SparseCoeffAccumulator {
     //! path sorts+merges pairs.
     void Flush(vector<int> &out_indices, vector<double> &out_coefficients);
 };
-
-//! Adds the decision terms of one row a clause emits to `accum`: each term's coefficient on the rows [begin, end) of
-//! `rows` (row k itself when `rows` is null), summed per solver column. An aggregate clause emits one such row per
-//! group, a per-row clause one per row. The model builder, the aggregate `<>` expansion and implied-bound propagation
-//! read a clause's rows through this one sum.
-void AccumulateClauseRow(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
-                         idx_t begin, idx_t end, SparseCoeffAccumulator &accum);
 
 } // namespace duckdb

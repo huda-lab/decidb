@@ -81,7 +81,7 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 //! Data-driven implied-bound propagation. For a non-negative `<=`/`=` row the model
 //! emits, Sum_j a_j x_j (<=|=) K with a_j >= 0 and x_j >= 0, each instance satisfies
 //! x_j <= K / a_j (the other non-negative terms only help), where a_j is the
-//! instance's coefficient summed over the row's data rows (AccumulateClauseRow) and K
+//! instance's coefficient summed over the row's data rows (ClauseEmittedRows) and K
 //! the row's bound less its fixed terms. A sound shared upper bound on a decision is
 //! the max over its instances of the tightest such bound, when every instance has
 //! one. This converts many

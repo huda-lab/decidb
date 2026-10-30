@@ -347,17 +347,13 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
     }
     const idx_t num_rows = input.num_rows;
 
-    // Reusable scratch for per-group LHS accumulation (replaces a per-group
-    // unordered_map<int,double>). The decide-variable flat indices are bounded by
-    // var_indexer.global_block_start, so the dense accumulator is sized to that —
-    // tighter than total_vars and unaffected by the globals appended as we go.
-    SparseCoeffAccumulator accum;
-
     const InstanceBox floors {input, var_indexer};
     for (auto &ec : deferred_aggregate) {
         bool has_groups = !ec.row_group_ids.empty();
         const string written = DecideWrittenClause(input, ec.source_clause_id);
-        accum.BeginForDecisions(var_indexer, num_rows, written); // hint; per-group merging keeps actual size small
+        // The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
+        // clause for an ungrouped one.
+        auto &emitted = ClauseEmittedRows(ec, var_indexer, written);
 
         // I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`, carried
         // onto every global z this `ec` allocates so the removal dial can label the edit.
@@ -439,14 +435,12 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 }
             }
 
-            // Accumulate LHS coefficients for active rows in this group.
-            AccumulateClauseRow(ec, var_indexer, &flat_rows, g_begin, g_end, accum);
-
-            // Flush once into a deduped (idx, coeff) snapshot, copied for every
-            // excluded value's disjunction below (only the last consumes it by move).
-            vector<int> group_indices;
-            vector<double> group_coefs;
-            accum.Flush(group_indices, group_coefs);
+            // The group's LHS as a snapshot, copied for every excluded value's disjunction below (only the last
+            // consumes it by move).
+            auto row_begin = NumericCast<int64_t>(emitted.offsets[g]);
+            auto row_end = NumericCast<int64_t>(emitted.offsets[g + 1]);
+            vector<int> group_indices(emitted.columns.begin() + row_begin, emitted.columns.begin() + row_end);
+            vector<double> group_coefs(emitted.values.begin() + row_begin, emitted.values.begin() + row_end);
 
             for (idx_t vi = 0; vi < distinct_rhs.size(); vi++) {
                 // Base (unscaled) value. For AVG(x) <> K we store the original K in

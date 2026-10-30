@@ -197,6 +197,93 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
     return ec.group_row_ids;
 }
 
+//! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, and each
+//! is row-scoped. Then no two (term, data row) pairs share a column, and a row's terms are read without summing them.
+static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarIndexer &indexer) {
+    std::unordered_set<idx_t> seen_vars;
+    for (idx_t v : ec.variable_indices) {
+        if (v == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        // Keyed and query-wide decisions both put many rows on one column.
+        if (indexer.var_scope[v] != DecideVarScope::ROW || !seen_vars.insert(v).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+//! Calls `add(column, coefficient)` for each decision term of one row a clause emits: each term's nonzero coefficient on
+//! the rows [begin, end) of `rows` (row k itself when `rows` is null). A term beside the reducers counts once:
+//! execution kept its coefficient on one row (CountOnce).
+template <class ADD>
+static void ForEachClauseRowTerm(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
+                                 idx_t begin, idx_t end, ADD &&add) {
+    for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+        idx_t decide_var_idx = ec.variable_indices[term_idx];
+        if (decide_var_idx == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        auto &col = ec.row_coefficients[term_idx];
+        for (idx_t k = begin; k < end; k++) {
+            idx_t row = rows ? (*rows)[k] : k;
+            double coeff = col.Get(row);
+            if (coeff != 0.0) {
+                add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
+            }
+        }
+    }
+}
+
+const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer, const string &written) {
+    auto &out = ec.emitted_rows;
+    if (!out.offsets.empty()) {
+        return out;
+    }
+    const idx_t num_rows = indexer.num_rows;
+    // The data rows of each emitted row: a grouped aggregate's group (ClauseRows), all rows for an ungrouped one, the
+    // row itself for a per-row clause.
+    const vector<idx_t> *rows = nullptr;
+    idx_t num_emitted = num_rows;
+    if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
+        rows = &ClauseRows(ec);
+        num_emitted = ec.num_groups;
+    } else if (ec.lhs_is_aggregate) {
+        num_emitted = 1;
+    }
+    // Terms with columns of their own are copied; any other row sums its terms per column first.
+    bool own_columns = TermsHaveTheirOwnColumns(ec, indexer);
+    SparseCoeffAccumulator accum;
+    if (own_columns) {
+        out.columns.reserve(ec.variable_indices.size() * num_rows);
+        out.values.reserve(ec.variable_indices.size() * num_rows);
+    } else {
+        accum.BeginForDecisions(indexer, ec.variable_indices.size() * (num_rows / std::max<idx_t>(num_emitted, 1)),
+                                written);
+    }
+    auto copy = [&](int column, double coeff) {
+        out.columns.push_back(column);
+        out.values.push_back(coeff);
+    };
+    auto sum = [&](int column, double coeff) { accum.Add(column, coeff); };
+    out.offsets.reserve(num_emitted + 1);
+    out.offsets.push_back(0);
+    for (idx_t e = 0; e < num_emitted; e++) {
+        idx_t begin = rows ? ec.group_offsets[e] : (ec.lhs_is_aggregate ? 0 : e);
+        idx_t end = rows ? ec.group_offsets[e + 1] : (ec.lhs_is_aggregate ? num_rows : e + 1);
+        bool excluded = !ec.lhs_is_aggregate && !ec.row_group_ids.empty() &&
+                        ec.row_group_ids[e] == DConstants::INVALID_INDEX;
+        if (!excluded && own_columns) {
+            ForEachClauseRowTerm(ec, indexer, rows, begin, end, copy);
+        } else if (!excluded) {
+            ForEachClauseRowTerm(ec, indexer, rows, begin, end, sum);
+            accum.Flush(out.columns, out.values);
+        }
+        out.offsets.push_back(out.columns.size());
+    }
+    return out;
+}
+
 //! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
 //! linear or quadratic, aggregate or per-row. `group_key` defaults to INVALID_INDEX for
 //! an ungrouped aggregate row; pass the `when`/`by` group id for a grouped aggregate row,
@@ -781,9 +868,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         model.constraints.reserve(model.constraints.size() + est_rows);
     }
 
-    // Scratch for the rows that sum several (term, row) pairs per column, reused across clauses: the dense strategy
-    // allocates once.
-    SparseCoeffAccumulator accum;
     for (auto &eval_const : input.constraints) {
         // Skip constraints with quadratic/bilinear terms — handled in quadratic section below
         if (!eval_const.bilinear_terms.empty() || eval_const.has_quadratic) {
@@ -798,26 +882,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         bool has_groups = !eval_const.row_group_ids.empty();
         LhsIntegrality lhs_integrality = IsEvalConstraintLhsIntegerValued(eval_const);
         const string written = DecideWrittenClause(input, eval_const.source_clause_id);
-
-        // Detect whether this constraint can bypass the hash-map accumulator:
-        // * every non-fixed term must reference a row-scoped decide variable
-        //   (keyed vars collapse many rows to the same solver index —
-        //   need dedup), AND
-        // * no decide variable appears in more than one term (otherwise distinct
-        //   terms at the same row collide on the same flat index). Fixed LHS
-        //   offsets use INVALID_INDEX and are subtracted from RHS separately.
-        auto CanUseRowScopedFastPath = [&](const EvaluatedConstraint &ec) -> bool {
-            std::unordered_set<idx_t> seen_vars;
-            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-                idx_t v = ec.variable_indices[term_idx];
-                if (v == DConstants::INVALID_INDEX) continue;
-                // Keyed and query-wide variables both collapse many rows onto
-                // one column, so the per-row fan-out below would double-write them.
-                if (indexer.var_scope[v] != DecideVarScope::ROW) return false;
-                if (!seen_vars.insert(v).second) return false;
-            }
-            return true;
-        };
 
         // Symbolic coefficient labels for a data-weighted aggregate: map each summed decide
         // variable to its coefficient expression (`buy → l_extendedprice`) so infeasible
@@ -863,7 +927,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // Empty unless the clause is an aggregate that takes the accumulating path, which
         // is the only case whose matrix coefficients are folded totals.
         vector<FoldedAggTerm> clause_folded_terms;
-        if (is_aggregate && !CanUseRowScopedFastPath(eval_const)) {
+        if (is_aggregate && !TermsHaveTheirOwnColumns(eval_const, indexer)) {
             std::unordered_set<idx_t> seen;
             for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
                 idx_t v = eval_const.variable_indices[t];
@@ -882,40 +946,23 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         }
 
+        // The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
+        // from the clause, and they are freed with this iteration.
+        ClauseEmittedRows(eval_const, indexer, written);
+        auto emitted = std::move(eval_const.emitted_rows);
+        auto copy_emitted_row = [&](idx_t e, ModelConstraint &constr) {
+            auto begin = NumericCast<int64_t>(emitted.offsets[e]);
+            auto end = NumericCast<int64_t>(emitted.offsets[e + 1]);
+            constr.indices.assign(emitted.columns.begin() + begin, emitted.columns.begin() + end);
+            constr.coefficients.assign(emitted.values.begin() + begin, emitted.values.begin() + end);
+        };
+
         if (is_aggregate) {
             if (!has_groups) {
-                // FAST PATH: no `when`, no groups — one constraint summing all rows.
+                // No `when`, no groups: one constraint summing all rows, the clause's one emitted row.
                 ModelConstraint constr;
-                bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
-
-                if (row_scoped_fast) {
-                    idx_t active_terms = 0;
-                    for (auto v : eval_const.variable_indices) {
-                        if (v != DConstants::INVALID_INDEX) active_terms++;
-                    }
-                    constr.indices.reserve(active_terms * num_rows);
-                    constr.coefficients.reserve(active_terms * num_rows);
-                    for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                        idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-                        if (decide_var_idx == DConstants::INVALID_INDEX) continue;
-                        auto &col = eval_const.row_coefficients[term_idx];
-                        for (idx_t row = 0; row < num_rows; row++) {
-                            double coeff = col[row];
-                            if (coeff == 0.0) continue;
-                            int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                            constr.indices.push_back(var_idx);
-                            constr.coefficients.push_back(coeff);
-                        }
-                    }
-                } else {
-                    // Keyed vars or repeated decide vars — need to
-                    // accumulate because multiple (term, row) pairs can map
-                    // to the same flat solver index. A term beside the reducers counts
-                    // once: execution kept its coefficient on one row (CountOnce).
-                    accum.BeginForDecisions(indexer, eval_const.variable_indices.size() * num_rows, written);
-                    AccumulateClauseRow(eval_const, indexer, nullptr, 0, num_rows, accum);
-                    accum.Flush(constr.indices, constr.coefficients);
-                }
+                constr.indices = std::move(emitted.columns);
+                constr.coefficients = std::move(emitted.values);
 
                 // One value for the whole constraint: the optimizer's bound-side
                 // window rewrite reduced a row-varying bound to the tightest one on
@@ -936,7 +983,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
-                // UNIFIED PATH: a `when` and/or groups — build group→rows CSR once, emit one constraint per group
+                // A `when` and/or groups: one constraint per group, the group's emitted row.
                 auto &flat_rows = ClauseRows(eval_const);
                 auto &offsets = eval_const.group_offsets;
 
@@ -944,50 +991,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // physical operator guarantees it is constant within the group.
                 D_ASSERT(RhsIsConstantWithinGroups(eval_const));
 
-                bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
-
-                // For the slow (accumulating) path, pick a strategy once per constraint
-                // and reuse the scratch storage across all groups.
-                if (!row_scoped_fast) {
-                    accum.BeginForDecisions(indexer, eval_const.variable_indices.size() *
-                                                         (eval_const.num_groups > 0 ? num_rows / eval_const.num_groups
-                                                                                    : num_rows),
-                                             written);
-                }
-
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     idx_t g_begin = offsets[g];
                     idx_t g_end = offsets[g + 1];
                     if (g_begin == g_end) {
                         continue;
                     }
-                    idx_t g_size = g_end - g_begin;
                     ModelConstraint constr;
-
-                    if (row_scoped_fast) {
-                        idx_t active_terms = 0;
-                        for (auto v : eval_const.variable_indices) {
-                            if (v != DConstants::INVALID_INDEX) active_terms++;
-                        }
-                        constr.indices.reserve(active_terms * g_size);
-                        constr.coefficients.reserve(active_terms * g_size);
-                        for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                            idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-                            if (decide_var_idx == DConstants::INVALID_INDEX) continue;
-                            auto &col = eval_const.row_coefficients[term_idx];
-                            for (idx_t k = g_begin; k < g_end; k++) {
-                                idx_t row = flat_rows[k];
-                                double coeff = col[row];
-                                if (coeff == 0.0) continue;
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                constr.indices.push_back(var_idx);
-                                constr.coefficients.push_back(coeff);
-                            }
-                        }
-                    } else {
-                        AccumulateClauseRow(eval_const, indexer, &flat_rows, g_begin, g_end, accum);
-                        accum.Flush(constr.indices, constr.coefficients);
-                    }
+                    copy_emitted_row(g, constr);
 
                     // Read this group's own bound. The guard above still proves every
                     // row agrees, so today this equals Get(0); once the RHS carries one
@@ -1011,54 +1022,20 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
 
         } else {
-            // PER-ROW CONSTRAINT: one constraint per row
-            idx_t per_row_active_terms = 0;
-            for (auto v : eval_const.variable_indices) {
-                if (v != DConstants::INVALID_INDEX) per_row_active_terms++;
-            }
-            idx_t num_terms = eval_const.variable_indices.size();
+            // PER-ROW CONSTRAINT: one constraint per row, the row's emitted row
             for (idx_t row = 0; row < num_rows; row++) {
                 // Skip rows excluded by `when` (row_group_ids with INVALID_INDEX)
                 if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
                     continue;
                 }
                 ModelConstraint constr;
-                constr.indices.reserve(per_row_active_terms);
-                constr.coefficients.reserve(per_row_active_terms);
+                copy_emitted_row(row, constr);
                 // LHS terms that don't reference a DECIDE variable (row-varying
                 // data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
                 // in `x - col <= K`) must move to RHS, not be dropped. The
                 // symbolic normalizer only canonicalizes aggregate constraints;
                 // per-row LHS arrives here with constant/data terms still attached.
-                double rhs_adjustment = 0.0;
-
-                // Aggregate coefficients per Gurobi variable index. Multiple
-                // lhs_terms can reference the same decision variable (e.g. after
-                // multiply-over-add distribution: `K * (1 - x)` becomes a
-                // constant plus a `-K*x` term, and any other `*x` term in the
-                // same constraint produces a duplicate column index that
-                // GRBaddconstr rejects). Sum-then-emit avoids duplicates.
-                std::unordered_map<int, double> coeff_by_var;
-                for (idx_t term_idx = 0; term_idx < num_terms; term_idx++) {
-                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-                    double coeff = eval_const.row_coefficients[term_idx][row];
-
-                    if (decide_var_idx != DConstants::INVALID_INDEX) {
-                        if (coeff != 0.0) {
-                            int var_idx = (int)indexer.Get(decide_var_idx, row);
-                            AddCoefficient(coeff_by_var[var_idx], coeff, written);
-                        }
-                    } else {
-                        // Constant / row-data LHS term: subtract from RHS.
-                        AddCoefficient(rhs_adjustment, coeff, written);
-                    }
-                }
-                for (auto &kv : coeff_by_var) {
-                    if (kv.second != 0.0) {
-                        constr.indices.push_back(kv.first);
-                        constr.coefficients.push_back(kv.second);
-                    }
-                }
+                double rhs_adjustment = SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written);
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, rhs_adjustment);
@@ -1554,24 +1531,6 @@ void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t 
         BeginDense(indexer.global_block_start, written_p);
     } else {
         BeginSparse(expected_size, written_p);
-    }
-}
-
-void AccumulateClauseRow(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
-                         idx_t begin, idx_t end, SparseCoeffAccumulator &accum) {
-    for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-        idx_t decide_var_idx = ec.variable_indices[term_idx];
-        if (decide_var_idx == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        auto &col = ec.row_coefficients[term_idx];
-        for (idx_t k = begin; k < end; k++) {
-            idx_t row = rows ? (*rows)[k] : k;
-            double coeff = col.Get(row);
-            if (coeff != 0.0) {
-                accum.Add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
-            }
-        }
     }
 }
 

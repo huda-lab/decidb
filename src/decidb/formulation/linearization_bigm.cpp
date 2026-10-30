@@ -253,9 +253,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
     // The bound each solver column gets from the clause at hand, NaN for none; `touched` resets it per clause.
     vector<double> column_bound(indexer.global_block_start, std::numeric_limits<double>::quiet_NaN());
     vector<int> touched;
-    SparseCoeffAccumulator accum;
-    vector<int> indices;
-    vector<double> coefficients;
     for (auto &ec : constraints) {
         if (ec.comparison_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
             ec.comparison_type != ExpressionType::COMPARE_EQUAL) {
@@ -315,26 +312,22 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
             continue;
         }
         const string written = DecideWrittenClause(input, ec.source_clause_id);
-        accum.BeginForDecisions(indexer, num_rows, written);
-        // One row the clause emits, read as the model builder emits it (AccumulateClauseRow): the rows [begin, end) of
-        // `rows` (row k itself for none). A solver column's coefficient is the sum of its terms over the row's data
-        // rows, so a decision that stands in several rows of a group, or one counted once beside the reducers, is
-        // bounded by what the row says about its instance. The row's bound is the clause's less its fixed terms, as
-        // the builder states it.
+        // Row e the clause emits, read as the model builder emits it (ClauseEmittedRows), over the data rows
+        // [begin, end) of `rows` (row k itself for none). A solver column's coefficient is the sum of its terms over
+        // the row's data rows, so a decision that stands in several rows of a group, or one counted once beside the
+        // reducers, is bounded by what the row says about its instance. The row's bound is the clause's less its fixed
+        // terms, as the builder states it.
+        auto &emitted = ClauseEmittedRows(ec, indexer, written);
         bool uniform_rhs = ec.rhs_values.IsUniform();
-        auto bound_row = [&](const vector<idx_t> *rows, idx_t begin, idx_t end) {
+        auto bound_row = [&](idx_t e, const vector<idx_t> *rows, idx_t begin, idx_t end) {
             if (begin == end) {
                 return; // an empty group, or no data rows
             }
             idx_t first_row = rows ? (*rows)[begin] : begin;
-            indices.clear();
-            coefficients.clear();
-            AccumulateClauseRow(ec, indexer, rows, begin, end, accum);
-            accum.Flush(indices, coefficients);
             double k = (uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(first_row)) -
                        SumFixedAggregateLhsOffset(ec, rows, begin, end, written);
-            for (idx_t i = 0; i < indices.size(); i++) {
-                double a = coefficients[i];
+            for (idx_t i = emitted.offsets[e]; i < emitted.offsets[e + 1]; i++) {
+                double a = emitted.values[i];
                 if (a < -1e-15) {
                     nonneg = false;
                     break;
@@ -345,7 +338,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
                 // A bound on one decision caps it at the greatest value it admits (stage 08), which the quotient
                 // may miss: `0.1 * x <= 0.3` admits 3, while 0.3 / 0.1 is just below 3.
                 double bound = ec.admitted_upper.logical_size ? ec.admitted_upper.Get(first_row) : k / a;
-                auto column = indices[i];
+                auto column = emitted.columns[i];
                 if (std::isnan(column_bound[column])) {
                     touched.push_back(column);
                     column_bound[column] = bound;
@@ -359,14 +352,14 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
         if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
             auto &rows = ClauseRows(ec);
             for (idx_t g = 0; nonneg && g < ec.num_groups; g++) {
-                bound_row(&rows, ec.group_offsets[g], ec.group_offsets[g + 1]);
+                bound_row(g, &rows, ec.group_offsets[g], ec.group_offsets[g + 1]);
             }
         } else if (ec.lhs_is_aggregate) {
-            bound_row(nullptr, 0, num_rows);
+            bound_row(0, nullptr, 0, num_rows);
         } else {
             for (idx_t r = 0; nonneg && r < num_rows; r++) {
                 if (ec.row_group_ids.empty() || ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
-                    bound_row(nullptr, r, r + 1); // an excluded row's class's first row bounds the same instance
+                    bound_row(r, nullptr, r, r + 1); // an excluded row's class's first row bounds the same instance
                 }
             }
         }

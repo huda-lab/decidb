@@ -942,6 +942,33 @@ static vector<bool> KeptRows(const Expression &condition, ChunkExprCache &chunk_
 	return std::move(KeptRowsOfEach({&condition}, read, chunk_expr_cache, context, data, num_rows)[0]);
 }
 
+//! A term's own `when`, and the state its rows are read into.
+struct TermFilterSlot {
+	const Expression *condition;
+	TermFilterState *state;
+};
+
+//! Reads each slot's filter among `read` (every row when null), all in one scan (KeptRowsOfEach), into its state. A
+//! filter that keeps every row it reads (a NULL test on data with no NULL) filters nothing: the state keeps no filter,
+//! and the term reads like one written without it.
+static void ReadTermFilters(const vector<TermFilterSlot> &slots, const vector<bool> *read,
+                            ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
+                            idx_t num_rows) {
+	vector<const Expression *> conditions;
+	for (auto &slot : slots) {
+		conditions.push_back(slot.condition);
+	}
+	auto masks = KeptRowsOfEach(conditions, read, chunk_expr_cache, context, data, num_rows);
+	for (idx_t i = 0; i < slots.size(); i++) {
+		bool keeps_every_read_row =
+		    read ? masks[i] == *read : std::find(masks[i].begin(), masks[i].end(), false) == masks[i].end();
+		if (!keeps_every_read_row) {
+			slots[i].state->mask = std::move(masks[i]);
+			slots[i].state->has_filter = true;
+		}
+	}
+}
+
 //! A decision outside the reducers (`MAXIMIZE when c: sum(x) + w * s`, `sum(x) by (g) + s <= 8`) is counted once
 //! (language/guide.md §4): once in the objective, once in each group's row of a clause in the aggregate shape. Its
 //! coefficient stays on one row -- the first kept row, the group's first row -- and every other row is zeroed; the
@@ -2202,13 +2229,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		}
 
 		{
-			// Collect all per-term filter expressions and their target states, then
-			// batch-evaluate them in a single scan instead of one scan per filter.
-			struct FilterSlot {
-				const Expression *cond;
-				TermFilterState *state;
-			};
-			vector<FilterSlot> filter_slots;
+			// Every term's own `when`, read in one scan (ReadTermFilters).
+			vector<TermFilterSlot> filter_slots;
 
             for (idx_t i = 0; i < constraint->lhs_terms.size(); i++) {
                 auto &term = constraint->lhs_terms[i];
@@ -2238,35 +2260,19 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 }
             }
 
-            if (!filter_slots.empty()) {
-                vector<const Expression *> cond_ptrs;
-                cond_ptrs.reserve(filter_slots.size());
-                for (auto &s : filter_slots) cond_ptrs.push_back(s.cond);
-
-                auto masks = KeptRowsOfEach(cond_ptrs, &scoped_kept, chunk_expr_cache, context, gstate.data, num_rows);
-
-                for (idx_t i = 0; i < filter_slots.size(); i++) {
-                    if (masks[i].size() != num_rows) {
-                        throw InternalException(
-                            "DECIDE aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                            num_rows, masks[i].size());
+            ReadTermFilters(filter_slots, &scoped_kept, chunk_expr_cache, context, gstate.data, num_rows);
+            for (auto &slot : filter_slots) {
+                if (!slot.state->has_filter) {
+                    has_unfiltered_aggregate_part = true;
+                    continue;
+                }
+                has_local_filters = true;
+                for (idx_t row = 0; row < num_rows; row++) {
+                    if (slot.state->mask[row]) {
+                        local_row_active[row] = true;
                     }
-					// A filter that keeps every row the clause reads (a NULL test on data with no NULL) filters
-					// nothing: the term reads like one with no filter, and the clause keeps its unfiltered shape.
-					if (masks[i] == scoped_kept) {
-						has_unfiltered_aggregate_part = true;
-						continue;
-					}
-					has_local_filters = true;
-                    filter_slots[i].state->mask = std::move(masks[i]);
-                    filter_slots[i].state->has_filter = true;
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        if (filter_slots[i].state->mask[row]) {
-                            local_row_active[row] = true;
-                        }
-                    }
-				}
-			}
+                }
+            }
 
             if (has_unfiltered_aggregate_part) {
                 std::fill(local_row_active.begin(), local_row_active.end(), true);
@@ -2841,10 +2847,6 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
         if (objective_has_when) {
 			objective_when_mask =
 			    KeptRows(*gstate.objective->when_condition, chunk_expr_cache, context, gstate.data, num_rows);
-			if (objective_when_mask.size() != num_rows) {
-				throw InternalException("DECIDE objective WHEN mask size mismatch: expected %llu rows, got %llu",
-				                        num_rows, objective_when_mask.size());
-			}
 		}
 
 		// DeciDB: evaluate both the linear and quadratic-inner term lists so that
@@ -2878,8 +2880,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
         if (!buckets.empty()) {
             // Pre-size filters + out_coeffs, snapshot variable indices, and collect
             // all filter expressions so they can be batch-evaluated in one scan.
-            struct ObjFilterSlot { const Expression *cond; TermFilterState *state; };
-            vector<ObjFilterSlot> obj_filter_slots;
+            vector<TermFilterSlot> obj_filter_slots;
 
             for (auto &b : buckets) {
                 b.out_term_filters->resize(b.src_terms->size());
@@ -2888,28 +2889,14 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     auto &term = (*b.src_terms)[term_idx];
                     (*b.out_term_filters)[term_idx].avg_scale = term.avg_scale;
                     if (term.filter) {
-                        (*b.out_term_filters)[term_idx].has_filter = true;
                         obj_filter_slots.push_back({term.filter.get(), &(*b.out_term_filters)[term_idx]});
                     }
                     b.out_var_indices->push_back(term.variable_index);
                 }
             }
 
-            if (!obj_filter_slots.empty()) {
-                vector<const Expression *> cond_ptrs;
-                cond_ptrs.reserve(obj_filter_slots.size());
-                for (auto &s : obj_filter_slots) cond_ptrs.push_back(s.cond);
-                auto masks = KeptRowsOfEach(cond_ptrs, objective_has_when ? &objective_when_mask : nullptr,
-                                            chunk_expr_cache, context, gstate.data, num_rows);
-                for (idx_t i = 0; i < obj_filter_slots.size(); i++) {
-                    if (masks[i].size() != num_rows) {
-                        throw InternalException(
-                            "DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                            num_rows, masks[i].size());
-					}
-					obj_filter_slots[i].state->mask = std::move(masks[i]);
-				}
-			}
+            ReadTermFilters(obj_filter_slots, objective_has_when ? &objective_when_mask : nullptr, chunk_expr_cache,
+                            context, gstate.data, num_rows);
 			for (auto &b : buckets) {
 				for (auto &state : *b.out_term_filters) {
 					fold_objective_when(state);
@@ -3001,32 +2988,16 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 
 		obj_bilinear_filters.resize(gstate.objective->bilinear_terms.size());
         {
-            struct BilFilterSlot { const Expression *cond; idx_t term_idx; };
-            vector<BilFilterSlot> bil_slots;
+            vector<TermFilterSlot> bil_slots;
             for (idx_t i = 0; i < gstate.objective->bilinear_terms.size(); i++) {
                 auto &term = gstate.objective->bilinear_terms[i];
                 obj_bilinear_filters[i].avg_scale = term.avg_scale;
                 if (term.filter) {
-                    obj_bilinear_filters[i].has_filter = true;
-                    bil_slots.push_back({term.filter.get(), i});
+                    bil_slots.push_back({term.filter.get(), &obj_bilinear_filters[i]});
                 }
             }
-            if (!bil_slots.empty()) {
-                vector<const Expression *> cond_ptrs;
-                cond_ptrs.reserve(bil_slots.size());
-                for (auto &s : bil_slots) cond_ptrs.push_back(s.cond);
-                auto masks = KeptRowsOfEach(cond_ptrs, objective_has_when ? &objective_when_mask : nullptr,
-                                            chunk_expr_cache, context, gstate.data, num_rows);
-                for (idx_t i = 0; i < bil_slots.size(); i++) {
-                    idx_t tidx = bil_slots[i].term_idx;
-                    if (masks[i].size() != num_rows) {
-                        throw InternalException(
-                            "DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                            num_rows, masks[i].size());
-                    }
-                    obj_bilinear_filters[tidx].mask = std::move(masks[i]);
-				}
-			}
+            ReadTermFilters(bil_slots, objective_has_when ? &objective_when_mask : nullptr, chunk_expr_cache, context,
+                            gstate.data, num_rows);
 			for (auto &state : obj_bilinear_filters) {
 				fold_objective_when(state);
 			}
