@@ -593,8 +593,9 @@ static string FormatPerGroupKey(const SolverModel &model, const GroupName &name)
 		return s;
 	}
 	auto &key = model.key_values[name.key_values];
-	for (idx_t c = 0; c < key.values.size(); c++) {
-		const Value &v = key.values[c][name.group];
+	auto values = key.values_of(name.group);
+	for (idx_t c = 0; c < values.size(); c++) {
+		const Value &v = values[c];
 		if (!s.empty()) {
 			s += ", ";
 		}

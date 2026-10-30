@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 
 namespace duckdb {
@@ -744,13 +745,13 @@ struct SolverInput {
     };
     vector<ClassSet> class_sets;
 
-    //! The representative values of a key's groups, which name a group (GroupName::key_values):
-    //! `values[column][group]`, over every row any clause read the key on (a collated column's
-    //! least spelling among them), and each column's NULL mode, which decides how a message
-    //! writes the value.
+    //! What names the groups of a key (GroupName::key_values): each column's NULL mode, which decides how a message
+    //! writes a value, and `values_of`, which reads a group's value of each column (a collated column's least
+    //! spelling among the rows any clause read the key on) from the source when a message names the group. Only the
+    //! execution that holds the source can read it, so a message is written while that execution runs.
     struct KeyValues {
-        vector<vector<Value>> values;
         vector<DecideKeyNullMode> null_modes;
+        std::function<vector<Value>(idx_t group)> values_of;
     };
     vector<KeyValues> key_values;
 

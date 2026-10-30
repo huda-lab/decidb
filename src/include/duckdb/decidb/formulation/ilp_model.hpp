@@ -412,7 +412,7 @@ struct SolverModel {
     //! The classes a scoped clause's group stands for, by ConstraintProvenance::class_set
     //! (SolverInput::class_sets, moved here by Build).
     vector<SolverInput::ClassSet> class_sets;
-    //! The representative values a GroupName names a group by (SolverInput::key_values,
+    //! What names the groups a GroupName refers to (SolverInput::key_values,
     //! moved here by Build).
     vector<SolverInput::KeyValues> key_values;
     //! Stable source display registry, indexed by source_clause_id.

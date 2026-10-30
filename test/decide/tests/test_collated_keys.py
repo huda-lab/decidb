@@ -209,3 +209,14 @@ def test_every_finding_spells_a_group_by_its_least_spelling_over_the_rows_read(d
     rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
     groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
     assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows
+
+
+@pytest.mark.diagnose
+def test_a_finding_spells_a_group_by_its_least_spelling_when_a_later_row_holds_it(decidb_cli):
+    """The group's first row spells it 'b', a later row 'B': the finding names 'B', whatever the first row reads."""
+    rows = ((1, "b"), (2, "B"), (3, "b"))
+    sql = f"""
+        SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(rows, 'v', ('id', 'g'))}) t
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
+    found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["B"], found

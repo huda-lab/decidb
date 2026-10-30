@@ -851,3 +851,15 @@ def test_an_unreachable_bound_quotes_the_scope_in_front(decidb_cli_highs, clause
     verdict reached before any backend reads the model."""
     rows = _diagnose(decidb_cli_highs, clause, scope="query")
     assert [(row["clause"], row["edit_source"]) for row in rows] == [(quoted, "unreachable_bound")], rows
+
+
+@pytest.mark.diagnose
+def test_a_finding_names_a_class_by_its_value_wherever_its_row_lies(decidb_cli):
+    """2500 classes of two rows each, past the first chunk of the data: every class is named by its own value, so a
+    value read at the wrong row of the data names the wrong class."""
+    sql = """
+        SELECT id, x FROM (SELECT id, id // 2 AS k FROM range(5000) r(id)) t
+        DECIDE x(BOOL) SUCH THAT per t.k: sum(x) by (t.k) >= 3 MAXIMIZE SUM(x)"""
+    rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
+    named = sorted(int(row["group"]) for row in rows if row["edit_source"] == "expanded_group")
+    assert named == list(range(2500)), named[:20]
