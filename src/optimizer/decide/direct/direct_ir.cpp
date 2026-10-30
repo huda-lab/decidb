@@ -116,36 +116,26 @@ private:
 		return true;
 	}
 
-	//! What a scope check is to the plan: nothing to check, a row check read into `row_check`, or one the plan cannot
-	//! make (a determination of a keyed decision, or of an expression that reads more than the source).
-	enum class RowCheckRead : uint8_t { NOTHING, READ, UNREADABLE };
-
-	RowCheckRead ReadRowCheck(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
+	//! Reads a scope check into `row_check`; false for one the plan cannot make (a determination of a keyed decision,
+	//! or of an expression that reads more than the source). A decision for the whole query is never a check's: every
+	//! key determines it (KeyHolds).
+	bool ReadRowCheck(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
 		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
 			// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
 			D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
 			row_check.invalid = check.value->Copy();
-			return RowCheckRead::READ;
+			return true;
 		}
-		// One instance for the whole query: nothing to determine.
-		if (check.decision != DConstants::INVALID_INDEX && decide.variable_scopes[check.decision].IsGlobal()) {
-			return RowCheckRead::NOTHING;
-		}
-		return ReadDetermination(check, row_check) ? RowCheckRead::READ : RowCheckRead::UNREADABLE;
+		return ReadDetermination(check, row_check);
 	}
 
 	void ReadRowChecks(DirectIR &ir) const {
 		for (auto &check : decide.scope_checks) {
 			DirectRowCheck row_check;
-			switch (ReadRowCheck(check, row_check)) {
-			case RowCheckRead::NOTHING:
-				break;
-			case RowCheckRead::READ:
+			if (ReadRowCheck(check, row_check)) {
 				ir.row_checks.push_back(std::move(row_check));
-				break;
-			case RowCheckRead::UNREADABLE:
+			} else {
 				MarkNotProved(ir.status);
-				break;
 			}
 		}
 	}
@@ -159,15 +149,10 @@ public:
 		vector<DecideScopeCheck> left;
 		for (auto &check : decide.scope_checks) {
 			DirectRowCheck row_check;
-			switch (ReadRowCheck(check, row_check)) {
-			case RowCheckRead::NOTHING:
-				break;
-			case RowCheckRead::READ:
+			if (ReadRowCheck(check, row_check)) {
 				taken.push_back(std::move(row_check));
-				break;
-			case RowCheckRead::UNREADABLE:
+			} else {
 				left.push_back(std::move(check));
-				break;
 			}
 		}
 		decide.scope_checks = std::move(left);
