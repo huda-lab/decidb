@@ -98,6 +98,19 @@ _DOMINATED_COLUMNS_SQL = """
         MINIMIZE SUM(ABS(adj - 0.01 * q)) + 0.5 * norm(adj, 1) + 0.3 * norm(adj, 0, 40))
 """
 
+# Two rows over 50,000 binaries x and 50,000 general integers z. Presolve's probing extracts variable bounds from each
+# row (``HighsCliqueTable::extractCliques``) by pairing every binary with every integer of the row: about 30 s.
+_CLIQUE_EXTRACTION_SQL = """
+    SELECT count(*) AS n FROM (
+        SELECT i, x, z FROM (
+            SELECT i, (i * 7919) % 1000 + 1 AS a, (i * 104729) % 997 + 1 AS b, (i * 31337) % 991 + 1 AS c,
+                   (i * 65537) % 983 + 1 AS d
+            FROM range(50000) t(i))
+        DECIDE x(BOOL), z(INT)
+        SUCH THAT z <= 3 AND SUM(a * x + b * z) <= 5000000 AND SUM(c * x + d * z) <= 5000000
+        MAXIMIZE SUM((a + c) * x + (b + d) * z))
+"""
+
 
 def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
     """Run ``sql`` on the Gurobi CLI with optional DECIDB_TIME_LIMIT in the env.
@@ -213,6 +226,21 @@ class TestTimeLimit:
         without it the subprocess timeout kills the solve.
         """
         result = _run_decidb(decidb_cli_highs, _DOMINATED_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
+        combined = result.stderr + result.stdout
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
+            f"  stdout: {result.stdout[:400]}\n"
+            f"  stderr: {result.stderr[:400]}"
+        )
+
+    def test_highs_limit_bounds_clique_extraction(self, decidb_cli_highs):
+        """HiGHS stops presolve's variable-bound extraction at DECIDB_TIME_LIMIT.
+
+        Probing pairs every binary of a row with every integer of it, about 30 s here with no clock check. The
+        vendored patch (BUG-25) checks the MIP limits once per 2^20 pairs, so the solve ends with the time-limit error
+        about 1 s in; without it the subprocess timeout kills the solve.
+        """
+        result = _run_decidb(decidb_cli_highs, _CLIQUE_EXTRACTION_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
         assert re.search(r"(?i)hit the time limit", combined), (
             f"Expected 'hit the time limit' message but got:\n"

@@ -2594,6 +2594,7 @@ void HighsDomain::conflictAnalyzeReconvergence(
   }
 
   conflictSet.resolveDepth(conflictSet.reconvergenceFrontier, depth, 0);
+  if (conflictSet.stopped) return;  // DeciDB patch (BUG-25)
   conflictPool.addReconvergenceCut(*this, conflictSet.reconvergenceFrontier,
                                    domchg);
 }
@@ -2705,6 +2706,7 @@ bool HighsDomain::ConflictSet::explainBoundChangeGeq(
     const HighsInt* inds, const double* vals, HighsInt len, double rhs,
     double maxAct) {
   if (maxAct == kHighsInf) return false;
+  entriesSinceLimitCheck += len;  // DeciDB patch (BUG-25)
 
   // get the coefficient value of the column for which we want to explain
   // the bound change
@@ -2814,6 +2816,7 @@ bool HighsDomain::ConflictSet::explainBoundChangeLeq(
     const HighsInt* inds, const double* vals, HighsInt len, double rhs,
     double minAct) {
   if (minAct == -kHighsInf) return false;
+  entriesSinceLimitCheck += len;  // DeciDB patch (BUG-25)
   // get the coefficient value of the column for which we want to explain
   // the bound change
   double domchgVal = 0;
@@ -3671,6 +3674,18 @@ HighsInt HighsDomain::ConflictSet::resolveDepth(std::set<LocalDomChg>& frontier,
 
   while (queueSize() > stopSize ||
          (queueSize() > 0 && numResolved < minResolve)) {
+    // DeciDB patch (BUG-25): check the MIP limits once per
+    // kEntriesPerLimitCheck row entries explained; past a limit, abandon the
+    // conflict: no cut is added (conflictAnalysis returns on stopped)
+    const int64_t kEntriesPerLimitCheck = int64_t{1} << 20;
+    if (entriesSinceLimitCheck >= kEntriesPerLimitCheck) {
+      entriesSinceLimitCheck = 0;
+      if (localdom.mipsolver->mipdata_->checkLimits()) {
+        stopped = true;
+        clearQueue();
+        return 0;
+      }
+    }
     std::set<LocalDomChg>::iterator pos = popQueue();
     if (!explainBoundChange(frontier, *pos)) continue;
 
@@ -3799,6 +3814,7 @@ void HighsDomain::ConflictSet::conflictAnalysis(
       }
     }
     HighsInt numNewConflicts = computeCuts(currDepth, conflictPool);
+    if (stopped) return;  // DeciDB patch (BUG-25)
     // if the depth level was empty, do not consider it
     if (numNewConflicts == -1) {
       --lastDepth;
@@ -3874,6 +3890,7 @@ void HighsDomain::ConflictSet::conflictAnalysis(
       }
     }
     HighsInt numNewConflicts = computeCuts(currDepth, conflictPool);
+    if (stopped) return;  // DeciDB patch (BUG-25)
     // if the depth level was empty, do not consider it
     if (numNewConflicts == -1) {
       --lastDepth;

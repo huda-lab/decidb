@@ -987,6 +987,8 @@ bool HighsPrimalHeuristics::linesearchRounding(
       if (tmpalpha < nextalpha && tmpalpha > alpha + 1e-2) nextalpha = tmpalpha;
     }
 
+    // DeciDB patch (BUG-25): check the MIP limits once per rounded point
+    if (mipsolver.mipdata_->checkLimits()) return false;
     if (tryRoundedPoint(roundedpoint, solution_source)) return true;
 
     if (reachedpoint2) return false;

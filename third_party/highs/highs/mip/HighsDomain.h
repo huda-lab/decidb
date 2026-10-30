@@ -101,6 +101,11 @@ class HighsDomain {
 
     std::vector<ResolveCandidate> resolveBuffer;
 
+    // DeciDB patch (BUG-25): row entries the explanations scanned since the
+    // last limit check, and whether a MIP limit stopped the analysis
+    int64_t entriesSinceLimitCheck = 0;
+    bool stopped = false;
+
     void pushQueue(std::set<LocalDomChg>::iterator domchgPos);
     std::set<LocalDomChg>::iterator popQueue();
     void clearQueue();
