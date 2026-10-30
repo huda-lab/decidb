@@ -1304,14 +1304,17 @@ TEST_CASE("DeciDB range-clause edits", "[decidb][query_diagnostics][range]") {
 TEST_CASE("DeciDB repair amounts snap to the precision the model resolves", "[decidb][query_diagnostics][snap]") {
 	using decide_render::SnapToPrecision;
 	// A backend's arithmetic above a clean number is the clean number.
-	CHECK(SnapToPrecision(5.0000000000000853) == 5.0);
-	CHECK(SnapToPrecision(-5.0000000000000853) == -5.0);
+	CHECK(SnapToPrecision(5.0000000000000853, 1) == 5.0);
+	CHECK(SnapToPrecision(-5.0000000000000853, 1) == -5.0);
 	// Noise below it is tidied to it.
-	CHECK(SnapToPrecision(4.499999) == 4.5);
-	// Anything more above a tick rounds up, however small: within the feasibility tolerance on one row, a
-	// shortfall still adds up over the rows an amount covers.
-	CHECK(SnapToPrecision(4.3333333) == Approx(4.33334));
-	CHECK(SnapToPrecision(10.000002) == Approx(10.00001));
-	CHECK(SnapToPrecision(21.0000004) == Approx(21.0001));
-	CHECK(SnapToPrecision(1.0 / 9000.0) == Approx(0.000111112).epsilon(1e-12));
+	CHECK(SnapToPrecision(4.499999, 1) == 4.5);
+	// A shortfall past the feasibility tolerance takes the next tick outward.
+	CHECK(SnapToPrecision(4.3333333, 1) == Approx(4.33334).epsilon(1e-12));
+	CHECK(SnapToPrecision(10.000002, 1) == Approx(10.0001).epsilon(1e-12));
+	// Within the tolerance on one row it rounds to nearest; the same shortfall over three rows passes it.
+	CHECK(SnapToPrecision(21.0000004, 1) == 21.0);
+	CHECK(SnapToPrecision(21.0000004, 3) == Approx(21.0001).epsilon(1e-12));
+	// 1/9000 short by 1.1e-10 is nothing on one row and the whole tolerance over 9,000.
+	CHECK(SnapToPrecision(1.0 / 9000.0, 1) == Approx(0.000111111).epsilon(1e-12));
+	CHECK(SnapToPrecision(1.0 / 9000.0, 9000) == Approx(0.000111112).epsilon(1e-12));
 }

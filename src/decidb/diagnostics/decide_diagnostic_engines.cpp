@@ -118,15 +118,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	// the existing columns first (slack/removal columns are appended with 0 here), and
 	// drop any quadratic objective. DiagnoseInfeasible sets one tier objective per
 	// lexicographic pass.
-	for (auto &c : elastic.obj_coeffs) {
-		c = 0.0;
-	}
-	elastic.obj_constant = 0.0;
-	elastic.q_rows.clear();
-	elastic.q_cols.clear();
-	elastic.q_vals.clear();
-	elastic.has_quadratic_obj = false;
-	elastic.nonconvex_quadratic = false;
+	elastic.ClearObjective();
 	elastic.maximize = false;
 
 	// Append a REAL, non-negative, uncapped slack column (sᵢ≥0 REAL even for integer
@@ -368,16 +360,41 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	return out;
 }
 
+//! The 1-norm of a block's slack columns in the elastic model: how many rows, with their
+//! weights, an amount read from the block moves a bound on (both columns for `=`).
+static double SlackColumnNorm(const SolverModel &elastic_model, const BlockSlackRef &sl) {
+	double norm = 0.0;
+	auto add = [&](const vector<int> &indices, const vector<double> &coefficients) {
+		for (idx_t k = 0; k < indices.size(); k++) {
+			idx_t col = static_cast<idx_t>(indices[k]);
+			if (col == sl.pos_col || col == sl.neg_col) {
+				norm += std::fabs(coefficients[k]);
+			}
+		}
+	};
+	for (idx_t r : sl.rows) {
+		if (sl.quadratic) {
+			const auto &qc = elastic_model.quadratic_constraints[r];
+			add(qc.linear_indices, qc.linear_coefficients);
+		} else {
+			const auto &row = elastic_model.constraints[r];
+			add(row.indices, row.coefficients);
+		}
+	}
+	return norm;
+}
+
 //! Read the slack support of a solved elastic model into the user-facing edit list.
 //! Every block whose slack clears the noise floor is an edit; the amount is the
 //! slack value (`=` reports the net s⁺ − s⁻). A data-RHS clause (`x <= col`) has no
 //! single literal to loosen, so it reads back per the `slack_scope` policy (T3): "query"
 //! folds it into one virtual offset `x <= col + delta`; "expanded" exposes each per-row
 //! slack. Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
-//! appended). Pure in `solution`, so it runs against either the stage-1 or stage-2 solve.
+//! appended); amounts are rounded by the slack columns of `elastic_model`. Pure in
+//! `solution`, so it runs against either the stage-1 or stage-2 solve.
 static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, const vector<double> &solution,
-                                           const SolverModel &orig_model, const vector<ColumnProvenance> &columns,
-                                           const string &slack_scope) {
+                                           const SolverModel &orig_model, const SolverModel &elastic_model,
+                                           const vector<ColumnProvenance> &columns, const string &slack_scope) {
 	// T3 slack-scope policy.
 	//   query (default): each block is ONE SQL literal knob the user edits, folded across
 	//     groups (BuildElasticModel). Editable literals report `source_literal`, a
@@ -413,10 +430,9 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 		if (std::fabs(amount) <= edit_floor) {
 			continue;
 		}
-		// Round away the conditioning noise a widened box costs, outward, so the edit as
-		// printed still repairs. The one rounding an amount gets, at either stage: a second
-		// one to a nearer grid would undo the direction this one keeps.
-		amount = SnapToPrecision(amount);
+		// Round away the conditioning noise a widened box costs, keeping the edit as printed
+		// a repair over every row it moves. The one rounding an amount gets, at either stage.
+		amount = SnapToPrecision(amount, SlackColumnNorm(elastic_model, sl));
 		if (std::fabs(amount) <= edit_floor) {
 			continue;
 		}
@@ -593,14 +609,7 @@ static bool TierHasTerms(const vector<BlockSlackRef> &slacks, ElasticRepairTier 
 
 static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &slacks,
                              ElasticRepairTier tier) {
-	for (auto &c : model.obj_coeffs) {
-		c = 0.0;
-	}
-	model.q_rows.clear();
-	model.q_cols.clear();
-	model.q_vals.clear();
-	model.has_quadratic_obj = false;
-	model.nonconvex_quadratic = false;
+	model.ClearObjective();
 	model.maximize = false;
 
 	ModelConstraint objective_terms;
@@ -923,7 +932,8 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		}
 	}
 
-	result.edits = ReadElasticEdits(slacks, repair_solution, candidate_model, columns, input.params.slack_scope);
+	result.edits =
+	    ReadElasticEdits(slacks, repair_solution, candidate_model, elastic.model, columns, input.params.slack_scope);
 	for (idx_t index : selected_indices) {
 		result.edits.push_back(MakeDropEdit(input.model, all_groups[index]));
 	}

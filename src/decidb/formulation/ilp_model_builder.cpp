@@ -304,6 +304,16 @@ bool SolverModel::ProvesInfeasible() const {
     return false;
 }
 
+void SolverModel::ClearObjective() {
+	obj_coeffs.assign(obj_coeffs.size(), 0.0);
+	obj_constant = 0.0;
+	q_rows.clear();
+	q_cols.clear();
+	q_vals.clear();
+	has_quadratic_obj = false;
+	nonconvex_quadratic = false;
+}
+
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     DecideProfileScope profile("model.build");
     DecideProfileScope phase("model.variables_and_bounds");

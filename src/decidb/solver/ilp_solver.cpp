@@ -353,16 +353,17 @@ static SolverResult SolveOnce(const SolverModel &model, SolverBackend backend, c
 	return session->Solve(model, time_limit);
 }
 
+//! Settle a solve's status: the one route every solve takes once its backend answers (SolveModel and
+//! SolvePreparedModel). A backend that cannot tell infeasible from unbounded says INF_OR_UNBD; the same model with
+//! no objective cannot be unbounded, so the status of that probe is final and says which one it is.
 static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
-                                          const SolveModelOptions &diagnostic_options,
-                                          const SolverResult &original) {
+                                          const SolveModelOptions &options, const SolverResult &original) {
     if (original.status != SolverStatus::INF_OR_UNBD) {
         return original;
     }
 
-    // A model with no objective cannot be unbounded, so the probe's own status is final.
     SolverModel probe_model = MakeZeroObjectiveProbeModel(model);
-    SolverResult probe_result = SolveOnce(probe_model, backend, diagnostic_options);
+    SolverResult probe_result = SolveOnce(probe_model, backend, MakeDiagnosticSolveOptions(options));
 
     SolverResult disambiguated = original;
     if (DidDiagnosticSolveStopEarly(probe_result)) {
@@ -382,8 +383,7 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
 }
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options) {
-	return DisambiguateInfOrUnbd(model, backend, MakeDiagnosticSolveOptions(options),
-	                             SolveOnce(model, backend, options));
+	return DisambiguateInfOrUnbd(model, backend, options, SolveOnce(model, backend, options));
 }
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
@@ -533,7 +533,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	phase.Next("solver.session_solve");
 	SolverResult result = session->Solve(model, time_limit);
 	phase.Next("solver.postsolve");
-	result = DisambiguateInfOrUnbd(model, backend, diagnostic_options, result);
+	result = DisambiguateInfOrUnbd(model, backend, options, result);
 	result = RejectIntegerCeilingOptimum(model, result);
 	AttachUnboundedRayIfRequested(model, backend, options, diagnostic_options, result);
 	// Hand the live session to the continuation loop if one asked for it, so a

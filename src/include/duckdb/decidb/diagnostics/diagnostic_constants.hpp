@@ -31,10 +31,4 @@ constexpr double INTEGER_SOLVER_CEILING = 2e9;
 //! genuine improving ray and to filter which variables actually escape.
 constexpr double DIAGNOSTIC_RAY_EPSILON = 1e-8;
 
-//! How far, relative to its own magnitude, a value a backend computed can sit off the
-//! number it stands for through the backend's arithmetic alone (HiGHS returns a slack of 5
-//! as 5.0000000000000853). Far below the six figures a diagnosis prints, so reading such a
-//! value as that number changes no printed digit beyond the noise.
-constexpr double DIAGNOSTIC_ARITHMETIC_NOISE = 1e-9;
-
 } // namespace duckdb

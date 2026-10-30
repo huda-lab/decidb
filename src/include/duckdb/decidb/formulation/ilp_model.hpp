@@ -438,6 +438,10 @@ struct SolverModel {
     //! model with their provenance, so diagnosis can name or relax them.
     bool ProvesInfeasible() const;
 
+    //! Remove the objective: every linear coefficient zero, no constant, no quadratic part. The sense and the
+    //! columns stay, so a caller can set a new objective over the same columns or solve for feasibility alone.
+    void ClearObjective();
+
     //! Build a SolverModel from a SolverInput (the shared model-building logic).
     //! Takes a non-const reference because raw global constraints are moved out of `input`
     //! into `model.constraints` to avoid deep copies.

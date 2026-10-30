@@ -26,15 +26,15 @@ string FormatNum(double v);
 
 //! Clean the sub-tolerance noise of a value the diagnosis reports or compares but that
 //! is no edit (the achievable objective, a repair cost): snap to the nearest integer when
-//! within a relative tolerance of one, otherwise trim a genuinely fractional value to a
-//! fixed absolute precision. Never applied to an edit's amount, which SnapToPrecision
-//! alone rounds.
+//! within the feasibility tolerance (plus arithmetic noise) of one, otherwise trim a
+//! genuinely fractional value to a fixed absolute precision. Never applied to an edit's
+//! amount, which SnapToPrecision alone rounds.
 double SnapDiagnosticValue(double v);
 
-//! Round a repair amount to the last decimal that is meaningful at its own magnitude,
-//! outward, so a reported repair is never one part in a million SHORT of actually
-//! repairing. The one rounding an amount gets.
-double SnapToPrecision(double v);
+//! Round a repair amount to the last decimal that is meaningful at its own magnitude: to
+//! nearest, and one tick outward when the shortfall summed over the `fan_out` rows the
+//! amount moves would exceed the feasibility tolerance. The one rounding an amount gets.
+double SnapToPrecision(double v, double fan_out);
 
 //! Render a row's LHS as the user wrote it when the model carries a source
 //! spelling, falling back to rebuilding it from the row's own coefficients.
