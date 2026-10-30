@@ -258,7 +258,15 @@ coefficients took 25 s under a 1 s limit, and 110,000 two-column inequalities 23
 on the postsolve stack. Tests: `test_error_time_limit.py` (`test_highs_limit_bounds_parallel_columns`,
 `test_highs_limit_bounds_parallel_rows`). Phases the time checks still do not reach, none seen to stall: the root
 analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group), the probing loop after clique extraction,
-rounding's fixing loop and the other presolve passes between their checks every 1,024 reductions. The upstream
+rounding's fixing loop and the other presolve passes between their checks every 1,024 reductions.
+
+Dual fixing (since HiGHS 1.12) and singleton column stuffing (since 1.13) scan a column's whole row once per column
+of it and make no reduction on a dense row, so presolve was quadratic there with no check: a symmetric MIP of
+100,000 columns spent 41 s in presolve (0.7 s on 1.11), and one row over 120,000 integer singleton columns 205 s
+under a 1 s limit. Dual fixing's substitution returns at once on a row with no integer column besides its own, where
+its scan finds no binary (`DeciDB patch (PERF-H1)`, the same reductions in the same order); both scans count the row
+entries they read and check the time limit once per 2^20 (`DeciDB patch (BUG-34)`). Tests:
+`test_highs_solved_mip_does_not_wait_for_symmetry_search`, `test_highs_limit_bounds_parallel_columns`. The upstream
 report is drafted in `../../issues/highs_upstream.md`.
 
 Diagnostic follow-up solves are budgeted separately
@@ -430,6 +438,10 @@ it changes report wording ("you stopped it" vs "hit the time limit"), not routin
 ---
 
 ## 5. HiGHS backend
+
+HiGHS 1.15.1, vendored as upstream plus DeciDB's patch series (`third_party/highs/README.md`; `make upgrade-highs
+HIGHS_VERSION=<x.y.z>` moves it). On a large LP whose bounds are column bounds, 1.11's postsolve returned a basis
+primal simplex repaired for minutes (R1 at 1.6M decisions: 55 s); 1.15.1 solves it in 1.8 s.
 
 The floor of the registry: every capability flag is false. No construct is native, so
 everything arrives fully lowered; no model class beyond plain linear and **convex**

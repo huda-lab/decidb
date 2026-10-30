@@ -1,19 +1,22 @@
-# Draft: HiGHS upstream issue — six presolve and MIP loops that never check the time limit
+# Draft: HiGHS upstream issue — seven presolve and MIP loops that never check the time limit
 
 Not posted. The owner posts it on github.com/ERGO-Code/HiGHS. Before posting:
 
 - attach one MPS file per case, written with `Highs::writeModel` from the model DeciDB loads (Q1, Q2, Q3 and Q10 at
   `large`), so the report does not depend on DeciDB;
-- check the current HiGHS release for the same loops; drop any case it already fixes.
+- check the current HiGHS release for the same loops; drop any case it already fixes. HiGHS 1.15.1 (2026-10-30)
+  fixes none of the seven: every patch still applies or was ported (`third_party/highs/README.md`).
 
 The patches it describes are listed in `third_party/highs/README.md`.
 
 ---
 
-**Title:** MIP time limit and user interrupt are not checked in six loops (clique partition, symmetry detection,
-dominated-columns presolve, clique extraction, conflict analysis, parallel rows and columns)
+**Title:** MIP time limit and user interrupt are not checked in seven loops (clique partition, symmetry detection,
+dominated-columns presolve, clique extraction, conflict analysis, parallel rows and columns, dual fixing and singleton
+column stuffing)
 
-**Version:** HiGHS 1.11.0 (git 364c83a51), built from source as a static library. macOS arm64.
+**Version:** HiGHS 1.15.1 (git 04024d701); cases 1-6 also on 1.11.0 (git 364c83a51). Built from source as a static
+library. macOS arm64.
 
 **Summary.** Five MIP models run minutes past `time_limit`, and the user interrupt callback is not called
 meanwhile. In each case the time goes to a loop that reads the clock only after some event
@@ -149,7 +152,23 @@ while (it != buckets.end() && it->first == colHashes[i]) {
   ...
 ```
 
+### 7. `HPresolve::dualFixing` and `HPresolve::singletonColStuffing` (presolve, since 1.12 and 1.13)
+
+- **Symptom:** both are quadratic in a long row and never check the time limit there. `dualFixing`'s `substituteCol`
+  calls `storeRow` and scans the whole row for a binary, once per column of it (since 1.12.0);
+  `singletonColStuffing`'s `computeCandidates` (since 1.13) rescans the whole row for every singleton column, twice
+  when it retries without integer candidates. On a dense row both make no reductions, so `checkLimits` never runs. A
+  symmetric MIP with n = 100,000 spends 41-60 s in presolve (also with highspy 1.13.1; 0.7 s on 1.11); one row
+  `SUM(a_i x_i) <= 1e9` over 120,000 integer singleton columns `x_i` in [0, 3] spends 205 s under a 1 s limit.
+- **Patches:** `substituteCol` returns at once when the row has no integer column besides the one it substitutes
+  for (`rowsizeInteger`, which upstream maintains), where its scan can find no binary: the same reductions in the
+  same order. Both scans count the row entries they read and call `checkTimeLimit()` once per 2^20, returning through
+  the pass's own `Result` exit.
+- **With the patches:** the symmetric MIP solves in 0.8 s; the long row stops at the 1 s limit.
+- **A full fix** would keep a count of binaries per row (for the early exit) and cache stuffing's candidates per row,
+  invalidated on changes to cost, bounds, column size or the row's sides.
+
 ### Suggestion
 
 A clock check inside each loop whose work does not depend on making progress (reductions, nodes, leaves) would cover
-these cases and others like them. We are happy to open a pull request with any of the six patches.
+these cases and others like them. We are happy to open a pull request with any of the seven patches.

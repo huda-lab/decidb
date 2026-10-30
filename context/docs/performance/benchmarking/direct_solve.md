@@ -110,7 +110,7 @@ The script also prints the table as Markdown while it runs.
 - TPC-H group sizes are fixed across scale factors: 80 offers per supplier and 4 suppliers per part. Only the number
   of groups grows, never their size.
 - Each query runs at one parameter setting: K = 2 for S1, a target of 5,000 for A1 and a cap of 5,000 per part for R1.
-- HiGHS cannot solve A1 beyond 800 decisions. Its QP solver stops with "Large nullspace" once more than 4,000
+- HiGHS (1.15.1, as 1.11) cannot solve A1 beyond 800 decisions. Its QP solver stops with "Large nullspace" once more than 4,000
   variables end strictly inside their bounds, and about half of A1's do (`../../pipeline/07_solver/done.md`, HiGHS
   backend). The cell reads `error` at 9,600 and the larger sizes are skipped. This is a limit of HiGHS's QP method,
   not of the model: the bounds reach HiGHS as column bounds, not rows.

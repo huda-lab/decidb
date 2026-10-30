@@ -19,17 +19,12 @@ posting the HiGHS report (§ 3), and the original measurement work (§ 4).
 
 ## 1. In progress (2026-10-30)
 
-- [ ] Upgrade HiGHS to its latest release through `make upgrade-highs` (a patch series over pristine upstream). HiGHS
-  1.11 takes 55 s on R1 at 1.6M decisions, 10 s on 2026-10-26: since bounds reach it as column bounds, its postsolve
-  returns a basis primal simplex repairs for 79 s; 1.13.1 solves the same LP in 1.4 s. Record in
-  `third_party/highs/README.md`, `pipeline/07_solver/done.md`, `issues/highs_upstream.md`,
-  `performance/benchmarking/direct_solve.md`.
 - [ ] BUG-29..32 DIAGNOSE output the example runner found wrong — issues/bugs.md § BUG-29 to BUG-32
   - Ruled (owner's delegate, 2026-10-30): `achievable_objective` is the objective as written, constant included; a
     printed amount rounds outward so the edit as printed restores feasibility. One batch (diagnosis); the report of
     `benchmark/decide/diagnose_examples/run.py` is the check. Record in `diagnostics/` per kind.
 - [ ] BUG-33 HiGHS fails or answers wrongly on a column bound or objective outside its window — issues/bugs.md § BUG-33
-  - Ruled: scale column bounds and the objective into HiGHS's window as rows are. After the HiGHS upgrade. Record in
+  - Ruled: scale column bounds and the objective into HiGHS's window as rows are. HiGHS is now 1.15.1. Record in
     `pipeline/07_solver/done.md` (HiGHS backend).
 
 ## 2. Slowdowns since the 2026-09-09 sweep
@@ -42,9 +37,9 @@ Q8's keyed mapping (PERF-9) is back to 257 ms and Q3/Q10's memory peak (PERF-11)
 
 ## 3. The owner's actions
 
-- [ ] Post the HiGHS upstream issue (six loops) — issues/highs_upstream.md
-  - Before posting: attach an MPS file for Q1, Q2, Q3 and Q10 at `large`; list only the loops the upgraded release
-    still lacks (§ 1).
+- [ ] Post the HiGHS upstream issue (seven loops, on 1.15.1) — issues/highs_upstream.md
+  - Before posting: attach an MPS file for Q1, Q2, Q3 and Q10 at `large`; every loop is still missing its check in
+    1.15.1.
 
 ## 4. Measurement (last; the owner runs them)
 

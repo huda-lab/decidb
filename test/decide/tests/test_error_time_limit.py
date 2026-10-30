@@ -271,11 +271,13 @@ class TestTimeLimit:
         )
 
     def test_highs_limit_bounds_parallel_columns(self, decidb_cli_highs):
-        """HiGHS stops presolve's parallel-columns pass at DECIDB_TIME_LIMIT.
+        """HiGHS stops presolve's parallel-columns, dual-fixing and stuffing passes at DECIDB_TIME_LIMIT.
 
-        Presolve checks the clock once per 1,024 reductions, and this pass compares every pair of the row's 120,000
-        columns and makes none, about 25 s. The vendored patch (BUG-28) checks it once per 2^20 compared pairs, so the
-        solve ends with the time-limit error about 1 s in; without it the subprocess timeout kills the solve.
+        Presolve checks the clock once per 1,024 reductions, and on this row of 120,000 integer columns three passes
+        make none: parallel columns compares every pair (about 25 s), dual fixing and singleton column stuffing scan
+        the row once per column (205 s). The vendored patches (BUG-28, BUG-34) check it once per 2^20 compared pairs
+        or scanned entries, so the solve ends with the time-limit error about 1 s in; without them the subprocess
+        timeout kills the solve.
         """
         result = _run_decidb(decidb_cli_highs, _PARALLEL_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
