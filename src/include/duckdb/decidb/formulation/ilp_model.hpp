@@ -236,11 +236,11 @@ struct ConstraintProvenance {
     //! Describes the formulation itself; atomic DROP identity lives independently in
     //! `removal_group_id`, and display identity in `source_clause_id`.
     idx_t indicator_col = DConstants::INVALID_INDEX;
-    //! Printable `per` key of this row's group (`'a'`, or `EU, 2024` for a composite key).
-    //! Empty when the clause is ungrouped. Lets infeasible diagnosis identify which group
-    //! an edit belongs to and populate the finding's `group` column, so grouped
-    //! aggregates can fold to `SUM(x)` without colliding in the relation (Facet A).
-    string group_label;
+    //! The name of this row's group (SolverModel::key_values); none when the clause's groups
+    //! have no key. Lets infeasible diagnosis identify which group an edit belongs to and
+    //! populate the finding's `group` column, so grouped aggregates can fold to `SUM(x)`
+    //! without colliding in the relation (Facet A).
+    GroupName group_name;
     //! The classes this row's group stands for (SolverModel::class_sets), or
     //! INVALID_INDEX: an expanded diagnosis reports the row once per class (D28).
     idx_t class_set = DConstants::INVALID_INDEX;
@@ -412,6 +412,9 @@ struct SolverModel {
     //! The classes a scoped clause's group stands for, by ConstraintProvenance::class_set
     //! (SolverInput::class_sets, moved here by Build).
     vector<SolverInput::ClassSet> class_sets;
+    //! The representative values a GroupName names a group by (SolverInput::key_values,
+    //! moved here by Build).
+    vector<SolverInput::KeyValues> key_values;
     //! Stable source display registry, indexed by source_clause_id.
     vector<ConstraintSourceInfo> constraint_sources;
 

@@ -509,8 +509,8 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     rc.indicator_col = z_idx;
                     rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
                     rc.is_aggregate = true;
-                    if (has_groups && g < ec.group_labels.size()) {
-                        rc.group_label = ec.group_labels[g];
+                    if (has_groups && g < ec.group_names.size()) {
+                        rc.group_name = ec.group_names[g];
                     }
                 };
 

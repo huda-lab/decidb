@@ -450,7 +450,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 		if (sl.quadratic) {
 			const auto &orig = orig_model.quadratic_constraints[sl.rows.front()];
 			ClauseEdit e =
-			    MakeLoosenEdit(orig.provenance, FindConstraintSource(orig_model, orig.provenance),
+			    MakeLoosenEdit(orig_model, orig.provenance, FindConstraintSource(orig_model, orig.provenance),
 			                   SourceAwareQuadraticLhs(orig_model, orig, columns), orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
 			// A quadratic row never shares a slack (I2.d), so it reads back on its own, its
@@ -486,9 +486,10 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 				// The independent per-row slack is that row's exact overshoot, one profile
 				// entry, quoted against that row's bound -- or offsetting the written bound
 				// when canonicalization moved a term across it, as below.
-				ClauseEdit e = written_rhs.empty()
-				                   ? MakeLoosenEdit(prov, source, display_lhs, orig.rhs, sl.sense, amount)
-				                   : MakeVirtualOffsetEdit(prov, source, display_lhs, written_rhs, sl.sense, amount);
+				ClauseEdit e =
+				    written_rhs.empty()
+				        ? MakeLoosenEdit(orig_model, prov, source, display_lhs, orig.rhs, sl.sense, amount)
+				        : MakeVirtualOffsetEdit(orig_model, prov, source, display_lhs, written_rhs, sl.sense, amount);
 				e.edit_source = "expanded_row";
 				e.group.clear();
 				e.row = prov.data_row;
@@ -504,12 +505,12 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 				// model carries is a literal the query does not contain. Offset the bound
 				// the user actually wrote instead — the same relaxation, named where they
 				// can apply it.
-				e = MakeVirtualOffsetEdit(prov, source, display_lhs, written_rhs, sl.sense, amount);
+				e = MakeVirtualOffsetEdit(orig_model, prov, source, display_lhs, written_rhs, sl.sense, amount);
 			} else if (data_rhs) {
 				string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
-				e = MakeVirtualOffsetEdit(prov, source, display_lhs, rhs_text, sl.sense, amount);
+				e = MakeVirtualOffsetEdit(orig_model, prov, source, display_lhs, rhs_text, sl.sense, amount);
 			} else {
-				e = MakeLoosenEdit(prov, source, display_lhs, orig.rhs, sl.sense, amount);
+				e = MakeLoosenEdit(orig_model, prov, source, display_lhs, orig.rhs, sl.sense, amount);
 			}
 			// An offset over the written bound is a virtual offset whichever bound it moves.
 			const char *clause_source = (data_rhs || !written_rhs.empty()) ? "virtual_offset" : "source_literal";
@@ -524,7 +525,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 			}
 			// When grouped this block is one group → break it out with its group
 			// key; otherwise there is nothing per-group to expose.
-			e.edit_source = prov.group_label.empty() ? clause_source : "expanded_group";
+			e.edit_source = prov.group_name.group == DConstants::INVALID_INDEX ? clause_source : "expanded_group";
 			edits.push_back(std::move(e));
 			continue;
 		}
@@ -535,17 +536,17 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 			// As above: offset the written bound, not the literal canonicalization left
 			// behind. Reported as a virtual offset because that is what it is — there is
 			// no number in the query to retype.
-			e = MakeVirtualOffsetEdit(prov, source, display_lhs, written_rhs, sl.sense, amount);
+			e = MakeVirtualOffsetEdit(orig_model, prov, source, display_lhs, written_rhs, sl.sense, amount);
 			e.edit_source = "virtual_offset";
 		} else if (data_rhs) {
 			// The folded shared slack `delta` is one virtual query-level offset over the
 			// data column (`x <= col + delta`). rhs_label names the column; fall back to
 			// the numeric representative RHS when it is unavailable.
 			string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
-			e = MakeVirtualOffsetEdit(prov, source, display_lhs, rhs_text, sl.sense, amount);
+			e = MakeVirtualOffsetEdit(orig_model, prov, source, display_lhs, rhs_text, sl.sense, amount);
 			e.edit_source = "virtual_offset";
 		} else {
-			e = MakeLoosenEdit(prov, source, display_lhs, orig.rhs, sl.sense, amount);
+			e = MakeLoosenEdit(orig_model, prov, source, display_lhs, orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
 		}
 		e.group.clear(); // folded across groups → clause-level, no single group key

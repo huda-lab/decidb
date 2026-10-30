@@ -393,7 +393,7 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub1.lhs_is_aggregate = false;
         ec_ub1.row_group_ids = c1.row_group_ids;
         ec_ub1.num_groups = c1.num_groups;
-        ec_ub1.group_labels = c1.group_labels;
+        ec_ub1.group_names = c1.group_names;
         ec_ub1.kind = ConstraintKind::STRUCTURAL;
         ec_ub1.source_clause_id = c1.source_clause_id;
         ec_ub1.repair_group_id = c1.repair_group_id;
@@ -411,7 +411,7 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub2.lhs_is_aggregate = false;
         ec_ub2.row_group_ids = c2.row_group_ids;
         ec_ub2.num_groups = c2.num_groups;
-        ec_ub2.group_labels = c2.group_labels;
+        ec_ub2.group_names = c2.group_names;
         ec_ub2.kind = ConstraintKind::STRUCTURAL;
         ec_ub2.source_clause_id = c2.source_clause_id;
         ec_ub2.repair_group_id = c2.repair_group_id;

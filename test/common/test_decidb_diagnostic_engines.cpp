@@ -1258,7 +1258,7 @@ SolverModel MakeBetweenModel() {
 ClauseEdit MakeEndEdit(const SolverModel &model, idx_t source_id, char sense, double bound, double amount) {
 	ConstraintProvenance prov;
 	prov.source_clause_id = source_id;
-	return decide_render::MakeLoosenEdit(prov, &model.constraint_sources[source_id],
+	return decide_render::MakeLoosenEdit(model, prov, &model.constraint_sources[source_id],
 	                                     model.constraint_sources[source_id].canonical_lhs, bound, sense, amount);
 }
 

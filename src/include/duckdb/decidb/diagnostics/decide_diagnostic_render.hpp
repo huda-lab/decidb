@@ -71,8 +71,8 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻).
-ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source, const string &lhs,
-                          double rhs, char sense, double amount);
+ClauseEdit MakeLoosenEdit(const SolverModel &model, const ConstraintProvenance &prov,
+                          const ConstraintSourceInfo *source, const string &lhs, double rhs, char sense, double amount);
 
 //! The findings one emitted row stands for (D28): one per class of its group's `per` key
 //! (`expanded_group`, the value in `group`); in the expanded slack scope, one per kept row
@@ -93,8 +93,9 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 //! Fold a clause's per-row data slack into one synthetic query-level offset
 //! (`x <= col + delta`; `>=` loosens downward → `col - delta`; `=` by its signed slack),
 //! a strict `<` / `>` keeping its operator.
-ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source,
-                                 const string &lhs, const string &rhs_text, char sense, double delta);
+ClauseEdit MakeVirtualOffsetEdit(const SolverModel &model, const ConstraintProvenance &prov,
+                                 const ConstraintSourceInfo *source, const string &lhs, const string &rhs_text,
+                                 char sense, double delta);
 
 } // namespace decide_render
 } // namespace duckdb

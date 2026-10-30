@@ -482,6 +482,21 @@ def test_a_when_in_front_limits_the_classes_to_the_kept_rows(decidb_cli):
 
 
 @pytest.mark.diagnose
+def test_a_group_keeps_its_name_when_a_later_clause_reads_its_key_on_more_rows(decidb_cli):
+    """The first clause reads t.region on row 4 alone, where W is its first group; the second reads it on every row,
+    which puts E first. The first clause's finding still names W, the group it holds (PerGroupCache::key_values)."""
+    findings = _findings(
+        _diagnose(
+            decidb_cli,
+            "when t.region = 'W' per t.region: sum(x) by (t.region) >= 100 "
+            "AND per t.region: sum(x) by (t.region) <= 1000",
+        )
+    )
+    change = "when t.region = 'W' per t.region: sum(x) by (t.region) >= {}"
+    assert findings == [("W", "NULL", 85, "expanded_group", change.format(15))]
+
+
+@pytest.mark.diagnose
 def test_the_query_scope_still_folds_a_clause_into_one_edit(decidb_cli):
     """The default scope reports one clause-level edit with no group, as before."""
     findings = _findings(_diagnose(decidb_cli, "per t.depot: sum(x) by (t.region) >= 100", scope="query"))

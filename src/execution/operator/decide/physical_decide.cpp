@@ -552,41 +552,6 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 //! value, so every call site reading the key sees the same ids and takes its kept
 //! groups as a subsequence. Lifetime: one PerGroupCache per Finalize invocation.
 
-//! A value as SQL writes it, for a message: 'East', 10, NULL.
-static string SqlLiteral(const Value &value) {
-	if (value.IsNull()) {
-		return "NULL";
-	}
-	if (DecideLiteralIsBare(value.type())) {
-		return value.ToString();
-	}
-	return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
-}
-
-//! Printable key for an (unfiltered) group: the per-key-column representative values joined with ", " (composite key
-//! → `EU, 2024`). A column the user wrote renders its value, "NULL" for a NULL; a value of a column a relation element
-//! stands for (`per D`) is an SQL literal, as a determination message writes it (`'EU'`, `NULL`), because there NULL is
-//! a value a string `'NULL'` must be told from.
-static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, const vector<DecideKeyElement> &elements,
-                                idx_t gid) {
-	string s;
-	for (idx_t c = 0; c < rep_keys.size(); c++) {
-		const Value &v = rep_keys[c][gid];
-		if (!s.empty()) {
-			s += ", ";
-		}
-		if (c < elements.size() && elements[c].null_mode == DecideKeyNullMode::VALUE) {
-			s += SqlLiteral(v);
-		} else if (v.IsNull()) {
-			s += "NULL";
-		} else {
-			string rendered = v.ToString();
-			s += rendered.empty() ? "''" : rendered;
-		}
-	}
-	return s;
-}
-
 //! The cache's grouping of `keys[key]`, computed on every row of `read_rows` (null: every
 //! row). Keys are interned, so the key's index is its identity; INVALID_INDEX is the
 //! empty key, which has one entry like any other. An entry computed on fewer rows is
@@ -594,8 +559,8 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, const vec
 static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
                                            ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                            ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read_rows) {
-	auto found = cache.find(key);
-	bool covers = found != cache.end();
+	auto found = cache.entries.find(key);
+	bool covers = found != cache.entries.end();
 	if (covers && !found->second.evaluated_rows.empty()) {
 		auto &evaluated = found->second.evaluated_rows;
 		for (idx_t r = 0; r < num_rows && covers; r++) {
@@ -606,20 +571,22 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 		vector<bool> rows;
 		if (read_rows) {
 			rows = *read_rows;
-			if (found != cache.end() && !found->second.evaluated_rows.empty()) {
+			if (found != cache.entries.end() && !found->second.evaluated_rows.empty()) {
 				for (idx_t r = 0; r < num_rows; r++) {
 					rows[r] = rows[r] || found->second.evaluated_rows[r];
 				}
 			}
 		}
-		if (found == cache.end()) {
-			found = cache.emplace(key, PerGroupCacheEntry()).first;
+		if (found == cache.entries.end()) {
+			found = cache.entries.emplace(key, PerGroupCacheEntry()).first;
 		}
 		auto &entry = found->second;
+		SolverInput::KeyValues key_values;
 		vector<const Expression *> key_exprs;
 		vector<const Expression *> label_exprs;
 		vector<bool> null_no_group;
 		for (auto &element : DecideKeyElements(keys, key)) {
+			key_values.null_modes.push_back(element.null_mode);
 			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, element.Grouping(), context));
 			label_exprs.push_back(
 			    element.collated ? &CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context)
@@ -627,9 +594,11 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 			null_no_group.push_back(element.null_mode == DecideKeyNullMode::NO_GROUP);
 		}
 		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)> {}, entry.unfiltered_row_group_ids,
-		              entry.unfiltered_num_groups, &entry.unfiltered_rep_keys, rows.empty() ? nullptr : &rows,
-		              null_no_group, label_exprs);
+		              entry.unfiltered_num_groups, &key_values.values, rows.empty() ? nullptr : &rows, null_no_group,
+		              label_exprs);
 		entry.evaluated_rows = std::move(rows);
+		entry.key_values = cache.key_values.size();
+		cache.key_values.push_back(std::move(key_values));
 	}
 	return found->second;
 }
@@ -645,7 +614,7 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 //! key is computed on no row outside them (`CachedKeyGroups`).
 //!
 //! Returns the kept groups: the call's group g is group `[g]` of the key's cache entry,
-//! whose representative values a caller that names a group reads (`GroupLabels`).
+//! whose representative values a caller that names a group reads (`GroupNames`).
 static vector<idx_t> LookupOrBuildPerGroupIds(
     PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key, ChunkExprCache &chunk_expr_cache,
     ClientContext &context, ColumnDataCollection &data, idx_t num_rows, const std::function<bool(idx_t)> &row_filter,
@@ -709,15 +678,18 @@ static vector<idx_t> LookupOrBuildPerGroupIds(
 	return kept_groups;
 }
 
-//! The printable key of each of `groups`, groups of `keys[key]` as its cache entry numbers them.
-static vector<string> GroupLabels(const PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
-                                  const vector<idx_t> &groups) {
-	auto &rep_keys = cache.at(key).unfiltered_rep_keys;
-	vector<string> labels;
-	for (auto group : groups) {
-		labels.push_back(FormatPerGroupKey(rep_keys, DecideKeyElements(keys, key), group));
+//! The name of each of `groups`, groups of key `key` as its cache entry numbers them now. The empty key has no value
+//! to name a group by.
+static vector<GroupName> GroupNames(const PerGroupCache &cache, idx_t key, const vector<idx_t> &groups) {
+	vector<GroupName> names;
+	if (key == DConstants::INVALID_INDEX) {
+		return names;
 	}
-	return labels;
+	auto key_values = cache.entries.at(key).key_values;
+	for (auto group : groups) {
+		names.push_back({key_values, group});
+	}
+	return names;
 }
 
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
@@ -855,11 +827,11 @@ static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const v
 	}
 	vector<idx_t> class_ids;
 	idx_t num_classes = 0;
-	vector<string> class_labels;
+	vector<GroupName> class_names;
 	if (keyed) {
 		auto classes = LookupOrBuildPerGroupIds(per_group_cache, keys, class_key, chunk_expr_cache, context, data,
 		                                        num_rows, kept, &kept_rows, class_ids, num_classes);
-		class_labels = GroupLabels(per_group_cache, keys, class_key, classes);
+		class_names = GroupNames(per_group_cache, class_key, classes);
 	}
 	// `named_in[c]` is the last group that recorded class c; groups are walked one at a
 	// time, so it says whether this group has it already.
@@ -874,7 +846,7 @@ static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const v
 				idx_t cls = class_ids[row];
 				if (cls != DConstants::INVALID_INDEX && named_in[cls] != group) {
 					named_in[cls] = group;
-					set.labels.push_back(class_labels[cls]);
+					set.classes.push_back(class_names[cls]);
 				}
 			}
 		} else {
@@ -1935,7 +1907,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     phase.Next("execution.assemble_input");
     VarIndexer var_indexer;
     SolverInput solver_input =
-        BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), evaluated, var_indexer);
+        BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(per_group_cache.key_values),
+                         evaluated, var_indexer);
 
     // Under DIAGNOSE, keep the model input and column space as assembly left them —
     // before a single constant was derived. An infeasibility repair searches a WIDER box
@@ -1978,7 +1951,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 static string DescribeKeyValues(const vector<string> &names, const vector<vector<Value>> &rep_keys, idx_t group) {
 	string result;
 	for (idx_t i = 0; i < names.size(); i++) {
-		result += (i > 0 ? ", " : "") + names[i] + " = " + SqlLiteral(rep_keys[i][group]);
+		result += (i > 0 ? ", " : "") + names[i] + " = " + DecideSqlLiteral(rep_keys[i][group]);
 	}
 	return result;
 }
@@ -2031,12 +2004,12 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		}
 		if (failing != DConstants::INVALID_INDEX) {
 			auto text = check.DeterminesText();
+			auto &key_values = per_group_cache.key_values[per_group_cache.entries.at(check.key).key_values];
 			throw InvalidInputException(
-			    text.one_class ? StringUtil::Format(text.Format())
-			                   : StringUtil::Format(text.Format(),
-			                                        DescribeKeyValues(keys[check.key].Names(),
-			                                                          per_group_cache.at(check.key).unfiltered_rep_keys,
-			                                                          groups[failing])));
+			    text.one_class
+			        ? StringUtil::Format(text.Format())
+			        : StringUtil::Format(text.Format(), DescribeKeyValues(keys[check.key].Names(), key_values.values,
+			                                                              groups[failing])));
 		}
 	}
 }
@@ -2367,7 +2340,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					                                       chunk_expr_cache, context, gstate.data, num_rows, emitted,
 					                                       &scoped_kept, eval_const.row_group_ids,
 					                                       eval_const.num_groups, &kept, &kept_row_group_ids);
-					eval_const.group_labels = GroupLabels(per_group_cache, keys, constraint->group_key, groups);
+					eval_const.group_names = GroupNames(per_group_cache, constraint->group_key, groups);
 				} else if (has_when || has_local_filters) {
 					eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 					kept_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -2418,7 +2391,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					}
 				}
 				eval_const.num_groups = num_classes;
-				eval_const.group_labels = GroupLabels(per_group_cache, keys, constraint->scope.class_key, classes);
+				eval_const.group_names = GroupNames(per_group_cache, constraint->scope.class_key, classes);
 				eval_const.rows_stand_with_their_class = !has_when;
 				// Each class's row stands for its class (D28), under DIAGNOSE only.
 				if (diagnose) {
@@ -3409,7 +3382,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		auto groups =
 		    LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
 		                             num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups);
-		ec.group_labels = GroupLabels(per_group_cache, keys, link.group_key, groups);
+		ec.group_names = GroupNames(per_group_cache, link.group_key, groups);
 
 		// The members' coefficients, computed on the member rows alone. A helper serves every clause that reads its
 		// reducer, so a number past a DOUBLE names the reducer as written (as LinearizeReducerValueLinks does).
@@ -3452,6 +3425,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 
 SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
                                              vector<KeyedMapping> keyed_mappings,
+                                             vector<SolverInput::KeyValues> key_values,
                                              EvaluatedClauses &evaluated,
                                              VarIndexer &out_var_indexer) const {
     DecideProfileScope phase("assembly.var_indexer");
@@ -3516,6 +3490,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// hand the constraints and the formulation links over before the first pass.
 	solver_input.constraints = std::move(gstate.evaluated_constraints);
 	solver_input.class_sets = std::move(gstate.class_sets);
+	solver_input.key_values = std::move(key_values);
 	solver_input.minmax_clause_labels = minmax_clause_labels;
 	solver_input.ne_clause_sources = ne_clause_sources;
 	for (auto &link : bilinear_links) {

@@ -210,6 +210,14 @@ struct CoefficientColumn {
     }
 };
 
+//! What names a group in a message (`'a'`, or `EU, 2024` for a composite key): the representative values of its key
+//! (SolverInput::key_values) and the group's number among them. Its text is formatted only where a message prints it;
+//! a group of no key (the empty key, a `when` alone) has no name.
+struct GroupName {
+    idx_t key_values = DConstants::INVALID_INDEX;
+    idx_t group = DConstants::INVALID_INDEX;
+};
+
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
     vector<idx_t> variable_indices;           // Which variable for each term
@@ -326,11 +334,10 @@ struct EvaluatedConstraint {
     //! not excluded but stands with its class's first row, which carries the same
     //! decisions and data (a scope check). So every row is still constrained.
     bool rows_stand_with_their_class = false;
-    //! Printable `per` key per group (size num_groups when grouped; empty otherwise).
-    //! Surfaces each group's key value (`'a'`, or `EU, 2024` for a composite key) so
-    //! infeasible diagnosis can identify which group an edit belongs to. Stamped onto
-    //! ConstraintProvenance::group_label at the grouped-aggregate emission sites.
-    vector<string> group_labels;
+    //! The name of each group (size num_groups when the clause's groups have a key; empty
+    //! otherwise), so infeasible diagnosis can identify which group an edit belongs to.
+    //! Stamped onto ConstraintProvenance::group_name at the grouped emission sites.
+    vector<GroupName> group_names;
     //! The classes each group's rows stand for (SolverInput::class_sets, by group;
     //! INVALID_INDEX for none), under DIAGNOSE: a `by` group's of a scoped clause of the
     //! aggregate shape or easy MIN/MAX, or each class's of a `per K:` / `per ()` per-row
@@ -663,14 +670,14 @@ struct SolverInput {
         //! The classes this row's group stands for (SolverInput::class_sets), or
         //! INVALID_INDEX: an expanded diagnosis reports the row once per class.
         idx_t class_set = DConstants::INVALID_INDEX;
-        //! The group id, its printable key, and whether the clause's LHS was an aggregate
+        //! The group id, its name, and whether the clause's LHS was an aggregate
         //! — the display half of the provenance every row carries. A per-row clause
         //! emitted through `EvaluatedConstraint` gets these from its `row_group_ids` /
-        //! `group_labels`; a clause emitted in flat columns has to state them, and does,
+        //! `group_names`; a clause emitted in flat columns has to state them, and does,
         //! so that changing a row's SHAPE never changes what diagnosis calls it. The
         //! clause's `when c per K:` qualifier is the source registry's.
         idx_t group_key = DConstants::INVALID_INDEX;
-        string group_label;
+        GroupName group_name;
         bool is_aggregate = false;
         //! What a lowering (or a folded LHS constant) added to the user's literal to
         //! build this row's `rhs`; the reported clause quotes `rhs` minus this.
@@ -690,15 +697,24 @@ struct SolverInput {
     //! Filled by execution under DIAGNOSE only; the model carries it on to the diagnosis.
     struct ClassSet {
         enum class Kind : uint8_t {
-            KEY_VALUES,  //!< `per K:`: K's values among the group's kept rows, in `labels`
+            KEY_VALUES,  //!< `per K:`: K's values among the group's kept rows, in `classes`
             KEPT_ROWS,   //!< no `per` key: every kept row is a class, in `rows`
             WHOLE_CLAUSE //!< `per ()`: one class, which has no key value
         };
         Kind kind;
-        vector<string> labels;
+        vector<GroupName> classes;
         vector<idx_t> rows;
     };
     vector<ClassSet> class_sets;
+
+    //! The representative values of a key's groups, which name a group (GroupName::key_values):
+    //! `values[column][group]`, numbered as the grouping that computed them numbers its groups,
+    //! and each column's NULL mode, which decides how a message writes the value.
+    struct KeyValues {
+        vector<vector<Value>> values;
+        vector<DecideKeyNullMode> null_modes;
+    };
+    vector<KeyValues> key_values;
 
     //! A ROW, conditioned: it holds whenever `binary_column == binary_value`, and says
     //! nothing otherwise. This is the semantic form of a disjunctive clause, and it is

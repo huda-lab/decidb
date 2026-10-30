@@ -329,8 +329,8 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.removal_group_id = ec.removal_group_id;
             outer.group_key = ec.row_group_ids.empty() ? DConstants::INVALID_INDEX : g;
             outer.is_aggregate = true;
-            if (g < ec.group_labels.size()) {
-                outer.group_label = ec.group_labels[g];
+            if (g < ec.group_names.size()) {
+                outer.group_name = ec.group_names[g];
             }
             if (g < ec.group_class_set.size()) {
                 outer.class_set = ec.group_class_set[g];

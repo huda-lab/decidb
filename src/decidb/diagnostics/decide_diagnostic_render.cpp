@@ -10,6 +10,7 @@
 #include "duckdb/decidb/diagnostics/decide_diagnostic_render.hpp"
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
@@ -582,12 +583,40 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 	return out;
 }
 
+//! Printable key of the group `name` names, empty for none: the per-key-column representative values joined with ", "
+//! (composite key → `EU, 2024`). A column the user wrote renders its value, "NULL" for a NULL; a value of a column a
+//! relation element stands for (`per D`) is an SQL literal, as a determination message writes it (`'EU'`, `NULL`),
+//! because there NULL is a value a string `'NULL'` must be told from.
+static string FormatPerGroupKey(const SolverModel &model, const GroupName &name) {
+	string s;
+	if (name.key_values == DConstants::INVALID_INDEX) {
+		return s;
+	}
+	auto &key = model.key_values[name.key_values];
+	for (idx_t c = 0; c < key.values.size(); c++) {
+		const Value &v = key.values[c][name.group];
+		if (!s.empty()) {
+			s += ", ";
+		}
+		if (key.null_modes[c] == DecideKeyNullMode::VALUE) {
+			s += DecideSqlLiteral(v);
+		} else if (v.IsNull()) {
+			s += "NULL";
+		} else {
+			string rendered = v.ToString();
+			s += rendered.empty() ? "''" : rendered;
+		}
+	}
+	return s;
+}
+
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻). For a strict `<` /
 //! `>` the δ offset was baked into `rhs` at build time, so re-quote the suggestion
 //! against the user's typed literal (`typed_k`) and render `<` / `>` (I2.d).
-ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source, const string &lhs,
-                          double rhs, char sense, double amount) {
+ClauseEdit MakeLoosenEdit(const SolverModel &model, const ConstraintProvenance &prov,
+                          const ConstraintSourceInfo *source, const string &lhs, double rhs, char sense,
+                          double amount) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
@@ -602,7 +631,7 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const ConstraintSour
 	e.suggestion = QuoteEditedClause(source, lhs, sense_str, FormatNum(new_rhs));
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
-	e.group = prov.group_label;
+	e.group = FormatPerGroupKey(model, prov.group_name);
 	e.moved = {prov.source_clause_id, sense, lhs, FormatNum(new_rhs)};
 	return e;
 }
@@ -622,9 +651,9 @@ vector<ClauseEdit> FanOutByClass(ClauseEdit edit, const ConstraintProvenance &pr
 	}
 	auto &set = model.class_sets[prov.class_set];
 	if (set.kind == Kind::KEY_VALUES) {
-		for (auto &label : set.labels) {
+		for (auto &name : set.classes) {
 			ClauseEdit per_class = edit;
-			per_class.group = label;
+			per_class.group = FormatPerGroupKey(model, name);
 			per_class.row = DConstants::INVALID_INDEX;
 			if (expanded) {
 				per_class.edit_source = "expanded_group";
@@ -673,7 +702,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 		base.label = IsRangeEnd(model, prov.source_clause_id, sense)
 		                 ? QuoteWrittenClause(*FindConstraintSource(model, prov))
 		                 : MakeClauseLabel(prov, FindConstraintSource(model, prov), lhs, rhs, sense);
-		base.group = prov.group_label;
+		base.group = FormatPerGroupKey(model, prov.group_name);
 		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
 			UnreachableClause c;
 			c.label = finding.label;
@@ -711,8 +740,9 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 //! stepped onto the lattice, and the written bound moves by the same amount.
 //! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
 //! name is available. `edit_source` is stamped by the caller.
-ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source,
-                                 const string &lhs, const string &rhs_text, char sense, double delta) {
+ClauseEdit MakeVirtualOffsetEdit(const SolverModel &model, const ConstraintProvenance &prov,
+                                 const ConstraintSourceInfo *source, const string &lhs, const string &rhs_text,
+                                 char sense, double delta) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	bool down = sense == '=' ? delta < 0.0 : sense == '>';
@@ -724,7 +754,7 @@ ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const Constra
 	e.suggestion = QuoteEditedClause(source, lhs, sense_str, rhs_text + op + mag);
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
-	e.group = prov.group_label;
+	e.group = FormatPerGroupKey(model, prov.group_name);
 	e.moved = {prov.source_clause_id, sense, lhs, rhs_text + op + mag};
 	return e;
 }

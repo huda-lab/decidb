@@ -214,7 +214,7 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
 //! lowering added, because the reader needs their sum and neither alone.
 static void StampConstraintProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const,
                                       idx_t repair_group_id, idx_t group_key = DConstants::INVALID_INDEX,
-                                      const string &group_label = string(), double lhs_offset = 0.0) {
+                                      const GroupName &group_name = GroupName(), double lhs_offset = 0.0) {
     provenance.source_clause_id = eval_const.source_clause_id;
     provenance.repair_group_id = repair_group_id;
     provenance.removal_group_id = eval_const.removal_group_id;
@@ -230,9 +230,7 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     if (group_key != DConstants::INVALID_INDEX) {
         provenance.group_key = group_key;
     }
-    if (!group_label.empty()) {
-        provenance.group_label = group_label;
-    }
+    provenance.group_name = group_name;
 }
 
 //! The data row a per-row row was emitted at (DIAGNOSE's `row`). A row that stands for
@@ -245,6 +243,11 @@ static void StampDataRow(ConstraintProvenance &provenance, idx_t row) {
 //! The class set group `group`'s rows stand for (D28), INVALID_INDEX for none.
 static idx_t ClassSetOf(const EvaluatedConstraint &eval_const, idx_t group) {
     return group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
+}
+
+//! The name of group `group` (GroupName), none for a group of no key.
+static GroupName NameOf(const EvaluatedConstraint &eval_const, idx_t group) {
+    return group < eval_const.group_names.size() ? eval_const.group_names[group] : GroupName();
 }
 
 //! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
@@ -319,6 +322,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     DecideProfileScope phase("model.variables_and_bounds");
     SolverModel model;
     model.class_sets = std::move(input.class_sets);
+    model.key_values = std::move(input.key_values);
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
@@ -926,7 +930,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, lhs_offset);
                 // F2 site 1: aggregate, ungrouped.
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
-                                          DConstants::INVALID_INDEX, string(), lhs_offset);
+                                          DConstants::INVALID_INDEX, GroupName(), lhs_offset);
                 StampAggregateProvenance(constr.provenance, eval_const);
                 constr.provenance.class_set = ClassSetOf(eval_const, 0);
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
@@ -999,8 +1003,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality,
                                          group_lhs_offset);
                     // F2 site 2: grouped aggregate (`by` and/or `when`).
-                    string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
-                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label,
+                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, NameOf(eval_const, g),
                                               group_lhs_offset);
                     StampAggregateProvenance(constr.provenance, eval_const);
                     constr.provenance.class_set = ClassSetOf(eval_const, g);
@@ -1070,13 +1073,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // re-emits that group as ordinary per-row rows, so this is the only site
                 // that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                string row_group_label =
-                    row_group_key != DConstants::INVALID_INDEX &&
-                            row_group_key < eval_const.group_labels.size()
-                        ? eval_const.group_labels[row_group_key]
-                        : string();
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
-                                          row_group_label, rhs_adjustment);
+                                          NameOf(eval_const, row_group_key), rhs_adjustment);
                 // A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
                 // `per K:` clause's row for its class; any other per-row row for its data row.
                 constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
@@ -1273,8 +1271,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 double lhs_constant;
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality, lhs_constant, written);
                 // F2 site 4: quadratic aggregate, ungrouped.
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX, string(),
-                                          lhs_constant);
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
+                                          GroupName(), lhs_constant);
                 StampAggregateProvenance(qc.provenance, eval_const);
                 qc.provenance.class_set = ClassSetOf(eval_const, 0);
                 model.quadratic_constraints.push_back(std::move(qc));
@@ -1298,8 +1296,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality,
                                                        lhs_constant, written);
                     // F2 site 5: grouped quadratic aggregate.
-                    string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
-                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label, lhs_constant);
+                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, NameOf(eval_const, g),
+                                              lhs_constant);
                     StampAggregateProvenance(qc.provenance, eval_const);
                     qc.provenance.class_set = ClassSetOf(eval_const, g);
                     model.quadratic_constraints.push_back(std::move(qc));
@@ -1317,7 +1315,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality, lhs_constant, written);
                 // F2 site 6: quadratic per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, string(),
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, GroupName(),
                                           lhs_constant);
                 qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
                 StampDataRow(qc.provenance, row);
@@ -1352,7 +1350,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // these stamped from its group columns; one emitted in flat columns states them
         // itself, so a clause reads the same in a diagnosis whichever shape its rows took.
         constr.provenance.group_key = raw.group_key;
-        constr.provenance.group_label = raw.group_label;
+        constr.provenance.group_name = raw.group_name;
         constr.provenance.is_aggregate = raw.is_aggregate;
         constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
         constr.provenance.rhs_label = raw.rhs_label;
@@ -1382,7 +1380,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         ic.provenance.removal_group_id = spec.row.removal_group_id;
         ic.provenance.indicator_col = spec.row.indicator_col;
         ic.provenance.group_key = spec.row.group_key;
-        ic.provenance.group_label = spec.row.group_label;
+        ic.provenance.group_name = spec.row.group_name;
         ic.provenance.is_aggregate = spec.row.is_aggregate;
         ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
         ic.provenance.rhs_label = spec.row.rhs_label;

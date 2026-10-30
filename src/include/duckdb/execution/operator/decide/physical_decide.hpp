@@ -33,15 +33,20 @@ struct PerGroupCacheEntry {
     vector<bool> evaluated_rows;
     vector<idx_t> unfiltered_row_group_ids;
     idx_t unfiltered_num_groups;
-    //! Representative key values per unfiltered group ([key_col][gid]); used to label
-    //! each group with its printable key for infeasible diagnosis.
-    vector<vector<Value>> unfiltered_rep_keys;
+    //! The groups' representative key values (PerGroupCache::key_values), which a message
+    //! names a group by.
+    idx_t key_values = DConstants::INVALID_INDEX;
 };
 //! The time-limit report's closeness figure: `gap`, a fraction, as a percentage with two significant digits.
 string FormatDecideGapPercent(double gap);
 
-//! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
-using PerGroupCache = std::unordered_map<idx_t, PerGroupCacheEntry>;
+struct PerGroupCache {
+    //! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
+    std::unordered_map<idx_t, PerGroupCacheEntry> entries;
+    //! Every grouping's representative key values. A rebuilt entry adds its own, so a group
+    //! a clause named keeps its number and its value; moved into SolverInput::key_values.
+    vector<SolverInput::KeyValues> key_values;
+};
 
 //! Per-term filter state for a reducer's own `when` (constraint terms, bilinear terms,
 //! quadratic groups, and their objective-side equivalents all share this shape).
@@ -368,7 +373,8 @@ private:
     //! into them before AVG scaling reads the surviving-row counts. The formulation pass
     //! below does not read those masks, so a second formulation is unaffected.
     SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<KeyedMapping> keyed_mappings,
-                                 EvaluatedClauses &evaluated, VarIndexer &out_var_indexer) const;
+                                 vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
+                                 VarIndexer &out_var_indexer) const;
 
     //! PHASE 3b, formulation: turn the evaluated clauses into solver rows against `box`
     //! — the auto-`M` refill, every linearization pass, and the lowering of whatever the

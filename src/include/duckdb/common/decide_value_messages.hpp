@@ -15,6 +15,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -91,6 +92,17 @@ struct DecideDeterminesText {
 //! A value as SQL writes it in a message: 'East', 10, NULL. A number or a Boolean is bare, any other type is quoted.
 inline bool DecideLiteralIsBare(const LogicalType &type) {
 	return type.IsNumeric() || type.id() == LogicalTypeId::BOOLEAN;
+}
+
+//! A value as SQL writes it, for a message: 'East', 10, NULL.
+inline string DecideSqlLiteral(const Value &value) {
+	if (value.IsNull()) {
+		return "NULL";
+	}
+	if (DecideLiteralIsBare(value.type())) {
+		return value.ToString();
+	}
+	return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
 }
 
 } // namespace duckdb
