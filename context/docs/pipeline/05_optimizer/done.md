@@ -153,18 +153,17 @@ short fails loudly instead of handing a backend a model it cannot load.
 ## 1. Pass order
 
 Two steps run on each `LogicalDecide` before these passes (`OptimizeSubtree`). First,
-`RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) replaces each data-only reducer on
+`RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) replaces each data-only reducer on
 a bound's right side (`sum(x) <= sum(cap)`) with a placeholder column and records it on the
 node (`LogicalDecide::bound_aggregates`; equal reducers share one). The path that answers the
-node installs the records (`InstallBoundWindows`: the direct-solve rule driver before it reads
-the IR, `InstallReducedBounds` on the solver path) as a window column over the source: the same
-DuckDB aggregate, partitioned by the reducer's `by` key as its rows group (under the key's
-collation, D69), over
-the rows the clause's `when` keeps. It reads its argument as that SQL aggregate does: a NULL is
+node builds each record as a side table of the source (`DirectAddBoundTables`, on both paths):
+the same DuckDB aggregate over another read of the source, grouped by the reducer's `by` key
+(under the key's collation, D69) over the rows the clause's `when` keeps, and joined back to
+every read by the key. It reads its argument as that SQL aggregate does: a NULL is
 skipped, and only a NaN is checked (`COUNT` counts one). The column carries the reducer as written
-and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. A partitioned window hands its rows on in an order that
-varies with the thread schedule. The DECIDE operator reads them in that order, so the model's
-row and column order and the group a scope check names first can differ between runs of
+and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. With several threads the
+source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
+so the model's row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread
 (`DeciDBCli.dump_model`, `golden/capture.sh`). Then the direct-solve rules may replace the node with
 ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes

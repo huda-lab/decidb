@@ -205,8 +205,8 @@ more than one budget. Two decisions run about 2 times one decision at 5,000,000 
 runs with all threads, 2.03 on one thread, 2.1 times the CPU: 10.5 s against 4.9 s), because the one sort holds
 10,000,000 items and each read computes both decisions' item values. The cross-product unpivot of stage 3 brought this
 down from 4.2 times; what remains is the work of twice the items. The `two_decisions` rows of this table were measured
-on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot, three runs each. A budget from an aggregate adds the
-right-hand-side rewrite's window over the source, which also makes the source a materialized CTE.
+on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot, three runs each. A budget from an aggregate over
+the clause's group is computed in R1's own aggregate; any other is a side table over another read of the source.
 
 **Reproduce** (after `make release`; the sweep takes about 20 minutes, building the databases included):
 

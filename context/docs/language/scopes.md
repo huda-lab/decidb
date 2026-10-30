@@ -93,7 +93,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   the clause as written.
 - **Scope checks.** `BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks` and
   `BuildObjectiveScopeChecks` build `DETERMINES` checks on `LogicalDecide::scope_checks`, from the clauses as bound.
-  The bound-side window rewrite adds `VALUE_IS_VALID` checks for the data values bounds read.
+  The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read.
   `PhysicalDecide::RunScopeChecks` runs them all before any clause is evaluated. An empty group is no check: execution
   skips its instance (D68, `SkipGroupsWithAnEmptyReducer`). They are run on the data rather than proved statically because whether a key determines a
   column is a property of the rows, and a static rule would refuse queries that are fine on their data.
@@ -105,8 +105,8 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::two_level_key`. An inner
   `MIN`/`MAX` emits linking rows only for rows with a nonzero coefficient; a group with none has its auxiliary pinned
   to 0.
-- `RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) turns every reducer on a bound into a window column over
-  the source, partitioned by its `by` key over the rows the clause keeps, and reduces a varying bound to its group's
+- `RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) turns every reducer on a bound into a side-table column of
+  the source, grouped by its `by` key over the rows the clause keeps, and reduces a varying bound to its group's
   tightest value (keeping every value for `<>`).
 - Rows a rewrite adds for a clause (`IN`, `ABS`, `norm` L0) keep the clause's `when`.
 

@@ -39,7 +39,7 @@ mark it not proved.
   (`DecideSingletonRow::LiftsDefaultFloor`); every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
   an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
 - `row_checks` are the value checks the DECIDE operator runs before it reads a value
-  (`PhysicalDecide::RunScopeChecks`): the bound-side window's `VALUE_IS_VALID` checks, each a per-row message, NULL on
+  (`PhysicalDecide::RunScopeChecks`): the bound-side rewrite's `VALUE_IS_VALID` checks, each a per-row message, NULL on
   a valid row. The rule driver puts them under every rule's plan (`AddRowChecks`: a window that takes the least
   message and a filter that raises it), so a rule does not see them. A `DETERMINES` check is not one of them yet: it
   makes the IR not proved. An empty group needs no check: a rule reads no row there, as the solver path skips its

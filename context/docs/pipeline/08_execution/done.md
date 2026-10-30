@@ -265,7 +265,7 @@ the data checks of [`../../language/guide.md`](../../language/guide.md)
 | `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
 | `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
 
-`DETERMINES` comes from the canonicalizer (stage 04). The bound-side window rewrite
+`DETERMINES` comes from the canonicalizer (stage 04). The bound-side rewrite
 (`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a
 scope error is reported before a bad value, and a bad bound before a bad coefficient. An
 empty group is no check: a reducer over no rows is NULL, so its instance is skipped where
@@ -302,9 +302,9 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`minmax_agg_type`): the members are the rows the reducer reads, and a zeroed row
   would be a member pinned at 0. The rows shape under `per K:` emits one row per class,
   at its first kept row; under `when` alone, one per kept row.
-- **Bound-side reducers** never reach execution: the bound-side window rewrite
-  (`RewriteRhsAggregates`, stage 05) made each a column of the source, evaluated by
-  DuckDB over its own `by` groups of the kept rows, and reduced the bound of an
+- **Bound-side reducers** never reach execution: the bound-side rewrite
+  (`RewriteRhsAggregates`, stage 05) made each a column of the source, a side table
+  DuckDB evaluates over its own `by` groups of the kept rows, and reduced the bound of an
   aggregate clause to its group's tightest value.
 - **De-duplication** for a reducer's own `per` keeps the first row of each class among
   the rows its `when` keeps (`BuildQualifierKeepMask`'s `eligible`), within each group:
@@ -361,7 +361,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 | `BoundColumnRefExpression` | `BoundReferenceExpression` on `binding.column_index` |
 | `BoundFunctionExpression` | recurse into children, copy `bind_info` |
 | `BoundCastExpression` | recurse into child, re-wrap with `AddCastToType` |
-| `BoundAggregateExpression` | an `InternalException`: the bound-side window rewrite made every reducer on the bound a column, and the binder keeps reducers out of coefficients and `when` conditions |
+| `BoundAggregateExpression` | an `InternalException`: the bound-side rewrite made every reducer on the bound a column, and the binder keeps reducers out of coefficients and `when` conditions |
 | anything else | copied as-is |
 
 Results are cached per `Finalize` call, and the cache outlives every
@@ -390,7 +390,7 @@ row or group sum from the RHS.
 
 - **Constant** — extracted once and broadcast.
 - **Expression** — evaluated per row, giving row-varying bounds.
-- **Reducer** — a window column of the source by now (`RewriteRhsAggregates`),
+- **Reducer** — a side-table column of the source by now (`RewriteRhsAggregates`),
   read like an expression.
 
 The canonical RHS classification decides which: a bound tagged
@@ -434,8 +434,8 @@ its groups); rows group and number on it (`DecideKeyElement::Grouping()`), and
 `BuildGroupIds` keeps the row holding each group's least raw value of the element for its
 label (a second scan, for a collated key only, once the groups are numbered, comparing sort
 keys), so a message quotes `'A'`
-for a NOCASE group of 'a' and 'A' in any row order. The bound-side
-window partitions on the same expression (`decide_rewrite_rhs_window.cpp`).
+for a NOCASE group of 'a' and 'A' in any row order. A bound's side
+table groups on the same expression (`direct_bound_tables.cpp`).
 
 The bound side of the aggregate shape gets its own map with the same numbering over every
 kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the

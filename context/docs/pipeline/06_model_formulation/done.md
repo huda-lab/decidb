@@ -655,7 +655,7 @@ points, before any `M` is asked for. A hard MAX is "some active row has LHS >= K
 `K = -inf` holds for every assignment and the group is dropped, while `K = +inf` is out
 of every row's reach and the group is re-emitted as a plain per-row constraint carrying
 that bound — an ordinary infeasibility naming the user's clause, not a refusal. MIN is
-the mirror image. The verdict is per group because the bound-side window rewrite
+the mirror image. The verdict is per group because the bound-side rewrite
 (`RewriteRhsAggregates`) has already reduced a row-varying bound to the tightest one, which is also what settles a
 group whose rows mix finite and infinite bounds. A bound-side reducer is what reaches
 the mixed case from SQL — `min(x) by (g) <= max(cap) by (g)` where `cap` holds an

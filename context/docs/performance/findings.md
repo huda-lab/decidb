@@ -287,6 +287,13 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   and saves nothing: on 1M lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s
   and 0.315 → 0.326 s, S1 0.044 → 0.044 s. DuckDB evaluates a constant subtree once per chunk, so per-row cost does not
   depend on it. Messages are rendered before `Apply`, so a fold there would change none.
+- **Bound reducers as side tables (PERF-15, closed).** A reducer a bound reads from data (`<= sum(cap) by (g)`) was a
+  window over the DECIDE source, holding every source column to attach one value per group, a stack of them for
+  several bounds. Each is now a grouped aggregate on its own read of the source, materialized once and joined back to
+  every read by its key (DuckDB's decorrelated scalar subquery), so a recomputable source stays recomputed. large.db,
+  1M-row lineitem JOIN supplier (23 columns), against the same bound written as a number, medians of 3: solver path,
+  same `by` key +256 ms / +738 MiB → +39 ms / +470 MiB, coarser key +523 ms / +994 MiB → +51 ms / +372 MiB; direct
+  path, coarser key +181 ms / +581 MiB → +63 ms / +46 MiB. A row bound read from a reducer on A1 is PERF-19.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

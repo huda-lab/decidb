@@ -59,16 +59,17 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   differ.
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar
   subquery. One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
-  (`DirectApplicabilityCondition::source_reads`) plus one per check, so it decides once, from the real total, whether
-  to recompute or materialize the source. `DirectAddRowChecks` gives each check its own read and a grouped aggregate
-  over only the columns the check reads (counts, least and greatest value, the least label per key), then an ungrouped
-  `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least failing group, NULL keys last.
-  The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row materialized CTE, and the reader
-  is gated on it (`DirectSourceReader::Gate`): every later read is `Filter[v](CrossProduct(read, CTERef v))`, whose
-  `projection_map` keeps the read's bindings. A gated read passes a row only once the CTE is computed, whichever side
-  of the product is built first, so a check raises before any rule-built raise. The solver path uses the same reader
-  with one read plus the checks' (`DirectTakeRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an
-  entity-scoped decision's determination. A rule that reads once builds over `DirectBuildOverOneRead`.
+  (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
+  from the real total, whether to recompute or materialize the source. `DirectAddRowChecks` gives each check its own
+  read and a grouped aggregate over only the columns the check reads (counts, least and greatest value, the least label
+  per key), then an ungrouped `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least
+  failing group, NULL keys last. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row
+  materialized CTE, and the reader is gated on it (`DirectSourceReader::Gate`): every later read is
+  `Filter[v](CrossProduct(read, CTERef v))`, whose `projection_map` keeps the read's bindings. A gated read passes a row
+  only once the CTE is computed, whichever side of the product is built first, so a check raises before any rule-built
+  raise. The solver path uses the same reader with one read plus the side tables' and the checks'
+  (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped decision's determination. A
+  rule that reads once builds over `DirectBuildOverOneRead`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier
@@ -133,16 +134,22 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test
   for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
   `DIRECT_FINITE_CONSTANT`.
-- **The bound-side window rewrite is the one evaluator of a data bound** (`decide_rewrite_rhs_window.cpp`,
+- **The bound-side rewrite is the one evaluator of a data bound** (`decide_rewrite_rhs_bounds.cpp`,
   `RewriteRhsAggregates`, called by `DecideOptimizer::Optimize` before the direct rules, in every mode). Every reducer
   over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed or colon
-  reducer) becomes a column of the DECIDE source: the same DuckDB aggregate, as a window partitioned by the rows the
-  clause's `when` keeps and by the reducer's `by` key, with the reducer's own `when` as its `FILTER`. A keyed or colon
-  reducer counts each class of its key once: the filter also asks for the first row of the class (a `ROW_NUMBER`
-  window over the same partitions and the key). On a row whose written `by` column is NULL the column is NULL, so the instance is skipped (D5), and a NULL inner `per` key is never the first of a class. A `per K:` in front of the
-  clause groups no reducer (D6). A window that reads another window's column is placed one level above it; equal windows
-  are shared. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these reducers, so neither reaches the
-  rewrite. A data norm of order 0 is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`.
+  reducer) becomes a placeholder column of the DECIDE source, recorded on the node (`LogicalDecide::bound_aggregates`;
+  equal reducers share one). The path that answers the node builds each record as a side table of the source reader
+  (`DirectAddBoundTables`, `DirectSourceReader::AddSideTable`): the same DuckDB aggregate over another read of the
+  source, grouped by the reducer's `by` key, with the rows the clause's `when` keeps and the reducer's own `when` as its
+  `FILTER`. The table has one row per group, is materialized once (`direct_bound`), and every read of the source joins
+  it back by the key with a SINGLE join on IS NOT DISTINCT FROM, so a NULL key is a group. This is how DuckDB
+  decorrelates a scalar subquery (FlattenDependentJoins). A keyed or colon reducer counts each class of its key once:
+  an aggregate per group and class takes the class's body (`ARBITRARY`; a scope check proves the key determines it),
+  and the reducer runs over the classes of each group. On a row whose written `by` column is NULL the column is NULL,
+  so the instance is skipped (D5), and a row whose inner `per` column is NULL is in no class. A `per K:` in front of the
+  clause groups no reducer (D6). A table may read the tables added before it. The binder rejects `DISTINCT` and drops
+  an `ORDER BY` inside these reducers, so neither reaches the rewrite. A data norm of order 0 is the count of its
+  non-zero rows, `SUM(ABS(SIGN(e)))`.
   - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper
     bound, the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's
     `per K:` (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a reducer
@@ -153,24 +160,24 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     (`DirectTightestBound`); a bound that reads data only through reducers of exactly the clause's group
     (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule adds the aggregates to
     the group aggregate it already runs, with no branch per bound (`DirectAddGroupBound` and a rule's
-    `DirectGroupSink`: S1 a window, R1 its hash aggregate), so a direct plan has no window under the rule. Only the
-    solver path builds the windows (`PlaceGroupBound`, from `InstallReducedBounds`), and it returns the checks in the
-    order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A reducer on
-    another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` keep the eager
-    window (`bound_windows_needed`).
-  - Every value the window reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
+    `DirectGroupSink`: S1 a window, R1 its hash aggregate), so a direct plan has no side table for them. Only the
+    solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
+    in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
+    reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` are
+    recorded on the direct path too (`DirectIR::bounds_to_record`), and read from side tables.
+  - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both
     paths make them with `DirectAddRowChecks` (above), so a scope error (a `per K:` that does not determine a value) is
     always reported before a bad value, and both paths raise the same text.
   - A data reducer on the bound side over exactly the clause's group is computed in the rule's group aggregate, not
-    as a window under the plan; one on another `by` key, qualified, or beside a column is still a window.
+    as a side table; one on another `by` key, qualified, or beside a column is a side table.
   - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1,
     -2^60 reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's
-    types. On a row a reducer does not read, its argument is not computed (syntax reference §6.3). The windows sit
-    directly above the DECIDE source, so they append columns and renumber none. They end late materialization for an
-    S1 source with an aggregate limit, and a window over a `by` key or a `when` regroups rows, so output row order and
-    the choice among equal optima are not guaranteed. Test: `test_rhs_aggregate_window.py`.
+    types. On a row a reducer does not read, its argument is not computed (syntax reference §6.3). A read carries the
+    tables' values after the source columns, so they renumber none, and the driver drops them from a rule's output
+    with the source row id, one block of the read. A side table leaves a recomputable source recomputed. Output row order and the
+    choice among equal optima are not guaranteed. Tests: `test_rhs_aggregate_window.py`, `test_bound_side_tables.py`.
 - **NULL values.** A NULL is skipped where it is read, as on the solver path (deck p. 50). A reducer's NULL summand
   arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of
   `part.filter` into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM
@@ -238,7 +245,9 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   see it). A new rule's suite imports the scaffold (`../architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
   example `auto: 3089 passed, 0 xfailed, 0 failed (3089 outcomes)`; the outcome totals of the modes should agree. Logs
-  stay in `test/decide/results/matrix_<time>/` (gitignored), or `$MATRIX_LOG_DIR`, and the last line prints the path. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `by` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+  stay in `test/decide/results/matrix_<time>/` (gitignored), or `$MATRIX_LOG_DIR`, and the last line prints the path.
+  The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: with several threads
+  a source's rows arrive in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
 ## Registering a rule
 
@@ -275,7 +284,7 @@ asks the solver's own question about which values a bound admits and which bound
   of results, an empty source and a prepared statement with a parameter.
 - Branch coverage: `make decide-coverage` (repository root) builds `build/coverage` when it is missing (an instrumented
   copy of the build; `-fprofile-list` instruments only `src/optimizer/decide/direct/*.cpp` and
-  `decide_rewrite_rhs_window.cpp`; `build/release` is untouched) and otherwise rebuilds what changed, runs the DECIDE
+  `decide_rewrite_rhs_bounds.cpp`; `build/release` is untouched) and otherwise rebuilds what changed, runs the DECIDE
   pytest suite with one profile per test (`test/decide/run_coverage.sh`) and `unittest "[decidb]"` as one combined
   profile, and prints the report into `COVERAGE_RUN_DIR` (default `build/coverage/run`). A warm run takes about 4
   minutes. `coverage_report.py report DIR` prints, per file, per test function and per test, the arms reached and the

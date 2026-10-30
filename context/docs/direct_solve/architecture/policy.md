@@ -42,7 +42,7 @@ set `require`.
   failing row as the solver does. Direct omits the solver's "at row N" on purpose: N is a position in scan order, not a
   key. A computed value with no NULL column is quoted as written on both paths (`RenderDecideSource`), and a NULL
   flattened subquery is named as the subquery. The bound of an aggregate clause is checked before any rule runs, by
-  the VALUE_IS_VALID scope checks the bound-side window rewrite adds, so its NULL, NaN and `=`-disagreement messages are
+  the VALUE_IS_VALID scope checks the bound-side rewrite adds, so its NULL, NaN and `=`-disagreement messages are
   the solver's on both paths. Which bad row a message names is not specified when several are bad.
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers
   disagreed with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons
