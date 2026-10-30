@@ -484,7 +484,8 @@ def test_a_when_in_front_limits_the_classes_to_the_kept_rows(decidb_cli):
 @pytest.mark.diagnose
 def test_a_group_keeps_its_name_when_a_later_clause_reads_its_key_on_more_rows(decidb_cli):
     """The first clause reads t.region on row 4 alone, where W is its first group; the second reads it on every row,
-    which puts E first. The first clause's finding still names W, the group it holds (PerGroupCache::key_values)."""
+    which renumbers the key's groups and puts E first. The first clause's finding still names W: a name holds a row of
+    its group and is resolved against the key's final grouping (ResolveGroupNames)."""
     findings = _findings(
         _diagnose(
             decidb_cli,
@@ -786,6 +787,31 @@ def test_a_quadratic_clause_reports_per_class(decidb_cli_gurobi, clause, expecte
     to 25 (row 0 alone is 100 short of its 20, row 3 25). Gurobi only: a quadratic row."""
     rows = _diagnose(decidb_cli_gurobi, clause)
     assert sorted(finding[:4] for finding in _findings(rows)) == sorted(expected), rows
+
+
+@pytest.mark.diagnose
+@pytest.mark.quadratic
+def test_a_quadratic_edit_over_every_group_names_none(decidb_cli_gurobi):
+    """In the query scope `sum(power(x - 20, 2)) by (t.region) <= 4` is one edit over regions E and W, so it names no
+    group, as a linear clause's edit does (ReadElasticEdits, the quadratic query-scope branch)."""
+    findings = _findings(_diagnose(decidb_cli_gurobi, "sum(power(x - 20, 2)) by (t.region) <= 4", scope="query"))
+    assert [(group, source) for group, _, _, source, _ in findings] == [("NULL", "source_literal")], findings
+
+
+@pytest.mark.diagnose
+@pytest.mark.quadratic
+def test_a_per_row_quadratic_clause_names_each_class(decidb_cli_gurobi):
+    """`per t.depot: power(y - 20, 2) <= 4` over a decision keyed by depot is one quadratic row per depot (the
+    per-row quadratic site of SolverModel::Build). In the expanded scope D1 (y <= 10) and D3 (y <= 15) each fall
+    short and each finding names its depot."""
+    sql = f"""
+        SELECT id, y {table('t', T_COLUMNS, T_ROWS)}
+        DECIDE per t.depot: y(INT)
+        SUCH THAT y <= t.cap AND per t.depot: power(y - 20, 2) <= 4
+        MAXIMIZE SUM(y)"""
+    rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli_gurobi, sql, scope="expanded"))
+    groups = sorted((row["group"], row["edit_source"]) for row in rows if row["clause"] != "NULL")
+    assert groups == [("D1", "expanded_group"), ("D3", "expanded_group")], rows
 
 
 @pytest.mark.diagnose

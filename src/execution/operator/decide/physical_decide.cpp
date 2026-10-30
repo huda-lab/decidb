@@ -555,7 +555,8 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 //! The cache's grouping of `keys[key]`, computed on every row of `read_rows` (null: every
 //! row). Keys are interned, so the key's index is its identity; INVALID_INDEX is the
 //! empty key, which has one entry like any other. An entry computed on fewer rows is
-//! rebuilt over both row sets, so a key keeps one numbering however many read it.
+//! rebuilt over both row sets, its values replacing the key's: a group a clause named
+//! before keeps its row, from which assembly finds it again (ResolveGroupNames).
 static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
                                            ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                            ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read_rows) {
@@ -597,8 +598,17 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 		              entry.unfiltered_num_groups, &key_values.values, rows.empty() ? nullptr : &rows, null_no_group,
 		              label_exprs);
 		entry.evaluated_rows = std::move(rows);
-		entry.key_values = cache.key_values.size();
-		cache.key_values.push_back(std::move(key_values));
+		entry.group_rows.assign(entry.unfiltered_num_groups, DConstants::INVALID_INDEX);
+		for (idx_t r = num_rows; r-- > 0;) {
+			if (entry.unfiltered_row_group_ids[r] != DConstants::INVALID_INDEX) {
+				entry.group_rows[entry.unfiltered_row_group_ids[r]] = r;
+			}
+		}
+		if (entry.key_values == DConstants::INVALID_INDEX) {
+			entry.key_values = cache.key_values.size();
+			cache.key_values.emplace_back();
+		}
+		cache.key_values[entry.key_values] = std::move(key_values);
 	}
 	return found->second;
 }
@@ -678,16 +688,16 @@ static vector<idx_t> LookupOrBuildPerGroupIds(
 	return kept_groups;
 }
 
-//! The name of each of `groups`, groups of key `key` as its cache entry numbers them now. The empty key has no value
-//! to name a group by.
+//! The name of each of `groups`, groups of key `key` as its cache entry numbers them now, by a row of each: a later
+//! read of the key on more rows can renumber them (ResolveGroupNames). The empty key has no value to name a group by.
 static vector<GroupName> GroupNames(const PerGroupCache &cache, idx_t key, const vector<idx_t> &groups) {
 	vector<GroupName> names;
 	if (key == DConstants::INVALID_INDEX) {
 		return names;
 	}
-	auto key_values = cache.entries.at(key).key_values;
+	auto &entry = cache.entries.at(key);
 	for (auto group : groups) {
-		names.push_back({key_values, group});
+		names.push_back({entry.key_values, DConstants::INVALID_INDEX, entry.group_rows[group]});
 	}
 	return names;
 }
@@ -1452,6 +1462,35 @@ public:
     bool diagnosis_only = false;
 };
 
+//! Late materialization of the group names extraction made: each names its group by a row, which falls in one group
+//! of its key's final grouping, computed over every row a clause read the key on. So a group is spelled one way in
+//! every message of a query, whichever clause names it and in whatever order (D69).
+static void ResolveGroupNames(const PerGroupCache &cache, DecideGlobalSinkState &gstate) {
+	vector<const vector<idx_t> *> group_of_row(cache.key_values.size());
+	for (auto &entry : cache.entries) {
+		if (entry.second.key_values != DConstants::INVALID_INDEX) {
+			group_of_row[entry.second.key_values] = &entry.second.unfiltered_row_group_ids;
+		}
+	}
+	auto resolve = [&](vector<GroupName> &names) {
+		for (auto &name : names) {
+			name.group = (*group_of_row[name.key_values])[name.row];
+			D_ASSERT(name.group != DConstants::INVALID_INDEX);
+		}
+	};
+	for (auto *constraints : {&gstate.evaluated_constraints, &gstate.evaluated_singleton_row_constraints}) {
+		for (auto &ec : *constraints) {
+			resolve(ec.group_names);
+		}
+	}
+	for (auto &link : gstate.evaluated_value_links) {
+		resolve(link.rows.group_names);
+	}
+	for (auto &set : gstate.class_sets) {
+		resolve(set.classes);
+	}
+}
+
 class DecideLocalSinkState : public LocalSinkState {
 public:
     DecideProfileTotals profile_sink {"execution.sink_append"};
@@ -1905,6 +1944,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
     phase.Next("execution.assemble_input");
+    ResolveGroupNames(per_group_cache, gstate);
     VarIndexer var_indexer;
     SolverInput solver_input =
         BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(per_group_cache.key_values),

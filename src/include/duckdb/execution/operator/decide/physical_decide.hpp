@@ -33,8 +33,9 @@ struct PerGroupCacheEntry {
     vector<bool> evaluated_rows;
     vector<idx_t> unfiltered_row_group_ids;
     idx_t unfiltered_num_groups;
-    //! The groups' representative key values (PerGroupCache::key_values), which a message
-    //! names a group by.
+    //! A row of each group, which a GroupName holds until assembly resolves it (ResolveGroupNames).
+    vector<idx_t> group_rows;
+    //! The key's representative values (PerGroupCache::key_values), which a message names a group by.
     idx_t key_values = DConstants::INVALID_INDEX;
 };
 //! The time-limit report's closeness figure: `gap`, a fraction, as a percentage with two significant digits.
@@ -43,8 +44,8 @@ string FormatDecideGapPercent(double gap);
 struct PerGroupCache {
     //! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
     std::unordered_map<idx_t, PerGroupCacheEntry> entries;
-    //! Every grouping's representative key values. A rebuilt entry adds its own, so a group
-    //! a clause named keeps its number and its value; moved into SolverInput::key_values.
+    //! Each key's representative values, of its grouping as it stands: a rebuilt entry
+    //! replaces its key's. Moved into SolverInput::key_values once extraction is done.
     vector<SolverInput::KeyValues> key_values;
 };
 

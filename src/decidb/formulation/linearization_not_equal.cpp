@@ -202,7 +202,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
             rc.repair_group_id = ec.repair_group_id;
             rc.removal_group_id = ec.removal_group_id;
             rc.indicator_col = z_col;
-            rc.group_key = has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX;
+            rc.StampGroup(ec, has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX);
             // The folded LHS constant, so a report quotes the user's `K` and not the
             // bound this fold produced.
             rc.rhs_mechanism_offset = -constant;
@@ -507,11 +507,8 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     rc.repair_group_id = ec.repair_group_id;
                     rc.removal_group_id = ec.removal_group_id;
                     rc.indicator_col = z_idx;
-                    rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
+                    rc.StampGroup(ec, has_groups ? g : DConstants::INVALID_INDEX);
                     rc.is_aggregate = true;
-                    if (has_groups && g < ec.group_names.size()) {
-                        rc.group_name = ec.group_names[g];
-                    }
                 };
 
                 // Collapsed: one plain inequality, no indicator and no disjunction left.

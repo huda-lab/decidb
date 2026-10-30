@@ -212,10 +212,13 @@ struct CoefficientColumn {
 
 //! What names a group in a message (`'a'`, or `EU, 2024` for a composite key): the representative values of its key
 //! (SolverInput::key_values) and the group's number among them. Its text is formatted only where a message prints it;
-//! a group of no key (the empty key, a `when` alone) has no name.
+//! a group of no key (the empty key, a `when` alone) has no name. Extraction holds a row of the group instead of its
+//! number, since a later clause that reads the key on more rows regroups it; assembly resolves `group` from `row`
+//! against the key's final grouping, so every name of a key reads one table.
 struct GroupName {
     idx_t key_values = DConstants::INVALID_INDEX;
     idx_t group = DConstants::INVALID_INDEX;
+    idx_t row = DConstants::INVALID_INDEX;
 };
 
 //! Represents an evaluated constraint ready for the solver
@@ -336,7 +339,7 @@ struct EvaluatedConstraint {
     bool rows_stand_with_their_class = false;
     //! The name of each group (size num_groups when the clause's groups have a key; empty
     //! otherwise), so infeasible diagnosis can identify which group an edit belongs to.
-    //! Stamped onto ConstraintProvenance::group_name at the grouped emission sites.
+    //! A row of group g carries NameOf(g), so diagnosis can name the group its finding sits in.
     vector<GroupName> group_names;
     //! The classes each group's rows stand for (SolverInput::class_sets, by group;
     //! INVALID_INDEX for none), under DIAGNOSE: a `by` group's of a scoped clause of the
@@ -353,6 +356,11 @@ struct EvaluatedConstraint {
     //! and the model builder to avoid repeated O(num_rows) reconstructions.
     mutable vector<idx_t> group_offsets;
     mutable vector<idx_t> group_row_ids;
+
+    //! The name of group `group` (INVALID_INDEX: none), none for a group of no key.
+    GroupName NameOf(idx_t group) const {
+        return group < group_names.size() ? group_names[group] : GroupName();
+    }
 };
 
 //! Sum decision-free LHS terms over a row range: the fixed part of the row a clause emits for those rows. `written`
@@ -673,12 +681,17 @@ struct SolverInput {
         //! The group id, its name, and whether the clause's LHS was an aggregate
         //! — the display half of the provenance every row carries. A per-row clause
         //! emitted through `EvaluatedConstraint` gets these from its `row_group_ids` /
-        //! `group_names`; a clause emitted in flat columns has to state them, and does,
-        //! so that changing a row's SHAPE never changes what diagnosis calls it. The
-        //! clause's `when c per K:` qualifier is the source registry's.
+        //! `group_names`; a clause emitted in flat columns has to state them, and does
+        //! (StampGroup), so that changing a row's SHAPE never changes what diagnosis calls
+        //! it. The clause's `when c per K:` qualifier is the source registry's.
         idx_t group_key = DConstants::INVALID_INDEX;
         GroupName group_name;
         bool is_aggregate = false;
+        //! Place this row in group `group` of `ec`'s clause (INVALID_INDEX: none), named as `ec` names it.
+        void StampGroup(const EvaluatedConstraint &ec, idx_t group) {
+            group_key = group;
+            group_name = ec.NameOf(group);
+        }
         //! What a lowering (or a folded LHS constant) added to the user's literal to
         //! build this row's `rhs`; the reported clause quotes `rhs` minus this.
         double rhs_mechanism_offset = 0.0;
@@ -708,8 +721,9 @@ struct SolverInput {
     vector<ClassSet> class_sets;
 
     //! The representative values of a key's groups, which name a group (GroupName::key_values):
-    //! `values[column][group]`, numbered as the grouping that computed them numbers its groups,
-    //! and each column's NULL mode, which decides how a message writes the value.
+    //! `values[column][group]`, over every row any clause read the key on (a collated column's
+    //! least spelling among them), and each column's NULL mode, which decides how a message
+    //! writes the value.
     struct KeyValues {
         vector<vector<Value>> values;
         vector<DecideKeyNullMode> null_modes;

@@ -453,10 +453,11 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 			    MakeLoosenEdit(orig_model, orig.provenance, FindConstraintSource(orig_model, orig.provenance),
 			                   SourceAwareQuadraticLhs(orig_model, orig, columns), orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
-			// A quadratic row never shares a slack (I2.d), so it reads back on its own, its
-			// group naming it in either scope; in the expanded scope a scoped clause's row
-			// reports the classes it stands for instead (D28).
+			// A quadratic edit is a literal knob: in the query scope its block folds every
+			// group of the clause, so it is clause-level, as a linear one is; in the expanded
+			// scope a row reports the classes it stands for (D28).
 			if (!expanded) {
+				e.group.clear();
 				edits.push_back(std::move(e));
 				continue;
 			}

@@ -9,6 +9,7 @@ import re
 
 import pytest
 
+from . import _diagnose_relation
 from ._scope_cases import aligned, answer, scope_solver, values  # noqa: F401
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
@@ -189,3 +190,22 @@ def test_an_objective_reads_one_collated_by_group(decidb_cli, scope_solver):
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (lambda r: {CONSTANT: 1},), per=())]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["p"]}, by=("gk",)),))
     _keyed_judged(decidb_cli, scope_solver, sql, clauses, objective, rows)
+
+
+# 'b' is read on rows 4-5 by the `when` clause and on rows 1-5 by the other: one group, spelled 'B' over every row read.
+SPELLING_ROWS = ((1, "a"), (2, "A"), (3, "B"), (4, "b"), (5, "b"))
+NARROW = "when t.id >= 4 per t.g: sum(x) by (t.g) >= 3"
+WIDE = "per t.g: sum(x) by (t.g) <= 1"
+
+
+@pytest.mark.diagnose
+@pytest.mark.parametrize("clauses", [(NARROW, WIDE), (WIDE, NARROW)], ids=["narrow-first", "wide-first"])
+def test_every_finding_spells_a_group_by_its_least_spelling_over_the_rows_read(decidb_cli, clauses):
+    """The `when` clause alone reads only 'b'; the other clause reads 'B' too. Each finding on the group names it 'B',
+    the least spelling over every row the query read the key on, whichever clause reads it first (ResolveGroupNames)."""
+    sql = f"""
+        SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(SPELLING_ROWS, 'v', ('id', 'g'))}) t
+        DECIDE x(BOOL) SUCH THAT {clauses[0]} AND {clauses[1]} MAXIMIZE SUM(x)"""
+    rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
+    groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
+    assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows

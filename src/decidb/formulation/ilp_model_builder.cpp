@@ -199,13 +199,15 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
 
 //! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
 //! linear or quadratic, aggregate or per-row. `group_key` defaults to INVALID_INDEX for
-//! an ungrouped aggregate row; pass the `when`/`by` group id (and its label) for a grouped
-//! aggregate row, or the row id for a per-row row. Leaves every other ConstraintProvenance
+//! an ungrouped aggregate row; pass the `when`/`by` group id for a grouped aggregate row,
+//! or the row's group for a per-row row. Leaves every other ConstraintProvenance
 //! field at its default -- the aggregate-only and linear-aggregate-only fields are each
 //! their own site (see StampAggregateProvenance and the avg/weight/folded-terms block in
 //! the linear aggregate branches), because a per-row or quadratic row does not carry them:
 //! FormatQuadraticLhs never reads avg_scaled/weight_labels/folded_terms, and FormatLhs's
-//! is_aggregate wrapping is meaningless off the aggregate branch.
+//! is_aggregate wrapping is meaningless off the aggregate branch. The group's name is
+//! the clause's for `group_key` (EvaluatedConstraint::NameOf), so no site names a group
+//! apart from placing a row in it.
 //! `lhs_offset` is the constant part of the LHS that this site folded into the RHS
 //! (`SUM(x + c) >= K` is emitted as `SUM(x) >= K - Sum(c)`). The reconstructed clause
 //! label still renders the LHS the user wrote, constant included, so the RHS it is
@@ -214,7 +216,7 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
 //! lowering added, because the reader needs their sum and neither alone.
 static void StampConstraintProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const,
                                       idx_t repair_group_id, idx_t group_key = DConstants::INVALID_INDEX,
-                                      const GroupName &group_name = GroupName(), double lhs_offset = 0.0) {
+                                      double lhs_offset = 0.0) {
     provenance.source_clause_id = eval_const.source_clause_id;
     provenance.repair_group_id = repair_group_id;
     provenance.removal_group_id = eval_const.removal_group_id;
@@ -230,7 +232,7 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     if (group_key != DConstants::INVALID_INDEX) {
         provenance.group_key = group_key;
     }
-    provenance.group_name = group_name;
+    provenance.group_name = eval_const.NameOf(group_key);
 }
 
 //! The data row a per-row row was emitted at (DIAGNOSE's `row`). A row that stands for
@@ -243,11 +245,6 @@ static void StampDataRow(ConstraintProvenance &provenance, idx_t row) {
 //! The class set group `group`'s rows stand for (D28), INVALID_INDEX for none.
 static idx_t ClassSetOf(const EvaluatedConstraint &eval_const, idx_t group) {
     return group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
-}
-
-//! The name of group `group` (GroupName), none for a group of no key.
-static GroupName NameOf(const EvaluatedConstraint &eval_const, idx_t group) {
-    return group < eval_const.group_names.size() ? eval_const.group_names[group] : GroupName();
 }
 
 //! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
@@ -930,7 +927,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, lhs_offset);
                 // F2 site 1: aggregate, ungrouped.
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
-                                          DConstants::INVALID_INDEX, GroupName(), lhs_offset);
+                                          DConstants::INVALID_INDEX, lhs_offset);
                 StampAggregateProvenance(constr.provenance, eval_const);
                 constr.provenance.class_set = ClassSetOf(eval_const, 0);
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
@@ -1003,8 +1000,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality,
                                          group_lhs_offset);
                     // F2 site 2: grouped aggregate (`by` and/or `when`).
-                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, NameOf(eval_const, g),
-                                              group_lhs_offset);
+                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_lhs_offset);
                     StampAggregateProvenance(constr.provenance, eval_const);
                     constr.provenance.class_set = ClassSetOf(eval_const, g);
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
@@ -1074,7 +1070,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
-                                          NameOf(eval_const, row_group_key), rhs_adjustment);
+                                          rhs_adjustment);
                 // A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
                 // `per K:` clause's row for its class; any other per-row row for its data row.
                 constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
@@ -1272,7 +1268,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality, lhs_constant, written);
                 // F2 site 4: quadratic aggregate, ungrouped.
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
-                                          GroupName(), lhs_constant);
+                                          lhs_constant);
                 StampAggregateProvenance(qc.provenance, eval_const);
                 qc.provenance.class_set = ClassSetOf(eval_const, 0);
                 model.quadratic_constraints.push_back(std::move(qc));
@@ -1296,8 +1292,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality,
                                                        lhs_constant, written);
                     // F2 site 5: grouped quadratic aggregate.
-                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, NameOf(eval_const, g),
-                                              lhs_constant);
+                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, lhs_constant);
                     StampAggregateProvenance(qc.provenance, eval_const);
                     qc.provenance.class_set = ClassSetOf(eval_const, g);
                     model.quadratic_constraints.push_back(std::move(qc));
@@ -1315,8 +1310,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality, lhs_constant, written);
                 // F2 site 6: quadratic per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, GroupName(),
-                                          lhs_constant);
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, lhs_constant);
                 qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
                 StampDataRow(qc.provenance, row);
                 model.quadratic_constraints.push_back(std::move(qc));
