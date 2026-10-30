@@ -273,6 +273,14 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   CSR buffer, each flush reallocated and copied the whole buffer: quadratic in the clause's rows. d1 (1M-row join,
   `per l.l_orderkey` over 250k kept rows) spent 5 s in `assembly.implied_bounds`. The reserve is gone and the vectors
   grow geometrically: d1 passing 6.2 → 0.98 s (three runs each, load 6-10). Q1, Q4 and P4 were too small to show it.
+- **Planned determination checks as side aggregates (PERF-3, closed).** A planned row check was three window operators
+  over the DECIDE source, each holding every row with every column (per-class counts and extremes, a dense rank of
+  every row to pick the least failing class, a global min for the message). Each check is now a grouped aggregate over
+  the columns it reads on its own read of the source, and the verdict a one-row CTE that gates every read (DuckDB's
+  uncorrelated scalar subquery). d1 (1M-row join, `per l.l_orderkey: assign <= o.o_shippriority + 1`), three runs
+  each against the build with BUG-40 fixed: passing 0.98 → 0.56 s and 1,543 → 817 MiB; failing 0.42 → 0.07 s and
+  1,476 → 436 MiB, same message. A key that
+  holds a decision's own key plans no check of it (FD reflexivity).
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

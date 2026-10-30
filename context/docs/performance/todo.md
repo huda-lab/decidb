@@ -13,16 +13,6 @@ console log in `sweep_large.log`. Its 3 `process_timeout` rows are Q1 on HiGHS, 
 its rows predate the HiGHS limit fixes and the MIP gap of 0, so its HiGHS `ok` rows on Q1 are near-optimal answers,
 not optima.
 
-## PERF-3 — A passing determination check materializes every row
-
-In progress (lane AN). A `per` key that must determine another column gets a planned determination check
-(`../language/guide.md` §7.3). On 1M rows (`per l.l_orderkey: assign <= o.o_shippriority`, `findings.md` § Input and
-extraction) the check costs about 480 ms of wall time and 860 MiB of peak memory while it passes, five times
-constraint evaluation: three window operators each materialize every row with every column, for the per-class
-count/min/max (569 ms CPU), a dense rank of all rows by the key to pick the least failing class (877 ms) and a global
-min for the message (125 ms). Ruled fix: a side aggregate over only the columns the check reads; the message is
-unchanged. Done: a key that holds a decision's own key plans no determination check of it (FD reflexivity).
-
 ## PERF-6 — Solver execution
 
 Run scale ladders and repetitions on both backends. Use separate native-log/stack-sample runs for slow cases. Extend solve budgets when that can resolve a concrete question. Do not equate timeouts with infeasibility or extrapolate small-model internal behavior. Keep algorithm/parameter changes deferred.

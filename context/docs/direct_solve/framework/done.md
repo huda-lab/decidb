@@ -57,11 +57,18 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
   the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
   differ.
-- **Row checks, one implementation** (`direct_row_checks.cpp`). `DirectAddRowChecks` puts the IR's row checks under a
-  plan as windows and a filter that keeps the source's bindings. A determination check names the least failing group
-  and quotes its least and greatest value, NULL last. The solver path installs the same checks under the node
-  (`DirectTakeRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped decision's determination. The
-  windows cost the solver path about 23% on tiny queries and change the order rows reach the model builder.
+- **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar
+  subquery. One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
+  (`DirectApplicabilityCondition::source_reads`) plus one per check, so it decides once, from the real total, whether
+  to recompute or materialize the source. `DirectAddRowChecks` gives each check its own read and a grouped aggregate
+  over only the columns the check reads (counts, least and greatest value, the least label per key), then an ungrouped
+  `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least failing group, NULL keys last.
+  The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row materialized CTE, and the reader
+  is gated on it (`DirectSourceReader::Gate`): every later read is `Filter[v](CrossProduct(read, CTERef v))`, whose
+  `projection_map` keeps the read's bindings. A gated read passes a row only once the CTE is computed, whichever side
+  of the product is built first, so a check raises before any rule-built raise. The solver path uses the same reader
+  with one read plus the checks' (`DirectTakeRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an
+  entity-scoped decision's determination. A rule that reads once builds over `DirectBuildOverOneRead`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier
