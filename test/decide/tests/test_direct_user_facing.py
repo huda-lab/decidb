@@ -869,6 +869,65 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
         _same_answers(direct, solver)
 
 
+# The side table of a bound, the verdict of a row check and the copy of a source (R1 reads it four times) are materialized
+# CTEs around the rule's plan. The row id and the payload pass through them like any source column, so the payload still
+# comes from a scan of its own whatever the plan holds. The scans: the rule's read (or the copy), the row check's read,
+# and the payload.
+_LATE_MATERIALIZATION_AROUND_CTES = {
+    "side_table": (
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 100 MAXIMIZE SUM(score * x)",
+        "direct_bound",
+        2,
+    ),
+    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 3),
+    "copied_source": (
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(cap * x) <= 5000 MAXIMIZE SUM(score * x)",
+        "direct_source",
+        2,
+    ),
+}
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("shape", sorted(_LATE_MATERIALIZATION_AROUND_CTES))
+def test_second_read_reaches_the_row_id_through_the_ctes_around_the_plan(decidb_cli, shape):
+    decide, cte, scans = _LATE_MATERIALIZATION_AROUND_CTES[shape]
+    setup = """
+        CREATE TEMP TABLE rr_src AS
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5)::DOUBLE AS cap, i % 5 AS g,
+               'payload-' || i::VARCHAR AS payload
+        FROM range(5000) t(i);
+    """
+    # Every payload comes back on its own row, and the optimum is the solver's.
+    query = (
+        "SELECT COUNT(*) FILTER (WHERE payload = 'payload-' || id::VARCHAR), SUM(score * x::DOUBLE) "
+        f"FROM (FROM rr_src {decide}) q"
+    )
+    plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
+    assert "Direct solve rule" in plan and cte in plan and _table_scans(plan) == scans, plan
+    direct, _ = _run(decidb_cli.with_verify_serializer(), setup + query)
+    solver, _ = _run(decidb_cli, setup + query, mode="off")
+    assert direct[0][0] == _LATE_MATERIALIZATION_ROWS
+    assert direct[0][0] == solver[0][0] and math.isclose(direct[0][1], solver[0][1], rel_tol=1e-9)
+
+
+@pytest.mark.correctness
+def test_second_read_leaves_a_column_the_rule_reads_in_the_single_read(decidb_cli):
+    # The key is a VARCHAR the rule groups by, so the rule reads it: a parent that reads it too does not get a second
+    # scan for it. The payload next to it does.
+    setup = """
+        CREATE TEMP TABLE rr_src AS
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, 'k' || (i % 5)::VARCHAR AS grp,
+               'payload-' || i::VARCHAR AS payload
+        FROM range(5000) t(i);
+    """
+    decide = "FROM rr_src DECIDE x(BOOL) SUCH THAT SUM(x) by (grp) <= 100 MAXIMIZE SUM(score * x)"
+    keyed = f"SELECT id, grp, x FROM ({decide}) q ORDER BY id"
+    assert _scans_and_solver_answers(decidb_cli, setup, keyed, 1)
+    both = f"SELECT id, grp, payload, x FROM ({decide}) q ORDER BY id"
+    assert _scans_and_solver_answers(decidb_cli, setup, both, 2)
+
+
 @pytest.mark.correctness
 def test_a1_verifies_then_streams_without_holding_rows(decidb_cli):
     setup = _late_materialization_setup("a1")
@@ -943,10 +1002,10 @@ def test_a1_pipelined_plan_does_not_read_twice(decidb_cli):
     _same_answers(rows, solver)
 
 
-def _single_read_and_solver_answers(cli, setup, query):
-    """The direct plan reads the table once (no late materialization) and answers like the solver."""
+def _scans_and_solver_answers(cli, setup, query, scans):
+    """The direct plan reads the table `scans` times and answers like the solver."""
     plan = _raw(cli, setup + f"EXPLAIN {query}").stdout
-    assert "Direct solve rule" in plan and _table_scans(plan) == 1, plan
+    assert "Direct solve rule" in plan and _table_scans(plan) == scans, plan
     direct, _ = _run(cli, setup + query)
     solver, _ = _run(cli, setup + query, mode="off")
     assert len(direct) > 0
@@ -960,7 +1019,7 @@ def test_second_read_is_skipped_when_the_source_already_reads_the_row_id(decidb_
     setup = _late_materialization_setup("s1")
     decide = _late_materialization_decide("s1", "(SELECT rowid AS rid, * FROM rr_src) s")
     query = f"SELECT id, payload, rid, x FROM ({decide}) q ORDER BY id"
-    _single_read_and_solver_answers(decidb_cli, setup, query)
+    _scans_and_solver_answers(decidb_cli, setup, query, 1)
 
 
 @pytest.mark.correctness
@@ -971,13 +1030,13 @@ def test_second_read_is_skipped_when_the_source_already_reads_the_row_id(decidb_
         pytest.param("payload || '!' AS payload_copy", id="read_by_a_computed_column"),
     ],
 )
-def test_second_read_is_skipped_when_another_column_reads_the_stored_column(decidb_cli, column):
-    # The payload is read by a second output (an alias of it) or by an expression of the source, so it is not only
-    # forwarded and stays in the single read.
+def test_second_read_serves_the_outputs_that_forward_a_stored_column_another_column_also_reads(decidb_cli, column):
+    # The payload is forwarded by two outputs (an alias of it), or read by an expression of the source as well. Every
+    # output that only forwards it comes from the second scan; the source's own expression keeps its read.
     setup = _late_materialization_setup("s1")
     decide = _late_materialization_decide("s1", f"(SELECT *, {column} FROM rr_src) s")
     query = f"SELECT id, payload, payload_copy, x FROM ({decide}) q ORDER BY id"
-    _single_read_and_solver_answers(decidb_cli, setup, query)
+    _scans_and_solver_answers(decidb_cli, setup, query, 2)
 
 
 @pytest.mark.correctness
@@ -999,9 +1058,11 @@ def test_second_read_is_skipped_when_another_column_reads_the_stored_column(deci
         ),
     ],
 )
-def test_second_read_is_skipped_when_a_later_pass_adds_a_join_to_the_source(decidb_cli, relation, query_columns):
+def test_second_read_follows_the_row_id_through_a_join_a_later_pass_adds_to_the_source(
+    decidb_cli, relation, query_columns
+):
     setup = _late_materialization_setup("s1")
     decide = _late_materialization_decide("s1", relation)
     query = f"SELECT {query_columns} FROM ({decide}) q ORDER BY id"
-    plan = _single_read_and_solver_answers(decidb_cli, setup, query)
+    plan = _scans_and_solver_answers(decidb_cli, setup, query, 2)
     assert "Join Type: MARK" in plan

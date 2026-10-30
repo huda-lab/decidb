@@ -105,7 +105,6 @@ void LogicalDirectResultAdapter::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty(209, "proof", annotation.condition);
 	serializer.WriteProperty(213, "prunable_outputs", prunable_outputs);
 	serializer.WriteProperty(214, "has_rowid_dependency", has_rowid_dependency);
-	serializer.WriteProperty(215, "scan_table_index", scan_table_index);
 	serializer.WriteProperty(216, "stored_columns", stored_columns);
 }
 
@@ -120,7 +119,6 @@ unique_ptr<LogicalExtensionOperator> LogicalDirectResultAdapter::Read(Deserializ
 	result->annotation.condition = deserializer.ReadProperty<string>(209, "proof");
 	result->prunable_outputs = deserializer.ReadProperty<vector<uint8_t>>(213, "prunable_outputs");
 	result->has_rowid_dependency = deserializer.ReadProperty<bool>(214, "has_rowid_dependency");
-	result->scan_table_index = deserializer.ReadProperty<idx_t>(215, "scan_table_index");
 	result->stored_columns = deserializer.ReadProperty<vector<idx_t>>(216, "stored_columns");
 	return std::move(result);
 }
@@ -207,7 +205,6 @@ unique_ptr<LogicalDirectResultAdapter> AdaptDirectResult(ClientContext &context,
 	}
 	if (late_materialization.Enabled()) {
 		adapter->has_rowid_dependency = true;
-		adapter->scan_table_index = late_materialization.scan_table_index;
 		adapter->stored_columns = late_materialization.stored_columns;
 		adapter->stored_columns.resize(adapter->output_types.size(), DConstants::INVALID_INDEX);
 		adapter->expressions.push_back(calc.Out(

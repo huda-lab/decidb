@@ -22,6 +22,7 @@
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
@@ -275,7 +276,17 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	// later, past the plan that holds rows. The rule passes it along like any other source column.
 	auto source_columns = prunable_sources.size();
 	DirectLateMaterialization late_materialization;
-	bool carries_rowid = DirectExposeStoredRowId(optimizer.context, source, late_materialization);
+	// The source columns the DECIDE node's own expressions read are the rule's; every other stored column is only
+	// forwarded, and a parent that reads one can have it read again.
+	column_binding_set_t read_by_node;
+	std::function<void(Expression &)> collect = [&](Expression &expression) {
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			read_by_node.insert(expression.Cast<BoundColumnRefExpression>().binding);
+		}
+		ExpressionIterator::EnumerateChildren(expression, collect);
+	};
+	decide.EnumerateExpressions([&](unique_ptr<Expression> *expression) { collect(**expression); });
+	bool carries_rowid = DirectExposeStoredRowId(optimizer.context, source, read_by_node, late_materialization);
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}

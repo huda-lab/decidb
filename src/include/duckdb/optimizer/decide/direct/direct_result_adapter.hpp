@@ -17,9 +17,8 @@ class ClientContext;
 struct DirectLateMaterialization {
 	//! Child slot of the rule's plan that carries the table's row id. Invalid when there is no late materialization.
 	idx_t rowid_slot = DConstants::INVALID_INDEX;
-	//! Table index of the scan the source reads.
-	idx_t scan_table_index = DConstants::INVALID_INDEX;
-	//! Per source column: the stored column it forwards unchanged, or invalid for a computed column.
+	//! Per source column: the stored column it forwards unchanged, or invalid for a computed column or one the DECIDE
+	//! node's expressions read.
 	vector<idx_t> stored_columns;
 
 	bool Enabled() const {
@@ -50,8 +49,7 @@ public:
 	//! True while `expressions` ends with the source row id. It stays live only while a parent reads an output that
 	//! `stored_columns` marks as movable; the late-materialization step removes it either way.
 	bool has_rowid_dependency = false;
-	idx_t scan_table_index = DConstants::INVALID_INDEX;
-	//! Per output: the stored column it forwards unchanged, or invalid.
+	//! Per output: the stored column it forwards unchanged and the rule never reads, or invalid.
 	vector<idx_t> stored_columns;
 
 	vector<ColumnBinding> GetColumnBindings() override;
