@@ -28,6 +28,14 @@ posting the HiGHS report (§ 3), and the original measurement work (§ 4).
   `benchmark/decide/diagnose_examples/run.py` recording DIAGNOSE for a corpus reaching every `edit_source`. Record in
   `pipeline/07_solver/done.md`, `diagnostics/README.md`.
 
+- [ ] BUG-29..32 DIAGNOSE output the example runner found wrong — issues/bugs.md § BUG-29 to BUG-32
+  - Ruled (owner's delegate, 2026-10-30): `achievable_objective` is the objective as written, constant included; a
+    printed amount rounds outward so the edit as printed restores feasibility. One batch (diagnosis), after the
+    diagnostics capture lands; the runner's report is the check. Record in `diagnostics/` per kind.
+- [ ] BUG-33 HiGHS fails or answers wrongly on a column bound or objective outside its window — issues/bugs.md § BUG-33
+  - Ruled: scale column bounds and the objective into HiGHS's window as rows are. After the HiGHS upgrade. Record in
+    `pipeline/07_solver/done.md` (HiGHS backend).
+
 ## 2. Slowdowns since the 2026-09-09 sweep
 
 - [ ] PERF-9 Q8's keyed-decision mapping: 229 → 1,169 ms — performance/todo.md § PERF-9
