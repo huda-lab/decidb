@@ -530,7 +530,10 @@ A `by` key's check reads the key as its rows group (`DecideKeyElement::Grouping(
 a NOCASE column, 'a' and 'A' are one value.
 The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check.
 Nor does one of the key's own elements as rows group on it (`KeyHolds`, reflexivity): a key determines its
-grouping expression by construction, so `per a: sum(x) by (a)` builds no check for `a`. A function of a key column
+grouping expression by construction, so `per a: sum(x) by (a)` builds no check for `a`. The same rule covers a
+decision: a key determines a decision whose own key's elements are all among its own, so `per (a, b)` over a decision
+`per a` builds no check, and a query-wide decision (the empty key) never gets one. A per-row decision always does.
+A function of a key column
 still gets one, since rows that group together can differ under it (0.0 and -0.0 under `atan2(a, -1)`, '1 month'
 and '30 days' under `date_part('day', a)`). Key elements compare as rows group on them, collation included: a key
 element is bound as GROUP BY binds a group (`DecideKeyElement::Bind`, `PushCollation` at binding, so

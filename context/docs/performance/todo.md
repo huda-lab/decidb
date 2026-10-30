@@ -21,7 +21,7 @@ extraction) the check costs about 480 ms of wall time and 860 MiB of peak memory
 constraint evaluation: three window operators each materialize every row with every column, for the per-class
 count/min/max (569 ms CPU), a dense rank of all rows by the key to pick the least failing class (877 ms) and a global
 min for the message (125 ms). Ruled fix: a side aggregate over only the columns the check reads; the message is
-unchanged.
+unchanged. Done: a key that holds a decision's own key plans no determination check of it (FD reflexivity).
 
 ## PERF-6 — Solver execution
 

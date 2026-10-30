@@ -64,8 +64,8 @@ between them, so setup and the row count are excluded. There are three event kin
   `highs.objective`), so each CSV column takes whichever name the run emitted.
 
 Spans are inclusive parent totals. Each CSV stage column sums only parent spans, so no time is counted twice. A span
-nested in a span of the same name (`canonicalize.objective` recursing, `execution.scope_checks` opened inside itself)
-counts once: its time is already in the outer span's.
+nested in a span of the same name (`canonicalize.objective` recursing) counts once: its time is already in the outer
+span's.
 
 | Column | Spans |
 |---|---|
