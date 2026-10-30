@@ -34,7 +34,7 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
   performance/todo.md § PERF-3
 - [ ] PERF-15 RHS-bound windows hold every source column; measure, then PERF-3's shape —
   performance/todo.md § PERF-15
-- [ ] PERF-16 Constant folding where a tree is built; first, messages quote the source text —
+- [ ] PERF-16 DECIDE-built trees miss constant folding; fold the direct plan once —
   performance/todo.md § PERF-16
 
 ## 4. Measurement (last)

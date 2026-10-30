@@ -39,10 +39,13 @@ one value per group. Measure the cost on a 1M-row clause with a data-bound RHS f
 PERF-3's shape, an aggregate over the columns the bound reads on a second read of the source (`DirectSourceReader`),
 joined back by its group key.
 
-## PERF-16 — Constant folding where a tree is built
+## PERF-16 — DECIDE-built trees miss constant folding
 
-Stage 08 constant-folds each tree it evaluates (`TransformToChunkExpression`), not where the optimizer finishes
-building it (`ExpressionBuilder::Out`), because messages render the built trees: folding there turns the `2 * w` a
-message quotes into `2.0 * w`. Direct-solve plans are not folded. The cause is the message, not the fold: a message
-that names a value should quote the source text the user wrote (as Clang underlines source rather than reprinting its
-tree). Once messages quote source text, the fold moves to `Out` and direct-solve plans get it too.
+DuckDB folds constants in `EXPRESSION_REWRITER` (`optimizer.cpp:124`), before `DECIDE_OPTIMIZER` (:147), so the
+trees DECIDE builds are never folded. Stage 08 folds the trees it evaluates once (`TransformToChunkExpression`);
+direct-solve plans are not folded. One fold must not run on each `ExpressionBuilder::Out` call: `GuardCoefficients`
+(`direct_ir.cpp:263`) wraps each IR coefficient in a CASE built there, and a message renders through that CASE, so
+folding there prints a written `2 * w` as `2.0 * w`. Proposal: name each coefficient before it is guarded, then fold
+the finished direct plan once (`error()` is volatile and never folds). Measure Q1, Q4 and P4 before and after:
+DuckDB evaluates a constant subtree once per chunk, so the gain may be under a millisecond; if nothing moves, record
+that and close.
