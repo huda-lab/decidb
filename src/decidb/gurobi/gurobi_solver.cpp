@@ -114,6 +114,11 @@ namespace {
 //! Continue() is just another RunAndReadback() with a fresh chunk budget.
 class GurobiSession : public SolverSession {
 public:
+    void SetInterruptPoll(std::function<bool()> poll) override {
+        should_interrupt = std::move(poll);
+    }
+
+protected:
     SolverResult SolveChunk(const SolverModel &ilp, double time_limit_seconds) override {
         Load(ilp);
         return RunAndReadback(time_limit_seconds);
@@ -122,10 +127,6 @@ public:
     SolverResult ContinueChunk(double time_limit_seconds) override {
         // Precondition: SolveChunk() already loaded the model into `guard`.
         return RunAndReadback(time_limit_seconds);
-    }
-
-    void SetInterruptPoll(std::function<bool()> poll) override {
-        should_interrupt = std::move(poll);
     }
 
 private:

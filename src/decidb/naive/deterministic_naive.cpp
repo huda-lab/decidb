@@ -234,6 +234,19 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
 //! time-limit stop, so Continue() is just another RunAndReadback() with a fresh chunk.
 class HighsSession : public SolverSession {
 public:
+	//! HiGHS asks its interrupt callbacks beside its `time_limit` checks in the MIP search, simplex and IPM. One
+	//! callback answers all three from the poll, so a Ctrl-C stops the solve at the next check with status kInterrupt. The poll is read on every call, so an empty one (set at a continuation
+	//! prompt) leaves the solve to run to its limit.
+	void SetInterruptPoll(std::function<bool()> poll) override {
+		should_interrupt = std::move(poll);
+		highs.setCallback([this](int, const std::string &, const HighsCallbackOutput *, HighsCallbackInput *data_in,
+		                         void *) { data_in->user_interrupt = should_interrupt && should_interrupt(); });
+		highs.startCallback(kCallbackMipInterrupt);
+		highs.startCallback(kCallbackSimplexInterrupt);
+		highs.startCallback(kCallbackIpmInterrupt);
+	}
+
+protected:
     SolverResult SolveChunk(const SolverModel &model, double time_limit_seconds) override {
 		SolverResult not_loaded;
 		if (!Load(model, not_loaded)) {
@@ -246,18 +259,6 @@ public:
         // Precondition: SolveChunk() already loaded the model into `highs`.
         return RunAndReadback(time_limit_seconds);
     }
-
-	//! HiGHS asks its interrupt callbacks beside its `time_limit` checks in the MIP search, simplex and IPM. One
-	//! callback answers all three from the poll, so a Ctrl-C stops the solve at the next check with status kInterrupt. The poll is read on every call, so an empty one (set at a continuation
-	//! prompt) leaves the solve to run to its limit.
-	void SetInterruptPoll(std::function<bool()> poll) override {
-		should_interrupt = std::move(poll);
-		highs.setCallback([this](int, const std::string &, const HighsCallbackOutput *, HighsCallbackInput *data_in,
-		                         void *) { data_in->user_interrupt = should_interrupt && should_interrupt(); });
-		highs.startCallback(kCallbackMipInterrupt);
-		highs.startCallback(kCallbackSimplexInterrupt);
-		highs.startCallback(kCallbackIpmInterrupt);
-	}
 
 private:
     Highs highs;
