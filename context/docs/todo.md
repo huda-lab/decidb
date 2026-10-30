@@ -30,7 +30,7 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
 
 ## 3. Extraction costs
 
-- [ ] PERF-19 A1's validation window on a row bound read from data, about +419 ms —
+- [ ] PERF-19 A1's validation window holds every column once a bound reads a side table, +412 ms —
   performance/todo.md § PERF-19
 
 ## 4. Measurement (last)

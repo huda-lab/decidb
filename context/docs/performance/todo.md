@@ -23,8 +23,13 @@ Find the point where each workload and backend stops fitting comfortably, and wh
 
 ## PERF-19 — A1's validation window on a row bound read from data
 
-With bound reducers as side tables (PERF-15, `findings.md`), a row bound read from a reducer
-(`x <= sum(q) by (g) / 20000`) on A1 still costs about +419 ms against the same bound written as a number (lineitem
-alone, 23 columns, 1M rows; lane AS): A1 validates the bound in a window over the source, which a constant bound does
-not need, so that plan is pipelined. The side table's join costs about 11 ms of it. Find what the validation window
-computes and whether a side aggregate (PERF-3's shape) or the side table itself can carry it.
+Every A1 plan whose values vary by row (a bound or an objective read from data) ends in DirectValidationBreaker: a
+projection raises a bad row's error and a `COUNT(*) OVER ()` window holds the whole input, so a bad last row raises
+even under an outer LIMIT 1. Late materialization keeps the window narrow by moving the variable-width columns out of
+it, but only over a plan of projections, windows, filters and scans (`CollectPlanOperators`); a bound's side table
+(PERF-15) adds a join and a CTE scan, so the window holds every column. Measured (lane AU, large.db lineitem alone,
+16 columns, 1M rows, `MAXIMIZE sum(x * l_extendedprice)`, medians of 3, wall ms / peak MiB): bound a number 180 / 388,
+a plain column 201 / 387, `sum(l_quantity) by (l_suppkey) / 20000` 592 / 362; a constant problem, pipelined, 39 ms.
+The side table's own join and aggregate cost about 15 ms of CPU. The window scales negatively with threads on wide
+rows (592 ms at 11 threads, 429 at 1). Design under review: verify, then stream (PERF-3's gated verdict on the
+shared reader) in place of the breaker.
