@@ -230,9 +230,23 @@ HiGHS's presolve checks the clock once per 1,024 reductions, and its dominated-c
 all 120,000 adjustments, stayed in it 339 s past a 300 s limit. The vendored pass (`DeciDB patch (BUG-23)`) checks the
 clock once per 1,024 columns, before a column's work starts, and stops through presolve's own `kStopped`. Test:
 `test_error_time_limit.py` (`test_highs_limit_bounds_dominated_columns`). Presolve calls no interrupt callback, so a
-Ctrl-C waits for presolve to end. Phases the time checks still do not reach, none seen to stall: the root
-analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group) and the other presolve passes between their
-checks every 1,024 reductions. The upstream report is drafted in `../../issues/highs_upstream.md`.
+Ctrl-C waits for presolve to end.
+
+Q1 at `large` (1M binaries over 8 rows, a MIP gap of 0) ran past 420 s under a 300 s limit in one of two loops,
+depending on the run. Presolve's probing extracts variable bounds from each row by pairing every binary with every
+non-binary column (`HighsCliqueTable::extractCliques`); after presolve merges duplicate binaries into integers a row
+holds about 146,000 of each, and the pass took 215 s. At the root, line-search rounding fixes every integer and runs
+conflict analysis on the infeasible point; each explanation scans a row of about 700,000 entries, and one analysis
+outlasted the limit. The vendored loops (`DeciDB patch (BUG-25)`) call `checkLimits` once per 2^20 pairs or row
+entries, a stride by work rather than by iteration since one iteration costs up to a second here, and line-search
+rounding calls it before each rounded point. Past a limit, extraction keeps the bounds it found and skips the rest of
+the row; conflict analysis abandons the conflict and adds no cut. Q1 now stops at 300 s. Test:
+`test_error_time_limit.py` (`test_highs_limit_bounds_clique_extraction`); the conflict-analysis stop has no small
+model that reaches it on every run, so Q1 at `large` is its check. Phases the time checks still do not reach: the
+parallel rows and columns pass (`HPresolve::detectParallelRowsAndCols`, BUG-28), and, none seen to stall, the root
+analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group), the probing loop after clique extraction,
+rounding's fixing loop and the other presolve passes between their checks every 1,024 reductions. The upstream
+report is drafted in `../../issues/highs_upstream.md`.
 
 Diagnostic follow-up solves are budgeted separately
 (`ResolveDecideDiagnosticTimeLimit`), capped at the smaller of the primary budget

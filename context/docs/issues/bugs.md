@@ -1,19 +1,10 @@
 # Known bugs
 
-## BUG-25 — HiGHS overruns its time limit in two more loops (Q1 at the large tier)
+## BUG-28 — HiGHS's parallel rows and columns presolve ignores the time limit
 
-- **Observed:** Q1 on HiGHS (`queries/q1_ilp_selection.sql`, large tier, 1M binaries, 8 rows, 300 s limit) runs past
-  420 s in all three runs of the 2026-10-30 sweep and once more alone with the sweep's environment. Stack samples show
-  one of two loops, depending on the run: presolve's probing in `HighsCliqueTable::extractCliques`
-  (`HighsCliqueTable.cpp:860`), which pairs every binary with every non-binary column of a row (about 146k by 138k
-  after presolve merges duplicate columns into integers; 215 s in one run), or the root heuristic
-  `linesearchRounding` → `tryRoundedPoint` → `HighsDomain::conflictAnalysis` → `explainBoundChangeLeq`, at 330 s and
-  400 s. Neither checks the time limit. The September sweep stopped at the root because HiGHS's default gap of 1e-4
-  accepted 11357385338 against the optimum 11357408132; since the gap is 0 (2dbbffbdab) HiGHS keeps going and reaches
-  the second loop.
-- **Fix (owner's delegate, to confirm):** the BUG-23 pattern: a time check in each loop, the clique loop once per
-  1,024 binaries, the rounding loop once per rounded point; past the limit each stops and returns what it has. Add
-  both to `third_party/highs/README.md` and § 4 of `highs_upstream.md`.
+- **Observed:** one row over 80,000 columns, every column parallel, on HiGHS with `DECIDB_TIME_LIMIT=2` ends at 5.2 s;
+  the time goes to `HPresolve::detectParallelRowsAndCols`, which has no clock check (found by lane X, BUG-25).
+- **Fix (to rule):** the BUG-23 pattern: `checkTimeLimit()` once per amount of work in its loop.
 
 ## BUG-27 — Two collations of one column share a key
 

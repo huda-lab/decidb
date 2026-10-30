@@ -1,8 +1,8 @@
-# Draft: HiGHS upstream issue — three MIP loops that never check the time limit
+# Draft: HiGHS upstream issue — five MIP loops that never check the time limit
 
 Not posted. The owner posts it on github.com/ERGO-Code/HiGHS. Before posting:
 
-- attach one MPS file per case, written with `Highs::writeModel` from the model DeciDB loads (Q2, Q3 and Q10 at
+- attach one MPS file per case, written with `Highs::writeModel` from the model DeciDB loads (Q1, Q2, Q3 and Q10 at
   `large`), so the report does not depend on DeciDB;
 - check the current HiGHS release for the same loops; drop any case it already fixes.
 
@@ -10,12 +10,12 @@ The patches it describes are listed in `third_party/highs/README.md`.
 
 ---
 
-**Title:** MIP time limit and user interrupt are not checked in three loops (clique partition, symmetry detection,
-dominated-columns presolve)
+**Title:** MIP time limit and user interrupt are not checked in five loops (clique partition, symmetry detection,
+dominated-columns presolve, clique extraction, conflict analysis)
 
 **Version:** HiGHS 1.11.0 (git 364c83a51), built from source as a static library. macOS arm64.
 
-**Summary.** Three MIP models run minutes past `time_limit`, and the user interrupt callback is not called
+**Summary.** Four MIP models run minutes past `time_limit`, and the user interrupt callback is not called
 meanwhile. In each case the time goes to a loop that reads the clock only after some event
 (a reduction, a search leaf), and the model produces none of those events. We patched each loop locally with a
 periodic check that leaves through an exit the code already has. The patches are below in case they are useful.
@@ -101,7 +101,39 @@ for (HighsInt j = 0; j < model->num_col_; ++j) {
   ...
 ```
 
+### 4. `HighsCliqueTable::extractCliques` (presolve probing)
+
+- **Symptom:** a MIP with 1,000,000 binary columns over 8 rows; presolve merges duplicate columns into general integers,
+  leaving 4 rows of about 700,000 nonzeros, each mixing about 146,000 binaries with 138,000 integers. One presolve
+  round took 215 s (the size line moves from 13 s to 228 s and removes 3 columns); in another run the solve ran past
+  420 s under a 300 s limit. Stack samples are in `runProbing` → `extractCliques(HighsMipSolver&, bool)` → the per-row
+  `extractCliques`, whose variable-bound loop pairs every binary with every non-binary column of the row.
+- **Patch:** the pair loop calls `mipdata_->checkLimits()` once per 2^20 (binary, non-binary) pairs. Past a limit it
+  returns from the row, keeping the variable bounds already added (they only strengthen the model).
+
+```cpp
+for (HighsInt i = 0; i != nbin; ++i) {
+  pairsSinceLimitCheck += ntotal - nbin;
+  if (pairsSinceLimitCheck >= kPairsPerLimitCheck) {
+    pairsSinceLimitCheck = 0;
+    if (mipsolver.mipdata_->checkLimits()) return;
+  }
+  ...
+```
+
+### 5. Conflict analysis under line-search rounding (root heuristics)
+
+- **Symptom:** the same model in another run: stack samples at 330 s and 400 s, under a 300 s limit, are both in
+  `evaluateRootNode` → `linesearchRounding` → `tryRoundedPoint` → `HighsDomain::conflictAnalysis` → `resolveDepth` →
+  `explainBoundChangeLeq`. Each explanation scans a row of about 700,000 entries, so one conflict analysis outlasts the
+  limit.
+- **Patch:** `ConflictSet` counts the row entries its explanations scan; `resolveDepth` calls `checkLimits()` once per
+  2^20 entries and, past a limit, clears its queue and marks the set stopped. `computeCuts` then adds no cut, and both
+  `conflictAnalysis` overloads and `conflictAnalyzeReconvergence` return on the mark. `linesearchRounding` also calls
+  `checkLimits()` before each rounded point.
+- **With the patches (4 and 5):** the model stops at 300 s.
+
 ### Suggestion
 
 A clock check inside each loop whose work does not depend on making progress (reductions, nodes, leaves) would cover
-these cases and others like them. We are happy to open a pull request with any of the three patches.
+these cases and others like them. We are happy to open a pull request with any of the five patches.

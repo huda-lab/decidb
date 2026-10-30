@@ -9,3 +9,5 @@ each exists: `context/docs/pipeline/07_solver/done.md`.
 - BUG-3 (`presolve/HighsSymmetry.*`, `mip/HighsMipSolverData.cpp`): symmetry detection stops at the time limit, a
   Ctrl-C, or the MIP finishing without it.
 - BUG-23 (`presolve/HPresolve.cpp`): the dominated-columns pass stops at the time limit.
+- BUG-25 (`mip/HighsCliqueTable.cpp`, `mip/HighsDomain.*`, `mip/HighsPrimalHeuristics.cpp`): clique extraction's
+  variable-bound loop, conflict analysis and line-search rounding stop at the time limit or a Ctrl-C.
