@@ -358,8 +358,8 @@ static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_group
 
 //! Streaming typed-hash grouping. Assigns group IDs during the chunk scan
 //! instead of materializing all key Values up front. Representative key tuples
-//! are stored once per group (size O(num_groups)), not once per row, and only
-//! materialized on the (rare) hash-collision fallback path.
+//! are stored once per group (size O(num_groups)), not once per row; a row that
+//! hashes to a group is compared with its representative Value by Value.
 //!
 //!   key_exprs       — pre-transformed expressions for chunk evaluation, one per key column
 //!   row_filter      — return true to include row in grouping (empty function = include all)
@@ -562,9 +562,6 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, const vec
                                 idx_t gid) {
 	string s;
 	for (idx_t c = 0; c < rep_keys.size(); c++) {
-		if (gid >= rep_keys[c].size()) {
-			continue;
-		}
 		const Value &v = rep_keys[c][gid];
 		if (!s.empty()) {
 			s += ", ";
@@ -638,24 +635,18 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 //! `read_rows` is the clause's kept rows, which hold every row either filter keeps: the
 //! key is computed on no row outside them (`CachedKeyGroups`).
 //!
-//! `out_group_labels`, when given, gets each kept group's printable key; a caller that
-//! names no group passes null.
-static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
-                                     ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                     ColumnDataCollection &data, idx_t num_rows,
-                                     const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
-                                     vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
-                                     vector<string> *out_group_labels,
-                                     // Optional second map over the SAME group numbering but a
-                                     // looser row filter. The right-hand side needs this: its
-                                     // reducers must not inherit the LHS reducers' own `when`,
-                                     // which `row_filter` folds in. Groups that no strict row
-                                     // reached emit no constraint, so their rows stay excluded.
-                                     const std::function<bool(idx_t)> *loose_row_filter = nullptr,
-                                     vector<idx_t> *out_loose_row_group_ids = nullptr,
-                                     // Each group's key values ([group][key column]), for a
-                                     // message that quotes them as SQL literals.
-                                     vector<vector<Value>> *out_group_values = nullptr) {
+//! Returns the kept groups: the call's group g is group `[g]` of the key's cache entry,
+//! whose representative values a caller that names a group reads (`GroupLabels`).
+static vector<idx_t> LookupOrBuildPerGroupIds(
+    PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key, ChunkExprCache &chunk_expr_cache,
+    ClientContext &context, ColumnDataCollection &data, idx_t num_rows, const std::function<bool(idx_t)> &row_filter,
+    const vector<bool> *read_rows, vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
+    // Optional second map over the SAME group numbering but a
+    // looser row filter. The right-hand side needs this: its
+    // reducers must not inherit the LHS reducers' own `when`,
+    // which `row_filter` folds in. Groups that no strict row
+    // reached emit no constraint, so their rows stay excluded.
+    const std::function<bool(idx_t)> *loose_row_filter = nullptr, vector<idx_t> *out_loose_row_group_ids = nullptr) {
 	if (read_rows && std::find(read_rows->begin(), read_rows->end(), false) == read_rows->end()) {
 		read_rows = nullptr;
 	}
@@ -663,18 +654,13 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKe
 
 	// The call's kept groups, renumbered densely in key-value order.
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-	if (out_group_labels) {
-		out_group_labels->clear();
-	}
-	if (out_group_values) {
-		out_group_values->clear();
-	}
+	vector<idx_t> kept_groups;
 	if (out_loose_row_group_ids) {
 		out_loose_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
 	}
 	if (entry->unfiltered_num_groups == 0 || num_rows == 0) {
 		out_num_groups = 0;
-		return;
+		return kept_groups;
 	}
 	auto reads = [&](idx_t r) {
 		return (!read_rows || (*read_rows)[r]) && entry->unfiltered_row_group_ids[r] != DConstants::INVALID_INDEX;
@@ -691,17 +677,7 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKe
 			continue;
 		}
 		remap[unf_gid] = next_remap++;
-		if (out_group_labels) {
-			out_group_labels->push_back(
-			    FormatPerGroupKey(entry->unfiltered_rep_keys, DecideKeyElements(keys, key), unf_gid));
-		}
-		if (out_group_values) {
-			vector<Value> values;
-			for (auto &column : entry->unfiltered_rep_keys) {
-				values.push_back(unf_gid < column.size() ? column[unf_gid] : Value());
-			}
-			out_group_values->push_back(std::move(values));
-		}
+		kept_groups.push_back(unf_gid);
 	}
 	for (idx_t r = 0; r < num_rows; r++) {
 		if (reads(r) && (!row_filter || row_filter(r))) {
@@ -721,6 +697,18 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKe
 			(*out_loose_row_group_ids)[r] = mapped;
 		}
 	}
+	return kept_groups;
+}
+
+//! The printable key of each of `groups`, groups of `keys[key]` as its cache entry numbers them.
+static vector<string> GroupLabels(const PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
+                                  const vector<idx_t> &groups) {
+	auto &rep_keys = cache.at(key).unfiltered_rep_keys;
+	vector<string> labels;
+	for (auto group : groups) {
+		labels.push_back(FormatPerGroupKey(rep_keys, DecideKeyElements(keys, key), group));
+	}
+	return labels;
 }
 
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
@@ -860,8 +848,9 @@ static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const v
 	idx_t num_classes = 0;
 	vector<string> class_labels;
 	if (keyed) {
-		LookupOrBuildPerGroupIds(per_group_cache, keys, class_key, chunk_expr_cache, context, data, num_rows, kept,
-		                         &kept_rows, class_ids, num_classes, &class_labels);
+		auto classes = LookupOrBuildPerGroupIds(per_group_cache, keys, class_key, chunk_expr_cache, context, data,
+		                                        num_rows, kept, &kept_rows, class_ids, num_classes);
+		class_labels = GroupLabels(per_group_cache, keys, class_key, classes);
 	}
 	// `named_in[c]` is the last group that recorded class c; groups are walked one at a
 	// time, so it says whether this group has it already.
@@ -1825,12 +1814,11 @@ vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, 
 			std::function<bool(idx_t)> every_kept_row;
 			vector<idx_t> member_ids;
 			LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
-			                         num_rows, is_member, &kept, member_ids, mapping.num_classes, nullptr,
-			                         &every_kept_row, &mapping.row_to_class);
+			                         num_rows, is_member, &kept, member_ids, mapping.num_classes, &every_kept_row,
+			                         &mapping.row_to_class);
 		} else {
 			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
-			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_class, mapping.num_classes,
-			                         nullptr);
+			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_class, mapping.num_classes);
 		}
 		// A row in no class (a NULL written key, a dropped row) has no decision: it maps to
 		// one spare class, so that every row has an id (KeyedMapping::absent_class).
@@ -1970,10 +1958,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 //===--------------------------------------------------------------------===//
 
 //! A class or group, as a message names it: `D.depotID = 'D1', D.region = 'East'`.
-static string DescribeKeyValues(const vector<string> &names, const vector<Value> &values) {
+//! `rep_keys` holds each group's value of each column ([column][group]).
+static string DescribeKeyValues(const vector<string> &names, const vector<vector<Value>> &rep_keys, idx_t group) {
 	string result;
-	for (idx_t i = 0; i < names.size() && i < values.size(); i++) {
-		result += (i > 0 ? ", " : "") + names[i] + " = " + SqlLiteral(values[i]);
+	for (idx_t i = 0; i < names.size(); i++) {
+		result += (i > 0 ? ", " : "") + names[i] + " = " + SqlLiteral(rep_keys[i][group]);
 	}
 	return result;
 }
@@ -2006,9 +1995,8 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		};
 		vector<idx_t> ids;
 		idx_t count = 0;
-		vector<vector<Value>> key_values;
-		LookupOrBuildPerGroupIds(per_group_cache, keys, check.key, chunk_expr_cache, context, gstate.data, num_rows,
-		                         looked_at_row, &looked_at, ids, count, nullptr, nullptr, nullptr, &key_values);
+		auto groups = LookupOrBuildPerGroupIds(per_group_cache, keys, check.key, chunk_expr_cache, context, gstate.data,
+		                                       num_rows, looked_at_row, &looked_at, ids, count);
 		auto &scope = variable_scopes[check.decision];
 		vector<idx_t> instance(count, DConstants::INVALID_INDEX);
 		// Several classes can fail; the message names the least by key value (the groups are numbered in that order).
@@ -2030,7 +2018,9 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 			throw InvalidInputException(
 			    text.one_class ? StringUtil::Format(text.Format())
 			                   : StringUtil::Format(text.Format(),
-			                                        DescribeKeyValues(keys[check.key].Names(), key_values[failing])));
+			                                        DescribeKeyValues(keys[check.key].Names(),
+			                                                          per_group_cache.at(check.key).unfiltered_rep_keys,
+			                                                          groups[failing])));
 		}
 	}
 }
@@ -2357,10 +2347,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					return scoped_kept[row] && (every_kept_row || !has_local_filters || local_row_active[row]);
 				};
 				if (constraint->group_key != DConstants::INVALID_INDEX) {
-					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->group_key, chunk_expr_cache, context,
-					                         gstate.data, num_rows, emitted, &scoped_kept, eval_const.row_group_ids,
-					                         eval_const.num_groups, &eval_const.group_labels, &kept,
-					                         &kept_row_group_ids);
+					auto groups = LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->group_key,
+					                                       chunk_expr_cache, context, gstate.data, num_rows, emitted,
+					                                       &scoped_kept, eval_const.row_group_ids,
+					                                       eval_const.num_groups, &kept, &kept_row_group_ids);
+					eval_const.group_labels = GroupLabels(per_group_cache, keys, constraint->group_key, groups);
 				} else if (has_when || has_local_filters) {
 					eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 					kept_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -2376,8 +2367,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					vector<idx_t> class_ids;
 					idx_t num_classes = 0;
 					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,
-					                         context, gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes,
-					                         nullptr);
+					                         context, gstate.data, num_rows, kept, &scoped_kept, class_ids,
+					                         num_classes);
 					if (num_classes == 0) {
 						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 						eval_const.num_groups = 0;
@@ -2398,9 +2389,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				// stands for the class because the key determines the whole clause.
 				vector<idx_t> class_ids;
 				idx_t num_classes = 0;
-				vector<string> labels;
-				LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache, context,
-				                         gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes, &labels);
+				auto classes = LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key,
+				                                        chunk_expr_cache, context, gstate.data, num_rows, kept,
+				                                        &scoped_kept, class_ids, num_classes);
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 				vector<bool> seen(num_classes, false);
 				for (idx_t row = 0; row < num_rows; row++) {
@@ -2411,7 +2402,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					}
 				}
 				eval_const.num_groups = num_classes;
-				eval_const.group_labels = std::move(labels);
+				eval_const.group_labels = GroupLabels(per_group_cache, keys, constraint->scope.class_key, classes);
 				eval_const.rows_stand_with_their_class = !has_when;
 				// Each class's row stands for its class (D28), under DIAGNOSE only.
 				if (diagnose) {
@@ -3095,7 +3086,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 		// diagnosed by clause key, so they carry no label.
 		LookupOrBuildPerGroupIds(per_group_cache, keys, gstate.objective->two_level_key, chunk_expr_cache, context,
 		                         gstate.data, num_rows, obj_row_is_included, nullptr, result.objective_row_group_ids,
-		                         result.objective_num_groups, nullptr);
+		                         result.objective_num_groups);
 	}
 
 	return result;
@@ -3399,8 +3390,10 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		std::function<bool(idx_t)> is_member = [&](idx_t row) {
 			return read[row];
 		};
-		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
-		                         num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups, &ec.group_labels);
+		auto groups =
+		    LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
+		                             num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups);
+		ec.group_labels = GroupLabels(per_group_cache, keys, link.group_key, groups);
 
 		// The members' coefficients, computed on the member rows alone. A helper serves every clause that reads its
 		// reducer, so a number past a DOUBLE names the reducer as written (as LinearizeReducerValueLinks does).
