@@ -308,8 +308,12 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 		break;
 	}
 	case LogicalOperatorType::LOGICAL_MATERIALIZED_CTE: {
-		everything_referenced = true;
-		break;
+		// The outputs are the consuming child's. The definition is read through CTE refs, which this pass does not
+		// follow, so it keeps every column. The consuming child is pruned by what the parents read.
+		RemoveUnusedColumns definition(binder, context, true);
+		definition.VisitOperator(*op.children[0]);
+		VisitOperator(*op.children[1]);
+		return;
 	}
 	case LogicalOperatorType::LOGICAL_CTE_REF: {
 		everything_referenced = true;

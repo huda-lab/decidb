@@ -868,6 +868,25 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
 
 
 @pytest.mark.correctness
+def test_a_scan_below_a_row_check_reads_only_the_columns_the_plan_needs(decidb_cli):
+    # The row check on cap (per g) gates every read of the source. A parent that reads no source column still leaves
+    # the payload out of the scans.
+    setup = """
+        CREATE TEMP TABLE gated_src AS
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5) AS cap, i % 5 AS g,
+               repeat('p', 200) AS payload
+        FROM range(5000) t(i);
+    """
+    decide = "FROM gated_src DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
+    assert "S1_UNIFORM_MATROID" in plan and "direct_verdict" in plan, plan
+    assert "payload" not in plan, plan
+    rows, _ = _run(decidb_cli, setup + f"SELECT COUNT(*), SUM(x::INT) FROM ({decide}) q")
+    solver, _ = _run(decidb_cli, setup + f"SELECT COUNT(*), SUM(x::INT) FROM ({decide}) q", mode="off")
+    assert rows == solver
+
+
+@pytest.mark.correctness
 def test_a1_pipelined_plan_does_not_read_twice(decidb_cli):
     setup = _late_materialization_setup("a1")
     # Every row sees the same bounds and coefficients, so the plan holds nothing and a late materialization would only add a join.
