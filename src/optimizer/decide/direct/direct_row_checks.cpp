@@ -3,6 +3,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
+#include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
@@ -58,19 +59,6 @@ private:
 		return optimizer.BindAggregateFunction(name, std::move(children));
 	}
 
-	//! A hash aggregate of `child` on `groups`; with none, one row however many rows `child` has.
-	unique_ptr<LogicalAggregate> AggregateOf(unique_ptr<LogicalOperator> child, vector<ExprPtr> groups,
-	                                         vector<unique_ptr<Expression>> aggregates) const {
-		auto &binder = optimizer.binder;
-		auto aggregate = make_uniq<LogicalAggregate>(binder.GenerateTableIndex(), binder.GenerateTableIndex(),
-		                                             std::move(aggregates));
-		for (auto &group : groups) {
-			aggregate->groups.push_back(calc.Out(group));
-		}
-		aggregate->children.push_back(std::move(child));
-		return aggregate;
-	}
-
 	ExprPtr Result(const LogicalAggregate &aggregate, idx_t i) const {
 		return calc.Col(aggregate.expressions[i]->return_type, ColumnBinding(aggregate.aggregate_index, i));
 	}
@@ -79,7 +67,7 @@ private:
 	CheckPlan ValueCheck(const DirectRowCheck &check) {
 		vector<unique_ptr<Expression>> aggregates;
 		aggregates.push_back(Aggregate("min", {Over(*check.invalid)}));
-		auto aggregate = AggregateOf(std::move(read.plan), {}, std::move(aggregates));
+		auto aggregate = DirectAggregateOver(optimizer, std::move(read.plan), {}, std::move(aggregates));
 		auto message = ColumnBinding(aggregate->aggregate_index, 0);
 		return {std::move(aggregate), message};
 	}
@@ -119,7 +107,7 @@ private:
 			auto key = Over(*element.grouping);
 			keys.push_back(key);
 			if (element.no_group) {
-				auto read_key = looked_at ? DirectOnKeptRows(calc, looked_at, key) : key;
+				auto read_key = DirectOnKeptRows(calc, looked_at, key);
 				auto present = calc.If(calc.IsNull(read_key), calc.Bool(false), calc.Bool(true));
 				in_class = in_class ? calc.If(in_class, present, calc.Bool(false)) : present;
 			}
@@ -150,7 +138,7 @@ private:
 			}
 			aggregates.push_back(Aggregate("min", {spelling}));
 		}
-		auto classes = AggregateOf(std::move(rows), keys, std::move(aggregates));
+		auto classes = DirectAggregateOver(optimizer, std::move(rows), keys, std::move(aggregates));
 		auto key_index = classes->group_index;
 		idx_t column = 0;
 		auto count = Result(*classes, column++);
@@ -204,7 +192,7 @@ private:
 			}
 			first.push_back(Aggregate("arg_min", {message, calc.Fn("struct_pack", fields)}));
 		}
-		auto named = AggregateOf(std::move(failing_classes), {}, std::move(first));
+		auto named = DirectAggregateOver(optimizer, std::move(failing_classes), {}, std::move(first));
 		auto binding = ColumnBinding(named->aggregate_index, 0);
 		return {std::move(named), binding};
 	}
@@ -236,11 +224,14 @@ void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const 
 
 void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
                             LogicalDecide &decide) {
-	if (checks.empty()) {
+	if (checks.empty() && decide.bound_aggregates.empty()) {
 		return;
 	}
-	// The operator reads the source once, and each check once more.
-	DirectSourceReader reader(optimizer, std::move(decide.children[0]), 1 + checks.size());
+	// The operator reads the source once, and each bound and check once more.
+	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
+	                          1 + decide.bound_aggregates.size() + checks.size());
+	auto source_width = reader.SourceBindings().size();
+	DirectAddBoundTables(optimizer, reader, decide);
 	DirectAddRowChecks(optimizer, reader, checks);
 	// A recomputed source is read last as itself, under its own bindings.
 	auto rows = reader.TakeRecomputedSource();
@@ -249,12 +240,15 @@ void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const v
 		return;
 	}
 	auto read = reader.ReadSource();
+	// The read has the source's columns, then the bounds: the bounds' placeholders are read from it now.
 	auto &old_bindings = reader.SourceBindings();
 	vector<ColumnBinding> new_bindings;
 	for (idx_t i = 0; i < old_bindings.size(); i++) {
 		new_bindings.emplace_back(read.table_index, i);
 	}
-	decide.RepointSourceColumns(reader.Source(), new_bindings);
+	decide.RepointSourceColumns(
+	    reader.Source(),
+	    vector<ColumnBinding>(new_bindings.begin(), new_bindings.begin() + NumericCast<int64_t>(source_width)));
 	ColumnBindingReplacer replacer;
 	for (idx_t i = 0; i < old_bindings.size(); i++) {
 		replacer.replacement_bindings.emplace_back(old_bindings[i], new_bindings[i]);

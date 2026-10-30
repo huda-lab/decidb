@@ -2131,14 +2131,15 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
 
 
 # A budget limit that is a function of reducers over exactly the budget's group is computed in the aggregate of the group
-# totals (stage 2): the source stays a chain of scans, with no window under the plan. A reducer over other rows than the
-# group's is a window column of the source, which the plan materializes once and reads four times, and the bound's NaN
-# check reads once more. The check's verdict is a one-row CTE that gates each of the four reads. The plan is read as
-# JSON, which prints each operator whole: a wide box plan cuts the rule's name.
+# totals (stage 2): the source stays a chain of scans, with no window under the plan and no side table. A reducer over
+# other rows than the group's is a side table (`direct_bound`): its aggregate, one row per group, is joined back to the
+# rows of each read by the key with a SINGLE join (a scalar subquery's form), so the source stays a chain the plan
+# re-scans four times and the bound's NaN check reads once more. The check's verdict is a one-row CTE that gates each of
+# the four reads. The plan is read as JSON, which prints each operator whole: a wide box plan cuts the rule's name.
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "budget, source_window",
+    "budget, side_table",
     [
         pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g)", False, id="reducer-of-the-group"),
         pytest.param("when f: SUM(w*x) by (g) <= 0.5 * COUNT(*) by (g)", False, id="count-of-the-group-under-a-when"),
@@ -2147,7 +2148,7 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
         pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g) + pad_1", True, id="column-beside-the-reducer"),
     ],
 )
-def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_cli, budget, source_window):
+def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_cli, budget, side_table):
     out = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN (FORMAT JSON) {_wide_query(budget)}").stdout
     nodes, stack = [], json.loads(out[out.index("[") :])
     while stack:
@@ -2157,16 +2158,23 @@ def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_c
     names = [name for name, _ in nodes]
     assert any(info.get("Direct solve rule") == "R1_CONTINUOUS_KNAPSACK" for _, info in nodes), out
     assert "DECIDE" not in names and "DECIDE_DIAGNOSE" not in names, out
-    # The one window is the sort of the items; every other is under the source.
-    assert (names.count("WINDOW") > 1) == source_window and names.count("WINDOW") >= 1, out
-    assert names.count("SEQ_SCAN") == (1 if source_window else 4), out
+    # The one window is the sort of the items: no bound is a window.
+    assert names.count("WINDOW") == 1, out
     ctes = {info["CTE Name"]: info["Table Index"] for name, info in nodes if name == "CTE"}
     scans = [info["CTE Index"] for name, info in nodes if name == "CTE_SCAN"]
-    if not source_window:
-        assert not ctes and not scans, out
+    single_joins = sum(1 for name, info in nodes if name == "HASH_JOIN" and info.get("Join Type") == "SINGLE")
+    # The source is never materialized: it is re-scanned once per stage.
+    assert "direct_source" not in ctes, out
+    if not side_table:
+        assert names.count("SEQ_SCAN") == 4 and not ctes and not scans, out
         return
-    assert set(ctes) == {"direct_source", "direct_verdict"}, out
-    assert scans.count(ctes["direct_source"]) == 4 + 1 and scans.count(ctes["direct_verdict"]) == 4, out
+    # The four stages' scans, the bound's own read and the check's read.
+    assert names.count("SEQ_SCAN") == 6, out
+    assert set(ctes) == {"direct_bound", "direct_verdict"}, out
+    # The four reads and the check's join the table, and the verdict gates the four reads. The plan's own stages may
+    # join their groups with SINGLE joins as well.
+    assert scans.count(ctes["direct_bound"]) == 4 + 1 and scans.count(ctes["direct_verdict"]) == 4, out
+    assert single_joins >= scans.count(ctes["direct_bound"]), out
 
 
 # The source is a chain over one table scan, which the plan can re-scan once per stage or read from one copy. It takes the
@@ -2229,9 +2237,7 @@ def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_
     "budget, groups",
     [
         pytest.param("when f: SUM(w*x) <= 20000", 2, id="when"),
-        pytest.param(
-            "SUM(w*x) by (g) <= 2000", 4, id="per"
-        ),
+        pytest.param("SUM(w*x) by (g) <= 2000", 4, id="per"),
     ],
 )
 def test_r1_hash_joins_build_on_the_group_rows(decidb_cli, tmp_path, budget, groups):
@@ -2313,9 +2319,7 @@ STORED_SOURCES = {
     "budget",
     [
         pytest.param("SUM(w*x) <= 300", id="one_budget"),
-        pytest.param(
-            "when f: SUM(w*x) by (g) <= 300", id="scoped"
-        ),
+        pytest.param("when f: SUM(w*x) by (g) <= 300", id="scoped"),
     ],
 )
 def test_r1_sources_over_a_stored_table_agree_with_the_solver(decidb_cli, name, budget):
@@ -2948,9 +2952,7 @@ def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, 
 
     plans = {}
     for name, limit in (("data", "cap * 500"), ("constant", "1500")):
-        plans[name] = decidb_cli.execute_raw(
-            f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query(limit)}"
-        ).stdout
+        plans[name] = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query(limit)}").stdout
     plan = plans["data"]
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
     assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
@@ -3010,7 +3012,9 @@ def test_r1_a_data_limit_is_read_over_the_rows_the_clause_keeps(decidb_cli, budg
 
 # `per g: C` is one constraint per class of g (D6): a budget bounds the whole total in each class, with a limit the class
 # determines, so the total takes the tightest class's. The scope check that g determines the limit runs under the plan.
-_PER_CLASS_ROWS = "(1, 'a', 2.0, 3.0, 4), (2, 'a', 1.0, 2.0, 4), (3, 'b', 3.0, 1.0, 2), (4, 'b', 2.0, 2.0, 2), (5, 'c', 1.0, 1.0, 3)"
+_PER_CLASS_ROWS = (
+    "(1, 'a', 2.0, 3.0, 4), (2, 'a', 1.0, 2.0, 4), (3, 'b', 3.0, 1.0, 2), (4, 'b', 2.0, 2.0, 2), (5, 'c', 1.0, 1.0, 3)"
+)
 
 
 @pytest.mark.var_real
@@ -3046,7 +3050,9 @@ def test_r1_a_budget_per_class_answers_as_the_solver_does(decidb_cli, budget):
         pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 1), (2, NULL::VARCHAR, 1.0, 2.0, 1)", id="every-g-null"),
         # One class is enough for the instance. A row in no class still counts in the total, but its own bound limits no
         # instance (test_per_class_null_key_bound.py).
-        pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 2), (2, 'a', 1.0, 2.0, 2), (3, NULL::VARCHAR, 2.0, 1.0, 5)", id="one-class"),
+        pytest.param(
+            "(1, NULL::VARCHAR, 2.0, 3.0, 2), (2, 'a', 1.0, 2.0, 2), (3, NULL::VARCHAR, 2.0, 1.0, 5)", id="one-class"
+        ),
         # The `when` leaves only NULL-g rows with a high value: no kept row has a class.
         pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 1), (2, 'a', 1.0, 0.5, 1)", id="the-class-row-is-not-kept"),
     ],

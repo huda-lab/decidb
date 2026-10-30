@@ -1,8 +1,8 @@
 """Data-only aggregate RHS in aggregate constraints.
 
 `SUM(x*val) <= SUM(val)` (RHS aggregate over data columns only) is evaluated by the
-bound-side window rewrite (RewriteRhsAggregates): each data reducer becomes a window
-column holding its value per group, honouring the reducer's own `when`, the constraint's
+bound-side rewrite (RewriteRhsAggregates): each data reducer becomes a column holding its value
+per group (a side table joined back to the rows), honouring the reducer's own `when`, the constraint's
 `when`/`per`, and relation-qualifier de-duplication. These tests pin (a) parity with
 the explicit hoisted form the binder used to produce, (b) parity with the
 scalar-bound equivalent, and (c) `when` / `per` / AVG composition, including

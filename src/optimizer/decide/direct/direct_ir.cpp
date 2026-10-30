@@ -59,14 +59,14 @@ public:
 		ir.decide_index = decide.decide_index;
 		ir.source_clause_count = decide.constraint_sources.size();
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
-		source_bindings = decide.children[0]->GetColumnBindings();
+		source_bindings = decide.SourceBindings();
 		ir.source_bindings = source_bindings;
 		ReadDecisions(ir);
 		ReadKeyedScopes(ir);
 		ReadConstraints(ir);
 		ReadObjective(ir.objective);
 		ReadRowChecks(ir);
-		ir.bound_windows_needed = bound_windows_needed;
+		ir.bounds_to_record = bounds_to_record;
 		return ir;
 	}
 
@@ -77,7 +77,7 @@ private:
 	DecideCanonicalizer canonicalizer;
 	vector<ColumnBinding> source_bindings;
 	//! Set while reading: a recorded bound a rule could not reduce.
-	mutable bool bound_windows_needed = false;
+	mutable bool bounds_to_record = false;
 
 	//! A predicate a row check can evaluate under the rule's plan: it reads only source columns. One that raises does
 	//! so there, before any value is read, as in the solver's scope check.
@@ -121,7 +121,7 @@ private:
 	//! key determines it (KeyHolds).
 	bool ReadRowCheck(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
 		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
-			// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
+			// The bound-side rewrite makes these over the source and the bounds' placeholders, with no `rows`.
 			D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
 			row_check.invalid = check.value->Copy();
 			return true;
@@ -144,7 +144,7 @@ public:
 	//! Moves the scope checks the plan can make out of the node: the solver path installs them under it
 	//! (DirectAddRowChecks). A check the plan cannot make stays for the operator.
 	vector<DirectRowCheck> TakeRowChecks() {
-		source_bindings = decide.children[0]->GetColumnBindings();
+		source_bindings = decide.SourceBindings();
 		vector<DirectRowCheck> taken;
 		vector<DecideScopeCheck> left;
 		for (auto &check : decide.scope_checks) {
@@ -390,14 +390,14 @@ private:
 				continue;
 			}
 			// A rule sums the rows the sum reads. With a `when` of its own those are fewer than the rows the bound is
-			// read over, so the rule cannot compute the bound: the windows are built and the IR is read again.
+			// read over, so the rule cannot compute the bound: its aggregates are recorded and the IR is read again.
 			for (auto &part : ir_node.lhs) {
 				if (part.filter) {
-					bound_windows_needed = true;
+					bounds_to_record = true;
 					return;
 				}
 			}
-			// What the aggregates read is over the source and the windows the rewrite built.
+			// What the aggregates read is over the source and the placeholders of the reducers other bounds recorded.
 			for (auto &input : bound.group->inputs) {
 				D_ASSERT(!input.invalid || CheckablePredicate(input.invalid.get()));
 			}

@@ -11,7 +11,7 @@ add_library_unity(
   decide_rewrite_minmax.cpp
   decide_rewrite_norm_in.cpp
   decide_rewrite_notequal_avg.cpp
-  decide_rewrite_rhs_window.cpp
+  decide_rewrite_rhs_bounds.cpp
   decide_rewrite_scoped.cpp
   decide_solver_gate.cpp)
 add_subdirectory(direct)

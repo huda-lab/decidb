@@ -164,8 +164,9 @@ unique_ptr<LogicalDirectResultAdapter> AdaptDirectResult(ClientContext &context,
                                                          vector<uint8_t> prunable_sources,
                                                          DirectExplainAnnotation annotation,
                                                          const DirectLateMaterialization &late_materialization) {
-	if (!substitute.child || substitute.slot_map.size() != output_types.size() ||
-	    prunable_sources.size() + substitute.prunable_decisions.size() != output_types.size()) {
+	// The rule driver has already matched the slot map to the outputs.
+	D_ASSERT(substitute.slot_map.size() == output_types.size());
+	if (!substitute.child || prunable_sources.size() + substitute.prunable_decisions.size() != output_types.size()) {
 		throw InternalException("Direct solve rule returned an incomplete result substitute");
 	}
 	auto prunable_outputs = std::move(prunable_sources);

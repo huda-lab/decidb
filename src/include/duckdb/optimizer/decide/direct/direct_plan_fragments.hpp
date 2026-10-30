@@ -15,6 +15,7 @@ namespace duckdb {
 
 class Binder;
 class ClientContext;
+class LogicalAggregate;
 class ExpressionBuilder;
 class Optimizer;
 
@@ -35,6 +36,12 @@ unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Express
 //! operator above that projection to read it.
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,
                                             idx_t projection_index);
+
+//! A hash aggregate of `child` on `groups` (expressions over its columns); with none, one row however many rows
+//! `child` has. Its columns are the groups, then the aggregates: (group_index, i) and (aggregate_index, j).
+unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_ptr<LogicalOperator> child,
+                                                 const vector<ExprPtr> &groups,
+                                                 vector<unique_ptr<Expression>> aggregates);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
 struct DirectPipelineBreaker {
@@ -60,8 +67,9 @@ DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<Logical
 //! Whether a clause's `when` holds on a row: true without one, and false when it is false or NULL.
 unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Expression *when);
 
-//! `value` on a row where `kept` is true, and NULL on any other. Nothing is computed on a row a `when` drops, so a
-//! value that raises (a logarithm of 0, an overflow) raises only on a kept row, as on the solver path.
+//! `value` on a row where `kept` is true, and NULL on any other; `value` itself when `kept` is null (every row is
+//! kept). Nothing is computed on a row a `when` drops, so a value that raises (a logarithm of 0, an overflow) raises
+//! only on a kept row, as on the solver path.
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
 
 //! The error of an `=` bound that takes two values in one group, on a row of the group: its smallest (`low`) and

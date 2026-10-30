@@ -153,11 +153,11 @@ struct DecideScopeCheck {
 //!  (g)`)
 //!    is an expression over those reducers' aggregates.
 //! The aggregates read their inputs on the rows of the group. A rule that applies computes them in the group aggregate
-//! it already runs (DirectAddGroupBound), and the solver path builds their windows
-//! (DecideOptimizer::InstallReducedBounds). Not serialized: the optimizer makes it, and an optimized plan is never
+//! it already runs (DirectAddGroupBound), and the solver path records them as bound aggregates
+//! (RecordReducedBounds). Not serialized: the optimizer makes it, and an optimized plan is never
 //! serialized.
 struct DecideGroupBound {
-	//! What an aggregate reads, per row, over the source (and the windows of the eager bounds).
+	//! What an aggregate reads, per row, over the source (and the placeholders of the bounds that are recorded).
 	struct Input {
 		//! The value aggregated; null for COUNT(*).
 		unique_ptr<Expression> argument;
@@ -215,12 +215,12 @@ private:
 };
 
 //! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left unevaluated, because a direct-solve rule
-//! computes it in its own group aggregate. When none does, the solver path builds the windows of its aggregates and the
-//! bound's checks join `scope_checks` where they would have stood.
+//! computes it in its own group aggregate. When none does, the solver path records its aggregates (RecordReducedBounds)
+//! and the bound's checks join `scope_checks` where they would have stood.
 struct DecideReducedBound {
 	//! The comparison whose right-hand side is the bound. It points into `decide_constraints`, which nothing rewrites
-	//! between the bound-side rewrite and the choice of how the query is answered; the windows are built, or the node
-	//! replaced, before the first formulation rewrite touches the tree.
+	//! between the bound-side rewrite and the choice of how the query is answered; the aggregates are built, or the
+	//! node replaced, before the first formulation rewrite touches the tree.
 	Expression *comparison = nullptr;
 	//! The clause's `when` (it is in the constraint tree), or null.
 	const Expression *when = nullptr;
@@ -231,11 +231,12 @@ struct DecideReducedBound {
 
 //! A reducer a bound reads from the data (`sum(cap) by (g)`), recorded by the bound-side rewrite
 //! (DecideOptimizer::RewriteRhsAggregates) and not yet computed. The bound's expressions read its result at the
-//! placeholder `column`, which no operator produces until the aggregate is installed (InstallBoundAggregates). The
-//! value is the aggregate over the rows of each group of `key` that the reducer reads, on every row of the group.
-//! Not serialized: the optimizer makes it, and an optimized plan is never serialized.
+//! placeholder `column`: the column of the aggregate's side table (DirectSourceReader::AddSideTable), which no operator
+//! produces until the path builds the table. The value is the aggregate over the rows of each group of `key` that the
+//! reducer reads, on every row of the group. Not serialized: the optimizer makes it, and an optimized plan is never
+//! serialized.
 struct DecideBoundAggregate {
-	//! The placeholder the bound reads.
+	//! The placeholder the bound reads: its own table index, and the column after the group key's.
 	ColumnBinding column;
 	//! The BoundAggregateExpression with its function and result type bound; its argument and filter are the members
 	//! below.
@@ -244,8 +245,6 @@ struct DecideBoundAggregate {
 	unique_ptr<Expression> argument;
 	//! The rows the reducer reads: the clause's kept rows that pass its own `when`; null for every row.
 	unique_ptr<Expression> reads;
-	//! Whether the clause's `when` keeps the row; null when it has none.
-	unique_ptr<Expression> kept;
 	//! The reducer's `by` key (an index into `keys`), INVALID_INDEX for the whole query.
 	idx_t key = DConstants::INVALID_INDEX;
 	//! Whether the reducer is `sum(per K: body)`, which counts each class of K in its group once, and its key K
@@ -256,7 +255,7 @@ struct DecideBoundAggregate {
 	bool Equals(const DecideBoundAggregate &other) const {
 		return key == other.key && counts_classes == other.counts_classes && class_key == other.class_key &&
 		       Expression::Equals(function, other.function) && Expression::Equals(argument, other.argument) &&
-		       Expression::Equals(reads, other.reads) && Expression::Equals(kept, other.kept);
+		       Expression::Equals(reads, other.reads);
 	}
 };
 
@@ -590,19 +589,18 @@ public:
 	//! The run-time requirements of every clause, in
 	//! clause order; PhysicalDecide runs them before it formulates anything.
 	//! The planner builds the scope checks (DETERMINES); the
-	//! optimizer's right-hand-side window rewrite appends the VALUE_IS_VALID checks of the
+	//! optimizer's right-hand-side rewrite appends the VALUE_IS_VALID checks of the
 	//! bounds it computes, after them, so a bad value is reported only once every scope
 	//! check has passed, as when the bound was read in the operator.
 	vector<DecideScopeCheck> scope_checks;
 
 	//! The bounds RewriteRhsAggregates left to a rule, in clause order; see DecideReducedBound. Empty once the solver
-	//! path has built their windows.
+	//! path has built their side tables (DirectSourceReader::AddSideTable).
 	vector<DecideReducedBound> reduced_bounds;
 
-	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them, and the table index
-	//! of their placeholder columns. Empty once their windows are installed (InstallBoundWindows).
+	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. Empty once the path
+	//! has built their side tables (DirectSourceReader::AddSideTable).
 	vector<DecideBoundAggregate> bound_aggregates;
-	idx_t bound_index = DConstants::INVALID_INDEX;
 
 	//! The registered name ("gurobi", "highs") of the solver this query will run on,
     //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here
@@ -696,7 +694,11 @@ public:
     //! a field (composed_minmax_*) previously went missing
     //! from one visitor while another already had it.
     void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
-    //! Re-points the user's names of the source columns (source_columns) once the source `old_source` is read under
+	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
+	//! aggregates the path has not built yet (bound_aggregates).
+	vector<ColumnBinding> SourceBindings();
+
+	//! Re-points the user's names of the source columns (source_columns) once the source `old_source` is read under
     //! `new_bindings`, one per column of it. They are keyed by DecideSourceColumnKey, not by binding, so
     //! ColumnBindingReplacer, which re-points the expressions, leaves them.
     void RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings);

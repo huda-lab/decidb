@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   a1_separable_box_rule.cpp
   direct_bound_reader.cpp
+  direct_bound_tables.cpp
   direct_plan_fragments.cpp
   direct_row_checks.cpp
   direct_runtime_checks.cpp

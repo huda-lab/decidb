@@ -569,7 +569,7 @@ private:
 		// A value is computed and checked only on the rows the part keeps.
 		vector<unique_ptr<Expression>> checks;
 		auto on_kept = [&](ExprPtr value) {
-			return kept ? DirectOnKeptRows(calc, kept, value) : value;
+			return DirectOnKeptRows(calc, kept, value);
 		};
 		// Linear coefficients add up per decision. A constant adds nothing to the answer, so like the solver path it
 		// is read one term at a time, with the part's factor applied, and never added up; each must still be valid,

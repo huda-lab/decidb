@@ -216,8 +216,8 @@ struct DirectIR {
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
 	vector<DirectRowCheck> row_checks;
 	//! A bound the bound-side rewrite left to the rule cannot be computed by it (its sum has a `when` of its own): the
-	//! driver builds the windows (InstallReducedBoundWindows) and reads the IR again.
-	bool bound_windows_needed = false;
+	//! driver records the aggregates of its group (RecordReducedBounds) and reads the IR again.
+	bool bounds_to_record = false;
 	//! NOT_PROVED when the DECIDE operator owes the rows a scope check the plan cannot make: a determination of an
 	//! keyed decision.
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;

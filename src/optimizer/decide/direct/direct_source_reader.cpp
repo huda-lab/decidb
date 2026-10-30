@@ -7,6 +7,7 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
+#include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -53,6 +54,7 @@ DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<Logica
 	bindings = source->GetColumnBindings();
 	types = source->types;
 	D_ASSERT(bindings.size() == types.size());
+	source_width = bindings.size();
 	chain_scan = DirectRepeatableSourceChain(*source, chain);
 	if (chain_scan && DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
 	                                            BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
@@ -117,16 +119,93 @@ unique_ptr<LogicalOperator> DirectSourceReader::CopyOfChain() const {
 	return current;
 }
 
-DirectSourceReader::Read DirectSourceReader::ForwardAllColumns(unique_ptr<LogicalOperator> top) {
+//! A side table's value and keys are columns of its definition, in this order, as a CTE's columns are named by
+//! position.
+static vector<string> PositionalNames(idx_t count) {
+	vector<string> names;
+	for (idx_t i = 0; i < count; i++) {
+		names.push_back("c" + std::to_string(i));
+	}
+	return names;
+}
+
+void DirectSourceReader::AddSideTable(unique_ptr<LogicalOperator> definition, vector<unique_ptr<Expression>> keys,
+                                      ColumnBinding placeholder) {
+	// A table added after the gate would be gated, and the verdict would read it.
+	D_ASSERT(!verdict);
+	definition->ResolveOperatorTypes();
+	D_ASSERT(definition->types.size() == keys.size() + 1 && placeholder.column_index == keys.size());
+	// The value is read where the clauses' expressions have the placeholder.
+	bindings.push_back(placeholder);
+	types.push_back(definition->types.back());
+	SideTable table;
+	table.types = definition->types;
+	table.definition = std::move(definition);
+	table.keys = std::move(keys);
+	table.cte_index = optimizer.binder.GenerateTableIndex();
+	table.ref_index = placeholder.table_index;
+	side_tables.push_back(std::move(table));
+}
+
+unique_ptr<LogicalOperator> DirectSourceReader::JoinSideTables(unique_ptr<LogicalOperator> top, bool own_bindings,
+                                                               vector<ColumnBinding> &side_values) {
+	if (side_tables.empty()) {
+		return top;
+	}
+	ExpressionBuilder calc(optimizer.context);
+	top->ResolveOperatorTypes();
+	// The key is written over the source's columns, which `top` has first, under its own bindings.
+	auto top_bindings = top->GetColumnBindings();
+	D_ASSERT(top_bindings.size() >= source_width);
+	vector<ColumnBinding> source_columns(bindings.begin(), bindings.begin() + NumericCast<int64_t>(source_width));
+	vector<unique_ptr<Expression>> on_top;
+	for (idx_t i = 0; i < source_width; i++) {
+		on_top.push_back(calc.Out(calc.Col(types[i], top_bindings[i])));
+	}
+	for (auto &table : side_tables) {
+		auto ref_index = own_bindings ? table.ref_index : optimizer.binder.GenerateTableIndex();
+		auto reference =
+		    make_uniq<LogicalCTERef>(ref_index, table.cte_index, table.types, PositionalNames(table.types.size()),
+		                             CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
+		side_values.emplace_back(ref_index, table.keys.size());
+		if (table.keys.empty()) {
+			// One group: its one row.
+			top = LogicalCrossProduct::Create(std::move(top), std::move(reference));
+			continue;
+		}
+		// The form DuckDB gives each row of a scalar subquery its one matching row: every row's group is in the table.
+		auto join = make_uniq<LogicalComparisonJoin>(JoinType::SINGLE);
+		for (idx_t j = 0; j < table.keys.size(); j++) {
+			JoinCondition on_key;
+			on_key.comparison = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
+			on_key.left = table.keys[j]->Copy();
+			DirectReplaceColumns(on_key.left, source_columns, on_top);
+			on_key.right = calc.Out(calc.Col(table.types[j], ColumnBinding(ref_index, j)));
+			join->conditions.push_back(std::move(on_key));
+		}
+		// The rows keep every column; the table gives its value alone.
+		join->right_projection_map.push_back(table.keys.size());
+		join->children.push_back(std::move(top));
+		join->children.push_back(std::move(reference));
+		top = std::move(join);
+	}
+	return top;
+}
+
+DirectSourceReader::Read DirectSourceReader::ForwardAllColumns(unique_ptr<LogicalOperator> top,
+                                                               const vector<ColumnBinding> &side_values) {
 	ExpressionBuilder calc(optimizer.context);
 	top->ResolveOperatorTypes();
 	auto top_bindings = top->GetColumnBindings();
-	D_ASSERT(top_bindings.size() == types.size());
+	D_ASSERT(top_bindings.size() >= source_width && side_values.size() == side_tables.size());
 	Read read;
 	read.table_index = optimizer.binder.GenerateTableIndex();
 	vector<unique_ptr<Expression>> expressions;
-	for (idx_t i = 0; i < top_bindings.size(); i++) {
+	for (idx_t i = 0; i < source_width; i++) {
 		expressions.push_back(calc.Out(calc.Col(top->types[i], top_bindings[i])));
+	}
+	for (idx_t i = 0; i < side_values.size(); i++) {
+		expressions.push_back(calc.Out(calc.Col(types[source_width + i], side_values[i])));
 	}
 	auto projection = make_uniq<LogicalProjection>(read.table_index, std::move(expressions));
 	projection->children.push_back(std::move(top));
@@ -138,19 +217,19 @@ DirectSourceReader::Read DirectSourceReader::ForwardAllColumns(unique_ptr<Logica
 DirectSourceReader::Read DirectSourceReader::ReadSource() {
 	// A copy reads the chain, which points into the source.
 	D_ASSERT(source);
-	Read read;
+	unique_ptr<LogicalOperator> rows;
 	if (chain_scan) {
-		read = ForwardAllColumns(CopyOfChain());
+		rows = CopyOfChain();
 	} else {
 		// A source read once has only the read TakeRecomputedSource makes.
 		D_ASSERT(materialized);
-		vector<string> names;
-		for (idx_t i = 0; i < types.size(); i++) {
-			names.push_back("c" + std::to_string(i));
-		}
-		read = ForwardAllColumns(make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), cte_index, types,
-		                                                  std::move(names), CTEMaterialize::CTE_MATERIALIZE_ALWAYS));
+		vector<LogicalType> source_types(types.begin(), types.begin() + NumericCast<int64_t>(source_width));
+		rows = make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), cte_index, std::move(source_types),
+		                                PositionalNames(source_width), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 	}
+	vector<ColumnBinding> side_values;
+	rows = JoinSideTables(std::move(rows), false, side_values);
+	auto read = ForwardAllColumns(std::move(rows), side_values);
 	read.plan = Gated(std::move(read.plan));
 	return read;
 }
@@ -159,7 +238,8 @@ unique_ptr<LogicalOperator> DirectSourceReader::TakeRecomputedSource() {
 	if (materialized) {
 		return nullptr;
 	}
-	return Gated(std::move(source));
+	vector<ColumnBinding> side_values;
+	return Gated(JoinSideTables(std::move(source), true, side_values));
 }
 
 void DirectSourceReader::Gate(unique_ptr<LogicalOperator> verdict_p) {
@@ -194,6 +274,12 @@ unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperato
 		plan =
 		    make_uniq<LogicalMaterializedCTE>("direct_verdict", verdict_index, 1, std::move(verdict), std::move(plan));
 	}
+	// The first side table is the outermost, because a later one's definition may read it.
+	for (idx_t i = side_tables.size(); i > 0; i--) {
+		auto &table = side_tables[i - 1];
+		plan = make_uniq<LogicalMaterializedCTE>("direct_bound", table.cte_index, table.types.size(),
+		                                         std::move(table.definition), std::move(plan));
+	}
 	if (!materialized) {
 		return plan;
 	}
@@ -202,12 +288,12 @@ unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperato
 	// binder does for the query of every CTE.
 	ExpressionBuilder calc(optimizer.context);
 	vector<unique_ptr<Expression>> columns;
-	for (idx_t i = 0; i < types.size(); i++) {
+	for (idx_t i = 0; i < source_width; i++) {
 		columns.push_back(calc.Out(calc.Col(types[i], bindings[i])));
 	}
 	auto definition = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(columns));
 	definition->children.push_back(std::move(source));
-	return make_uniq<LogicalMaterializedCTE>("direct_source", cte_index, types.size(), std::move(definition),
+	return make_uniq<LogicalMaterializedCTE>("direct_source", cte_index, source_width, std::move(definition),
 	                                         std::move(plan));
 }
 

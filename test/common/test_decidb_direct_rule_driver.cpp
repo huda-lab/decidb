@@ -58,7 +58,6 @@ public:
 	enum class Fault : uint8_t {
 		NONE,
 		NO_CHILD,
-		EXTRA_SLOT,
 		NO_PRUNABLE_DECISION,
 		SLOT_OUT_OF_RANGE,
 		VALIDATED_COLUMN_OUT_OF_RANGE,
@@ -148,9 +147,6 @@ private:
 			break;
 		case Fault::NO_CHILD:
 			substitute.child.reset();
-			break;
-		case Fault::EXTRA_SLOT:
-			substitute.slot_map.push_back(0);
 			break;
 		case Fault::NO_PRUNABLE_DECISION:
 			substitute.prunable_decisions.clear();
@@ -421,7 +417,6 @@ TEST_CASE("Direct rule driver rejects each way a rule can hand the adapter a sub
 	};
 	const Case cases[] = {
 	    {"no child", StubRule::Fault::NO_CHILD, false, "incomplete result substitute"},
-	    {"a slot more than the outputs", StubRule::Fault::EXTRA_SLOT, false, "incomplete result substitute"},
 	    {"no prunable flag for the decision", StubRule::Fault::NO_PRUNABLE_DECISION, false,
 	     "incomplete result substitute"},
 	    {"a slot beyond the child", StubRule::Fault::SLOT_OUT_OF_RANGE, false, "slot map that does not match"},
@@ -429,7 +424,7 @@ TEST_CASE("Direct rule driver rejects each way a rule can hand the adapter a sub
 	     "lost a required validated column"},
 	    {"a row id slot beyond the child", StubRule::Fault::ROW_ID_SLOT_OUT_OF_RANGE, true, "lost the source row id"},
 	    {"a slot map without the source row id", StubRule::Fault::ROW_ID_NOT_PASSED, true,
-	     "did not pass the source row id through"}};
+	     "did not pass every column of its read through"}};
 	for (auto &test_case : cases) {
 		INFO(test_case.name);
 		auto fault = test_case.fault;

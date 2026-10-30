@@ -1,16 +1,16 @@
 //===----------------------------------------------------------------------===//
 //                         DeciDB
 //
-// src/optimizer/decide/decide_rewrite_rhs_window.cpp
+// src/optimizer/decide/decide_rewrite_rhs_bounds.cpp
 //
 // The bound-side evaluator. See decide_optimizer.cpp.
 //
 // A bound is data: `SUM(x) <= SUM(cap)`, `SUM(x) BY (g) <= cap`. Every value a bound needs that is not one row's
 // value is computed once, as a column of the DECIDE source:
 //   - each reducer on a bound (`sum(cap)`, `sum(per D: cap) by (g)`) is recorded (LogicalDecide::bound_aggregates), and
-//     the bound reads a placeholder column where its value goes. The record is installed at path time
-//     (InstallBoundWindows) as the same DuckDB aggregate over a window of its groups, so the surrounding arithmetic
-//     (`COUNT(*) * k`) is evaluated in DuckDB's own types;
+//     the bound reads a placeholder column where its value goes. The path builds the aggregate as a side table of
+//     the DECIDE source, one row per group, joined back to the rows by the group key (DirectAddBoundTables), so the
+//     surrounding arithmetic (`COUNT(*) * k`) is evaluated in DuckDB's own types;
 //   - the tightest bound of a clause in the aggregate shape: such a clause is one constraint per group, and the
 //     constraint on each kept row of the group holds when the tightest one does (paper §3.2.1), so `<=` takes the
 //     group's MIN and `>=` its MAX; `=` must have one value per group.
@@ -21,10 +21,10 @@
 // sum(cap) by (g)`). A direct-solve rule computes its aggregates in the group aggregate it already runs; the solver
 // path records their aggregates (RecordGroupBounds) as it does for every other bound.
 //
-// The values the windows read are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
+// The values the side tables hold are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
 // NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
-// report it. A NULL bound is no value: the window's reducer skips it as SQL's does, and a group whose tightest bound
-// is NULL has no instance, which the bound's reader skips. A window itself raises nothing.
+// report it. A NULL bound is no value: the reducer skips it as SQL's does, and a group whose tightest bound
+// is NULL has no instance, which the bound's reader skips. A side table itself raises nothing.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -37,7 +37,6 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
-#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
@@ -47,159 +46,19 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
-#include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
-#include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
 
 namespace {
 
-//! `value` on `rows` (every row when null), and NULL elsewhere, where it is not computed.
-ExprPtr OnRows(const ExpressionBuilder &calc, const ExprPtr &rows, const ExprPtr &value) {
-	return rows ? calc.If(rows, value, calc.Constant(Value(value->return_type))) : value;
-}
-
-//! Builds the windows of the reducers a DECIDE node's bounds read (LogicalDecide::bound_aggregates) and installs them
-//! as a stack of LogicalWindows directly above DECIDE's child: a window that reads another window's column stands on
-//! the level above it. A window keeps its child's bindings and appends its own, so no binding the DECIDE node holds
-//! changes, except the placeholders, which are re-pointed at the window columns.
-//!
-//! Every window is partitioned by whether the clause's `when` keeps the row (when it has one): the rows the clause
-//! drops form partitions no constraint reads, and nothing a window computes is evaluated on them. A group a reducer's
-//! own `when` leaves empty reads NULL, and a NULL bound skips its instance.
-class BoundWindowInstaller {
-public:
-	BoundWindowInstaller(Optimizer &optimizer_p, LogicalDecide &decide_p)
-	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context) {
-	}
-
-	void Install() {
-		if (decide.bound_aggregates.empty()) {
-			return;
-		}
-		ColumnBindingReplacer replacer;
-		for (auto &record : decide.bound_aggregates) {
-			auto column = PlaceAggregate(record);
-			replacer.replacement_bindings.emplace_back(record.column, column->Cast<BoundColumnRefExpression>().binding);
-		}
-		decide.bound_aggregates.clear();
-		for (auto &level : levels) {
-			auto window = make_uniq<LogicalWindow>(level.table_index);
-			window->expressions = std::move(level.windows);
-			window->estimated_cardinality = decide.children[0]->estimated_cardinality;
-			window->children.push_back(std::move(decide.children[0]));
-			decide.children[0] = std::move(window);
-		}
-		// The bounds read the windows where they read the placeholders.
-		replacer.stop_operator = decide.children[0].get();
-		replacer.VisitOperator(decide);
-	}
-
-private:
-	//! One LogicalWindow of the stack: level 0 reads the source, level k also the columns of the levels below it.
-	struct Level {
-		idx_t table_index;
-		vector<unique_ptr<Expression>> windows;
-	};
-
-	//! The reducer's value on each row, as the column of a window over the rows of the row's group that it reads,
-	//! counting each class of its `per` key once.
-	ExprPtr PlaceAggregate(const DecideBoundAggregate &record) {
-		ExprPtr reads = record.reads ? calc.Of(*record.reads) : nullptr;
-		auto counted = reads;
-		if (record.counts_classes) {
-			auto first =
-			    calc.Cmp(ExpressionType::COMPARE_EQUAL, FirstOfClass(record, reads), calc.Constant(Value::BIGINT(1)));
-			// A row whose written `per` column is NULL is in no class, so it is not counted.
-			for (auto &element : DecideKeyElements(decide.keys, record.class_key)) {
-				if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
-					first = calc.If(calc.IsNull(calc.Of(*element.expression)), calc.Bool(false), first);
-				}
-			}
-			counted = reads ? calc.If(reads, first, calc.Bool(false)) : first;
-		}
-		auto window = DirectWindowOfAggregate(
-		    *record.function, record.argument ? calc.Out(OnRows(calc, reads, calc.Of(*record.argument))) : nullptr,
-		    counted ? calc.Out(counted) : nullptr);
-		if (record.kept) {
-			window->partitions.push_back(record.kept->Copy());
-		}
-		for (auto &element : DecideKeyElements(decide.keys, record.key)) {
-			window->partitions.push_back(element.Grouping().Copy());
-		}
-		return Place(std::move(window));
-	}
-
-	//! 1 on the first row of each class of the reducer's `per` key (or relation, in the colon form) in its group, among
-	//! the rows it reads. That row stands for the class: the key determines the reducer's body (a scope check).
-	ExprPtr FirstOfClass(const DecideBoundAggregate &record, const ExprPtr &reads) {
-		auto rank =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
-		rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-		if (reads) {
-			rank->partitions.push_back(calc.Out(reads));
-		}
-		for (auto &element : DecideKeyElements(decide.keys, record.key)) {
-			rank->partitions.push_back(element.Grouping().Copy());
-		}
-		// `per ()` has no key column: one class per group.
-		for (auto &element : DecideKeyElements(decide.keys, record.class_key)) {
-			rank->partitions.push_back(calc.Out(calc.Of(element.Grouping())));
-		}
-		return Place(std::move(rank));
-	}
-
-	//! A column reading `window`, placed on the lowest level that can read its inputs and shared with an equal window
-	//! placed before.
-	ExprPtr Place(unique_ptr<BoundWindowExpression> window) {
-		auto level = LevelAbove(*window);
-		if (level == levels.size()) {
-			levels.push_back({optimizer.binder.GenerateTableIndex(), {}});
-		}
-		auto &placed = levels[level].windows;
-		idx_t slot = 0;
-		while (slot < placed.size() && !placed[slot]->Equals(*window)) {
-			slot++;
-		}
-		auto type = window->return_type;
-		if (slot == placed.size()) {
-			placed.push_back(std::move(window));
-		}
-		return calc.Col(type, ColumnBinding(levels[level].table_index, slot));
-	}
-
-	//! The level a window over `expr` stands on: 0 over the source alone, else one above the highest window it reads.
-	idx_t LevelAbove(const Expression &expr) const {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-			auto table_index = expr.Cast<BoundColumnRefExpression>().binding.table_index;
-			for (idx_t i = 0; i < levels.size(); i++) {
-				if (levels[i].table_index == table_index) {
-					return i + 1;
-				}
-			}
-			return 0;
-		}
-		idx_t level = 0;
-		ExpressionIterator::EnumerateChildren(
-		    expr, [&](const Expression &child) { level = MaxValue(level, LevelAbove(child)); });
-		return level;
-	}
-
-	Optimizer &optimizer;
-	LogicalDecide &decide;
-	ExpressionBuilder calc;
-	vector<Level> levels;
-};
-
 //! The bound-side rewrite of one DECIDE node: every value a bound needs that is not one row's value is replaced by a
 //! placeholder column, and the reducers behind the placeholders are recorded (LogicalDecide::bound_aggregates), not
 //! computed. A group bound that a direct-solve rule can compute itself is recorded as a DecideGroupBound instead.
-class RhsWindowRewriter {
+class RhsBoundRewriter {
 public:
-	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
+	RhsBoundRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
 	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
 	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
 	                    decide_p.is_boolean_var) {
@@ -260,7 +119,7 @@ private:
 	//! any value is read. A bound that reads data only through the reducers of its group is recorded as the aggregates
 	//! it is a function of, and one that may differ between the kept rows of a group as its tightest value. `<>` keeps
 	//! every value: each one is excluded. A query-wide value has one value already. A row-wise bound is checked by the
-	//! solver as it reads it. The solver path builds the windows of a recorded bound later (InstallRecorded).
+	//! solver as it reads it. The solver path records the aggregates of a recorded bound later (RecordGroupBounds).
 	void RewriteBound(BoundComparisonExpression &comparison) {
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
@@ -293,7 +152,7 @@ private:
 	//! Whether the bound is a function of its group's own reducers: each reads exactly the rows the clause's group
 	//! holds, and the bound reads no data but through them, so it has one value per group, which the group's aggregate
 	//! computes. A reducer with another `by` key reads other rows, and one that counts each class of a `per` key once
-	//! is no plain aggregate; `<>` excludes each value its bound takes. The windows build all of those.
+	//! is no plain aggregate; `<>` excludes each value its bound takes. The side tables compute all of those.
 	bool IsGroupBound(const BoundComparisonExpression &comparison) const {
 		if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 			return false;
@@ -380,8 +239,8 @@ private:
 		}
 	}
 
-	//! Leaves the bound to the rule. Its checks stand where they would have, in clause order, once the windows are
-	//! built.
+	//! Leaves the bound to the rule. Its checks stand where they would have, in clause order, once the aggregates are
+	//! recorded.
 	void Record(BoundComparisonExpression &comparison, unique_ptr<DecideGroupBound> group) {
 		DecideReducedBound bound;
 		bound.comparison = &comparison;
@@ -417,34 +276,31 @@ private:
 		idx_t scope_idx;
 		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
 			D_ASSERT(scope_idx < decide.keyed_scopes.size());
+			// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
+			D_ASSERT(decide.keyed_scopes[scope_idx].value_link == DConstants::INVALID_INDEX);
 			record.counts_classes = true;
 			record.class_key = decide.keyed_scopes[scope_idx].key;
 		}
 		auto keys = GroupKeyOf(reducer);
-		auto column = Record(std::move(record), Reads(reducer.filter.get()));
+		auto column = RecordAggregate(std::move(record), Reads(reducer.filter.get()));
 		reducer_columns.push_back({column, std::move(keys)});
 		return NamedReducerValue(reducer, calc.Col(reducer.return_type, column));
 	}
 
 	//! Adds `record` to the node's bound aggregates, reading the rows `reads` (null for every row) of the clause being
-	//! rewritten, and returns its placeholder column; an equal record is shared.
-	ColumnBinding Record(DecideBoundAggregate record, const ExprPtr &reads) {
-		if (decide.bound_index == DConstants::INVALID_INDEX) {
-			decide.bound_index = optimizer.binder.GenerateTableIndex();
-		}
+	//! rewritten, and returns its placeholder column; an equal record is shared. The aggregate has one value per group
+	//! of its key, so its table has the key's columns, then the value.
+	ColumnBinding RecordAggregate(DecideBoundAggregate record, const ExprPtr &reads) {
 		if (reads) {
 			record.reads = calc.Out(reads);
-		}
-		auto kept = Kept();
-		if (kept) {
-			record.kept = calc.Out(kept);
 		}
 		for (auto &known : decide.bound_aggregates) {
 			if (known.Equals(record)) {
 				return known.column;
 			}
 		}
-		record.column = ColumnBinding(decide.bound_index, decide.bound_aggregates.size());
+		record.column =
+		    ColumnBinding(optimizer.binder.GenerateTableIndex(), DecideKeyElements(decide.keys, record.key).size());
 		decide.bound_aggregates.push_back(std::move(record));
 		return decide.bound_aggregates.back().column;
 	}
@@ -468,7 +324,7 @@ private:
 		auto body = DecideWrittenNormBody(reducer);
 		auto argument = body ? body : reducer.children[0].get();
 		auto nan = NanMessage(*argument, Written(*argument));
-		return nan ? calc.Out(OnRows(calc, Reads(reducer.filter.get()), InGroup(reducer, nan))) : nullptr;
+		return nan ? calc.Out(DirectOnKeptRows(calc, Reads(reducer.filter.get()), InGroup(reducer, nan))) : nullptr;
 	}
 
 	//! The reducer's value on a row, given the column that holds its aggregate: NULL on a row whose written `by` column
@@ -519,8 +375,8 @@ private:
 			}
 			record.key = GroupKeyIndex(comparison);
 			placeholders.push_back(aggregate.column);
-			columns.push_back(
-			    calc.Col(aggregate.function->return_type, Record(std::move(record), Reads(input.filter.get()))));
+			columns.push_back(calc.Col(aggregate.function->return_type,
+			                           RecordAggregate(std::move(record), Reads(input.filter.get()))));
 			values.push_back(calc.Out(InGroup(comparison, columns.back())));
 		}
 		vector<unique_ptr<Expression>> messages;
@@ -531,10 +387,10 @@ private:
 		}
 		if (group.invalid) {
 			DirectReplaceColumns(group.invalid, placeholders, values);
-			messages.push_back(calc.Out(OnRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
+			messages.push_back(calc.Out(DirectOnKeptRows(calc, Kept(), calc.Wrap(std::move(group.invalid)))));
 		}
 		if (group.low != DConstants::INVALID_INDEX) {
-			messages.push_back(calc.Out(OnRows(
+			messages.push_back(calc.Out(DirectOnKeptRows(
 			    calc, Kept(), DirectBoundDisagreement(calc, group.text, columns[group.low], columns[group.high]))));
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
@@ -577,7 +433,7 @@ private:
 		if (!nan) {
 			return nullptr;
 		}
-		return calc.Out(OnRows(calc, rows, nan));
+		return calc.Out(DirectOnKeptRows(calc, rows, nan));
 	}
 
 	//! The message a row raises for a NaN `value`, and NULL elsewhere; null when `value` cannot be NaN.
@@ -655,24 +511,13 @@ private:
 
 void DecideOptimizer::RewriteRhsAggregates(LogicalDecide &decide) {
 	D_ASSERT(decide.children.size() == 1);
-	RhsWindowRewriter(optimizer, decide).Run();
+	RhsBoundRewriter(optimizer, decide).Run();
 }
 
-void InstallBoundWindows(Optimizer &optimizer, LogicalDecide &decide) {
-	BoundWindowInstaller(optimizer, decide).Install();
-}
-
-void InstallReducedBoundWindows(Optimizer &optimizer, LogicalDecide &decide) {
-	if (decide.reduced_bounds.empty()) {
-		return;
+void RecordReducedBounds(Optimizer &optimizer, LogicalDecide &decide) {
+	if (!decide.reduced_bounds.empty()) {
+		RhsBoundRewriter(optimizer, decide).RecordGroupBounds();
 	}
-	RhsWindowRewriter(optimizer, decide).RecordGroupBounds();
-	InstallBoundWindows(optimizer, decide);
-}
-
-void DecideOptimizer::InstallReducedBounds(LogicalDecide &decide) {
-	InstallBoundWindows(optimizer, decide);
-	InstallReducedBoundWindows(optimizer, decide);
 }
 
 } // namespace duckdb

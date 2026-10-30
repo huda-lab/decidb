@@ -192,6 +192,8 @@ _REDUCER_BASES = {
 _REDUCER_EXTRAS = {
     "AVG(sm) + 2": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) + 2,
 }
+
+
 # A reducer with a `when` of its own reads the rows of the clause's group that the `when` keeps; over no row it is NULL
 # (None), which skips the group's instance. A count with a condition is a sum of 1 (COUNT takes no `when`, D15).
 def _kept_values(rows, keep, value):
@@ -1660,10 +1662,14 @@ def _group_bound_sql(constraint):
     )
 
 
-def _window_count(decidb_cli, constraint):
+def _bound_plan(decidb_cli, constraint):
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {_group_bound_sql(constraint)}").stdout
     assert "S1_UNIFORM_MATROID" in plan, plan
-    return len(re.findall(r"│\s+WINDOW\s+│", plan))
+    return plan
+
+
+def _window_count(decidb_cli, constraint):
+    return len(re.findall(r"│\s+WINDOW\s+│", _bound_plan(decidb_cli, constraint)))
 
 
 @pytest.mark.var_boolean
@@ -1679,6 +1685,7 @@ def _window_count(decidb_cli, constraint):
 )
 def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constraint):
     assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
+    assert "direct_bound" not in _bound_plan(decidb_cli, constraint)
 
 
 @pytest.mark.var_boolean
@@ -1692,8 +1699,11 @@ def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constr
         pytest.param("when g IS NOT NULL: SUM(when keep: x) by (g) <= SUM(cap) by (g) / 2", id="sum-with-its-own-when"),
     ],
 )
-def test_s1_a_bound_that_is_not_the_groups_own_leaves_its_window(decidb_cli, constraint):
-    assert _window_count(decidb_cli, constraint) > _window_count(decidb_cli, "SUM(x) <= 2")
+def test_s1_a_bound_that_is_not_the_groups_own_is_read_from_a_side_table(decidb_cli, constraint):
+    plan = _bound_plan(decidb_cli, constraint)
+    # The reducer is a side table (`direct_bound`) joined back to the rows by its key; no bound is a window.
+    assert "direct_bound" in plan and "Join Type: SINGLE" in plan, plan
+    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
 
 
 # Every bound above and the bounds that are not the group's own, answered as the solver answers them.
@@ -1825,7 +1835,9 @@ def test_s1_a_count_per_class_answers_as_the_solver_does(decidb_cli, constraint)
     "rows",
     [
         # Every kept row has a NULL g, so there is no class and no instance: the count does not bind (D5).
-        pytest.param("(1, NULL::VARCHAR, 9.0, 1), (2, NULL::VARCHAR, 8.0, 1), (3, NULL::VARCHAR, 7.0, 1)", id="every-g-null"),
+        pytest.param(
+            "(1, NULL::VARCHAR, 9.0, 1), (2, NULL::VARCHAR, 8.0, 1), (3, NULL::VARCHAR, 7.0, 1)", id="every-g-null"
+        ),
         # One class is enough for the instance. A row in no class still counts in the total, but its own bound limits no
         # instance (test_per_class_null_key_bound.py).
         pytest.param("(1, NULL::VARCHAR, 9.0, 2), (2, 'a', 8.0, 2), (3, NULL::VARCHAR, 7.0, 5)", id="one-class"),

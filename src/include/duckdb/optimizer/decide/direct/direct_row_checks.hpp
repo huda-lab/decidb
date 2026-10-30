@@ -24,9 +24,10 @@ class Optimizer;
 void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const vector<DirectRowCheck> &checks);
 
 //! The solver path's checks: the source of `decide`, a node in `root`, becomes one gated read of it
-//! (DirectAddRowChecks). A recomputed source keeps its bindings. A materialized one is read under new bindings, and
-//! every reader of the old ones above the source in `root`, the node's user names of its columns included, is
-//! re-pointed (ColumnBindingReplacer, LogicalDecide::RepointSourceColumns).
+//! (DirectAddRowChecks), joined to the side tables of its bounds (DirectAddBoundTables), which the checks read. A
+//! recomputed source keeps its bindings. A materialized one is read under new bindings, and every reader of the old
+//! ones above the source in `root`, the node's user names of its columns included, is re-pointed
+//! (ColumnBindingReplacer, LogicalDecide::RepointSourceColumns).
 void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
                             LogicalDecide &decide);
 

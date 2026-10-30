@@ -11,6 +11,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
+#include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
@@ -206,10 +207,9 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
-	InstallBoundWindows(optimizer, decide);
 	auto ir = DirectIR::Read(optimizer.context, decide);
-	if (ir.bound_windows_needed) {
-		InstallReducedBoundWindows(optimizer, decide);
+	if (ir.bounds_to_record) {
+		RecordReducedBounds(optimizer, decide);
 		ir = DirectIR::Read(optimizer.context, decide);
 	}
 	auto &source = *decide.children[0];
@@ -269,18 +269,26 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	// One reader of the source for the whole plan: the rule's reads and one per row check, so it makes its copy
-	// decision once, from the real total. The checks gate every read the rule takes.
+	// One reader of the source for the whole plan: the rule's reads, one per bound and one per row check, so it makes
+	// its copy decision once, from the real total. The bounds join every read, and the checks gate every read the rule
+	// takes.
 	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
-	                          selected.condition->source_reads + ir.row_checks.size());
+	                          selected.condition->source_reads + decide.bound_aggregates.size() + ir.row_checks.size());
+	DirectAddBoundTables(optimizer, reader, decide);
 	DirectAddRowChecks(optimizer, reader, ir.row_checks);
 	auto substitute = selected.rule->Apply(reader, optimizer, *selected.condition);
+	// A rule passes every column of its read along: the node's source columns, then the source row id and the bounds'
+	// values. The node's outputs have neither of the last, so the adapter is not told of them.
+	auto read_only = reader.SourceBindings().size() - source_columns;
+	if (substitute.slot_map.size() != output_bindings.size() + read_only) {
+		throw InternalException("Direct solve rule did not pass every column of its read through");
+	}
 	if (carries_rowid) {
-		if (substitute.slot_map.size() != output_bindings.size() + 1) {
-			throw InternalException("Direct solve rule did not pass the source row id through");
-		}
 		late_materialization.rowid_slot = substitute.slot_map[source_columns];
-		substitute.slot_map.erase(substitute.slot_map.begin() + NumericCast<int64_t>(source_columns));
+	}
+	auto first_read_only = substitute.slot_map.begin() + NumericCast<int64_t>(source_columns);
+	substitute.slot_map.erase(first_read_only, first_read_only + NumericCast<int64_t>(read_only));
+	if (carries_rowid) {
 		if (substitute.pipelined) {
 			// Nothing is held, so there is nothing to gain from a late materialization.
 			late_materialization = DirectLateMaterialization();

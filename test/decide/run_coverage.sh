@@ -12,7 +12,7 @@
 # calls this script for the pytest suite, runs `unittest "[decidb]"` as one combined profile and prints the
 # report. The instrumented build (build/release is untouched) is made by `make decide-coverage-build`:
 # -fprofile-instr-generate -fcoverage-mapping -fprofile-list limited to src/optimizer/decide/direct/* and
-# src/optimizer/decide/decide_rewrite_rhs_window.cpp, with the cmake variables `make release` passes.
+# src/optimizer/decide/decide_rewrite_rhs_bounds.cpp, with the cmake variables `make release` passes.
 # Do not run build/coverage/decidb by hand without LLVM_PROFILE_FILE set: it drops a default.profraw in the
 # current directory.
 

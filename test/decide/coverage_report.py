@@ -56,7 +56,7 @@ BINARY = REPO / "build" / "coverage" / "decidb"
 UNITTEST_BINARY = REPO / "build" / "coverage" / "src" / "libduckdb.dylib"
 CPP_NODEID = "unittest [decidb]"
 SCOPE_DIR = REPO / "src" / "optimizer" / "decide" / "direct"
-SCOPE = sorted(SCOPE_DIR.glob("*.cpp")) + [REPO / "src" / "optimizer" / "decide" / "decide_rewrite_rhs_window.cpp"]
+SCOPE = sorted(SCOPE_DIR.glob("*.cpp")) + [REPO / "src" / "optimizer" / "decide" / "decide_rewrite_rhs_bounds.cpp"]
 
 _KIND_BRANCH = 4  # llvm-cov branch region
 

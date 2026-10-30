@@ -15,6 +15,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
@@ -73,6 +74,20 @@ unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Express
 	return calc.Out(term);
 }
 
+unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_ptr<LogicalOperator> child,
+                                                 const vector<ExprPtr> &groups,
+                                                 vector<unique_ptr<Expression>> aggregates) {
+	ExpressionBuilder calc(optimizer.context);
+	auto &binder = optimizer.binder;
+	auto aggregate =
+	    make_uniq<LogicalAggregate>(binder.GenerateTableIndex(), binder.GenerateTableIndex(), std::move(aggregates));
+	for (auto &group : groups) {
+		aggregate->groups.push_back(calc.Out(group));
+	}
+	aggregate->children.push_back(std::move(child));
+	return aggregate;
+}
+
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,
                                             idx_t projection_index) {
 	auto copy = value.Copy();
@@ -91,7 +106,7 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 }
 
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value) {
-	return calc.If(kept, value, calc.Constant(Value(value->return_type)));
+	return kept ? calc.If(kept, value, calc.Constant(Value(value->return_type))) : value;
 }
 
 ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
@@ -387,7 +402,7 @@ vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const 
 		// A reducer reads its argument on the rows it reads alone: nothing is computed on any other.
 		if (input.argument) {
 			auto argument = calc.Wrap(over(*input.argument));
-			columns.argument = columns.reads ? DirectOnKeptRows(calc, columns.reads, argument) : argument;
+			columns.argument = DirectOnKeptRows(calc, columns.reads, argument);
 		}
 		if (input.invalid) {
 			columns.invalid = calc.Wrap(over(*input.invalid));

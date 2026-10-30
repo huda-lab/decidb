@@ -114,7 +114,7 @@ void DecideOptimizer::InstallRowChecks(LogicalDecide &decide, LogicalOperator &r
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
-	RunPass("optimizer.install_bound_windows", [&] { InstallReducedBounds(decide); });
+	RunPass("optimizer.record_bounds", [&] { RecordReducedBounds(optimizer, decide); });
 	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
