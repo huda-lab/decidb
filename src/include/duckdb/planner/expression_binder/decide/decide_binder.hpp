@@ -76,11 +76,11 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 //! A function's name as the user wrote it: `count(*)` reaches the binder as `count_star`.
 string DecideWrittenFunctionName(const FunctionExpression &func);
 
-//! The one text for a CASE inside a constraint or an objective, whether it reaches a
-//! reducer's argument (ValidateSumArgument) or the clause itself: a user who writes one
-//! is asking for conditional logic, and the answer (a scope in front, `per`, or a CTE)
-//! is the same everywhere, instead of leaking `ExpressionClass::CASE`.
-const char *DecideCaseUnsupportedMessage();
+//! Refuses a CASE anywhere in a parsed constraint or objective with the one message that names the alternatives (a
+//! scope in front, `per`, or a CTE). Run before any binder classifies a shape, so the text does not depend on which
+//! path reaches the CASE first. A `when` condition, a key and a `by` key are SQL over the rows, and a subquery is a
+//! query of its own: a CASE there is not visited.
+void ValidateDecideNoCase(const ParsedExpression &expr);
 
 //! Reject a user-written CAST/TRY_CAST/:: whose child contains a DECIDE variable.
 //!
@@ -226,7 +226,8 @@ protected:
     bool IsRowInvariantExpression(const ParsedExpression &expr) const;
     //! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
     //! own rules: it reads no decision, and it is not a function (a reducer or a scope
-    //! marker), a subquery or a CASE, which keep their DECIDE handling.
+    //! marker) or a subquery, which keep their DECIDE handling. A CASE never gets this far
+    //! (ValidateDecideNoCase).
     bool IsDataOperand(const ParsedExpression &expr) const;
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;

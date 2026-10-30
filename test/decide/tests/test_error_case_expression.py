@@ -142,11 +142,8 @@ class TestCaseExpressionRejection:
     def test_case_outside_a_reducer_shares_the_friendly_message(self, decidb_cli):
         """A CASE written outside any reducer used to miss the friendly arm.
 
-        Every case above puts the CASE inside SUM/AVG/MIN/MAX, which routes
-        through `ValidateSumArgument`. A CASE sitting directly in the
-        constraint fell through to the constraint binder's unsupported-class
-        arm instead and printed `(ExpressionClass::CASE)` — a C++ enum name a
-        SQL user cannot act on. Both spellings now share one message.
+        A CASE sitting directly in the constraint once printed
+        `(ExpressionClass::CASE)` — a C++ enum name a SQL user cannot act on.
         """
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
@@ -162,8 +159,7 @@ class TestCaseExpressionRejection:
         )
 
     def test_case_outside_a_reducer_in_the_objective(self, decidb_cli):
-        """The objective binder has its own unsupported-class arm, so it needs
-        its own pin."""
+        """A CASE added to the objective's terms, outside any reducer."""
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
             DECIDE x(BOOL)
@@ -176,3 +172,74 @@ class TestCaseExpressionRejection:
         assert "ExpressionClass" not in combined, (
             f"Internal enum name leaked to the user: {combined[:600]}"
         )
+
+
+_CASE = "CASE WHEN s_nationkey = 1 THEN 1 ELSE 2 END"
+
+# The full message, so a refusal that names CASE but drops the alternatives fails too.
+_CASE_MESSAGE = (
+    "CASE expressions are not supported inside DECIDE constraints or objectives. Write the condition as a "
+    "scope in front of the clause (when category = 'A': sum(x) >= 1), split rows into classes with per, or "
+    "pre-compute conditional values in a CTE or subquery before the DECIDE clause."
+)
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+class TestCaseRefusedEverywhere:
+    """A CASE the clause's algebra would read gets the one message, wherever it stands (BUG-42)."""
+
+    # (constraints, objective). Each position is a different way the CASE is reached: the bound of an aggregate
+    # clause (which used to be refused by the bound allow-list with another text), then the containers it can sit in.
+    _REFUSED = {
+        "aggregate bound": (f"SUM(x) <= {_CASE}", "SUM(x)"),
+        "aggregate bound, left side": (f"{_CASE} >= SUM(x)", "SUM(x)"),
+        "aggregate bound, in arithmetic": (f"SUM(x) <= 1 + {_CASE}", "SUM(x)"),
+        "aggregate bound, in a call": (f"SUM(x) <= abs({_CASE})", "SUM(x)"),
+        "aggregate bound, in a cast": (f"SUM(x) <= CAST({_CASE} AS INT)", "SUM(x)"),
+        "aggregate bound, in a lambda": (
+            "SUM(x) <= list_reduce([1, 2], (a, b) -> CASE WHEN a > b THEN a ELSE b END)",
+            "SUM(x)",
+        ),
+        "aggregate bound, in a reducer's FILTER": (f"SUM(x) <= SUM(s_suppkey) FILTER (WHERE {_CASE} = 1)", "SUM(x)"),
+        "aggregate bound, in a BETWEEN": (f"SUM(x) BETWEEN 0 AND {_CASE}", "SUM(x)"),
+        "aggregate bound, in a later conjunct": (f"SUM(x) <= 5 AND SUM(x) >= {_CASE}", "SUM(x)"),
+        "decision reducer's FILTER": (f"SUM(x) FILTER (WHERE {_CASE} = 1) <= 3", "SUM(x)"),
+        "per-row bound": (f"x <= {_CASE}", "SUM(x)"),
+        "reducer argument": (f"SUM(x * {_CASE}) <= 3", "SUM(x)"),
+        "bound of a clause with when": (f"when s_suppkey > 2: SUM(x) <= {_CASE}", "SUM(x)"),
+        "reducer argument under by": (f"SUM(x * {_CASE}) by (s_nationkey) <= 3", "SUM(x)"),
+        "objective term": ("SUM(x) <= 3", f"SUM(x) + {_CASE}"),
+        "objective coefficient": ("SUM(x) <= 3", f"SUM(x * {_CASE})"),
+        "objective under when": ("SUM(x) <= 3", f"when s_suppkey > 2: SUM(x) + {_CASE}"),
+    }
+
+    @pytest.mark.parametrize("position", list(_REFUSED))
+    def test_case_is_refused_with_the_one_message(self, decidb_cli, position):
+        constraint, objective = self._REFUSED[position]
+        sql = f"""
+            SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
+            DECIDE x(INT)
+            SUCH THAT {constraint}
+            MAXIMIZE {objective}
+        """
+        result = decidb_cli.execute_raw(sql)
+        assert _CASE_MESSAGE in result.stderr + result.stdout, f"{position}: {result.stderr[:600]}"
+
+    # Positions that hold SQL over the rows, not the clause's algebra: a CASE there is the user's own filter or key.
+    _ACCEPTED = {
+        "when condition": f"when {_CASE} = 1: SUM(x) <= 3",
+        "by key": f"SUM(x) by ({_CASE}) <= 3",
+        "scalar subquery bound": f"SUM(x) <= (SELECT {_CASE} FROM supplier WHERE s_suppkey = 1)",
+    }
+
+    @pytest.mark.parametrize("position", list(_ACCEPTED))
+    def test_case_in_sql_positions_is_still_accepted(self, decidb_cli, position):
+        sql = f"""
+            SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
+            DECIDE x(BOOL)
+            SUCH THAT {self._ACCEPTED[position]}
+            MAXIMIZE SUM(x * s_acctbal)
+        """
+        rows, _ = decidb_cli.execute(sql)
+        assert rows, position

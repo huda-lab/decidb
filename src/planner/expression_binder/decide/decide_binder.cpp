@@ -103,6 +103,27 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 	    expr, [&](const ParsedExpression &child) { ValidateDecideNoExplicitDecisionCasts(child, variables); });
 }
 
+void ValidateDecideNoCase(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::CASE) {
+		throw BinderException(expr, "CASE expressions are not supported inside DECIDE constraints or objectives. "
+		                            "Write the condition as a scope in front of the clause (when category = 'A': "
+		                            "sum(x) >= 1), split rows into classes with per, or pre-compute conditional "
+		                            "values in a CTE or subquery before the DECIDE clause.");
+	}
+	// A condition, a key or a `by` key is SQL over the rows, not part of the clause's algebra; nor is a subquery,
+	// which EnumerateChildren does not enter.
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (func.is_operator && !func.children.empty() &&
+		    (func.function_name == REDUCER_BY_TAG || IsDecideScopeMarker(expr))) {
+			ValidateDecideNoCase(*func.children[0]);
+			return;
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(expr,
+	                                            [&](const ParsedExpression &child) { ValidateDecideNoCase(child); });
+}
+
 //===--------------------------------------------------------------------===//
 // Where when, per and by may stand
 //===--------------------------------------------------------------------===//
@@ -1195,14 +1216,6 @@ string DecideWrittenFunctionName(const FunctionExpression &func) {
 	return StringUtil::CIEquals(func.function_name, "count_star") ? "count(*)" : func.function_name;
 }
 
-const char *DecideCaseUnsupportedMessage() {
-	return "CASE expressions are not supported inside DECIDE constraints or "
-	       "objectives. Write the condition as a scope in front of the clause "
-	       "(when category = 'A': sum(x) >= 1), split rows into classes with per, "
-	       "or pre-compute conditional values in a CTE or subquery before the "
-	       "DECIDE clause.";
-}
-
 // Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                         bool &has_decide_variable, string &error_msg, bool allow_quadratic = false);
@@ -1407,9 +1420,6 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
         }
         return true;
     }
-    case ExpressionClass::CASE:
-        error_msg = DecideCaseUnsupportedMessage();
-        return false;
     default:
 		// Any other shape that reads no decision (a comparison, a parameter, a lambda) is a
 		// per-row coefficient DuckDB evaluates, like the data-only operators above.
@@ -1492,7 +1502,6 @@ bool DecideBinder::IsDataOperand(const ParsedExpression &expr) const {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::FUNCTION:
 	case ExpressionClass::SUBQUERY:
-	case ExpressionClass::CASE:
 		return false;
 	default:
 		return !ExpressionContainsDecideVariable(expr, variables);

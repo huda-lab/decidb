@@ -244,6 +244,14 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true);
         }
 
+        // A CASE is refused wherever the algebra would read it, before any binder classifies a shape.
+        if (statement.decide_constraints) {
+            ValidateDecideNoCase(*statement.decide_constraints);
+        }
+        if (statement.decide_objective) {
+            ValidateDecideNoCase(*statement.decide_objective);
+        }
+
         // This is the only point where cast authorship is still observable. Reject
         // explicit casts over decisions before DECIDE generates any parsed nodes and
         // before DuckDB binding adds its own type-reconciliation casts. SELECT-list
