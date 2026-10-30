@@ -214,7 +214,7 @@ user-clause level instead of raw rows.
   user parameter. The six evaluated-constraint sites share the field-setting through
   three free functions: `StampConstraintProvenance` (the fields common to all six:
   `source_clause_id`, `repair_group_id`, `removal_group_id`, `kind`, `shape`/`rhs_label`,
-  `rhs_mechanism_offset`, and `group_key`/`group_label` where grouped),
+  `rhs_mechanism_offset`, and `group_key`/`group_name` where grouped),
   `StampAggregateProvenance` (`is_aggregate`, the four aggregate sites only) and
   `StampDataRow` (`data_row` and `per_kept_row`, the two per-row sites) — see
   `../../pipeline/06_model_formulation/done.md` §7 for why `avg_scaled` /

@@ -64,5 +64,10 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   scans once. Q1 `when_per_and_qualifiers` 218 → 165-174 ms.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
+- **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data
+  was read and copied it into each model row; a row now carries a group number and the text is formatted only for a
+  finding that prints it. On a clause of 200,000 groups over 1M rows, `extraction.constraint` 150 → 103 ms (medians of
+  three interleaved runs, load ~17); Q1 and Q8, whose grouped clauses have 4-6 groups, unchanged. DIAGNOSE on 20,000
+  groups: same time and peak RSS.
 - **Peak memory on Q3 and Q10 (PERF-11).** The peak is inside Gurobi's solve, after DeciDB hands over the model; the
   stages before it hold less than the solve adds. Not a DeciDB cost.

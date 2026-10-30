@@ -11,22 +11,23 @@ at a time.
 
 ## Where things stand (2026-10-30)
 
-Every filed bug is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on both
-backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
+Every bug up to BUG-37 is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on
+both backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
 found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that sorted every
-input row). What remains: two slowdowns left from September (§ 2) and the original measurement work (§ 3).
+input row). What remains: two bugs found by PERF-12's lane (§ 1), a slowdown left from September (§ 2) and the original
+measurement work (§ 3).
 
 ## 1. Bugs
 
-Every filed bug is fixed.
+- [ ] BUG-38 Per-row quadratic and `<>` rows of a grouped clause name no group — issues/bugs.md § BUG-38
+- [ ] BUG-39 A collated key's group spelling depends on clause order — issues/bugs.md § BUG-39
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 
 - [ ] PERF-10 Extraction: constraint setup and implied bounds still slower on Q1 — performance/todo.md § PERF-10
-- [ ] PERF-12 A constraint's provenance formats its group label eagerly — performance/todo.md § PERF-12
 
-Q8's keyed mapping (PERF-9) is back to 257 ms and Q3/Q10's memory peak (PERF-11) is Gurobi's own
-(`performance/findings.md` § Regressions since 2026-09-09).
+Q8's keyed mapping (PERF-9) is back to 257 ms, group keys are formatted only when printed (PERF-12), and Q3/Q10's memory
+peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2026-09-09).
 
 ## 3. Measurement (last; the owner runs them)
 

@@ -60,10 +60,3 @@ and the `when` scan are fixed (`findings.md` § Regressions since 2026-09-09). L
 (Q1 34 → 88 ms) and `assembly.implied_bounds` (Q1 14 → 59 ms, still 61-75 ms after the shared row lists). Rerun Q1,
 Q4 and P4 at `large` alone on the current build (the 2026-10-30 timings ran beside other work, load 8-18). Expected:
 one cause per span, or the work each needs.
-
-### PERF-12 — A constraint's provenance formats its group label eagerly
-
-The model builder copies a group's label string into every constraint's provenance, per-row rows included
-(`ilp_model_builder.cpp` ~990, ~1063, ~1291), though only a message that prints reads it. Provenance carrying (key,
-group id) and formatting only when a message prints removes the work. Expected: the spans of Q1 and Q8 before and
-after.
