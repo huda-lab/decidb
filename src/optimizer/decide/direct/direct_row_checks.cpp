@@ -217,16 +217,10 @@ bool DirectAddRowChecks(Optimizer &optimizer, LogicalOperator &root, const vecto
 	if (checks.empty()) {
 		return false;
 	}
-	auto &source = decide.children[0];
-	source->ResolveOperatorTypes();
-	vector<ColumnBinding> name_keys;
-	for (auto &binding : source->GetColumnBindings()) {
-		name_keys.push_back(DecideSourceColumnKey(*source, binding));
-	}
 	ExpressionBuilder calc(optimizer.context);
-	// Two reads: the rows, and the checks. A check reads a few columns of the source, however many checks there are,
-	// so its reads do not make a copy of every column pay.
-	DirectSourceReader reader(optimizer, std::move(source), 2);
+	// Each check reads a few columns of the source, so a copy of every column does not pay for its reads. Recomputing
+	// a chain also keeps the source's own bindings for the rows' read.
+	DirectSourceReader reader(optimizer, std::move(decide.children[0]), checks.size() + 1, DirectSourceCopy::NEVER);
 	RowCheckBuilder builder(optimizer, reader);
 	unique_ptr<LogicalOperator> verdicts;
 	vector<unique_ptr<Expression>> raised;
@@ -245,25 +239,29 @@ bool DirectAddRowChecks(Optimizer &optimizer, LogicalOperator &root, const vecto
 
 	// The rows: a recomputed source is itself, under its own bindings; a materialized one is read like the checks.
 	auto old_bindings = reader.SourceBindings();
-	auto new_bindings = old_bindings;
+	vector<ColumnBinding> new_bindings;
 	auto rows = reader.TakeRecomputedSource();
 	if (!rows) {
 		auto read = reader.ReadSource();
 		rows = std::move(read.plan);
-		for (idx_t i = 0; i < new_bindings.size(); i++) {
-			new_bindings[i] = ColumnBinding(read.table_index, i);
+		for (idx_t i = 0; i < old_bindings.size(); i++) {
+			new_bindings.emplace_back(read.table_index, i);
 		}
+		decide.RepointSourceColumns(reader.Source(), new_bindings);
 	}
-	// The verdict is the cross product's build side, so it is computed, and raises, before any row passes. The filter
-	// reads it, so no pass prunes it, and passes on exactly the rows' columns.
+	// The verdict is one row joined to every row; it is usually the build side, so it raises before any row passes,
+	// as a scalar subquery's does. Correctness does not hang on that: a later pass may flip the sides, and the checks
+	// read the same rows either way. The filter reads it, so no pass prunes it, and passes on exactly the rows'
+	// columns.
 	auto gate = make_uniq<LogicalFilter>(calc.Out(calc.Col(LogicalType::BOOLEAN, ColumnBinding(verdict_index, 0))));
 	for (idx_t i = 0; i < old_bindings.size(); i++) {
 		gate->projection_map.push_back(i);
 	}
 	gate->children.push_back(LogicalCrossProduct::Create(std::move(rows), std::move(verdict)));
+	auto &source = decide.children[0];
 	source = reader.Finish(std::move(gate));
 	source->ResolveOperatorTypes();
-	if (new_bindings == old_bindings) {
+	if (new_bindings.empty()) {
 		return false;
 	}
 	// The operators above read the source's columns where the read now has them.
@@ -273,16 +271,6 @@ bool DirectAddRowChecks(Optimizer &optimizer, LogicalOperator &root, const vecto
 	}
 	replacer.stop_operator = source.get();
 	replacer.VisitOperator(root);
-	// The user's names of the source columns are kept by DecideSourceColumnKey, which is not the binding of a scan's
-	// column. The read's columns are a projection's, named by their bindings.
-	for (auto &column : decide.source_columns) {
-		for (idx_t i = 0; i < name_keys.size(); i++) {
-			if (column.binding == name_keys[i]) {
-				column.binding = new_bindings[i];
-				break;
-			}
-		}
-	}
 	return true;
 }
 

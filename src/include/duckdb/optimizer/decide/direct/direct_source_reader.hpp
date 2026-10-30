@@ -17,13 +17,22 @@ class Optimizer;
 //! share of it). A source with no rows, or no estimate (0), is re-scanned.
 bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t memory);
 
+//! What a reader does with a source it could recompute.
+enum class DirectSourceCopy : uint8_t {
+	//! Copies it when the copy is cheaper than its reads (DirectSourceCopyIsCheaper).
+	WHEN_CHEAPER,
+	//! Recomputes it on every read: recompute or materialize, never copy. A recomputed source keeps its own bindings.
+	NEVER
+};
+
 //! A rule whose plan needs the DECIDE source more than once (one read per stage) gets each read from here. This is the
 //! recompute-or-materialize choice DuckDB makes for a CTE, made once for the source:
 //!
 //!  - a source that is a chain of non-volatile projections and filters over one scan of a DuckDB base table
 //!    (DirectRepeatableSourceChain) can be recomputed: every read is a copy of the chain with fresh table indexes, so
 //!    each read is a parallel scan and no copy of the rows is kept (the Prototype pattern). It is recomputed unless a
-//!    copy is cheaper (CopyIsCheaper: the rule reads the source often enough and the copy fits in memory);
+//!    copy is cheaper (CopyIsCheaper: the rule reads the source often enough and the copy fits in memory) and the
+//!    reader may copy it (DirectSourceCopy);
 //!  - any other source is materialized once, as the definition of a LogicalMaterializedCTE, and every read is a
 //!    LogicalCTERef to it.
 //!
@@ -39,8 +48,9 @@ public:
 	};
 
 	//! `source` is the DECIDE input with its types resolved. The reader owns it from here on. `reads` is how many times
-	//! the rule's plan reads it.
-	DirectSourceReader(Optimizer &optimizer, unique_ptr<LogicalOperator> source, idx_t reads);
+	//! the rule's plan reads it; `copy`, whether a source it could recompute may be copied instead.
+	DirectSourceReader(Optimizer &optimizer, unique_ptr<LogicalOperator> source, idx_t reads,
+	                   DirectSourceCopy copy = DirectSourceCopy::WHEN_CHEAPER);
 
 	//! The bindings of the source columns, which the proved expressions refer to.
 	const vector<ColumnBinding> &SourceBindings() const {
@@ -48,6 +58,11 @@ public:
 	}
 	const vector<LogicalType> &SourceTypes() const {
 		return types;
+	}
+	//! The source, until TakeRecomputedSource or Finish takes it.
+	LogicalOperator &Source() {
+		D_ASSERT(source);
+		return *source;
 	}
 	//! A new read of the source.
 	Read ReadSource();

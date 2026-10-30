@@ -237,7 +237,8 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 		source.ResolveOperatorTypes();
 	}
 	if (DirectAddRowChecks(optimizer, *root, ir.row_checks, decide)) {
-		// A row id rides a recomputed scan chain, which keeps its bindings.
+		// A row id is exposed only on a repeatable scan chain (DirectExposeStoredRowId), which the row checks' reader
+		// recomputes and never copies (DirectSourceCopy::NEVER), so the source kept its bindings.
 		D_ASSERT(!carries_rowid);
 		// The node reads its source under new bindings: the rule applies to the IR read from them.
 		ir = DirectIR::Read(optimizer.context, decide);

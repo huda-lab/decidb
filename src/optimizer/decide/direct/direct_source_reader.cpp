@@ -46,15 +46,17 @@ static idx_t RowWidth(const vector<LogicalType> &types) {
 	return width;
 }
 
-DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p)
+DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p,
+                                       DirectSourceCopy copy)
     : optimizer(optimizer_p), source(std::move(source_p)), reads(reads_p) {
 	source->ResolveOperatorTypes();
 	bindings = source->GetColumnBindings();
 	types = source->types;
 	D_ASSERT(bindings.size() == types.size());
 	chain_scan = DirectRepeatableSourceChain(*source, chain);
-	if (chain_scan && DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
-	                                            BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
+	if (chain_scan && copy == DirectSourceCopy::WHEN_CHEAPER &&
+	    DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
+	                              BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
 		chain_scan = nullptr;
 		chain.clear();
 	}

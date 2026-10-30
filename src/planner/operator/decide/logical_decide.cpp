@@ -147,7 +147,8 @@ LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> 
 LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE) {
 }
 
-LogicalOperator *DecideBindingProducer(LogicalOperator &plan, idx_t table_index) {
+//! The operator in `plan` whose own output carries `table_index`, or null.
+static const LogicalOperator *DecideBindingProducer(const LogicalOperator &plan, idx_t table_index) {
 	for (auto index : plan.GetTableIndex()) {
 		if (index == table_index) {
 			return &plan;
@@ -161,7 +162,7 @@ LogicalOperator *DecideBindingProducer(LogicalOperator &plan, idx_t table_index)
 	return nullptr;
 }
 
-ColumnBinding DecideSourceColumnKey(LogicalOperator &source, const ColumnBinding &binding) {
+ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding) {
 	auto *producer = DecideBindingProducer(source, binding.table_index);
 	if (producer && producer->type == LogicalOperatorType::LOGICAL_PROJECTION &&
 	    binding.column_index < producer->expressions.size()) {
@@ -313,6 +314,23 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 				if (*expr) {
 					callback(expr);
 				}
+			}
+		}
+	}
+}
+
+void LogicalDecide::RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings) {
+	auto old_bindings = old_source.GetColumnBindings();
+	D_ASSERT(old_bindings.size() == new_bindings.size());
+	vector<ColumnBinding> keys;
+	for (auto &binding : old_bindings) {
+		keys.push_back(DecideSourceColumnKey(old_source, binding));
+	}
+	for (auto &column : source_columns) {
+		for (idx_t i = 0; i < keys.size(); i++) {
+			if (column.binding == keys[i]) {
+				column.binding = new_bindings[i];
+				break;
 			}
 		}
 	}

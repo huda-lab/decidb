@@ -241,15 +241,13 @@ struct DecideSourceColumnName {
     static DecideSourceColumnName Deserialize(Deserializer &deserializer);
 };
 
-//! The operator in `plan` whose own output carries `table_index`, or null.
-LogicalOperator *DecideBindingProducer(LogicalOperator &plan, idx_t table_index);
 //! The binding under which LogicalDecide::source_columns names column `binding` of the DECIDE input `source`. A scan's
 //! bindings index its column list, which projection pushdown shortens, so a scan's column is named by its table ordinal
 //! (as LogicalGet::ResolveTypes walks the list). Any other column is named by its binding. A column the user wrote no
 //! name for is named by no column (INVALID_INDEX): a row id, which is synthetic, and a projection's computed column
 //! without an alias, which the binder records under its own ToString. A plain column reference, bound or resolved,
 //! forwards a name.
-ColumnBinding DecideSourceColumnKey(LogicalOperator &source, const ColumnBinding &binding);
+ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding);
 
 class LogicalDecide : public LogicalOperator {
 public:
@@ -662,6 +660,10 @@ public:
     //! a field (composed_minmax_*) previously went missing
     //! from one visitor while another already had it.
     void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
+    //! Re-points the user's names of the source columns (source_columns) once the source `old_source` is read under
+    //! `new_bindings`, one per column of it. They are keyed by DecideSourceColumnKey, not by binding, so
+    //! ColumnBindingReplacer, which re-points the expressions, leaves them.
+    void RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings);
 
     // --- Implement virtual functions ---
 
