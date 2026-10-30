@@ -2,6 +2,8 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/executor.hpp"
+#include "duckdb/execution/aggregate_hashtable.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
@@ -311,10 +313,14 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 	}
 }
 
-//! Renumbers `num_groups` groups by key value, so no id depends on row order: columns
-//! compare in key order, NULL after every value as `ORDER BY` places it. `rep_keys`
-//! ([key column][group]) and `row_to_group` are rewritten in the new numbering.
-static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_groups, vector<idx_t> &row_to_group) {
+//! Numbers the groups by key value, so no id depends on row order: columns compare in key
+//! order, NULL after every value as `ORDER BY` places it. Group g, in creation order, has
+//! values `rep_keys[column][g]` and is found at `group_address[g]`; row r is in the group at
+//! `row_address[r]` (null: in none). `rep_keys` is rewritten in the new numbering and
+//! `row_to_group` gets each row's number, INVALID_INDEX for none.
+static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, const vector<data_ptr_t> &group_address,
+                                const vector<data_ptr_t> &row_address, vector<idx_t> &row_to_group) {
+	const idx_t num_groups = group_address.size();
 	auto before = [&](idx_t a, idx_t b) {
 		for (auto &column : rep_keys) {
 			auto &va = column[a];
@@ -341,10 +347,19 @@ static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_group
 	for (idx_t position = 0; position < num_groups; position++) {
 		rank[order[position]] = position;
 	}
-	for (auto &gid : row_to_group) {
-		if (gid != DConstants::INVALID_INDEX) {
-			gid = rank[gid];
+	// A row's group is found by its address among the groups' addresses, sorted.
+	vector<idx_t> by_address(num_groups);
+	std::iota(by_address.begin(), by_address.end(), 0);
+	std::sort(by_address.begin(), by_address.end(),
+	          [&](idx_t a, idx_t b) { return group_address[a] < group_address[b]; });
+	for (idx_t row = 0; row < row_address.size(); row++) {
+		if (!row_address[row]) {
+			row_to_group[row] = DConstants::INVALID_INDEX;
+			continue;
 		}
+		auto found = std::lower_bound(by_address.begin(), by_address.end(), row_address[row],
+		                              [&](idx_t group, data_ptr_t address) { return group_address[group] < address; });
+		row_to_group[row] = rank[*found];
 	}
 	for (auto &column : rep_keys) {
 		vector<Value> sorted;
@@ -356,10 +371,10 @@ static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_group
 	}
 }
 
-//! Streaming typed-hash grouping. Assigns group IDs during the chunk scan
-//! instead of materializing all key Values up front. Representative key tuples
-//! are stored once per group (size O(num_groups)), not once per row; a row that
-//! hashes to a group is compared with its representative Value by Value.
+//! Groups the rows by their key values as GROUP BY does, in one chunk scan: DuckDB's
+//! aggregate hash table, with no aggregate, finds or creates each row's group, comparing
+//! in place (NULL equals NULL). A group's key values are made Values once, for its first
+//! row (size O(num_groups)).
 //!
 //!   key_exprs       — pre-transformed expressions for chunk evaluation, one per key column
 //!   row_filter      — return true to include row in grouping (empty function = include all)
@@ -424,7 +439,14 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 	// rep_keys[j][gid] — result column j's value for the representative row of group `gid`:
 	// the key columns, then the label columns. Size grows with num_groups, not num_rows.
 	vector<vector<Value>> rep_keys(key_types.size());
-	std::unordered_multimap<hash_t, idx_t> hash_to_rep_group;
+	// The table names a group by the address of its row. With radix_bits 0 every row is in
+	// one partition appended with KEEP_EVERYTHING_PINNED (InitializePartitionedData), and a
+	// resize only reinserts the pointers (ReinsertTuples), so the address is fixed for the
+	// table's lifetime.
+	vector<LogicalType> group_types(key_types.begin(), key_types.begin() + NumericCast<int64_t>(num_key_cols));
+	GroupedAggregateHashTable groups(context, BufferAllocator::Get(context), group_types);
+	vector<data_ptr_t> group_address;
+	vector<data_ptr_t> row_address(num_rows, nullptr);
 
 	ColumnDataScanState scan;
 	data.InitializeScan(scan);
@@ -432,32 +454,22 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 	chunk.Initialize(context, data.Types());
 	DataChunk key_results;
 	key_results.Initialize(context, key_types);
-	Vector chunk_hashes(LogicalType::HASH);
+	DataChunk group_chunk;
+	group_chunk.InitializeEmpty(group_types);
+	SelectionVector grouped(STANDARD_VECTOR_SIZE);
+	SelectionVector new_groups(STANDARD_VECTOR_SIZE);
+	Vector addresses(LogicalType::POINTER);
 	vector<UnifiedVectorFormat> key_udatas(num_key_cols);
-	idx_t next_group = 0;
 	idx_t row_offset = 0;
 	while (data.Scan(scan, chunk)) {
 		idx_t count = chunk.size();
-		if (count == 0) {
-			continue;
-		}
 		key_results.Reset();
 		ExecuteOnReadRows(key_executor, chunk, row_offset, read_rows, key_results);
-
-		VectorOperations::Hash(key_results.data[0], chunk_hashes, count);
-		for (idx_t c = 1; c < num_key_cols; c++) {
-			VectorOperations::CombineHash(chunk_hashes, key_results.data[c], count);
-		}
-		// A key that is the same on every row (`by (1)`, a folded expression) hashes to a
-		// constant vector holding one value; each row reads its own slot below.
-		chunk_hashes.Flatten(count);
-		auto hashes_data = FlatVector::GetData<hash_t>(chunk_hashes);
-
-		// UnifiedVectorFormat lets us check NULLness without materializing a Value.
 		for (idx_t c = 0; c < num_key_cols; c++) {
 			key_results.data[c].ToUnifiedFormat(count, key_udatas[c]);
 		}
-
+		// The rows that join a group: those read and kept, with no NULL in a NO_GROUP column.
+		idx_t grouped_count = 0;
 		for (idx_t i = 0; i < count; i++) {
 			idx_t row = row_offset + i;
 			if ((read_rows && !(*read_rows)[row]) || (row_filter && !row_filter(row))) {
@@ -467,52 +479,26 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			for (idx_t c = 0; c < null_no_group.size() && !no_group; c++) {
 				no_group = null_no_group[c] && !key_udatas[c].validity.RowIsValid(key_udatas[c].sel->get_index(i));
 			}
-			if (no_group) {
-				continue;
+			if (!no_group) {
+				grouped.set_index(grouped_count++, i);
 			}
-			hash_t h = hashes_data[i];
-			auto range = hash_to_rep_group.equal_range(h);
-			bool matched = false;
-			for (auto it = range.first; it != range.second; ++it) {
-				idx_t gid = it->second;
-				bool eq = true;
-				for (idx_t c = 0; c < num_key_cols; c++) {
-					Value v = key_results.data[c].GetValue(i);
-					const Value &rv = rep_keys[c][gid];
-					if (v.IsNull() != rv.IsNull()) {
-						eq = false;
-						break;
-					}
-					if (v.IsNull()) {
-						continue;
-					}
-					if (!(v == rv)) {
-						eq = false;
-						break;
-					}
-				}
-				if (eq) {
-					out_row_to_group[row] = gid;
-					matched = true;
-					for (idx_t c = 0; c < num_key_cols; c++) {
-						if (label_column[c] == c) {
-							continue;
-						}
-						Value label = key_results.data[label_column[c]].GetValue(i);
-						if (!label.IsNull() && label < rep_keys[label_column[c]][gid]) {
-							rep_keys[label_column[c]][gid] = std::move(label);
-						}
-					}
-					break;
-				}
+		}
+		if (grouped_count > 0) {
+			for (idx_t c = 0; c < num_key_cols; c++) {
+				group_chunk.data[c].Slice(key_results.data[c], grouped, grouped_count);
 			}
-			if (!matched) {
-				idx_t gid = next_group++;
+			group_chunk.SetCardinality(grouped_count);
+			idx_t new_count = groups.FindOrCreateGroups(group_chunk, addresses, new_groups);
+			auto address_data = FlatVector::GetData<data_ptr_t>(addresses);
+			for (idx_t n = 0; n < new_count; n++) {
+				auto slot = new_groups.get_index(n);
 				for (idx_t j = 0; j < rep_keys.size(); j++) {
-					rep_keys[j].push_back(key_results.data[j].GetValue(i));
+					rep_keys[j].push_back(key_results.data[j].GetValue(grouped.get_index(slot)));
 				}
-				hash_to_rep_group.emplace(h, gid);
-				out_row_to_group[row] = gid;
+				group_address.push_back(address_data[slot]);
+			}
+			for (idx_t slot = 0; slot < grouped_count; slot++) {
+				row_address[row_offset + grouped.get_index(slot)] = address_data[slot];
 			}
 		}
 		row_offset += count;
@@ -526,8 +512,31 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 
 	// The label columns trail the key columns: distinct groups differ in a key column, so
 	// they never decide the order, and they are permuted with it.
-	NumberGroupsByValue(rep_keys, next_group, out_row_to_group);
-	out_num_groups = next_group;
+	NumberGroupsByValue(rep_keys, group_address, row_address, out_row_to_group);
+	out_num_groups = group_address.size();
+	// A collated column's label is the least spelling among its group's rows, so it is the
+	// same in any row order: a second scan reads the labels of the rows each group holds.
+	if (key_types.size() > num_key_cols) {
+		data.InitializeScan(scan);
+		row_offset = 0;
+		while (data.Scan(scan, chunk)) {
+			key_results.Reset();
+			ExecuteOnReadRows(key_executor, chunk, row_offset, read_rows, key_results);
+			for (idx_t i = 0; i < chunk.size(); i++) {
+				auto gid = out_row_to_group[row_offset + i];
+				for (idx_t c = 0; c < num_key_cols && gid != DConstants::INVALID_INDEX; c++) {
+					if (label_column[c] == c) {
+						continue;
+					}
+					Value label = key_results.data[label_column[c]].GetValue(i);
+					if (!label.IsNull() && label < rep_keys[label_column[c]][gid]) {
+						rep_keys[label_column[c]][gid] = std::move(label);
+					}
+				}
+			}
+			row_offset += chunk.size();
+		}
+	}
 	if (out_rep_keys) {
 		// Expose each group's label values (group g's value for each key column), which
 		// messages and the unbounded diagnosis quote.
