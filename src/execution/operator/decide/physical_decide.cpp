@@ -1996,7 +1996,6 @@ static string DescribeKeyValues(const vector<string> &names, const vector<vector
 void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                     ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                     const vector<KeyedMapping> &keyed_mappings) const {
-	DecideProfileScope profile("execution.scope_checks");
 	for (auto &check : scope_checks) {
 		D_ASSERT(check.kind == DecideScopeCheckKind::DETERMINES && check.decision != DConstants::INVALID_INDEX &&
 		         variable_scopes[check.decision].IsKeyed());
