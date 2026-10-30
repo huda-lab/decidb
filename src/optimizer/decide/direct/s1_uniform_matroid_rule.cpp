@@ -11,6 +11,7 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
@@ -311,7 +312,7 @@ public:
 	string Summary() const override {
 		return "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
-	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
@@ -581,11 +582,10 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
 class PlanBuilder {
 public:
-	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
-		// The rule driver hands the input over with its types resolved.
-		source_bindings = source.GetColumnBindings();
-		source_types = source.types;
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
+	            const vector<LogicalType> &source_types_p)
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
+	      source_bindings(source_bindings_p), source_types(source_types_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 		score_index = binder.GenerateTableIndex();
 		window_index = binder.GenerateTableIndex();
@@ -1189,13 +1189,14 @@ private:
 	}
 };
 
-DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
 	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
-	PlanBuilder plan_builder(condition, optimizer, *source);
-	return plan_builder.Build(std::move(source));
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+	return DirectBuildOverOneRead(
+	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
 }
 
 } // namespace direct_s1_uniform_matroid

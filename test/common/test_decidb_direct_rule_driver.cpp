@@ -93,8 +93,14 @@ public:
 	string Summary() const override {
 		return "stub";
 	}
-	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                       const DirectApplicabilityCondition &) const override {
+		return DirectBuildOverOneRead(
+		    reader, [&](duckdb::unique_ptr<LogicalOperator> rows) { return Build(std::move(rows), optimizer); });
+	}
+
+private:
+	DirectSubstitute Build(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer) const {
 		ExpressionBuilder build(optimizer.context);
 		auto bindings = source->GetColumnBindings();
 		auto types = source->types;
@@ -166,7 +172,6 @@ public:
 		return substitute;
 	}
 
-private:
 	//! Hands a shared plan fragment what the fault says is wrong with it. The fragment raises, so no plan results.
 	void RaiseFromSharedFragment(duckdb::unique_ptr<LogicalOperator> &source,
 	                             const duckdb::vector<ColumnBinding> &bindings,
@@ -758,8 +763,7 @@ public:
 	string Summary() const override {
 		return "stub";
 	}
-	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator>, Optimizer &,
-	                       const DirectApplicabilityCondition &) const override {
+	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &) const override {
 		throw InternalException("never applies");
 	}
 

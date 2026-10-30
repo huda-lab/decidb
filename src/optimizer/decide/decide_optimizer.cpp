@@ -110,7 +110,7 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 
 void DecideOptimizer::InstallRowChecks(LogicalDecide &decide, LogicalOperator &root) {
 	auto checks = DirectTakeRowChecks(optimizer.context, decide);
-	DirectAddRowChecks(optimizer, root, checks, decide);
+	DirectInstallRowChecks(optimizer, root, checks, decide);
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {

@@ -212,15 +212,11 @@ private:
 
 } // namespace
 
-bool DirectAddRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
-                        LogicalDecide &decide) {
+void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const vector<DirectRowCheck> &checks) {
 	if (checks.empty()) {
-		return false;
+		return;
 	}
 	ExpressionBuilder calc(optimizer.context);
-	// Each check reads a few columns of the source, so a copy of every column does not pay for its reads. Recomputing
-	// a chain also keeps the source's own bindings for the rows' read.
-	DirectSourceReader reader(optimizer, std::move(decide.children[0]), checks.size() + 1, DirectSourceCopy::NEVER);
 	RowCheckBuilder builder(optimizer, reader);
 	unique_ptr<LogicalOperator> verdicts;
 	vector<unique_ptr<Expression>> raised;
@@ -231,47 +227,44 @@ bool DirectAddRowChecks(Optimizer &optimizer, LogicalOperator &root, const vecto
 		    verdicts ? LogicalCrossProduct::Create(std::move(verdicts), std::move(built.plan)) : std::move(built.plan);
 	}
 	// One row: true, or the error of the first check that fails, in the order given.
-	auto verdict_index = optimizer.binder.GenerateTableIndex();
 	vector<unique_ptr<Expression>> verdict_columns;
 	verdict_columns.push_back(DirectAllHold(calc, std::move(raised)));
-	auto verdict = make_uniq<LogicalProjection>(verdict_index, std::move(verdict_columns));
+	auto verdict = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(verdict_columns));
 	verdict->children.push_back(std::move(verdicts));
+	reader.Gate(std::move(verdict));
+}
 
-	// The rows: a recomputed source is itself, under its own bindings; a materialized one is read like the checks.
-	auto old_bindings = reader.SourceBindings();
-	vector<ColumnBinding> new_bindings;
+void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
+                            LogicalDecide &decide) {
+	if (checks.empty()) {
+		return;
+	}
+	// The operator reads the source once, and each check once more.
+	DirectSourceReader reader(optimizer, std::move(decide.children[0]), 1 + checks.size());
+	DirectAddRowChecks(optimizer, reader, checks);
+	// A recomputed source is read last as itself, under its own bindings.
 	auto rows = reader.TakeRecomputedSource();
-	if (!rows) {
-		auto read = reader.ReadSource();
-		rows = std::move(read.plan);
-		for (idx_t i = 0; i < old_bindings.size(); i++) {
-			new_bindings.emplace_back(read.table_index, i);
-		}
-		decide.RepointSourceColumns(reader.Source(), new_bindings);
+	if (rows) {
+		decide.children[0] = reader.Finish(std::move(rows));
+		return;
 	}
-	// The verdict is one row joined to every row; it is usually the build side, so it raises before any row passes,
-	// as a scalar subquery's does. Correctness does not hang on that: a later pass may flip the sides, and the checks
-	// read the same rows either way. The filter reads it, so no pass prunes it, and passes on exactly the rows'
-	// columns.
-	auto gate = make_uniq<LogicalFilter>(calc.Out(calc.Col(LogicalType::BOOLEAN, ColumnBinding(verdict_index, 0))));
+	auto read = reader.ReadSource();
+	auto &old_bindings = reader.SourceBindings();
+	vector<ColumnBinding> new_bindings;
 	for (idx_t i = 0; i < old_bindings.size(); i++) {
-		gate->projection_map.push_back(i);
+		new_bindings.emplace_back(read.table_index, i);
 	}
-	gate->children.push_back(LogicalCrossProduct::Create(std::move(rows), std::move(verdict)));
-	auto &source = decide.children[0];
-	source = reader.Finish(std::move(gate));
-	source->ResolveOperatorTypes();
-	if (new_bindings.empty()) {
-		return false;
-	}
-	// The operators above read the source's columns where the read now has them.
+	decide.RepointSourceColumns(reader.Source(), new_bindings);
 	ColumnBindingReplacer replacer;
 	for (idx_t i = 0; i < old_bindings.size(); i++) {
 		replacer.replacement_bindings.emplace_back(old_bindings[i], new_bindings[i]);
 	}
+	auto &source = decide.children[0];
+	source = reader.Finish(std::move(read.plan));
+	source->ResolveOperatorTypes();
+	// The operators above read the source's columns where the read now has them.
 	replacer.stop_operator = source.get();
 	replacer.VisitOperator(root);
-	return true;
 }
 
 } // namespace duckdb

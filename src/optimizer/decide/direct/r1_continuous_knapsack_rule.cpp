@@ -35,6 +35,9 @@ constexpr const char *RULE_NAME = "R1_CONTINUOUS_KNAPSACK";
 //! What CheckCondition proved: one or more row-scoped REAL decisions, each with its per-row bounds, one budget `lower
 //! <= SUM(w0*x0 + w1*x1 + ...) <= upper` over the rows the budget covers, and a linear objective. Nothing links two
 //! decisions of a row: every per-row bound reads one decision, and no objective term multiplies two.
+//! How many times the plan reads the source: stages 2 to 4 and the answer of stage 5 each read it once.
+static constexpr idx_t SOURCE_READS = 4;
+
 struct Condition final : DirectApplicabilityCondition {
 	//! A limit of the budget read from the data: a source column or an expression over source columns, or the
 	//! bound-side rewrite's aggregates of the group (DecideGroupBound). The plan takes the group's tightest value of a
@@ -105,6 +108,7 @@ public:
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
+		condition->source_reads = SOURCE_READS;
 		condition->sense = ir.objective.sense;
 		if (!ProveBudget(ir, context, budgets, *condition) || !ProveBounds(ir, context, *condition) ||
 		    !ProveObjective(ir, context, *condition)) {
@@ -117,7 +121,7 @@ public:
 		return "min/max SUM(v*x), l <= x <= u, L <= SUM(w*x) <= U";
 	}
 
-	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
@@ -1265,9 +1269,6 @@ public:
 		}
 	}
 
-	//! How many times the plan reads the source: stages 2 to 4 and the answer of stage 5 each read it once.
-	static constexpr idx_t SOURCE_READS = 4;
-
 	DirectSubstitute Build() {
 		auto totals = GroupTotals();
 		auto price = Price(std::move(totals));
@@ -1800,10 +1801,10 @@ private:
 	}
 };
 
-DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	DirectSourceReader reader(optimizer, std::move(source), AggregatePlanBuilder::SOURCE_READS);
+	D_ASSERT(condition.source_reads == SOURCE_READS);
 	AggregatePlanBuilder builder(condition, optimizer, reader);
 	return builder.Build();
 }

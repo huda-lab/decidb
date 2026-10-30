@@ -9,12 +9,14 @@
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 #include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
+#include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -143,6 +145,32 @@ void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
 
 } // namespace
 
+DirectSubstitute DirectBuildOverOneRead(DirectSourceReader &reader,
+                                        const std::function<DirectSubstitute(unique_ptr<LogicalOperator>)> &build) {
+	// A rule is handed its read with its types resolved.
+	auto rows = reader.TakeRecomputedSource();
+	if (rows) {
+		rows->ResolveOperatorTypes();
+		auto substitute = build(std::move(rows));
+		substitute.child = reader.Finish(std::move(substitute.child));
+		return substitute;
+	}
+	auto read = reader.ReadSource();
+	read.plan->ResolveOperatorTypes();
+	auto &read_plan = *read.plan;
+	auto substitute = build(std::move(read.plan));
+	// The plan reads the source's columns where the read has them.
+	ColumnBindingReplacer replacer;
+	auto &source_bindings = reader.SourceBindings();
+	for (idx_t i = 0; i < source_bindings.size(); i++) {
+		replacer.replacement_bindings.emplace_back(source_bindings[i], ColumnBinding(read.table_index, i));
+	}
+	replacer.stop_operator = &read_plan;
+	replacer.VisitOperator(*substitute.child);
+	substitute.child = reader.Finish(std::move(substitute.child));
+	return substitute;
+}
+
 bool DirectIRIsReadable(const DirectIR &ir) {
 	if (ir.status != DirectAnalysisStatus::PROVED) {
 		return false;
@@ -220,14 +248,18 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers with the DECIDE node's outputs: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
+	auto output_bindings = source.GetColumnBindings();
 	auto output_types = source.types;
+	D_ASSERT(output_bindings.size() == output_types.size());
 	vector<uint8_t> prunable_sources;
-	for (auto &binding : source.GetColumnBindings()) {
+	for (auto &binding : output_bindings) {
 		prunable_sources.push_back(DirectCanSkipSourceOutput(source, binding) ? 1 : 0);
 	}
-	for (auto &variable : decide.decide_variables) {
-		output_types.push_back(variable->return_type);
+	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
+		output_bindings.emplace_back(decide.decide_index, i);
+		output_types.push_back(decide.decide_variables[i]->return_type);
 	}
+	D_ASSERT(output_bindings == decide.GetColumnBindings());
 	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again
 	// later, past the plan that holds rows. The rule passes it along like any other source column.
 	auto source_columns = prunable_sources.size();
@@ -236,27 +268,12 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	if (DirectAddRowChecks(optimizer, *root, ir.row_checks, decide)) {
-		// A row id is exposed only on a repeatable scan chain (DirectExposeStoredRowId), which the row checks' reader
-		// recomputes and never copies (DirectSourceCopy::NEVER), so the source kept its bindings.
-		D_ASSERT(!carries_rowid);
-		// The node reads its source under new bindings: the rule applies to the IR read from them.
-		ir = DirectIR::Read(optimizer.context, decide);
-		selected.condition = selected.rule->CheckCondition(ir, optimizer.context);
-		if (!selected.condition) {
-			throw InternalException("Direct solve rule %s does not apply once the row checks are installed",
-			                        selected.rule->Name());
-		}
-	}
-	// The source's columns, under the bindings the gate passes them on with.
-	auto output_bindings = decide.children[0]->GetColumnBindings();
-	output_bindings.resize(source_columns);
-	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
-		output_bindings.emplace_back(decide.decide_index, i);
-	}
-	D_ASSERT(output_bindings.size() == output_types.size());
-	D_ASSERT(carries_rowid || output_bindings == decide.GetColumnBindings());
-	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
+	// One reader of the source for the whole plan: the rule's reads and one per row check, so it makes its copy
+	// decision once, from the real total. The checks gate every read the rule takes.
+	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
+	                          selected.condition->source_reads + ir.row_checks.size());
+	DirectAddRowChecks(optimizer, reader, ir.row_checks);
+	auto substitute = selected.rule->Apply(reader, optimizer, *selected.condition);
 	if (carries_rowid) {
 		if (substitute.slot_map.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");

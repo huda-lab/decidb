@@ -14,6 +14,8 @@
 
 namespace duckdb {
 
+class DirectSourceReader;
+
 class ClientContext;
 class LogicalDecide;
 class LogicalOperator;
@@ -225,6 +227,9 @@ struct DirectIR {
 //! object, never an unverified query shape.
 struct DirectApplicabilityCondition {
 	virtual ~DirectApplicabilityCondition() = default;
+	//! How many times the rule's plan reads the source. The rule driver adds one read per row check and builds the one
+	//! reader of the source (DirectSourceReader) for that total.
+	idx_t source_reads = 1;
 };
 
 //! A complete relational child plus an explicit map back to DECIDE outputs: the source columns in order, then one
@@ -264,10 +269,18 @@ public:
 	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
 	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
-	//! `source` is the DECIDE input with its types resolved.
-	virtual DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	//! `reader` reads the DECIDE input, gated by the row checks when there are any; the rule reads the source
+	//! `condition.source_reads` times through it and finishes its plan with it (DirectSourceReader::Finish).
+	virtual DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                               const DirectApplicabilityCondition &condition) const = 0;
 };
+
+//! Applies a rule that reads the source once and writes its plan over the source's own bindings: `build` makes the
+//! substitute over the one read. A recomputed source is read as itself and keeps its bindings; the read of a
+//! materialized one has new bindings, at which the plan above it is re-pointed (ColumnBindingReplacer). The reader then
+//! finishes the plan.
+DirectSubstitute DirectBuildOverOneRead(DirectSourceReader &reader,
+                                        const std::function<DirectSubstitute(unique_ptr<LogicalOperator>)> &build);
 
 //! Every rule the rule driver tries, in registration order (direct_registry.cpp). A new problem class adds one line
 //! there and changes nothing in policy, fallback, or output mapping.

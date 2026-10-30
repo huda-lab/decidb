@@ -2132,7 +2132,9 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
 
 # A budget limit that is a function of reducers over exactly the budget's group is computed in the aggregate of the group
 # totals (stage 2): the source stays a chain of scans, with no window under the plan. A reducer over other rows than the
-# group's is a window column of the source, which the plan materializes and reads four times.
+# group's is a window column of the source, which the plan materializes once and reads four times, and the bound's NaN
+# check reads once more. The check's verdict is a one-row CTE that gates each of the four reads. The plan is read as
+# JSON, which prints each operator whole: a wide box plan cuts the rule's name.
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 @pytest.mark.parametrize(
@@ -2146,12 +2148,25 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
     ],
 )
 def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_cli, budget, source_window):
-    plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {_wide_query(budget)}").stdout
-    assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
+    out = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN (FORMAT JSON) {_wide_query(budget)}").stdout
+    nodes, stack = [], json.loads(out[out.index("[") :])
+    while stack:
+        node = stack.pop()
+        nodes.append((node["name"].strip(), node.get("extra_info", {})))
+        stack.extend(node.get("children", []))
+    names = [name for name, _ in nodes]
+    assert any(info.get("Direct solve rule") == "R1_CONTINUOUS_KNAPSACK" for _, info in nodes), out
+    assert "DECIDE" not in names and "DECIDE_DIAGNOSE" not in names, out
     # The one window is the sort of the items; every other is under the source.
-    assert (_count(plan, "WINDOW") > 1) == source_window and _count(plan, "WINDOW") >= 1, plan
-    assert _count(plan, "CTE_SCAN") == (4 if source_window else 0), plan
-    assert _count(plan, "SEQ_SCAN") == (1 if source_window else 4), plan
+    assert (names.count("WINDOW") > 1) == source_window and names.count("WINDOW") >= 1, out
+    assert names.count("SEQ_SCAN") == (1 if source_window else 4), out
+    ctes = {info["CTE Name"]: info["Table Index"] for name, info in nodes if name == "CTE"}
+    scans = [info["CTE Index"] for name, info in nodes if name == "CTE_SCAN"]
+    if not source_window:
+        assert not ctes and not scans, out
+        return
+    assert set(ctes) == {"direct_source", "direct_verdict"}, out
+    assert scans.count(ctes["direct_source"]) == 4 + 1 and scans.count(ctes["direct_verdict"]) == 4, out
 
 
 # The source is a chain over one table scan, which the plan can re-scan once per stage or read from one copy. It takes the

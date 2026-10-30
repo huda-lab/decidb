@@ -77,8 +77,7 @@ public:
 	string Summary() const override {
 		return "probe";
 	}
-	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator>, Optimizer &,
-	                       const DirectApplicabilityCondition &) const override {
+	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &) const override {
 		throw InternalException("The probe rule never applies");
 	}
 

@@ -1,11 +1,12 @@
 """The plan of the scope row checks (language/guide.md §7.1): each check is an aggregate over the source, in the
-form of DuckDB's uncorrelated scalar subquery, cross-joined on the build side of the source's rows.
+form of DuckDB's uncorrelated scalar subquery. Their verdict is a one-row CTE, cross-joined with every read of the
+source's rows.
 
 A determination check groups the kept rows by its key, keeps the classes that hold two values, and reports the least
 of them: `arg_min` over the class's key as a struct, whose NULL fields sort last. The check reads the source a second
-time: a scan of a single table is repeated, and any other source (here a join) is materialized once and read twice, with
-everything above it re-pointed at the read. Each case reaches one of those branches, on the solver path (`off`) and
-on the direct path (`require`), which install the checks at different sites. The messages were checked against the
+time: a scan of a single table is repeated, and any other source (here a join) is materialized once and read twice.
+Each case reaches one of those branches, on the solver path (`off`), whose operator reads the source under the new
+bindings, and on the direct path (`require`), whose rule reads it through the same reader. The messages were checked against the
 plan the checks replaced, which ranked the classes with a window.
 """
 
@@ -71,7 +72,7 @@ FAILING = [
     pytest.param(
         STORED.format(cap=3) + STORED_JOIN,
         "DECIDE: per d.dk does not determine s.cap. d.dk = 'D1' has more than one value: 3, 5.",
-        # A join is materialized and read twice; the rows above are re-pointed at the read.
+        # A join is materialized and read twice.
         id="join-source",
     ),
     pytest.param(
@@ -91,13 +92,15 @@ def test_a_failing_check_reports_its_least_class(decidb_cli, sql, message, mode)
     assert_no_internal_leak(result, "a determination error")
 
 
-def _operators(cli, setup: str, sql: str) -> list[str]:
+def _ctes(cli, setup: str, sql: str) -> list[str]:
+    """The names of the plan's CTEs."""
     result = cli.execute_raw(f"{setup} SET decide_direct_solve='off'; EXPLAIN (FORMAT JSON) {sql};")
     plan = json.loads(result.stdout[result.stdout.index("[") :])
     names, stack = [], list(plan)
     while stack:
         node = stack.pop()
-        names.append(node["name"])
+        if node["name"].strip() == "CTE":
+            names.append(node["extra_info"]["CTE Name"])
         stack.extend(node.get("children", []))
     return names
 
@@ -111,11 +114,12 @@ def _operators(cli, setup: str, sql: str) -> list[str]:
     ],
 )
 def test_the_check_reads_the_source_a_second_time(decidb_cli, sql, materialized):
-    assert ("CTE_SCAN" in _operators(decidb_cli, STORED.format(cap=5), sql)) == materialized
+    ctes = _ctes(decidb_cli, STORED.format(cap=5), sql)
+    assert "direct_verdict" in ctes and ("direct_source" in ctes) == materialized, ctes
 
 
 def test_a_passing_check_on_a_join_source_keeps_its_rows(decidb_cli):
-    """The direct path re-reads its IR once the join is materialized; it solves as the solver path does."""
+    """The rule reads the materialized join through the gated reader; it solves as the solver path does."""
     sql = STORED.format(cap=5) + STORED_JOIN
     assert run(decidb_cli, sql, "require") == run(decidb_cli, sql, "off")
 

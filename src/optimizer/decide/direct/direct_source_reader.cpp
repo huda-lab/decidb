@@ -6,6 +6,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
+#include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -46,21 +47,21 @@ static idx_t RowWidth(const vector<LogicalType> &types) {
 	return width;
 }
 
-DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p,
-                                       DirectSourceCopy copy)
+DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p)
     : optimizer(optimizer_p), source(std::move(source_p)), reads(reads_p) {
 	source->ResolveOperatorTypes();
 	bindings = source->GetColumnBindings();
 	types = source->types;
 	D_ASSERT(bindings.size() == types.size());
 	chain_scan = DirectRepeatableSourceChain(*source, chain);
-	if (chain_scan && copy == DirectSourceCopy::WHEN_CHEAPER &&
-	    DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
-	                              BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
+	if (chain_scan && DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
+	                                            BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
 		chain_scan = nullptr;
 		chain.clear();
 	}
-	if (!chain_scan) {
+	// A source read once is read as itself, as DuckDB inlines a CTE referenced once.
+	materialized = !chain_scan && reads > 1;
+	if (materialized) {
 		cte_index = optimizer.binder.GenerateTableIndex();
 	}
 }
@@ -137,26 +138,63 @@ DirectSourceReader::Read DirectSourceReader::ForwardAllColumns(unique_ptr<Logica
 DirectSourceReader::Read DirectSourceReader::ReadSource() {
 	// A copy reads the chain, which points into the source.
 	D_ASSERT(source);
+	Read read;
 	if (chain_scan) {
-		return ForwardAllColumns(CopyOfChain());
+		read = ForwardAllColumns(CopyOfChain());
+	} else {
+		// A source read once has only the read TakeRecomputedSource makes.
+		D_ASSERT(materialized);
+		vector<string> names;
+		for (idx_t i = 0; i < types.size(); i++) {
+			names.push_back("c" + std::to_string(i));
+		}
+		read = ForwardAllColumns(make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), cte_index, types,
+		                                                  std::move(names), CTEMaterialize::CTE_MATERIALIZE_ALWAYS));
 	}
-	vector<string> names;
-	for (idx_t i = 0; i < types.size(); i++) {
-		names.push_back("c" + std::to_string(i));
-	}
-	return ForwardAllColumns(make_uniq<LogicalCTERef>(optimizer.binder.GenerateTableIndex(), cte_index, types,
-	                                                  std::move(names), CTEMaterialize::CTE_MATERIALIZE_ALWAYS));
+	read.plan = Gated(std::move(read.plan));
+	return read;
 }
 
 unique_ptr<LogicalOperator> DirectSourceReader::TakeRecomputedSource() {
-	if (!chain_scan) {
+	if (materialized) {
 		return nullptr;
 	}
-	return std::move(source);
+	return Gated(std::move(source));
+}
+
+void DirectSourceReader::Gate(unique_ptr<LogicalOperator> verdict_p) {
+	D_ASSERT(!verdict && verdict_p);
+	verdict_p->ResolveOperatorTypes();
+	D_ASSERT(verdict_p->types.size() == 1 && verdict_p->types[0] == LogicalType::BOOLEAN);
+	verdict = std::move(verdict_p);
+	verdict_index = optimizer.binder.GenerateTableIndex();
+}
+
+unique_ptr<LogicalOperator> DirectSourceReader::Gated(unique_ptr<LogicalOperator> read) {
+	if (!verdict) {
+		return read;
+	}
+	ExpressionBuilder calc(optimizer.context);
+	auto reference_index = optimizer.binder.GenerateTableIndex();
+	auto reference =
+	    make_uniq<LogicalCTERef>(reference_index, verdict_index, vector<LogicalType> {LogicalType::BOOLEAN},
+	                             vector<string> {"v"}, CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
+	// The filter reads the verdict, so no pass prunes it, and passes on exactly the read's columns.
+	auto gate = make_uniq<LogicalFilter>(calc.Out(calc.Col(LogicalType::BOOLEAN, ColumnBinding(reference_index, 0))));
+	read->ResolveOperatorTypes();
+	for (idx_t i = 0; i < read->types.size(); i++) {
+		gate->projection_map.push_back(i);
+	}
+	gate->children.push_back(LogicalCrossProduct::Create(std::move(read), std::move(reference)));
+	return std::move(gate);
 }
 
 unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperator> plan) {
-	if (chain_scan) {
+	if (verdict) {
+		plan =
+		    make_uniq<LogicalMaterializedCTE>("direct_verdict", verdict_index, 1, std::move(verdict), std::move(plan));
+	}
+	if (!materialized) {
 		return plan;
 	}
 	// A reference reads the materialized columns by position, but a join's output order can change in the optimizer

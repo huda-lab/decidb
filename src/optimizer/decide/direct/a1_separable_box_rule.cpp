@@ -10,6 +10,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
@@ -189,7 +190,7 @@ public:
 		return "min/max SUM(c*x), l <= x <= u, each row independent";
 	}
 
-	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
@@ -330,11 +331,10 @@ struct Stage {
 //!   P5 the source columns, the typed answers, and the breaker
 class PlanBuilder {
 public:
-	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
-		// The rule driver hands the input over with its types resolved.
-		source_bindings = source.GetColumnBindings();
-		source_types = source.types;
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
+	            const vector<LogicalType> &source_types_p)
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
+	      source_bindings(source_bindings_p), source_types(source_types_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
@@ -822,11 +822,12 @@ private:
 	}
 };
 
-DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, *source);
-	return plan_builder.Build(std::move(source));
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+	return DirectBuildOverOneRead(
+	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
 }
 
 } // namespace direct_a1_separable_box
