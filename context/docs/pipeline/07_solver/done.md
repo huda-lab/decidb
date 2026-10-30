@@ -583,11 +583,13 @@ HiGHS has no thread-safe terminate, so it never sets `user_interrupted`.
 
 ## 6. Adding a backend
 
-1. Implement `SolverSession` with `Solve(model, time_limit)` and
-   `Continue(time_limit)`, both returning a normalized `SolverResult`. Map the
-   backend's terminal statuses onto `SolverStatus`; anything unmapped goes to `OTHER`
-   with `status_text` holding the backend's own words for it, when it has any. Override a `SolverSession` virtual only for behavior the
-   backend alone acts on.
+1. Implement `SolverSession`'s protected `SolveChunk(model, time_limit)` and
+   `ContinueChunk(time_limit)`, both returning a normalized `SolverResult`. Callers use the
+   base class's non-virtual `Solve` and `Continue` (the non-virtual interface pattern), which
+   add the model's objective constant to the value and bound read back, so a backend never
+   receives or adds it. Map the backend's terminal statuses onto `SolverStatus`; anything
+   unmapped goes to `OTHER` with `status_text` holding the backend's own words for it, when
+   it has any. Override a `SolverSession` virtual only for behavior the backend alone acts on.
 2. Add `IsAvailable()`, `Capabilities()`, and `CreateSession()` statics.
 3. Append one `SolverBackendInfo` row to `REGISTERED_BACKENDS` in
    `solver_registry.cpp`, positioned by preference.

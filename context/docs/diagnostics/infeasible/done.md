@@ -798,9 +798,12 @@ exactly the feasibility tolerance passes the certificate's LP and can fail HiGHS
 user's query (`issues/bugs.md` § Limitations).
 
 **Objective value plumbing.** The objective's constant (a data term, the `c²` of
-`POWER(x - c, 2)`, a peeled `+ 3`) is `SolverModel::obj_constant`, passed to the backend as its
-objective offset (Gurobi `ObjCon`, HiGHS `offset_`), so every value read back, the
-`achievable_objective` included, is the objective as written. `SolverModel::ClearObjective()`
+`POWER(x - c, 2)`, a peeled `+ 3`) is `SolverModel::obj_constant`. No solver receives it, since a
+constant moves no optimum and would change a relative MIP gap; `SolverSession` adds it to every
+objective value and bound a solve reads back (`../../pipeline/07_solver/done.md`), so the
+`achievable_objective` is the objective as written. It is summed without a range check: terms past a
+DOUBLE make it ±inf, and the query still answers (a constant never changes the answer, BUG-24).
+`SolverModel::ClearObjective()`
 clears it with the rest of the objective for every derived model. `SolverResult` carries
 `objective_value`, populated on
 `OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via
