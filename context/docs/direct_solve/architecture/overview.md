@@ -62,8 +62,10 @@ Names follow [the glossary](../../glossary.md).
 - **Adapter with an optimization fence.** The result adapter presents the substitute with the DECIDE node's columns
   and types under bindings it owns (a binding boundary, as a projection is) and keeps parent filters and limits from
   crossing it.
-- **Pipeline breaker and late materialization** (DuckDB, column stores). Inputs the solver path would reject are
-  validated before any row is emitted, and wide columns are fetched by row id after the plan has chosen its rows.
+- **Verify, then stream, and late materialization** (PostgreSQL's InitPlan, DuckDB's uncorrelated scalar subquery,
+  column stores). Inputs the solver path would reject are validated before any row is emitted: a plan that streams
+  waits for a one-row verdict over every row, a plan that holds its rows anyway (a rank window) checks them there, and
+  wide columns are fetched by row id after the plan has chosen its rows.
 
 **Departure from Cascades: rules are disjoint, not chosen by cost.** Cascades lets several rules apply and keeps the
 cheapest plan. Here, rules are told apart by the IR they require, and two rules applying to one query is an internal
@@ -73,6 +75,6 @@ error naming both: the overlap is a bug in the rules, and no ordering is safe to
 
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
 `direct_rule_driver.cpp` (the flow above), then `s1_uniform_matroid_rule.cpp` (a rule built on a window) and
-`a1_separable_box_rule.cpp` (a rule built on a chain of projections and the pipeline breaker). The rest of the folder is
+`a1_separable_box_rule.cpp` (a rule built on a chain of projections, verified then streamed). The rest of the folder is
 named for what it does: IR, plan fragments, runtime checks, bound reader, result adapter, expression predicates,
 registry.

@@ -40,41 +40,42 @@ constants, and passthrough aliases through projections, filters, or inner compar
 raise an error stays live, because the solver would have raised it. This is what lets a wide unused payload leave the
 rank sort. The validated columns stay live even when no parent reads any output.
 
-## Pipeline breaker
+## Every row is read
 
 Runtime checks (NULL or non-finite scores, bad bounds) must run over every input row whenever the DECIDE result is
 consumed, even if `x` is unused or the capacity is zero. A standalone filter is not enough: it can skip a late bad row
-under `LIMIT 1`. S1's rank window reads every row before it emits one, so it is already a pipeline breaker. A rule whose
-plan is pipelined (each row flows straight through) adds one with `DirectValidationBreaker`: a projected truth-or-error
-column plus a whole-input window. That holds the rows in memory, so memory grows with the input.
+under `LIMIT 1`. S1's rank window reads every row before it emits one, so it is already a pipeline breaker, and holds
+the rows in memory, so memory grows with the input. A rule whose plan streams (each row flows straight through)
+verifies, then streams, and holds nothing: one read of the source computes a one-row verdict over every row
+(`DirectAllRowsValid`: `bool_and` of each row's check, true or raising), and the source reader gates every later read on
+it (`DirectSourceReader::Gate`), so the streamed read passes no row before every row is checked. This is DuckDB's plan
+for an uncorrelated scalar subquery (PostgreSQL's InitPlan). It costs a second evaluation of the rule's per-row stages
+in place of memory that grows with the input. A streaming plan whose rows all see the same values needs no verdict: the
+first row raises what every row would.
 
 ### Memory of holding rows
 
 Peak memory of one query in a fresh `decidb -readonly` process with `decide_direct_solve='require'`, on a stored
 database with a narrow table `src` (id, t, cap, score, f) and `src_wide` (the same plus `repeat('p', 512) AS payload`).
-The shapes are those of `benchmark/decide/direct_solve/archive/profile_direct_a1.py`: A1 is `x(REAL) ... BETWEEN 0 AND cap MINIMIZE
-SUM(POWER(x - t, 2))`; S1 is `x(BOOL) ... SUM(x) <= rows/10 MAXIMIZE SUM(score * x)`. Peak is the macOS memory
+S1 is `x(BOOL) ... SUM(x) <= rows/10 MAXIMIZE SUM(score * x)`. Peak is the macOS memory
 footprint from `/usr/bin/time -l` (maximum resident size reads lower once the system compresses pages). The payload is
 488 MiB per 1,000,000 rows.
 
-| Peak footprint, MiB | Rows | No DECIDE | Payload unused (control) | Payload held in the breaker | Payload late-materialized |
+| Peak footprint, MiB | Rows | No DECIDE | Payload unused (control) | Payload held in the rank | Payload late-materialized |
 |---|---:|---:|---:|---:|---:|
-| A1 | 1,000,000 | 7 | 32 | 1,049 | 73 |
-| A1 | 5,000,000 | 14 | 131 | 5,212 | 353 |
 | S1 | 1,000,000 | 6 | 99 | 651 | 145 to 149 |
 | S1 | 5,000,000 | 14 | 725 | 3,351 to 3,362 | 811 to 829 |
 
 "Payload unused" reads `COUNT(*), SUM(x)`, so the payload is pruned. "Held" and "late-materialized" read
-`SUM(length(payload))` as well; held means the payload travels through the breaker or the rank, late-materialized means
+`SUM(length(payload))` as well; held means the payload travels through the rank, late-materialized means
 it is read by a second scan (next section). "No DECIDE" is `SELECT COUNT(*), SUM(length(payload)) FROM src_wide`.
 
-- Held rows cost memory in proportion to the input. Over the control, A1 adds about two payload copies per row and S1
-  about one (the rank's sort buffer is the likely reason, not isolated).
-- Late materialization stays near the control: 4.0 to 14.8 times less memory than holding at 5,000,000 rows.
+- Held rows cost memory in proportion to the input. Over the control, S1 adds about one payload copy per row (the
+  rank's sort buffer is the likely reason, not isolated).
+- Late materialization stays near the control: about 4 times less memory than holding at 5,000,000 rows.
 - The wide column is the cause. Without it nothing grows, and a plain scan of the same payload is pipelined in 6 to
   14 MiB.
-- The solver path holds more than direct solve on the same query (A1 at 1,000,000 rows: 1,655 MiB against 1,049; S1:
-  1,012 MiB against 652).
+- The solver path holds more than direct solve on the same query (S1 at 1,000,000 rows: 1,012 MiB against 652).
 
 Only peak memory is measured here; wall times were taken on a busy machine and are not recorded.
 
@@ -87,7 +88,7 @@ has a separate step, `ApplyDirectLateMaterialization`, for the reason at the end
 When the source is one DuckDB base table under non-volatile projections and filters, the plan carries the table's
 `rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
 that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined (inner, on
-`rowid`) under the adapter. That column never enters the breaker or the rank, and the first read still checks every row,
+`rowid`) under the adapter. That column never enters the rank, and the first read still checks every row,
 so a bad last row under `LIMIT 1` still raises.
 
 - **Only variable-width columns move** (`VARCHAR`, `BLOB`, `BIT`, lists, arrays, structs, maps, unions: a physical type
@@ -97,19 +98,20 @@ so a bad last row under `LIMIT 1` still raises.
   0.28 to 0.33 s moved against 0.21 to 0.25 s held, with the same memory. Staying in the single read gives up A1's small
   gain to avoid S1's 30% loss, and needs no tuning number.
 - **The single read is kept** for a join, an aggregate, a volatile or computed column, or a source that already reads
-  `rowid` (no stable row key, or reading twice could change the rows), and for a pipelined plan (A1's constant problem),
-  which holds nothing.
+  `rowid` (no stable row key, or reading twice could change the rows), and for a pipelined plan (A1), which holds
+  nothing.
 - **Where it runs.** Inside the `UNUSED_COLUMNS` pass, right after removal, not beside DuckDB's `LATE_MATERIALIZATION`.
   The passes in between add projection maps that unused-column removal does not keep up to date, so pruning again after
   them is unsafe. With that pass disabled the row id is dropped and the plan holds rows.
-- **Other sources hold their rows**, wide columns included: 5.2 GiB at 5,000,000 rows for A1 with a 512-byte payload.
+- **Other sources hold their rows** in a plan that holds rows, wide columns included.
 
 ## Result types
 
 A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the solver path.
 
 Details: `direct_result_adapter.cpp` (map checks, serialization, pruning hook), `direct_late_materialization.cpp` (late
-materialization) and `direct_plan_fragments.cpp` (breaker) and `direct_rule_driver.cpp`
+materialization), `direct_plan_fragments.cpp` and `direct_source_reader.cpp` (the verdict and the gate) and
+`direct_rule_driver.cpp`
 (pruning proof). The optimizer passes that run after DECIDE
 are covered for parent filter, join, aggregate, nested, and serializer cases by the parent-context rows in
 `test_direct_s1_uniform_matroid.py` and the pruning tests in `test_direct_user_facing.py`.

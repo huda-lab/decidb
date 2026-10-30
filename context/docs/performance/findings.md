@@ -293,7 +293,20 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   every read by its key (DuckDB's decorrelated scalar subquery), so a recomputable source stays recomputed. large.db,
   1M-row lineitem JOIN supplier (23 columns), against the same bound written as a number, medians of 3: solver path,
   same `by` key +256 ms / +738 MiB → +39 ms / +470 MiB, coarser key +523 ms / +994 MiB → +51 ms / +372 MiB; direct
-  path, coarser key +181 ms / +581 MiB → +63 ms / +46 MiB. A row bound read from a reducer on A1 is PERF-19.
+  path, coarser key +181 ms / +581 MiB → +63 ms / +46 MiB. A row bound read from a reducer on A1 was PERF-19.
+- **A1 verifies, then streams (PERF-19, closed).** Every A1 plan whose values vary by row held its whole input in a
+  partitionless `COUNT(*) OVER ()` window, so a bad last row raised under `LIMIT 1`. Late materialization kept the
+  window narrow only over projections, windows, filters and scans, so a bound's side table made it hold every column,
+  and the window scaled negatively with threads (592 ms at 11 threads, 429 at 1). A1 now reads the source once into a
+  one-row verdict (`bool_and` of each row's check) and gates a second, streamed read on it, as the row checks do.
+  large.db lineitem (16 columns, 1M rows), `MAXIMIZE sum(x * l_extendedprice)`, medians of 3, old → new: a bound read
+  from a reducer 590 → 248 ms, a number 173 → 47 ms, a plain column 204 → 55 ms; lineitem JOIN supplier with a reducer
+  984 → 393 ms. Peak memory falls where rows were held wide and rises where a third read makes the reader copy the
+  source (lineitem with a reducer 361 → 512 MiB; PERF-21). profile_direct_a1.py at 5M rows: 0.32 → 0.09 s.
+- **Column pruning below a materialized CTE.** DuckDB's `RemoveUnusedColumns` kept every column below a materialized
+  CTE, the consuming plan's included, so every gate verdict (PERF-3) and side table (PERF-15) wrapped around a direct
+  plan stopped pruning beneath it: `SELECT count(*)` over A1 scanned all 16 lineitem columns. The definition now keeps
+  every column (it is read through CTE refs the pass does not follow) and the consuming plan is pruned as any other.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

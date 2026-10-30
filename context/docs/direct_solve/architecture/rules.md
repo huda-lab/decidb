@@ -41,7 +41,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    rule does not re-check the IR's statuses, offset or sense; any other not-proved node is a decline. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
-   (`DirectProveValue`). Take the empty-aggregate guard, the all-rows breaker, the scope projection
+   (`DirectProveValue`). Take the all-rows verdict (`DirectAllRowsValid`), the scope projection
    (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`) and
    `DirectWindowExtremum` from `direct_plan_fragments.cpp`, the
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
@@ -60,8 +60,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 ## What every rule must match from the solver
 
 - **Every input row is read.** A bad value on the last of 5,000 rows must raise even under `LIMIT 1` or
-  `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBreaker`; a rank window already reads
-  everything. Only `LIMIT 0` may skip the read.
+  `COUNT(*)`. A plan that streams gates its rows on a verdict over every row (`DirectAllRowsValid`,
+  `DirectSourceReader::Gate`); a rank window already reads everything. Only `LIMIT 0` may skip the read.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: invalid data-valued bounds and fixed
   values on the rows that read them; invalid objective coefficients (NULL, NaN, infinity); infeasibility. Nothing is
   computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path

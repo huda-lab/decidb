@@ -21,19 +21,6 @@ Run scale ladders and repetitions on both backends. Use separate native-log/stac
 
 Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
 
-## PERF-19 — A1's validation window on a row bound read from data
-
-Every A1 plan whose values vary by row (a bound or an objective read from data) ends in DirectValidationBreaker: a
-projection raises a bad row's error and a `COUNT(*) OVER ()` window holds the whole input, so a bad last row raises
-even under an outer LIMIT 1. Late materialization keeps the window narrow by moving the variable-width columns out of
-it, but only over a plan of projections, windows, filters and scans (`CollectPlanOperators`); a bound's side table
-(PERF-15) adds a join and a CTE scan, so the window holds every column. Measured (lane AU, large.db lineitem alone,
-16 columns, 1M rows, `MAXIMIZE sum(x * l_extendedprice)`, medians of 3, wall ms / peak MiB): bound a number 180 / 388,
-a plain column 201 / 387, `sum(l_quantity) by (l_suppkey) / 20000` 592 / 362; a constant problem, pipelined, 39 ms.
-The side table's own join and aggregate cost about 15 ms of CPU. The window scales negatively with threads on wide
-rows (592 ms at 11 threads, 429 at 1). Design under review: verify, then stream (PERF-3's gated verdict on the
-shared reader) in place of the breaker.
-
 ## PERF-20 — S1 and R1 lose late materialization under a side table or a row-check gate
 
 Late materialization moves a stored source's variable-width columns out of the operators that hold rows and joins
@@ -42,4 +29,15 @@ them back by row id, but only over a plan of projections, windows, filters and s
 gate (a filter with a `projection_map` over a cross product, PERF-3) makes it refuse, so S1's and R1's held rows carry
 every column. Measure first: S1 and R1 on large.db lineitem (16 columns) with a bound read from data and with a
 planned row check, against the same query without them. A fix follows the row id's binding through any operator
-rather than widening the list (A1 stops holding rows under PERF-19, so it is not affected).
+rather than widening the list (A1 holds no rows since PERF-19, so it is not affected).
+
+## PERF-21 — A materialized copy of the source keeps every column
+
+The source reader copies a source once when the plan reads it often enough (`DirectSourceCopyIsCheaper`, three reads
+or more) or when it cannot be re-scanned (a join). The copy is a materialized CTE's definition, which unused-column
+removal keeps whole because it does not follow CTE refs, so it holds every source column whatever the reads use.
+Measured (lane AU, large.db lineitem, 16 columns, 1M rows, A1 with a bound read from a reducer: three reads): 248 ms
+and 512 MiB copied against 277 ms and 272 MiB recomputed (forced by `memory_limit`), so the copy buys about 30 ms for
+about 240 MiB; lineitem JOIN supplier rises 160 MiB the same way. Find the root fix: prune a CTE definition to the
+columns its refs read (DuckDB's `ColumnLifetimeAnalyzer` treats a materialized CTE the same blanket way), or count
+the copy's width in the copy decision.

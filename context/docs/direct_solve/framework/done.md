@@ -35,19 +35,20 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   rule's validated columns live. What a rule hands it (a child, a slot map that fits the DECIDE outputs, the validated
   columns and the source row id) is checked in release builds and a misfit raises an internal error, because rules are
   plug-ins and a broken one must fail loudly. Checks on plans the engine builds itself, in the adapter and in late
-  materialization, are `D_ASSERT`s, which debug builds run. `DirectValidationBreaker` builds the all-rows read for a
-  plan that could stream. Because every row is checked before any is released, rows are held in memory
-  (`../architecture/result_adapter.md`, "Memory of holding rows").
+  materialization, are `D_ASSERT`s, which debug builds run. A plan that streams checks every row before it releases
+  one without holding them: one read computes a verdict over all rows (`DirectAllRowsValid`, `bool_and`, true or
+  raising), and the reader gates every later read on it (Row checks, below). A plan that holds its rows anyway (S1's
+  rank) checks them there (`../architecture/result_adapter.md`, "Every row is read").
 - **Late materialization of a stored table** (`direct_late_materialization.cpp`). The rule driver appends the table's
   `rowid` to a single-base-table source, and after unused-column removal a late step moves each parent-read
   variable-width column that the rule's plan only forwards to a second scan joined on `rowid`. Fixed-width columns,
   joins, aggregates, volatile or computed columns, a source that already reads `rowid`, and a pipelined plan
-  (`DirectSubstitute::pipelined`, set by A1's constant problem) keep the single read. Rules and measurements:
+  (`DirectSubstitute::pipelined`, set by A1) keep the single read. Rules and measurements:
   `../architecture/result_adapter.md`.
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
-  form of a factory method). It lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
-  `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant factor
-  of a coefficient) and `DirectIsNull`. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
+  form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
+  `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient) and
+  `DirectOnKeptRows`. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
@@ -67,9 +68,12 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   materialized CTE, and the reader is gated on it (`DirectSourceReader::Gate`): every later read is
   `Filter[v](CrossProduct(read, CTERef v))`, whose `projection_map` keeps the read's bindings. A gated read passes a row
   only once the CTE is computed, whichever side of the product is built first, so a check raises before any rule-built
-  raise. The solver path uses the same reader with one read plus the side tables' and the checks'
-  (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped decision's determination. A
-  rule that reads once builds over `DirectBuildOverOneRead`.
+  raise. Gates chain: a rule gates the reader again on its own verdict (A1), computed from reads the row checks gate,
+  so a scope error raises before a rule's own, and every read after waits for the newest verdict alone; the verdict
+  CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path uses the same reader with one read plus the
+  side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped
+  decision's determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
+  `DirectBuildOverOneRead`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier
@@ -254,8 +258,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
 A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
 (`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
-breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
-reading comes from the solver's code, not a copy: `DirectIRConstraint::singleton_row`, `bound` and
+rank window or a verified, streamed plan) and run on the same two central files. An IR flag a rule needs about the
+solver's own reading comes from the solver's code, not a copy: `DirectIRConstraint::singleton_row`, `bound` and
 `variable_bound` come from the classifier `DecideReadSingletonRow` (`decide_singleton_row_folding.cpp`), so a rule
 asks the solver's own question about which values a bound admits and which bounds replace a variable's default box.
 
@@ -265,8 +269,9 @@ asks the solver's own question about which values a bound admits and which bound
   an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
   front end could not read offered to no rule, mismatched slot, a shared plan fragment handed an input that does not
-  fit, each way a substitute can misfit the adapter (no child, a slot too many, a missing prunable flag, a slot,
-  validated column or row id slot beyond the child), breaker under `LIMIT 1` and `COUNT(*)`),
+  fit, each way a substitute can misfit the adapter (no child, a missing prunable flag, a slot,
+  validated column or row id slot beyond the child), a pipelined check and a gated verdict under `LIMIT 1` and
+  `COUNT(*)`),
   `test_decidb_direct_decline.cpp` (each decline branch of S1's and A1's `CheckCondition` and of `DirectIRIsReadable`,
   tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
   small query that is only planned, edits it for the few shapes SQL cannot write, and asks S1 or A1 whether it
