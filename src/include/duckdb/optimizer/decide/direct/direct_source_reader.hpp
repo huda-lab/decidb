@@ -65,6 +65,11 @@ public:
 	const vector<LogicalType> &SourceTypes() const {
 		return types;
 	}
+	//! Whether the source is materialized once. The copy holds every row the plan reads, so a plan over it holds rows
+	//! even when the rule's own plan streams.
+	bool Materialized() const {
+		return materialized;
+	}
 	//! The source, until TakeRecomputedSource or Finish takes it.
 	LogicalOperator &Source() {
 		D_ASSERT(source);

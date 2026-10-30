@@ -1203,6 +1203,22 @@ def test_a1_each_verdict_gates_one_read_and_the_rows_wait_for_the_newest(decidb_
     assert len(verdicts) == 2 and sorted(gates) == sorted(verdicts), (verdicts, gates)
 
 
+@pytest.mark.correctness
+def test_a1_streamed_from_a_copy_reads_the_stored_strings_back_by_row_id(decidb_cli):
+    # The stream holds nothing, but the copy it reads from holds every row: the reducer bound and its row check make
+    # four reads, so the source is copied, and the string the parent reads comes from a second scan instead.
+    setup = (
+        "CREATE OR REPLACE TEMP TABLE a1_wide AS SELECT i, (i % 3 + 1)::DOUBLE AS q, i % 2 AS g, "
+        "'pad-' || i::VARCHAR AS pad FROM range(5000) r(i);"
+    )
+    query = "FROM a1_wide DECIDE x(REAL) SUCH THAT x >= 0 AND x <= sum(q) by (g) / 1000 MAXIMIZE SUM(x)"
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {setup} EXPLAIN SELECT i, x, pad FROM ({query})")
+    assert "A1_SEPARABLE_BOX" in plan.stdout and "direct_source" in plan.stdout, plan.stdout
+    assert plan.stdout.count("SEQ_SCAN") == 2, plan.stdout
+    answer = f"{setup} SELECT COUNT(*), ROUND(SUM(x), 6), SUM(length(pad)) FROM ({query})"
+    assert _run(decidb_cli, answer, "require") == _run(decidb_cli, answer, "off")
+
+
 @pytest.mark.error
 @pytest.mark.correctness
 def test_a1_a_late_bad_row_raises_with_a_row_check_in_front_of_the_verdict(decidb_cli):

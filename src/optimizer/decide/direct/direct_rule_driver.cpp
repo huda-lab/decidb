@@ -299,11 +299,9 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	}
 	auto first_read_only = substitute.slot_map.begin() + NumericCast<int64_t>(source_columns);
 	substitute.slot_map.erase(first_read_only, first_read_only + NumericCast<int64_t>(read_only));
-	if (carries_rowid) {
-		if (substitute.pipelined) {
-			// Nothing is held, so there is nothing to gain from a late materialization.
-			late_materialization = DirectLateMaterialization();
-		}
+	if (carries_rowid && substitute.pipelined && !reader.Materialized()) {
+		// Nothing is held, so there is nothing to gain from a late materialization.
+		late_materialization = DirectLateMaterialization();
 	}
 	auto adapter = AdaptDirectResult(optimizer.context, std::move(substitute), optimizer.binder.GenerateTableIndex(),
 	                                 std::move(output_types), std::move(prunable_sources), std::move(annotation),
