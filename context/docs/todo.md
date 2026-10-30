@@ -14,7 +14,7 @@ at a time.
 Every bug filed up to BUG-28 is fixed and merged. The large benchmark sweep (90 runs, `performance/todo.md` § PERF-1)
 found two regressions, both fixed: HiGHS ran past its time limit on Q1 (BUG-25, then BUG-28 in presolve), and Q8 ran
 five times slower (BUG-26: scope checks that can never fail sorted every input row). Overall, total solve time on
-Gurobi is 3 % lower than in September. What remains: work in progress (§ 1), three slowdowns since September (§ 2),
+Gurobi is 3 % lower than in September. What remains: work in progress (§ 1), two slowdowns left from September (§ 2),
 posting the HiGHS report (§ 3), and the original measurement work (§ 4).
 
 ## 1. In progress (2026-10-30)
@@ -34,12 +34,11 @@ posting the HiGHS report (§ 3), and the original measurement work (§ 4).
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 
-- [ ] PERF-9 Q8's keyed-decision mapping: 229 → 1,169 ms — performance/todo.md § PERF-9
-- [ ] PERF-10 Extraction 40-240 ms slower on most queries — performance/todo.md § PERF-10
-- [ ] PERF-11 Peak memory up 0.7-0.8 GiB on Q3 and Q10 — performance/todo.md § PERF-11
+- [ ] PERF-10 Extraction: constraint setup and implied bounds still slower on Q1 — performance/todo.md § PERF-10
+- [ ] PERF-12 A constraint's provenance formats its group label eagerly — performance/todo.md § PERF-12
 
-In progress as one batch: the profiling pass found the causes of PERF-9 and PERF-10 (per-row `Value` work in group ids
-and labels, one scan per filter part); fixes are landing. PERF-11's peak is inside Gurobi's solve.
+Q8's keyed mapping (PERF-9) is back to 257 ms and Q3/Q10's memory peak (PERF-11) is Gurobi's own
+(`performance/findings.md` § Regressions since 2026-09-09).
 
 ## 3. The owner's actions
 
