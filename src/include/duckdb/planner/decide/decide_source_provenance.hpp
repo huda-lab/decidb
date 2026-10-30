@@ -53,6 +53,11 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr);
 
+//! The value a NULL guard (NULL_GUARD_TAG) protects: the first operand of a COALESCE, the THEN of a CASE. An expression
+//! that is no guard is its own value. What a guard protects is what a message names and what decides whether the value
+//! is a constant: the guard itself reads a column.
+const Expression &DecideUnguarded(const Expression &expr);
+
 //! What a message about a clause renders with: the registries above. A column reads as the user wrote it
 //! (`D.depotID`): its bound reference carries that spelling as a source fragment.
 struct DecideSourceNames {

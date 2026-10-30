@@ -21,6 +21,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 
@@ -467,11 +468,13 @@ private:
 		return result;
 	}
 
-	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none.
-	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values) const {
+	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none. `guarded` false reads each value
+	//! without its NULL guard: the number on a row the guard keeps (DecideUnguarded).
+	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values, bool guarded = true) const {
 		unique_ptr<Expression> total;
 		for (auto &value : values) {
-			auto term = DirectScaledTerm(optimizer, value.expr->Copy(), value.sign, false, 1.0, false);
+			auto &written = guarded ? *value.expr : DecideUnguarded(*value.expr);
+			auto term = DirectScaledTerm(optimizer, written.Copy(), value.sign, false, 1.0, false);
 			total =
 			    total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
 		}
@@ -479,8 +482,16 @@ private:
 	}
 
 	//! The check of a raw value of P1, evaluated over P1: it raises what DirectNumberMessage names, reading the values
-	//! the number is computed from in the source columns P1 carries first.
-	unique_ptr<Expression> ValidNumber(const Stage &p1, ColumnBinding number, const DirectNumberNames &names) const {
+	//! the number is computed from in the source columns P1 carries first. `kept` is the number as a row its NULL guard
+	//! keeps reads it. A number that is a finite constant there is finite on every row (a skipped row reads 0), so no
+	//! row can fail it and there is no check (null).
+	unique_ptr<Expression> ValidNumber(const Stage &p1, ColumnBinding number, const DirectNumberNames &names,
+	                                   const unique_ptr<Expression> &kept) const {
+		double constant;
+		if (kept && TryEvaluateFoldableDouble(optimizer.context, *kept, constant, DIRECT_CONSTANT) &&
+		    std::isfinite(constant)) {
+			return nullptr;
+		}
 		auto message =
 		    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), names, [&](const Expression &input) {
 			    return calc.Wrap(DirectOverProjection(input, source_bindings, p1.index));
@@ -524,7 +535,9 @@ private:
 				                                   std::move(check))
 				           : std::move(check);
 			};
-			checks.push_back(read_on(ValidNumber(p1, coefficient, clause.coefficient_names)));
+			if (auto check = ValidNumber(p1, coefficient, clause.coefficient_names, SumOf(clause.coefficient, false))) {
+				checks.push_back(read_on(std::move(check)));
+			}
 			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
 			raw.clauses.push_back(columns);
 		}
@@ -566,26 +579,41 @@ private:
 		// is read one term at a time, with the part's factor applied, and never added up; each must still be valid,
 		// and is checked after the sums.
 		vector<ExprPtr> linear_sums(condition.decisions.size());
+		vector<ExprPtr> linear_kept(condition.decisions.size());
 		vector<unique_ptr<Expression>> constant_checks;
 		for (auto &term : part.linear.terms) {
-			auto value = calc.Wrap(DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false));
-			auto &sum = linear_sums[term.decision];
-			sum = sum ? calc.Add(sum, value) : value;
+			auto add = [&](ExprPtr &sum, const Expression &coefficient) {
+				auto value = calc.Wrap(DirectScaledTerm(optimizer, coefficient.Copy(), term.sign, false, 1.0, false));
+				sum = sum ? calc.Add(sum, value) : value;
+			};
+			add(linear_sums[term.decision], *term.coefficient);
+			add(linear_kept[term.decision], DecideUnguarded(*term.coefficient));
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::CONSTANT) {
 				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, part.linear.scaled,
 				                                        part.linear.scale, part.linear.divides));
-				constant_checks.push_back(ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names));
+				auto kept_value = DirectScaledTerm(optimizer, DecideUnguarded(*term.value).Copy(), term.sign,
+				                                   part.linear.scaled, part.linear.scale, part.linear.divides);
+				auto check = ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names, kept_value);
+				if (check) {
+					constant_checks.push_back(std::move(check));
+				}
 			} else {
 				Raw::SquareColumns square;
 				square.decision = term.decision;
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_linear)))));
-				checks.push_back(ValidNumber(p1, square.linear, term.inner_linear_names));
+				if (auto check =
+				        ValidNumber(p1, square.linear, term.inner_linear_names, SumOf(term.inner_linear, false))) {
+					checks.push_back(std::move(check));
+				}
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_constant)))));
-					checks.push_back(ValidNumber(p1, square.constant, term.inner_constant_names));
+					if (auto check = ValidNumber(p1, square.constant, term.inner_constant_names,
+					                             SumOf(term.inner_constant, false))) {
+						checks.push_back(std::move(check));
+					}
 				} else {
 					square.constant = p1.Add(calc.Out(calc.Num(0.0)));
 				}
@@ -597,7 +625,10 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(calc.Out(on_kept(linear_sums[d])));
-			checks.push_back(ValidNumber(p1, binding, part.linear.names[d]));
+			auto kept_sum = calc.Out(linear_kept[d]);
+			if (auto check = ValidNumber(p1, binding, part.linear.names[d], kept_sum)) {
+				checks.push_back(std::move(check));
+			}
 			columns.linear_decision.push_back(d);
 			columns.linear.push_back(binding);
 		}

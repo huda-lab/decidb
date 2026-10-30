@@ -208,6 +208,59 @@ def test_a1_invalid_coefficient_names_the_value_the_user_wrote(decidb_cli, bad):
         assert skip_two_w in error("x", "2 * w * x", mode), mode
 
 
+def _a1_plan_text(cli, objective):
+    # The plan with the box drawing and line breaks removed, so a message wrapped across lines reads as one string.
+    sql = f"""
+        EXPLAIN SELECT id, s FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
+        DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM({objective})
+    """
+    plan = _raw(cli, sql).stdout
+    assert "A1_SEPARABLE_BOX" in plan, plan
+    return "".join(plan.replace("│", "").split())
+
+
+@pytest.mark.correctness
+def test_a1_a_number_made_of_finite_literals_has_no_invalid_value_check(decidb_cli):
+    # A literal is finite on every row (a row the data skips reads 0), so the plan checks only the numbers a column
+    # makes: `p / 100` and not the `1` that multiplies `s` (BUG-41, which named it as a value NaN on some rows).
+    plan = _a1_plan_text(decidb_cli, "POWER(s - p / 100, 2)")
+    assert "DECIDE:p/100isNaNorinfiniteonsomerows" in plan
+    assert "DECIDE:1isNaNorinfinite" not in plan
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective,messages",
+    [
+        # A message left in the plan belongs to a number it computes (the sums and the answers), never to a literal. Each
+        # query reaches one site that checks a number: the bound's coefficient, a square's linear and constant parts,
+        # a constant term, and a decision's linear sum.
+        ("POWER(s - 3, 2) + 2", 4),
+        ("3 * s", 6),
+        # A column among the literals is still checked: the same query over `p` keeps the checks of its numbers.
+        ("POWER(s - p, 2) + 2", 6),
+    ],
+)
+def test_a1_a_finite_literal_adds_no_too_large_check(decidb_cli, objective, messages):
+    plan = _a1_plan_text(decidb_cli, objective)
+    assert plan.count("computesanumbertoolargeforaDOUBLE") == messages, plan
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p", "s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
+def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient):
+    # A literal that is not finite keeps its check, which names the objective as the solver path does. Under the data's
+    # NULL skip the literal is still no column's value, so it is never named as one.
+    sql = f"""
+        SELECT id, s FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
+        DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER({coefficient}, 2))
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "computes a number too large for a DOUBLE" in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
 def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):

@@ -5,6 +5,7 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
 namespace duckdb {
@@ -166,7 +167,8 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause) {
 	DirectNumberNames names;
 	for (auto &value : values) {
-		if (!value.expr->IsFoldable()) {
+		// A literal under a NULL guard (it reads 0 on a skipped row) is still a literal.
+		if (!DecideUnguarded(*value.expr).IsFoldable()) {
 			names.inputs.push_back(value.expr->Copy());
 			names.texts.push_back(ir.render(*value.expr));
 		}

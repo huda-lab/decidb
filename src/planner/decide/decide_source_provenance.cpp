@@ -88,14 +88,16 @@ static RenderContext ContextOf(const DecideSourceNames &names) {
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence = 0);
 
-//! The value a NULL guard (NULL_GUARD_TAG) protects: the first operand of a COALESCE, the THEN of a CASE.
-static const Expression &GuardedValue(const Expression &guard) {
-	if (guard.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
-		return *guard.Cast<BoundCaseExpression>().case_checks[0].then_expr;
+const Expression &DecideUnguarded(const Expression &expr) {
+	if (!HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
+		return expr;
 	}
-	D_ASSERT(guard.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
-	         guard.type == ExpressionType::OPERATOR_COALESCE);
-	return *guard.Cast<BoundOperatorExpression>().children[0];
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
+		return *expr.Cast<BoundCaseExpression>().case_checks[0].then_expr;
+	}
+	D_ASSERT(expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
+	         expr.type == ExpressionType::OPERATOR_COALESCE);
+	return *expr.Cast<BoundOperatorExpression>().children[0];
 }
 
 //! A column name as SQL spells it: quoted where it would otherwise not parse -- a
@@ -375,7 +377,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		return StripDecideTags(expr.GetAlias()); // a bound's reducer, as written: SQL, not an identifier
 	}
 	if (HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
-		return RenderSource(GuardedValue(expr), ctx, parent_precedence);
+		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 	    HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {
