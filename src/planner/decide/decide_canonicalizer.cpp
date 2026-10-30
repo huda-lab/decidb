@@ -1763,8 +1763,8 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		// all, and may leave the reducer with none: the ANR plan's phase 6.
 		if (reducer && ReferencesDecideVar(*reducer) && frame.MaySelectNothing()) {
 			throw BinderException("DECIDE: %s may select no position inside %s, a reducer over decisions, which is "
-			                      "not supported yet; give it an else, or make its timeline cyclic",
-			                      frame.text, QuoteAsWritten(*reducer));
+			                      "not supported yet; %s",
+			                      frame.text, QuoteAsWritten(*reducer), DecideFrameAbsenceRemedy(frame));
 		}
 		if (!per) {
 			return;

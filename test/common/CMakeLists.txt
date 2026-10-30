@@ -8,6 +8,7 @@ add_library_unity(
   test_decidb_diagnostic_engines.cpp
   test_decidb_probe_models.cpp
   test_decidb_escape_characterization.cpp
+  test_decidb_frame_predicates.cpp
   test_decidb_plan_serialization.cpp
   test_decidb_router.cpp
   test_decidb_solver_registry.cpp

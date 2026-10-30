@@ -881,11 +881,12 @@ class AnrModel:
             raise ScopeError("ambiguous_peer", f"{len(peers[q])} rows at {within}, {timeline.order[peers[q][0]]}")
         return next(iter(candidates.values()))
 
-    def _payload(self, node: Range, r, kept):
-        """The payload at a selected row; ``count`` skips a NULL rather than reading it
-        as a coefficient (D78 makes a NULL payload an error everywhere else)."""
+    def _payload(self, node: Range, part, r, kept):
+        """A value the range reads -- its payload at a selected row, or its fallback at the
+        anchor; ``count`` skips a NULL rather than reading it as a coefficient (D78 makes a
+        NULL an error everywhere else)."""
         try:
-            return self._form(node.payload, r, kept)
+            return self._form(part, r, kept)
         except ScopeError as error:
             if node.kind == "count" and error.kind == "null_value":
                 return NULL
@@ -898,17 +899,13 @@ class AnrModel:
         timeline = self._timeline(node.over, kept)
         within, anchor = timeline.position[t]
         peers = timeline.peers[within]
-        values, missing = [], 0
-        for q in self._requested(node, anchor, len(peers)):
-            p = self._wrap(q, len(peers), node.over.cyclic)
-            if p is None:
-                missing += 1
-                continue
-            values.extend(self._payload(node, r, kept) for r in peers[p])
+        selected = [self._wrap(q, len(peers), node.over.cyclic) for q in self._requested(node, anchor, len(peers))]
+        missing = sum(1 for p in selected if p is None)
         if node.all and missing:
-            return ABSENT
+            return ABSENT  # nothing is read, so no value it would read can fail
+        values = [self._payload(node, node.payload, r, kept) for p in selected if p is not None for r in peers[p]]
         if missing and node.fallback is not None:
-            values.extend([self._form(node.fallback, t, kept)] * missing)
+            values.extend([self._payload(node, node.fallback, t, kept)] * missing)
         return self._combine(node.kind, values)
 
     # -- reading DeciDB's answer and assignments ----------------------------------

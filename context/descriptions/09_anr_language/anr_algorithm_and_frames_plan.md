@@ -1,6 +1,7 @@
 # The full ANR algorithm and frame selectors — implementation plan
 
-Status: phases 0, 1 and 2 shipped (2026-10-28); phases 3–7 to build. Baseline commit
+Status: phases 0, 1 and 2 shipped (2026-10-28), 3 (2026-10-29), 4 and 5 (2026-10-30);
+phases 6 and 7 to build. Baseline commit
 38275dde6f (branch `Sami-Active`), reviewed
 27 October 2026 against `~/Desktop/Capstone/ANR.pdf` (the "DeciQL proposals" deck, 119
 pages) and `ANR Implementation.pdf`. It supersedes the first draft, which was never
@@ -740,14 +741,63 @@ field — F19; (3) frame reads — F2, F9, F18, F4, F15, deck examples 1, 4, 5, 
 query, keyed and query-wide payloads and fallbacks; (4) the refusals, EXPLAIN and DIAGNOSE
 pins, docs, the full verification list.
 
-### Phase 5 — Range selectors
+### Phase 5 — Range selectors (shipped 2026-10-30)
+
+Built as the design below says; the record, with the choices made beyond it, is
+`done.md`, "phase 5".
 
 - `from … to …`, `every`, `else` per position, `all`; SUM/AVG/MIN/MAX/COUNT over the
   selected rows; data-only ranges as values; decision ranges as helpers; the expansion
   limit and interrupt polling.
-- Tests: `test_anr_frames.py::TestRange` (§6.6): F5, F6, deck examples 2, 3, 6; cyclic
+- Tests: `test_anr_frames.py::TestRange` (§6.6): F5, F6, deck examples 2 and 6 (example
+  3 is a point frame that may miss inside a reducer over decisions, phase 6); cyclic
   repeats; reversed ranges; `all` versus `else`.
 - Exit: the range matrix of §6.6 passes on both solvers.
+
+**Design (written 2026-10-30, before the code).** Words used below: an anchor's **range**
+is the list of values a range frame reads for it — every row of each position it
+selects (a repeated visit again), and, with `else v`, one `v` per missing position; a
+**window** is one range several anchors share. Two anchors share a window when nothing
+about the anchor itself changes what is read: under `first`/`last` at both ends, every
+anchor of a timeline reads the same range; under a relative end, every anchor of a peer
+does, except where it reaches an `else` that reads the anchor's own row.
+
+One idea per kind of payload:
+
+- **Over data, a range is a value**, as a point frame over data is: one column of the
+  frame's own reducer type (`sum` of an INTEGER is a HUGEINT, `max` of a DATE a DATE),
+  computed by running the bound aggregate itself over each window's values, so SQL's
+  types and arithmetic hold. A NULL among a window's values makes that window's value
+  NULL, which its reader reports as today's NULL bound or coefficient (D78); `count`
+  skips it, as SQL's `count(e)` does.
+- **Over decisions, a range is a helper decision per window** (D72), defined once per
+  window: an equality for SUM and AVG, an extremum link for MIN and MAX. The helper
+  replaces the frame in the tree before any other rewrite, so ABS, `norm`, `<>`,
+  MIN/MAX and every reducer read it as an ordinary keyed decision and the canonical
+  shape stands. A window over a timeline is one helper for the whole timeline, so
+  `x <= sum(from first to last: x) over (t.period)` over n rows is one definition of n
+  terms, not n of them.
+
+| Layer | Owns in phase 5 | Contract it hands down |
+|---|---|---|
+| 2 binder | A range's `else` and payload take one type, as a point's do; the range's reducer is bound over it | the marker `agg(e)` tagged `__frame_<i>__` |
+| 3 plan | `DecideFrameSpec::MaySelectNothing()` for ranges, exact per endpoint pair: a range may read nothing when it may be empty (a reversed pair such as `from next to previous`, or `from first to 2 previous` near the start), when `all` meets a missing position, or when, with no `else`, every requested position may lie off the timeline; `count` is never empty (0), only `all` makes it absent | the frame's placement and policy |
+| 4 canonicalizer | Unchanged: a range marker is a tuple term like a point's; placement, D69 and the signature field (D76) already read `Relative()`; the phase-6 refusal of a frame that may read nothing inside a reducer over decisions now covers ranges | placed frames |
+| 5 rewrites | `RewriteFrameRanges`, first among the rewrites: each range over decisions becomes a helper decision with one instance per window (a scope of its own, built by execution from the frame map) and a `ReducerValueLink` naming the frame; a MIN/MAX helper's sides are read off the way its comparison pushes it, through `+`, `-`, data factors and enclosing SUM/AVG, both sides elsewhere (D73) | the helper, in every row a rewrite derives |
+| 5 linear form | A range over data becomes one `REDUCED` column; one inside a bound-side reducer that may read nothing adds its `PRESENT` column to the reducer's `when`, as a point does; a range's `else` gives `FALLBACK` columns, read by the helper's definition and by the signature where an anchor reaches it | `DecidePreparedModel::frame_columns`, `ReducerValueLink::fallback_terms` |
+| 6 formulation | A helper's members are handed over **listed**: per instance, the row it is read at and its members, each a constant and terms (decision, row, coefficient). The rows form of today, which assumes the groups partition the rows, cannot state windows that share rows; execution now lists every link, and the three passes over links read one form | `ReducerValueLinkSpec::members` |
+| 8 execution | The frame map's windows and their values (rows with visit counts, missing positions), in O(values) work: positions off a timeline that does not wrap are counted, never visited; `decide_frame_limit` (default 10,000,000 values per frame) is checked as they are listed, and an interrupt polled; absence per anchor; the `REDUCED` column through the aggregate's own state functions; the helper scope's entities (one per window); each link's members listed (a window's rows read once each, AVG scaled by the window's value count, a fallback scaled by its missing positions) | the model |
+
+Choices beyond the text above, recorded as such:
+
+- The helpers are keyed per **window**, not per anchor row (§4.5 step 3 said a helper
+  per row): the definition rows then grow with the windows, not with anchors × width.
+- The limit counts the **values** a frame reads (each row read at a selected position,
+  each `else` standing in for a missing one), which is what memory holds, rather than
+  the positions it requests: ties in the order key can make one position many rows.
+- A range in the objective's root follows D66 as a point does: `sum(from first to last:
+  x) over (t.period)` is one value; one relative to the anchor is produced once per
+  position and refused.
 
 ### Phase 6 — Composition, diagnostics, guards
 

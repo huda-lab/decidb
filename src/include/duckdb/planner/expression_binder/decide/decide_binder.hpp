@@ -218,6 +218,11 @@ protected:
     //! query runs (D80).
     ErrorData BindFrameFallback(DecideFrameExpression &frame, const DecideFrameSpec &spec,
                                 const string &fallback_text, idx_t depth, unique_ptr<Expression> &out);
+    //! The catalog aggregate `name` (a range's reducer, or a point's `first`) over a bound
+    //! payload, aliased `alias`; null, with `error` set, when none takes its type.
+    unique_ptr<Expression> BindFrameAggregate(const string &name, unique_ptr<Expression> payload,
+                                              const DecideFrameExpression &frame, const string &alias,
+                                              ErrorData &error);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     //! The dispatch itself. `BindExpression` wraps it so every bound node this binder

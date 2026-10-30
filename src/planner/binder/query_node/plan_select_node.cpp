@@ -171,14 +171,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         };
         tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
         tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
-        // A range frame parses, binds and has its subqueries planned; formulating one is
-        // the ANR plan's phase 5. It stops here, before canonicalization -- the first layer
-        // that would read it -- so no later layer refuses it for a reason of its own.
-        for (auto &frame : statement.decide_frames) {
-            if (frame.range) {
-                throw BinderException("DECIDE: a range frame selector is not supported yet: %s", frame.text);
-            }
-        }
         // Canonicalization: the single point at which the shape of a user-written
         // constraint is decided (decision terms left, data right). Runs here rather
         // than during binding because it needs bound expressions -- a decision

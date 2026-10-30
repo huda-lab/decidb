@@ -382,12 +382,50 @@ struct AbsMaximizeLinkSpec {
     bool range_unbounded = false;
 };
 
-//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated.
-//! `rows` holds the reducer's members: the inner terms' coefficients on the rows the
-//! clause and the reducer keep (every other row 0), grouped by the `by` key over the kept
-//! rows. For SUM and AVG it also carries the helper's own term, -1 on each group's first
-//! row, so the row is the equality `members - value = 0` per group; a MIN/MAX helper is
-//! pinned by an extremum link per group instead (ExtremumLinkSpec).
+//! The members a helper decision is defined from, listed per group -- one group per
+//! instance of the helper -- in flat arrays: group `g` is read at `group_rows[g]` and
+//! holds members [group_begin[g], group_begin[g + 1]); member `m` is `constants[m]` plus
+//! the terms [member_begin[m], member_begin[m + 1]), each `coefficients[t]` times decision
+//! `variables[t]` read at `rows[t]`. Listed rather than given as rows with a group each,
+//! because the groups may share rows: a range frame's windows (syntax_reference.md
+//! §5.6) overlap where a `by` key's groups partition.
+struct ReducerValueMembers {
+    vector<idx_t> group_rows;
+    vector<idx_t> group_begin {0};
+    vector<double> constants;
+    vector<idx_t> member_begin {0};
+    vector<idx_t> variables;
+    vector<idx_t> rows;
+    vector<double> coefficients;
+
+    idx_t GroupCount() const {
+        return group_rows.size();
+    }
+    //! Open group `g`, read at `row`: the members added next are its.
+    void AddGroup(idx_t row) {
+        group_rows.push_back(row);
+        group_begin.push_back(group_begin.back());
+    }
+    //! Open a member of the last group, with `constant`: the terms added next are its.
+    void AddMember(double constant) {
+        constants.push_back(constant);
+        member_begin.push_back(member_begin.back());
+        group_begin.back()++;
+    }
+    //! A term of the last member.
+    void AddTerm(idx_t variable, idx_t row, double coefficient) {
+        variables.push_back(variable);
+        rows.push_back(row);
+        coefficients.push_back(coefficient);
+        member_begin.back()++;
+    }
+};
+
+//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated:
+//! its members, each a linear expression over decisions read at rows (an AVG's carry its
+//! 1/n). For SUM and AVG stage 06 states the equality `value - members = constants` per
+//! group; a MIN/MAX helper is pinned by an extremum link per group instead
+//! (ExtremumLinkSpec). A group with no member defines nothing.
 struct ReducerValueLinkSpec {
     idx_t value_var = DConstants::INVALID_INDEX;
     string agg_name;
@@ -395,7 +433,11 @@ struct ReducerValueLinkSpec {
     bool need_closing = false;
     //! The reducer as written, for the rows and columns a diagnosis names.
     string label;
-    EvaluatedConstraint rows;
+    //! The clause the helper belongs to (INVALID_INDEX for the objective), and its atomic
+    //! removal group: every row its definition emits carries both.
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
+    idx_t removal_group_id = DConstants::INVALID_INDEX;
+    ReducerValueMembers members;
 };
 
 //! A construct handed to the backend whole, instead of being lowered into rows.

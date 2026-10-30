@@ -12,6 +12,10 @@
 // definition), and the comparison is then an ordinary row per class. Deck example 1,
 // `ship <= 0.20 * sum(ship)`, costs N rows and one helper rather than N rows of N terms.
 //
+// A range frame over decisions (syntax_reference.md §5.6) is a reducer whose groups are
+// the frame's windows, and becomes a helper through the same door (AddValueHelper,
+// CollectDecisionSites; RewriteFrameRanges in decide_rewrite_frames.cpp).
+//
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
@@ -40,67 +44,74 @@ namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-namespace {
-
-//! A decision reducer on the decision side of a VALUE-shape comparison, and the sign its
-//! term carries once the side is read as a sum: through `+`, `-`, binder casts and the
-//! factors on it. 0 when that sign is not known before the query runs -- a factor that is
-//! a data column or a subquery, a reducer inside another expression -- which pins a
-//! MIN/MAX helper from both sides.
-struct ReducerSite {
-	unique_ptr<Expression> *slot;
-	int sign;
-};
-
-void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &context, idx_t decide_index,
-                         vector<ReducerSite> &out) {
-	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
-		return; // data holds no decision reducer
+void decide_rewrite::CollectDecisionSites(unique_ptr<Expression> &expr, int sign, DecisionSiteKind kind,
+                                          ClientContext &context, const LogicalDecide &decide,
+                                          vector<DecisionSite> &out) {
+	if (!BoundExpressionReferencesDecide(*expr, decide.decide_index)) {
+		return; // data holds no decision reducer and no range over decisions
 	}
 	switch (expr->GetExpressionClass()) {
 	case ExpressionClass::BOUND_AGGREGATE: {
 		idx_t frame;
-		if (!TryGetDecideFrame(*expr, frame)) {
-			out.push_back({&expr, sign}); // a frame is a tuple term of the row, no reducer
+		if (TryGetDecideFrame(*expr, frame)) {
+			// A point is read in place, a tuple term of the row; a range over decisions is a
+			// site of the range rewrite. No frame stands in a payload (D74).
+			if (kind == DecisionSiteKind::RANGES && frame < decide.frames.size() && decide.frames[frame].range) {
+				out.push_back({&expr, sign});
+			}
+			return;
+		}
+		if (kind == DecisionSiteKind::REDUCERS) {
+			out.push_back({&expr, sign});
+			return;
+		}
+		// A SUM or AVG passes its members' sign through, by positive weights; a MIN, a MAX
+		// (D73) and a norm do not.
+		auto &reducer = expr->Cast<BoundAggregateExpression>();
+		auto name = StringUtil::Lower(reducer.function.name);
+		string norm;
+		const bool passes = (name == "sum" || name == "avg") && !TryParseNormMarker(reducer.GetAlias(), norm);
+		for (auto &child : reducer.children) {
+			CollectDecisionSites(child, passes ? sign : 0, kind, context, decide, out);
 		}
 		return;
 	}
 	case ExpressionClass::BOUND_CAST:
-		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, out);
+		CollectDecisionSites(expr->Cast<BoundCastExpression>().child, sign, kind, context, decide, out);
 		return;
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr->Cast<BoundFunctionExpression>();
 		auto &name = func.function.name;
 		if (name == "+") {
 			for (auto &child : func.children) {
-				CollectReducerSites(child, sign, context, decide_index, out);
+				CollectDecisionSites(child, sign, kind, context, decide, out);
 			}
 			return;
 		}
 		if (name == "-" && func.children.size() == 2) {
-			CollectReducerSites(func.children[0], sign, context, decide_index, out);
-			CollectReducerSites(func.children[1], -sign, context, decide_index, out);
+			CollectDecisionSites(func.children[0], sign, kind, context, decide, out);
+			CollectDecisionSites(func.children[1], -sign, kind, context, decide, out);
 			return;
 		}
 		if (name == "-" && func.children.size() == 1) {
-			CollectReducerSites(func.children[0], -sign, context, decide_index, out);
+			CollectDecisionSites(func.children[0], -sign, kind, context, decide, out);
 			return;
 		}
 		if ((name == "*" || name == "/") && func.children.size() == 2) {
-			// `factor * reducer` and `reducer / factor`: the factor's sign, when it is known
-			// before the query runs. A reducer in a divisor, or two decision-bearing
-			// factors, leave the sign unknown.
+			// `factor * term` and `term / factor`: the factor's sign, when it is known before
+			// the query runs. A term in a divisor, or two decision-bearing factors, leave the
+			// sign unknown.
 			for (idx_t i = 0; i < 2; i++) {
 				auto &term = func.children[i];
 				auto &other = func.children[1 - i];
-				if (!BoundExpressionReferencesDecide(*term, decide_index)) {
+				if (!BoundExpressionReferencesDecide(*term, decide.decide_index)) {
 					continue;
 				}
 				int factor_sign = 0;
-				if (!(name == "/" && i == 1) && !BoundExpressionReferencesDecide(*other, decide_index)) {
+				if (!(name == "/" && i == 1) && !BoundExpressionReferencesDecide(*other, decide.decide_index)) {
 					factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/");
 				}
-				CollectReducerSites(term, sign * factor_sign, context, decide_index, out);
+				CollectDecisionSites(term, sign * factor_sign, kind, context, decide, out);
 			}
 			return;
 		}
@@ -111,9 +122,48 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 	}
 	// Any other node (ABS, POWER, CASE, ...): the sign of what it holds is not known.
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		CollectReducerSites(child, 0, context, decide_index, out);
+		CollectDecisionSites(child, 0, kind, context, decide, out);
 	});
 }
+
+void decide_rewrite::ExtremumSides(const string &agg_name, ExtremumPush push, bool &need_envelope,
+                                   bool &need_closing) {
+	// Under `<=` a positive term is pushed down, so a MAX needs its envelope (`value >=
+	// member`) and a MIN its closing side (`value >= some member`, with indicators); the
+	// mirror for `>=` and for a negative term. An unknown sign, `=` and `<>` need both.
+	const bool extremum = agg_name == "min" || agg_name == "max";
+	const bool easy = IsEasyExtremum(agg_name == "max", push);
+	need_envelope = extremum && (push == ExtremumPush::NONE || easy);
+	need_closing = extremum && (push == ExtremumPush::NONE || !easy);
+}
+
+idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link,
+                                     unique_ptr<EntityScopeInfo> scope, bool whole,
+                                     LogicalDecide::RewriteAccount::Kind account) {
+	const idx_t link_idx = decide.reducer_value_links.size();
+	// One instance per entity of its scope, which execution builds from the link, or one
+	// for the query.
+	auto var_scope = DecideVarScopeInfo::Scalar();
+	if (scope) {
+		scope->value_link = link_idx;
+		decide.entity_scopes.push_back(std::move(*scope));
+		var_scope = DecideVarScopeInfo::Entity(decide.entity_scopes.size() - 1);
+	}
+	// F6: a diagnosis, and a plan, name the helper by what it holds, `by` included.
+	link.value_var = AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__",
+	                                      whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false, var_scope,
+	                                      link.label);
+	if (var_scope.IsEntity()) {
+		decide.entity_scopes[var_scope.entity_scope_idx].scoped_variable_indices.push_back(link.value_var);
+	}
+	AddRewriteAccount(decide, link.source_clause_id, account, link.label);
+	decide.reducer_value_links.push_back(std::move(link));
+	return link_idx;
+}
+
+namespace {
+
+using ReducerSite = DecisionSite;
 
 //! The helper decisions allocated so far, each with the reducer it holds as written (the
 //! alias carries its `by` key and qualifier). One occurrence of a reducer in a clause is
@@ -124,7 +174,8 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 //! different clauses never share one: the definition carries one clause's provenance.
 struct Helpers {
 	LogicalDecide &decide;
-	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
+	vector<unique_ptr<Expression>> reducers; //!< each helper's reducer, as written
+	vector<idx_t> links;                     //!< parallel: its link, into decide.reducer_value_links
 	vector<bool> objective;                  //!< parallel: the helper serves the objective
 
 	//! The link holding `agg` for a row of the clause `source_clause_id` (or of the
@@ -135,8 +186,9 @@ struct Helpers {
 		if (source_clause_id == DConstants::INVALID_INDEX && !objective_row) {
 			return DConstants::INVALID_INDEX;
 		}
+		// Other links -- a range frame's (RewriteFrameRanges) -- stand among these.
 		for (idx_t i = 0; i < reducers.size(); i++) {
-			auto &link = decide.reducer_value_links[i];
+			auto &link = decide.reducer_value_links[links[i]];
 			if (link.source_clause_id != source_clause_id || objective[i] != objective_row ||
 			    link.group_key != group_key || !reducers[i]->Equals(agg) ||
 			    reducers[i]->GetAlias() != agg.GetAlias()) {
@@ -145,7 +197,7 @@ struct Helpers {
 			// A clause's rows carry copies of its `when`: the same condition.
 			const bool same_rows = rows ? link.when && link.when->Equals(*rows) : !link.when;
 			if (same_rows) {
-				return i;
+				return links[i];
 			}
 		}
 		return DConstants::INVALID_INDEX;
@@ -172,7 +224,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	// the argument; a member of a MIN or MAX is pinned from both sides (D73).
 	vector<ReducerSite> nested;
 	if (!agg.children.empty()) {
-		CollectReducerSites(agg.children[0], 1, context, decide.decide_index, nested);
+		CollectDecisionSites(agg.children[0], 1, DecisionSiteKind::REDUCERS, context, decide, nested);
 	}
 	auto below = path.Below(agg);
 	for (auto &inner : nested) {
@@ -201,13 +253,9 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	}
 
 	// MIN/MAX: which side pins the helper is the one the row would otherwise let it escape
-	// through. Under `<=` a positive term is pushed down, so a MAX needs its envelope
-	// (`value >= member`) and a MIN its closing side (`value >= some member`, with
-	// indicators); the mirror for `>=` and for a negative term. An unknown sign, `=` and
-	// `<>` need both. A helper several rows read needs every side any of them does.
-	const bool easy = IsEasyExtremum(agg_name == "max", push);
-	const bool need_envelope = extremum && (push == ExtremumPush::NONE || easy);
-	const bool need_closing = extremum && (push == ExtremumPush::NONE || !easy);
+	// through (ExtremumSides). A helper several rows read needs every side any of them does.
+	bool need_envelope, need_closing;
+	ExtremumSides(agg_name, push, need_envelope, need_closing);
 
 	// `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when
 	// the helper is whole. The binder admitted the clause by its own reading: a constant
@@ -257,37 +305,25 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	link.removal_group_id = removal_group_id;
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
-	link_idx = decide.reducer_value_links.size();
 
 	// The helper decision: whole-numbered when the reducer's value is, so a strict bound on
 	// the rewritten row still steps on the integer lattice; a query-wide decision when its
 	// path key is `by ()` throughout, else one instance per group of that key among the rows
 	// its path keeps -- a scope of its own (EntityScopeInfo::value_link), which execution
 	// builds from the link.
-	auto var_scope = DecideVarScopeInfo::Scalar();
+	unique_ptr<EntityScopeInfo> scope;
 	if (link.group_key != DConstants::INVALID_INDEX) {
-		EntityScopeInfo helper_scope;
-		helper_scope.table_alias = decide.group_keys[link.group_key].text;
-		helper_scope.key_names = decide.group_keys[link.group_key].names;
-		helper_scope.value_link = link_idx;
-		decide.entity_scopes.push_back(std::move(helper_scope));
-		var_scope = DecideVarScopeInfo::Entity(decide.entity_scopes.size() - 1);
+		scope = make_uniq<EntityScopeInfo>();
+		scope->table_alias = decide.group_keys[link.group_key].text;
+		scope->key_names = decide.group_keys[link.group_key].names;
 	}
-	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
-	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included.
-	link.value_var =
-	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
-	AddRewriteAccount(decide, source_clause_id,
-	                  var_scope.IsEntity() ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP
-	                                       : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER,
-	                  plan_label);
-	if (var_scope.IsEntity()) {
-		decide.entity_scopes[var_scope.entity_scope_idx].scoped_variable_indices.push_back(link.value_var);
-	}
+	const auto account = scope ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP
+	                           : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER;
+	link_idx = AddValueHelper(decide, std::move(link), std::move(scope), whole, account);
 	helpers.reducers.push_back(agg.Copy());
+	helpers.links.push_back(link_idx);
 	helpers.objective.push_back(objective_row);
-	*site.slot = MakeDecisionRef(decide, link.value_var);
-	decide.reducer_value_links.push_back(std::move(link));
+	*site.slot = MakeDecisionRef(decide, decide.reducer_value_links[link_idx].value_var);
 }
 
 //! The key a reducer's own `per` names, as expressions: its key scope's columns, or for a
@@ -368,7 +404,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	}
 	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
 	                             decide.aux_var_expressions);
-	Helpers helpers {decide, {}, {}};
+	Helpers helpers {decide, {}, {}, {}};
 
 	std::function<void(unique_ptr<Expression> &, ClauseScope)> rewrite = [&](unique_ptr<Expression> &expr,
 	                                                                         ClauseScope scope) {
@@ -393,7 +429,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		TryParseRemovalGroupTag(cmp.GetAlias(), removal_group_id);
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
-		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, sites);
+		CollectDecisionSites(cmp.left, 1, DecisionSiteKind::REDUCERS, optimizer.context, decide, sites);
 		const bool objective_row = HasDecideTag(cmp.GetAlias(), OBJECTIVE_ROW_TAG);
 		DecideReducerPath path;
 		if (scope.when) {
@@ -423,7 +459,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		body = &decide.decide_objective->Cast<BoundConjunctionExpression>().children[0];
 	}
 	vector<ReducerSite> sites;
-	CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, sites);
+	CollectDecisionSites(*body, 1, DecisionSiteKind::REDUCERS, optimizer.context, decide, sites);
 	DecideReducerPath path;
 	if (scope.when) {
 		path.conditions.push_back(scope.when);

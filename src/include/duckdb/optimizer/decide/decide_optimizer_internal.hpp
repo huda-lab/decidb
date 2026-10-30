@@ -89,5 +89,40 @@ void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDec
 void AddRewriteAccount(LogicalDecide &decide, const string &clause_alias, LogicalDecide::RewriteAccount::Kind kind,
                        string subject);
 
+//! A decision-bearing expression a rewrite replaces by a helper decision -- a reducer, or a
+//! range frame over decisions (syntax_reference.md §5.6) -- and the sign its term carries
+//! once the side it stands in is read as a sum: through `+`, `-`, binder casts and data
+//! factors of known sign; 0 where that sign is not known before the query runs (a factor
+//! that is a data column or a subquery, anything else around it), which pins a MIN/MAX
+//! helper from both sides.
+struct DecisionSite {
+	unique_ptr<Expression> *slot;
+	int sign;
+};
+enum class DecisionSiteKind : uint8_t {
+	//! The value rewrite's: the reducers of a side, outside every reducer (it walks a
+	//! reducer's argument at that reducer, along its path); a frame is skipped.
+	REDUCERS,
+	//! The range rewrite's: every range over decisions, through the members of a SUM or AVG
+	//! (whose sign they keep) and under anything else (sign 0; under a MIN or MAX, D73).
+	RANGES
+};
+//! The sites of `kind` in `expr`, whose sign is `sign`, appended to `out`.
+void CollectDecisionSites(unique_ptr<Expression> &expr, int sign, DecisionSiteKind kind, ClientContext &context,
+                          const LogicalDecide &decide, vector<DecisionSite> &out);
+
+//! The sides a helper holding a MIN or MAX (`agg_name`) pushed `push` needs
+//! (ExtremumLinkSpec): its envelope when pushed its cheap way, its closing side the other
+//! way, both under NONE; neither for any other reducer, whose definition is an equality.
+void ExtremumSides(const string &agg_name, ExtremumPush push, bool &need_envelope, bool &need_closing);
+
+//! The helper decision holding `link`'s value, appended to the plan's: whole-numbered when
+//! `whole`, so a strict bound on a row reading it still steps on the integer lattice; one
+//! instance per entity of `scope` (which names the link, and which execution builds from
+//! it), or one for the query when `scope` is null; named, in a plan and a diagnosis, by
+//! `link.label`, under `account` in EXPLAIN. Returns the link's index.
+idx_t AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link, unique_ptr<EntityScopeInfo> scope,
+                     bool whole, LogicalDecide::RewriteAccount::Kind account);
+
 } // namespace decide_rewrite
 } // namespace duckdb

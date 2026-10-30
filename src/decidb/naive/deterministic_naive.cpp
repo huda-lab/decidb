@@ -545,6 +545,15 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
         status = highs.run();
         highs.setOptionValue("mip_feasibility_tolerance", HIGHS_INTEGRALITY_TOLERANCE);
     }
+    // HiGHS's MIP presolve can also return a point it calls optimal that violates a bound
+    // or a row outright, on a model with no integer point at all (`3 * y = 1`, `y`
+    // whole, beside columns presolve fixes), and then report the same solve error. Without
+    // presolve its search settles the model's status itself, so a last run reads that.
+    if (status == HighsStatus::kError && is_mip && highs.getModelStatus() == HighsModelStatus::kSolveError) {
+        highs.setOptionValue("presolve", "off");
+        status = highs.run();
+        highs.setOptionValue("presolve", "choose");
+    }
     phase.Next("highs.status_and_readback");
     if (DecideProfileScope::Enabled()) {
         const auto &info = highs.getInfo();

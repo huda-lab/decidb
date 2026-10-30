@@ -366,11 +366,18 @@ private:
 
     //! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
     //! reducer it holds, among those the clause and the reducer keep, grouped by its `by`
-    //! key -- onto gstate.evaluated_value_links. The formulation pass states the
+    //! key, or what each window of a range frame reads -- listed onto
+    //! gstate.evaluated_value_links (ReducerValueMembers). The formulation pass states the
     //! definition over them.
     void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                    const vector<EntityMapping> &entity_mappings) const;
+    //! A range frame's helper (`link.frame`), into `out`: one group per window that reads
+    //! something, read at its anchor; a member per row the window reads, and one for its
+    //! `else` where a position is missing (syntax_reference.md §5.6).
+    void EvaluateFrameLink(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                           ChunkExprCache &chunk_expr_cache, const LogicalDecide::ReducerValueLink &link,
+                           ReducerValueMembers &out) const;
 
     //! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
     //! types and the column box, implied-bound propagation, the objective transfer with

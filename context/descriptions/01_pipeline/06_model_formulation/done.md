@@ -640,14 +640,19 @@ members it actually writes, so the native arm allocates none at all.
 ### Helper decisions of the value rewrite
 
 Stage 05 replaced each decision reducer of a VALUE-shape clause by a helper
-decision, and every reducer nested in one, or in a nested objective, by one keyed by its
-path (`05_optimizer/done.md`); stage 08 evaluated that reducer's members per group
-of its path key into a `ReducerValueLinkSpec` (`solver_input.hpp`): an
-`EvaluatedConstraint` whose terms are the body's -- an inner helper among them, read at
-the member's row through its own entity mapping -- nonzero only on the rows the path and
-the reducer keep, grouped by the path key over the rows the path keeps, with the link's
-label (the reducer with its `by`) and provenance. Links arrive innermost first. The
-helper's own column enters only here (`linearization_reducer_value.cpp`).
+decision, every reducer nested in one, or in a nested objective, by one keyed by its
+path, and each range frame over decisions by one per window of its frame
+(`05_optimizer/done.md`); stage 08 evaluated each one's members into a
+`ReducerValueLinkSpec` (`solver_input.hpp`), with the link's label (the reducer as
+written) and provenance. The members arrive **listed** (`ReducerValueMembers`): per group
+-- one per instance of the helper, read at `group_rows[g]` -- its members, each a constant
+and terms, each a decision read at a row with its coefficient (an inner helper among them,
+read at the member's row through its own entity mapping; an AVG's coefficients already
+carry the 1/n). Listed rather than as rows each in one group because a range frame's
+windows share rows, where a `by` key's groups partition them; stage 08 lists a reducer's
+too, so the three passes below read one form. A group with no member defines nothing.
+Links arrive innermost first. The helper's own column enters only here
+(`linearization_reducer_value.cpp`).
 
 `DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
 members' signed brackets for SUM/AVG (an AVG's coefficients already carry the 1/n), their

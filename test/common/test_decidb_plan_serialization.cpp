@@ -399,16 +399,45 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 	}
 }
 
-TEST_CASE("A range frame stops before canonicalization until phase 5", "[decidb]") {
+TEST_CASE("A placed range frame survives a serialization round trip", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SetUp(con);
 
-	REQUIRE_THROWS_WITH(con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
-	                                    "SUCH THAT sum(from previous to next: x) over (site.cap within region) <= 9 "
-	                                    "MAXIMIZE sum(x)"),
-	                    Catch::Contains("a range frame selector is not supported yet: sum(from previous to next: x) "
-	                                    "over (site.cap within region)"));
+	// A range carries its reducer, both ends with their k, its step and its policy beside a
+	// point's fields; execution reads each (DecideFrameSpec::MaySelectNothing among them).
+	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
+	                            "SUCH THAT x <= 9 AND sum(from 2 previous to 3 next every 2 all: x) "
+	                            "over (site.cap within region) <= 9 "
+	                            "AND x <= avg(from first to last else 0.5: site.cap) over (site.s_key cyclic) "
+	                            "MAXIMIZE sum(x)");
+	auto *before = FindDecide(*plan);
+	REQUIRE(before != nullptr);
+	REQUIRE(before->frames.size() == 2);
+	REQUIRE(before->frames[0].range);
+	REQUIRE(before->frames[0].reducer == "sum");
+	REQUIRE(before->frames[1].reducer == "avg");
+	REQUIRE(before->frames[1].fallback != nullptr);
+
+	auto copied = RoundTrip(con, *plan);
+	auto *after = FindDecide(*copied);
+	REQUIRE(after != nullptr);
+	REQUIRE(after->frames.size() == before->frames.size());
+	for (idx_t i = 0; i < before->frames.size(); i++) {
+		auto &b = before->frames[i];
+		auto &a = after->frames[i];
+		REQUIRE(a.range == b.range);
+		REQUIRE(a.reducer == b.reducer);
+		REQUIRE(a.from == b.from);
+		REQUIRE(a.from_k == b.from_k);
+		REQUIRE(a.to == b.to);
+		REQUIRE(a.to_k == b.to_k);
+		REQUIRE(a.every == b.every);
+		REQUIRE(a.all == b.all);
+		REQUIRE((a.fallback != nullptr) == (b.fallback != nullptr));
+		REQUIRE(a.text == b.text);
+		REQUIRE(a.MaySelectNothing() == b.MaySelectNothing());
+	}
 }
 
 TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {

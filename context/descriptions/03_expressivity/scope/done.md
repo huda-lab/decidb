@@ -202,10 +202,11 @@ reads once per class (SR §7.1; deck pp. 34–40):
 - every decision outside reducers, by instance — its row if it is per row, its class
   if it is keyed; a query-wide decision splits nothing;
 - every reducer's `by` key, by value.
-- every point frame (`at(...) over (...)`, SR §5.6), by its keys, never by the data it
-  reads (D76): its timeline, and its peer when the position is relative; plus its
-  fallback where the fallback is reached. A first/last frame whose `within` columns the
-  key holds is covered and splits nothing (`../../09_anr_language/done.md`, phase 4).
+- every frame (`at(...) over (...)`, a range `agg(from ... to ...: e) over (...)`, SR
+  §5.6), by its keys, never by the data it reads (D76): its timeline, and its peer when a
+  position is relative to the anchor; plus its fallback where the fallback is reached. A
+  first/last frame whose `within` columns the key holds is covered and splits nothing
+  (`../../09_anr_language/done.md`, phases 4 and 5).
 
 An inner `per` key, and the `D` of the colon form, hand their reducer one value per
 variant of each of its classes the same way (D65). Where the key fixes every field —

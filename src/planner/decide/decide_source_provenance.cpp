@@ -921,6 +921,12 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::VALUE_HELPER_PER_GROUP:
 		became = "a helper decision per group";
 		break;
+	case Kind::FRAME_HELPER_PER_TIMELINE:
+		became = "a helper decision per timeline";
+		break;
+	case Kind::FRAME_HELPER_PER_POSITION:
+		became = "a helper decision per position";
+		break;
 	case Kind::EXTREMUM:
 		became = "an extremum column";
 		break;

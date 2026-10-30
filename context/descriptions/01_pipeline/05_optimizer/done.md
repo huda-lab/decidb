@@ -234,8 +234,34 @@ which is not supported yet"*), since it has no once-only reading in the model.
 
 ### Frame selectors
 
-The passes before this one carry a frame's marker as one term (the value rewrite lifts
-none: `CollectReducerSites` skips it), so an ABS envelope, a `<>` disjunction or a
+**A range over decisions** becomes a helper decision first, in `RewriteFrameRanges`
+(`decide_rewrite_frames.cpp`), which runs before every other rewrite so none copies a
+range. It enters through the value rewrite's door: one walker finds both rewrites' sites
+with the sign each carries (`CollectDecisionSites`, a reducer's or a range's), one rule
+gives a MIN/MAX helper its sides (`ExtremumSides`), and one allocation makes every helper
+(`AddValueHelper`), so a third kind of helper cannot miss a guard. The value rewrite
+records which link each of its reducers holds (`Helpers::links`), since a range's link may
+stand before its own; read by position, a reducer's second occurrence -- the copy an ABS
+envelope holds -- once took a range's helper. Placement's clause id is asserted against the
+comparison's, and a range on a comparison's bound is an internal error: the marker is replaced by the helper, an ordinary keyed decision to every pass
+after it, and the canonical shape stands. The helper has a scope of its own, one instance
+per **window** of the frame — the range several anchors share: its timeline when neither
+end depends on the anchor, else its position (peer), split per anchor where it reaches an
+`else` that reads the anchor's own row — which execution builds from the frame map
+(`EntityScopeInfo::value_link` naming a `ReducerValueLink` whose `frame` is set). The link
+holds the payload (`inner_expr`) and, flattened below, the `else` (`fallback_terms`); stage
+06 defines the helper per window, an equality for SUM and AVG, an extremum link for MIN and
+MAX. A MIN/MAX helper's sides are read off the way its comparison pushes it, through `+`,
+`-`, binder casts, data factors of known sign and the members of a SUM or AVG; both sides
+under anything else (ABS, a norm, a MIN or MAX: D73). It is whole-numbered when the range
+is, by the binder's test (the type payload and `else` share), so a strict bound on it steps
+exactly and one on a fractional range was refused at bind time.
+EXPLAIN reads *"a helper decision per timeline"* or *"... per position"*
+(`FRAME_HELPER_PER_TIMELINE`, `FRAME_HELPER_PER_POSITION`). `count` over decisions never
+gets here: the binder refuses it.
+
+The passes before flattening carry a point frame's marker as one term (the value rewrite
+lifts none: `CollectReducerSites` skips it), so an ABS envelope, a `<>` disjunction or a
 MIN/MAX member holds the frame where the clause did. Flattening lowers it
 (`../../00_project_overview/syntax_reference.md` §5.6; D72):
 
@@ -248,11 +274,15 @@ MIN/MAX member holds the frame where the clause did. Flattening lowers it
 - **A frame over data**, wherever execution evaluates an expression — a bound, a constant
   term, a coefficient (`LowerFramesInPreparedModel`) — becomes one `VALUE` column of the
   marker's type: the payload at the selected row, the fallback at the anchor, so no
-  arithmetic joins them and a DATE or BOOLEAN payload reads as itself. One in a bound-side
-  reducer's argument that may select no position
-  adds its `PRESENT` column to that reducer's own `when`, so execution drops the member as
-  it drops any its `when` drops.
-- `VALUE`, `READ`, `FALLBACK` and `PRESENT` are chunk columns after the input's
+  arithmetic joins them and a DATE or BOOLEAN payload reads as itself. A range over data
+  becomes one `REDUCED` column of its reducer's type, the marker itself (the bound
+  aggregate) carried for execution to run over each window's values, its `else` beside it.
+  Every frame's `else` gets `FALLBACK` columns (`ExtractFallbackTerms`, shared by points and
+  ranges), listed per frame in `frame_fallback_columns`, which the signature keys a reached
+  `else` by (`RecordFallbackColumns`). One in a bound-side reducer's argument
+  that may read nothing adds its `PRESENT` column to that reducer's own `when`, so
+  execution drops the member as it drops any its `when` drops.
+- `VALUE`, `REDUCED`, `READ`, `FALLBACK` and `PRESENT` are chunk columns after the input's
   (`DecidePreparedModel::frame_columns`, from `frame_column_base`), which execution
   computes; a coefficient or bound reading one is an ordinary expression.
   `frame_payload_terms` lists each frame's payload terms (decision, `READ` column, sign),

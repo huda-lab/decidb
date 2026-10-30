@@ -308,6 +308,10 @@ void RegisterDecideDiagnosticOptions(DBConfig &config);
 //! 1e-4). Clamped to the floor (>= 1e-5) so the indicator link is always enforced.
 double GetDecideL0Tolerance(ClientContext &context);
 
+//! Read the most values one range frame may read across its ranges from the session
+//! settings (`decide_frame_limit`, default 10,000,000; syntax_reference.md §5.6).
+idx_t GetDecideFrameLimit(ClientContext &context);
+
 //! Read the unbounded-characterization knobs (escape rate / categorical ratio /
 //! min-categories floor) from the session settings, falling back to defaults.
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context);

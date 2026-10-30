@@ -50,7 +50,7 @@ separate objective-side copy.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
-| 2a | `Finalize` → `BuildFrames` | Each frame selector's timelines and selections, and the values frames read appended to the input as columns (§3a) |
+| 2a | `Finalize` → `BuildFrames` | Each frame selector's timelines, selections and windows, and the values frames read appended to the input as columns (§3a) |
 | 3 | `Finalize` → `BuildEntityMappings` | Build the row → class maps of the key scopes |
 | 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | Run the scope checks (§4a), then the frames' peer check (D67); the first failure stops the query |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
@@ -202,9 +202,10 @@ produces them, and why it cannot live here, is
 ## 3a. PHASE 1.4 — frame selectors
 
 A point frame (`syntax_reference.md` §5.6) reads, at each row of its timeline, a value at
-the row its position selects. `BuildFrames` (`physical_decide_frames.cpp`,
-`decide_frame_map.hpp`) reads each `LogicalDecide::frames` entry into a `DecideFrameMap`
-before anything else reads the data:
+the row its position selects; a range reads the rows of every position from its first end
+to its last. `BuildFrames` (`physical_decide_frames.cpp`, `decide_frame_map.hpp`) reads
+each `LogicalDecide::frames` entry into a `DecideFrameMap` before anything else reads the
+data:
 
 1. **Timelines.** Its anchors are the rows its `rows` condition keeps (its scoped
    expression's path rows, stage 04); `BuildGroupIds` splits them by its path's `by` keys
@@ -215,12 +216,43 @@ before anything else reads the data:
 2. **Selections.** An anchor at peer `a` of `n` selects `0`, `n - 1`, `a - k` or `a + k`,
    wrapped modulo `n` when cyclic, else missing outside `[0, n)`; the selected peer's
    first row is the one read.
+   **Windows** (a range, `ListRangeWindows`). A range's ends lift the same way, and it
+   requests every `every`-th position from the first to the last, none when the first
+   comes after the last. A **window** is the range several anchors share: one per timeline
+   when neither end depends on the anchor, else one per position, split per anchor where
+   it reaches an `else` that reads the anchor's own row (one that is not a constant). Each
+   window reads a list -- windows of one position share it -- of the rows of each position
+   it selects, each with its visit count (a cyclic range wraps onto a position again, D70),
+   in the order the positions are requested, and counts its missing positions; a window
+   `all` makes absent lists no row, so none is evaluated for it. Off a timeline that does
+   not wrap, a position is counted, never visited, so the work is the values listed.
+   Ends lift through one function for points and ranges (`LiftFramePosition`).
+   `decide_frame_limit` (default 10,000,000) caps a frame's values, each row read and each
+   `else` standing in counted -- each window of a parted position again, as it reads its
+   list again -- checked before the work that lists them:
+   *"DECIDE: ... reads more than 4 values over its ranges, above decide_frame_limit (4).
+   Narrow the range, or raise the setting."* An interrupt is polled per position.
+   **Absence** is recorded per anchor (`DecideFrameMap::absent`): a point's missing
+   position with no `else`; a range requesting no position, meeting `all`, or reading no
+   value (`count` excepted). A map that finds a frame absent where
+   `DecideFrameSpec::MaySelectNothing` says it cannot be is an internal error, since every
+   layer above planned on that predicate.
 3. **Columns** (`AppendDecideFrameColumns`). Every `DecidePreparedModel::frame_columns`
    entry is computed over the rows its kind names only — a payload (`VALUE`, `READ`) on
    the first row of each selected peer, the row its anchors read, a fallback (`VALUE`'s
    `else`, `FALLBACK`) on the anchors whose position is missing, which is what keeps an
    unused `else` unevaluated — and gathered to each anchor; where neither stands a
    coefficient (`READ`, `FALLBACK`) is 0 and a value (`VALUE`) NULL, which nothing reads.
+   A range over data's `REDUCED` column runs the frame's own bound aggregate through its
+   state functions (`initialize`, `update`, `finalize`, `destructor`, as `list_aggregate`
+   does) over each window's values -- the payload on the rows it reads, once per visit, the
+   `else` at its anchor once per missing position -- so the value has SQL's type: a DATE's
+   maximum is a DATE. A window holding a NULL value is NULL, and its reader reports the
+   NULL bound (D78), but a `count`, which skips a NULL value, payload or `else`, as SQL
+   does. What a window reads -- its rows with their visits, its `else` count, the rows and
+   anchors evaluated -- is the map's to say (`DecideFrameMap::ForEachRead`,
+   `WindowFallbacks`, `ValueCount`, `ReadRows`, `FallbackAnchors`), read alike by this
+   column and by a helper's members.
    The input is rebuilt with them after its own columns, which must number
    `frame_column_base` as stage 05 counted them. Every later phase reads them as data: a
    `when`, a coefficient, a bound, a reducer, a signature (a reached fallback keys a
@@ -249,7 +281,19 @@ that reads no bound carries the group's (`ReduceAggregateRhsPerGroup`). A bound-
 reducer whose frames left a group no member is absent (`EvaluateRhsReducerPerGroup`'s
 `absent`, `count` excepted, which is 0), and so is the instance reading it; an inner one
 drops the outer member. The objective's root frame selecting nothing at its first kept row
-is an error (*"DECIDE objective: ... selects no position; ... Give the frame an else."*).
+is an error (*"DECIDE objective: ... selects no position; ... Give the frame an else."*, a
+range's remedy worded by what makes it read nothing).
+
+**A range over decisions** is a helper decision (stage 05) whose scope's entities are the
+frame map's windows (`BuildEntityMappings`), so every anchor reads its window's instance.
+`EvaluateFrameLink` lists its members per window that reads something, read at the
+window's anchor: one per row the window reads, its payload's coefficients evaluated on
+the rows some window reads only, and one for its `else` at the anchor where a position is
+missing. A SUM or AVG counts each value -- a row once per visit, the `else` once per
+missing position -- and an AVG divides by their number; a MIN or MAX reads each once. Every
+link's members are handed to stage 06 listed (`ReducerValueMembers`), a reducer's too:
+`EvaluateReducerValueLinks` builds a reducer's per `by` group over the rows as before and
+lists them (`ListRowMembers`).
 
 **Frame reads.** A payload term (`DecideTerm::frame_read`) names, at every row, the
 variable `DecideGlobalSinkState::ReadVariable` gives it: one per decision and frame, after

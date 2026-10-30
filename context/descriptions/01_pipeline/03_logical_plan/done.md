@@ -127,17 +127,28 @@ message names them. `variable_scopes` points each keyed decision at one, with it
 written (`declared_key`). `group_keys` holds every `by (G)` key of the clauses
 (`DecideGroupKey`: the bound expressions, the key as written, each element's name); a
 reducer's `__group_key_<i>__` tag names entry `i`. `frames` (id 220) holds every frame
-selector (`DecideFrameSpec`: point or range, the positions and their `k`, `every`, `all`,
-the fallback, the order key and its direction, `cyclic`, the `within` key's columns, the
-frame as written and the names its messages use); the aggregate a frame binds to carries
-`__frame_<i>__` naming entry `i` (`../02_binder/done.md` §4a). The canonicalizer fills in
-where each stands (below). `CreatePlan` plans a frame's subqueries, then refuses a range
-(*"DECIDE: a range frame selector is not supported yet: <frame>"*) before
-canonicalization, until phase 5. A constraint's `per K:` key lives in
+selector (`DecideFrameSpec`: point or range, a range's reducer (id 119), the positions and
+their `k`, `every`, `all`, the fallback, the order key and its direction, `cyclic`, the
+`within` key's columns, the frame as written and the names its messages use); the
+aggregate a frame binds to carries `__frame_<i>__` naming entry `i`
+(`../02_binder/done.md` §4a). The canonicalizer fills in where each stands (below).
+`CreatePlan` plans a frame's subqueries. `DecideFrameSpec::MaySelectNothing` is the one
+statement of whether a frame can read nothing at some anchor, which every layer above
+execution reads (placement's refusal, instance skipping, bound absorption, the objective):
+a point relative to the anchor with neither `else` nor `cyclic`; a range that may be empty
+(`MayBeEmpty`, exact per pair of ends: `from next to previous` always, `from first to 2
+previous` at the first positions), that `all` may meet a missing position, or none of whose
+requested positions need exist with no `else` (`MayMissEveryPosition`); `count` reads 0,
+not nothing, but under `all` where a position may be missing (`MayMissAPosition`, exact
+per pair of ends: `from first to previous` never misses one). Execution holds every map to
+it, and `test_decidb_frame_predicates.cpp` holds each predicate to an enumeration of every
+position on timelines of up to ten, for every end with `k` and every step up to 4. A constraint's `per K:` key lives in
 its `PER_CLASS_TAG` wrapper, as bound column references. A scope the optimizer creates for a
 helper decision of the value rewrite names the link it holds instead of key columns
 (`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
-deliberately absent from the serialization: an optimized plan is never serialized). Its
+deliberately absent from the serialization: an optimized plan is never serialized); a
+range frame's helper names its link too, whose `frame` gives its windows
+(`ReducerValueLink::frame`, `../05_optimizer/done.md`). Its
 entities are the link's `by` groups among the rows the link's clause keeps. A scope the
 canonicalizer creates for a relation-qualified reducer whose body reads a value its key
 does not fix names its signature instead (`EntityScopeInfo::signature`, serialized, id

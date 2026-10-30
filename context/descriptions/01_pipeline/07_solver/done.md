@@ -460,9 +460,15 @@ binary that far from 1 under a Big-M row misses the row by M times as much, so t
 fails ("MIP solver claims optimality, but with ... infeasibilities") and the model status
 is a solve error: `MAXIMIZE max(avg(t.w * x) by (t.g))`, whose closing rows carry 1/3
 coefficients, did this. The session solves once more with integrality held to 1e-9, which
-keeps such a row within the check, and restores the tolerance. A solve error that
-survives the retry is a failed solve (`SolverStatus::OTHER`), not an internal error; any
-other `kError` still is one.
+keeps such a row within the check, and restores the tolerance. HiGHS's MIP presolve can
+also call a point optimal that violates a bound or a row outright, on a model with no
+integer point at all, and report the same solve error: a model whose columns presolve
+fixes at 0 beside `3 * y = 1` over a whole `y` (found by the range fuzzer, 2026-10-30,
+`test_anr_frames.py::TestRangeErrors::test_an_infeasible_model_is_infeasible_on_both_backends`).
+A solve error that survives the first retry is solved a last time without presolve, whose
+search settles the model's status itself (infeasible there), and presolve is restored. A
+solve error that survives both is a failed solve (`SolverStatus::OTHER`), not an internal
+error; any other `kError` still is one.
 
 Logging is off (`log_to_console = false`). The session sets `time_limit` per chunk
 rather than once at load, which is what makes `Continue()` work: HiGHS resumes its

@@ -538,9 +538,20 @@ scopes, then bound like a reducer whose rows are the ones the frame selects.
   `within` key resolved as a `per` key is (`ResolveKey`: columns, and relations standing
   for their stored columns), and the fallback. The fallback binds like the payload, as a
   number of any numeric or boolean type (*"DECIDE: in at(previous else 'none': x) over
-  (t.period), else 'none' is not a number"*), and a point's payload and fallback are cast
-  to their common type, the marker's: `else 0.5` over a whole-numbered payload is 0.5
-  there, and an expression around the frame is bound for a type that holds both. A
+  (t.period), else 'none' is not a number"*), and payload and fallback are cast to their
+  common type: a point's is the marker's, so `else 0.5` over a whole-numbered payload is
+  0.5 there, and an expression around the frame is bound for a type that holds both; a
+  range's reducer is bound again over it (`BindFrameAggregate`), so `sum(from previous to
+  next else 0.5: t.n)` sums decimals, and the `else` takes the type the bound reducer
+  reads, which its overload may widen the payload to (`sum` of a FLOAT reads a DOUBLE).
+  A frame's value is whole (`DecideSideIsWholeNumbered`) only when that shared type is,
+  every addend and the `else` part of it, and an AVG range never is: the binder's
+  strict-comparison check and the range's helper type (stage 05) read that one test, so
+  `sum(from previous to next else 0.5: x) < 3` is refused as fractional. A range's
+  reducer name is recorded (`DecideFrameSpec::reducer`), and an AVG range is no AVG the
+  `<>` hoist may multiply through (`IsBoundAvgAggregate`): it is fractional,
+  *"Comparison '<>' is not supported here: 'avg(from first to last: x) over (t.period)'
+  has type DOUBLE and can take fractional values ..."*. A
   fallback that is NULL before the query runs is no fallback (D80; the transformer drops
   a written `else NULL`, so the frame prints without it). The frame's text, and the names
   of its `within` columns and its order key as written (`timeline_names`, `order_name`,

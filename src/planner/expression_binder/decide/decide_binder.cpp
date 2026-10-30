@@ -1207,13 +1207,15 @@ static bool IsBoundL0NormMarker(const Expression &expr) {
 	return StringUtil::StartsWith(payload, "0");
 }
 
-//! Is this bound node an AVG aggregate?
+//! Is this bound node an AVG aggregate -- a reducer, not a range frame's marker? A range
+//! is a value of the row (syntax_reference.md §5.6), which no rewrite multiplies through.
 static bool IsBoundAvgAggregate(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return false;
 	}
 	auto &agg = expr.Cast<const BoundAggregateExpression>();
-	return StringUtil::CIEquals(agg.function.name, "avg");
+	idx_t frame;
+	return StringUtil::CIEquals(agg.function.name, "avg") && !TryParseFrameTag(agg.GetAlias(), frame);
 }
 
 //! Is `expr` provably whole-numbered from declared types alone?
@@ -1253,6 +1255,14 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		// return type.
 		auto &agg = expr.Cast<const BoundAggregateExpression>();
 		const auto &name = agg.function.name;
+		// A frame is a value of the row, every addend and its `else` part of it: whole when
+		// the type its payload and `else` share is (BindDecideFrame casts both to it), and a
+		// range's SUM, MIN or MAX of them; an AVG range divides.
+		idx_t frame;
+		if (TryParseFrameTag(agg.GetAlias(), frame)) {
+			const bool averages = StringUtil::CIEquals(name, "avg");
+			return !averages && agg.children.size() == 1 && DecideTypeIsWholeNumbered(agg.children[0]->return_type);
+		}
 		bool extremum = StringUtil::CIEquals(name, "min") || StringUtil::CIEquals(name, "max");
 		bool norm = HasDecideTag(agg.alias, NORM_MARKER_TAG_PREFIX);
 		if ((StringUtil::CIEquals(name, "sum") || extremum) && agg.children.size() == 1) {
@@ -2092,6 +2102,24 @@ ErrorData DecideBinder::BindFrameFallback(DecideFrameExpression &frame, const De
 	return ErrorData();
 }
 
+unique_ptr<Expression> DecideBinder::BindFrameAggregate(const string &name, unique_ptr<Expression> payload,
+                                                        const DecideFrameExpression &frame, const string &alias,
+                                                        ErrorData &error) {
+	auto &entry = Catalog::GetEntry<AggregateFunctionCatalogEntry>(context, SYSTEM_CATALOG, DEFAULT_SCHEMA, name);
+	FunctionBinder function_binder(binder);
+	auto offset = function_binder.BindFunction(entry.name, entry.functions, {payload->return_type}, error);
+	if (!offset.IsValid()) {
+		error.AddQueryLocation(frame);
+		return nullptr;
+	}
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(payload));
+	auto result =
+	    function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(offset.GetIndex()), std::move(children));
+	result->SetAlias(alias);
+	return std::move(result);
+}
+
 BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t depth) {
 	if (!qualifier_context || !qualifier_context->frames) {
 		throw InternalException("DECIDE: a frame selector needs the clause's frames");
@@ -2121,6 +2149,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			throw BinderException(frame, "DECIDE: a range frame reduces with sum, avg, min, max or count, found %s",
 			                      frame.reducer);
 		}
+		spec.reducer = name;
 		vector<unique_ptr<ParsedExpression>> arguments;
 		arguments.push_back(std::move(frame.payload));
 		unique_ptr<ParsedExpression> call = make_uniq<FunctionExpression>(name, std::move(arguments));
@@ -2130,6 +2159,37 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			return bound;
 		}
 		result = std::move(bound.expression);
+		// A missing position's `else` is one of the values the reducer reads, so payload and
+		// fallback take a type that holds both, as a point's do: `else 0.5` over a
+		// whole-numbered payload sums 0.5 there. The reducer is bound again over it.
+		unique_ptr<Expression> fallback;
+		auto fallback_error = BindFrameFallback(frame, spec, fallback_text, depth, fallback);
+		if (fallback_error.HasError()) {
+			return BindResult(std::move(fallback_error));
+		}
+		if (fallback) {
+			auto *reducer = GetBoundAggregate(*result);
+			if (!reducer || reducer->children.size() != 1) {
+				throw InternalException("DECIDE: a range frame did not bind to an aggregate over its payload");
+			}
+			auto &payload_type = reducer->children[0]->return_type;
+			LogicalType common;
+			if (!LogicalType::TryGetMaxLogicalType(context, payload_type, fallback->return_type, common)) {
+				throw BinderException(frame, "DECIDE: in %s, else %s is not a number", spec.text, fallback_text);
+			}
+			if (payload_type != common) {
+				auto payload = BoundCastExpression::AddCastToType(context, std::move(reducer->children[0]), common);
+				ErrorData reducer_error;
+				result = BindFrameAggregate(name, std::move(payload), frame, reducer->GetAlias(), reducer_error);
+				if (!result) {
+					return BindResult(std::move(reducer_error));
+				}
+			}
+			// The type the bound reducer reads, which its overload may have widened the payload
+			// to (`sum` of a FLOAT reads a DOUBLE): the fallback is one more value of it.
+			auto &argument_type = GetBoundAggregate(*result)->children[0]->return_type;
+			spec.fallback = BoundCastExpression::AddCastToType(context, std::move(fallback), argument_type);
+		}
 	} else {
 		ErrorData payload_error;
 		BindChild(frame.payload, depth, payload_error);
@@ -2155,18 +2215,11 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			children[0] = BoundCastExpression::AddCastToType(context, std::move(children[0]), common);
 			spec.fallback = BoundCastExpression::AddCastToType(context, std::move(fallback), common);
 		}
-		auto &first =
-		    Catalog::GetEntry<AggregateFunctionCatalogEntry>(context, SYSTEM_CATALOG, DEFAULT_SCHEMA, "first");
-		FunctionBinder function_binder(binder);
 		ErrorData first_error;
-		auto first_idx =
-		    function_binder.BindFunction(first.name, first.functions, {children[0]->return_type}, first_error);
-		if (!first_idx.IsValid()) {
-			first_error.AddQueryLocation(frame);
+		result = BindFrameAggregate("first", std::move(children[0]), frame, string(), first_error);
+		if (!result) {
 			return BindResult(std::move(first_error));
 		}
-		result = function_binder.BindAggregateFunction(first.functions.GetFunctionByOffset(first_idx.GetIndex()),
-		                                               std::move(children));
 	}
 	auto *aggregate = GetBoundAggregate(*result);
 	if (!aggregate || aggregate->children.size() != 1) {
@@ -2192,12 +2245,6 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	for (auto &column : ResolveKey(binder.bind_context, frame.within, 0, DecisionNames(variables), "within")) {
 		spec.within.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
 		spec.timeline_names.push_back(column.name);
-	}
-	if (frame.IsRange()) {
-		auto fallback_error = BindFrameFallback(frame, spec, fallback_text, depth, spec.fallback);
-		if (fallback_error.HasError()) {
-			return BindResult(std::move(fallback_error));
-		}
 	}
 
 	// The aggregate prints as the frame written, a source fragment of its own. Tagged here

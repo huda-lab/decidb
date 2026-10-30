@@ -75,6 +75,19 @@ static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value
 	}
 }
 
+// A range frame reads, for each window, every row of every position it selects: a frame
+// from `first` to `last` over n rows of one peer each reads n values per timeline, but one
+// relative to the anchor over n tied rows reads n per anchor. This caps what one frame may
+// list, so a query whose frame would read billions of values is refused in its own words
+// instead of exhausting memory.
+static constexpr int64_t DECIDE_FRAME_LIMIT_DEFAULT = 10000000;
+
+static void FrameLimitSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.GetValue<int64_t>() < 1) {
+		throw InvalidInputException("decide_frame_limit must be >= 1; got " + parameter.ToString() + ".");
+	}
+}
+
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	// Unbounded characterization knobs: they shape the `group` / `amount` columns a
 	// runaway variable reports under DIAGNOSE.
@@ -111,6 +124,13 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "enforced, so >= 1e-5. Default 1e-4. Lower it toward the floor for small-magnitude "
 	    "data; raise it to treat larger residuals as zero.",
 	    LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
+	// Frame expansion limit (expressivity knob, beside the L0 threshold).
+	config.AddExtensionOption(
+	    "decide_frame_limit",
+	    "Range frame selectors (agg(from ... to ...: e) over (...)): the most values one frame may read across "
+	    "its ranges -- every row of every selected position, and every else standing in for a missing one. A "
+	    "frame reading more is refused. Must be >= 1. Default 10000000.",
+	    LogicalType::BIGINT, Value::BIGINT(DECIDE_FRAME_LIMIT_DEFAULT), FrameLimitSetCallback);
 }
 
 double GetDecideL0Tolerance(ClientContext &context) {
@@ -122,6 +142,15 @@ double GetDecideL0Tolerance(ClientContext &context) {
 		return v < DECIDE_L0_TOLERANCE_FLOOR ? DECIDE_L0_TOLERANCE_FLOOR : v;
 	}
 	return DECIDE_L0_TOLERANCE_DEFAULT;
+}
+
+idx_t GetDecideFrameLimit(ClientContext &context) {
+	Value value;
+	if (context.TryGetCurrentSetting("decide_frame_limit", value) && !value.IsNull()) {
+		auto limit = value.GetValue<int64_t>();
+		return limit < 1 ? 1 : static_cast<idx_t>(limit);
+	}
+	return static_cast<idx_t>(DECIDE_FRAME_LIMIT_DEFAULT);
 }
 
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {

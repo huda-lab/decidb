@@ -45,3 +45,31 @@ that stage 06 assembles row by row through the extremum members' path
 directly; the model is three columns and three rows larger (1,000,013 rows). Its wall
 time is 6.13 s against 7.15 (the solver's share varies from run to run). Inlining a SUM
 helper into the one reader that sums it is phase 7 of the plan.
+
+## After ANR phase 5
+
+Measured 2026-10-30 the same way (medium, Gurobi, medians of three runs, all 33
+succeeded), on the phase-5 working tree over commit 3649855796, against the d20d23733b
+baseline above (`--compare d20d23733b`). Phases 3 to 5 changed no flat workload's model:
+variables and rows are the baseline's everywhere but Q4, whose three extra columns and rows
+are phase 2's helpers. DeciDB's own time fell from 2,064 to 1,877 ms over the suite; the
+solver's share is unchanged within its run-to-run spread (104.6 s against 101.2 s).
+
+| Query | Model construction ms | Solver ms | Wall s | Peak MiB |
+|---|---|---|---|---|
+| Q1 | 250 (324) | 1,970 | 2.29 | 724 |
+| Q2 | 61 (59) | 6,252 | 6.37 | 2,121 |
+| Q3 | 13 (13) | 17,340 | 17.45 | 2,701 |
+| Q4 | 760 (622) | 4,899 | 5.72 | 2,071 |
+| Q5 | 1 (1) | 4,327 | 4.38 | 221 |
+| Q6 | 27 (54) | 19,709 | 19.82 | 3,300 |
+| Q7 | 8 (8) | 6,426 | 6.52 | 2,089 |
+| Q8 | 527 (745) | 66 | 0.68 | 442 |
+| Q9 | 3 (3) | 122 | 0.15 | 146 |
+| Q10 | 225 (232) | 39,943 | 40.39 | 3,583 |
+| Q11 | 3 (3) | 140 | 0.16 | 146 |
+
+The baseline's model construction is in parentheses. Q4 is phase 2's cost, as recorded
+above (752 ms then, 760 now): phase 5's listed members cost it nothing. Q10's peak memory
+is the solver's and spreads from 2,977 to 3,796 MiB across its three runs (the
+baseline's from 3,052 to 3,235).

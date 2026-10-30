@@ -818,6 +818,101 @@ execution keeps it opaque, and execution turns it into data columns and decision
   collection rather than by holding it through a pointer; a sort key is a short string
   for the usual order types, held inline.
 
+## The full algorithm — phase 5: range selectors
+
+Shipped 2026-10-30. A range `agg(from F1 to F2 [every d] [else v | all]: e) over (S [desc]
+[cyclic] [within K])` is formulated wherever a point is (`syntax_reference.md` §5.6; deck
+pp. 43–56), with `sum`, `avg`, `min`, `max` and, over data, `count`; the gate that refused
+it is gone. The design is the plan's phase-5 section: over data a range is a value of the
+row, over decisions a helper decision per **window** — the range several anchors share.
+
+- **Binder** (`../01_pipeline/02_binder/done.md` §4a). A range's payload and `else` take
+  one type and its reducer is bound again over it (`else 0.5` over INTEGERs sums
+  decimals); its reducer's name is recorded; an AVG range is no AVG the `<>` hoist may
+  multiply through, so under `<>` it is refused as fractional.
+- **Plan** (`../01_pipeline/03_logical_plan/done.md` §4). `DecideFrameSpec::reducer` (id
+  119). `MaySelectNothing` covers ranges, exact per pair of ends (`MayBeEmpty`,
+  `MayMissEveryPosition`): every layer that skips an instance, drops a member, refuses a
+  shape or checks the objective reads it, and execution holds every map to it.
+- **Canonicalizer** (`../01_pipeline/04_canonicalizer/done.md`). Nothing new but the
+  remedy of the phase-6 refusal, worded by what makes the frame read nothing.
+- **Optimizer** (`../01_pipeline/05_optimizer/done.md`, "Frame selectors").
+  `RewriteFrameRanges`, first among the rewrites: each range over decisions becomes a
+  helper decision with one instance per window, its link naming the frame, its MIN/MAX
+  sides read off the way its comparison pushes it (D73), so every later rewrite — ABS,
+  `norm`, `<>`, MIN/MAX, the value rewrite — reads an ordinary keyed decision and the
+  canonical shape stands. A range over data is one `REDUCED` column; a range's `else` has
+  `FALLBACK` columns, read by the helper's definition and by the signature.
+- **Formulation** (`../01_pipeline/06_model_formulation/done.md`, "Helper decisions of the
+  value rewrite"). A helper's members arrive listed (`ReducerValueMembers`: per instance,
+  its members, each a constant and terms read at rows), since a range's windows share rows
+  where a `by` key's groups partition them; the three passes over links read that one form.
+- **Execution** (`../01_pipeline/08_execution/done.md` §3a). The frame map lists each
+  range's windows — one per timeline when neither end depends on the anchor, else one per
+  position, split at an anchor that reaches an `else` reading its own row — and each
+  window's rows with visit counts and missing positions, in O(values): a position off a
+  timeline that does not wrap is counted, never visited. `decide_frame_limit` (a new
+  setting, default 10,000,000 values) is checked before the work, an interrupt polled per
+  position. A range over data runs its own bound aggregate through the aggregate's state
+  functions over each window's values; a range over decisions' helper takes the windows as
+  its entities and its members from them. Absence is per anchor (`DecideFrameMap::absent`),
+  read by instance skipping, `PRESENT`, and the objective's check.
+- **Choices beyond the plan's text.** Helpers are keyed per window, not per anchor row as
+  §4.5 step 3 said, so `x <= sum(from first to last: x) over (t.period)` over n rows is one
+  definition of n terms rather than n of them; the stage-06 link contract changed to listed
+  members for every link, not a second form beside rows; the limit counts the values read
+  (ties in the order key make one position many rows), not the positions requested; a
+  range's helper replaces the marker before any rewrite, rather than the value rewrite
+  lifting it (which runs on VALUE-shape clauses only, so a range at a ROWS clause's root
+  would have reached flattening). An AVG range under `<>` is refused as fractional, where
+  a plain AVG is multiplied through. `count` over decisions keeps the binder's refusal.
+- **Found while building it** and fixed: an AVG range beside a decision under `<>` reached
+  the model builder as an internal error (the binder's `<>` hoist read the marker as an AVG
+  reducer; now refused as fractional, `test_an_average_range_under_not_equal_is_fractional`);
+  HiGHS's MIP presolve called a point optimal on a model with no integer point and reported
+  a solve error (now solved once more without presolve, `../01_pipeline/07_solver/done.md`).
+- **Architecture review** (a `decidb-architect` pass over the phase-5 diff). Fixed, each with
+  a test in `TestRangeReview`: a range's helper was whole-numbered by its payload alone, so
+  `else 0.5` called a feasible query infeasible and stepped `>= 0.5` to `>= 1`, and a strict
+  bound on `sum(...: x + 0.5)` reached the model builder (a frame's value is now whole only
+  when the type payload and `else` share is, one test for the binder and the helper); an
+  `else` of another type than the reducer's argument (`CAST(0.5 AS FLOAT)`) was an internal
+  error; `count ... all` that cannot miss a position was refused (`MayMissAPosition` is exact
+  per pair of ends, and a C++ test enumerates every position against each predicate); a
+  window `all` makes absent evaluated its payload; the windows of a parted position each read
+  their list but were charged once against the limit; `count` read a NULL `else` as an
+  error (it skips it, as a NULL payload, and `_anr_oracle` with it); the range rewrite
+  duplicated the value rewrite's walker and helper allocation (now shared,
+  `CollectDecisionSites`, `ExtremumSides`, `AddValueHelper`, the rewrite in a file of its
+  own), the signature found a range's `else` columns by a side effect (now
+  `frame_fallback_columns`), and execution's two readers of a window repeated its walk (now
+  the map's). Refactoring the shared allocation exposed one more bug of this phase: the value
+  rewrite matched a reducer's occurrences to links by position, which a range's link, made
+  first, displaced, so an ABS envelope's copy of a reducer read the range's helper and an
+  infeasible query answered (`Helpers::links`). Measured against the last commit on 1,000,000
+  rows of a helper per `by` group, the listed members cost no memory (1.81–1.93 GB against
+  1.94–2.01 GB) and time (2.1 s against 2.3 s); the models dump identical. Kept: a range's
+  reducer as its SQL name, beside the links' `agg_name`; cumulative ranges' n² values and a
+  parted position's repeated reads, both `../05_performance/04_model_construction/todo.md`.
+- Tests: `test_anr_frames.py` (`TestRange`: the ten phase-5 fixtures of `_anr_cases`, every
+  pair of six ends under both steps, each policy, open and cyclic — 432 cases —, each
+  reducer over data and over decisions in every push direction, the helpers per window
+  pinned in the model dump, composition with ABS, `<>`, a reducer around the range, a data
+  factor and a point frame, the objective, a keyed payload and a decision `else`, variants
+  under `per`, laziness, NULL and `count`, SQL types of a range over data; `TestRangeDeck`:
+  deck examples 2 and 6 under each policy; `TestRangeErrors`: the phase-6 refusals with
+  their remedies, `count` over decisions, the objective, `decide_frame_limit`, EXPLAIN's
+  helper lines, DIAGNOSE), `test_frame_parser.test` (the former gate cases answer),
+  `test_decidb_plan_serialization.cpp` (a range's fields round-trip). A differential fuzzer
+  against `_anr_oracle` (scratchpad `fuzz/fuzz_ranges.py`: random ranges over data and
+  decisions beside point frames, at a comparison's root, on its bound, under ABS, inside
+  decision and bound-side reducers, under `when` and `per`, in the objective; three solver
+  settings) ran 4,300 cases, ranges in 93% of them, 300 over timelines of up to 18 rows and
+  the last 1,000, after the review, with fractional payloads and `else` values: no wrong
+  answer, no internal error; its only differences are which of two errors a query
+  reports first (the engine runs every scope check, and a domain contradiction, before the
+  peer check).
+
 ## Decisions
 
 Settled while the language was built; the code and the tests cite them by number. A
@@ -879,8 +974,9 @@ not the code.
 | D67 | A frame's selected position holding rows that read different payloads is an error naming the position; rows reading one payload — one value of data, one linear form over decisions — select once |
 | D68 | A frame's order key orders peers as `ORDER BY` does, NULL where `default_null_order` puts it |
 | D69 | Under `per K`, each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines |
+| D70 | A cyclic range keeps every repeated visit: on three positions, `from 4 previous to 4 next` reads nine |
 | D71 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
-| D72 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range lowers to helpers (phase 5) |
+| D72 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range over decisions is a helper decision per window, a timeline or a position on one |
 | D73 | A nested MIN/MAX is pinned on the side its readers push it through SUM and AVG levels, and on both sides under any other reader |
 | D74 | Stays refused, each by name: `norm` inside a reducer and a reducer inside `norm`, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone (`count` included) added inside one over decisions, inside a reducer a reducer times a decision and `abs` over a reducer on a path that keeps rows; a frame in `when`/`per`/`by`/`within`/an order key, a reducer or frame inside a frame's payload, a square or product of decisions in it, a frame term times a decision |
 | D75 | The two-level objective keeps its spelling and loses its special path: it is a nested reducer, its four refusals lifted |

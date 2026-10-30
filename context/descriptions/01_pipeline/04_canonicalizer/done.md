@@ -552,11 +552,15 @@ instances (`DecideFrameSpec::SkipsInstancesOf`) from the objective's error
 (`MayLeaveObjectiveUnset`). For a frame a `per` key reads directly — a clause's `per K:` or a
 reducer's own `per` — whose `within` the key (with the path's keys) does not hold, it
 builds the `FRAME_PARTITION` check (D69): each class of the key lies in one timeline. And
-it refuses, until phase 6, a frame that may select no position (relative, not cyclic, no
-`else`) inside a reducer over decisions, whose member would have to be dropped:
-*"DECIDE: at(previous: x) over (t.period) may select no position inside sum(...), a
-reducer over decisions, which is not supported yet; give it an else, or make its timeline
-cyclic"*.
+it refuses, until phase 6, a frame that may read nothing (`DecideFrameSpec::
+MaySelectNothing`: a point relative to the anchor, not cyclic, with no `else`; a range
+that may request no position, meet `all`, or find every position missing) inside a reducer
+over decisions, whose member would have to be dropped: *"DECIDE: at(previous: x) over
+(t.period) may select no position inside sum(...), a reducer over decisions, which is not
+supported yet; give it an else, or make its timeline cyclic"*, the remedy worded by what
+makes it read nothing (`DecideFrameAbsenceRemedy`: *"its first end may come after its
+last, which requests no position"*, *"drop all, or make its timeline cyclic"*). A range's
+marker is placed as a point's is; nothing else here knows ranges from points.
 
 ## 5. What this stage does not do
 

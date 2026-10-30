@@ -757,12 +757,16 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
 - **A frame's term is linear**: its payload and fallback square or multiply no decision.
 - **A missing position** (before the first row, after the last): `else v` supplies `v`,
   read at the anchor row and only there — an `else` no row reaches is never evaluated;
-  `else NULL` written is no `else` (D80). `all` makes the whole range select nothing;
-  otherwise a range keeps the positions that exist, and a point frame that selects nothing
-  is absent: its comparison skips that instance — and only that comparison: `x <= 10 AND
-  at(previous: x) over (...) >= 10` keeps the cap on the first period, and a `BETWEEN` is
-  its two comparisons, so a frame absent in one bound skips that half alone (§3) — and a
-  reducer drops that member.
+  `else NULL` written is no `else` (D80). A range reads one `v` per missing position, so
+  `sum(from previous to next else 0: x)` at a timeline's first period is `0 + x1 + x2`.
+  `all` makes the whole range select nothing; otherwise a range keeps the positions that
+  exist. A frame that reads nothing — a point's missing position, a range whose first end
+  comes after its last (`from next to previous`), one meeting `all`, or one with no `else`
+  whose positions are all missing — is absent: its comparison skips that instance — and
+  only that comparison: `x <= 10 AND at(previous: x) over (...) >= 10` keeps the cap on
+  the first period, and a `BETWEEN` is its two comparisons, so a frame absent in one bound
+  skips that half alone (§3) — and a reducer drops that member. A `count` range reading
+  nothing is 0, as SQL counts an empty set, unless `all` makes it absent.
 - **The timeline** is the rows its scoped expression reads: a frame at a comparison's root
   reads the rows the `when` keeps, one inside a reducer the rows of that reducer's group
   (its path, §5.5). Under `per K` each class must lie in one timeline (D69: *"DECIDE: per
@@ -773,8 +777,21 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   of data, the same linear form over decisions: one constant and one coefficient on each
   decision instance, so `0 * x` reads no instance of `x` — else *"DECIDE: at(previous: x) over (t.period within
   t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one
-  row."* (D67). A NULL payload read at the selected row is a NULL bound or coefficient, as
-  one read at the row is (D78).
+  row."* (D67). A range reads every row of each position it selects, and a cyclic one a
+  position again each time it wraps onto it (D70). A NULL payload read at a selected row
+  is a NULL bound or coefficient, as one read at the row is (D78); a `count` range skips
+  a NULL value, payload or `else`, as SQL's `count(e)` does.
+- **A range over data has its reducer's SQL type**: `max(from previous to next: t.d)`
+  over a DATE is a DATE, a `sum` of INTEGERs a HUGEINT, and an `else` takes a type with
+  the payload's (`else 0.5` over INTEGERs sums as a decimal). A frame's value is whole
+  only when that shared type is, so `<`, `>` and `<>` over `sum(from previous to next
+  else 0.5: x)` or `sum(... : x + 0.5)` are refused as fractional (§3.2), and an AVG
+  range always is.
+- **How many values a range may read**: the session setting `decide_frame_limit` (`SET
+  decide_frame_limit = …`, default 10,000,000) caps the values one frame reads over its
+  ranges, each row read and each `else` standing in counted: *"DECIDE: sum(from first to last: t.v) over (t.period) reads more than 4
+  values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the
+  setting."*
 - **Under `per K`** a frame is compared by its keys, not by the value it reads (D76): its
   timeline, the anchor's position there when it reads relative to the anchor (`previous`,
   `next`), and its fallback where it is reached. `per t.product: x <= at(previous: t.v)
@@ -792,20 +809,27 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   The full contract — peers, cyclic repeats, absence, NULL — is
   `09_anr_language/anr_algorithm_and_frames_plan.md` §3.4–3.5.
 
-**Status.** Point frames are formulated (the ANR plan's phase 4): a frame over decisions
-reads the decision's own column at the selected row, so `inventory >= at(previous:
-inventory) over (t.period within t.product)` over six rows is six columns and one row per
-instance, with no helper. Not yet (§10.2): a range (*"DECIDE: a range frame selector is
-not supported yet: sum(from first to last: x) over (t.period)"*, phase 5, which stops
-before canonicalization, as every frame did in phase 3); inside a reducer over decisions,
-a frame that may select no position (relative, not cyclic, no `else`), and a frame inside
-a MIN or MAX composed with other terms (phase 6); a fallback that reads a decision beside a
-payload that reads none.
+**Status.** Point frames and ranges are formulated (the ANR plan's phases 4 and 5). A
+point frame over decisions reads the decision's own column at the selected row, so
+`inventory >= at(previous: inventory) over (t.period within t.product)` over six rows is
+six columns and one row per instance, with no helper. A range over decisions is a helper
+decision per **window** — the range several anchors share: one per timeline when neither
+end depends on the anchor, else one per position — defined once from what the window
+reads, so `x <= sum(from first to last: x) over (t.period)` over n rows is one definition
+of n terms; every other construct reads the helper as an ordinary decision (EXPLAIN: *"a
+helper decision per timeline"*, *"... per position"*). A range over data is one value per
+anchor. Not yet (§10.2): inside a reducer over decisions, a frame that may read nothing,
+and a point frame over decisions inside a MIN or MAX composed with other terms (phase 6);
+a fallback that reads a decision beside a payload that reads none; `count` over decisions,
+which counts nothing a decision decides.
 
 Tests: `test/decidb/test_frame_parser.test` (parse and bind errors, the echo, answers,
 ordinary SQL windows), `test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint`:
-every phase-4 fixture, the deck's point examples 1, 4, 5 and the DeQL comparison, judged by
-`_anr_oracle`), `test/common/test_decidb_plan_serialization.cpp` (round trips).
+every phase-4 fixture, the deck's point examples 1, 4, 5 and the DeQL comparison;
+`TestRange`: every phase-5 fixture, every pair of ends under each step and policy, each
+reducer over data and decisions, the helpers per window, composition, the objective;
+`TestRangeDeck`: deck examples 2 and 6; all judged by `_anr_oracle`),
+`test/common/test_decidb_plan_serialization.cpp` (round trips).
 
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
@@ -1281,8 +1305,7 @@ Each shape below is refused with a message, never answered wrongly.
 | A decision beside a `MIN` or `MAX` in the objective | `DECIDE: 's' beside MIN or MAX is not supported yet` |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | `DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet` |
 | A scope inside an ordinary SQL subquery written in the clause | `DECIDE: 'WHEN condition:' is not supported yet` |
-| A range frame selector (§5.6), until phase 5 formulates it | `DECIDE: a range frame selector is not supported yet: sum(from first to last: x) over (t.period)` |
-| Inside a reducer over decisions, a frame that may select no position: relative, not cyclic, with no `else` (phase 6) | `DECIDE: at(previous: x) over (t.period) may select no position inside sum(at(previous: x) over (t.period)), a reducer over decisions, which is not supported yet; give it an else, or make its timeline cyclic` |
+| Inside a reducer over decisions, a frame that may read nothing (phase 6): a point relative to the anchor, not cyclic, with no `else`; a range that may request no position, meet `all`, or find every position missing with no `else` | `DECIDE: at(previous: x) over (t.period) may select no position inside sum(at(previous: x) over (t.period)), a reducer over decisions, which is not supported yet; give it an else, or make its timeline cyclic` · `...; its first end may come after its last, which requests no position` · `...; drop all, or make its timeline cyclic` |
 | A frame over decisions inside a MIN or MAX composed with other terms (phase 6) | `DECIDE: at(first: x) over (t.period) inside MAX beside another term is not supported yet` |
 | A frame's payload or fallback that is not linear in the decisions | `DECIDE: 'abs((x - 3))' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
 | A fallback that reads a decision beside a payload that reads none | `DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the payload reads none, which is not supported yet` |

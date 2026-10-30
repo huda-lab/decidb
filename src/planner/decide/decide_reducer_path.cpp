@@ -37,6 +37,17 @@ bool ContainsDecideFrame(const Expression &expr) {
 	return found;
 }
 
+string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame) {
+	// A `count` that requests no position reads 0, so only `all` makes one read nothing.
+	if (frame.range && frame.reducer != "count" && frame.MayBeEmpty()) {
+		return "its first end may come after its last, which requests no position";
+	}
+	if (frame.all) {
+		return "drop all, or make its timeline cyclic";
+	}
+	return "give it an else, or make its timeline cyclic";
+}
+
 DecideReducerPath DecideReducerPath::Below(const BoundAggregateExpression &reducer) const {
 	auto below = *this;
 	if (reducer.filter) {

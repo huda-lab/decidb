@@ -5,12 +5,12 @@
 A frame reads a payload at a position of the anchor row's timeline: ``at(F [else v]: e)
 over (S [desc] [cyclic] [within K])`` for one position, ``agg(from F1 to F2 [every d]
 [else v | all]: e) over (...)`` for several. Phase 3 parses, binds and plans every
-spelling; phase 4 formulates the point frames, and a range still stops at one place with
-"not supported yet" until phase 5. ``TestSyntax`` holds the parse, bind and echo contract
-and every refusal of D74; ``TestPoint`` runs every phase-4 fixture of ``_anr_cases``, the
-deck's point examples and the DeQL comparison through DeciDB, each judged by
-``_anr_oracle``, which reads no SQL. The exact parse errors are
-``test/decidb/test_frame_parser.test``'s, the round trips ``test_decidb_plan_serialization.cpp``'s.
+spelling; phase 4 formulates the point frames, phase 5 the ranges. ``TestSyntax`` holds
+the parse, bind and echo contract and every refusal of D74; ``TestPoint`` and
+``TestRange`` run every phase-4 and phase-5 fixture of ``_anr_cases``, the deck's examples
+and the DeQL comparison through DeciDB, each judged by ``_anr_oracle``, which reads no SQL.
+The exact parse errors are ``test/decidb/test_frame_parser.test``'s, the round trips
+``test_decidb_plan_serialization.cpp``'s.
 """
 
 import re
@@ -30,6 +30,7 @@ from ._anr_oracle import (
     Decision,
     Objective,
     Over,
+    Range,
     ScopeError,
     Var,
     clause,
@@ -46,10 +47,6 @@ from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import answer, dump_counts, scope_solver, table, table_rows, values  # noqa: F401 -- fixture
 from solver.types import ObjSense, SolverStatus, VarType
-
-RANGE_NOT_YET = "DECIDE: a range frame selector is not supported yet: "
-
-RANGE_CASES = [pytest.param(case, id=case.name) for case in CASES if " over (" in case.sql and case.phase >= 5]
 
 T = table("t", ("id", "product", "period", "demand", "price"),
           ((1, "A", 1, 5, 2.5), (2, "A", 2, 6, 1.5), (3, "B", 1, 7, 0.5)))
@@ -76,14 +73,6 @@ def _bare(text: str) -> str:
 
 @pytest.mark.error
 class TestSyntax:
-    @pytest.mark.parametrize("case", RANGE_CASES)
-    def test_every_range_fixture_binds_and_stops_at_one_place(self, decidb_cli, case):
-        """Every range fixture of phases 5-6, as written, binds: no parse or bind error comes
-        first, not even the ones its data raises once it runs."""
-        result = decidb_cli.execute_raw(case.sql)
-        assert RANGE_NOT_YET in result.stderr, result.stderr
-        assert_no_internal_leak(result, case.name)
-
     @pytest.mark.parametrize("clause, frame", [
         pytest.param("x >= at(previous: x) over (t.period within t.product)",
                      "at(previous: x) over (t.period within t.product)", id="point"),
@@ -115,11 +104,9 @@ class TestSyntax:
         pytest.param("x <= count(from first to last: t.demand) over (t.period)",
                      "count(from first to last: t.demand) over (t.period)", id="range-count"),
     ])
-    def test_a_range_stops_at_the_gate_as_written(self, decidb_cli, clause, frame):
-        """The range's refusal quotes it as written, the defaults left out."""
-        result = decidb_cli.execute_raw(_query(clause))
-        assert RANGE_NOT_YET + frame in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a range")
+    def test_a_range_echoes_as_written(self, decidb_cli, clause, frame):
+        """EXPLAIN prints a range as written, its defaults left out."""
+        assert _bare(frame) in _explained(decidb_cli, _query(clause))
 
     def test_a_frame_in_the_objective_echoes_as_written(self, decidb_cli):
         sql = _query("x >= 0", "MINIMIZE sum(abs(x - at(previous else 0: x) over (t.period within t.product)))")
@@ -194,14 +181,16 @@ class TestSyntax:
         assert message in result.stderr, result.stderr
         assert_no_internal_leak(result, "a frame refusal")
 
-    def test_no_later_layer_refuses_a_range_first(self, decidb_cli):
-        """The gate stands before canonicalization, the first layer that would read a frame,
-        so none refuses a range for a reason of its own first: `<>` beside an AVG reads as a
-        reducer's refusal there."""
+    def test_an_average_range_under_not_equal_is_fractional(self, decidb_cli):
+        """A range is a value of the row, not a reducer `<>` could multiply through by its
+        count as it does an AVG: an AVG range under `<>` is refused as fractional, in the
+        words a fractional column takes."""
         result = decidb_cli.execute_raw(
             f"SELECT id, x {T} DECIDE x(INT) SUCH THAT x <= 9 AND "
             "x + avg(from first to last: x) over (t.period) <> 3 MAXIMIZE sum(x)")
-        assert RANGE_NOT_YET + "avg(from first to last: x) over (t.period)" in result.stderr, result.stderr
+        assert ("Comparison '<>' is not supported here: 'avg(from first to last: x) over (t.period)' has type "
+                "DOUBLE and can take fractional values") in result.stderr, result.stderr
+        assert_no_internal_leak(result, "an AVG range under <>")
 
     @pytest.mark.correctness
     def test_ordinary_sql_in_a_clause_keeps_its_meaning(self, decidb_cli):
@@ -684,3 +673,456 @@ class TestPointErrors:
         assert result.returncode == 0, result.stderr
         assert diagnose_rows(result), result.stdout
         assert_no_internal_leak(result, "DIAGNOSE of a frame clause")
+
+
+# ---------------------------------------------------------------------------
+# Range selectors (phase 5)
+# ---------------------------------------------------------------------------
+
+RANGE_CASES = [pytest.param(case, id=case.name) for case in CASES if case.phase == 5]
+
+#: A position as written, and as the oracle states it.
+POSITIONS = [("first", FIRST), ("last", LAST), ("previous", previous()), ("2 previous", previous(2)),
+             ("next", next_()), ("2 next", next_(2))]
+#: `else`, `all`, and neither, as written and as the oracle's keywords.
+POLICIES = [("", {}), (" else 1", {"fallback": Const(1)}), (" all", {"all": True})]
+
+
+def _range_sql(reducer, start, end, every, policy, payload, cyclic=False, within="t.product"):
+    step = f" every {every}" if every != 1 else ""
+    over = f"t.period{' cyclic' if cyclic else ''} within {within}"
+    return f"{reducer}(from {start} to {end}{step}{policy}: {payload}) over ({over})"
+
+
+def _range(reducer, start, end, every, policy, payload, cyclic=False):
+    return Range(reducer, start, end, payload, Over("period", cyclic=cyclic, within=("product",)), every=every,
+                 **policy)
+
+
+@pytest.mark.correctness
+class TestRange:
+    @pytest.mark.parametrize("case", RANGE_CASES)
+    def test_the_engine_answers_each_fixture(self, decidb_cli, scope_solver, case):
+        """F5-F7 and the range edge cases: the hand-computed optimum, or the error the data
+        raises (§6.3)."""
+        result = decidb_cli.execute_raw(case.sql)
+        assert_no_internal_leak(result, case.name)
+        if case.error:
+            assert ScopeError.PHRASES[case.error] in result.stderr, result.stderr
+            return
+        assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+        model = case.model()
+        reached = model.judge(answer(decidb_cli, case.sql), case.clauses, case.objective)
+        expected = case.optimum
+        if expected is None:
+            expected = model.solve(scope_solver, case.clauses, case.objective).objective
+        assert reached == pytest.approx(expected, abs=1e-6)
+
+    @pytest.mark.parametrize("cyclic", [False, True], ids=["open", "cyclic"])
+    @pytest.mark.parametrize("policy_sql, policy", POLICIES, ids=["default", "else", "all"])
+    @pytest.mark.parametrize("every", [1, 2])
+    @pytest.mark.parametrize("start_sql, start", POSITIONS, ids=[p[0] for p in POSITIONS])
+    @pytest.mark.parametrize("end_sql, end", POSITIONS, ids=[p[0] for p in POSITIONS])
+    def test_every_endpoint_pair(self, decidb_cli, scope_solver, start_sql, start, end_sql, end, every, policy_sql,
+                                 policy, cyclic):
+        """Every pair of ends, both steps, each policy, open and cyclic, over decisions: a
+        reversed range, `all` meeting a missing position and a range of missing positions
+        with no `else` read nothing and skip their instance; the rest are a helper per
+        window, judged by the oracle."""
+        frame = _range_sql("sum", start_sql, end_sql, every, policy_sql, "x", cyclic)
+        body = le(_range("sum", start, end, every, policy, X, cyclic), 7)
+        _judged(decidb_cli, scope_solver, _edge(f"{frame} <= 7"), table_rows(EDGE, EDGE_ROWS), [Decision("x")],
+                [CAP, clause(body)], MAXIMIZE_X)
+
+    @pytest.mark.parametrize("reducer", ["sum", "avg", "min", "max", "count"])
+    @pytest.mark.parametrize("policy_sql, policy", POLICIES, ids=["default", "else", "all"])
+    @pytest.mark.parametrize("start_sql, start, end_sql, end", [
+        pytest.param("previous", previous(), "next", next_(), id="around"),
+        pytest.param("first", FIRST, "last", LAST, id="timeline"),
+        pytest.param("2 previous", previous(2), "previous", previous(), id="before"),
+        pytest.param("next", next_(), "previous", previous(), id="reversed"),
+    ])
+    def test_a_range_over_data_is_a_value(self, decidb_cli, scope_solver, reducer, policy_sql, policy, start_sql,
+                                          start, end_sql, end):
+        """A range over data is one value per anchor, its reducer's: on the bound side, its
+        instance skipped where it reads nothing (`count` reads 0 there, but under `all`)."""
+        frame = _range_sql(reducer, start_sql, end_sql, 1, policy_sql, "t.v")
+        body = le(X, _range(reducer, start, end, 1, policy, Col("v")))
+        _judged(decidb_cli, scope_solver, _edge(f"x <= {frame}"), table_rows(EDGE, EDGE_ROWS), [Decision("x")],
+                [CAP, clause(body)], MAXIMIZE_X)
+
+    @pytest.mark.parametrize("reducer, sense, bound, objective", [
+        pytest.param("max", "<=", 6, MAXIMIZE_X, id="max-easy"),
+        pytest.param("max", ">=", 8, Objective(ObjSense.MINIMIZE, reduce("sum", X)), id="max-hard"),
+        pytest.param("min", ">=", 2, Objective(ObjSense.MINIMIZE, reduce("sum", X)), id="min-easy"),
+        pytest.param("min", "<=", 1, MAXIMIZE_X, id="min-hard"),
+        pytest.param("max", "=", 5, MAXIMIZE_X, id="max-equal"),
+        pytest.param("avg", ">=", 4.5, Objective(ObjSense.MINIMIZE, reduce("sum", X)), id="avg"),
+        pytest.param("sum", "=", 9, MAXIMIZE_X, id="sum-equal"),
+    ])
+    def test_each_reducer_over_decisions(self, decidb_cli, scope_solver, reducer, sense, bound, objective):
+        """A helper per window, pinned on the side its comparison pushes it: a MAX pushed
+        down and a MIN pushed up by their envelope, the other way by their closing side,
+        both under `=`. A missing position reads the `else`, 2, as one of the values."""
+        frame = _range_sql(reducer, "previous", "next", 1, " else 2", "x")
+        body = {"<=": le, ">=": ge, "=": eq}[sense](_range(reducer, previous(), next_(), 1, {"fallback": Const(2)},
+                                                           X), bound)
+        verb = "MINIMIZE" if objective.sense == ObjSense.MINIMIZE else "MAXIMIZE"
+        _judged(decidb_cli, scope_solver, _edge(f"{frame} {sense} {bound}", objective=f"{verb} sum(x)"),
+                table_rows(EDGE, EDGE_ROWS), [Decision("x")], [CAP, clause(body)], objective)
+
+    @pytest.mark.parametrize("clause_sql, body, rows, counts", [
+        pytest.param("x <= sum(from first to last: x) over (t.period within t.product) - 4",
+                     le(X, _range("sum", FIRST, LAST, 1, {}, X) - 4), EDGE_ROWS,
+                     {"num_vars": 5 + 2, "num_rows": 5 + 2}, id="a-helper-per-timeline"),
+        pytest.param("sum(from previous to next: x) over (t.period within t.product) <= 7",
+                     le(_range("sum", previous(), next_(), 1, {}, X), 7), EDGE_ROWS,
+                     {"num_vars": 5 + 5, "num_rows": 5}, id="a-helper-per-position"),
+        pytest.param("sum(from previous to next: x) over (t.period within t.product) <= 7",
+                     le(_range("sum", previous(), next_(), 1, {}, X), 7),
+                     ((1, "A", 1, 4, 2), (2, "A", 1, 6, 1), (3, "A", 2, 1, 3)),
+                     {"num_vars": 3 + 2, "num_rows": 2}, id="tied-rows-share-a-position"),
+    ])
+    def test_a_helper_per_window(self, decidb_cli, tmp_path, scope_solver, clause_sql, body, rows, counts):
+        """A range over decisions is a helper per window, defined once: one per timeline
+        when neither end depends on the anchor -- n terms in one definition, not n of them
+        -- and one per position otherwise, the tied rows of a position sharing it. A bound
+        on the range alone is a bound on its helper's column, so it costs no row."""
+        sql = _edge(clause_sql, rows=rows)
+        assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == counts
+        _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, rows), [Decision("x")], [CAP, clause(body)],
+                MAXIMIZE_X)
+
+    @pytest.mark.parametrize("clause_sql, body, objective", [
+        pytest.param("abs(x - avg(from previous to next: x) over (t.period within t.product)) <= 1",
+                     le(Abs(X - _range("avg", previous(), next_(), 1, {}, X)), 1), "MAXIMIZE sum(x)", id="abs"),
+        pytest.param("x + sum(from previous to next: x) over (t.period within t.product) <> 10",
+                     ne(X + _range("sum", previous(), next_(), 1, {}, X), 10), "MAXIMIZE sum(x)",
+                     id="not-equal"),
+        pytest.param("sum(sum(from previous to next else 0: x) over (t.period within t.product)) by (t.product) "
+                     "<= 12", le(reduce("sum", _range("sum", previous(), next_(), 1, {"fallback": Const(0)}, X),
+                                        by=("product",)), 12), "MAXIMIZE sum(x)", id="inside-a-reducer"),
+        pytest.param("max(min(from first to last: x) over (t.period within t.product)) >= 3",
+                     ge(reduce("max", _range("min", FIRST, LAST, 1, {}, X)), 3), "MINIMIZE sum(x)",
+                     id="inside-a-max"),
+        pytest.param("t.w * sum(from previous to next: x) over (t.period within t.product) <= 9",
+                     le(Col("w") * _range("sum", previous(), next_(), 1, {}, X), 9), "MAXIMIZE sum(x)",
+                     id="data-coefficient"),
+        pytest.param("x <= max(from previous to previous: x) over (t.period within t.product) + 2 "
+                     "AND x <= t.v + at(previous else 0: x) over (t.period within t.product)",
+                     le(X, _range("max", previous(), previous(), 1, {}, X) + 2), "MAXIMIZE sum(x)",
+                     id="beside-a-point-frame"),
+    ])
+    def test_a_range_composes(self, decidb_cli, scope_solver, clause_sql, body, objective):
+        """The helper is an ordinary keyed decision to every rewrite after it: ABS, `<>`, a
+        reducer around it, a data factor, a point frame beside it."""
+        sense = ObjSense.MINIMIZE if objective.startswith("MINIMIZE") else ObjSense.MAXIMIZE
+        clauses = [CAP, clause(body)]
+        if "AND x <= t.v +" in clause_sql:
+            clauses.append(clause(le(X, Col("v") + At(previous(), X, TIMELINE, fallback=Const(0)))))
+        _judged(decidb_cli, scope_solver, _edge(clause_sql, objective=objective), table_rows(EDGE, EDGE_ROWS),
+                [Decision("x")], clauses, Objective(sense, reduce("sum", X)))
+
+    @pytest.mark.parametrize("objective_sql, objective", [
+        pytest.param("MAXIMIZE sum(x) - 2 * sum(from first to last: x) over (t.period)",
+                     reduce("sum", X) - 2 * Range("sum", FIRST, LAST, X, Over("period")), id="beside-a-reducer"),
+        pytest.param("MINIMIZE sum(max(from previous to next else 0: x) over (t.period within t.product))",
+                     reduce("sum", Range("max", previous(), next_(), X, TIMELINE, fallback=Const(0))),
+                     id="a-sum-of-ranges"),
+        pytest.param("MAXIMIZE sum(from first to last: t.w * x) over (t.period)",
+                     Range("sum", FIRST, LAST, Col("w") * X, Over("period")), id="one-timeline"),
+    ])
+    def test_a_range_in_the_objective(self, decidb_cli, scope_solver, objective_sql, objective):
+        """A range in the objective's root reads one value when its window is the whole
+        timeline (D66); a reducer over ranges reads one per anchor."""
+        sense = ObjSense.MINIMIZE if objective_sql.startswith("MINIMIZE") else ObjSense.MAXIMIZE
+        clauses = [CAP, clause(ge(X, Col("w")))]
+        _judged(decidb_cli, scope_solver, _edge("x >= t.w", objective=objective_sql), table_rows(EDGE, EDGE_ROWS),
+                [Decision("x")], clauses, Objective(sense, objective))
+
+    def test_a_relative_range_in_the_objective_is_produced_more_than_once(self, decidb_cli):
+        result = decidb_cli.execute_raw(_edge("x <= t.v", objective="MAXIMIZE sum(from previous to next: x) "
+                                                                     "over (t.period within t.product)"))
+        assert ScopeError.PHRASES["objective_variants"] in result.stderr, result.stderr
+
+    def test_a_keyed_payload_and_a_decision_else(self, decidb_cli, scope_solver):
+        """A payload over a decision keyed per product reads its instance at each selected
+        row; an `else` over the anchor's own decision reads it once per missing position,
+        so the window splits at each anchor that reaches it."""
+        sql = _edge("y <= 6 AND x <= t.v AND sum(from previous to next else x: y + x) over (t.period within t.product) "
+                    "<= 20", decide="x(INT), per t.product: y(INT)", objective="MAXIMIZE sum(x) + sum(y)",
+                    select="x, y")
+        frame = Range("sum", previous(), next_(), Y + X, TIMELINE, fallback=X)
+        clauses = [CAP, clause(le(Y, 6)), clause(le(X, Col("v"))), clause(le(frame, 20))]
+        _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x"), Decision("y", ("product",))],
+                clauses, Objective(ObjSense.MAXIMIZE, reduce("sum", X) + reduce("sum", Y)))
+
+    def test_under_per_a_range_is_one_variant_per_position(self, decidb_cli, tmp_path, scope_solver):
+        """D76: a relative range under `per t.product` is a field by the anchor's position, so
+        over x keyed per product the clause is one row per position -- five -- while one
+        from `first` to `last` reads one value per timeline -- two."""
+        decisions = [Decision("x", ("product",))]
+        for clause_sql, body, rows in [
+            ("per t.product: x <= sum(from previous to next: t.v) over (t.period within t.product)",
+             le(X, _range("sum", previous(), next_(), 1, {}, Col("v"))), 5),
+            ("per t.product: x <= max(from first to last: t.v) over (t.period within t.product)",
+             le(X, _range("max", FIRST, LAST, 1, {}, Col("v"))), 2),
+        ]:
+            sql = _edge(clause_sql, decide="per t.product: x(INT)")
+            scoped = clause(body, per=("product",))
+            assert len(AnrModel(table_rows(EDGE, EDGE_ROWS), decisions).instances(scoped)) == rows
+            assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == rows
+            _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), decisions, [CAP, scoped], MAXIMIZE_X)
+
+    def test_an_unused_else_is_never_evaluated(self, decidb_cli, scope_solver):
+        """The `else` is read at the anchors that miss a position, and only there: a cast that
+        fails on every other row raises nothing (laziness, §3.4)."""
+        rows = ((1, "A", 1, 4, 2), (2, "A", 2, 6, 1), (3, "A", 3, 1, 3))
+        texts = ("1", "none", "none")
+        sql = f"""SELECT t.id, x FROM (VALUES {', '.join(f"({r[0]}, '{r[1]}', {r[2]}, {r[3]}, '{s}')"
+                                                         for r, s in zip(rows, texts))}) t(id, product, period, v, s)
+            DECIDE x(INT) SUCH THAT x <= 9 AND
+                x <= sum(from previous to previous else CAST(t.s AS INTEGER): t.v) over (t.period)
+            MAXIMIZE sum(x) ORDER BY t.id"""
+        assert [int(row["x"]) for row in answer(decidb_cli, sql)] == [1, 4, 6]
+
+    def test_a_null_value_is_an_error_and_count_skips_it(self, decidb_cli):
+        """D78: a NULL among a range's values is a NULL bound, as a NULL point is; `count`
+        counts the values that are not NULL, as SQL's `count(e)` does."""
+        rows = ((1, "A", 1, None, 2), (2, "A", 2, 6, 1), (3, "A", 3, 1, 3))
+        result = decidb_cli.execute_raw(_edge("x <= sum(from previous to next: t.v) over (t.period)", rows=rows))
+        assert ScopeError.PHRASES["null_value"] in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a NULL in a range")
+        sql = _edge("x <= count(from previous to next: t.v) over (t.period)", rows=rows)
+        assert [int(row["x"]) for row in answer(decidb_cli, sql)] == [1, 2, 2]
+
+    @pytest.mark.parametrize("clause_sql, expected", [
+        pytest.param("x <= datediff('day', DATE '2020-01-01', max(from previous to next: t.d) over (t.id within t.g))",
+                     [8, 8, 1], id="date-max"),
+        pytest.param("x <= sum(from previous to next else 0.5: t.n) over (t.id within t.g) * 2", [7, 7, 6],
+                     id="fractional-else-over-whole-values"),
+        pytest.param("x <= count(from previous to next else true: t.f) over (t.id within t.g)", [3, 3, 3],
+                     id="boolean-count"),
+    ])
+    def test_a_range_over_data_reads_its_reducer_type(self, decidb_cli, clause_sql, expected):
+        """A range over data reduces with SQL's own aggregate: a DATE's maximum is a DATE, an
+        INTEGER payload with `else 0.5` sums as a decimal (the binder gives both one type)."""
+        sql = f"""SELECT t.id, x FROM (VALUES (1, 'a', DATE '2020-01-05', 1, false),
+                  (2, 'a', DATE '2020-01-09', 2, true), (3, 'b', DATE '2020-01-02', 2, true)) t(id, g, d, n, f)
+            DECIDE x(INT) SUCH THAT x <= 9 AND {clause_sql} MAXIMIZE sum(x) ORDER BY t.id"""
+        assert [int(row["x"]) for row in answer(decidb_cli, sql)] == expected
+
+
+@pytest.mark.correctness
+class TestRangeDeck:
+    def test_example_2_rolling_range(self, decidb_cli, scope_solver):
+        """Deck p. 45: demand over the previous, current and next period of the same product,
+        bounded per tuple; a partial frame at each end keeps the positions that exist."""
+        sql = f"""SELECT tid, produce {DECK_FROM}
+            DECIDE produce(INT)
+            SUCH THAT produce <= T.cap AND
+                produce + sum(from previous to next: T.demand) over (T.period within T.productID) <= 15
+            MAXIMIZE sum(produce) ORDER BY tid"""
+        rolling = Range("sum", previous(), next_(), Col("demand"), Over("period", within=("productID",)))
+        clauses = [clause(le(PRODUCE, Col("cap"))), clause(le(PRODUCE + rolling, 15))]
+        _judged(decidb_cli, scope_solver, sql, _deck_rows(), [Decision("produce")], clauses,
+                Objective(ObjSense.MAXIMIZE, reduce("sum", PRODUCE)))
+
+    @pytest.mark.parametrize("policy_sql, policy", POLICIES, ids=["default", "else-0", "all"])
+    def test_example_6_boundary_policies(self, decidb_cli, scope_solver, policy_sql, policy):
+        """Deck p. 49: the same rolling demand under each policy -- the default keeps a
+        partial frame, `else 0` fills it, `all` requires all three positions (the first and
+        last periods then have no instance)."""
+        policy_sql = policy_sql.replace("else 1", "else 0")
+        policy = {"fallback": Const(0)} if "fallback" in policy else policy
+        sql = f"""SELECT tid, produce {DECK_FROM}
+            DECIDE produce(INT)
+            SUCH THAT produce <= T.cap AND
+                produce <= sum(from previous to next{policy_sql}: T.demand) over (T.period within T.productID) - 6
+            MAXIMIZE sum(produce) ORDER BY tid"""
+        rolling = Range("sum", previous(), next_(), Col("demand"), Over("period", within=("productID",)), **policy)
+        clauses = [clause(le(PRODUCE, Col("cap"))), clause(le(PRODUCE, rolling - 6))]
+        _judged(decidb_cli, scope_solver, sql, _deck_rows(), [Decision("produce")], clauses,
+                Objective(ObjSense.MAXIMIZE, reduce("sum", PRODUCE)))
+
+
+@pytest.mark.error
+class TestRangeErrors:
+    @pytest.mark.parametrize("clause_sql, message", [
+        pytest.param("sum(sum(from previous to next: x) over (t.period)) <= 4",
+                     "DECIDE: sum(from previous to next: x) over (t.period) may select no position inside", id="never"),
+        pytest.param("sum(sum(from 2 next to 3 next: x) over (t.period)) <= 4",
+                     "give it an else, or make its timeline cyclic", id="every-position-missing"),
+        pytest.param("sum(sum(from next to previous else 0: x) over (t.period)) <= 4",
+                     "its first end may come after its last, which requests no position", id="reversed"),
+        pytest.param("sum(avg(from previous to next all: x) over (t.period)) <= 4",
+                     "drop all, or make its timeline cyclic", id="all"),
+    ])
+    def test_a_range_that_may_read_nothing_inside_a_reducer_over_decisions(self, decidb_cli, clause_sql, message):
+        """Phase 6 owns a member a range drops from a reducer over decisions. `from previous
+        to next` always reads the anchor's own position, so it is accepted; the others are
+        refused, each naming what makes it read nothing."""
+        result = decidb_cli.execute_raw(_edge(clause_sql))
+        if "never" in message or "previous to next:" in clause_sql:
+            assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+            return
+        assert message in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a range inside a reducer over decisions")
+
+    def test_count_over_decisions_is_refused(self, decidb_cli):
+        result = decidb_cli.execute_raw(_edge("x <= count(from first to last: x) over (t.period)"))
+        assert "COUNT over a DECIDE variable is degenerate" in result.stderr, result.stderr
+
+    def test_an_objective_range_that_reads_nothing(self, decidb_cli):
+        result = decidb_cli.execute_raw(_edge("x <= t.v", objective="MAXIMIZE sum(x) + sum(from last to first: x) "
+                                                                     "over (t.period)"))
+        assert ("selects no position; the objective is produced once and cannot be skipped; its first end may come "
+                "after its last, which requests no position.") in result.stderr, result.stderr
+
+    def test_the_frame_limit(self, decidb_cli):
+        """`decide_frame_limit` caps the values one frame reads over its ranges: every row of
+        every selected position, and every `else` standing in for a missing one."""
+        sql = _edge("x <= sum(from first to last: t.v) over (t.period within t.product)")
+        result = decidb_cli.execute_raw("SET decide_frame_limit = 4; " + sql)
+        assert ("DECIDE: sum(from first to last: t.v) over (t.period within t.product) reads more than 4 values over "
+                "its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting.") in result.stderr, \
+            result.stderr
+        assert [int(row["x"]) for row in answer(decidb_cli, "SET decide_frame_limit = 5; " + sql)] == [9, 9, 9, 9, 9]
+        result = decidb_cli.execute_raw("SET decide_frame_limit = 0")
+        assert "decide_frame_limit must be >= 1" in result.stderr, result.stderr
+
+    def test_explain_names_the_helpers(self, decidb_cli):
+        explained = _explained(decidb_cli, _edge("sum(from previous to next: x) over (t.period within t.product) <= 7 "
+                                                 "AND x <= max(from first to last: x) over (t.period) - 1"))
+        assert _bare("a helper decision per position") in explained, explained
+        assert _bare("a helper decision per timeline") in explained, explained
+
+    def test_diagnose_names_no_internal(self, decidb_cli):
+        """An infeasible range clause: DIAGNOSE reports it with no internal name."""
+        sql = _edge("x >= 5 AND sum(from previous to next: x) over (t.period within t.product) <= 7")
+        result = run_diagnose(decidb_cli, sql)
+        assert result.returncode == 0, result.stderr
+        assert diagnose_rows(result), result.stdout
+        assert_no_internal_leak(result, "DIAGNOSE of a range clause")
+
+    @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+    def test_an_infeasible_model_is_infeasible_on_both_backends(self, request, cli_fixture):
+        """Found by the range fuzzer: `count(min(from next to first: 2) ...)` counts an empty
+        range, 0, fixing every x at 0, which leaves `3 * y = 1` over a whole y. HiGHS's
+        MIP presolve called a point violating a bound optimal and reported a solve error;
+        it is solved once more without presolve, and says infeasible as Gurobi does."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = ((1, "b", 4, -1), (2, "a", 3, 0), (3, "b", 1, -1), (4, "a", 4, 1), (5, "b", 6, 3), (6, "b", 7, -3),
+                (7, "a", 2, 0))
+        sql = f"""SELECT t.id, x, y {table('t', ('id', 'g', 'period', 'w'), rows)}
+            DECIDE x(INT), per t.g: y(INT)
+            SUCH THAT y <= 4 AND per (): x <= count(min(from next to first: 2) over (t.period within t.g))
+              AND t.w * at(3 next: x - y) over (t.period desc within t.g) + x
+                  = count(from previous to last every 2: t.w) over (t.period within t.g)
+            MINIMIZE sum(abs(x - at(next: x - y) over (t.period desc cyclic within t.g))) ORDER BY t.id"""
+        result = cli.execute_raw(sql)
+        assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+
+
+@pytest.mark.correctness
+class TestRangeReview:
+    """Found by the architecture review of phase 5 (`09_anr_language/done.md`, "phase 5")."""
+
+    @pytest.mark.parametrize("clause_sql, body, objective", [
+        pytest.param("x + sum(from previous to previous else 0.5: x) over (t.period within t.product) <= 9",
+                     le(X + _range("sum", previous(), previous(), 1, {"fallback": Const(0.5)}, X), 9),
+                     MAXIMIZE_X, id="fractional-else"),
+        pytest.param("max(from previous to next else 0.5: x) over (t.period within t.product) >= 0.5",
+                     ge(_range("max", previous(), next_(), 1, {"fallback": Const(0.5)}, X), 0.5),
+                     Objective(ObjSense.MINIMIZE, reduce("sum", X)), id="fractional-else-bound"),
+        pytest.param("sum(from previous to next: x + 0.5) over (t.period within t.product) <= 4",
+                     le(_range("sum", previous(), next_(), 1, {}, X + 0.5), 4), MAXIMIZE_X,
+                     id="fractional-addend"),
+        pytest.param("x + sum(from previous to previous else t.f: x) over (t.period within t.product) <= 9",
+                     le(X + _range("sum", previous(), previous(), 1, {"fallback": Col("f")}, X), 9), MAXIMIZE_X,
+                     id="fractional-data-else"),
+    ])
+    def test_a_fractional_range_is_no_whole_helper(self, decidb_cli, scope_solver, clause_sql, body, objective):
+        """A range's helper is whole-numbered only when the type its payload and `else` share
+        is: an INTEGER helper for `else 0.5` called a feasible query infeasible and stepped
+        `>= 0.5` to `>= 1`."""
+        rows = tuple(row + (0.5,) for row in EDGE_ROWS)
+        verb = "MINIMIZE" if objective.sense == ObjSense.MINIMIZE else "MAXIMIZE"
+        sql = f"""SELECT id, x {table('t', EDGE + ('f',), rows)} DECIDE x(INT)
+            SUCH THAT x <= 9 AND {clause_sql} {verb} sum(x) ORDER BY id"""
+        _judged(decidb_cli, scope_solver, sql, table_rows(EDGE + ("f",), rows), [Decision("x")], [CAP, clause(body)],
+                objective)
+
+    @pytest.mark.parametrize("sense", ["<", ">", "<>"])
+    @pytest.mark.parametrize("frame", ["sum(from previous to next: x + 0.5) over (t.period)",
+                                       "sum(from previous to next else 0.5: x) over (t.period)"])
+    def test_a_strict_bound_on_a_fractional_range_is_refused(self, decidb_cli, sense, frame):
+        """The binder reads a range's whole-numberedness the same way, so `<`, `>` and `<>`
+        over a fractional range get its fractional message, not an internal error."""
+        result = decidb_cli.execute_raw(_edge(f"{frame} {sense} 3"))
+        assert "'sum(from previous to next" in result.stderr and "has type DECIMAL" in result.stderr, result.stderr
+        assert "can take fractional values" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a strict bound on a fractional range")
+
+    def test_an_else_of_another_type(self, decidb_cli, scope_solver):
+        """The `else` takes the type the bound reducer reads, which its overload may widen
+        the payload to: a FLOAT `else` beside an INTEGER payload sums as a DOUBLE."""
+        sql = _edge("x <= sum(from previous to next else CAST(0.5 AS FLOAT): t.v) over (t.period within t.product)")
+        body = le(X, _range("sum", previous(), next_(), 1, {"fallback": Const(0.5)}, Col("v")))
+        _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x")], [CAP, clause(body)],
+                MAXIMIZE_X)
+
+    def test_count_all_that_cannot_miss_inside_a_reducer_over_decisions(self, decidb_cli, scope_solver):
+        """`from first to previous` never requests a position off its timeline, so `count ...
+        all` reads 0 at worst and is no absent member: accepted beside a decision."""
+        sql = _edge("sum(x + count(from first to previous all: t.v) over (t.period within t.product)) <= 20")
+        frame = _range("count", FIRST, previous(), 1, {"all": True}, Col("v"))
+        _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x")],
+                [CAP, clause(le(reduce("sum", X + frame), 20))], MAXIMIZE_X)
+
+    def test_a_window_all_makes_absent_reads_nothing(self, decidb_cli):
+        """Under `all` a window with a missing position reads no row: the payload is never
+        evaluated there, so a cast that fails on a row only such windows select raises
+        nothing."""
+        sql = """SELECT t.id, x FROM (VALUES (1, 1, '4'), (2, 2, 'none'), (3, 3, '1')) t(id, period, s)
+            DECIDE x(INT) SUCH THAT x <= 9 AND
+                x <= sum(from previous to next every 2 all: CAST(t.s AS INTEGER)) over (t.period)
+            MAXIMIZE sum(x) ORDER BY t.id"""
+        assert [int(row["x"]) for row in answer(decidb_cli, sql)] == [9, 5, 9]
+
+    def test_count_skips_a_null_else(self, decidb_cli):
+        """`count` counts the values that are not NULL, its `else` among them, as SQL's
+        `count(e)` does."""
+        sql = """SELECT t.id, x FROM (VALUES (1, 1, 4, NULL), (2, 2, 6, 2), (3, 3, 1, 3)) t(id, period, v, n)
+            DECIDE x(INT) SUCH THAT x <= 9 AND x <= count(from previous to next else t.n: t.v) over (t.period)
+            MAXIMIZE sum(x) ORDER BY t.id"""
+        assert [int(row["x"]) for row in answer(decidb_cli, sql)] == [2, 3, 3]
+
+    def test_split_windows_count_against_the_limit(self, decidb_cli):
+        """An `else` that reads the anchor's row parts a position's window per anchor, and
+        each part reads the position's values again: each counts against the limit."""
+        sql = ("SET decide_frame_limit = 30; SELECT id, x FROM (SELECT i AS id, 1 AS p, i AS w FROM range(5) r(i)) t "
+               "DECIDE x(INT) SUCH THAT x <= 9 AND sum(from previous to next else t.w: x) over (t.p) <= 50 "
+               "MAXIMIZE sum(x)")
+        result = decidb_cli.execute_raw(sql)
+        assert "reads more than 30 values over its ranges, above decide_frame_limit (30)" in result.stderr, \
+            result.stderr
+
+    @pytest.mark.parametrize("bound, optimum", [(4, None), (8, 20)])
+    def test_a_reducer_beside_a_range_under_abs_keeps_its_own_helper(self, decidb_cli, scope_solver, bound,
+                                                                     optimum):
+        """The value rewrite matched a reducer's second occurrence -- the copy an ABS envelope
+        holds -- to the link at its own index, which the range rewrite, running first, had
+        taken: the copy read the range's helper, and with the bound 4 an infeasible query
+        answered, breaking a generated row."""
+        sql = _edge(f"x <= t.v AND abs(x - 0.5 * sum(x) + sum(from first to last: x) over (t.period within t.product) "
+                    f"- 10) <= {bound}")
+        body = le(Abs(X - 0.5 * reduce("sum", X) + _range("sum", FIRST, LAST, 1, {}, X) - 10), bound)
+        clauses = [CAP, clause(le(X, Col("v"))), clause(body)]
+        if optimum is None:
+            model = AnrModel(table_rows(EDGE, EDGE_ROWS), [Decision("x")])
+            assert model.solve(scope_solver, clauses, MAXIMIZE_X).status == SolverStatus.INFEASIBLE
+            assert "is infeasible" in decidb_cli.execute_raw(sql).stderr
+            return
+        assert _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x")], clauses,
+                       MAXIMIZE_X) == optimum

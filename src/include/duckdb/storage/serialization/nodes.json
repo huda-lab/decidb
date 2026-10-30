@@ -1253,6 +1253,11 @@
         "id": 118,
         "name": "order_name",
         "type": "string"
+      },
+      {
+        "id": 119,
+        "name": "reducer",
+        "type": "string"
       }
     ],
     "pointer_type": "none"

@@ -192,21 +192,27 @@ struct DecideObjective {
 //! `DecidePreparedModel::frame_column_base + j` for entry j, so no evaluator learns a new
 //! node. `value` is evaluated on the rows `kind` names only, which is what makes an unused
 //! fallback never evaluated (syntax_reference.md §5.6). A frame over data reads one value:
-//!   VALUE    — `value`, its payload, at the row the frame selects for the row; `fallback`,
-//!              its `else`, at the row itself where it selects none; NULL where neither
-//!              stands, which no consumer reads (the instance is skipped, the member dropped)
+//!   VALUE    — a point: `value`, its payload, at the row the frame selects for the row;
+//!              `fallback`, its `else`, at the row itself where it selects none; NULL where
+//!              neither stands, which no consumer reads (the instance is skipped, the member
+//!              dropped)
+//!   REDUCED  — a range: `value`, its marker -- the frame's reducer over its payload --
+//!              over the values the row's range reads, `fallback` read at the row once per
+//!              missing position; NULL where it reads nothing, and where a value it reads is
+//!              NULL (D78), which its reader reports
 //! A frame over decisions reads its terms' coefficients, 0 where a term does not stand:
 //!   READ     — `value` at the row the frame selects for the row; 0 where it selects none
-//!   FALLBACK — `value` at the row itself where the frame selects none and has an `else`;
-//!              0 everywhere else
+//!   FALLBACK — `value` at the row itself where a position the frame requests is missing
+//!              and it has an `else`; 0 everywhere else. A range has these too, over data
+//!              or decisions, read by its helper's definition and its signature field
 //! And either may drop a reducer's member:
-//!   PRESENT  — whether the frame selects a row (BOOLEAN; `value` is null)
+//!   PRESENT  — whether the frame reads anything at the row (BOOLEAN; `value` is null)
 struct DecideFrameColumn {
-	enum class Kind : uint8_t { VALUE, READ, FALLBACK, PRESENT };
+	enum class Kind : uint8_t { VALUE, READ, FALLBACK, PRESENT, REDUCED };
 	Kind kind = Kind::READ;
 	idx_t frame = DConstants::INVALID_INDEX;
 	unique_ptr<Expression> value;
-	//! VALUE: the frame's `else`, of `value`'s type; null when it has none.
+	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
 };
@@ -243,8 +249,10 @@ struct DecidePreparedModel {
 	//! decision instance -- or the position is ambiguous (D67). Empty for a frame over data,
 	//! whose one READ column is its whole payload.
 	vector<vector<DecideFramePayloadTerm>> frame_payload_terms;
-	//! Per frame, the decisions its fallback reads at the row itself: with its FALLBACK
-	//! columns, what tells two anchors that reach the fallback apart (D76).
+	//! Per frame, its `else` as a signature keys it where an anchor reaches it (D76): the
+	//! FALLBACK columns of its terms (into frame_columns), and the decisions it reads at
+	//! the row itself. Both empty for a frame with no `else`.
+	vector<vector<idx_t>> frame_fallback_columns;
 	vector<vector<idx_t>> frame_fallback_decisions;
 };
 

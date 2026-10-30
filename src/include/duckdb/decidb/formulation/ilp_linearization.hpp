@@ -241,12 +241,13 @@ void DeriveReducerValueBounds(SolverInput &input);
 //! Only tightens; FormulateModel runs it in the same fixed point.
 void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
 
-//! Phase 2: emit each helper's definition, one row per group of its members. SUM/AVG:
-//! the flat equality `value - members = constants` (an AVG's members carry their 1/n).
-//! MIN/MAX: an extremum link (EmitExtremumLink) on the sides the clause needs, its
-//! closing Big-M sized off the helper's box against the family's far end, and refused
-//! naming a column to bound where no such constant exists on the lowering arm. The
-//! evaluated member rows are consumed here; none reaches `input.constraints`.
+//! Phase 2: emit each helper's definition, one per group of its members (a `by` group,
+//! or a range frame's window). SUM/AVG: the flat equality `value - members = constants`
+//! (an AVG's members carry their 1/n). MIN/MAX: an extremum link (EmitExtremumLink) on
+//! the sides the clause needs, its closing Big-M sized off the helper's box against the
+//! family's far end, and refused naming a column to bound where no such constant exists
+//! on the lowering arm. The listed members are consumed here; none reaches
+//! `input.constraints`.
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
 

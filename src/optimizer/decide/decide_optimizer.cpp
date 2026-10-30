@@ -86,7 +86,10 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	ChooseDecideSolver(decide);
 	phase.Next("optimizer.tag_groups");
 	TagAtomicRemovalGroups(decide);
+	phase.Next("optimizer.frame_ranges");
+	RewriteFrameRanges(decide); // A range over decisions becomes a helper before any rewrite copies it
 
+	phase.Next("optimizer.norm");
 	RewriteNorm(decide);
 	phase.Next("optimizer.in_domain");
 	RewriteInDomain(decide);

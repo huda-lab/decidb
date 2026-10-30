@@ -51,6 +51,10 @@ idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer);
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame);
 //! Whether `expr` holds a frame marker anywhere, itself included.
 bool ContainsDecideFrame(const Expression &expr);
+//! What a message about `frame` reading nothing at some anchor (DecideFrameSpec::
+//! MaySelectNothing) ends on, in lower case: the remedy, or for a range that may request
+//! no position, the cause, which no `else` cures.
+string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame);
 
 //! The expressions of `keys`, each once, with their names when `names` is given.
 vector<unique_ptr<Expression>> DecidePathKeyExpressions(const vector<idx_t> &keys,

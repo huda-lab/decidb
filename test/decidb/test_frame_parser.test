@@ -1,5 +1,5 @@
 # name: test/decidb/test_frame_parser.test
-# description: Frame selectors (syntax_reference.md §5.6) parse, bind and print back as written; a point frame is formulated, a range says it is not yet from one place; ordinary SQL windows are unchanged
+# description: Frame selectors (syntax_reference.md §5.6) parse, bind and print back as written, and are formulated, points and ranges; ordinary SQL windows are unchanged
 # group: [decidb]
 
 statement ok
@@ -9,9 +9,8 @@ statement ok
 INSERT INTO T VALUES (1, 'A', 'Food', 1, 5, 2.5, TIMESTAMP '2026-01-01 00:00:00'), (2, 'A', 'Food', 2, 6, 1.5, TIMESTAMP '2026-01-02 00:00:00'), (3, 'B', 'Toys', 1, 7, 0.5, TIMESTAMP '2026-01-01 00:00:00');
 
 # ---------------------------------------------------------------------------
-# Every spelling parses and binds, in a clause, a reducer and the objective. A point
-# frame is formulated (phase 4); a range stops at the one place that refuses it until it
-# is (phase 5).
+# Every spelling parses, binds and is formulated, in a clause, a reducer and the
+# objective: point frames (phase 4) and ranges (phase 5).
 # ---------------------------------------------------------------------------
 
 # a point frame over a decision, with its timeline partitioned: each product's first
@@ -31,11 +30,14 @@ SELECT id, x FROM T DECIDE x(INT) SUCH THAT x <= at(first: T.demand) over (T.per
 2	6
 3	6
 
-# a range frame: every, all, else, each reducer
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(from 2 previous to previous every 2: x) over (T.period within T.product) <= 4 AND avg(from first to last all: x) over (T.period) >= 1 AND min(from previous to next else 0: x) over (T.period) >= 0 AND max(from first to last: x) over (T.period) <= 9 AND x <= count(from first to last: T.demand) over (T.period) MAXIMIZE sum(x);
+# a range frame: every, all, else, each reducer. The count reads the three rows of the
+# one timeline, so each x is 3
+query II
+SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(from 2 previous to previous every 2: x) over (T.period within T.product) <= 4 AND avg(from first to last all: x) over (T.period) >= 1 AND min(from previous to next else 0: x) over (T.period) >= 0 AND max(from first to last: x) over (T.period) <= 9 AND x <= count(from first to last: T.demand) over (T.period) MAXIMIZE sum(x) ORDER BY id;
 ----
-Binder Error: DECIDE: a range frame selector is not supported yet: sum(from 2 previous to previous every 2: x) over (T.period within T.product)
+1	3.0
+2	3.0
+3	3.0
 
 # a frame inside a reducer, and in the objective
 query II
@@ -62,21 +64,28 @@ EXPLAIN SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= 9 AND x >= at(previous
 # NULL` (D80), and within () for one timeline.
 # ---------------------------------------------------------------------------
 
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from 1 previous to 3 next every 1 all: x) over (T.period asc cyclic within T.product, T) MAXIMIZE sum(x);
+# each row is a timeline of its own (within T), so the cyclic range reads its own x at
+# all five positions: x >= 5x
+query II
+SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= sum(from 1 previous to 3 next every 1 all: x) over (T.period asc cyclic within T.product, T) MAXIMIZE sum(x) ORDER BY id;
 ----
-Binder Error: DECIDE: a range frame selector is not supported yet: sum(from previous to 3 next all: x) over (T.period cyclic within T.product, T)
+1	0.0
+2	0.0
+3	0.0
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(at(1 next else NULL: x) over (T.period desc within ())) <= 3 MAXIMIZE sum(x);
 ----
 Binder Error: DECIDE: at(next: x) over (T.period desc) may select no position inside
 
-# A view plans its query, so one holding a range stops at the same place.
-statement error
+# A view holding a range plans, and runs
+statement ok
 CREATE VIEW frames AS SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(from first to last: x) over (T.period) <= 3 MAXIMIZE sum(x);
+
+query R
+SELECT sum(x) FROM frames;
 ----
-Binder Error: DECIDE: a range frame selector is not supported yet: sum(from first to last: x) over (T.period)
+3.0
 
 # A view holding a point frame plans, and runs
 statement ok
@@ -272,11 +281,14 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= sum(from first to last: a := T
 ----
 Parser Error: DECIDE: sum(from first to last: e) takes its expression without a name
 
-# a frame word is read whatever its case
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= AT(PREVIOUS ELSE 0: x) OVER (T.period DESC CYCLIC) AND SUM(FROM FIRST TO LAST EVERY 2: x) OVER (T.period) <= 5 MAXIMIZE sum(x);
+# a frame word is read whatever its case: product A's two periods wrap onto each other,
+# so x1 = x2, and the range reads period 1's rows only
+query II
+SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x >= AT(PREVIOUS ELSE 0: x) OVER (T.period DESC CYCLIC WITHIN T.product) AND SUM(FROM FIRST TO LAST EVERY 2: x) OVER (T.period) <= 5 MAXIMIZE sum(x) ORDER BY id;
 ----
-Binder Error: DECIDE: a range frame selector is not supported yet: sum(from first to last every 2: x) over (T.period)
+1	5.0
+2	5.0
+3	0.0
 
 # a frame in a correlated DECIDE subquery, re-bound by the outer query
 statement error

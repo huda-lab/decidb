@@ -456,6 +456,7 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(116, "reduced", reduced);
 	serializer.WritePropertyWithDefault<vector<string>>(117, "timeline_names", timeline_names);
 	serializer.WritePropertyWithDefault<string>(118, "order_name", order_name);
+	serializer.WritePropertyWithDefault<string>(119, "reducer", reducer);
 }
 
 DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
@@ -479,6 +480,7 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<bool>(116, "reduced", result.reduced);
 	deserializer.ReadPropertyWithDefault<vector<string>>(117, "timeline_names", result.timeline_names);
 	deserializer.ReadPropertyWithDefault<string>(118, "order_name", result.order_name);
+	deserializer.ReadPropertyWithDefault<string>(119, "reducer", result.reducer);
 	return result;
 }
 
