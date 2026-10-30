@@ -183,8 +183,6 @@ unique_ptr<LogicalOperator> DirectSourceReader::JoinSideTables(unique_ptr<Logica
 			on_key.right = calc.Out(calc.Col(table.types[j], ColumnBinding(ref_index, j)));
 			join->conditions.push_back(std::move(on_key));
 		}
-		// The rows keep every column; the table gives its value alone.
-		join->right_projection_map.push_back(table.keys.size());
 		join->children.push_back(std::move(top));
 		join->children.push_back(std::move(reference));
 		top = std::move(join);
@@ -228,10 +226,8 @@ DirectSourceReader::Read DirectSourceReader::ReadSource() {
 		                                PositionalNames(source_width), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 	}
 	vector<ColumnBinding> side_values;
-	rows = JoinSideTables(std::move(rows), false, side_values);
-	auto read = ForwardAllColumns(std::move(rows), side_values);
-	read.plan = Gated(std::move(read.plan));
-	return read;
+	rows = Gated(JoinSideTables(std::move(rows), false, side_values));
+	return ForwardAllColumns(std::move(rows), side_values);
 }
 
 unique_ptr<LogicalOperator> DirectSourceReader::TakeRecomputedSource() {
@@ -262,12 +258,8 @@ unique_ptr<LogicalOperator> DirectSourceReader::Gated(unique_ptr<LogicalOperator
 	auto reference =
 	    make_uniq<LogicalCTERef>(reference_index, verdicts.back().cte_index, vector<LogicalType> {LogicalType::BOOLEAN},
 	                             vector<string> {"v"}, CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
-	// The filter reads the verdict, so no pass prunes it, and passes on exactly the read's columns.
+	// The filter reads the verdict, so no pass prunes it. It passes on the read's bindings and the verdict's.
 	auto gate = make_uniq<LogicalFilter>(calc.Out(calc.Col(LogicalType::BOOLEAN, ColumnBinding(reference_index, 0))));
-	read->ResolveOperatorTypes();
-	for (idx_t i = 0; i < read->types.size(); i++) {
-		gate->projection_map.push_back(i);
-	}
 	gate->children.push_back(LogicalCrossProduct::Create(std::move(read), std::move(reference)));
 	return std::move(gate);
 }

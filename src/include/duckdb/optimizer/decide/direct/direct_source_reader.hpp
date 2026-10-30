@@ -85,8 +85,8 @@ public:
 	//! Gates every later read on `verdict`, a plan of one row whose one BOOLEAN column is true or raises. A verdict
 	//! built from reads taken before the gate is gated by the verdicts before it; one added later reads only what the
 	//! newest verdict passed. The verdict is the definition of a one-row materialized CTE, and a gated read is
-	//! Filter[v, projection_map = the read's columns](CrossProduct(read, CTERef v)) on the newest one: it keeps the
-	//! read's bindings and passes a row only once the CTE is computed, whichever side of the product is built first.
+	//! Filter[v](CrossProduct(rows, CTERef v)) on the newest one, under the read's forwarding projection: it keeps the
+	//! rows' bindings and passes a row only once the CTE is computed, whichever side of the product is built first.
 	void Gate(unique_ptr<LogicalOperator> verdict);
 
 	//! The plan built from the reads. A gate's verdict becomes the definition of a LogicalMaterializedCTE whose child
