@@ -29,6 +29,7 @@ objective mismatch. After changing a case or the model builder, remove its entri
 """
 
 import itertools
+import json
 import math
 import random
 from dataclasses import dataclass
@@ -1127,17 +1128,101 @@ def test_a1_a_constant_problem_is_pipelined_and_matches_the_solver(decidb_cli, n
     sql = _constant_query(decision, CONSTANT_PROBLEMS[name])
     assert _run(decidb_cli, sql, "require") == _run(decidb_cli, sql, "off")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert "A1_SEPARABLE_BOX" in plan and "WINDOW" not in plan, plan
+    assert "A1_SEPARABLE_BOX" in plan and "direct_verdict" not in plan, plan
 
 
 @pytest.mark.correctness
-def test_a1_a_problem_that_reads_a_column_waits_for_every_row(decidb_cli):
+def test_a1_a_problem_that_reads_a_column_waits_for_a_verdict_on_every_row(decidb_cli):
+    # The rows are not held (no window): a verdict over a first read gates the second, which streams.
     sql = _constant_query("x(REAL)", "x BETWEEN 0 AND id MAXIMIZE SUM(3*x)")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert "A1_SEPARABLE_BOX" in plan and "WINDOW" in plan, plan
+    assert "A1_SEPARABLE_BOX" in plan and "direct_verdict" in plan and "WINDOW" not in plan, plan
     conditional = _constant_query("x(REAL)", "when id > 1: x BETWEEN 0 AND 10 MAXIMIZE SUM(3*x)")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {conditional}").stdout
-    assert "WINDOW" in plan, plan
+    assert "direct_verdict" in plan and "WINDOW" not in plan, plan
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a1_a_problem_that_reads_a_column_raises_however_little_of_the_result_is_read(decidb_cli):
+    # The verdict is the only thing that reads the last row when the outer query stops early.
+    problem = "x BETWEEN 0 AND id - 2 MAXIMIZE SUM(x)"
+    for parent in (
+        "SELECT id FROM ({}) q LIMIT 1",
+        "SELECT COUNT(*) FROM ({}) q",
+        "SELECT id FROM ({}) q WHERE id = 3",
+    ):
+        with pytest.raises(DeciDBCliError, match="infeasible"):
+            _run(decidb_cli, _constant_query("x(REAL)", problem, parent), "require")
+    # No row, no verdict to fail: an empty source answers with no rows.
+    empty = (
+        "SELECT id, x FROM (SELECT 1 AS id WHERE false) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND id - 2 MAXIMIZE SUM(x)"
+    )
+    assert _run(decidb_cli, empty, "require")[0] == []
+
+
+def _reducer_bound(decide_text, q_sql="(i % 3 + 1)::DOUBLE", lo_sql="0.0", tail=""):
+    """A 5,000-row problem whose rows share two groups, with a bound read from the group's sum (2,500 rows each).
+    The bound is a column, so the source has a row check on it."""
+    return (
+        f"SELECT i, x FROM (SELECT i, {q_sql} AS q, {lo_sql} AS lo, i % 2 AS g FROM range(5000) r(i)) "
+        f"DECIDE {decide_text} {tail}"
+    )
+
+
+@pytest.mark.correctness
+def test_a1_each_verdict_gates_one_read_and_the_rows_wait_for_the_newest(decidb_cli, tmp_path):
+    # A materialized CTE runs whether or not anything reads it, so the error alone cannot tell a read that waits for
+    # its verdict from one that does not. The plan can: every verdict is the gate of exactly one read. With a row check
+    # the first gates the verdict's own read and the second gates the rows.
+    path = tmp_path / "profile.json"
+    plain = _reducer_bound("x(REAL) SUCH THAT x >= lo AND x <= 9 MAXIMIZE SUM(x)")
+    checked = _reducer_bound("x(REAL) SUCH THAT x >= lo AND x <= sum(q) by (g) / 1000 MAXIMIZE SUM(x)")
+
+    def verdicts_and_gates(sql):
+        decidb_cli.execute_raw(
+            f"SET decide_direct_solve='require'; PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {sql}"
+        )
+        verdicts, gates = [], []
+
+        def visit(node):
+            info = node.get("extra_info", {})
+            if node.get("operator_type") == "CTE" and info.get("CTE Name") == "direct_verdict":
+                verdicts.append(info["Table Index"])
+            if node.get("operator_type") == "FILTER":
+                gates.extend(c["extra_info"]["CTE Index"] for c in node["children"] if c["operator_type"] == "CTE_SCAN")
+            for child in node.get("children", []):
+                visit(child)
+
+        visit(json.loads(path.read_text()))
+        return verdicts, gates
+
+    verdicts, gates = verdicts_and_gates(plain)
+    assert len(verdicts) == 1 and gates == verdicts
+    verdicts, gates = verdicts_and_gates(checked)
+    assert len(verdicts) == 2 and sorted(gates) == sorted(verdicts), (verdicts, gates)
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a1_a_late_bad_row_raises_with_a_row_check_in_front_of_the_verdict(decidb_cli):
+    # The bound reads a reducer, so the source has a row check (the NaN of q) and A1 a verdict after it. The last row's
+    # empty box is found by the verdict alone, however little of the result is read.
+    decide = "x(REAL) SUCH THAT x >= lo AND x <= sum(q) by (g) / 1000 MAXIMIZE SUM(x)"
+    late = _reducer_bound(
+        decide, q_sql="(i % 3 + 1)::DOUBLE", lo_sql="CASE WHEN i = 4999 THEN 10.0 ELSE 0.0 END", tail="LIMIT 1"
+    )
+    with pytest.raises(DeciDBCliError, match="infeasible"):
+        _run(decidb_cli, late, "require")
+    # The row check is the first obligation: with a NaN on row 0 as well, its message is the one raised.
+    both = _reducer_bound(
+        decide,
+        q_sql="CASE WHEN i = 0 THEN 'NaN'::DOUBLE ELSE (i % 3 + 1)::DOUBLE END",
+        lo_sql="CASE WHEN i = 4999 THEN 10.0 ELSE 0.0 END",
+        tail="LIMIT 1",
+    )
+    with pytest.raises(DeciDBCliError, match="NaN"):
+        _run(decidb_cli, both, "require")
 
 
 @pytest.mark.error

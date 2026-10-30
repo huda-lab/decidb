@@ -35,7 +35,8 @@ bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t m
 //! decorrelates a scalar subquery: a grouped aggregate over a second read, joined back by the correlation key.
 //!
 //! A reader can be gated (Gate) by a verdict on the rows, the scope checks', after which every read passes its rows
-//! only once the verdict holds.
+//! only once the verdict holds. Gates chain: a later verdict is computed from reads the earlier one gates, so the
+//! order of the obligations (row checks, then a rule's own verdict, then the rows) is a data dependency.
 class DirectSourceReader {
 public:
 	//! One read of the source: a projection over it that forwards every source column in source order, then the value
@@ -81,16 +82,17 @@ public:
 	void AddSideTable(unique_ptr<LogicalOperator> definition, vector<unique_ptr<Expression>> keys,
 	                  ColumnBinding placeholder);
 
-	//! Gates every later read on `verdict`, a plan of one row whose one BOOLEAN column is true or raises.
-	//! The verdict is the definition of a one-row materialized CTE, and a gated read is
-	//! Filter[v, projection_map = the read's columns](CrossProduct(read, CTERef v)): it keeps the read's bindings and
-	//! passes a row only once the CTE is computed, whichever side of the product is built first.
+	//! Gates every later read on `verdict`, a plan of one row whose one BOOLEAN column is true or raises. A verdict
+	//! built from reads taken before the gate is gated by the verdicts before it; one added later reads only what the
+	//! newest verdict passed. The verdict is the definition of a one-row materialized CTE, and a gated read is
+	//! Filter[v, projection_map = the read's columns](CrossProduct(read, CTERef v)) on the newest one: it keeps the
+	//! read's bindings and passes a row only once the CTE is computed, whichever side of the product is built first.
 	void Gate(unique_ptr<LogicalOperator> verdict);
 
 	//! The plan built from the reads. A gate's verdict becomes the definition of a LogicalMaterializedCTE whose child
-	//! is `plan`, and each side table that of one outside that, the first outermost. A materialized source becomes the
-	//! definition of a LogicalMaterializedCTE outside all of them, the root every read needs above it; a recomputed
-	//! source needs nothing.
+	//! is `plan`, the first outermost, and each side table that of one outside all of them, the first outermost. A
+	//! materialized source becomes the definition of a LogicalMaterializedCTE outside all of them, the root every read
+	//! needs above it; a recomputed source needs nothing.
 	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> plan);
 
 private:
@@ -127,9 +129,13 @@ private:
 	//! Whether the source is materialized, and the table index of its CTE.
 	bool materialized = false;
 	idx_t cte_index = DConstants::INVALID_INDEX;
-	//! The gate's verdict, until Finish takes it, and the table index of its CTE; null and INVALID_INDEX ungated.
-	unique_ptr<LogicalOperator> verdict;
-	idx_t verdict_index = DConstants::INVALID_INDEX;
+	//! A gate's verdict until Finish takes it, and the table index of its CTE.
+	struct Verdict {
+		unique_ptr<LogicalOperator> definition;
+		idx_t cte_index = DConstants::INVALID_INDEX;
+	};
+	//! The gates, oldest first; none when ungated.
+	vector<Verdict> verdicts;
 };
 
 } // namespace duckdb

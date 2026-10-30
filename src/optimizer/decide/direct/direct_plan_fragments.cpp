@@ -33,34 +33,6 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
 	return count;
 }
 
-DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<LogicalOperator> input,
-                                              unique_ptr<Expression> valid) {
-	ExpressionBuilder calc(binder.context);
-	input->ResolveOperatorTypes();
-	auto bindings = input->GetColumnBindings();
-	if (bindings.size() != input->types.size() || valid->return_type != LogicalType::BOOLEAN) {
-		throw InternalException("Direct solve validation breaker received an invalid input");
-	}
-	DirectPipelineBreaker result;
-	auto projection_index = binder.GenerateTableIndex();
-	vector<unique_ptr<Expression>> expressions;
-	for (idx_t i = 0; i < bindings.size(); i++) {
-		expressions.push_back(calc.Out(calc.Col(input->types[i], bindings[i])));
-		result.input_bindings.emplace_back(projection_index, i);
-	}
-	expressions.push_back(std::move(valid));
-	auto projection = make_uniq<LogicalProjection>(projection_index, std::move(expressions));
-	projection->children.push_back(std::move(input));
-	auto window_index = binder.GenerateTableIndex();
-	auto window = make_uniq<LogicalWindow>(window_index);
-	window->expressions.push_back(DirectWindowMatchingCount(
-	    calc, calc.Out(calc.Col(LogicalType::BOOLEAN, ColumnBinding(projection_index, bindings.size())))));
-	window->children.push_back(std::move(projection));
-	result.breaker = ColumnBinding(window_index, 0);
-	result.plan = std::move(window);
-	return result;
-}
-
 unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
                                         double scale, bool divides) {
 	ExpressionBuilder calc(optimizer.context);
@@ -86,6 +58,15 @@ unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_pt
 	}
 	aggregate->children.push_back(std::move(child));
 	return aggregate;
+}
+
+unique_ptr<LogicalOperator> DirectAllRowsValid(Optimizer &optimizer, unique_ptr<LogicalOperator> rows,
+                                               unique_ptr<Expression> valid) {
+	vector<unique_ptr<Expression>> arguments;
+	arguments.push_back(std::move(valid));
+	vector<unique_ptr<Expression>> aggregates;
+	aggregates.push_back(optimizer.BindAggregateFunction("bool_and", std::move(arguments)));
+	return DirectAggregateOver(optimizer, std::move(rows), {}, std::move(aggregates));
 }
 
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,

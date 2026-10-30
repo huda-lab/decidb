@@ -7,6 +7,7 @@
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
+#include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -243,12 +244,14 @@ struct DirectSubstitute {
 	//! skipped. Validation the rule needs must then hang off a validated column.
 	vector<uint8_t> prunable_decisions;
 	//! Child slots kept live even when no parent reads any output. A rule whose plan must read every input row
-	//! before it releases one (the solver's obligation) declares the column that forces that read here, typically
-	//! the breaker from DirectValidationBreaker. Empty when the plan has nothing to keep live.
+	//! before it releases one (the solver's obligation) and does so inside the plan declares the column that forces
+	//! that read here: the hidden rank of a window, or the check a pipelined plan raises on its first row. A rule that
+	//! reads the rows once to validate them gates its other reads on the verdict instead
+	//! (DirectSourceReader::Gate), which no pass prunes. Empty when the plan has nothing to keep live.
 	vector<idx_t> validated_columns;
 	//! True when the plan is pipelined: it passes rows through without holding the input, so a column a parent reads
 	//! costs no memory to carry. The rule driver then never reads a stored column a second time for it. Leave false for
-	//! a plan that holds every row (a breaker, a rank).
+	//! a plan that holds every row (a rank).
 	bool pipelined = false;
 };
 
@@ -274,6 +277,13 @@ public:
 	virtual DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                               const DirectApplicabilityCondition &condition) const = 0;
 };
+
+//! A plan over one read the reader gave (ReadSource), written over the source's own bindings: `build` makes it over
+//! the read, and the source's bindings in it are re-pointed at the read's columns (ColumnBindingReplacer). The caller
+//! finishes the plan with the reader.
+unique_ptr<LogicalOperator>
+DirectBuildOverRead(DirectSourceReader &reader, DirectSourceReader::Read read,
+                    const std::function<unique_ptr<LogicalOperator>(unique_ptr<LogicalOperator>)> &build);
 
 //! Applies a rule that reads the source once and writes its plan over the source's own bindings: `build` makes the
 //! substitute over the one read. A recomputed source is read as itself and keeps its bindings; the read of a

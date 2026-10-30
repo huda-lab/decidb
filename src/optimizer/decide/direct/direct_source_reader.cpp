@@ -131,8 +131,8 @@ static vector<string> PositionalNames(idx_t count) {
 
 void DirectSourceReader::AddSideTable(unique_ptr<LogicalOperator> definition, vector<unique_ptr<Expression>> keys,
                                       ColumnBinding placeholder) {
-	// A table added after the gate would be gated, and the verdict would read it.
-	D_ASSERT(!verdict);
+	// A table added after a gate would be gated, and the verdict would read it.
+	D_ASSERT(verdicts.empty());
 	definition->ResolveOperatorTypes();
 	D_ASSERT(definition->types.size() == keys.size() + 1 && placeholder.column_index == keys.size());
 	// The value is read where the clauses' expressions have the placeholder.
@@ -243,21 +243,24 @@ unique_ptr<LogicalOperator> DirectSourceReader::TakeRecomputedSource() {
 }
 
 void DirectSourceReader::Gate(unique_ptr<LogicalOperator> verdict_p) {
-	D_ASSERT(!verdict && verdict_p);
+	D_ASSERT(verdict_p);
 	verdict_p->ResolveOperatorTypes();
 	D_ASSERT(verdict_p->types.size() == 1 && verdict_p->types[0] == LogicalType::BOOLEAN);
-	verdict = std::move(verdict_p);
-	verdict_index = optimizer.binder.GenerateTableIndex();
+	Verdict verdict;
+	verdict.definition = std::move(verdict_p);
+	verdict.cte_index = optimizer.binder.GenerateTableIndex();
+	verdicts.push_back(std::move(verdict));
 }
 
 unique_ptr<LogicalOperator> DirectSourceReader::Gated(unique_ptr<LogicalOperator> read) {
-	if (!verdict) {
+	if (verdicts.empty()) {
 		return read;
 	}
+	// Only the newest verdict is checked: its definition read rows that passed the one before it.
 	ExpressionBuilder calc(optimizer.context);
 	auto reference_index = optimizer.binder.GenerateTableIndex();
 	auto reference =
-	    make_uniq<LogicalCTERef>(reference_index, verdict_index, vector<LogicalType> {LogicalType::BOOLEAN},
+	    make_uniq<LogicalCTERef>(reference_index, verdicts.back().cte_index, vector<LogicalType> {LogicalType::BOOLEAN},
 	                             vector<string> {"v"}, CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 	// The filter reads the verdict, so no pass prunes it, and passes on exactly the read's columns.
 	auto gate = make_uniq<LogicalFilter>(calc.Out(calc.Col(LogicalType::BOOLEAN, ColumnBinding(reference_index, 0))));
@@ -270,9 +273,11 @@ unique_ptr<LogicalOperator> DirectSourceReader::Gated(unique_ptr<LogicalOperator
 }
 
 unique_ptr<LogicalOperator> DirectSourceReader::Finish(unique_ptr<LogicalOperator> plan) {
-	if (verdict) {
-		plan =
-		    make_uniq<LogicalMaterializedCTE>("direct_verdict", verdict_index, 1, std::move(verdict), std::move(plan));
+	// The first verdict is the outermost, because a later one's definition reads it.
+	for (idx_t i = verdicts.size(); i > 0; i--) {
+		auto &verdict = verdicts[i - 1];
+		plan = make_uniq<LogicalMaterializedCTE>("direct_verdict", verdict.cte_index, 1, std::move(verdict.definition),
+		                                         std::move(plan));
 	}
 	// The first side table is the outermost, because a later one's definition may read it.
 	for (idx_t i = side_tables.size(); i > 0; i--) {

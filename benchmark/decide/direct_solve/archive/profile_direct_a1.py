@@ -31,7 +31,7 @@ SHAPES = {
     ),
     "real_quadratic_when": (
         "src",
-        "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - t, 2)) WHEN (f)",
+        "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE when f: SUM(POWER(x - t, 2))",
         "COUNT(*), SUM(x)",
     ),
     "int_linear": ("src", "x(INT) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score * x)", "COUNT(*), SUM(x)"),

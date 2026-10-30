@@ -515,7 +515,8 @@ def test_a1_unused_wide_columns_stay_out_of_the_barrier_and_computed_errors_stay
     aggregate = f"SELECT COUNT(*), SUM(x), SUM(POWER(x - score, 2)) FROM ({decide}) q"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate}").stdout
     scan = plan.rsplit("SEQ_SCAN", 1)[-1]
-    assert "A1_SEPARABLE_BOX" in plan and "WINDOW" in plan
+    # Nothing holds a row, so no column is held: the verdict gates a read that streams.
+    assert "A1_SEPARABLE_BOX" in plan and "direct_verdict" in plan and "WINDOW" not in plan
     assert "score" in scan and "payload" not in scan
 
     rows, _ = _run(decidb_cli.with_verify_serializer(), setup + aggregate)
@@ -708,8 +709,9 @@ def test_extension_registration_preserves_binder_errors(decidb_cli):
 
 # --- Reading a stored table twice instead of holding wide rows ---------------------------------------------------------
 #
-# Direct solve checks every input row before it releases one, so its plan holds the rows. A stored column the parent
-# reads and the rule never uses is read from a second scan of the table, joined on the row id, so it is not held.
+# Direct solve checks every input row before it releases one. A plan that holds its rows to do it (S1's rank window)
+# reads a stored column the parent reads and the rule never uses from a second scan of the table, joined on the row id,
+# so it is not held. A1 holds nothing: a verdict over its own read gates the read that streams.
 
 _LATE_MATERIALIZATION_ROWS = 5000
 
@@ -754,7 +756,7 @@ def _same_answers(left, right):
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("rule", ["s1", "a1"])
+@pytest.mark.parametrize("rule", ["s1"])
 def test_second_read_returns_the_solvers_answers_and_the_plan_reads_the_table_twice(decidb_cli, rule):
     setup = _late_materialization_setup(rule)
     decide = _late_materialization_decide(rule)
@@ -784,7 +786,7 @@ def test_second_read_returns_the_solvers_answers_and_the_plan_reads_the_table_tw
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("rule", ["s1", "a1"])
+@pytest.mark.parametrize("rule", ["s1"])
 def test_second_read_still_raises_on_a_bad_value_in_the_last_row_under_limit(decidb_cli, rule):
     setup = _late_materialization_setup(rule, bad_last=True)
     decide = _late_materialization_decide(rule)
@@ -799,7 +801,7 @@ def test_second_read_still_raises_on_a_bad_value_in_the_last_row_under_limit(dec
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("rule", ["s1", "a1"])
+@pytest.mark.parametrize("rule", ["s1"])
 def test_second_read_only_for_a_stored_table_and_a_column_the_rule_does_not_use(decidb_cli, rule):
     setup = _late_materialization_setup(rule)
     decide = _late_materialization_decide(rule)
@@ -841,7 +843,7 @@ def test_second_read_only_for_a_stored_table_and_a_column_the_rule_does_not_use(
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("rule", ["s1", "a1"])
+@pytest.mark.parametrize("rule", ["s1"])
 def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
     setup = _late_materialization_setup(rule)
     decide = _late_materialization_decide(rule)
@@ -865,6 +867,22 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
         solver, _ = _run(decidb_cli, setup + query, mode="off")
         assert len(direct) == _LATE_MATERIALIZATION_ROWS
         _same_answers(direct, solver)
+
+
+@pytest.mark.correctness
+def test_a1_verifies_then_streams_without_holding_rows(decidb_cli):
+    setup = _late_materialization_setup("a1")
+    decide = _late_materialization_decide("a1")
+    query = f"SELECT id, payload, x FROM ({decide}) q ORDER BY id"
+    plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
+    # One scan for the verdict and one for the rows, whatever the parent reads; no window and no join back by row id.
+    assert "A1_SEPARABLE_BOX" in plan and "direct_verdict" in plan, plan
+    assert _table_scans(plan) == 2 and "WINDOW" not in plan and "HASH_JOIN" not in plan, plan
+    narrow = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
+    assert _table_scans(narrow) == 2 and "WINDOW" not in narrow, narrow
+    rows, _ = _run(decidb_cli, setup + query)
+    solver, _ = _run(decidb_cli, setup + query, mode="off")
+    _same_answers(rows, solver)
 
 
 @pytest.mark.correctness

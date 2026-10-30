@@ -22,17 +22,9 @@ using namespace duckdb;
 
 namespace {
 
-struct StubCondition final : DirectApplicabilityCondition {};
-
-//! A plan that reports one binding fewer than it has columns, as no real operator does.
-class ProjectionWithoutLastBinding final : public LogicalProjection {
-public:
-	using LogicalProjection::LogicalProjection;
-
-	duckdb::vector<ColumnBinding> GetColumnBindings() override {
-		auto bindings = LogicalProjection::GetColumnBindings();
-		bindings.pop_back();
-		return bindings;
+struct StubCondition final : DirectApplicabilityCondition {
+	explicit StubCondition(idx_t source_reads_p) {
+		source_reads = source_reads_p;
 	}
 };
 
@@ -41,8 +33,8 @@ enum class StubValidation : uint8_t {
 	NONE,
 	//! Checks the first source column for NULL in a pipelined projection.
 	PIPELINED,
-	//! The same check behind DirectValidationBreaker.
-	BREAKER
+	//! The same check as a verdict the rule's second read waits for (DirectAllRowsValid, DirectSourceReader::Gate).
+	VERDICT
 };
 
 //! A rule with fixed answers. Its plan assigns every row `value`.
@@ -67,10 +59,6 @@ public:
 		//! source.
 		ROW_ID_NOT_PASSED,
 		//! What the rule passes to a shared plan fragment is wrong, and the fragment raises while the rule builds.
-		//! The condition handed to DirectValidationBreaker is not Boolean.
-		BREAKER_CONDITION_NOT_BOOLEAN,
-		//! The plan handed to DirectValidationBreaker reports a different number of bindings than types.
-		BREAKER_INPUT_BINDINGS_MISMATCH,
 		//! A value handed to DirectOverProjection reads a column of an outer query.
 		OVER_PROJECTION_OUTER_COLUMN,
 		//! A value handed to DirectOverProjection reads a column the source does not carry.
@@ -87,39 +75,44 @@ public:
 		if (!applies) {
 			return nullptr;
 		}
-		return make_uniq<StubCondition>();
+		// A verdict is one more read of the source.
+		return make_uniq<StubCondition>(validation == StubValidation::VERDICT ? 2 : 1);
 	}
 	string Summary() const override {
 		return "stub";
 	}
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	                       const DirectApplicabilityCondition &) const override {
+		if (validation == StubValidation::VERDICT) {
+			reader.Gate(DirectBuildOverRead(reader, reader.ReadSource(), [&](duckdb::unique_ptr<LogicalOperator> rows) {
+				auto valid = Valid(optimizer, rows->types[0], rows->GetColumnBindings()[0]);
+				return DirectAllRowsValid(optimizer, std::move(rows), std::move(valid));
+			}));
+		}
 		return DirectBuildOverOneRead(
 		    reader, [&](duckdb::unique_ptr<LogicalOperator> rows) { return Build(std::move(rows), optimizer); });
 	}
 
 private:
+	//! True, or the row raises when the column is NULL.
+	static duckdb::unique_ptr<Expression> Valid(Optimizer &optimizer, const LogicalType &type, ColumnBinding binding) {
+		ExpressionBuilder build(optimizer.context);
+		auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
+		is_null->children.push_back(build.Out(build.Col(type, binding)));
+		return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, "stub: NULL"),
+		                                      build.Out(build.Bool(true)));
+	}
+
 	DirectSubstitute Build(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer) const {
 		ExpressionBuilder build(optimizer.context);
 		auto bindings = source->GetColumnBindings();
 		auto types = source->types;
-		RaiseFromSharedFragment(source, bindings, types, optimizer);
-		auto valid = [&](const duckdb::vector<ColumnBinding> &input) {
-			auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-			is_null->children.push_back(build.Out(build.Col(types[0], input[0])));
-			return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, "stub: NULL"),
-			                                      build.Out(build.Bool(true)));
-		};
+		RaiseFromSharedFragment(bindings, types, optimizer);
 		duckdb::vector<ColumnBinding> input = bindings;
 		duckdb::unique_ptr<LogicalOperator> plan = std::move(source);
 		duckdb::unique_ptr<Expression> check;
-		if (validation == StubValidation::BREAKER) {
-			auto breaker = DirectValidationBreaker(optimizer.binder, std::move(plan), valid(bindings));
-			plan = std::move(breaker.plan);
-			input = breaker.input_bindings;
-			check = build.Out(build.Col(LogicalType::BIGINT, breaker.breaker));
-		} else if (validation == StubValidation::PIPELINED) {
-			check = valid(bindings);
+		if (validation == StubValidation::PIPELINED) {
+			check = Valid(optimizer, types[0], bindings[0]);
 		}
 		auto index = optimizer.binder.GenerateTableIndex();
 		duckdb::vector<duckdb::unique_ptr<Expression>> expressions;
@@ -169,8 +162,7 @@ private:
 	}
 
 	//! Hands a shared plan fragment what the fault says is wrong with it. The fragment raises, so no plan results.
-	void RaiseFromSharedFragment(duckdb::unique_ptr<LogicalOperator> &source,
-	                             const duckdb::vector<ColumnBinding> &bindings,
+	void RaiseFromSharedFragment(const duckdb::vector<ColumnBinding> &bindings,
 	                             const duckdb::vector<LogicalType> &types, Optimizer &optimizer) const {
 		ExpressionBuilder build(optimizer.context);
 		auto column = [&](ColumnBinding binding, idx_t depth = 0) {
@@ -178,20 +170,6 @@ private:
 		};
 		const ColumnBinding foreign(9999, 0);
 		switch (fault) {
-		case Fault::BREAKER_CONDITION_NOT_BOOLEAN:
-			DirectValidationBreaker(optimizer.binder, std::move(source), column(bindings[0]));
-			break;
-		case Fault::BREAKER_INPUT_BINDINGS_MISMATCH: {
-			duckdb::vector<duckdb::unique_ptr<Expression>> expressions;
-			for (idx_t i = 0; i < bindings.size(); i++) {
-				expressions.push_back(build.Out(build.Col(types[i], bindings[i])));
-			}
-			auto input =
-			    make_uniq<ProjectionWithoutLastBinding>(optimizer.binder.GenerateTableIndex(), std::move(expressions));
-			input->children.push_back(std::move(source));
-			DirectValidationBreaker(optimizer.binder, std::move(input), build.Out(build.Bool(true)));
-			break;
-		}
 		case Fault::OVER_PROJECTION_OUTER_COLUMN:
 			DirectOverProjection(*column(bindings[0], 1), bindings, 0);
 			break;
@@ -458,12 +436,7 @@ TEST_CASE("Direct rule driver rejects each way a rule can hand a shared plan fra
 		StubRule::Fault fault;
 		const char *error;
 	};
-	const Case cases[] = {{"a validation condition that is not Boolean", StubRule::Fault::BREAKER_CONDITION_NOT_BOOLEAN,
-	                       "validation breaker received an invalid input"},
-	                      {"a breaker input with fewer bindings than columns",
-	                       StubRule::Fault::BREAKER_INPUT_BINDINGS_MISMATCH,
-	                       "validation breaker received an invalid input"},
-	                      {"a value that reads an outer query", StubRule::Fault::OVER_PROJECTION_OUTER_COLUMN,
+	const Case cases[] = {{"a value that reads an outer query", StubRule::Fault::OVER_PROJECTION_OUTER_COLUMN,
 	                       "could not re-point a value"},
 	                      {"a value that reads a column the source lacks",
 	                       StubRule::Fault::OVER_PROJECTION_FOREIGN_COLUMN, "could not re-point a value"},
@@ -493,7 +466,7 @@ TEST_CASE("Direct rule driver rejects each way a rule can hand a shared plan fra
 	REQUIRE(CHECK_COLUMN(control, 1, {1, 1, 1}));
 }
 
-TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or COUNT returns", "[decidb]") {
+TEST_CASE("A rule's verdict reads every row before an outer LIMIT or COUNT returns", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// One thread, so a pipelined plan under LIMIT 1 deterministically stops after its first chunk.
@@ -508,12 +481,12 @@ TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or CO
 	const string decide = "FROM (SELECT CASE WHEN i = 4999 THEN NULL ELSE i END AS v FROM range(5000) t(i))"
 	                      " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(v*x)";
 
-	// Without the breaker the late NULL is never read: the check is only as eager as the parent.
+	// Without the verdict the late NULL is never read: the check is only as eager as the parent.
 	install(StubValidation::PIPELINED);
 	auto pipelined = con.Query("SELECT v FROM (" + decide + ") q LIMIT 1");
 	REQUIRE_NO_FAIL(*pipelined);
 
-	install(StubValidation::BREAKER);
+	install(StubValidation::VERDICT);
 	for (auto &outer : {"SELECT v FROM (" + decide + ") q LIMIT 1", "SELECT COUNT(*) FROM (" + decide + ") q"}) {
 		auto result = con.Query(outer);
 		REQUIRE(result->HasError());

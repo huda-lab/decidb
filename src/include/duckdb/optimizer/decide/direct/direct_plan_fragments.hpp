@@ -43,22 +43,13 @@ unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_pt
                                                  const vector<ExprPtr> &groups,
                                                  vector<unique_ptr<Expression>> aggregates);
 
-//! A plan that releases no row before `valid` has been evaluated on every input row.
-struct DirectPipelineBreaker {
-	unique_ptr<LogicalOperator> plan;
-	//! Where each input column lives in `plan`, in input order.
-	vector<ColumnBinding> input_bindings;
-	//! Carry this column to the rule's output and declare it as a validated column, so pruning keeps the breaker.
-	ColumnBinding breaker;
-};
-
-//! The solver reads every input row before it returns, so a bad value on the last row raises even under an outer
-//! LIMIT 1. A rule whose plan would otherwise be pipelined keeps that obligation here: `valid`, over `input`'s
-//! columns, returns true or raises the row's error; a projection evaluates it on every row and a window counting the
-//! whole input cannot emit until all of them are read. The predicate is a projected column rather than a filter, so
-//! filter pushdown cannot move it below a join onto rows the DECIDE input never sees.
-DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<LogicalOperator> input,
-                                              unique_ptr<Expression> valid);
+//! A verdict on every row of `rows` (DirectSourceReader::Gate): one row whose one BOOLEAN column is true when `valid`,
+//! over `rows`' columns, is true on every row, and otherwise the error of a row that raises it. It is NULL for no rows,
+//! which a gate passes none of and which have no row to raise on. The solver reads every input row before it returns,
+//! so a bad value on the last row raises even under an outer LIMIT 1; a rule that streams its rows keeps that
+//! obligation by gating them on this.
+unique_ptr<LogicalOperator> DirectAllRowsValid(Optimizer &optimizer, unique_ptr<LogicalOperator> rows,
+                                               unique_ptr<Expression> valid);
 
 //===--------------------------------------------------------------------===//
 // DECIDE semantics every aggregate rule shares

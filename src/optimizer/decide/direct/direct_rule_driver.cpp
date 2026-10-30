@@ -146,6 +146,23 @@ void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
 
 } // namespace
 
+unique_ptr<LogicalOperator>
+DirectBuildOverRead(DirectSourceReader &reader, DirectSourceReader::Read read,
+                    const std::function<unique_ptr<LogicalOperator>(unique_ptr<LogicalOperator>)> &build) {
+	read.plan->ResolveOperatorTypes();
+	auto &read_plan = *read.plan;
+	auto plan = build(std::move(read.plan));
+	// The plan reads the source's columns where the read has them.
+	ColumnBindingReplacer replacer;
+	auto &source_bindings = reader.SourceBindings();
+	for (idx_t i = 0; i < source_bindings.size(); i++) {
+		replacer.replacement_bindings.emplace_back(source_bindings[i], ColumnBinding(read.table_index, i));
+	}
+	replacer.stop_operator = &read_plan;
+	replacer.VisitOperator(*plan);
+	return plan;
+}
+
 DirectSubstitute DirectBuildOverOneRead(DirectSourceReader &reader,
                                         const std::function<DirectSubstitute(unique_ptr<LogicalOperator>)> &build) {
 	// A rule is handed its read with its types resolved.
@@ -156,19 +173,12 @@ DirectSubstitute DirectBuildOverOneRead(DirectSourceReader &reader,
 		substitute.child = reader.Finish(std::move(substitute.child));
 		return substitute;
 	}
-	auto read = reader.ReadSource();
-	read.plan->ResolveOperatorTypes();
-	auto &read_plan = *read.plan;
-	auto substitute = build(std::move(read.plan));
-	// The plan reads the source's columns where the read has them.
-	ColumnBindingReplacer replacer;
-	auto &source_bindings = reader.SourceBindings();
-	for (idx_t i = 0; i < source_bindings.size(); i++) {
-		replacer.replacement_bindings.emplace_back(source_bindings[i], ColumnBinding(read.table_index, i));
-	}
-	replacer.stop_operator = &read_plan;
-	replacer.VisitOperator(*substitute.child);
-	substitute.child = reader.Finish(std::move(substitute.child));
+	DirectSubstitute substitute;
+	auto plan = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows_p) {
+		substitute = build(std::move(rows_p));
+		return std::move(substitute.child);
+	});
+	substitute.child = reader.Finish(std::move(plan));
 	return substitute;
 }
 

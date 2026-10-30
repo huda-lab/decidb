@@ -183,6 +183,8 @@ public:
 			return nullptr;
 		}
 		condition->constant_problem = IsConstantProblem(*condition);
+		// The rows are read once to validate them and once to answer, unless every row raises the same error.
+		condition->source_reads = condition->constant_problem ? 1 : 2;
 		return std::move(condition);
 	}
 
@@ -327,8 +329,12 @@ struct Stage {
 //!   P2 per-clause bounds, per-decision objective coefficients, and the check on every raw value
 //!   P3 each decision's box
 //!   P4 each decision's answer and whether its row is infeasible
-//!   breaker: every row is validated before one is released
-//!   P5 the source columns, the typed answers, and the breaker
+//!
+//! The solver reads every row before it returns, so a bad value on the last row raises even under an outer LIMIT 1.
+//! The plan keeps that obligation without holding rows (verify, then stream). When the rows differ, one read runs
+//! P1-P4 into a verdict, `bool_and` of every row's checks, true or raising, and the reader gates the second read on
+//! it (DirectSourceReader::Gate): that read runs P1-P4 again and releases each row as it comes. When every row sees
+//! the same values, the first row raises whatever the others would and the plan is one pipelined read.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -338,31 +344,15 @@ public:
 		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
+	//! One row: true when every row of `source` is valid, and otherwise the error of a row that is not.
+	unique_ptr<LogicalOperator> BuildVerdict(unique_ptr<LogicalOperator> source) const {
+		auto stages = RunStages(std::move(source));
+		return DirectAllRowsValid(optimizer, std::move(stages.plan), ValidAnswers(stages.answers));
+	}
+
+	//! The source columns and the answers. A source that is read twice has already been validated by the verdict.
 	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
-		Stage p1(binder.GenerateTableIndex());
-		vector<unique_ptr<Expression>> checks;
-		Raw raw;
-		LayoutRawValues(p1, checks, raw);
-		unique_ptr<LogicalOperator> plan = p1.Finish(std::move(source));
-
-		Stage p2(binder.GenerateTableIndex());
-		Bounds bounds;
-		auto passthrough2 = Passthrough(p2, raw.source);
-		ComputeBounds(p2, raw, checks, bounds);
-		plan = p2.Finish(std::move(plan));
-
-		Stage p3(binder.GenerateTableIndex());
-		auto passthrough3 = Passthrough(p3, passthrough2);
-		Box box;
-		ComputeBox(p3, bounds, box);
-		plan = p3.Finish(std::move(plan));
-
-		Stage p4(binder.GenerateTableIndex());
-		auto passthrough4 = Passthrough(p4, passthrough3);
-		Answers answers;
-		ComputeAnswers(p4, box, answers);
-		plan = p4.Finish(std::move(plan));
-
+		auto stages = RunStages(std::move(source));
 		DirectSubstitute substitute;
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			substitute.prunable_decisions.push_back(1);
@@ -370,34 +360,22 @@ public:
 		for (idx_t i = 0; i < source_bindings.size() + condition.decisions.size(); i++) {
 			substitute.slot_map.push_back(i);
 		}
-		substitute.validated_columns.push_back(source_bindings.size() + condition.decisions.size());
-
 		Stage p5(binder.GenerateTableIndex());
-		if (condition.constant_problem) {
-			// Every row sees the same values, so the first row raises whatever the others would, and nothing has to be
-			// held back: the plan is pipelined, and the validation column raises wherever a row is read. An empty
-			// source has no row to raise on and returns no rows. A bound the solver rejects outright (against the
-			// variable's built-in domain) is never proved, so it cannot differ on an empty input.
-			for (idx_t i = 0; i < source_bindings.size(); i++) {
-				p5.Add(calc.Out(calc.Col(source_types[i], passthrough4[i])));
-			}
-			for (idx_t d = 0; d < condition.decisions.size(); d++) {
-				p5.Add(TypedAnswer(d, answers.value[d]));
-			}
-			p5.Add(ValidAnswers(answers));
-			substitute.child = p5.Finish(std::move(plan));
-			substitute.pipelined = true;
-			return substitute;
-		}
-		auto breaker = DirectValidationBreaker(binder, std::move(plan), ValidAnswers(answers));
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p5.Add(calc.Out(calc.Col(source_types[i], breaker.input_bindings[i])));
+			p5.Add(calc.Out(calc.Col(source_types[i], stages.passthrough[i])));
 		}
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			p5.Add(TypedAnswer(d, breaker.input_bindings[answers.value[d].column_index]));
+			p5.Add(TypedAnswer(d, stages.answers.value[d]));
 		}
-		p5.Add(calc.Out(calc.Col(LogicalType::BIGINT, breaker.breaker)));
-		substitute.child = p5.Finish(std::move(breaker.plan));
+		if (condition.constant_problem) {
+			// The validation column raises wherever a row is read. An empty source has no row to raise on and returns
+			// no rows. A bound the solver rejects outright (against the variable's built-in domain) is never proved,
+			// so it cannot differ on an empty input.
+			substitute.validated_columns.push_back(source_bindings.size() + condition.decisions.size());
+			p5.Add(ValidAnswers(stages.answers));
+		}
+		substitute.child = p5.Finish(std::move(stages.plan));
+		substitute.pipelined = true;
 		return substitute;
 	}
 
@@ -451,6 +429,40 @@ private:
 		vector<ColumnBinding> b;
 		ColumnBinding valid_data;
 	};
+
+	//! P1-P4 over a read: the plan, where each source column is in it, and the answers.
+	struct Stages {
+		unique_ptr<LogicalOperator> plan;
+		vector<ColumnBinding> passthrough;
+		Answers answers;
+	};
+
+	Stages RunStages(unique_ptr<LogicalOperator> source) const {
+		Stage p1(binder.GenerateTableIndex());
+		vector<unique_ptr<Expression>> checks;
+		Raw raw;
+		LayoutRawValues(p1, checks, raw);
+		Stages stages;
+		stages.plan = p1.Finish(std::move(source));
+
+		Stage p2(binder.GenerateTableIndex());
+		Bounds bounds;
+		auto passthrough2 = Passthrough(p2, raw.source);
+		ComputeBounds(p2, raw, checks, bounds);
+		stages.plan = p2.Finish(std::move(stages.plan));
+
+		Stage p3(binder.GenerateTableIndex());
+		auto passthrough3 = Passthrough(p3, passthrough2);
+		Box box;
+		ComputeBox(p3, bounds, box);
+		stages.plan = p3.Finish(std::move(stages.plan));
+
+		Stage p4(binder.GenerateTableIndex());
+		stages.passthrough = Passthrough(p4, passthrough3);
+		ComputeAnswers(p4, box, stages.answers);
+		stages.plan = p4.Finish(std::move(stages.plan));
+		return stages;
+	}
 
 	const Condition &condition;
 	Optimizer &optimizer;
@@ -805,9 +817,9 @@ private:
 		return DirectErrorPredicate(optimizer, calc.Out(calc.Fn("concat", parts)));
 	}
 
-	//! The condition the breaker evaluates on every row. It is true, or the row raises the error that applies: a
-	//! coefficient the arithmetic made non-finite, an empty box, an improvement without limit, or a whole number the
-	//! answer cannot hold exactly. Every raw value was checked in P2 and arrives as `valid_data`.
+	//! The condition every row must meet. It is true, or the row raises the error that applies: a coefficient the
+	//! arithmetic made non-finite, an empty box, an improvement without limit, or a whole number the answer cannot hold
+	//! exactly. Every raw value was checked in P2 and arrives as `valid_data`.
 	unique_ptr<Expression> ValidAnswers(const Answers &answers) const {
 		vector<unique_ptr<Expression>> checks;
 		// The raw values come first: P2 folded their checks into one flag that is true or false, never an error.
@@ -830,7 +842,7 @@ private:
 		return DirectAllHold(calc, std::move(checks));
 	}
 
-	//! The answer in the decision's own output type. The breaker has already raised for anything that is not finite or
+	//! The answer in the decision's own output type. The verdict has already raised for anything that is not finite or
 	//! not exactly representable, so the guard only keeps the cast from raising on its own if that ever changed.
 	unique_ptr<Expression> TypedAnswer(idx_t decision, ColumnBinding value) const {
 		auto &prepared = condition.decisions[decision];
@@ -848,6 +860,12 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+	if (!condition.constant_problem) {
+		// Verify, then stream: the verdict is read first, and every read after it waits for it.
+		reader.Gate(DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+			return plan_builder.BuildVerdict(std::move(rows));
+		}));
+	}
 	return DirectBuildOverOneRead(
 	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
 }
