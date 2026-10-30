@@ -14,6 +14,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -246,9 +247,10 @@ optional_ptr<LogicalGet> DirectRepeatableSourceChain(LogicalOperator &source,
 	return get;
 }
 
-bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source, const column_binding_set_t &read,
+bool DirectExposeStoredRowId(ClientContext &context, LogicalDecide &decide,
                              DirectLateMaterialization &late_materialization) {
 	ExpressionBuilder calc(context);
+	auto &source = *decide.children[0];
 	vector<reference<LogicalOperator>> chain;
 	auto scan = DirectRepeatableSourceChain(source, chain);
 	if (!scan) {
@@ -262,6 +264,16 @@ bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source, co
 			return false; // the query already reads the row id; leave it alone
 		}
 	}
+	// The source columns the DECIDE node's own expressions read are the rule's; every other stored column is only
+	// forwarded, and a parent that reads one can have it read again.
+	column_binding_set_t read;
+	std::function<void(Expression &)> collect = [&](Expression &expression) {
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			read.insert(expression.Cast<BoundColumnRefExpression>().binding);
+		}
+		ExpressionIterator::EnumerateChildren(expression, collect);
+	};
+	decide.EnumerateExpressions([&](unique_ptr<Expression> *expression) { collect(**expression); });
 	auto bindings = source.GetColumnBindings();
 	late_materialization.stored_columns.clear();
 	for (auto &binding : bindings) {

@@ -2194,6 +2194,43 @@ def test_r1_source_is_one_copy_read_four_times_when_the_copy_fits(decidb_cli):
     assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 1, plan
 
 
+# A stored table with 600 VARCHAR columns the rule never reads, 9.6 KB of inline strings a row: a copy of every column
+# (2000 rows, 19 MB) is more than an eighth of 32 MB. The parent reads one of them, which late materialization reads
+# again by row id, so the copy leaves the variable-width columns out and fits.
+VARCHAR_WIDE_SETUP = (
+    "CREATE OR REPLACE TEMP TABLE r1_wide AS SELECT i AS id, 1.0 + (i % 3) AS w, 2.0 + (i % 5) AS v, 3.0 AS cap, "
+    "i % 4 AS g, " + ", ".join(f"'p{k}-' || i::VARCHAR AS pad_{k}" for k in range(600)) + " FROM range(2000) t(i);"
+)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_copy_leaves_out_the_stored_strings_it_reads_back_by_row_id(decidb_cli):
+    query = (
+        "SELECT id, x, v, pad_0 FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND "
+        "SUM(w*x) by (g) <= 500 MAXIMIZE SUM(v*x)) q"
+    )
+    prefix = f"SET decide_direct_solve='require'; SET memory_limit='32MB'; {VARCHAR_WIDE_SETUP}"
+    plan = decidb_cli.execute_raw(f"{prefix} EXPLAIN {query}").stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan, plan
+    # The copy's scan and the strings' scan; the stages read the copy.
+    assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 2, plan
+    # The solver path carries no row id, so nothing is read back and its copy would hold the strings: it re-scans.
+    solver_query = (
+        "SELECT id, x FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= SUM(w) by (g) / 2 "
+        "AND SUM(w*x) <= SUM(cap) by (g) AND SUM(w*x) >= -SUM(v) by (g) MAXIMIZE SUM(v*x)) q"
+    )
+    for limit, copied in (("32MB", False), ("4GB", True)):
+        solver_plan = decidb_cli.execute_raw(
+            f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} SET memory_limit='{limit}'; EXPLAIN {solver_query}"
+        ).stdout
+        assert ("direct_source" in solver_plan) == copied, solver_plan
+    answer = f"SELECT COUNT(*), ROUND(SUM(v * x), 6), SUM(length(pad_0)) FROM ({query})"
+    assert decidb_cli.execute(f"{prefix} {answer}") == decidb_cli.execute(
+        f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} {answer}"
+    )
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_source_is_rescanned_when_the_copy_does_not_fit(decidb_cli):

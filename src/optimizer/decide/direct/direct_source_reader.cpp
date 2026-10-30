@@ -19,14 +19,16 @@ namespace duckdb {
 //! The one constant of the choice: what a read of the materialized copy costs, as a share of re-scanning the chain once
 //! (no decompression, filters or projections to redo). Re-scanning costs `reads` units; materializing costs one scan of
 //! the chain, writing the copy (one copy-read) and `reads` copy-reads. At 0.4, R1's four reads cost 4 against 3, and
-//! two reads cost 2 against 2.2, so a source is copied only when it is read three times or more. Set from R1 on
-//! partsupp and on a 20-column table at 100K and 1M rows, where one copy ran at 0.70 to 0.96 of four re-scans.
+//! two reads cost 2 against 2.2, so a source is copied only when it is read three times or more. Any constant from 1/3
+//! to 1/2 makes that choice. Measured on a copy of the columns the plan reads over partsupp, lineitem and a 20-column
+//! table at 100K and 1M rows: with two reads the copy took 1.0 to 1.2 of the re-scans' time (and 3.5 to 4.3 times at 1M
+//! rows when the whole source comes back), with three 0.57 to 0.98, with four 0.62 to 1.05.
 static constexpr double COPY_READ_COST = 0.4;
 //! The copy may take at most 1/8 of the memory the buffer manager has. A bigger one spills along with the sort and the
-//! joins above it, and then the re-scans win. Measured at 800K rows: partsupp's copy (the width of its source, which
-//! counts a column the query never reads) tied the re-scans at 1/11 of the memory, lost 5% at 1/7 and 14% at 1/4; the
-//! 20-column table whose parent reads every column tied at 1/1.5, lost 8% at 1/1.2 and 44% at 1/0.7. 1/8 re-scans
-//! wherever the copy could lose, and gives up the copy's win on a big table under a small memory limit.
+//! joins above it, and then the re-scans win. Measured at 800K rows with a copy of every column of the source:
+//! partsupp's tied the re-scans at 1/11 of the memory, lost 5% at 1/7 and 14% at 1/4; the 20-column table whose parent
+//! reads every column tied at 1/1.5, lost 8% at 1/1.2 and 44% at 1/0.7. 1/8 re-scans wherever the copy could lose, and
+//! gives up the copy's win on a big table under a small memory limit.
 static constexpr idx_t COPY_MEMORY_SHARE = 8;
 
 bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t memory) {
@@ -37,18 +39,24 @@ bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t m
 	return rows > 0 && rows <= memory / COPY_MEMORY_SHARE / MaxValue<idx_t>(row_width, 1);
 }
 
-//! The width of one row of the source, from the physical size of its columns; a variable-width column counts its 16
-//! inline bytes.
-static idx_t RowWidth(const vector<LogicalType> &types) {
+//! The width of one row of a copy of the source, from the physical size of its columns; a variable-width column counts
+//! its 16 inline bytes. The copy leaves out the variable-width columns that `stored_columns` marks as late
+//! materialized. The row id, which the source carries after its columns, is in the copy.
+static idx_t CopyWidth(const vector<LogicalType> &types, const vector<idx_t> &stored_columns) {
 	idx_t width = 0;
-	for (auto &type : types) {
-		auto physical = type.InternalType();
-		width += TypeIsConstantSize(physical) ? GetTypeIdSize(physical) : sizeof(string_t);
+	for (idx_t i = 0; i < types.size(); i++) {
+		auto physical = types[i].InternalType();
+		if (TypeIsConstantSize(physical)) {
+			width += GetTypeIdSize(physical);
+		} else if (i >= stored_columns.size() || stored_columns[i] == DConstants::INVALID_INDEX) {
+			width += sizeof(string_t);
+		}
 	}
 	return width;
 }
 
-DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p)
+DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p,
+                                       const vector<idx_t> &stored_columns)
     : optimizer(optimizer_p), source(std::move(source_p)), reads(reads_p) {
 	source->ResolveOperatorTypes();
 	bindings = source->GetColumnBindings();
@@ -56,7 +64,8 @@ DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<Logica
 	D_ASSERT(bindings.size() == types.size());
 	source_width = bindings.size();
 	chain_scan = DirectRepeatableSourceChain(*source, chain);
-	if (chain_scan && DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
+	if (chain_scan && DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context),
+	                                            CopyWidth(types, stored_columns),
 	                                            BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
 		chain_scan = nullptr;
 		chain.clear();

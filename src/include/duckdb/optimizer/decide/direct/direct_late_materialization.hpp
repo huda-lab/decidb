@@ -3,11 +3,11 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
-#include "duckdb/planner/column_binding_map.hpp"
 
 namespace duckdb {
 
 class ClientContext;
+class LogicalDecide;
 class LogicalGet;
 class LogicalOperator;
 class Optimizer;
@@ -26,14 +26,14 @@ class Optimizer;
 optional_ptr<LogicalGet> DirectRepeatableSourceChain(LogicalOperator &source,
                                                      vector<reference<LogicalOperator>> &chain);
 
-//! Step one, in the rule driver before the rule applies: if the source is a chain of non-volatile projections
-//! and filters over one scan of a DuckDB base table, append that table's row id to the source as a trailing column and
-//! record which source columns forward a stored column unchanged and are not in `read`, the source bindings the DECIDE
-//! node's own expressions read (LogicalDecide::EnumerateExpressions: constraints, objective, keys, scope checks, bound
+//! Step one, in the rule driver before the rule applies: if the DECIDE node's source is a chain of non-volatile
+//! projections and filters over one scan of a DuckDB base table, append that table's row id to the source as a
+//! trailing column and record which source columns forward a stored column unchanged and are not read by the node's
+//! own expressions (LogicalDecide::EnumerateExpressions: constraints, objective, keys, scope checks, bound
 //! aggregates). The rule passes the row id along like any other source column. Returns false and leaves the source
 //! untouched for any other source (a join, a subquery with an aggregate or a limit, a volatile expression, a table
 //! function).
-bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source, const column_binding_set_t &read,
+bool DirectExposeStoredRowId(ClientContext &context, LogicalDecide &decide,
                              DirectLateMaterialization &late_materialization);
 
 //! Step two, once unused columns are removed and the parents' reads are known: for every result adapter whose parent

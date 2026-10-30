@@ -13,8 +13,8 @@ class Optimizer;
 //! Whether one materialized copy of a source that could be re-scanned is cheaper than `reads` re-scans of it.
 //! Re-scanning and copying both scale with the size of the rows, so the comparison is of `reads` alone: the copy wins
 //! when reading it often enough pays for writing it (a constant measured on R1). The size of the rows decides only
-//! whether the copy fits in `memory` (DuckDB's estimate of the rows times the physical width of one row, within a fixed
-//! share of it). A source with no rows, or no estimate (0), is re-scanned.
+//! whether the copy fits in `memory` (DuckDB's estimate of the rows times the physical width of one row of the copy,
+//! within a fixed share of it). A source with no rows, or no estimate (0), is re-scanned.
 bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t memory);
 
 //! A rule whose plan needs the DECIDE source more than once (one read per stage) gets each read from here. This is the
@@ -49,8 +49,12 @@ public:
 	};
 
 	//! `source` is the DECIDE input with its types resolved. The reader owns it from here on. `reads` is how many times
-	//! the plan reads it: the rule's reads, the side tables' and the checks'.
-	DirectSourceReader(Optimizer &optimizer, unique_ptr<LogicalOperator> source, idx_t reads);
+	//! the plan reads it: the rule's reads, the side tables' and the checks'. `stored_columns` is
+	//! DirectLateMaterialization::stored_columns of the source, empty when the source carries no row id: a copy of the
+	//! source leaves out the variable-width stored columns the node does not read, because late materialization reads
+	//! them again by row id, so a copy's width is the other columns' and the row id's.
+	DirectSourceReader(Optimizer &optimizer, unique_ptr<LogicalOperator> source, idx_t reads,
+	                   const vector<idx_t> &stored_columns);
 
 	//! The bindings of the source columns, then the placeholder of every side table added so far, which the proved
 	//! expressions refer to. These are the columns a read has. The DECIDE node's own outputs are the source columns

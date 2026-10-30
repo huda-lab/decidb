@@ -229,7 +229,7 @@ void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const v
 	}
 	// The operator reads the source once, and each bound and check once more.
 	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
-	                          1 + decide.bound_aggregates.size() + checks.size());
+	                          1 + decide.bound_aggregates.size() + checks.size(), vector<idx_t>());
 	auto source_width = reader.SourceBindings().size();
 	DirectAddBoundTables(optimizer, reader, decide);
 	DirectAddRowChecks(optimizer, reader, checks);
