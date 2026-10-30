@@ -63,7 +63,9 @@ between them, so setup and the row count are excluded. There are three event kin
 - `counter`: model size and solver figures. Gurobi and HiGHS name them differently (`ObjVal` against
   `highs.objective`), so each CSV column takes whichever name the run emitted.
 
-Spans are inclusive parent totals. Each CSV stage column sums only parent spans, so no time is counted twice:
+Spans are inclusive parent totals. Each CSV stage column sums only parent spans, so no time is counted twice. A span
+nested in a span of the same name (`canonicalize.objective` recursing, `execution.scope_checks` opened inside itself)
+counts once: its time is already in the outer span's.
 
 | Column | Spans |
 |---|---|
@@ -72,7 +74,7 @@ Spans are inclusive parent totals. Each CSV stage column sums only parent spans,
 | `rewrite_ms` | `optimizer.decide`: the whole stage, from the bound-side rewrite and the choice of a rule or a solver to the solver path's row checks, bound windows and formulation passes |
 | `plan_ms` | `frontend.physical_decide` |
 | `input_ms` | `execution.assemble_input`, `execution.sink_append`, `execution.sink_combine` |
-| `extraction_ms` | `execution.evaluate_constraints`, `execution.evaluate_objective`, `execution.evaluate_composed`, `execution.keyed_mapping`, `execution.formulate` |
+| `extraction_ms` | `execution.keyed_mapping`, `execution.scope_checks`, `execution.evaluate_constraints`, `execution.evaluate_objective`, `execution.evaluate_composed`, `execution.evaluate_value_links`, `execution.formulate` |
 | `model_build_ms` | `solver.build_neutral_model` |
 | `backend_load_ms` | `gurobi.load`, `highs.load` |
 | `solve_ms` | `gurobi.optimize`, `highs.optimize` |
@@ -91,9 +93,22 @@ on: there is no memory guard, cap or early stop.
 
 ## Correctness signal
 
-The only correctness signal is the row count of `result` (the `rows` column). There is no constraint check and no
-objective recomputation, so a query that finishes with a wrong answer is not caught here. Correctness belongs to the
-oracle suite and the optimizer's own tests. Keep only data from binaries that lower `norm` under arithmetic ([`../../pipeline/05_optimizer/done.md`](../../pipeline/05_optimizer/done.md)); a binary without it solves a reduced objective for Q3 and Q5.
+Each run records the row count of `result` (the `rows` column). After the sweep, `objective_disagreements` compares
+the optima of each query: over every `ok` run that reports an objective, on both backends and all repeats (rows loaded
+on resume included), the largest objective minus the smallest must be at most `1e-6 * max(1, |objective|)`, with the
+largest `|objective|` among them.
+An `ok` run is a proven optimum of the same model (`decide_mip_gap` defaults to 0), so two optima can differ
+only by the feasibility tolerance DeciDB sets (`DECIDE_FEASIBILITY_TOLERANCE`, 1e-6), relative to the objective's
+size; `max(1, ...)` keeps it absolute near zero. Runs stopped at a limit report an incumbent, not an optimum, and are
+skipped. The script prints each disagreeing query with every run's (backend, repeat, objective); it never stops the
+sweep.
+
+The check catches a backend or a run that answers wrongly however fast: a wrong readback, a limit reported as optimal,
+a nondeterministic build. A model built wrongly the same way on both backends agrees with itself; there is no
+constraint check and no objective recomputation, so that belongs to the oracle suite and the optimizer's own tests.
+Keep only data from binaries that lower `norm` under arithmetic
+([`../../pipeline/05_optimizer/done.md`](../../pipeline/05_optimizer/done.md)); a binary without it solves a reduced
+objective for Q3 and Q5.
 
 ## Output
 
@@ -107,5 +122,6 @@ Both are gitignored; keep the files a finding cites.
 ## Tests
 
 `test/decide/tests/test_pipeline_profile.py` checks query discovery and order, that every query resolves its
-placeholders, span summing and counter reading, the folding of `aggregate` events, that events outside the query
-markers are ignored, and that no span belongs to two stages and every stage and counter has a CSV column.
+placeholders, span summing and counter reading, the folding of `aggregate` events, that a span inside its own name
+counts once, that events outside the query markers are ignored, that no span belongs to two stages and every stage
+and counter has a CSV column, and that the objective check flags disagreeing optima and skips runs stopped at a limit.
