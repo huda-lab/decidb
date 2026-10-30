@@ -34,3 +34,11 @@ Emulated in SQL, a grouped aggregate on a recomputed read joined back by the nul
 about +30 MiB on a single-table source; on a join source materialized as a CTE it ties the windows. Design under
 review: decorrelate each bound as a scalar-aggregate subquery is unnested (PERF-3's side aggregate on the shared
 reader).
+
+## PERF-19 — A1's validation window on a row bound read from data
+
+With PERF-15's side tables, a row bound read from a reducer (`x <= sum(q) by (g) / 20000`) on A1 still costs about
++419 ms against the same bound written as a number (lineitem alone, 23 columns, 1M rows; lane AS): A1 validates the
+bound in a window over the source, which a constant bound does not need, so that plan is pipelined. The side table's
+join costs about 11 ms of it. Find what the validation window computes and whether a side aggregate (PERF-3's shape)
+or the side table itself can carry it.

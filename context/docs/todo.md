@@ -32,6 +32,8 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
 
 - [ ] PERF-15 RHS-bound windows hold every source column; measure, then PERF-3's shape —
   performance/todo.md § PERF-15
+- [ ] PERF-19 A1's validation window on a row bound read from data, about +419 ms —
+  performance/todo.md § PERF-19
 
 ## 4. Measurement (last)
 
