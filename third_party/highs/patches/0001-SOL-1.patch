@@ -1,0 +1,87 @@
+diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
+--- a/highs/mip/HighsCliqueTable.cpp
++++ b/highs/mip/HighsCliqueTable.cpp
+@@ -1001,7 +1001,9 @@
+   partitionStart.push_back(numClqVars);
+ }
+ 
+-void HighsCliqueTable::cliquePartition(const std::vector<double>& objective,
++// DeciDB patch (SOL-1): mipsolver supplies the limits checked below
++void HighsCliqueTable::cliquePartition(const HighsMipSolver& mipsolver,
++                                       const std::vector<double>& objective,
+                                        std::vector<CliqueVar>& clqVars,
+                                        std::vector<HighsInt>& partitionStart) {
+   randgen.shuffle(clqVars.data(), clqVars.size());
+@@ -1021,7 +1023,22 @@
+   HighsInt extensionEnd = numClqVars;
+   partitionStart.push_back(0);
+   HighsInt lastSwappedIndex = 0;
++  // DeciDB patch (SOL-1): check the MIP limits once per kQueriesPerTimeCheck
++  // queries
++  const int64_t kQueriesPerTimeCheck = 100000;
++  int64_t nextTimeCheck = numNeighbourhoodQueries;
+   for (HighsInt i = 0; i < numClqVars; ++i) {
++    // DeciDB patch (SOL-1): past a limit (the time limit or a user interrupt),
++    // the rest become singletons
++    if (numNeighbourhoodQueries >= nextTimeCheck) {
++      nextTimeCheck = numNeighbourhoodQueries + kQueriesPerTimeCheck;
++      if (mipsolver.mipdata_->checkLimits()) {
++        if (partitionStart.back() != i) partitionStart.push_back(i);
++        for (HighsInt j = i + 1; j < numClqVars; ++j)
++          partitionStart.push_back(j);
++        break;
++      }
++    }
+     if (i == extensionEnd) {
+       partitionStart.push_back(i);
+       extensionEnd = numClqVars;
+diff --git a/highs/mip/HighsCliqueTable.h b/highs/mip/HighsCliqueTable.h
+--- a/highs/mip/HighsCliqueTable.h
++++ b/highs/mip/HighsCliqueTable.h
+@@ -236,7 +236,9 @@
+   void cliquePartition(std::vector<CliqueVar>& clqVars,
+                        std::vector<HighsInt>& partitionStart);
+ 
+-  void cliquePartition(const std::vector<double>& objective,
++  // DeciDB patch (SOL-1): stops growing partitions at mipsolver's time limit
++  void cliquePartition(const HighsMipSolver& mipsolver,
++                       const std::vector<double>& objective,
+                        std::vector<CliqueVar>& clqVars,
+                        std::vector<HighsInt>& partitionStart);
+ 
+diff --git a/highs/mip/HighsObjectiveFunction.cpp b/highs/mip/HighsObjectiveFunction.cpp
+--- a/highs/mip/HighsObjectiveFunction.cpp
++++ b/highs/mip/HighsObjectiveFunction.cpp
+@@ -18,7 +18,8 @@
+ #include "util/HighsIntegers.h"
+ 
+ HighsObjectiveFunction::HighsObjectiveFunction(const HighsMipSolver& mipsolver)
+-    : model(mipsolver.model_) {
++    : mipsolver(&mipsolver),  // DeciDB patch (SOL-1): kept for the time limit
++      model(mipsolver.model_) {
+   objectiveNonzeros.reserve(model->num_col_);
+ 
+   for (HighsInt i = 0; i < model->num_col_; ++i) {
+@@ -78,7 +79,9 @@
+     clqvars.emplace_back(col, model->col_cost_[col] < 0.0);
+   }
+ 
+-  cliqueTable.cliquePartition(model->col_cost_, clqvars, cliquePartitionStart);
++  // DeciDB patch (SOL-1): the partition stops at the solver's time limit
++  cliqueTable.cliquePartition(*mipsolver, model->col_cost_, clqvars,
++                              cliquePartitionStart);
+   HighsInt numPartitions = cliquePartitionStart.size() - 1;
+   if (numPartitions == numBinary)
+     cliquePartitionStart.resize(1);
+diff --git a/highs/mip/HighsObjectiveFunction.h b/highs/mip/HighsObjectiveFunction.h
+--- a/highs/mip/HighsObjectiveFunction.h
++++ b/highs/mip/HighsObjectiveFunction.h
+@@ -20,6 +20,8 @@
+ class HighsMipSolver;
+ 
+ class HighsObjectiveFunction {
++  // DeciDB patch (SOL-1): its time limit bounds setupCliquePartition
++  const HighsMipSolver* mipsolver;
+   const HighsLp* model;
+   double objIntScale;
+   HighsInt numIntegral;

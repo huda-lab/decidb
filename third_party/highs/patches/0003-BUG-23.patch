@@ -1,0 +1,14 @@
+diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
+--- a/highs/presolve/HPresolve.cpp
++++ b/highs/presolve/HPresolve.cpp
+@@ -1080,6 +1080,10 @@
+ 
+   HighsInt numFixedCols = 0;
+   for (HighsInt j = 0; j < model->num_col_; ++j) {
++    // DeciDB patch (BUG-23): check the time limit once per 1,024 columns;
++    // checkLimits checks it once per 1,024 reductions, and this pass may make
++    // none
++    if ((j & 1023) == 0) HPRESOLVE_CHECKED_CALL(checkTimeLimit());
+     if (colDeleted[j]) continue;
+     bool upperImplied = isUpperImplied(j);
+     bool lowerImplied = isLowerImplied(j);

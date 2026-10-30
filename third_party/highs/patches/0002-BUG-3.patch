@@ -1,0 +1,126 @@
+diff --git a/highs/mip/HighsMipSolverData.cpp b/highs/mip/HighsMipSolverData.cpp
+--- a/highs/mip/HighsMipSolverData.cpp
++++ b/highs/mip/HighsMipSolverData.cpp
+@@ -433,7 +433,11 @@
+   symData->symDetection.loadModelAsGraph(
+       mipsolver.mipdata_->presolvedModel,
+       mipsolver.options_mip_->small_matrix_value);
+-  detectSymmetries = symData->symDetection.initializeDetection();
++  // DeciDB patch (BUG-3): detection stops at the solver's time limit or a
++  // user interrupt
++  detectSymmetries = symData->symDetection.initializeDetection(
++      mipsolver.timer_, mipsolver.options_mip_->time_limit,
++      mipsolver.submip ? nullptr : mipsolver.callback_);
+ 
+   if (detectSymmetries) {
+     taskGroup.spawn([&]() {
+diff --git a/highs/presolve/HighsSymmetry.cpp b/highs/presolve/HighsSymmetry.cpp
+--- a/highs/presolve/HighsSymmetry.cpp
++++ b/highs/presolve/HighsSymmetry.cpp
+@@ -882,10 +882,35 @@
+   const u32* h = vertexHash.find(v);
+   if (h) return *h;
+   return 0;
++}
++
++// DeciDB patch (BUG-3): checkLimits's time and interrupt tests, without its
++// writes to the MIP solver's state
++bool HighsSymmetryDetection::checkStop() {
++  if (stopped) return true;
++  if (timeLimit < kHighsInf && timer->read() >= timeLimit) {
++    stopped = true;
++  } else if (callback && callback->user_callback &&
++             callback->active[kCallbackMipInterrupt]) {
++    // DeciDB patch (BUG-3): local output and input keep this thread off
++    // HiGHS's shared callback data (callback->data_out, data_in)
++    HighsCallbackOutput dataOut;
++    HighsCallbackInput dataIn;
++    callback->user_callback(kCallbackMipInterrupt, "Symmetry detection",
++                            &dataOut, &dataIn, callback->user_callback_data);
++    stopped = dataIn.user_interrupt;
++  }
++  return stopped;
+ }
+ 
+ bool HighsSymmetryDetection::partitionRefinement() {
++  // DeciDB patch (BUG-3): check for a stop once per kRefinementsPerStopCheck
++  // cells; on one, leave the partition partial (the callers leave at once)
++  const HighsInt kRefinementsPerStopCheck = 100;
++  HighsInt numRefinements = 0;
+   while (!refinementQueue.empty()) {
++    if (++numRefinements % kRefinementsPerStopCheck == 0 && checkStop())
++      return true;
+     std::pop_heap(refinementQueue.begin(), refinementQueue.end(),
+                   std::greater<HighsInt>());
+ 
+@@ -1674,9 +1699,18 @@
+   return true;
+ }
+ 
+-bool HighsSymmetryDetection::initializeDetection() {
++// DeciDB patch (BUG-3): mipTimer, mipTimeLimit and mipCallback stop the
++// detection
++bool HighsSymmetryDetection::initializeDetection(
++    const HighsTimer& mipTimer, double mipTimeLimit,
++    const HighsCallback* mipCallback) {
++  timer = &mipTimer;
++  timeLimit = mipTimeLimit;
++  callback = mipCallback;
+   initializeHashValues();
+   partitionRefinement();
++  // DeciDB patch (BUG-3): a partition cut short by a stop detects none
++  if (stopped) return false;
+   removeFixPoints();
+   if (numActiveCols == 0) return false;
+   return true;
+@@ -1691,6 +1725,11 @@
+   HighsInt maxPerms = 64000000 / numActiveCols;
+   HighsSplitDeque* workerDeque = HighsTaskExecutor::getThisWorkerDeque();
+   while (!nodeStack.empty()) {
++    // DeciDB patch (BUG-3): on a stop, keep the generators found, as the
++    // maxPerms break does; a cancelled search (the MIP finished without it)
++    // ends here too, not only at a leaf
++    if (checkStop()) break;
++    workerDeque->checkInterrupt();
+     HighsInt targetCell = selectTargetCell();
+     if (targetCell == -1) {
+       if (firstLeavePartition.empty()) {
+diff --git a/highs/presolve/HighsSymmetry.h b/highs/presolve/HighsSymmetry.h
+--- a/highs/presolve/HighsSymmetry.h
++++ b/highs/presolve/HighsSymmetry.h
+@@ -21,6 +21,8 @@
+ #include "util/HighsDisjointSets.h"
+ #include "util/HighsHash.h"
+ #include "util/HighsInt.h"
++#include "lp_data/HighsCallback.h"  // DeciDB patch (BUG-3): for the stop
++#include "util/HighsTimer.h"        // DeciDB patch (BUG-3): for the stop
+ 
+ /// class that is responsible for assigning distinct colors for each distinct
+ /// double value
+@@ -187,6 +189,14 @@
+   HighsInt numVertices;
+   HighsInt numActiveCols;
+ 
++  // DeciDB patch (BUG-3): the time limit and the user interrupt, read only:
++  // run() works off the main thread, where checkLimits would race with it
++  const HighsTimer* timer = nullptr;
++  double timeLimit = kHighsInf;
++  const HighsCallback* callback = nullptr;
++  bool stopped = false;
++  bool checkStop();
++
+   // node in the search tree for finding automorphisms
+   struct Node {
+     HighsInt stackStart;
+@@ -273,7 +283,10 @@
+  public:
+   void loadModelAsGraph(const HighsLp& model, double epsilon);
+ 
+-  bool initializeDetection();
++  // DeciDB patch (BUG-3): detection stops at the time limit or a user
++  // interrupt (mipCallback: null for a sub-MIP)
++  bool initializeDetection(const HighsTimer& mipTimer, double mipTimeLimit,
++                           const HighsCallback* mipCallback);
+ 
+   void run(HighsSymmetries& symmetries);
+ };

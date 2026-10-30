@@ -551,6 +551,10 @@ decide-test: decide-golden
 decide-golden:
 	test/decide/golden/check.sh
 
+# Vendors HiGHS release HIGHS_VERSION into third_party/highs and reapplies its patch series (third_party/highs/README.md).
+upgrade-highs:
+	python3 scripts/upgrade_highs.py $(HIGHS_VERSION)
+
 # Branch coverage of the direct-solve code (build/coverage is an instrumented copy of the build; build/release is
 # untouched). decide-coverage-build creates it when missing and otherwise only rebuilds what changed.
 # decide-coverage runs the DECIDE pytest suite with one profile per test (test/decide/run_coverage.sh) and
