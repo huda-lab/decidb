@@ -11,15 +11,15 @@ at a time.
 
 ## Where things stand (2026-10-30)
 
-Every bug filed but BUG-35 and BUG-36 is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the
-same answer on both backends but one (a model HiGHS refuses before solving). The large benchmark sweep
-(`performance/todo.md` § PERF-1) found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit;
-BUG-26: scope checks that sorted every input row). What remains: two bugs (§ 1), two slowdowns left from September
-(§ 2), posting the HiGHS report (§ 3), and the original measurement work (§ 4).
+Every filed bug is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on both
+backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
+found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that sorted every
+input row). What remains: two slowdowns left from September (§ 2), posting the HiGHS report (§ 3), and the original
+measurement work (§ 4).
 
 ## 1. Bugs
 
-- [ ] BUG-35, BUG-36 Repair amounts below 1e-5 dropped; 1e7 and above unrounded — issues/bugs.md § BUG-35, BUG-36
+Every filed bug is fixed.
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 

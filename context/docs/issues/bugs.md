@@ -1,18 +1,5 @@
 # Known bugs
 
-## BUG-35 — A needed repair amount below 1e-5 is dropped
-
-- **Observed:** the absolute edit floor (`diagnostics/infeasible/done.md` § What the widening costs) drops a slack
-  below 1e-5 as rounding, so a needed amount below it, such as 1/n spread over more than 100,000 rows, is not reported.
-- **Fix (to rule):** with printed amounts certified by a solve, the floor's job is noise; decide whether the
-  certificate can replace it.
-
-## BUG-36 — A repair amount of 1e7 or more prints unrounded
-
-- **Observed:** `SnapToPrecision` returns values at or above 1e7 as they are, so an amount like 12345678.90123 prints
-  every digit.
-- **Fix (to rule):** render at the same significant-figure precision as smaller amounts.
-
 ## Limitations (not bugs)
 
 - **A repair exactly at the tolerance on HiGHS's QP path.** An edit whose rows miss a summed bound by exactly the

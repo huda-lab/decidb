@@ -785,17 +785,21 @@ plus a relative `1e-9`, the floating-point error of a value summed over many ter
 integer values at any magnitude, where significant-figure rounding would turn `1234567890` into
 `1234570001`); a feasibility tolerance bounds a row's violation, not that arithmetic.
 
-**A printed amount is certified.** Each edit is rendered two ways at its printed precision
-(`SnapToPrecision`): to nearest and outward (the direction that loosens). When the two agree for
-every edit, they print. Otherwise one solve decides for the whole relation: the elastic model with
-a zero objective and every slack fixed at its nearest amount (`ApplyEdits`), under the diagnosis
-time budget. `OPTIMAL` prints the nearest amounts; any other status prints the outward ones,
-which dominate the solver's own amounts and so restore feasibility by construction. So Gurobi's
-`7.00000028` prints `BETWEEN 3`, and `1/9000` spread over 9,000 rows prints an amount whose sum
-reaches the bound. A rounding rule computed from the numbers alone cannot do this: it cannot tell
-a solver spending its tolerance from a real need. Known edge: an amount whose rows miss the bound by
-exactly the feasibility tolerance passes the certificate's LP and can fail HiGHS's QP path on the
-user's query (`issues/bugs.md` § Limitations).
+**A printed amount is certified.** A repair has three readings of its amounts, tidiest first: to
+nearest at its printed precision (`SnapToPrecision`) with amounts at or below the noise floor
+dropped; outward (the direction that loosens) with the floor; outward with every amount kept. A
+reading equal to the one before is skipped. Each reading but the last is certified by one solve:
+the elastic model with a zero objective and every slack fixed at that reading's amounts
+(`ApplyEdits`), under the diagnosis time budget. The first `OPTIMAL` one prints; the last needs
+no solve, because its amounts dominate the solver's own and so restore feasibility by
+construction. So Gurobi's `7.00000028` prints `BETWEEN 3`, `1/9000` spread over 9,000 rows
+prints an amount whose sum reaches the bound, a needed amount below the floor prints, and a
+slack of the backend's own tolerance that the query does not need prints in none of them. A
+rounding rule computed from the numbers alone cannot do this: it cannot tell a solver spending
+its tolerance from a real need. The common case costs one solve or none; a second runs only when
+the nearest reading falls short and a floored slack exists. Known edge: an amount whose rows
+miss the bound by exactly the feasibility tolerance passes the certificate's LP and can fail
+HiGHS's QP path on the user's query (`issues/bugs.md` § Limitations).
 
 **Objective value plumbing.** The objective's constant (a data term, the `c²` of
 `POWER(x - c, 2)`, a peeled `+ 3`) is `SolverModel::obj_constant`. No solver receives it, since a
@@ -970,16 +974,19 @@ and both are wrong, in opposite directions:
   repair whose other half is `y <= 20000` — and the surviving half alone does not restore
   feasibility, so the user is handed a repair that does not work.
 
-The asymmetry decides it: an extra hairline edit is cosmetic, a dropped one is a broken
-repair, so the floor errs toward reporting. (Both were symptoms of the model-wide widening
-that has since been replaced; the absolute floor is what is correct independently of it.)
+The asymmetry decides it: an extra hairline edit is cosmetic, a dropped one is a broken repair.
+The certificate settles it per repair: the floor applies only to the readings a solve certifies,
+and the last reading keeps every amount, so a needed edit below the floor is never dropped. A
+slack is read within its bound of 0 (a negative value is the backend's tolerance past that
+bound, which would print as a tightening); an `=` clause's net s⁺ − s⁻ stays signed.
 
-Rounding a reported amount is separate. It *is* relative — to that amount's own magnitude,
-so an edit of 2 and an edit of 30,000 in one model are each trusted to about six figures of
-themselves — and it is **one-directional**: it may tidy `4.499999` up to `4.5`, never
-`4.333333…` down to `4.33333`. A loosening reported one tick short is not a repair; the user
-pastes `x <= 3.33333`, the sum lands on 9.99999 against a `>= 10` floor, and the query is
-still infeasible. Over-repairing by one part in a million is invisible.
+Rounding a reported amount is separate. It is relative to that amount's own magnitude, so an
+edit of 2 and an edit of 30,000 in one model are each trusted to about six figures of
+themselves, and never coarser than a whole number, so `12345678.90123` prints `12345679` and
+`1234567889` keeps every digit. Which direction prints is the certificate's call: to nearest
+when the query accepts it, outward otherwise. A loosening reported one tick short is not a
+repair; the user pastes `x <= 3.33333`, the sum lands on 9.99999 against a `>= 10` floor, and
+the query is still infeasible, so that reading never certifies.
 
 **A backend that cannot analyse the repair model says so.** The elastic program is
 deliberately harder than the query's own — a widened box means looser Big-M constants — and
