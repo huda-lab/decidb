@@ -64,6 +64,21 @@ def test_profile_folds_in_aggregate_totals():
     assert result["phases"]["execution.assemble_input"] == 1.5
 
 
+def test_profile_counts_a_span_inside_its_own_name_once():
+    # canonicalize.objective recurses into a `when` wrapper's child; the inner span's time is already in the outer one.
+    events = [
+        {"event": "begin", "id": 1, "parent": 0, "name": "canonicalize.objective"},
+        {"event": "begin", "id": 2, "parent": 1, "name": "other"},
+        {"event": "begin", "id": 3, "parent": 2, "name": "canonicalize.objective"},
+        {"event": "end", "id": 3, "parent": 2, "name": "canonicalize.objective", "duration_ms": 3},
+        {"event": "end", "id": 2, "parent": 1, "name": "other", "duration_ms": 4},
+        {"event": "end", "id": 1, "parent": 0, "name": "canonicalize.objective", "duration_ms": 5},
+        {"event": "end", "id": 4, "parent": 0, "name": "canonicalize.objective", "duration_ms": 2},
+    ]
+    text = "\n".join("DECIDB_PROFILE: " + json.dumps(event) for event in events)
+    assert PROFILE.parse_profile(text)["phases"] == {"canonicalize.objective": 7, "other": 4}
+
+
 def test_profile_ignores_events_outside_the_measured_query():
     events = [{"event": "end", "id": 1, "parent": 0, "name": "setup", "duration_ms": 99}]
     noise = "\n".join("DECIDB_PROFILE: " + json.dumps(event) for event in events)

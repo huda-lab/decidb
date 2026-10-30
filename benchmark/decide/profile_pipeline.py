@@ -38,8 +38,9 @@ STAGES = {
     "rewrite": ["optimizer.decide"],
     "plan": ["frontend.physical_decide"],
     "input": ["execution.assemble_input", "execution.sink_append", "execution.sink_combine"],
-    "extraction": ["execution.evaluate_constraints", "execution.evaluate_objective",
-                   "execution.evaluate_composed", "execution.keyed_mapping", "execution.formulate"],
+    "extraction": ["execution.keyed_mapping", "execution.scope_checks", "execution.evaluate_constraints",
+                   "execution.evaluate_objective", "execution.evaluate_composed", "execution.evaluate_value_links",
+                   "execution.formulate"],
     "model_build": ["solver.build_neutral_model"],
     "backend_load": ["gurobi.load", "highs.load"],
     "solve": ["gurobi.optimize", "highs.optimize"],
@@ -79,12 +80,23 @@ def parse_profile(stderr: str) -> dict:
         stderr = stderr.split("DECIDB_PROFILE_QUERY_BEGIN\n", 1)[1].split("DECIDB_PROFILE_QUERY_END\n", 1)[0]
     events = [json.loads(line.split("DECIDB_PROFILE: ", 1)[1]) for line in stderr.splitlines()
               if line.startswith("DECIDB_PROFILE: ")]
+    spans = {event["id"]: event for event in events if event["event"] in ("begin", "end")}
+
+    def inside_own_name(event: dict) -> bool:
+        # A span inside a span of its own name (a recursive call) is already in that span's inclusive time.
+        parent = spans.get(event["parent"])
+        while parent is not None:
+            if parent["name"] == event["name"]:
+                return True
+            parent = spans.get(parent["parent"])
+        return False
+
     phases = defaultdict(float)
     for event in events:
         # "end" is one nested span; "aggregate" is a pre-summed total across many calls
         # (sink_append, output_readback) where the engine doesn't log every chunk. Both
         # carry a plain duration_ms for this name, so both add straight into the phase.
-        if event["event"] in ("end", "aggregate"):
+        if event["event"] == "aggregate" or (event["event"] == "end" and not inside_own_name(event)):
             phases[event["name"]] += event["duration_ms"]
     counters = {event["name"]: event["value"] for event in events if event["event"] == "counter"}
     counter_totals = defaultdict(float)
