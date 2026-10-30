@@ -338,12 +338,12 @@ struct EvaluatedConstraint {
     //! once per class. Empty otherwise.
     vector<idx_t> group_class_set;
 
-    //! CSR-style group→rows index, computed lazily by EnsureGroupCSR().
+    //! CSR-style group→rows index, computed lazily by ClauseRows().
     //! group_offsets has size num_groups + 1 when populated; empty otherwise.
     //! Group g's active rows occupy [group_offsets[g], group_offsets[g+1]) in group_row_ids.
     //! Empty groups have group_offsets[g] == group_offsets[g+1].
-    //! Built once and reused across the model builder, deferred-NE expansion, and
-    //! two-level objective MIN/MAX paths to avoid repeated O(num_rows) reconstructions.
+    //! Built once and reused across implied-bound propagation, the aggregate `<>` expansion
+    //! and the model builder to avoid repeated O(num_rows) reconstructions.
     mutable vector<idx_t> group_offsets;
     mutable vector<idx_t> group_row_ids;
 };

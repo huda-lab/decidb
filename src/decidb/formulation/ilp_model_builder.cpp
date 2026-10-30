@@ -168,12 +168,6 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
         flat_rows.clear();
         return;
     }
-    if (!offsets.empty()) {
-        // Already built; reuse. Both call sites pass freshly-cleared vectors, so this
-        // looks unreachable today — it is kept as the contract for a caller that wants
-        // to build the CSR once and reuse it across constraints.
-        return;
-    }
     offsets.assign(num_groups + 1, 0);
     // First pass: count rows per group
     for (idx_t r = 0; r < row_group_ids.size(); r++) {
@@ -193,6 +187,14 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
         if (gid == DConstants::INVALID_INDEX) continue;
         flat_rows[cursor[gid]++] = r;
     }
+}
+
+const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
+    D_ASSERT(!ec.row_group_ids.empty());
+    if (ec.group_offsets.empty()) {
+        BuildGroupCSR(ec.row_group_ids, ec.num_groups, ec.group_offsets, ec.group_row_ids);
+    }
+    return ec.group_row_ids;
 }
 
 //! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
@@ -922,10 +924,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
             } else {
                 // UNIFIED PATH: a `when` and/or groups — build group→rows CSR once, emit one constraint per group
-                BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups, eval_const.group_offsets,
-                              eval_const.group_row_ids);
+                auto &flat_rows = ClauseRows(eval_const);
                 auto &offsets = eval_const.group_offsets;
-                auto &flat_rows = eval_const.group_row_ids;
 
                 // Each group's bound is read from one of its own rows below; the
                 // physical operator guarantees it is constant within the group.
@@ -1268,10 +1268,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 model.quadratic_constraints.push_back(std::move(qc));
             } else {
                 // Groups: one QuadraticConstraint per group, reuse CSR
-                BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups, eval_const.group_offsets,
-                              eval_const.group_row_ids);
+                auto &flat_rows = ClauseRows(eval_const);
                 auto &offsets = eval_const.group_offsets;
-                auto &flat_rows = eval_const.group_row_ids;
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     idx_t g_begin = offsets[g];
                     idx_t g_end = offsets[g + 1];

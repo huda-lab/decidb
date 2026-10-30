@@ -254,8 +254,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
     vector<double> column_bound(indexer.global_block_start, std::numeric_limits<double>::quiet_NaN());
     vector<int> touched;
     SparseCoeffAccumulator accum;
-    vector<idx_t> group_offsets;
-    vector<idx_t> group_rows;
     vector<int> indices;
     vector<double> coefficients;
     for (auto &ec : constraints) {
@@ -318,44 +316,23 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
         }
         const string written = DecideWrittenClause(input, ec.source_clause_id);
         accum.BeginForDecisions(indexer, num_rows, written);
-        // The rows the clause emits, read as the model builder emits them (AccumulateClauseRow): one per group of an
-        // aggregate (all rows for no groups), one per kept row otherwise. A solver column's coefficient is the sum of
-        // its terms over the row's data rows, so a decision that stands in several rows of a group, or one counted
-        // once beside the reducers, is bounded by what the row says about its instance. The row's bound is the
-        // clause's less its fixed terms, as the builder states it.
-        group_offsets.clear();
-        group_rows.clear();
-        if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
-            BuildGroupCSR(ec.row_group_ids, ec.num_groups, group_offsets, group_rows);
-        } else {
-            group_offsets.push_back(0);
-            for (idx_t r = 0; r < num_rows; r++) {
-                if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                    continue; // its class's first row bounds the same instance
-                }
-                group_rows.push_back(r);
-                if (!ec.lhs_is_aggregate) {
-                    group_offsets.push_back(group_rows.size());
-                }
-            }
-            if (ec.lhs_is_aggregate) {
-                group_offsets.push_back(group_rows.size());
-            }
-        }
+        // One row the clause emits, read as the model builder emits it (AccumulateClauseRow): the rows [begin, end) of
+        // `rows` (row k itself for none). A solver column's coefficient is the sum of its terms over the row's data
+        // rows, so a decision that stands in several rows of a group, or one counted once beside the reducers, is
+        // bounded by what the row says about its instance. The row's bound is the clause's less its fixed terms, as
+        // the builder states it.
         bool uniform_rhs = ec.rhs_values.IsUniform();
-        for (idx_t g = 0; nonneg && g + 1 < group_offsets.size(); g++) {
-            idx_t begin = group_offsets[g];
-            idx_t end = group_offsets[g + 1];
+        auto bound_row = [&](const vector<idx_t> *rows, idx_t begin, idx_t end) {
             if (begin == end) {
-                continue;
+                return; // an empty group, or no data rows
             }
-            idx_t first_row = group_rows[begin];
+            idx_t first_row = rows ? (*rows)[begin] : begin;
             indices.clear();
             coefficients.clear();
-            AccumulateClauseRow(ec, indexer, &group_rows, begin, end, accum);
+            AccumulateClauseRow(ec, indexer, rows, begin, end, accum);
             accum.Flush(indices, coefficients);
             double k = (uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(first_row)) -
-                       SumFixedAggregateLhsOffset(ec, &group_rows, begin, end, written);
+                       SumFixedAggregateLhsOffset(ec, rows, begin, end, written);
             for (idx_t i = 0; i < indices.size(); i++) {
                 double a = coefficients[i];
                 if (a < -1e-15) {
@@ -374,6 +351,22 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
                     column_bound[column] = bound;
                 } else {
                     column_bound[column] = std::min(column_bound[column], bound);
+                }
+            }
+        };
+        // The rows the clause emits: one per group of a grouped aggregate (ClauseRows), one of all rows for an
+        // ungrouped one, one per kept row of a per-row clause.
+        if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
+            auto &rows = ClauseRows(ec);
+            for (idx_t g = 0; nonneg && g < ec.num_groups; g++) {
+                bound_row(&rows, ec.group_offsets[g], ec.group_offsets[g + 1]);
+            }
+        } else if (ec.lhs_is_aggregate) {
+            bound_row(nullptr, 0, num_rows);
+        } else {
+            for (idx_t r = 0; nonneg && r < num_rows; r++) {
+                if (ec.row_group_ids.empty() || ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
+                    bound_row(nullptr, r, r + 1); // an excluded row's class's first row bounds the same instance
                 }
             }
         }

@@ -372,10 +372,9 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
         const vector<idx_t> *offsets_ptr = nullptr;
         const vector<idx_t> *flat_ptr = nullptr;
         if (has_groups) {
-            BuildGroupCSR(ec.row_group_ids, ec.num_groups, ec.group_offsets, ec.group_row_ids);
+            flat_ptr = &ClauseRows(ec);
             num_groups_to_process = ec.num_groups;
             offsets_ptr = &ec.group_offsets;
-            flat_ptr = &ec.group_row_ids;
         } else {
             ungrouped_offsets = {0, num_rows};
             ungrouped_flat.resize(num_rows);

@@ -492,11 +492,18 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
 //!   offsets has size num_groups + 1; group g's rows live in
 //!   [offsets[g], offsets[g+1]) of flat_rows. Empty groups are still represented
 //!   (offsets[g] == offsets[g+1]).
-//! No-op if row_group_ids is empty (ungrouped fast path) or already populated.
+//! Both outputs are cleared if row_group_ids is empty (ungrouped fast path).
 void BuildGroupCSR(const vector<idx_t> &row_group_ids,
                    idx_t num_groups,
                    vector<idx_t> &offsets,
                    vector<idx_t> &flat_rows);
+
+//! The data rows each row of a grouped aggregate clause sums, kept on `ec`: group g's row sums rows
+//! [group_offsets[g], group_offsets[g + 1]) of the returned list. Built from row_group_ids on the first call
+//! (BuildGroupCSR), so implied-bound propagation, the aggregate `<>` expansion and the model builder share one list.
+//! row_group_ids is final by then: the passes after implied bounds that change a clause's rows (a MIN/MAX rewrite, a
+//! per-row `<>` mask) change only clauses implied bounds passes over.
+const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec);
 
 //! Adds `value` into `target`, a number the model merges from several: like coefficients on one solver column, a
 //! square's products, the fixed terms moved to the bound side. The one place such a sum grows. Every value it adds was
