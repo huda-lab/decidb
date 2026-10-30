@@ -525,29 +525,31 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
 
 - **`group_name`** — which group of which key the row belongs to, from which the group's
   printable key value (`a`, or `EU, 2024` for the composite key of `per r, y:`) is formatted when
-  a finding prints it, never when the model is built (late materialization: a row carries 16
-  bytes, and a query that prints nothing formats nothing). `BuildGroupIds` returns each group's
-  representative values; `CachedKeyGroups` (`physical_decide.cpp`) appends them to the per-group
-  cache's `key_values` table, which `Build` moves onto `SolverModel::key_values`, and a
-  `GroupName` is an index into that table plus the key's group number. A key recomputed over more
-  rows (a later clause reading it on rows the first did not) renumbers its groups, so the
-  recomputation appends a new entry rather than overwriting the one earlier names point at.
-  `FormatPerGroupKey` (`decide_diagnostic_render.cpp`) is the one formatter: it joins composite
-  columns with `, `; a relation key (`per D`, which compares NULL as a value) writes each value as
-  an SQL literal, as the determination messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL
-  bare); a written key keeps its spelling, where an empty-string key renders `''` so it is not
-  confused with "ungrouped". Threaded through `EvaluatedConstraint::group_names` and stamped on
-  `provenance.group_name` at the grouped aggregate sites and the per-row linear site
-  (`ilp_model_builder.cpp`). The per-row site is the one that sees a hard MIN/MAX whose bound no
-  row in a group can reach: the rewrite drops the MIN/MAX marking and re-emits that group as
-  ordinary per-row rows (`linearization_minmax.cpp`, the `NO_SOLUTION` branch). So a grouped
-  failure names the group it sits in (`per g: min(x) by (g) <= -inf`, group `0`) rather than
-  sending the user through every group. In the expanded scope the classes a row stands for
-  (`class_set`, read by `FanOutByClass`) supply the `group` values; `group_name` names the group
-  of a row that carries none. Whether a row is grouped is read from the name's group number, not
-  its text. The `clause` stays in the user's spelling, so a finding never relies on relation row
-  order to tie `suggested_change`/`amount` to a group and never appends implementation-only
-  `[group: ...]` text to the clause.
+  a finding prints it, never when the model is built (late materialization: a query that prints
+  nothing formats nothing). `BuildGroupIds` returns each group's representative values;
+  `CachedKeyGroups` (`physical_decide.cpp`) keeps one values table per key, replaced when a later
+  clause reads the key on more rows and the key is recomputed over the union of the rows read.
+  During extraction a name holds one row of its group; `ResolveGroupNames`, once at
+  `execution.assemble_input`, maps that row to its group in the key's final grouping, over every
+  name (evaluated constraints, value links, class sets). So a group is spelled one way in every
+  finding of a query, its least spelling over every row any clause read the key on (D69),
+  whichever clause names it and in whatever order, and no row a `when` drops is evaluated to spell
+  it. `Build` moves the tables onto `SolverModel::key_values`. `FormatPerGroupKey`
+  (`decide_diagnostic_render.cpp`) is the one formatter: it joins composite columns with `, `; a
+  relation key (`per D`, which compares NULL as a value) writes each value as an SQL literal, as
+  the determination messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key
+  keeps its spelling, where an empty-string key renders `''` so it is not confused with
+  "ungrouped". `StampConstraintProvenance` derives the name from the group key it stamps, so no
+  emission site stamps a group without its name. A hard MIN/MAX whose bound no row in a group can
+  reach is re-emitted as ordinary per-row rows (`linearization_minmax.cpp`, the `NO_SOLUTION`
+  branch), so a grouped failure names the group it sits in (`per g: min(x) by (g) <= -inf`, group
+  `0`) rather than sending the user through every group. In the expanded scope the classes a row
+  stands for (`class_set`, read by `FanOutByClass`) supply the `group` values; `group_name` names
+  the group of a row that carries none. In the query scope one edit folded across a clause's
+  groups, linear or quadratic, is clause-level and names no group. Whether a row is grouped is
+  read from the name's group number, not its text. The `clause` stays in the user's spelling, so a
+  finding never relies on relation row order to tie `suggested_change`/`amount` to a group and
+  never appends implementation-only `[group: ...]` text to the clause.
 - **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
   drives the single-row `SUM(...)` wrapper in `FormatLhs` (see the AVG section above).
 - **The scope (`qualifier`)** — the `when c per K:` text in front of the clause, built once

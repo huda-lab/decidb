@@ -388,10 +388,11 @@ aggregate / grouped aggregate / per-row shape — and two free functions in
 `ilp_model_builder.cpp` own the fields common across that shape matrix rather than
 each site repeating them:
 
-- `StampConstraintProvenance(provenance, eval_const, repair_group_id, group_key,
-  group_name)` sets `source_clause_id`, `repair_group_id`, `kind`, `shape` +
-  `rhs_label`, and — only when the caller passes a real one — `group_key` /
-  `group_name`. All six sites call this; the four aggregate sites then set
+- `StampConstraintProvenance(provenance, eval_const, repair_group_id, group_key)` sets
+  `source_clause_id`, `repair_group_id`, `kind`, `shape` + `rhs_label`, and — only when
+  the caller passes a real group — `group_key` and the `group_name` derived from it, so
+  no site stamps a group without its name. All six sites call this; the four aggregate
+  sites then set
   `class_set` from `EvaluatedConstraint::group_class_set` (`ClassSetOf`), the index of
   the group's classes in `SolverModel::class_sets` (moved from `SolverInput::class_sets`
   by `Build`; D28), each of a `Kind`: `KEY_VALUES` (a `per K:`'s values), `KEPT_ROWS` (no

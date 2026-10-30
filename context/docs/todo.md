@@ -11,16 +11,14 @@ at a time.
 
 ## Where things stand (2026-10-30)
 
-Every bug up to BUG-37 is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on
-both backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
+Every filed bug is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on both
+backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
 found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that sorted every
-input row). What remains: two bugs found by PERF-12's lane (§ 1), a slowdown left from September (§ 2) and the original
-measurement work (§ 3).
+input row). What remains: a slowdown left from September (§ 2) and the original measurement work (§ 3).
 
 ## 1. Bugs
 
-- [ ] BUG-38 Per-row quadratic and `<>` rows of a grouped clause name no group — issues/bugs.md § BUG-38
-- [ ] BUG-39 A collated key's group spelling depends on clause order — issues/bugs.md § BUG-39
+Every filed bug is fixed.
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 
