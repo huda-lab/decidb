@@ -43,8 +43,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   `rowid` to a single-base-table source, and after unused-column removal a late step moves each parent-read
   variable-width column that the rule's plan only forwards to a second scan joined on `rowid`. Fixed-width columns,
   joins, aggregates, volatile or computed columns, a source that already reads `rowid`, and a pipelined plan
-  (`DirectSubstitute::pipelined`, set by A1) keep the single read. Rules and measurements:
-  `../architecture/result_adapter.md`.
+  (`DirectSubstitute::pipelined`, set by A1) over a source that is not copied keep the single read. Rules and
+  measurements: `../architecture/result_adapter.md`.
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
   form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
   `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient) and

@@ -30,8 +30,7 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
 
 ## 3. Extraction costs
 
-- [ ] PERF-22 A pipelined plan over a copy of the source holds its wide columns; measure first —
-  performance/todo.md § PERF-22
+Every extraction cost found is fixed.
 
 ## 4. Measurement (last)
 

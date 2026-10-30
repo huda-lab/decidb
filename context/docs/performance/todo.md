@@ -20,12 +20,3 @@ Run scale ladders and repetitions on both backends. Use separate native-log/stac
 ## PERF-8 — Memory and scaling
 
 Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
-
-## PERF-22 — A pipelined plan over a copy of the source holds its wide columns
-
-Late materialization is switched off for a pipelined plan (A1's stream), which holds no rows. But a stored source read
-three times or more is copied (`DirectSourceCopyIsCheaper`), and the copy holds every row it keeps, the variable-width
-columns the parent reads included; the copy decision also counted its width without them, because the reader takes the
-driver's `stored_columns` before the rule says it pipelines. A1 with a bound read from a reducer is three reads. Measure
-first (A1 with a reducer on large.db lineitem, a parent that reads every column), then make the rule "late
-materialization applies when the plan holds rows, in a rank or a copy" rather than "when the plan is not pipelined".

@@ -107,15 +107,17 @@ the rank, and the first read still checks every row, so a bad last row under `LI
   0.28 to 0.33 s moved against 0.21 to 0.25 s held, with the same memory. Staying in the single read gives up A1's small
   gain to avoid S1's 30% loss, and needs no tuning number.
 - **The single read is kept** for a join, an aggregate, a volatile or computed column, or a source that already reads
-  `rowid` (no stable row key, or reading twice could change the rows), and for a pipelined plan (A1), which holds
-  nothing.
+  `rowid` (no stable row key, or reading twice could change the rows), and for a pipelined plan (A1) over a source read
+  again rather than copied, which holds nothing.
 - **Where it runs.** Inside the `UNUSED_COLUMNS` pass, right after removal, not beside DuckDB's `LATE_MATERIALIZATION`.
   The passes in between add projection maps that unused-column removal does not keep up to date, so pruning again after
   them is unsafe. With that pass disabled the row id is dropped and the plan holds rows.
 - **Other sources hold their rows** in a plan that holds rows, wide columns included.
 - **A copy of the source leaves the moved columns out.** The copy is pruned to what its reads use, so its row width in
   the copy decision (`CopyWidth`) counts every column except the variable-width stored ones the node does not read. A
-  pipelined plan over a copy holds those columns in the copy, which this rule does not see yet (PERF-22).
+  copy holds rows even under a pipelined plan, so a pipelined plan over a copy late-materializes too: A1 with a bound
+  read from a reducer reads the source three times or more, so it is copied, and its whole-source CTAS on large.db
+  lineitem (1M rows) took 251 ms copying the strings against 96 ms reading them back.
 
 ## Result types
 

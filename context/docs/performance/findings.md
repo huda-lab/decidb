@@ -318,6 +318,11 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   reducer on lisup, none, 64 / 548 → 26 / 112. A1 with a reducer on lisup whose parent reads every column (CTAS) stays
   near 250 / 506: a join is copied whole and is never late-materialized. The lisup cases gain from the pruned copy,
   the lineitem case from late materialization.
+- **A pipelined plan over a copy (PERF-22, closed).** Late materialization was switched off for every pipelined plan,
+  but a source read three times or more is copied, and the copy held the strings the parent reads. It now applies
+  whenever the plan holds rows, in a rank or a copy. large.db lineitem, 1M rows, A1 with a bound read from a reducer,
+  medians of 5, old → new: a parent that returns every column (CTAS) 251 ms / 503 MiB → 96 ms / 509 MiB; a parent that
+  reads one string, 36 ms / 170 MiB → 42 ms / 159 MiB (the second scan and its join).
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data
