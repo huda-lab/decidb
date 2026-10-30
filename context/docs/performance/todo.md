@@ -31,14 +31,6 @@ Run scale ladders and repetitions on both backends. Use separate native-log/stac
 
 Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
 
-## PERF-13 — Q8's key values
-
-`BuildGroupIds` keeps one `Value` per class per key column as each class's representative (`out_rep_keys`): 250k
-classes × 9 columns for Q8's `per o`. They cost 143 ms to build in `execution.keyed_mapping`, 45 ms to destroy in
-`solver.cleanup` and 360 MiB of peak memory (`findings.md` § Input and extraction: against `per o.o_orderkey` on the
-same query). Proposal: keep each group's representative row (`group_rows`) instead of its values, order the groups
-by a sort over the key columns, and format values only when a message names a group (late materialization).
-
 ## PERF-17 — Q4's formulation
 
 Q4's `execution.formulate` takes about 310 ms, its largest extraction span once PERF-14 is fixed: composed MIN/MAX

@@ -249,6 +249,13 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   it, one scan per inner term (a stack sample put the phase's whole time in the cast). It now reads a term's inner
   coefficients in one scan through `EvaluateTermColumns`, the vectorized reader every other clause uses. Q4
   `execution.evaluate_composed` 489 → 21 ms on Gurobi, 21 ms on HiGHS; no other span moved.
+- **A group keeps its row, not its key values (PERF-13, closed).** `BuildGroupIds` kept one `Value` per group per
+  key column (250k groups × 9 columns on Q8's `per o`). A group now keeps its first row (for a collated column, the
+  row of its least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message
+  reads a group's values at its row when it names it (late materialization). Q8, medians of 3, two interleaved
+  rounds (load 10-13): `execution.keyed_mapping` 264 → 167 ms, `extraction.group_ids` 314 → 219, `solver.cleanup`
+  52 → 0, peak RSS 834 → 526 MiB. The keyed mapping left is the hash-table build (about 100 ms) and the sort of
+  250k groups (about 80 ms).
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

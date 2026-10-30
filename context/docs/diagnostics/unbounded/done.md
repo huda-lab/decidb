@@ -200,7 +200,7 @@ characterizer distinguishes three cases:
   name-only cases omit the count.
 
 **Mechanism.** Categorical grouping reuses `BuildGroupIds` (one scan per candidate
-column; it returns per-group representative values). A column is a candidate when
+column; a group's values are read at its row only for a column under the categorical cap). A column is a candidate when
 `2 ≤ distinct ≤ max(min_categories, ratio × N)` — relative cardinality excludes
 continuous / id-like columns (out of scope by design). A **decision per row** scans
 all named input columns. A **keyed decision** also scans named input columns, then

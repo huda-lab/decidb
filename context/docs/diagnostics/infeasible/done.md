@@ -526,15 +526,17 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
 - **`group_name`** — which group of which key the row belongs to, from which the group's
   printable key value (`a`, or `EU, 2024` for the composite key of `per r, y:`) is formatted when
   a finding prints it, never when the model is built (late materialization: a query that prints
-  nothing formats nothing). `BuildGroupIds` returns each group's representative values;
-  `CachedKeyGroups` (`physical_decide.cpp`) keeps one values table per key, replaced when a later
+  nothing formats nothing). `BuildGroupIds` returns each group's row (for a collated column, the row
+  of its least spelling); `CachedKeyGroups` (`physical_decide.cpp`) keeps one `KeyValues` per key,
+  whose `values_of` reads a group's values at that row from the source, replaced when a later
   clause reads the key on more rows and the key is recomputed over the union of the rows read.
   During extraction a name holds one row of its group; `ResolveGroupNames`, once at
   `execution.assemble_input`, maps that row to its group in the key's final grouping, over every
   name (evaluated constraints, value links, class sets). So a group is spelled one way in every
   finding of a query, its least spelling over every row any clause read the key on (D69),
   whichever clause names it and in whatever order, and no row a `when` drops is evaluated to spell
-  it. `Build` moves the tables onto `SolverModel::key_values`. `FormatPerGroupKey`
+  it. `Build` moves them onto `SolverModel::key_values`; every finding is written while the
+  execution that holds the source runs, so a reader never outlives the data it reads. `FormatPerGroupKey`
   (`decide_diagnostic_render.cpp`) is the one formatter: it joins composite columns with `, `; a
   relation key (`per D`, which compares NULL as a value) writes each value as an SQL literal, as
   the determination messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key

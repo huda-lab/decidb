@@ -418,10 +418,10 @@ computed once per query into a `PerGroupCache` entry, its index in the key table
 cache key. `BuildGroupIds` finds each row's group in DuckDB's aggregate hash table with no
 aggregate (`GroupedAggregateHashTable::FindOrCreateGroups`, as GROUP BY and the recursive
 CTE's UNION use it), which compares keys in place and names a group by the address of its
-row; a group's key values become `Value`s once, for its first row. It then numbers the
-groups by value:
-columns compare in key order, a relation column's NULL after every value, as `ORDER BY`
-places it. Each
+row; a group keeps its first row, not its values (late materialization). It then numbers
+the groups by value through DuckDB's order-preserving sort key (`CreateSortKey`, ascending,
+NULLS LAST, as `ORDER BY` and TopN compare rows), built once per new group and compared
+bytewise: columns compare in key order, a relation column's NULL after every value. Each
 reader takes the groups its filters keep as a subsequence, renumbered `0..K'` in the same
 order, so a keyed decision's columns, a clause's group rows and a message's group labels
 never depend on row order. A key is computed only on rows some reader keeps: an entry
@@ -431,8 +431,9 @@ over both sets, so the numbering stays one.
 **A key groups under its collation** (D69). The planner gives each key element whose type
 carries a collation a `collated` copy (`ExpressionBinder::PushCollation`, as GROUP BY binds
 its groups); rows group and number on it (`DecideKeyElement::Grouping()`), and
-`BuildGroupIds` keeps each group's least raw value of the element for its label (a second
-scan, for a collated key only, once the groups are numbered), so a message quotes `'A'`
+`BuildGroupIds` keeps the row holding each group's least raw value of the element for its
+label (a second scan, for a collated key only, once the groups are numbered, comparing sort
+keys), so a message quotes `'A'`
 for a NOCASE group of 'a' and 'A' in any row order. The bound-side
 window partitions on the same expression (`decide_rewrite_rhs_window.cpp`).
 
@@ -451,8 +452,9 @@ row no limit (its `by (g)` helper is absent there) while the total still counts 
 The ids a key takes over every row are cached (`PerGroupCache`) across every constraint,
 check and the objective, so one key is evaluated once however many clauses use it. A
 lookup returns the groups its rows keep (`kept_groups`, each one's index in the key's own
-numbering); a caller that names a group formats that one label from the entry's values,
-so no label is built for a group no message quotes; a
+numbering); a caller that names a group reads that group's values at its row
+(`GroupKeyReader`: a seek and a one-row evaluation per column) and formats that one label,
+so no value is read and no label built for a group no message quotes; a
 clause whose `when` drops rows builds its groups afresh over its kept rows
 (`LookupOrBuildPerGroupIds`' `read_rows`), since the cached key was computed on every row.
 
