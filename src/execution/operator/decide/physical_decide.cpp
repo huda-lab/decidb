@@ -421,11 +421,9 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 		}
 	}
 
-	// rep_keys[c][gid] — key values for the representative row of group `gid`.
-	// Size grows with num_groups, not num_rows. rep_labels[c] is filled only for a column
-	// with a label column of its own; any other column's label is its key value.
-	vector<vector<Value>> rep_keys(num_key_cols);
-	vector<vector<Value>> rep_labels(num_key_cols);
+	// rep_keys[j][gid] — result column j's value for the representative row of group `gid`:
+	// the key columns, then the label columns. Size grows with num_groups, not num_rows.
+	vector<vector<Value>> rep_keys(key_types.size());
 	std::unordered_multimap<hash_t, idx_t> hash_to_rep_group;
 
 	ColumnDataScanState scan;
@@ -501,8 +499,8 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 							continue;
 						}
 						Value label = key_results.data[label_column[c]].GetValue(i);
-						if (!label.IsNull() && label < rep_labels[c][gid]) {
-							rep_labels[c][gid] = std::move(label);
+						if (!label.IsNull() && label < rep_keys[label_column[c]][gid]) {
+							rep_keys[label_column[c]][gid] = std::move(label);
 						}
 					}
 					break;
@@ -510,11 +508,8 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			}
 			if (!matched) {
 				idx_t gid = next_group++;
-				for (idx_t c = 0; c < num_key_cols; c++) {
-					rep_keys[c].push_back(key_results.data[c].GetValue(i));
-					if (label_column[c] != c) {
-						rep_labels[c].push_back(key_results.data[label_column[c]].GetValue(i));
-					}
+				for (idx_t j = 0; j < rep_keys.size(); j++) {
+					rep_keys[j].push_back(key_results.data[j].GetValue(i));
 				}
 				hash_to_rep_group.emplace(h, gid);
 				out_row_to_group[row] = gid;
@@ -529,21 +524,15 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			row_offset, num_rows);
 	}
 
-	// The label columns ride as trailing columns, in key column order: distinct groups differ
-	// in a key column, so they never decide the order, and they are permuted with it.
-	for (idx_t c = 0; c < num_key_cols; c++) {
-		if (label_column[c] != c) {
-			rep_keys.push_back(std::move(rep_labels[c]));
-		}
-	}
+	// The label columns trail the key columns: distinct groups differ in a key column, so
+	// they never decide the order, and they are permuted with it.
 	NumberGroupsByValue(rep_keys, next_group, out_row_to_group);
 	out_num_groups = next_group;
 	if (out_rep_keys) {
 		// Expose each group's label values (group g's value for each key column), which
 		// messages and the unbounded diagnosis quote.
-		idx_t trailing = num_key_cols;
 		for (idx_t c = 0; c < num_key_cols; c++) {
-			(*out_rep_keys)[c] = std::move(rep_keys[label_column[c] == c ? c : trailing++]);
+			(*out_rep_keys)[c] = std::move(rep_keys[label_column[c]]);
 		}
 	}
 }
