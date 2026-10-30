@@ -11,3 +11,4 @@ each exists: `context/docs/pipeline/07_solver/done.md`.
 - BUG-23 (`presolve/HPresolve.cpp`): the dominated-columns pass stops at the time limit.
 - BUG-25 (`mip/HighsCliqueTable.cpp`, `mip/HighsDomain.*`, `mip/HighsPrimalHeuristics.cpp`): clique extraction's
   variable-bound loop, conflict analysis and line-search rounding stop at the time limit or a Ctrl-C.
+- BUG-28 (`presolve/HPresolve.cpp`): the parallel rows and columns pass stops at the time limit.

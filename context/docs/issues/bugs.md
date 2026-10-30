@@ -1,11 +1,5 @@
 # Known bugs
 
-## BUG-28 — HiGHS's parallel rows and columns presolve ignores the time limit
-
-- **Observed:** one row over 80,000 columns, every column parallel, on HiGHS with `DECIDB_TIME_LIMIT=2` ends at 5.2 s;
-  the time goes to `HPresolve::detectParallelRowsAndCols`, which has no clock check (found by lane X, BUG-25).
-- **Fix (to rule):** the BUG-23 pattern: `checkTimeLimit()` once per amount of work in its loop.
-
 ## BUG-27 — Two collations of one column share a key
 
 - **Observed:** `FindOrCreateDecideKey` matches key elements with `Expression::Equals`, which ignores the collation,

@@ -1,4 +1,4 @@
-# Draft: HiGHS upstream issue — five MIP loops that never check the time limit
+# Draft: HiGHS upstream issue — six presolve and MIP loops that never check the time limit
 
 Not posted. The owner posts it on github.com/ERGO-Code/HiGHS. Before posting:
 
@@ -10,12 +10,12 @@ The patches it describes are listed in `third_party/highs/README.md`.
 
 ---
 
-**Title:** MIP time limit and user interrupt are not checked in five loops (clique partition, symmetry detection,
-dominated-columns presolve, clique extraction, conflict analysis)
+**Title:** MIP time limit and user interrupt are not checked in six loops (clique partition, symmetry detection,
+dominated-columns presolve, clique extraction, conflict analysis, parallel rows and columns)
 
 **Version:** HiGHS 1.11.0 (git 364c83a51), built from source as a static library. macOS arm64.
 
-**Summary.** Four MIP models run minutes past `time_limit`, and the user interrupt callback is not called
+**Summary.** Five MIP models run minutes past `time_limit`, and the user interrupt callback is not called
 meanwhile. In each case the time goes to a loop that reads the clock only after some event
 (a reduction, a search leaf), and the model produces none of those events. We patched each loop locally with a
 periodic check that leaves through an exit the code already has. The patches are below in case they are useful.
@@ -133,7 +133,23 @@ for (HighsInt i = 0; i != nbin; ++i) {
   `checkLimits()` before each rounded point.
 - **With the patches (4 and 5):** the model stops at 300 s.
 
+### 6. `HPresolve::detectParallelRowsAndCols` (presolve)
+
+- **Symptom:** one row over 120,000 integer columns with distinct coefficients stays in this pass 25 s under a 1 s
+  limit; 110,000 inequalities over two columns each, 23.5 s. Columns (or rows) that share a hash are compared pairwise
+  in their bucket, and when no pair is parallel no reduction happens, so `checkLimits` never runs.
+- **Patch:** both bucket loops count the candidates they compare and call `checkTimeLimit()` once per 2^20 of them,
+  before a candidate's work, returning through `kStopped`.
+- **With the patch:** both models stop at about 2 s (a 1 s limit plus process start).
+
+```cpp
+while (it != buckets.end() && it->first == colHashes[i]) {
+  if (++numBucketCandidates % kCandidatesPerTimeCheck == 0)
+    HPRESOLVE_CHECKED_CALL(checkTimeLimit());
+  ...
+```
+
 ### Suggestion
 
 A clock check inside each loop whose work does not depend on making progress (reductions, nodes, leaves) would cover
-these cases and others like them. We are happy to open a pull request with any of the five patches.
+these cases and others like them. We are happy to open a pull request with any of the six patches.

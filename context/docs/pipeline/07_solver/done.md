@@ -242,8 +242,16 @@ entries, a stride by work rather than by iteration since one iteration costs up 
 rounding calls it before each rounded point. Past a limit, extraction keeps the bounds it found and skips the rest of
 the row; conflict analysis abandons the conflict and adds no cut. Q1 now stops at 300 s. Test:
 `test_error_time_limit.py` (`test_highs_limit_bounds_clique_extraction`); the conflict-analysis stop has no small
-model that reaches it on every run, so Q1 at `large` is its check. Phases the time checks still do not reach: the
-parallel rows and columns pass (`HPresolve::detectParallelRowsAndCols`, BUG-28), and, none seen to stall, the root
+model that reaches it on every run, so Q1 at `large` is its check.
+
+Presolve's parallel rows and columns pass (`HPresolve::detectParallelRowsAndCols`) hashes every column and every
+row and compares each pair in a hash bucket; it read the clock only after a reduction, so a bucket whose members
+share a hash but never merge ran quadratically with no check: one row over 120,000 integers with distinct
+coefficients took 25 s under a 1 s limit, and 110,000 two-column inequalities 23.5 s. The vendored pass
+(`DeciDB patch (BUG-28)`) counts the candidates both bucket loops compare and calls `checkTimeLimit()` once per
+2^20 of them, before a candidate's work, stopping through presolve's `kStopped`; earlier reductions are complete
+on the postsolve stack. Tests: `test_error_time_limit.py` (`test_highs_limit_bounds_parallel_columns`,
+`test_highs_limit_bounds_parallel_rows`). Phases the time checks still do not reach, none seen to stall: the root
 analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group), the probing loop after clique extraction,
 rounding's fixing loop and the other presolve passes between their checks every 1,024 reductions. The upstream
 report is drafted in `../../issues/highs_upstream.md`.
