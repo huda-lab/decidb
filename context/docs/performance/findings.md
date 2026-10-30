@@ -234,6 +234,16 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   stops at the first kept row with a class instead of renumbering every row; a clause's term conditions are read in one
   scan; the kept rows' groups are built only under DIAGNOSE, their one reader. `extraction.constraint` Q1 312 → 217 ms,
   Q4 210 → 156, P4 134 → 123; `assembly.implied_bounds` Q1 61 → 49, Q4 and P4 unchanged.
+- **Rows, bounds and NULL tests built once (PERF-10, closed).** Each clause's emitted rows are one CSR shared by
+  implied bounds, the `<>` expansion and the builder; a bound's admitted ends read `a` and `r` evaluated once per row
+  (two projections) and stage 08 folds constants once; a NULL test the statistics prove always TRUE folds at plan time
+  and no filter is read for it, and the objective sites treat an identity filter as none. Medians of 3 at `large` on
+  Gurobi, two interleaved rounds (load 5-14), Q1 / Q4 / P4: `extraction.constraint` 216 → 202, 156 → 120,
+  122 → 120 ms; `assembly.implied_bounds` 52 → 38, 51 → 42, 26 → 24; `extraction.rhs` Q4 83 → 55;
+  `extraction.constraint_setup` Q1 60 → 43, Q4 8 → 0; `execution.evaluate_objective` 32 → 20, 26 → 17, 11 → 7;
+  `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters still select kept rows with a per-row `vector<bool>`: a
+  `SelectionVector` path would let DuckDB's conjunction `Select` reorder AND/OR operands, and DECIDE reads them left
+  to right.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

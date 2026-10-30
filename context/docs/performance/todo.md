@@ -53,33 +53,10 @@ one value per group. Measure the cost on a 1M-row clause with a data-bound RHS f
 PERF-3's shape, an aggregate over the columns the bound reads on a second read of the source (`DirectSourceReader`),
 joined back by its group key.
 
-## Regressions since the 2026-09-09 sweep
+## PERF-16 — Constant folding where a tree is built
 
-The 2026-10-30 large sweep (PERF-1) against the 2026-09-09 one, on Gurobi, where every run finishes in both: total
-time fell 3 % (smaller models: per-row bounds fold into column boxes), and the non-solver stages grew in a few
-queries. The scope checks a key always passes caused most of it and are fixed (Q8 4.0 s and 3.95 GiB → 1.7 s and
-1.14 GiB); so are the group ids and the `when` scan (PERF-9, PERF-11 closed: `findings.md`). Each task: find
-the cause with the profile spans (`profile_pipeline.py`
-raw `profile.json`, one query at `large`), fix it if it is a defect, else record why the cost is needed. Record in
-`findings.md`, and in the owning stage's `done.md` if code changes.
-
-### PERF-10 — Implied bounds, the admitted interval and setup still slower than September
-
-After the extraction fixes (`findings.md` § Regressions since 2026-09-09), measured alone at `large`: implied bounds Q1
-13.6 → 49 ms, Q4 14 → 49, P4 7 → 25; Q4's `extraction.rhs` 74 ms per 1M rows; Q1's linear coefficients 31 ms against
-15.6; a grouped clause's group view 13-19 ms against about 7.5. Causes and proposals, each to rule:
-
-- Implied bounds (78ef6ec5bf): every emitted row goes through `AccumulateClauseRow` and `Flush` (Q1: accumulate 14,
-  flush 10, bound loop 12, instance loop 5 ms); the CSR moved here from the builder, whose time fell about as much.
-  Proposal: build each clause's emitted rows once as a CSR shared by implied bounds, the `<>` expansion and the builder
-  (late materialization). Changes no result.
-- The admitted interval (5fdd4659c5): an easy MAX's `AdmittedInterval` is two CASE trees evaluated per row with
-  nothing shared. Proposal: evaluate both ends in one projection through DuckDB's common-subexpression elimination.
-- The NULL test: about 5 ms per clause scanning for it, and the objective sites still carry identity NULL-test filters
-  (Q1 `evaluate_objective` 24 → 32 ms). Proposal: drop the test at plan time where DuckDB's statistics prove the column
-  never NULL, as `StatisticsPropagator` folds `IS NOT NULL`; the objective sites treat an identity filter as none, as
-  the constraint sites now do.
-- Term filters read on the kept rows only (`KeepChunkRowsWhere` / `ExecuteOnReadRows`, a per-row `vector<bool>`
-  selection): 9-30 ms. A `SelectionVector` path is faster, but DuckDB's conjunction `Select` reorders AND/OR operands
-  adaptively, and DECIDE reads them left to right; a design trade-off.
-- The `masks[i].size() != num_rows` InternalException in `EvaluateConstraints` cannot fire: delete it.
+Stage 08 constant-folds each tree it evaluates (`TransformToChunkExpression`), not where the optimizer finishes
+building it (`ExpressionBuilder::Out`), because messages render the built trees: folding there turns the `2 * w` a
+message quotes into `2.0 * w`. Direct-solve plans are not folded. The cause is the message, not the fold: a message
+that names a value should quote the source text the user wrote (as Clang underlines source rather than reprinting its
+tree). Once messages quote source text, the fold moves to `Out` and direct-solve plans get it too.

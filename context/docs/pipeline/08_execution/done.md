@@ -102,8 +102,14 @@ repair model loosens it one kept row or class at a time (D28) while the solved m
 keeps the box alone. Those clauses are the repair model's only rows for a folded bound.
 A bound against a data column (`x <= cap`, `cap * x <= 10`, an easy `max(cap * x) <= 10`)
 is not tagged: it flattens to a per-row spec that carries the classifier's admitted range
-(`DecideConstraint::admitted_lower` / `admitted_upper`, stage 05). `EvaluateConstraints`
-evaluates both ends on the kept rows in the same pass that reads a data right-hand side,
+(`DecideConstraint::admitted_lower` / `admitted_upper`, stage 05). The ends read the clause
+as `a * x <comparison> r` through two inputs, `admitted_a` and `admitted_r`, which both ends
+read many times: `EvaluateConstraints` evaluates the inputs once on the rows the reducer filter
+`admitted_member` keeps, then both ends over them (two projections, the common-subexpression
+shape); a row that is no member admits every value. An input that is a constant is in the
+ends already, and stage 08 constant-folds each tree it evaluates once (`ConstantFoldingRule`,
+in `TransformToChunkExpression`, after messages have rendered from the prepared trees). It
+evaluates the ends on the kept rows in the same pass that reads a data right-hand side,
 after it, admitting ±infinity as an open end, into
 `EvaluatedConstraint::admitted_lower` / `admitted_upper`, and the model builder folds each
 row into its column box when no diagnosis is armed (`../06_model_formulation/done.md`,

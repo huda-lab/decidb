@@ -77,7 +77,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 - **NULL.** A reducer reads its argument as the same SQL aggregate does: it skips a row whose summand is NULL, so
   `AVG(cap)` and `AVG(w * x)` divide by the rows kept. `DecideCanonicalizer::SkipNullData` (plan_select_node, after
   canonicalization and before any rewrite copies a filter) ANDs a tagged `e IS NOT NULL` into a reducer's filter for
-  each data factor of its summand, so the term masks and AVG's row count do the skipping. A reducer over data whose
+  each data factor of its summand, so the term masks and AVG's row count do the skipping. Where DuckDB's statistics
+  prove the factor never NULL, `StatisticsPropagator` folds the test to TRUE (its LOGICAL_DECIDE case, as it folds a
+  filter's `IS NOT NULL`); the folded constant keeps its tag, and stage 08 reads no filter for it. A reducer over data
+  whose
   every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
   on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `SkipNullInstances` cuts the instance
   that row reaches: one row of a row constraint, the whole group of a grouped one. A composed MIN/MAX clause with a

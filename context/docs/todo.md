@@ -14,8 +14,8 @@ at a time.
 Every filed bug is fixed and merged, HiGHS is 1.15.1, and DIAGNOSE's example corpus prints the same answer on both
 backends but one (a model HiGHS refuses before solving). The large benchmark sweep (`performance/todo.md` § PERF-1)
 found two regressions, both fixed (BUG-25 and BUG-28: HiGHS past its time limit; BUG-26: scope checks that sorted every
-input row). What remains: a slowdown left from September (§ 2), three extraction costs the measurements found (§ 3)
-and the rest of the measurement work (§ 4).
+input row). What remains: the extraction costs the measurements found (§ 3) and the rest of the measurement work
+(§ 4).
 
 ## 1. Bugs
 
@@ -23,8 +23,7 @@ Every filed bug is fixed.
 
 ## 2. Slowdowns since the 2026-09-09 sweep
 
-- [ ] PERF-10 Implied bounds, the admitted interval and setup still slower; four proposals to rule —
-  performance/todo.md § PERF-10
+Every slowdown found is fixed.
 
 Q8's keyed mapping (PERF-9) is back to 257 ms, group keys are formatted only when printed (PERF-12), and Q3/Q10's memory
 peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2026-09-09).
@@ -37,6 +36,8 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
 - [ ] PERF-14 Q4's composed MIN/MAX evaluation, 495 ms, cause unknown — performance/todo.md § PERF-14
 - [ ] PERF-15 RHS-bound windows hold every source column; measure, then PERF-3's shape —
   performance/todo.md § PERF-15
+- [ ] PERF-16 Constant folding where a tree is built; first, messages quote the source text —
+  performance/todo.md § PERF-16
 
 ## 4. Measurement (last)
 
