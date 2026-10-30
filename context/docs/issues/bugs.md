@@ -1,5 +1,15 @@
 # Known bugs
 
+- **BUG-42 — A `CASE` in an aggregate clause's bound gets a message that does not say `CASE`.** `CASE` is refused
+  everywhere in DECIDE (`language/guide.md` § Data operands), with a message that names it and the alternatives
+  (`DecideCaseUnsupportedMessage`). In the bound of an aggregate clause the refusal comes instead from the bound's
+  allow-list (`IsAllowedDecisionFreeBoundExpression`), whose `default: return false` drops the reason: "SUM cannot be
+  compared to an expression that is not a scalar or aggregate without DECIDE variables", even for `CASE WHEN true`.
+  The refusal is written once per binder path (constraints, reducer argument, objective), so the path that reaches a
+  `CASE` first decides the text. Repro: `SELECT id, x FROM t DECIDE x(BOOL) SUCH THAT SUM(x) <= CASE WHEN s = 'F'
+  THEN 1 ELSE 2 END MAXIMIZE SUM(p*x)` over `t(id, s VARCHAR, p DOUBLE)`; `x <= CASE ...` names `CASE`. Found
+  2026-10-30 (lane AV, PERF-20).
+
 ## Limitations (not bugs)
 
 - **A repair exactly at the tolerance on HiGHS's QP path.** An edit whose rows miss a summed bound by exactly the
