@@ -1,7 +1,8 @@
 diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
+index 40a90902dc..6864c88a53 100644
 --- a/highs/mip/HighsCliqueTable.cpp
 +++ b/highs/mip/HighsCliqueTable.cpp
-@@ -1001,7 +1001,9 @@
+@@ -1005,7 +1005,9 @@ void HighsCliqueTable::cliquePartition(std::vector<CliqueVar>& clqVars,
    partitionStart.push_back(numClqVars);
  }
  
@@ -12,7 +13,7 @@ diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
                                         std::vector<CliqueVar>& clqVars,
                                         std::vector<HighsInt>& partitionStart) {
    randgen.shuffle(clqVars.data(), clqVars.size());
-@@ -1021,7 +1023,22 @@
+@@ -1025,7 +1027,22 @@ void HighsCliqueTable::cliquePartition(const std::vector<double>& objective,
    HighsInt extensionEnd = numClqVars;
    partitionStart.push_back(0);
    HighsInt lastSwappedIndex = 0;
@@ -36,9 +37,10 @@ diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
        partitionStart.push_back(i);
        extensionEnd = numClqVars;
 diff --git a/highs/mip/HighsCliqueTable.h b/highs/mip/HighsCliqueTable.h
+index 3bfca902a5..ab9674e1fd 100644
 --- a/highs/mip/HighsCliqueTable.h
 +++ b/highs/mip/HighsCliqueTable.h
-@@ -236,7 +236,9 @@
+@@ -253,7 +253,9 @@ class HighsCliqueTable {
    void cliquePartition(std::vector<CliqueVar>& clqVars,
                         std::vector<HighsInt>& partitionStart);
  
@@ -50,6 +52,7 @@ diff --git a/highs/mip/HighsCliqueTable.h b/highs/mip/HighsCliqueTable.h
                         std::vector<HighsInt>& partitionStart);
  
 diff --git a/highs/mip/HighsObjectiveFunction.cpp b/highs/mip/HighsObjectiveFunction.cpp
+index 08be70f415..abdcb4cec0 100644
 --- a/highs/mip/HighsObjectiveFunction.cpp
 +++ b/highs/mip/HighsObjectiveFunction.cpp
 @@ -18,7 +18,8 @@
@@ -62,7 +65,7 @@ diff --git a/highs/mip/HighsObjectiveFunction.cpp b/highs/mip/HighsObjectiveFunc
    objectiveNonzeros.reserve(model->num_col_);
  
    for (HighsInt i = 0; i < model->num_col_; ++i) {
-@@ -78,7 +79,9 @@
+@@ -75,7 +76,9 @@ void HighsObjectiveFunction::setupCliquePartition(
      clqvars.emplace_back(col, model->col_cost_[col] < 0.0);
    }
  
@@ -74,9 +77,10 @@ diff --git a/highs/mip/HighsObjectiveFunction.cpp b/highs/mip/HighsObjectiveFunc
    if (numPartitions == numBinary)
      cliquePartitionStart.resize(1);
 diff --git a/highs/mip/HighsObjectiveFunction.h b/highs/mip/HighsObjectiveFunction.h
+index 0598146e32..c678410fe0 100644
 --- a/highs/mip/HighsObjectiveFunction.h
 +++ b/highs/mip/HighsObjectiveFunction.h
-@@ -20,6 +20,8 @@
+@@ -20,6 +20,8 @@ class HighsLp;
  class HighsMipSolver;
  
  class HighsObjectiveFunction {

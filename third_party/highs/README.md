@@ -1,6 +1,6 @@
 # HiGHS (vendored, patched)
 
-HiGHS 1.11.0 (`364c83a51`). `highs/` and `extern/` are upstream's, minus the sources its static library does not
+HiGHS 1.15.1 (`04024d701`). `highs/` and `extern/` are upstream's, minus the sources its static library does not
 compile in DeciDB's configuration, plus the patch series in `patches/`. `CMakeLists.txt`, `HConfig.h` and `patches/`
 are DeciDB's own; the build compiles every source in the tree.
 

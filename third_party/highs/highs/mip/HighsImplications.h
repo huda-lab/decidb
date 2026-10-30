@@ -29,6 +29,8 @@ class HighsImplications {
   };
   std::vector<Implics> implications;
   int64_t numImplications;
+  int64_t numVarBounds;
+  int64_t maxVarBounds;
 
   bool computeImplications(HighsInt col, bool val);
 
@@ -63,6 +65,8 @@ class HighsImplications {
     vlbs.resize(numcol);
     nextCleanupCall = mipsolver.numNonzero();
     numImplications = 0;
+    numVarBounds = 0;
+    maxVarBounds = calcMaxVarBounds(numcol);
   }
 
   std::function<void(HighsInt, HighsInt, HighsInt, double)>
@@ -84,11 +88,19 @@ class HighsImplications {
     vlbs.clear();
     vlbs.shrink_to_fit();
     vlbs.resize(numcol);
+    numVarBounds = 0;
+    maxVarBounds = calcMaxVarBounds(numcol);
 
     nextCleanupCall = mipsolver.numNonzero();
   }
 
-  HighsInt getNumImplications() const { return numImplications; }
+  constexpr static int64_t calcMaxVarBounds(HighsInt numcol) {
+    return int64_t{5000000} + 10 * static_cast<int64_t>(numcol);
+  };
+
+  HighsInt getNumImplications() const {
+    return static_cast<HighsInt>(numImplications);
+  }
 
   const std::vector<HighsDomainChange>& getImplications(HighsInt col, bool val,
                                                         bool& infeasible) {
@@ -108,11 +120,21 @@ class HighsImplications {
     return implications[loc].computed;
   }
 
+  bool tooManyVarBounds() const { return numVarBounds >= maxVarBounds; }
+
+  void strengthenVarBound(VarBound& vbnd, HighsInt multiplier) const;
+
   void addVUB(HighsInt col, HighsInt vubcol, double vubcoef,
               double vubconstant);
 
+  void addVUB(HighsInt col, HighsInt vubcol, double vubcoef, double vubconstant,
+              double colupperbound, bool colisinteger);
+
   void addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef,
               double vlbconstant);
+
+  void addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef, double vlbconstant,
+              double collowerbound, bool colisinteger);
 
   void columnTransformed(HighsInt col, double scale, double constant) {
     // Update variable bounds affected by transformation
@@ -139,11 +161,13 @@ class HighsImplications {
 
   std::pair<HighsInt, VarBound> getBestVub(HighsInt col,
                                            const HighsSolution& lpSolution,
-                                           double& bestUb) const;
+                                           double& bestUb,
+                                           const HighsDomain& globaldom) const;
 
   std::pair<HighsInt, VarBound> getBestVlb(HighsInt col,
                                            const HighsSolution& lpSolution,
-                                           double& bestLb) const;
+                                           double& bestLb,
+                                           const HighsDomain& globaldom) const;
 
   bool runProbing(HighsInt col, HighsInt& numReductions);
 
@@ -154,7 +178,8 @@ class HighsImplications {
 
   void separateImpliedBounds(const HighsLpRelaxation& lpRelaxation,
                              const std::vector<double>& sol,
-                             HighsCutPool& cutpool, double feastol);
+                             HighsCutPool& cutpool, double feastol,
+                             HighsDomain& globaldom, bool thread_safe);
 
   void cleanupVarbounds(HighsInt col);
 
@@ -165,6 +190,8 @@ class HighsImplications {
   void cleanupVub(HighsInt col, HighsInt vubCol,
                   HighsImplications::VarBound& vub, double ub, bool& redundant,
                   bool& infeasible, bool allowBoundChanges = true) const;
+
+  void applyImplications(HighsDomain& domain, HighsInt col, HighsInt val);
 };
 
 #endif

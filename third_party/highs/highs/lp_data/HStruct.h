@@ -15,16 +15,7 @@
 #include <vector>
 
 #include "lp_data/HConst.h"
-
-struct HighsFiles {
-  bool empty = true;
-  std::string read_solution_file = "";
-  std::string read_basis_file = "";
-  std::string write_model_file = "";
-  std::string write_solution_file = "";
-  std::string write_basis_file = "";
-  void clear();
-};
+#include "util/HighsTimer.h"
 
 struct HighsSolution {
   bool value_valid = false;
@@ -36,6 +27,11 @@ struct HighsSolution {
   bool hasUndefined() const;
   void invalidate();
   void clear();
+  void print(const std::string& prefix = "",
+             const std::string& message = "") const;
+  bool isModelRow(HighsInt row) const {
+    return static_cast<size_t>(row) < row_value.size();
+  }
 };
 
 struct HighsObjectiveSolution {
@@ -81,8 +77,10 @@ struct HighsBasis {
   std::string debug_origin_name = "None";
   std::vector<HighsBasisStatus> col_status;
   std::vector<HighsBasisStatus> row_status;
-  void print(std::string message = "") const;
-  void printScalars(std::string message = "") const;
+  void print(const std::string& prefix = "",
+             const std::string& message = "") const;
+  void printScalars(const std::string& prefix = "",
+                    const std::string& message = "") const;
   void invalidate();
   void clear();
 };
@@ -168,6 +166,47 @@ struct HighsLinearObjective {
   void clear();
 };
 
+struct HighsProfilingRecord {
+  std::vector<HighsInt> num_call;
+  std::vector<double> run_time;
+  std::vector<double> start_time;
+};
+
+struct HighsProfiling {
+  HighsTimer* timer = nullptr;
+  bool multi_threaded = true;
+  std::string model_name_ = "";
+  bool sub_solver_ = false;
+  bool mip_ = false;
+  HighsInt num_profiling_clock_ = -1;
+  std::vector<std::string> name;
+  // These vectors are over threads
+  std::vector<uint8_t> submip;
+  std::vector<HighsProfilingRecord> record;
+  std::vector<HighsProfilingRecord> submip_record;
+  bool initialized = false;
+
+  void initialize(HighsTimer& timer_, const bool subsolver_profiling,
+                  const bool mip_profiling = false);
+  void clear();
+  HighsInt numThread();
+  HighsInt myThread();
+  void setSubMip(const bool submip);
+  bool isSubMip();
+  HighsProfilingRecord* getHighsProfilingRecord(
+      const HighsInt record_type = kChooseRecord);
+  void start(const HighsInt profiling_clock, const bool restart = false);
+  void stop(const HighsInt profiling_clock);
+  double read(const HighsInt profiling_clock,
+              const HighsInt record_type = kChooseRecord);
+  bool running(const HighsInt profiling_clock,
+               const HighsInt record_type = kChooseRecord);
+  HighsInt numCall(const HighsInt profiling_clock,
+                   const HighsInt record_type = kChooseRecord);
+  void solveCall(const std::string& model, const bool submip);
+  //  HighsInt getSepaClockIndex(const std::string& name);
+};
+
 struct HighsSimplexStats {
   bool valid;
   HighsInt iteration_count;
@@ -180,6 +219,31 @@ struct HighsSimplexStats {
   double row_DSE_density;
   void report(FILE* file, const std::string message = "") const;
   void initialise(const HighsInt iteration_count_ = 0);
+};
+
+struct HighsUserScaleData {
+  HighsInt user_objective_scale = 0;
+  HighsInt user_bound_scale = 0;
+  double infinite_cost;
+  double infinite_bound;
+  double small_matrix_value;
+  double large_matrix_value;
+  HighsInt num_infinite_costs;
+  HighsInt num_infinite_hessian_values;
+  HighsInt num_infinite_col_bounds;
+  HighsInt num_infinite_row_bounds;
+  HighsInt num_small_matrix_values;
+  HighsInt num_large_matrix_values;
+  HighsInt suggested_user_objective_scale;
+  HighsInt suggested_user_bound_scale;
+  bool applied = false;
+  void initialise(const HighsInt& user_objective_scale_,
+                  const HighsInt& user_bound_scale_,
+                  const double& infinite_cost_, const double& infinite_bound_,
+                  const double& small_matrix_value_,
+                  const double& large_matrix_value_);
+  bool scaleError(std::string& message) const;
+  bool scaleWarning(std::string& message) const;
 };
 
 #endif /* LP_DATA_HSTRUCT_H_ */

@@ -30,7 +30,7 @@ using std::map;
 // Read file called filename. Returns 0 if OK and 1 if file can't be opened
 //
 FilereaderRetcode readMps(
-    const HighsLogOptions& log_options, const std::string filename,
+    const HighsLogOptions& log_options, const std::string& filename,
     HighsInt mxNumRow, HighsInt mxNumCol, HighsInt& numRow, HighsInt& numCol,
     ObjSense& objSense, double& objOffset, vector<HighsInt>& Astart,
     vector<HighsInt>& Aindex, vector<double>& Avalue, vector<double>& colCost,
@@ -393,9 +393,9 @@ FilereaderRetcode readMps(
   // Load Hessian
   if (flag[0] == 'Q') {
     warning_issued = true;
-    highsLogUser(
-        log_options, HighsLogType::kWarning,
-        "Quadratic section: under development. Assumes QUADOBJ section\n");
+    highsLogUser(log_options, HighsLogType::kWarning,
+                 "Quadratic section: under development. Assumes "
+                 "QUADOBJ/QSECTION section\n");
     Qdim = numCol;
     HighsInt hessian_nz = 0;
     HighsInt previous_col = -1;
@@ -549,40 +549,18 @@ bool load_mpsLine(std::istream& file, HighsVarType& integerVar, HighsInt lmax,
 }
 
 HighsStatus writeModelAsMps(const HighsOptions& options,
-                            const std::string filename, const HighsModel& model,
-                            const bool free_format) {
+                            const std::string& filename,
+                            const HighsModel& model, const bool free_format) {
   bool warning_found = false;
   const HighsLp& lp = model.lp_;
-  const HighsHessian& hessian = model.hessian_;
-  bool have_col_names = (lp.col_names_.size() != 0);
-  bool have_row_names = (lp.row_names_.size() != 0);
-  std::vector<std::string> local_col_names;
-  std::vector<std::string> local_row_names;
-  local_col_names.resize(lp.num_col_);
-  local_row_names.resize(lp.num_row_);
-  // Initialise the local names to any existing names
-  if (have_col_names) local_col_names = lp.col_names_;
-  if (have_row_names) local_row_names = lp.row_names_;
-  //
-  // Normalise the column names
-  HighsInt max_col_name_length = kHighsIInf;
-  if (!free_format) max_col_name_length = 8;
-  HighsStatus col_name_status =
-      normaliseNames(options.log_options, "column", lp.num_col_,
-                     local_col_names, max_col_name_length);
-  if (col_name_status == HighsStatus::kError) return col_name_status;
-  warning_found = col_name_status == HighsStatus::kWarning || warning_found;
-  //
-  // Normalise the row names
-  HighsInt max_row_name_length = kHighsIInf;
-  if (!free_format) max_row_name_length = 8;
-  HighsStatus row_name_status =
-      normaliseNames(options.log_options, "row", lp.num_row_, local_row_names,
-                     max_row_name_length);
-  if (row_name_status == HighsStatus::kError) return row_name_status;
-  warning_found = row_name_status == HighsStatus::kWarning || warning_found;
 
-  HighsInt max_name_length = std::max(max_col_name_length, max_row_name_length);
+  const bool ok_names = lp.okNames();
+  assert(ok_names);
+  if (!ok_names) return HighsStatus::kError;
+
+  const HighsHessian& hessian = model.hessian_;
+
+  HighsInt max_name_length = maxNameLength(lp);
   bool use_free_format = free_format;
   if (!free_format) {
     if (max_name_length > 8) {
@@ -607,16 +585,16 @@ HighsStatus writeModelAsMps(const HighsOptions& options,
       hessian.dim_, lp.sense_, lp.offset_, lp.col_cost_, lp.col_lower_,
       lp.col_upper_, lp.row_lower_, lp.row_upper_, lp.a_matrix_.start_,
       lp.a_matrix_.index_, lp.a_matrix_.value_, hessian.start_, hessian.index_,
-      hessian.value_, lp.integrality_, local_objective_name, local_col_names,
-      local_row_names, use_free_format);
+      hessian.value_, lp.integrality_, local_objective_name, lp.col_names_,
+      lp.row_names_, use_free_format);
   if (write_status == HighsStatus::kOk && warning_found)
     return HighsStatus::kWarning;
   return write_status;
 }
 
 HighsStatus writeMps(
-    const HighsLogOptions& log_options, const std::string filename,
-    const std::string model_name, const HighsInt& num_row,
+    const HighsLogOptions& log_options, const std::string& filename,
+    const std::string& model_name, const HighsInt& num_row,
     const HighsInt& num_col, const HighsInt& q_dim, const ObjSense& sense,
     const double& offset, const vector<double>& col_cost,
     const vector<double>& col_lower, const vector<double>& col_upper,
@@ -624,7 +602,7 @@ HighsStatus writeMps(
     const vector<HighsInt>& a_start, const vector<HighsInt>& a_index,
     const vector<double>& a_value, const vector<HighsInt>& q_start,
     const vector<HighsInt>& q_index, const vector<double>& q_value,
-    const vector<HighsVarType>& integrality, const std::string objective_name,
+    const vector<HighsVarType>& integrality, const std::string& objective_name,
     const vector<std::string>& col_names, const vector<std::string>& row_names,
     const bool use_free_format) {
   HighsInt num_no_cost_zero_columns = 0;
@@ -639,9 +617,8 @@ HighsStatus writeMps(
   }
   highsLogDev(log_options, HighsLogType::kInfo, "writeMPS: Opened file  OK\n");
   // Check that the names are no longer than 8 characters for fixed format write
-  HighsInt max_col_name_length = maxNameLength(num_col, col_names);
-  HighsInt max_row_name_length = maxNameLength(num_row, row_names);
-  HighsInt max_name_length = std::max(max_col_name_length, max_row_name_length);
+  HighsInt max_name_length =
+      std::max(maxNameLength(col_names), maxNameLength(row_names));
   if (!use_free_format && max_name_length > 8) {
     highsLogUser(
         log_options, HighsLogType::kError,

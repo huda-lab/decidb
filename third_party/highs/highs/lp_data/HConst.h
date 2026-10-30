@@ -18,11 +18,11 @@
 #include "util/HighsInt.h"
 
 const std::string kHighsCopyrightStatement =
-    "Copyright (c) 2025 HiGHS under MIT licence terms";
+    "Copyright (c) 2026 under MIT licence terms";
 
-const size_t kHighsSize_tInf = std::numeric_limits<size_t>::max();
-const HighsInt kHighsIInf = std::numeric_limits<HighsInt>::max();
-const HighsInt kHighsIInf32 = std::numeric_limits<int>::max();
+const size_t kHighsSize_tInf = (std::numeric_limits<size_t>::max)();
+const HighsInt kHighsIInf = (std::numeric_limits<HighsInt>::max)();
+const HighsInt kHighsIInf32 = (std::numeric_limits<int>::max)();
 const double kHighsInf = std::numeric_limits<double>::infinity();
 const double kHighsUndefined = kHighsInf;
 const double kHighsTiny = 1e-14;
@@ -34,11 +34,13 @@ const std::string kHighsOnString = "on";
 const HighsInt kHighsMaxStringLength = 512;
 const HighsInt kSimplexConcurrencyLimit = 8;
 const double kRunningAverageMultiplier = 0.05;
-const double kExcessivelyLargeBoundValue = 1e10;
-const double kExcessivelyLargeCostValue = 1e10;
-const double kExcessivelySmallBoundValue = 1e-4;
-const double kExcessivelySmallCostValue = 1e-4;
 
+const double kExcessivelySmallObjectiveCoefficient = 1e-4;
+const double kExcessivelyLargeObjectiveCoefficient = 1e6;
+const double kExcessivelySmallBoundValue = 1e-4;
+const double kExcessivelyLargeBoundValue = 1e6;
+
+const HighsInt kNoThreadInstance = -1;
 const bool kAllowDeveloperAssert = false;
 const bool kExtendInvertWhenAddingRows = false;
 
@@ -86,12 +88,14 @@ enum HighsAnalysisLevel {
   kHighsAnalysisLevelNlaTime = 32,
   kHighsAnalysisLevelMipData = 64,
   kHighsAnalysisLevelMipTime = 128,
+  kHighsAnalysisLevelPresolveTime = 256,
   kHighsAnalysisLevelMin = kHighsAnalysisLevelNone,
   kHighsAnalysisLevelMax =
       kHighsAnalysisLevelModelData + kHighsAnalysisLevelSolverSummaryData +
       kHighsAnalysisLevelSolverRuntimeData + kHighsAnalysisLevelSolverTime +
       kHighsAnalysisLevelNlaData + kHighsAnalysisLevelNlaTime +
-      kHighsAnalysisLevelMipData + kHighsAnalysisLevelMipTime
+      kHighsAnalysisLevelMipData + kHighsAnalysisLevelMipTime +
+      kHighsAnalysisLevelPresolveTime
 };
 
 enum class HighsVarType : uint8_t {
@@ -105,6 +109,8 @@ enum class HighsVarType : uint8_t {
 enum class HighsOptionType { kBool = 0, kInt, kDouble, kString };
 
 enum class HighsInfoType { kInt64 = -1, kInt = 1, kDouble };
+
+enum class HighsRunDataType { kInt64 = -1, kInt = 1, kDouble };
 
 enum OptionOffChooseOn {
   kHighsOptionOff = -1,
@@ -144,6 +150,9 @@ enum BasisValidity {
   kBasisValidityMax = kBasisValidityValid
 };
 
+const std::string kHighsBasisFileV1 = "v1";  // Deprecated
+const std::string kHighsBasisFileV2 = "v2";
+
 enum SolutionStyle {
   kSolutionStyleOldRaw = -1,
   kSolutionStyleRaw = 0,
@@ -163,6 +172,10 @@ enum GlpsolCostRowLocation {
 };
 
 const std::string kHighsFilenameDefault = "";
+const std::string kHighsMinimalColNamePrefix = "c";
+const std::string kHighsMinimalrowNamePrefix = "r";
+const std::string kHighsUniqueColNamePrefix = "c_ekk";
+const std::string kHighsUniquerowNamePrefix = "r_ekk";
 
 enum class HighsPresolveStatus {
   kNotPresolved = -1,
@@ -211,8 +224,9 @@ enum class HighsModelStatus {
   kSolutionLimit,
   kInterrupt,
   kMemoryLimit,
+  kHighsInterrupt,
   kMin = kNotset,
-  kMax = kMemoryLimit
+  kMax = kHighsInterrupt
 };
 
 enum HighsCallbackType : int {
@@ -262,23 +276,81 @@ enum PresolveRuleType : int {
   kPresolveRuleDependentFreeCols,
   kPresolveRuleAggregator,
   kPresolveRuleParallelRowsAndCols,
+  kPresolveRuleSparsify,
   kPresolveRuleProbing,
-  kPresolveRuleMax = kPresolveRuleProbing,
+  kPresolveRuleEnumeration,
+  kPresolveRuleDualFixing,
+  kPresolveRuleColStuffing,
+  kPresolveRuleInitialSweep,
+  kPresolveRuleMax = kPresolveRuleInitialSweep,
   kPresolveRuleLastAllowOff = kPresolveRuleMax,
-  kPresolveRuleCount,
+  kPresolveRuleCount
 };
 
-enum IisStrategy {
+enum IisStrategy : int {
   kIisStrategyMin = 0,
-  kIisStrategyFromLpRowPriority = kIisStrategyMin,  // 0
-  kIisStrategyFromLpColPriority,                    // 1
-  //  kIisStrategyFromRayRowPriority,                     // 2
-  //  kIisStrategyFromRayColPriority,                     // 3
-  kIisStrategyMax = kIisStrategyFromLpColPriority
+  kIisStrategyLight = kIisStrategyMin,  // 0
+  kIisStrategyFromRay = 1,
+  kIisStrategyFromLp = 2,
+  kIisStrategyIrreducible = 4,
+  kIisStrategyColPriority = 8,
+  kIisStrategyRelaxation = 16,
+  kIisStrategyDefault = kIisStrategyLight,
+  kIisStrategyMax = kIisStrategyFromRay + kIisStrategyFromLp +
+                    kIisStrategyIrreducible + kIisStrategyColPriority +
+                    kIisStrategyRelaxation
 };
 
-// Default KKT tolerance
+enum IisStatus : int {
+  kIisStatusMin = -1,
+  kIisStatusNotInConflict = kIisStatusMin,  // -1
+  kIisStatusMaybeInConflict,                // 0
+  kIisStatusInConflict,                     // 1
+  kIisStatusMax = kIisStatusInConflict
+};
+
+enum MipChooseSubMipRecord : int {
+  kMipRecord = -1,
+  kChooseRecord,
+  kSubMipRecord
+};
+
+enum PresolveSolvePostsolveIndex : int {
+  kPresolveTime = 0,
+  kSolveTime,
+  kPostsolveTime,
+  kToPresolveSolvePostsolve
+};
+
+enum SubSolverIndex : int {
+  kFromSubSolver = kToPresolveSolvePostsolve,
+  kSubSolverMip = kFromSubSolver,
+  kSubSolverDuSimplexBasis,
+  kSubSolverDuSimplexNoBasis,
+  kSubSolverPrSimplexBasis,
+  kSubSolverPrSimplexNoBasis,
+  kSubSolverHipo,
+  kSubSolverIpx,
+  kSubSolverHipoAc,
+  kSubSolverIpxAc,
+  kSubSolverPdlp,
+  kSubSolverQpAsm,
+  kSubSolverSubMip,
+  kLastSubSolver = kSubSolverSubMip,
+  kToSubSolver = kLastSubSolver + 1
+};
+
+// Minimum and default KKT tolerance
+const double kMinimumKktTolerance = 1e-10;
 const double kDefaultKktTolerance = 1e-7;
+
+// Minimum and default MIP tolerance
+const double kMinimumMipTolerance = 1e-10;
+const double kDefaultMipTolerance = 1e-6;
+
+// Minimum and default IPM optimality tolerance
+const double kMinimumIpmTolerance = 1e-12;
+const double kDefaultIpmTolerance = 1e-1 * kDefaultKktTolerance;
 
 // Default QP Hessian regularization value
 const double kHessianRegularizationValue = 1e-7;
@@ -307,6 +379,9 @@ const HighsInt kHighsIllegalErrorIndex = -1;
 const double kHighsIllegalComplementarityViolation = kHighsInf;
 const HighsInt kHighsIllegalComplementarityCount = -1;
 
+const double kHighsIllegalDoubleMeasure = -kHighsInf;
+const HighsInt kHighsIllegalIntMeasure = -1;
+
 // Maximum upper bound on semi-variables
 const double kMaxSemiVariableUpper = 1e5;
 
@@ -331,4 +406,46 @@ const int8_t kPivotUnit = 1;
 const int8_t kPivotRowSingleton = 2;
 const int8_t kPivotColSingleton = 3;
 const int8_t kPivotMarkowitz = 4;
+
+// For converting general LPs to form for PDLP
+//
+// Requires non-conforming names for cuPDLP-C
+enum ConstraintType { EQ = 0, LEQ, GEQ, BOUND, FREE };
+
+// Mask for switching off PDLP features
+enum PdlpFeaturesOff {
+  kPdlpAllFeaturesOn = 0,
+  kPdlpScalingOff = 1,
+  kPdlpRestartOff = 2,
+  kPdlpAdaptiveStepSizeOff = 4,
+  kPdlpAllFeaturesOff =
+      kPdlpScalingOff + kPdlpRestartOff + kPdlpAdaptiveStepSizeOff
+};
+
+enum PdlpScalingBit {
+  kPdlpScalingMin = 0,
+  kPdlpScalingRuiz = 1,
+  kPdlpScalingL2 = 2,
+  kPdlpScalingPC = 4,
+  kPdlpScalingMax = kPdlpScalingRuiz + kPdlpScalingL2 + kPdlpScalingPC
+};
+
+enum PdlpStepSizeStrategy {
+  kPdlpStepSizeStrategyFixed = 0,
+  kPdlpStepSizeStrategyMin = kPdlpStepSizeStrategyFixed,
+  kPdlpStepSizeStrategyAdaptive,
+  kPdlpStepSizeStrategyMalitskyPock,
+  kPdlpStepSizeStrategyPid,
+  kPdlpStepSizeStrategyMax = kPdlpStepSizeStrategyPid
+};
+
+enum PdlpRestartStrategy {
+  kPdlpRestartStrategyOff = 0,
+  kPdlpRestartStrategyMin = kPdlpRestartStrategyOff,
+  kPdlpRestartStrategyFixed,
+  kPdlpRestartStrategyAdaptive,
+  kPdlpRestartStrategyHalpern,
+  kPdlpRestartStrategyMax = kPdlpRestartStrategyHalpern
+};
+
 #endif /* LP_DATA_HCONST_H_ */

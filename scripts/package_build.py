@@ -41,7 +41,6 @@ def third_party_includes():
     includes += [os.path.join('third_party', 'highs')]
     includes += [os.path.join('third_party', 'highs', 'highs')]
     includes += [os.path.join('third_party', 'highs', 'extern')]
-    includes += [os.path.join('third_party', 'highs', 'extern', 'filereaderlp')]
     includes += [os.path.join('third_party', 'highs', 'extern', 'pdqsort')]
     includes += [os.path.join('third_party', 'highs', 'highs', 'interfaces')]
     includes += [os.path.join('third_party', 'highs', 'highs', 'io')]

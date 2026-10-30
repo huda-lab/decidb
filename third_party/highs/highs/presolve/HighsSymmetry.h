@@ -47,7 +47,8 @@ class HighsMatrixColoring {
     // tolerance in which case we create a new color and store it with the key
     // value
     if (it == colorMap.end() || it->first > value + tolerance)
-      it = colorMap.emplace_hint(it, value, colorMap.size() + 1);
+      it = colorMap.emplace_hint(it, value,
+                                 static_cast<u32>(colorMap.size()) + 1);
     return it->second;
   }
 };
@@ -55,6 +56,12 @@ class HighsMatrixColoring {
 class HighsDomain;
 class HighsCliqueTable;
 struct HighsSymmetries;
+struct StabilizerOrbitWorkspace {
+  std::vector<HighsInt> orbitPartition;
+  std::vector<HighsInt> orbitSize;
+  std::vector<HighsInt> linkCompressionStack;
+};
+
 struct StabilizerOrbits {
   std::vector<HighsInt> orbitCols;
   std::vector<HighsInt> orbitStarts;
@@ -71,11 +78,17 @@ struct HighsOrbitopeMatrix {
     kFull,
     kPacking,
   };
+  enum RowPackingStatus : int8_t {
+    kRowUndetermined = -1,
+    kRowNotPacking = 0,
+    kRowPacking = 1,
+    kRowPackingNegated = 2,
+  };
   HighsInt rowLength;
   HighsInt numRows;
   HighsInt numSetPackingRows;
   HighsHashTable<HighsInt, HighsInt> columnToRow;
-  std::vector<int8_t> rowIsSetPacking;
+  std::vector<RowPackingStatus> rowIsSetPacking;
   std::vector<HighsInt> matrix;
 
   HighsInt& entry(HighsInt i, HighsInt j) {
@@ -121,8 +134,18 @@ struct HighsSymmetries {
   HighsInt numGenerators = 0;
 
   void clear();
-  void mergeOrbits(HighsInt col1, HighsInt col2);
-  HighsInt getOrbit(HighsInt col);
+  void mergeOrbits(HighsInt col1, HighsInt col2,
+                   std::vector<HighsInt>& orbitPartition,
+                   std::vector<HighsInt>& orbitSize,
+                   std::vector<HighsInt>& linkCompressionStack);
+  void mergeOrbits(HighsInt col1, HighsInt col2) {
+    mergeOrbits(col1, col2, orbitPartition, orbitSize, linkCompressionStack);
+  }
+  HighsInt getOrbit(HighsInt col, std::vector<HighsInt>& orbitPartition,
+                    std::vector<HighsInt>& linkCompressionStack);
+  HighsInt getOrbit(HighsInt col) {
+    return getOrbit(col, orbitPartition, linkCompressionStack);
+  }
 
   HighsInt propagateOrbitopes(HighsDomain& domain) const;
 
@@ -137,7 +160,7 @@ struct HighsSymmetries {
   }
 
   std::shared_ptr<const StabilizerOrbits> computeStabilizerOrbits(
-      const HighsDomain& localdom);
+      const HighsDomain& localdom, StabilizerOrbitWorkspace& workspace);
 };
 
 class HighsSymmetryDetection {
@@ -217,7 +240,7 @@ class HighsSymmetryDetection {
   bool compareCurrentGraph(
       const HighsHashTable<std::tuple<HighsInt, HighsInt, HighsUInt>>&
           otherGraph,
-      HighsInt& wrongCell);
+      HighsInt& wrongCell) const;
 
   void removeFixPoints();
   void initializeGroundSet();
@@ -228,9 +251,9 @@ class HighsSymmetryDetection {
   void initializeHashValues();
   bool isomorphicToFirstLeave();
   bool partitionRefinement();
-  bool checkStoredAutomorphism(HighsInt vertex);
+  bool checkStoredAutomorphism(HighsInt vertex) const;
   u32 getVertexHash(HighsInt vertex);
-  HighsInt selectTargetCell();
+  HighsInt selectTargetCell() const;
 
   bool updateCellMembership(HighsInt vertex, HighsInt cell,
                             bool markForRefinement = true);
@@ -261,7 +284,9 @@ class HighsSymmetryDetection {
     HighsInt getComponentByIndex(HighsInt compIndex) const {
       return componentNumber[compIndex];
     }
-    HighsInt numComponents() const { return componentStarts.size() - 1; }
+    HighsInt numComponents() const {
+      return static_cast<HighsInt>(componentStarts.size()) - 1;
+    }
     HighsInt componentSize(HighsInt component) const {
       return componentStarts[component + 1] - componentStarts[component];
     }

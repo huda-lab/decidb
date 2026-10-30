@@ -1,7 +1,8 @@
 diff --git a/highs/mip/HighsMipSolverData.cpp b/highs/mip/HighsMipSolverData.cpp
+index c26129c1d3..e28c6f98cf 100644
 --- a/highs/mip/HighsMipSolverData.cpp
 +++ b/highs/mip/HighsMipSolverData.cpp
-@@ -433,7 +433,11 @@
+@@ -547,7 +547,11 @@ void HighsMipSolverData::startSymmetryDetection(
    symData->symDetection.loadModelAsGraph(
        mipsolver.mipdata_->presolvedModel,
        mipsolver.options_mip_->small_matrix_value);
@@ -15,14 +16,13 @@ diff --git a/highs/mip/HighsMipSolverData.cpp b/highs/mip/HighsMipSolverData.cpp
    if (detectSymmetries) {
      taskGroup.spawn([&]() {
 diff --git a/highs/presolve/HighsSymmetry.cpp b/highs/presolve/HighsSymmetry.cpp
+index 2820fd6002..5451c48e2a 100644
 --- a/highs/presolve/HighsSymmetry.cpp
 +++ b/highs/presolve/HighsSymmetry.cpp
-@@ -882,10 +882,35 @@
-   const u32* h = vertexHash.find(v);
-   if (h) return *h;
+@@ -899,8 +899,33 @@ HighsSymmetryDetection::u32 HighsSymmetryDetection::getVertexHash(HighsInt v) {
    return 0;
-+}
-+
+ }
+ 
 +// DeciDB patch (BUG-3): checkLimits's time and interrupt tests, without its
 +// writes to the MIP solver's state
 +bool HighsSymmetryDetection::checkStop() {
@@ -40,8 +40,8 @@ diff --git a/highs/presolve/HighsSymmetry.cpp b/highs/presolve/HighsSymmetry.cpp
 +    stopped = dataIn.user_interrupt;
 +  }
 +  return stopped;
- }
- 
++}
++
  bool HighsSymmetryDetection::partitionRefinement() {
 +  // DeciDB patch (BUG-3): check for a stop once per kRefinementsPerStopCheck
 +  // cells; on one, leave the partition partial (the callers leave at once)
@@ -53,7 +53,7 @@ diff --git a/highs/presolve/HighsSymmetry.cpp b/highs/presolve/HighsSymmetry.cpp
      std::pop_heap(refinementQueue.begin(), refinementQueue.end(),
                    std::greater<HighsInt>());
  
-@@ -1674,9 +1699,18 @@
+@@ -1689,9 +1714,18 @@ bool HighsSymmetryDetection::isFullOrbitope(const ComponentData& componentData,
    return true;
  }
  
@@ -73,7 +73,7 @@ diff --git a/highs/presolve/HighsSymmetry.cpp b/highs/presolve/HighsSymmetry.cpp
    removeFixPoints();
    if (numActiveCols == 0) return false;
    return true;
-@@ -1691,6 +1725,11 @@
+@@ -1706,6 +1740,11 @@ void HighsSymmetryDetection::run(HighsSymmetries& symmetries) {
    HighsInt maxPerms = 64000000 / numActiveCols;
    HighsSplitDeque* workerDeque = HighsTaskExecutor::getThisWorkerDeque();
    while (!nodeStack.empty()) {
@@ -86,6 +86,7 @@ diff --git a/highs/presolve/HighsSymmetry.cpp b/highs/presolve/HighsSymmetry.cpp
      if (targetCell == -1) {
        if (firstLeavePartition.empty()) {
 diff --git a/highs/presolve/HighsSymmetry.h b/highs/presolve/HighsSymmetry.h
+index 07f1e7eb23..c5971ff42c 100644
 --- a/highs/presolve/HighsSymmetry.h
 +++ b/highs/presolve/HighsSymmetry.h
 @@ -21,6 +21,8 @@
@@ -97,7 +98,7 @@ diff --git a/highs/presolve/HighsSymmetry.h b/highs/presolve/HighsSymmetry.h
  
  /// class that is responsible for assigning distinct colors for each distinct
  /// double value
-@@ -187,6 +189,14 @@
+@@ -210,6 +212,14 @@ class HighsSymmetryDetection {
    HighsInt numVertices;
    HighsInt numActiveCols;
  
@@ -112,7 +113,7 @@ diff --git a/highs/presolve/HighsSymmetry.h b/highs/presolve/HighsSymmetry.h
    // node in the search tree for finding automorphisms
    struct Node {
      HighsInt stackStart;
-@@ -273,7 +283,10 @@
+@@ -298,7 +308,10 @@ class HighsSymmetryDetection {
   public:
    void loadModelAsGraph(const HighsLp& model, double epsilon);
  

@@ -1,9 +1,15 @@
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/*                                                                       */
+/*    This file is part of the HiGHS linear optimization suite           */
+/*                                                                       */
+/*    Available as open-source under the MIT License                     */
+/*                                                                       */
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #ifndef __SRC_LIB_FEASIBILITYBOUNDED_HPP__
 #define __SRC_LIB_FEASIBILITYBOUNDED_HPP__
 
 #include "Highs.h"
 #include "qpsolver/a_asm.hpp"
-#include "qpsolver/crashsolution.hpp"
 
 static void computeStartingPointBounded(Instance& instance, Settings& settings,
                                         Statistics& stats,

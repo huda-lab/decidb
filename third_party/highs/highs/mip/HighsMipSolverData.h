@@ -18,6 +18,7 @@
 #include "mip/HighsDomain.h"
 #include "mip/HighsImplications.h"
 #include "mip/HighsLpRelaxation.h"
+#include "mip/HighsMipWorker.h"
 #include "mip/HighsNodeQueue.h"
 #include "mip/HighsObjectiveFunction.h"
 #include "mip/HighsPrimalHeuristics.h"
@@ -42,39 +43,44 @@ struct HighsPrimaDualIntegral {
 enum MipSolutionSource : int {
   kSolutionSourceNone = -1,
   kSolutionSourceMin = kSolutionSourceNone,
-  kSolutionSourceBranching,
-  kSolutionSourceCentralRounding,
-  kSolutionSourceFeasibilityPump,
-  kSolutionSourceFeasibilityJump,
-  kSolutionSourceHeuristic,
-  //  kSolutionSourceInitial,
-  kSolutionSourceSubMip,
-  kSolutionSourceEmptyMip,
-  kSolutionSourceRandomizedRounding,
-  kSolutionSourceZiRound,
-  kSolutionSourceShifting,
-  kSolutionSourceSolveLp,
-  kSolutionSourceEvaluateNode,
-  kSolutionSourceUnbounded,
-  kSolutionSourceUserSolution,
-  kSolutionSourceTrivialZ,
-  kSolutionSourceTrivialL,
-  kSolutionSourceTrivialU,
-  kSolutionSourceTrivialP,
+  //  kSolutionSourceInitial, // 0
+  kSolutionSourceBranching,           // B
+  kSolutionSourceCentralRounding,     // C
+  kSolutionSourceFeasibilityPump,     // F
+  kSolutionSourceHeuristic,           // H
+  kSolutionSourceShifting,            // I
+  kSolutionSourceFeasibilityJump,     // J
+  kSolutionSourceSubMip,              // L
+  kSolutionSourceEmptyMip,            // P
+  kSolutionSourceRandomizedRounding,  // R
+  kSolutionSourceSolveLp,             // S
+  kSolutionSourceEvaluateNode,        // T
+  kSolutionSourceUnbounded,           // U
+  kSolutionSourceUserSolution,        // X
+  kSolutionSourceHighsSolution,       // Y
+  kSolutionSourceZiRound,             // Z
+  kSolutionSourceTrivialL,            // l
+  kSolutionSourceTrivialP,            // p
+  kSolutionSourceTrivialU,            // u
+  kSolutionSourceTrivialZ,            // z
   kSolutionSourceCleanup,
   kSolutionSourceCount
 };
 
 struct HighsMipSolverData {
   HighsMipSolver& mipsolver;
-  HighsCutPool cutpool;
-  HighsConflictPool conflictPool;
-  HighsDomain domain;
-  HighsLpRelaxation lp;
-  HighsPseudocost pseudocost;
+
+  std::deque<HighsLpRelaxation> lps;
+  std::deque<HighsCutPool> cutpools;
+  std::deque<HighsConflictPool> conflictpools;
+  std::deque<HighsDomain> domains;
+  std::deque<HighsPseudocost> pseudocosts;
+  std::deque<HighsMipWorker> workers;
+  bool parallel_lock;
+
+  HighsPrimalHeuristics heuristics;
   HighsCliqueTable cliquetable;
   HighsImplications implications;
-  HighsPrimalHeuristics heuristics;
   HighsRedcostFixing redcostfixing;
   HighsObjectiveFunction objectiveFunction;
   presolve::HighsPostsolveStack postSolveStack;
@@ -153,67 +159,7 @@ struct HighsMipSolverData {
 
   HighsDebugSol debugSolution;
 
-  HighsMipSolverData(HighsMipSolver& mipsolver)
-      : mipsolver(mipsolver),
-        cutpool(mipsolver.numCol(), mipsolver.options_mip_->mip_pool_age_limit,
-                mipsolver.options_mip_->mip_pool_soft_limit),
-        conflictPool(5 * mipsolver.options_mip_->mip_pool_age_limit,
-                     mipsolver.options_mip_->mip_pool_soft_limit),
-        domain(mipsolver),
-        lp(mipsolver),
-        pseudocost(),
-        cliquetable(mipsolver.numCol()),
-        implications(mipsolver),
-        heuristics(mipsolver),
-        objectiveFunction(mipsolver),
-        presolve_status(HighsPresolveStatus::kNotSet),
-        cliquesExtracted(false),
-        rowMatrixSet(false),
-        analyticCenterComputed(false),
-        analyticCenterStatus(HighsModelStatus::kNotset),
-        detectSymmetries(false),
-        numRestarts(0),
-        numRestartsRoot(0),
-        numCliqueEntriesAfterPresolve(0),
-        numCliqueEntriesAfterFirstPresolve(0),
-        feastol(0.0),
-        epsilon(0.0),
-        heuristic_effort(0.0),
-        dispfreq(0),
-        firstlpsolobj(-kHighsInf),
-        rootlpsolobj(-kHighsInf),
-        numintegercols(0),
-        maxTreeSizeLog2(0),
-        pruned_treeweight(0),
-        avgrootlpiters(0.0),
-        disptime(0.0),
-        last_disptime(0.0),
-        firstrootlpiters(0),
-        num_nodes(0),
-        num_leaves(0),
-        num_leaves_before_run(0),
-        num_nodes_before_run(0),
-        total_repair_lp(0),
-        total_repair_lp_feasible(0),
-        total_repair_lp_iterations(0),
-        total_lp_iterations(0),
-        heuristic_lp_iterations(0),
-        sepa_lp_iterations(0),
-        sb_lp_iterations(0),
-        total_lp_iterations_before_run(0),
-        heuristic_lp_iterations_before_run(0),
-        sepa_lp_iterations_before_run(0),
-        sb_lp_iterations_before_run(0),
-        num_disp_lines(0),
-        numImprovingSols(0),
-        lower_bound(-kHighsInf),
-        upper_bound(kHighsInf),
-        upper_limit(kHighsInf),
-        optimality_limit(kHighsInf),
-        debugSolution(mipsolver) {
-    domain.addCutpool(cutpool);
-    domain.addConflictPool(conflictPool);
-  }
+  HighsMipSolverData(HighsMipSolver& mipsolver);
 
   bool solutionRowFeasible(const std::vector<double>& solution) const;
   HighsModelStatus feasibilityJump();
@@ -251,7 +197,7 @@ struct HighsMipSolverData {
   void init();
   void basisTransfer();
   void checkObjIntegrality();
-  void runPresolve(const HighsInt presolve_reduction_limit);
+  void runMipPresolve(const HighsInt presolve_reduction_limit);
   void setupDomainPropagation();
   void saveReportMipSolution(const double new_upper_limit = -kHighsInf);
   void runSetup();
@@ -265,10 +211,12 @@ struct HighsMipSolverData {
       const std::vector<double>& solution) const;
   bool trySolution(const std::vector<double>& solution,
                    const int solution_source = kSolutionSourceNone);
-  bool rootSeparationRound(HighsSeparation& sepa, HighsInt& ncuts,
-                           HighsLpRelaxation::Status& status);
-  HighsLpRelaxation::Status evaluateRootLp();
-  void evaluateRootNode();
+  bool rootSeparationRound(HighsMipWorker& worker, HighsSeparation& sepa,
+                           HighsInt& ncuts, HighsLpRelaxation::Status& status);
+  HighsLpRelaxation::Status evaluateRootLp(HighsMipWorker& worker);
+
+  void evaluateRootNode(HighsMipWorker& worker);
+
   bool addIncumbent(const std::vector<double>& sol, double solobj,
                     const int solution_source,
                     const bool print_display_line = true,
@@ -277,8 +225,8 @@ struct HighsMipSolverData {
   const std::vector<double>& getSolution() const;
 
   std::string solutionSourceToString(const int solution_source,
-                                     const bool code = true);
-  void printSolutionSourceKey();
+                                     const bool code = true) const;
+  void printSolutionSourceKey() const;
   void printDisplayLine(const int solution_source = kSolutionSourceNone);
 
   void getRow(HighsInt row, HighsInt& rowlen, const HighsInt*& rowinds,
@@ -292,13 +240,40 @@ struct HighsMipSolverData {
   bool checkLimits(int64_t nodeOffset = 0) const;
   void limitsToBounds(double& dual_bound, double& primal_bound,
                       double& mip_rel_gap) const;
+  void updateLowerBound(double new_lower_bound,
+                        const bool check_bound_change = true,
+                        const bool check_prev_data = true);
   void setCallbackDataOut(const double mipsolver_objective_value) const;
   bool interruptFromCallbackWithData(const int callback_type,
                                      const double mipsolver_objective_value,
                                      const std::string message = "") const;
-  void callbackUserSolution(
+  void queryExternalSolution(
       const double mipsolver_objective_value,
-      const userMipSolutionCallbackOrigin user_solution_callback_origin);
+      const ExternalMipSolutionQueryOrigin external_solution_query_origin);
+
+  HighsInt terminatorConcurrency() const;
+  bool terminatorActive() const { return terminatorConcurrency() > 0; }
+  HighsInt terminatorMyInstance() const;
+  void terminatorTerminate();
+  bool terminatorTerminated() const;
+  void terminatorReport() const;
+
+  bool parallelLockActive() const {
+    return (parallel_lock && hasMultipleWorkers());
+  }
+
+  bool hasMultipleWorkers() const { return workers.size() > 1; }
+
+  HighsDomain& getDomain() { return domains[0]; }
+  HighsConflictPool& getConflictPool() { return conflictpools[0]; }
+  HighsCutPool& getCutPool() { return cutpools[0]; }
+  HighsLpRelaxation& getLp() { return lps[0]; }
+  HighsPseudocost& getPseudoCost() { return pseudocosts[0]; }
+  const HighsDomain& getDomain() const { return domains[0]; }
+  const HighsConflictPool& getConflictPool() const { return conflictpools[0]; }
+  const HighsCutPool& getCutPool() const { return cutpools[0]; }
+  const HighsLpRelaxation& getLp() const { return lps[0]; }
+  const HighsPseudocost& getPseudoCost() const { return pseudocosts[0]; }
 };
 
 #endif

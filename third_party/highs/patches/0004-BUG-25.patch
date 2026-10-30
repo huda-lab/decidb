@@ -1,7 +1,8 @@
 diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
+index 6864c88a53..fb34de4520 100644
 --- a/highs/mip/HighsCliqueTable.cpp
 +++ b/highs/mip/HighsCliqueTable.cpp
-@@ -857,7 +857,17 @@
+@@ -857,7 +857,17 @@ void HighsCliqueTable::extractCliques(
    // constraints on the non-binary variable for each binary variable in the
    // constraint
    if (nbin < ntotal) {
@@ -17,20 +18,21 @@ diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
 +        if (mipsolver.mipdata_->checkLimits()) return;
 +      }
        HighsInt bincol = inds[perm[i]];
-       HighsCDouble impliedub = HighsCDouble(rhs) - vals[perm[i]];
-       for (HighsInt j = nbin; j != ntotal; ++j) {
+       HighsCDouble impliedub = static_cast<HighsCDouble>(rhs) - vals[perm[i]];
+       if (implics.tooManyVarBounds()) break;
 diff --git a/highs/mip/HighsDomain.cpp b/highs/mip/HighsDomain.cpp
+index f09d0f5b81..4524f81189 100644
 --- a/highs/mip/HighsDomain.cpp
 +++ b/highs/mip/HighsDomain.cpp
-@@ -2594,6 +2594,7 @@
-   }
+@@ -2661,6 +2661,7 @@ void HighsDomain::conflictAnalyzeReconvergence(
  
-   conflictSet.resolveDepth(conflictSet.reconvergenceFrontier, depth, 0);
+   conflictSet.resolveDepth(conflictSet.reconvergenceFrontier, depth, 0,
+                            pseudocost);
 +  if (conflictSet.stopped) return;  // DeciDB patch (BUG-25)
    conflictPool.addReconvergenceCut(*this, conflictSet.reconvergenceFrontier,
                                     domchg);
  }
-@@ -2705,6 +2706,7 @@
+@@ -2772,6 +2773,7 @@ bool HighsDomain::ConflictSet::explainBoundChangeGeq(
      const HighsInt* inds, const double* vals, HighsInt len, double rhs,
      double maxAct) {
    if (maxAct == kHighsInf) return false;
@@ -38,7 +40,7 @@ diff --git a/highs/mip/HighsDomain.cpp b/highs/mip/HighsDomain.cpp
  
    // get the coefficient value of the column for which we want to explain
    // the bound change
-@@ -2814,6 +2816,7 @@
+@@ -2880,6 +2882,7 @@ bool HighsDomain::ConflictSet::explainBoundChangeLeq(
      const HighsInt* inds, const double* vals, HighsInt len, double rhs,
      double minAct) {
    if (minAct == -kHighsInf) return false;
@@ -46,7 +48,7 @@ diff --git a/highs/mip/HighsDomain.cpp b/highs/mip/HighsDomain.cpp
    // get the coefficient value of the column for which we want to explain
    // the bound change
    double domchgVal = 0;
-@@ -3671,6 +3674,18 @@
+@@ -3736,6 +3739,18 @@ HighsInt HighsDomain::ConflictSet::resolveDepth(std::set<LocalDomChg>& frontier,
  
    while (queueSize() > stopSize ||
           (queueSize() > 0 && numResolved < minResolve)) {
@@ -65,26 +67,27 @@ diff --git a/highs/mip/HighsDomain.cpp b/highs/mip/HighsDomain.cpp
      std::set<LocalDomChg>::iterator pos = popQueue();
      if (!explainBoundChange(frontier, *pos)) continue;
  
-@@ -3799,6 +3814,7 @@
+@@ -3866,6 +3881,7 @@ void HighsDomain::ConflictSet::conflictAnalysis(HighsConflictPool& conflictPool,
        }
      }
-     HighsInt numNewConflicts = computeCuts(currDepth, conflictPool);
+     HighsInt numNewConflicts = computeCuts(currDepth, conflictPool, pseudocost);
 +    if (stopped) return;  // DeciDB patch (BUG-25)
      // if the depth level was empty, do not consider it
      if (numNewConflicts == -1) {
        --lastDepth;
-@@ -3874,6 +3890,7 @@
+@@ -3942,6 +3958,7 @@ void HighsDomain::ConflictSet::conflictAnalysis(const HighsInt* proofinds,
        }
      }
-     HighsInt numNewConflicts = computeCuts(currDepth, conflictPool);
+     HighsInt numNewConflicts = computeCuts(currDepth, conflictPool, pseudocost);
 +    if (stopped) return;  // DeciDB patch (BUG-25)
      // if the depth level was empty, do not consider it
      if (numNewConflicts == -1) {
        --lastDepth;
 diff --git a/highs/mip/HighsDomain.h b/highs/mip/HighsDomain.h
+index e69ab43c8c..d6c4170f44 100644
 --- a/highs/mip/HighsDomain.h
 +++ b/highs/mip/HighsDomain.h
-@@ -101,6 +101,11 @@
+@@ -104,6 +104,11 @@ class HighsDomain {
  
      std::vector<ResolveCandidate> resolveBuffer;
  
@@ -97,14 +100,15 @@ diff --git a/highs/mip/HighsDomain.h b/highs/mip/HighsDomain.h
      std::set<LocalDomChg>::iterator popQueue();
      void clearQueue();
 diff --git a/highs/mip/HighsPrimalHeuristics.cpp b/highs/mip/HighsPrimalHeuristics.cpp
+index cb6efd3026..eba5c3b255 100644
 --- a/highs/mip/HighsPrimalHeuristics.cpp
 +++ b/highs/mip/HighsPrimalHeuristics.cpp
-@@ -987,6 +987,8 @@
+@@ -1104,6 +1104,8 @@ bool HighsPrimalHeuristics::linesearchRounding(
        if (tmpalpha < nextalpha && tmpalpha > alpha + 1e-2) nextalpha = tmpalpha;
      }
  
 +    // DeciDB patch (BUG-25): check the MIP limits once per rounded point
 +    if (mipsolver.mipdata_->checkLimits()) return false;
-     if (tryRoundedPoint(roundedpoint, solution_source)) return true;
+     if (tryRoundedPoint(worker, roundedpoint, solution_source)) return true;
  
      if (reachedpoint2) return false;

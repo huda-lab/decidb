@@ -1,7 +1,8 @@
 diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
+index 47de82f002..300cdb2aac 100644
 --- a/highs/presolve/HPresolve.cpp
 +++ b/highs/presolve/HPresolve.cpp
-@@ -5743,6 +5743,12 @@
+@@ -7349,6 +7349,12 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
    std::unordered_multimap<std::uint64_t, HighsInt> buckets;
  
    const bool debug_report = false;
@@ -14,7 +15,7 @@ diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
    for (HighsInt i = 0; i != model->num_col_; ++i) {
      if (colDeleted[i]) continue;
      if (colsize[i] == 0) {
-@@ -5756,6 +5762,9 @@
+@@ -7362,6 +7368,9 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
      HighsInt parallelColCandidate = -2;
  
      while (it != buckets.end() && it->first == colHashes[i]) {
@@ -24,7 +25,7 @@ diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
        parallelColCandidate = it->second;
        last = it++;
  
-@@ -6224,6 +6233,9 @@
+@@ -7768,6 +7777,9 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
      HighsInt delRow = -1;
      if (it != buckets.end()) storeRow(i);
      while (it != buckets.end() && it->first == rowHashes[i]) {

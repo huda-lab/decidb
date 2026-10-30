@@ -58,11 +58,11 @@ def compiled_sources(upstream, work):
     query = os.path.join(build, '.cmake', 'api', 'v1', 'query')
     os.makedirs(query)
     open(os.path.join(query, 'codemodel-v2'), 'w').close()
-    subprocess.run(
-        ['cmake', '--no-warn-unused-cli', '-S', upstream, '-B', build] + CONFIGURATION,
-        check=True,
-        stdout=subprocess.DEVNULL,
+    configure = subprocess.run(
+        ['cmake', '--no-warn-unused-cli', '-S', upstream, '-B', build] + CONFIGURATION, capture_output=True, text=True
     )
+    if configure.returncode != 0:
+        sys.exit(f'upgrade_highs: configuring upstream failed:\n{configure.stdout}{configure.stderr}')
     reply = os.path.join(build, '.cmake', 'api', 'v1', 'reply')
     index = json.load(open(glob.glob(os.path.join(reply, 'index-*.json'))[0]))
     model = json.load(open(os.path.join(reply, index['reply']['codemodel-v2']['jsonFile'])))

@@ -1,3 +1,10 @@
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/*                                                                       */
+/*    This file is part of the HiGHS linear optimization suite           */
+/*                                                                       */
+/*    Available as open-source under the MIT License                     */
+/*                                                                       */
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include "qpsolver/a_asm.hpp"
 
 #include "qpsolver/quass.hpp"
@@ -60,6 +67,8 @@ std::string qpModelStatusToString(const QpModelStatus qp_model_status) {
       return "Time ;limit";
     case QpModelStatus::kLargeNullspace:
       return "Large nullspace";
+    case QpModelStatus::kNonConvex:
+      return "Non-convex";
     case QpModelStatus::kError:
       return "Error";
     default:

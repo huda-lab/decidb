@@ -2,12 +2,7 @@
 /*                                                                       */
 /*    This file is part of the HiGHS linear optimization suite           */
 /*                                                                       */
-/*    Written and engineered 2008-2021 at the University of Edinburgh    */
-/*                                                                       */
 /*    Available as open-source under the MIT License                     */
-/*                                                                       */
-/*    Authors: Julian Hall, Ivet Galabova, Qi Huangfu, Leona Gottwald    */
-/*    and Michael Feldmeier                                              */
 /*                                                                       */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #ifndef HIGHS_PARALLEL_H_
@@ -100,9 +95,20 @@ class TaskGroup {
       workerDeque->cancelTask(i);
   }
 
-  ~TaskGroup() {
+  ~TaskGroup() noexcept(false) {
     cancel();
+
+    // Setting the rootTask to null ensures that taskWait does not throw
+    // exceptions, so that all tasks can be successfully completed before
+    // destroying the object.
+    HighsTask* prevRoot = workerDeque->setRootTask(nullptr);
+
     taskWait();
+
+    // Reinstate the original rootTask and potentially throw exception.
+    // dtor needs to be noexcept(false) for this to work.
+    workerDeque->setRootTask(prevRoot);
+    workerDeque->checkInterrupt();
   }
 };
 
