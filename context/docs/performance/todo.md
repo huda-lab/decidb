@@ -33,3 +33,13 @@ a plain column 201 / 387, `sum(l_quantity) by (l_suppkey) / 20000` 592 / 362; a 
 The side table's own join and aggregate cost about 15 ms of CPU. The window scales negatively with threads on wide
 rows (592 ms at 11 threads, 429 at 1). Design under review: verify, then stream (PERF-3's gated verdict on the
 shared reader) in place of the breaker.
+
+## PERF-20 — S1 and R1 lose late materialization under a side table or a row-check gate
+
+Late materialization moves a stored source's variable-width columns out of the operators that hold rows and joins
+them back by row id, but only over a plan of projections, windows, filters and scans (`CollectPlanOperators`,
+`direct_late_materialization.cpp`). A bound's side table (a SINGLE join and a CTE scan, PERF-15) or the row checks'
+gate (a filter with a `projection_map` over a cross product, PERF-3) makes it refuse, so S1's and R1's held rows carry
+every column. Measure first: S1 and R1 on large.db lineitem (16 columns) with a bound read from data and with a
+planned row check, against the same query without them. A fix follows the row id's binding through any operator
+rather than widening the list (A1 stops holding rows under PERF-19, so it is not affected).
