@@ -1536,8 +1536,6 @@ void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t 
 
 void SparseCoeffAccumulator::Flush(vector<int> &out_indices, vector<double> &out_coefficients) {
     if (use_dense) {
-        out_indices.reserve(out_indices.size() + touched.size());
-        out_coefficients.reserve(out_coefficients.size() + touched.size());
         for (int idx : touched) {
             double v = dense[idx];
             if (v != 0.0) {

@@ -268,6 +268,11 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   only where the native arm pins a column (late materialization). Q4, medians of 3 (load 15): `execution.formulate`
   167 → 122 ms; same model. The dense accumulator `BuildMinMaxGroups` assigns per call costs 1.4 ms cold, 0.12 ms
   warm: left as is.
+- **A reserve that grew a shared buffer one row at a time (BUG-40, fixed).** `SparseCoeffAccumulator::Flush` reserved
+  exactly `size + touched` on each call. Since `ClauseEmittedRows` (PERF-10) appends every row of a clause into one
+  CSR buffer, each flush reallocated and copied the whole buffer: quadratic in the clause's rows. d1 (1M-row join,
+  `per l.l_orderkey` over 250k kept rows) spent 5 s in `assembly.implied_bounds`. The reserve is gone and the vectors
+  grow geometrically: d1 passing 6.2 → 0.98 s (three runs each, load 6-10). Q1, Q4 and P4 were too small to show it.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data
