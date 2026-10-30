@@ -5,6 +5,8 @@ decision; a message quotes the group's least spelling ('A'). The oracle states N
 lowercased key `gk`.
 """
 
+import re
+
 import pytest
 
 from ._scope_cases import aligned, answer, scope_solver, values  # noqa: F401
@@ -39,6 +41,21 @@ def test_a_by_group_groups_its_key_under_the_collation(decidb_cli, scope_solver)
     """`sum(x) by (g) <= 1`: 'a' and 'A' are one group, so one of rows 1 and 2 is picked, and one of rows 3-5."""
     sql = f"SELECT id, x {_source()} DECIDE x(BOOL) SUCH THAT sum(x) by (t.g) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},))]
+    result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
+    assert sum(row["x"] for row in result) == 2
+
+
+@pytest.mark.correctness
+def test_a_collated_per_key_determines_its_own_by_group(decidb_cli, scope_solver):
+    """`per g: sum(x) by (g) <= 1`: the class and the `by` group both group under NOCASE, so the key determines its
+    own `by` element by construction and no check is planned (KeyHolds); 'a' and 'A' are still one class."""
+    sql = f"""
+        SELECT id, x {_source()}
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN {sql}")
+    assert plan.returncode == 0, plan.stderr
+    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
     assert sum(row["x"] for row in result) == 2
 

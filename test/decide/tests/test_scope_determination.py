@@ -10,10 +10,13 @@ one class holding two values, in the user's SQL only (§10.1). Without `per` the
 is legal: one constraint per row, which is the tightest bound per group (S3).
 """
 
+import re
+
 import pytest
 
 from ._output_helpers import assert_no_internal_leak
-from ._scope_cases import DEPOTS, SHIPMENTS, aligned, answer, from_clause, joined, scope_solver  # noqa: F401
+from ._scope_cases import DEPOT_COLUMNS, DEPOTS, SHIPMENT_COLUMNS, SHIPMENTS, values
+from ._scope_cases import aligned, answer, from_clause, joined, scope_solver  # noqa: F401
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective, ScopeError
 from solver.types import ObjSense
 
@@ -250,3 +253,69 @@ def test_messages_quote_the_sql_only(decidb_cli):
         "DECIDE: per D.region does not determine CAST(D.capacity AS DOUBLE). D.region = 'East' has more than "
         "one value: 25.0, 40.0.",
     )
+
+
+_BOX = re.compile(r"[│┌┐└┘├┤┬┴┼─\s]")
+
+
+def _plan(cli, clause: str) -> str:
+    """EXPLAIN of the clause over depots whose capacity is DOUBLE, so a bound or factor reads `D.capacity` itself and
+    not a cast of it; box glyphs and whitespace removed, as the box wraps text mid-token. The solver path plans each
+    scope check as a window under the DECIDE node, and the window prints the check's message."""
+    depots = f"(SELECT * REPLACE (capacity::DOUBLE AS capacity) FROM {values(DEPOTS, 'v', DEPOT_COLUMNS)}) D"
+    sql = f"""
+        EXPLAIN SELECT shipmentID, ship
+        FROM {values(SHIPMENTS, 'S', SHIPMENT_COLUMNS)} JOIN {depots} USING (depotID)
+        DECIDE ship(INT)
+        SUCH THAT ship <= S.demand AND {clause}
+        MAXIMIZE SUM(ship)"""
+    out = cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(sql)
+    assert out.returncode == 0 and not out.stderr.strip(), out.stderr
+    return _BOX.sub("", out.stdout)
+
+
+@pytest.mark.explain
+@pytest.mark.parametrize(
+    "own, other, check",
+    [
+        # BuildClauseScopeChecks, a `by` element (Q8's form).
+        pytest.param(
+            "per D.region: sum(ship) by (D.region) <= 50",
+            "per D.country: sum(ship) by (D.region) <= 50",
+            "doesnotdetermineD.region(inby(D.region))",
+            id="clause-by",
+        ),
+        # BuildClauseScopeChecks, a tuple term.
+        pytest.param(
+            "per D.capacity: sum(ship) <= D.capacity",
+            "per D.region: sum(ship) <= D.capacity",
+            "doesnotdetermineD.capacity.",
+            id="clause-value",
+        ),
+        # BuildReducerScopeChecks, the reducer's body.
+        pytest.param(
+            "sum(per D.capacity: D.capacity * ship) <= 60",
+            "sum(per D.region: D.capacity * ship) <= 60",
+            "doesnotdetermineD.capacity(insum",
+            id="reducer-body",
+        ),
+        # A relation key stands for each column of its relation.
+        pytest.param(
+            "per D: sum(ship) <= D.capacity",
+            "per D.region: sum(ship) <= D.capacity",
+            "doesnotdetermineD.capacity.",
+            id="relation-clause",
+        ),
+        pytest.param(
+            "sum(D: D.capacity * ship) <= 60",
+            "sum(per D.region: D.capacity * ship) <= 60",
+            "doesnotdetermineD.capacity(insum",
+            id="relation-reducer",
+        ),
+    ],
+)
+def test_a_key_determines_its_own_elements(decidb_cli, own, other, check):
+    """Reflexivity (KeyHolds): a key determines each of its own elements, so a check of one could never fail and is
+    not planned; the same expression under another key still is."""
+    assert check not in _plan(decidb_cli, own)
+    assert check in _plan(decidb_cli, other)

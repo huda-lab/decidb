@@ -564,7 +564,7 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	// under its own `when`, and an objective written with a scope.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 	                            "DECIDE x(INT), per region: open(BOOL) "
-	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= 50 "
+	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= cap "
 	                            "AND sum(when cap > 30 per region: open) by (site.r_key) <= 1 "
 	                            "MAXIMIZE when cap > 0: sum(x)");
 	auto *before = FindDecide(*plan);
@@ -579,11 +579,12 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	for (auto &check : before->scope_checks) {
 		kinds.push_back(check.kind);
 	}
-	// The clause's per key over the `by` key, then the reducer's own per key over the reducer's body.
+	// The clause's per key over its bound (it holds its own `by` key by construction), then the reducer's own per key
+	// over the reducer's body.
 	REQUIRE(kinds ==
 	        duckdb::vector<DecideScopeCheckKind> {DecideScopeCheckKind::DETERMINES, DecideScopeCheckKind::DETERMINES});
 	REQUIRE(before->scope_checks[0].subject == "r_name");
-	REQUIRE(before->scope_checks[0].context == "in by (r_name)");
+	REQUIRE(before->scope_checks[0].object == "cap");
 	REQUIRE(before->scope_checks[1].decision != DConstants::INVALID_INDEX);
 
 	auto copied = RoundTrip(con, *plan);

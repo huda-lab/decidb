@@ -1716,6 +1716,17 @@ static string DeclaredScope(const DecideVarScopeInfo &scope) {
 	return "declared per row";
 }
 
+//! Whether `key` determines `value` by construction: `value` is one of its elements as rows group on it, so every
+//! class shows it once (reflexivity, the trivial functional dependency). Such a check could never fail.
+static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression &value) {
+	for (auto &element : DecideKeyElements(keys, key)) {
+		if (element.Grouping().Equals(value)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
 	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
@@ -1723,7 +1734,8 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	idx_t by = DConstants::INVALID_INDEX;
 	TryParseGroupKeyTag(reducer.GetAlias(), by);
 	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- determines its
-	// body within each `by` group, over the rows its `when` keeps.
+	// body within each `by` group, over the rows its `when` keeps; one of the key's own
+	// elements it determines by construction (KeyHolds).
 	idx_t scope_idx;
 	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.keyed_scopes.size() ||
 	    reducer.children.empty()) {
@@ -1745,6 +1757,9 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 		return check;
 	};
 	for (auto *value : body.values) {
+		if (KeyHolds(scope.keys, key, *value)) {
+			continue;
+		}
 		auto check = make_check();
 		check.value = value->Copy();
 		check.object = RenderDecideSource(*value, names);
@@ -1768,7 +1783,8 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
-	// The `per` key determines every tuple term, decision and `by` key of the clause.
+	// The `per` key determines every tuple term, decision and `by` key of the clause; one of its own elements it
+	// determines by construction (KeyHolds).
 	if (enclosing.per_wrapper) {
 		auto &per = *enclosing.per_wrapper;
 		auto key = enclosing.PerKey();
@@ -1785,6 +1801,9 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 			return check;
 		};
 		for (auto *value : parts.values) {
+			if (KeyHolds(scope.keys, key, *value)) {
+				continue;
+			}
 			auto check = make_check();
 			check.value = value->Copy();
 			check.object = RenderDecideSource(*value, names);
@@ -1809,6 +1828,9 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 			}
 			auto &by = scope.keys[group_key];
 			for (auto &element : by.elements) {
+				if (KeyHolds(scope.keys, key, element.Grouping())) {
+					continue;
+				}
 				auto check = make_check();
 				check.value = element.Grouping().Copy();
 				check.object = element.name;
