@@ -569,6 +569,34 @@ def test_a_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_cli, sco
     )
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "condition, holds",
+    [
+        pytest.param("t.w > 0 AND ln(t.w) > 1.5", lambda r: r["w"] > 0 and math.log(r["w"]) > 1.5, id="and"),
+        pytest.param("t.w <= 0 OR ln(t.w) > 1.5", lambda r: r["w"] <= 0 or math.log(r["w"]) > 1.5, id="or"),
+    ],
+)
+def test_a_when_reads_its_parts_left_to_right(decidb_cli, scope_solver, condition, holds):
+    """`ln(0)` is an error: an AND's second part is read only where its first keeps the row, an OR's only where its
+    first does not, so the row where w is 0 never reaches `ln`."""
+    columns = ("id", "w", "v")
+    rows = ((1, 0.0, 10), (2, 4.0, 20), (3, 9.0, 30))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND when {condition}: x <= 5
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    clauses = [X_BOUND, Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 5},), when=holds)]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (_x_sum(),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------

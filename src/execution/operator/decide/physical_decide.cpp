@@ -877,17 +877,17 @@ static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const v
 	return group_class_set;
 }
 
-//! Narrows `rows` to those where `condition` holds (NULL keeps none), as a scoped clause
-//! reads a `when`: the condition is computed on `rows` only, and the parts of an AND or an
-//! OR left to right, each only on the rows the parts before it leave undecided -- an AND's
-//! on the rows they keep, an OR's on the rows they do not. The composed MIN/MAX rewrite
-//! folds a clause's `when` in front of a term's own, which must not be read where the
-//! clause's drops.
-static void KeepRowsWhere(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                          ColumnDataCollection &data, vector<bool> &rows) {
+//! Narrows `rows`, one per row of `chunk`, to those where `condition` holds (NULL keeps
+//! none), as a scoped clause reads a `when`: the condition is computed on `rows` only, and
+//! the parts of an AND or an OR left to right, each only on the rows the parts before it
+//! leave undecided -- an AND's on the rows they keep, an OR's on the rows they do not. The
+//! composed MIN/MAX rewrite folds a clause's `when` in front of a term's own, which must
+//! not be read where the clause's drops.
+static void KeepChunkRowsWhere(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                               DataChunk &chunk, vector<bool> &rows) {
 	if (condition.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 		for (auto &part : condition.Cast<BoundConjunctionExpression>().children) {
-			KeepRowsWhere(*part, chunk_expr_cache, context, data, rows);
+			KeepChunkRowsWhere(*part, chunk_expr_cache, context, chunk, rows);
 		}
 		return;
 	}
@@ -896,7 +896,7 @@ static void KeepRowsWhere(const Expression &condition, ChunkExprCache &chunk_exp
 		std::fill(rows.begin(), rows.end(), false);
 		for (auto &part : condition.Cast<BoundConjunctionExpression>().children) {
 			vector<bool> kept = undecided;
-			KeepRowsWhere(*part, chunk_expr_cache, context, data, kept);
+			KeepChunkRowsWhere(*part, chunk_expr_cache, context, chunk, kept);
 			for (idx_t row = 0; row < kept.size(); row++) {
 				if (kept[row]) {
 					rows[row] = true;
@@ -906,27 +906,34 @@ static void KeepRowsWhere(const Expression &condition, ChunkExprCache &chunk_exp
 		}
 		return;
 	}
-	ExpressionExecutor executor(context);
-	executor.AddExpression(CachedTransformToChunkExpression(chunk_expr_cache, condition, context));
+	ExpressionExecutor executor(context, CachedTransformToChunkExpression(chunk_expr_cache, condition, context));
+	DataChunk result;
+	result.Initialize(context, {LogicalType::BOOLEAN});
+	ExecuteOnReadRows(executor, chunk, 0, &rows, result);
+	UnifiedVectorFormat kept;
+	result.data[0].ToUnifiedFormat(chunk.size(), kept);
+	auto values = UnifiedVectorFormat::GetData<bool>(kept);
+	for (idx_t i = 0; i < chunk.size(); i++) {
+		if (rows[i]) {
+			auto index = kept.sel->get_index(i);
+			rows[i] = kept.validity.RowIsValid(index) && values[index];
+		}
+	}
+}
+
+//! KeepChunkRowsWhere over every row of `data`, in one scan.
+static void KeepRowsWhere(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                          ColumnDataCollection &data, vector<bool> &rows) {
 	ColumnDataScanState scan;
 	data.InitializeScan(scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
-	DataChunk result;
-	result.Initialize(context, {LogicalType::BOOLEAN});
 	idx_t row_offset = 0;
-	UnifiedVectorFormat kept;
 	while (data.Scan(scan, chunk)) {
-		result.Reset();
-		ExecuteOnReadRows(executor, chunk, row_offset, &rows, result);
-		result.data[0].ToUnifiedFormat(chunk.size(), kept);
-		auto values = UnifiedVectorFormat::GetData<bool>(kept);
-		for (idx_t i = 0; i < chunk.size(); i++) {
-			if (rows[row_offset + i]) {
-				auto index = kept.sel->get_index(i);
-				rows[row_offset + i] = kept.validity.RowIsValid(index) && values[index];
-			}
-		}
+		vector<bool> chunk_rows(rows.begin() + NumericCast<int64_t>(row_offset),
+		                        rows.begin() + NumericCast<int64_t>(row_offset + chunk.size()));
+		KeepChunkRowsWhere(condition, chunk_expr_cache, context, chunk, chunk_rows);
+		std::copy(chunk_rows.begin(), chunk_rows.end(), rows.begin() + NumericCast<int64_t>(row_offset));
 		row_offset += chunk.size();
 	}
 }
