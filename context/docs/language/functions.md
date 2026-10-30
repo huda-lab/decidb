@@ -133,7 +133,8 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so `AVG(a) + SUM(b)` is
   not `SUM(a) + SUM(b)`. Tests: `test_avg.py`.
 - **`MIN`/`MAX`.** The inner expression is any linear combination plus a constant (`max((cost + 1) * x)`,
-  `max(cost * x + 5)`). Each link row is accumulated per solver column before emission (`MinMaxLinkRow`), because a
+  `max(cost * x + 5)`). Each link row is summed per solver column before emission (the model builder's
+  `SparseCoeffAccumulator`, then `MinMaxLinkRow`), because a
   column can reach one row more than once (a distributed term, a keyed or query-wide variable) and both solvers reject
   a repeated column index. Constants fold into the row's bound. On Gurobi the hard cases are general constraints with
   no Big-M; the choice is made once at execution from the backend's capability table, and both paths reach the same

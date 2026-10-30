@@ -256,6 +256,12 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   rounds (load 10-13): `execution.keyed_mapping` 264 → 167 ms, `extraction.group_ids` 314 → 219, `solver.cleanup`
   52 → 0, peak RSS 834 → 526 MiB. The keyed mapping left is the hash-table build (about 100 ms) and the sort of
   250k groups (about 80 ms).
+- **MIN/MAX link rows summed without a hash map (PERF-17, closed).** Each MIN/MAX link row summed its columns in its
+  own `std::unordered_map` (`MinMaxLinkRow::AddColumn`, and the composed outer row's `outer_accum`): a bucket array
+  and a node per member, millions of allocations on Q4's 1M members, and rows grown from capacity 1. The rows now sum
+  in the model builder's `SparseCoeffAccumulator` (dense scatter, first-touch order) and are sized once. Q4, medians
+  of 3 (load 11-16): `execution.formulate` 346 → 172 ms; same model (1,000,002 columns, 1,000,010 rows, 6,000,004
+  nonzeros). PERF-18 holds what is left: each member staged before it becomes a row.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

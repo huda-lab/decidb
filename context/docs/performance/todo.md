@@ -31,12 +31,6 @@ Run scale ladders and repetitions on both backends. Use separate native-log/stac
 
 Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
 
-## PERF-17 — Q4's formulation
-
-Q4's `execution.formulate` takes about 310 ms, its largest extraction span once PERF-14 is fixed: composed MIN/MAX
-240 ms and the MIN/MAX objective 73 (`findings.md` § Input and extraction). Find where the time goes inside the
-composed linearization before proposing a change.
-
 ## PERF-15 — RHS-bound windows hold every source column
 
 The bounds a clause's right-hand side reads from data (`decide_rewrite_rhs_window.cpp`) are a stack of
@@ -52,3 +46,12 @@ building it (`ExpressionBuilder::Out`), because messages render the built trees:
 message quotes into `2.0 * w`. Direct-solve plans are not folded. The cause is the message, not the fold: a message
 that names a value should quote the source text the user wrote (as Clang underlines source rather than reprinting its
 tree). Once messages quote source text, the fold moves to `Out` and direct-solve plans get it too.
+
+## PERF-18 — A MIN/MAX member is staged before it becomes a row
+
+Each member of a composed MIN/MAX link is built as an `ExtremumMember` (two vectors and a copied `AuxRange`) and
+then copied into a `RawConstraint`: on Q4, after PERF-17, building about 38 ms, freeing about 15 and per-row
+allocations about 20 of `execution.formulate`'s 156. Proposal (late materialization): `EmitExtremumLink` takes a member
+source, a count and a callback that fills one reused scratch row, and reads the `AuxRange` only for the native arm;
+about 7 call sites change. Also: `BuildMinMaxGroups` assigns its dense accumulator (about 8 MB on Q4) once per
+call, so a query with many hard MIN/MAX clauses on a large table pays it per clause; measure that before changing it.
