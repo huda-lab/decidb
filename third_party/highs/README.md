@@ -27,4 +27,8 @@ Each patch's edits are marked `DeciDB patch (<id>)` in the source. Why each exis
 - `0003-BUG-23` (`presolve/HPresolve.cpp`): the dominated-columns pass stops at the time limit.
 - `0004-BUG-25` (`mip/HighsCliqueTable.cpp`, `mip/HighsDomain.*`, `mip/HighsPrimalHeuristics.cpp`): clique
   extraction's variable-bound loop, conflict analysis and line-search rounding stop at the time limit or a Ctrl-C.
+  Like upstream's own checks there, a worker under the parallel lock does not check.
 - `0005-BUG-28` (`presolve/HPresolve.cpp`): the parallel rows and columns pass stops at the time limit.
+- `0006-PERF-H1` (`presolve/HPresolve.cpp`): dual fixing's substitution skips a row with no integer column other than
+  the one it substitutes for, where its scan finds no binary; per column, that scan made presolve quadratic in a long
+  row.

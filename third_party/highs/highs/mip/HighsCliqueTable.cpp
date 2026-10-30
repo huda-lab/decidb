@@ -859,14 +859,18 @@ void HighsCliqueTable::extractCliques(
   if (nbin < ntotal) {
     // DeciDB patch (BUG-25): check the MIP limits once per kPairsPerLimitCheck
     // (binary, non-binary) pairs; past a limit, keep the bounds found so far
-    // (they only strengthen the model) and skip the rest of the row
+    // (they only strengthen the model) and skip the rest of the row. As
+    // upstream does off the main thread, a worker under the parallel lock
+    // does not check
     const int64_t kPairsPerLimitCheck = int64_t{1} << 20;
     int64_t pairsSinceLimitCheck = 0;
     for (HighsInt i = 0; i != nbin; ++i) {
       pairsSinceLimitCheck += ntotal - nbin;
       if (pairsSinceLimitCheck >= kPairsPerLimitCheck) {
         pairsSinceLimitCheck = 0;
-        if (mipsolver.mipdata_->checkLimits()) return;
+        if (!mipsolver.mipdata_->parallelLockActive() &&
+            mipsolver.mipdata_->checkLimits())
+          return;
       }
       HighsInt bincol = inds[perm[i]];
       HighsCDouble impliedub = static_cast<HighsCDouble>(rhs) - vals[perm[i]];

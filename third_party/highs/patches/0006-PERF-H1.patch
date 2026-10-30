@@ -1,0 +1,18 @@
+diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
+index 300cdb2aac..4bf1d328cb 100644
+--- a/highs/presolve/HPresolve.cpp
++++ b/highs/presolve/HPresolve.cpp
+@@ -4692,6 +4692,13 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
+   // lambda for variable substitution
+   auto substituteCol = [&](HighsInt col, HighsInt row, HighsInt direction,
+                            double colBound, double otherColBound) {
++    // DeciDB patch (PERF-H1): the scan below substitutes only a binary of the
++    // row, and a binary is an integer column; a row whose only integer column
++    // is col has none, so skip its scan, which per column made the pass
++    // quadratic in a long row
++    if (rowsizeInteger[row] ==
++        (model->integrality_[col] == HighsVarType::kInteger ? 1 : 0))
++      return Result::kOk;
+     // check lhs and rhs for finiteness
+     bool lhsFinite = model->row_lower_[row] != -kHighsInf;
+     bool rhsFinite = model->row_upper_[row] != kHighsInf;

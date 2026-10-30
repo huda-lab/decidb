@@ -3741,11 +3741,14 @@ HighsInt HighsDomain::ConflictSet::resolveDepth(std::set<LocalDomChg>& frontier,
          (queueSize() > 0 && numResolved < minResolve)) {
     // DeciDB patch (BUG-25): check the MIP limits once per
     // kEntriesPerLimitCheck row entries explained; past a limit, abandon the
-    // conflict: no cut is added (conflictAnalysis returns on stopped)
+    // conflict: no cut is added (conflictAnalysis returns on stopped). As
+    // upstream does off the main thread, a worker under the parallel lock
+    // does not check
     const int64_t kEntriesPerLimitCheck = int64_t{1} << 20;
     if (entriesSinceLimitCheck >= kEntriesPerLimitCheck) {
       entriesSinceLimitCheck = 0;
-      if (localdom.mipsolver->mipdata_->checkLimits()) {
+      if (!localdom.mipsolver->mipdata_->parallelLockActive() &&
+          localdom.mipsolver->mipdata_->checkLimits()) {
         stopped = true;
         clearQueue();
         return 0;
