@@ -560,6 +560,9 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
                                            ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                            ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read_rows) {
+	if (read_rows && std::find(read_rows->begin(), read_rows->end(), false) == read_rows->end()) {
+		read_rows = nullptr;
+	}
 	auto found = cache.entries.find(key);
 	bool covers = found != cache.entries.end();
 	if (covers && !found->second.evaluated_rows.empty()) {
@@ -635,9 +638,6 @@ static vector<idx_t> LookupOrBuildPerGroupIds(
     // which `row_filter` folds in. Groups that no strict row
     // reached emit no constraint, so their rows stay excluded.
     const std::function<bool(idx_t)> *loose_row_filter = nullptr, vector<idx_t> *out_loose_row_group_ids = nullptr) {
-	if (read_rows && std::find(read_rows->begin(), read_rows->end(), false) == read_rows->end()) {
-		read_rows = nullptr;
-	}
 	auto *entry = &CachedKeyGroups(cache, keys, key, chunk_expr_cache, context, data, num_rows, read_rows);
 
 	// The call's kept groups, renumbered densely in key-value order.
@@ -912,40 +912,34 @@ static void KeepChunkRowsWhere(const Expression &condition, ChunkExprCache &chun
 	}
 }
 
-//! KeepChunkRowsWhere over every row of `data`, in one scan.
-static void KeepRowsWhere(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                          ColumnDataCollection &data, vector<bool> &rows) {
+//! The rows among `read` (every row when null) that each of `conditions` keeps (KeepChunkRowsWhere), all read in one
+//! scan of `data`.
+static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &conditions, const vector<bool> *read,
+                                           ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                           ColumnDataCollection &data, idx_t num_rows) {
+	vector<vector<bool>> masks(conditions.size(), read ? *read : vector<bool>(num_rows, true));
 	ColumnDataScanState scan;
 	data.InitializeScan(scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	idx_t row_offset = 0;
-	while (data.Scan(scan, chunk)) {
-		vector<bool> chunk_rows(rows.begin() + NumericCast<int64_t>(row_offset),
-		                        rows.begin() + NumericCast<int64_t>(row_offset + chunk.size()));
-		KeepChunkRowsWhere(condition, chunk_expr_cache, context, chunk, chunk_rows);
-		std::copy(chunk_rows.begin(), chunk_rows.end(), rows.begin() + NumericCast<int64_t>(row_offset));
+	while (!conditions.empty() && data.Scan(scan, chunk)) {
+		auto begin = NumericCast<int64_t>(row_offset);
+		auto end = NumericCast<int64_t>(row_offset + chunk.size());
+		for (idx_t c = 0; c < conditions.size(); c++) {
+			vector<bool> chunk_rows(masks[c].begin() + begin, masks[c].begin() + end);
+			KeepChunkRowsWhere(*conditions[c], chunk_expr_cache, context, chunk, chunk_rows);
+			std::copy(chunk_rows.begin(), chunk_rows.end(), masks[c].begin() + begin);
+		}
 		row_offset += chunk.size();
 	}
+	return masks;
 }
 
 //! The rows among `read` (every row when null) that a scoped clause's `condition` keeps.
 static vector<bool> KeptRows(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
                              ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read = nullptr) {
-	vector<bool> rows = read ? *read : vector<bool>(num_rows, true);
-	KeepRowsWhere(condition, chunk_expr_cache, context, data, rows);
-	return rows;
-}
-
-//! Each term's own `when`, read among `read` (KeptRows).
-static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &conditions, const vector<bool> *read,
-                                           ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                           ColumnDataCollection &data, idx_t num_rows) {
-	vector<vector<bool>> masks;
-	for (auto *condition : conditions) {
-		masks.push_back(KeptRows(*condition, chunk_expr_cache, context, data, num_rows, read));
-	}
-	return masks;
+	return std::move(KeptRowsOfEach({&condition}, read, chunk_expr_cache, context, data, num_rows)[0]);
 }
 
 //! A decision outside the reducers (`MAXIMIZE when c: sum(x) + w * s`, `sum(x) by (g) + s <= 8`) is counted once
@@ -2252,13 +2246,19 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
                 auto masks = KeptRowsOfEach(cond_ptrs, &scoped_kept, chunk_expr_cache, context, gstate.data, num_rows);
 
-                has_local_filters = true;
                 for (idx_t i = 0; i < filter_slots.size(); i++) {
                     if (masks[i].size() != num_rows) {
                         throw InternalException(
                             "DECIDE aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
                             num_rows, masks[i].size());
                     }
+					// A filter that keeps every row the clause reads (a NULL test on data with no NULL) filters
+					// nothing: the term reads like one with no filter, and the clause keeps its unfiltered shape.
+					if (masks[i] == scoped_kept) {
+						has_unfiltered_aggregate_part = true;
+						continue;
+					}
+					has_local_filters = true;
                     filter_slots[i].state->mask = std::move(masks[i]);
                     filter_slots[i].state->has_filter = true;
                     for (idx_t row = 0; row < num_rows; row++) {
@@ -2358,8 +2358,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
 		// Each kept row's group in the aggregate shape: the clause's kept rows by its `by`
 		// key, without the reducers' own `when` filters -- the rows whose classes a
-		// diagnosis reports for the group. Empty means "every row, one group", the same
-		// convention `row_group_ids` uses.
+		// diagnosis reports for the group. Empty means "every kept row, one group", the same
+		// convention `row_group_ids` uses, which is all a clause with no `by` key has. Diagnosis
+		// prep: built under DIAGNOSE only, its one reader.
 		vector<idx_t> kept_row_group_ids;
 
 		{
@@ -2376,29 +2377,29 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					return scoped_kept[row] && (every_kept_row || !has_local_filters || local_row_active[row]);
 				};
 				if (constraint->group_key != DConstants::INVALID_INDEX) {
-					auto groups = LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->group_key,
-					                                       chunk_expr_cache, context, gstate.data, num_rows, emitted,
-					                                       &scoped_kept, eval_const.row_group_ids,
-					                                       eval_const.num_groups, &kept, &kept_row_group_ids);
+					auto groups = LookupOrBuildPerGroupIds(
+					    per_group_cache, keys, constraint->group_key, chunk_expr_cache, context, gstate.data, num_rows,
+					    emitted, &scoped_kept, eval_const.row_group_ids, eval_const.num_groups,
+					    diagnose ? &kept : nullptr, diagnose ? &kept_row_group_ids : nullptr);
 					eval_const.group_names = GroupNames(per_group_cache, constraint->group_key, groups);
 				} else if (has_when || has_local_filters) {
 					eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-					kept_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 					for (idx_t row = 0; row < num_rows; row++) {
 						eval_const.row_group_ids[row] = emitted(row) ? 0 : DConstants::INVALID_INDEX;
-						kept_row_group_ids[row] = kept(row) ? 0 : DConstants::INVALID_INDEX;
 					}
 					eval_const.num_groups = 1;
 				}
 				// A `per K:` that names classes holds once per class; with every kept row's K
-				// NULL there is no class, so no instance.
+				// NULL there is no class, so no instance. The first kept row in a class settles it.
 				if (constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
-					vector<idx_t> class_ids;
-					idx_t num_classes = 0;
-					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,
-					                         context, gstate.data, num_rows, kept, &scoped_kept, class_ids,
-					                         num_classes);
-					if (num_classes == 0) {
+					auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key,
+					                                chunk_expr_cache, context, gstate.data, num_rows, &scoped_kept);
+					bool any_class = false;
+					for (idx_t row = 0; row < num_rows && !any_class; row++) {
+						any_class =
+						    scoped_kept[row] && classes.unfiltered_row_group_ids[row] != DConstants::INVALID_INDEX;
+					}
+					if (!any_class) {
 						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 						eval_const.num_groups = 0;
 					}

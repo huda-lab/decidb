@@ -41,18 +41,18 @@ SHAPES = {
 }
 
 
-def _sql(rows, shape):
+def _sql(rows, shape, bound="cap"):
     declaration, box, clause, _, _ = SHAPES[shape]
     values = ", ".join(
         "(" + ", ".join(sql_literal(value, sql_type) for value, sql_type in zip(row, TYPES)) + ")" for row in rows
     )
     return (
         f"SELECT id, x FROM (FROM (VALUES {values}) t(id, g, w, v, cap) DECIDE {declaration} "
-        f"SUCH THAT {box}per g: {clause} <= cap MAXIMIZE SUM(v*x)) q ORDER BY id"
+        f"SUCH THAT {box}per g: {clause} <= {bound} MAXIMIZE SUM(v*x)) q ORDER BY id"
     )
 
 
-def _agree(cli, oracle_solver, rows, shape):
+def _agree(cli, oracle_solver, rows, shape, bound="cap"):
     _, _, _, weight, var_type = SHAPES[shape]
     oracle_solver.create_model("per_class_null_key_bound")
     for row in rows:
@@ -82,7 +82,7 @@ def _agree(cli, oracle_solver, rows, shape):
         value = sum(row[3] * chosen[row[0]] for row in rows)
         assert math.isclose(value, oracle.objective_value, abs_tol=1e-6), (mode, value, oracle.objective_value)
 
-    agree_with_oracle(cli, _sql(rows, shape), oracle, check_assignment)
+    agree_with_oracle(cli, _sql(rows, shape, bound), oracle, check_assignment)
 
 
 @pytest.mark.cons_aggregate
@@ -101,6 +101,14 @@ def test_a_nan_bound_on_a_null_key_row_is_never_read(decidb_cli, oracle_solver, 
     drops."""
     rows = [row[:4] + (NAN if row[1] is None else row[4],) for row in ROWS]
     _agree(decidb_cli, oracle_solver, rows, shape)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("shape", ["bool", "real"])
+def test_no_class_when_every_key_is_null(decidb_cli, oracle_solver, shape):
+    """Every row's key is NULL: `per g:` names no class, so the clause has no instance and its bound limits nothing."""
+    _agree(decidb_cli, oracle_solver, [(row[0], None) + row[2:] for row in ROWS], shape, bound="1")
 
 
 @pytest.mark.cons_aggregate
