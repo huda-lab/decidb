@@ -275,6 +275,21 @@ def test_r1_a_finite_literal_adds_no_too_large_check(decidb_cli, literal, column
     assert _r1_too_large_checks(decidb_cli, *literal) < _r1_too_large_checks(decidb_cli, *column)
 
 
+@pytest.mark.correctness
+def test_s1_a_finite_literal_score_adds_no_too_large_check(decidb_cli):
+    # A reducer whose score is a literal (`2 * x`) cannot fail, so the plan has no message for it; `q * x` has one.
+    def checks(objective):
+        sql = f"""
+            EXPLAIN SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM({objective})
+        """
+        plan = _raw(decidb_cli, sql).stdout
+        assert "S1_UNIFORM_MATROID" in plan, plan
+        return "".join(plan.replace("│", "").split()).count("computesanumbertoolargeforaDOUBLE")
+
+    assert checks("2 * x") < checks("q * x")
+
+
 @pytest.mark.error
 @pytest.mark.correctness
 @pytest.mark.parametrize("budget", [False, True])

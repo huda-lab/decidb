@@ -759,6 +759,20 @@ private:
 		return std::move(state.plan);
 	}
 
+	//! Whether reducer `part` scores a finite constant on every row, which no row can fail (DirectIsFiniteWhereKept).
+	bool PartIsFiniteConstant(idx_t part) const {
+		vector<DirectSignedValue> values;
+		const Condition::ObjectivePart *scaling = nullptr;
+		for (auto &term : condition.objective_parts) {
+			if (term.part == part) {
+				values.push_back({term.sign, term.coefficient->Copy()});
+				scaling = &term;
+			}
+		}
+		D_ASSERT(scaling);
+		return DirectIsFiniteWhereKept(optimizer, values, scaling->scaled, scaling->scale, scaling->divides);
+	}
+
 	//! Stage 3: the score projection. It forwards the source columns, the combined linear score, the scope and
 	//! fixed-value flags, and the source-valued bounds, so every later stage reads one projection. The constructor
 	//! laid out the slots; each is appended here at exactly that position.
@@ -791,7 +805,7 @@ private:
 		};
 		vector<ExprPtr> candidates;
 		for (idx_t p = 0; p < part_scores.size(); p++) {
-			if (part_scores[p]) {
+			if (part_scores[p] && !PartIsFiniteConstant(p)) {
 				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_names[p], into_score));
 			}
 		}
