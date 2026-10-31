@@ -12,6 +12,7 @@
 #include "duckdb/parser/result_modifier.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_constraints_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
@@ -133,11 +134,14 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         RefuseRemovedDecideSpellings(statement);
 
         // Every declared name, checked and collected before any key resolves, so a key
-        // element can be told from a decision declared before or after it.
+        // element can be told from a decision declared before or after it. A name is free of
+        // every column of the FROM clause: GetMatchingBindings, not GetMatchingBinding, which
+        // skips a column a USING or NATURAL join merges -- a bare name binds it ahead of every
+        // relation, so it would hide the decision -- and throws on one two relations share.
         case_insensitive_set_t declared_names;
         for (const auto &expr_ptr : statement.decide_variables) {
             auto &name = SplitDeclaration(*expr_ptr).name->GetColumnName();
-            if (bind_context.GetMatchingBinding(name)) {
+            if (!bind_context.GetMatchingBindings(name).empty()) {
                 throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
             }
             if (!declared_names.insert(name).second) {
@@ -384,6 +388,33 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             binding.names.resize(num_user_vars);
             binding.types.resize(num_user_vars);
         }
+}
+
+void DecideDeclarationsBinder::RefuseDecisionsInWhere(const Expression &where, const BoundSelectNode &result) {
+	auto refuse = [&](const ColumnBinding &binding) {
+		D_ASSERT(binding.column_index < result.decide_variables.size());
+		auto &name = result.decide_variables[binding.column_index]->GetAlias();
+		throw BinderException(where,
+		                      "DECIDE: %s is a decision; WHERE may only use data, since it picks the rows before the "
+		                      "solve. Filter on %s in an outer query",
+		                      name, name);
+	};
+	if (where.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = where.Cast<BoundColumnRefExpression>();
+		if (colref.binding.table_index == result.decide_index) {
+			refuse(colref.binding);
+		}
+	} else if (where.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+		// A subquery's body has its own binder, which lists every column of this query read
+		// anywhere inside it as correlated.
+		for (auto &column : where.Cast<BoundSubqueryExpression>().binder->correlated_columns) {
+			if (column.binding.table_index == result.decide_index) {
+				refuse(column.binding);
+			}
+		}
+	}
+	ExpressionIterator::EnumerateChildren(where,
+	                                      [&](const Expression &child) { RefuseDecisionsInWhere(child, result); });
 }
 
 } // namespace duckdb

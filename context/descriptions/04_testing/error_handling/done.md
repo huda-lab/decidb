@@ -24,7 +24,7 @@ expression in a key) are pinned in `test/decidb/test_scope_parser.test`. See
 All expect `decidb.InvalidInputException` or `decidb.BinderException`.
 Categories covered in `test_error_binder.py` unless noted:
 
-- Name/scope conflicts: variable conflicts with column, duplicate DECIDE variables, unknown variable in constraint.
+- Name/scope conflicts: variable conflicts with column, duplicate DECIDE variables, unknown variable in constraint; a name a join merges and a decision in `WHERE` in `test_decision_names.py` (`../variables/done.md`).
 - Unsupported syntax in SUCH THAT: IS NULL, `SUM(x) IN (...)`, non-DECIDE variable in constraint, non-SUM/AVG/MIN/MAX function in objective.
 - Non-linear / invalid aggregate: no DECIDE variable in SUM, multiple DECIDE variables in SUM, nonlinear DECIDE variables.
 - RHS shape: non-scalar BETWEEN / SUM RHS / `SUM = RHS`, DECIDE variable in BETWEEN bounds, IN RHS, or constraint RHS.

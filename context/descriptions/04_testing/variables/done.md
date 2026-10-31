@@ -26,6 +26,15 @@ All oracle-verified:
 variable, unknown variable in constraint. Unknown type annotation is
 parser-level (`test_error_parser.py`).
 
+`test_decision_names.py`: where a decision's name may stand outside the clauses. A
+name a `USING`, `FULL OUTER JOIN USING` or `NATURAL` join merges, in any letter case,
+or one two relations share, is the conflict error in both clause orders; a decision with
+its own name over a `USING` join answers. A decision in `WHERE` is refused by name,
+through a SELECT alias, an aliased expression, `COLUMNS(*)`, a lambda body, the left of
+an `IN` subquery, and one or two correlated subqueries down; `WHERE` over data (a
+column, a correlated data subquery, a lambda parameter named like a decision) keeps its
+rows, and an outer query filters on the solved value, the refusal's suggestion.
+
 ## Feature interactions covered
 
 | Feature A | Feature B | Tested |

@@ -136,7 +136,11 @@ A scope inside an ordinary SQL subquery written in the clause is refused
   names — `INT`, `BOOL`, `REAL`. A name without one is a parser error that names the
   three (§10.1).
 - Use: available in `SUCH THAT`, `MAXIMIZE/MINIMIZE`, and the `SELECT` list, always
-  by its bare name (§2.3).
+  by its bare name (§2.3); `GROUP BY`, `HAVING`, `QUALIFY` and `ORDER BY` read its solved
+  value. Never in `WHERE`, which picks the rows before the solve: filter on a solved value
+  in an outer query (§10.1).
+- Name: it must differ from every column of the `FROM` clause, including a column a
+  `USING` or `NATURAL` join merges (§10.1).
 - A declaration's **key** decides how many solver columns it yields:
 
   | Spelling | Scope | Columns |
@@ -1305,6 +1309,8 @@ Tests: `test/decide/tests/test_scope_explain_diagnose.py`, `test_anr_variants.py
 | `OR` between constraints | bind | `SUCH THAT: '((x <= cap) OR (x <= 1))' joins constraints with OR, which is not supported; every constraint must hold, so join them with AND. ...` |
 | `by` after a call that is not `SUM`, `AVG`, `MIN`, `MAX`, `norm` or `count` | bind | `DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count` |
 | `when` or `per` inside a call that is not `SUM`, `AVG`, `MIN` or `MAX` (`norm` and `count` included) | bind | `DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint or inside a reducer` |
+| A decision named like a column of the `FROM` clause, including a column two relations share or one a `USING` or `NATURAL` join merges | bind | `DECIDE variable 'k' conflicts with an existing column name.` |
+| A decision in `WHERE`, by name, through a `SELECT` alias or `COLUMNS(*)`, or inside a subquery | bind | `DECIDE: x is a decision; WHERE may only use data, since it picks the rows before the solve. Filter on x in an outer query` |
 | A decision in a `when`, a key or a `by` | bind | `DECIDE: x is a decision; when, per and by may only use data` |
 | A window function in a `when`, a key or a `by` | bind | `DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by` |
 | An unknown key element (a key resolves in its own query's `FROM` only) | bind | `DECIDE: depot is neither a column nor a relation of the FROM clause` |

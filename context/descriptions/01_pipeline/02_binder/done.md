@@ -9,8 +9,8 @@ choose a solver formulation.
 
 - `src/planner/expression_binder/decide/decide_declarations_binder.cpp` —
   declarations, their scopes and types, the parsed-tree validators, then the two
-  clause binders (`BindDeclarations`; the DECIDE section of `BindSelectNode` in
-  `bind_select_node.cpp` only calls it)
+  clause binders (`BindDeclarations`), and the WHERE refusal (`RefuseDecisionsInWhere`);
+  `BindSelectNode` in `bind_select_node.cpp` only calls the two
 - `src/planner/expression_binder/decide/decide_binder.cpp` — shared DECIDE expression
   rules: reducers, the colon form, a reducer's own scope and `by`, key scopes, and where
   `when`, `per` and `by` may stand
@@ -30,8 +30,12 @@ resolves, so a key can be told from a decision declared before or after it. The 
 
 | Check | Message |
 |---|---|
-| Name collides with a real column | `DECIDE variable '%s' conflicts with an existing column name.` |
+| Name equals a column of any relation in the FROM clause, including a column two relations share or one a `USING` or `NATURAL` join merges | `DECIDE variable '%s' conflicts with an existing column name.` |
 | Name declared twice | `Duplicate DECIDE variable name '%s'.` |
+
+The conflict check asks `BindContext::GetMatchingBindings`, every relation holding the
+name, not `GetMatchingBinding`: that one skips a merged `USING` column, which a bare name
+binds ahead of every relation, so a decision named like it would never be read.
 
 A decision is registered under its bare name, and only that name references it.
 `RefuseQualifiedDecisionReferences` refuses `D.x`, where `D` is a relation of the FROM
@@ -41,6 +45,20 @@ D.x; a decision is referenced by its bare name"*, or, in a `when` condition, a `
 or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43).
 A qualified name that binds to a column, a struct field or a `USING` column is left to
 the SQL binder.
+
+### Not in WHERE
+
+WHERE picks the rows before the solve: `CreatePlan` puts its filter below the DECIDE
+operator, where a decision has no value. The decisions' binding is already in the bind
+context when WHERE binds (the select list, bound first, may name them), so
+`BindSelectNode` hands the bound condition to `RefuseDecisionsInWhere`, which refuses
+any read of the DECIDE binding: *"DECIDE: x is a decision; WHERE may only use data,
+since it picks the rows before the solve. Filter on x in an outer query"*. It reads the
+bound tree because only binding knows what a name stands for: a decision reached through
+a SELECT alias, `COLUMNS(*)` or a lambda body is a column reference to `decide_index`,
+one inside a subquery is in the subquery binder's correlated columns, and a lambda
+parameter named like a decision is neither. GROUP BY, HAVING, QUALIFY, the select list
+and ORDER BY are planned above the operator and read the solved values.
 
 ### Scope
 
@@ -609,7 +627,7 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 
 | Concern | Location |
 |---|---|
-| Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
+| Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`), the WHERE refusal (`RefuseDecisionsInWhere`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
 | Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes and frames may stand (`ValidateDecideScopeSpellings`, `ValidateFrame`), frame binding (`BindDecideFrame`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |

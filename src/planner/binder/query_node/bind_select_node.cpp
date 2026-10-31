@@ -468,6 +468,9 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 		WhereBinder where_binder(*this, context, &alias_binder);
 		unique_ptr<ParsedExpression> condition = std::move(statement.where_clause);
 		result->where_clause = where_binder.Bind(condition);
+		if (result->HasDecideClause()) {
+			DecideDeclarationsBinder::RefuseDecisionsInWhere(*result->where_clause, *result);
+		}
 	}
 
 	// now bind all the result modifiers; including DISTINCT and ORDER BY targets

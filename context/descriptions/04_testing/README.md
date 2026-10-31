@@ -18,7 +18,7 @@ Each subdirectory corresponds to a feature area and contains:
 | Directory | Feature | Key test files |
 |-----------|---------|----------------|
 | `clause_order/` | The two `DECIDE` clause positions (split / single-block) | `test_clause_order.py` |
-| `variables/` | BOOL / INT / REAL, multi-variable | `test_var_*.py` |
+| `variables/` | BOOL / INT / REAL, multi-variable, where a decision's name may stand | `test_var_*.py`, `test_decision_names.py` |
 | `scope/` | The scoping language (`per`, `when`, `by`): the scope oracle, declarations, generation, `by`, a reducer's own scope, the objective, determination and empty sets, the value rewrite, bare clauses, the 784-cell grid, deck examples 1–8, the EXPLAIN/DIAGNOSE echo, the removed spellings and the scanner that keeps them out | `test_scope_*.py`, `_scope_oracle.py`, `test_no_old_spellings_remain.py` |
 | `entity_scope/` | Keyed decisions (`DECIDE per K: x(TYPE)`) over joins | `test_entity_scope.py` |
 | `scalar_scope/` | Query-wide decisions (`DECIDE per (): x(TYPE)`) | `test_scalar_scope.py`, `test_scalar_var_in_aggregate.py` |

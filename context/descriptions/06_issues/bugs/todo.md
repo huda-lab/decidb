@@ -24,16 +24,6 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
-## A decision named like a USING column is silently ignored
-
-- **Location:** the name-conflict check in `DecideDeclarationsBinder::BindDeclarations`
-  uses `BindContext::GetMatchingBinding`, which skips USING columns.
-- **Observed:** `SELECT * FROM (VALUES (1, 10), (2, 20)) A(k, v) JOIN (VALUES (1, 5),
-  (2, 6)) B(k, w) USING (k) DECIDE k(INT) SUCH THAT k <= 3 MAXIMIZE SUM(k)` runs; the
-  clause binds `k` to the join column, so the model has no row and every decision is 0.
-- **Expected:** the conflict error a decision named like any other column gets.
-- **Impact:** a silently wrong answer.
-
 ## A negative lower bound under a `when` leaves the decision non-negative
 
 - **Location:** bound absorption does not enter a `when` wrapper
@@ -266,18 +256,42 @@ Each reproduces on the current build.
 - **Impact:** a suggested change that does not repair the query, or names the wrong
   direction.
 
-## A decision named in WHERE filters on an input column
+## A decision named by position or by its internal relation passes the data-only checks
 
-- **Location:** WHERE binding sees the DECIDE binding that `BindDeclarations` adds
-  (`src/planner/binder/query_node/bind_select_node.cpp`); the filter is planned below the
-  DECIDE operator, where the decision's column index reads an input column.
-- **Observed:** `SELECT id, cap FROM (VALUES (1,3,'A'),(2,5,'A'),(3,7,'B')) t(id,cap,g)
-  WHERE x > 1 DECIDE x(INT) SUCH THAT x <= cap MAXIMIZE SUM(x)` returns ids 2 and 3:
-  EXPLAIN shows `FILTER (col0 > 2)` for `WHERE x > 2`, a filter on `id`. With two
-  decisions, the second reads the second input column.
-- **Expected:** a refusal -- a decision has no value before the solve, so WHERE takes
-  data only (*"DECIDE: x is a decision; WHERE may only use data"*).
-- **Impact:** a silent wrong answer. Older than the scoping language.
+- **Location:** the checks that a `when` condition, a `by` key, a frame's `over (...)` and
+  a subquery in a clause read data only run on the parsed tree and match bare names
+  (`IsVariableExpression`, `ExpressionContainsDecideVariable`, `decide_binder.cpp`). A
+  positional reference `#n` and `decide_variables.x` bind to the decisions' binding
+  anyway (`PositionToColumn`, the binding's internal name). WHERE does not have the
+  problem: its check reads the bound tree (`RefuseDecisionsInWhere`, `02_binder/done.md`).
+- **Observed:** over `t(g, cap)` with BIGINT columns, `SUM(x) BY (#3) <= 4` (`#3` is x)
+  returns x = (0, 4, 4), the answer grouped by `g`; `WHEN #3 = 1: x <= 1` returns
+  (1, 1, 7), the condition read on `g`; `over (#3)` orders by `g`. With INTEGER columns
+  all three fail with *"INTERNAL Error: Vector::Reference used on vector of different
+  type"* (`PhysicalDecide::RunScopeChecks`, `BuildGroupIds`). `x <= (SELECT
+  decide_variables.x) + cap` and `MAXIMIZE SUM(x * (SELECT decide_variables.x))` fail with
+  *"INTERNAL Error: Failed to bind column reference"*; `WHEN decide_variables.x > 4:`
+  reads an input column. `#3` in a constraint body is refused, but by *"SUCH THAT clause
+  does not support '#3'(ExpressionClass::POSITIONAL_REFERENCE)"*.
+- **Expected:** the refusal the bare name gets (*"DECIDE: x is a decision; when, per and
+  by may only use data"*, *"Subqueries in DECIDE clauses cannot reference DECIDE
+  variables."*), however the decision is named.
+- **Impact:** silent wrong answers. Same root as the ANR log's A08 (`decide_variables`
+  reachable through `per` and `by` keys): the data-only checks should read what a name
+  binds to, as WHERE's does.
+
+## A subquery or lambda in a clause is refused for a name that is not the decision
+
+- **Location:** the same parsed-tree name match (`ExpressionContainsDecideVariable`),
+  which enters a subquery's body and a lambda without knowing what binds there.
+- **Observed:** `x <= (SELECT max(x) FROM (VALUES (1)) u(x)) + cap` (the inner `x` is
+  `u.x`) and `x <= (SELECT len(list_filter(l, x -> x > 0))) + cap` (a lambda parameter)
+  are refused with *"Subqueries in DECIDE clauses cannot reference DECIDE variables."*;
+  `WHEN cap > (SELECT max(x) FROM (VALUES (4)) u(x)):` with *"DECIDE: x is a decision;
+  when, per and by may only use data"*. WHERE accepts the same shapes.
+- **Expected:** a name that binds to a column of the subquery or to a lambda parameter is
+  data.
+- **Impact:** valid queries refused.
 
 ## Parameters of a prepared statement or a table macro fail in a DECIDE clause
 
@@ -286,10 +300,16 @@ Each reproduces on the current build.
   '$1'(ExpressionClass::PARAMETER)"*; `sum(x) <= $1` answers *"SUM cannot be compared to
   an expression that is not a scalar or aggregate without DECIDE variables"*. A table
   macro's parameter in a clause answers *"Referenced column "lim" not found in FROM
-  clause!"*.
-- **Expected:** a parameter is data, bound like a constant.
+  clause!"*. A table macro whose parameter shares a decision's name splits the name:
+  `CREATE MACRO tm(x) AS TABLE SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap
+  MAXIMIZE SUM(x)` then `SELECT * FROM tm(100)` returns the column `100`, all 100s: the
+  select list and WHERE read the argument, the clauses the decision. The macro's
+  parameter substitution (`ReplaceMacroParameters`, through
+  `EnumerateQueryNodeChildren`) never visits the DECIDE clauses.
+- **Expected:** a parameter is data, bound like a constant; a parameter named like a
+  decision is the conflict error, as a column is.
 - **Impact:** a prepared or macro DECIDE query cannot take a value; the message names an
-  internal enum.
+  internal enum; a macro parameter named like a decision gives a wrong answer.
 
 ## A scaled `AVG` leaves a constraint the debug verifier calls non-canonical
 
