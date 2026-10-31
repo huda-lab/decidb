@@ -396,7 +396,8 @@ s`) stays AGGREGATE: the quadratic builder counts it once per grouped row, as th
 one does (stage 06). A clause
 that takes the composed MIN/MAX formulation (`TakesComposedMinMax`: a MIN or MAX over
 decisions beside another term, or alone under a factor whose sign is not known before
-the query runs) is AGGREGATE only with no `by`, a constant bound and no decision beside
+the query runs; `norm(e, 'inf')` is one, a MAX the binder carries as a SUM marker until
+stage 05 lowers it -- `IsExtremumReducer` reads the marker, so its shape is the MAX's, A06) is AGGREGATE only with no `by`, a constant bound and no decision beside
 it — that formulation is one row over all of the clause's kept rows under one bound;
 otherwise it is VALUE, where each extremum is pinned per group. `PeelScale` lets a
 row-varying factor stay on a constraint's reducer as its scale (the comparison is then

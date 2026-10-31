@@ -1717,3 +1717,67 @@ def test_abs_under_a_zero_factor_needs_no_bound(request, cli_fixture, extra_env,
         DECIDE x(INT) SUCH THAT sum(x) >= 0 {sense} + {dead} ORDER BY id"""
     judge_rows(answer(cli, sql), {f"x{i}": range(4) for i in range(3)}, lambda a: True,
                lambda a: -_total(a) if maximize else _total(a), maximize)
+
+
+# ===========================================================================
+# An ABS of a query-wide decision beside a reducer (A07)
+# ===========================================================================
+#
+# `abs(s - 1)` over a query-wide `s` holds one value for the query, so the clause is the
+# reducer's row with one term beside it -- and its auxiliary is one decision for the
+# query, the scope its term had when the shape was decided. A per-row auxiliary turned the
+# clause into another shape after that, and it failed internally. Judged by enumeration on
+# both solvers, with the auxiliary pinned both ways.
+
+_QUERY_WIDE_ABS = """SELECT id, x, s FROM (VALUES (1, 'A', 3), (2, 'A', 3), (3, 'B', 2)) t(id, g, cap)
+    DECIDE x(INT), per (): s(INT) SUCH THAT x <= cap AND s <= 3 AND {clause} MAXIMIZE {objective} ORDER BY id"""
+_QUERY_WIDE_DOMAINS = {"x0": range(4), "x1": range(4), "x2": range(3), "s": range(4)}
+
+
+def _total(a):
+    return a["x0"] + a["x1"] + a["x2"]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("clause, feasible, objective, value", [
+    pytest.param("sum(x) + abs(s - 1) <= 5", lambda a: _total(a) + abs(a["s"] - 1) <= 5, "sum(x) + s",
+                 lambda a: _total(a) + a["s"], id="beside-a-sum"),
+    pytest.param("per (): sum(x) + abs(s - 1) <= 5", lambda a: _total(a) + abs(a["s"] - 1) <= 5, "sum(x) + s",
+                 lambda a: _total(a) + a["s"], id="per-nothing"),
+    pytest.param("sum(x) by (g) + abs(s - 1) <= 5",
+                 lambda a: a["x0"] + a["x1"] + abs(a["s"] - 1) <= 5 and a["x2"] + abs(a["s"] - 1) <= 5,
+                 "sum(x) + s", lambda a: _total(a) + a["s"], id="by-a-key"),
+    pytest.param("per g: sum(x) by (g) + abs(s - 1) <= 4",
+                 lambda a: a["x0"] + a["x1"] + abs(a["s"] - 1) <= 4 and a["x2"] + abs(a["s"] - 1) <= 4,
+                 "sum(x) + s", lambda a: _total(a) + a["s"], id="per-a-key"),
+    pytest.param("when g = 'A': sum(x) + abs(s - 1) <= 5", lambda a: a["x0"] + a["x1"] + abs(a["s"] - 1) <= 5,
+                 "sum(x) + s", lambda a: _total(a) + a["s"], id="under-a-when"),
+    pytest.param("sum(x) - abs(s - 1) >= 1", lambda a: _total(a) - abs(a["s"] - 1) >= 1, "sum(x) - 3 * s",
+                 lambda a: _total(a) - 3 * a["s"], id="subtracted"),
+    # Pushed up: an auxiliary only above |s - 1| would cover the 8 alone, so it is pinned.
+    pytest.param("sum(x) + abs(s - 1) >= 8", lambda a: _total(a) + abs(a["s"] - 1) >= 8, "s - sum(x)",
+                 lambda a: a["s"] - _total(a), id="pushed-up"),
+    pytest.param("sum(x) <= 5", lambda a: _total(a) <= 5, "sum(x) - abs(s - 3)",
+                 lambda a: _total(a) - abs(a["s"] - 3), id="in-the-objective"),
+])
+def test_an_abs_of_a_query_wide_decision_beside_a_reducer(request, cli_fixture, clause, feasible, objective,
+                                                          value):
+    rows = answer(request.getfixturevalue(cli_fixture), _QUERY_WIDE_ABS.format(clause=clause, objective=objective))
+    judge_rows(rows, _QUERY_WIDE_DOMAINS, feasible, value)
+
+
+@pytest.mark.correctness
+def test_an_abs_of_a_query_wide_decision_beside_a_reducer_lowered(decidb_cli_gurobi):
+    """Pushed up with every construct lowered: the sign indicator is query-wide too."""
+    lowered = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
+    rows = answer(lowered, _QUERY_WIDE_ABS.format(clause="sum(x) + abs(s - 1) >= 8", objective="s - sum(x)"))
+    judge_rows(rows, _QUERY_WIDE_DOMAINS, lambda a: _total(a) + abs(a["s"] - 1) >= 8, lambda a: a["s"] - _total(a))
+
+
+def test_a_refusal_quotes_a_query_wide_abs_as_written(decidb_cli):
+    """A square of a query-wide ABS in the objective is refused, and the refusal names the
+    ABS as written, not its auxiliary."""
+    result = decidb_cli.execute_raw(_QUERY_WIDE_ABS.format(clause="sum(x) <= 5",
+                                                           objective="-power(abs(s - 2), 2) + sum(x)"))
+    assert "'power(abs(s - 2), 2)' multiplies decisions outside a reducer" in result.stderr, result.stderr

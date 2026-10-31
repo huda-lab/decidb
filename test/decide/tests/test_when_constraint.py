@@ -18,6 +18,8 @@ import pytest
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 
+from ._output_helpers import assert_no_internal_leak
+
 
 @pytest.mark.when_constraint
 @pytest.mark.var_boolean
@@ -653,3 +655,50 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+# ---------------------------------------------------------------------------
+# A condition is quoted as written, whatever operator holds its subquery
+# ---------------------------------------------------------------------------
+
+#: A correlated subquery that no row's value of exceeds 100: every `when` below keeps no row.
+_SMALL = "(SELECT u.c FROM (VALUES (1, 10), (2, 15)) u(i, c) WHERE u.i = t.id)"
+_TWO_ROWS = "(VALUES (1, 'a'), (2, 'a')) t(id, g)"
+
+
+@pytest.mark.when_constraint
+@pytest.mark.error
+@pytest.mark.parametrize("clauses, objective, quoted", [
+    pytest.param(f"x <= 5 AND when COALESCE({_SMALL}, 0) > 100: x <= 1", "SUM(x)", "when COALESCE((SELECT u.c",
+                 id="coalesce"),
+    pytest.param(f"x <= 5 AND when NOT ({_SMALL} IS NOT NULL): x <= 1", "SUM(x)", "when (NOT ((SELECT u.c",
+                 id="not-is-not-null"),
+    pytest.param(f"x <= 5 AND when {_SMALL} BETWEEN 100 AND 200: x <= 1", "SUM(x)", "when ((SELECT u.c",
+                 id="between"),
+    pytest.param(f"x <= 5 AND sum(when {_SMALL} IS NULL: x) <= 3", "SUM(x)", "sum(when ((SELECT u.c",
+                 id="a-reducer-when"),
+    pytest.param("x <= 5", f"when COALESCE({_SMALL}, 0) > 100: SUM(x)", "when COALESCE((SELECT u.c",
+                 id="the-objective-when"),
+])
+def test_a_condition_holding_a_subquery_is_quoted_as_written(decidb_cli, clauses, objective, quoted):
+    """Under COALESCE, IS NULL, NOT or BETWEEN the subquery printed as the column DuckDB
+    flattened it into, `__source_fragment_0____row_varying_subquery__` (A09)."""
+    sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(INT) SUCH THAT {clauses} MAXIMIZE {objective}"
+    result = decidb_cli.execute_raw(sql)
+    assert quoted in result.stderr and ("matches no rows" in result.stderr or "has no rows" in result.stderr), \
+        result.stderr
+    assert_no_internal_leak(result, "a condition holding a subquery", sql)
+
+
+@pytest.mark.when_constraint
+@pytest.mark.diagnose
+def test_a_condition_on_a_column_named_per_pastes_back(decidb_cli):
+    """DIAGNOSE suggests the condition back with `"per"` quoted, the clause's keyword (A26),
+    and the suggestion runs."""
+    source = """(VALUES (1, 'a', 3), (2, 'a', 5), (3, 'b', 7), (4, NULL, 4)) t(id, "per", cap)"""
+    rows, cols = decidb_cli.execute(f"""DIAGNOSE SELECT id, x FROM {source}
+        DECIDE x(INT) SUCH THAT x <= cap AND when "per" IS NOT NULL: x >= 6 MAXIMIZE sum(x)""")
+    suggested = [row[cols.index("suggested_change")] for row in rows if row[cols.index("suggested_change")]]
+    assert suggested == ['when ("per" IS NOT NULL): x >= 3'], rows
+    assert decidb_cli.execute(f"""SELECT id, x FROM {source}
+        DECIDE x(INT) SUCH THAT x <= cap AND {suggested[0]} MAXIMIZE sum(x)""")[0]

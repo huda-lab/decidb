@@ -34,16 +34,8 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (!when) {
 		return BindResult(std::move(bound));
 	}
-	ErrorData condition_error;
 	is_top_expression = false;
-	binding_when_condition = true;
-	try {
-		BindChild(when->children[1], depth, condition_error);
-	} catch (...) {
-		binding_when_condition = false;
-		throw;
-	}
-	binding_when_condition = false;
+	auto condition_error = BindData(when->children[1], depth, DecideDataPosition::SCOPE);
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
 	}
@@ -58,16 +50,8 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	return BindResult(wrap(std::move(bound)));
 }
 
-BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
-	auto location = expr_ptr->GetQueryLocation();
-	return PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression));
-}
-
-BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
-                                                         bool root_expression) {
-	if (binding_when_condition) {
-		return ExpressionBinder::BindExpression(expr_ptr, depth);
-	}
+BindResult DecideObjectiveBinder::BindNode(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                           bool root_expression) {
 	if (depth > 0) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
 	}
@@ -97,7 +81,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	        return BindFunction(expr_ptr, depth);
 	}
     case ExpressionClass::SUBQUERY:
-        return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+        return DecideBinder::BindNode(expr_ptr, depth, root_expression);
 	case ExpressionClass::DECIDE_FRAME:
 		// A frame over decisions is an objective on its own, as a decision is.
 		if (is_top_expression && !ExpressionContainsDecideVariable(expr, variables)) {
@@ -106,7 +90,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 			                             expr.ToString())));
 		}
 		is_top_expression = false;
-		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+		return DecideBinder::BindNode(expr_ptr, depth, root_expression);
 	case ExpressionClass::CAST:
 		// Explicit decision-bearing casts were rejected from the parsed objective
 		// before rewrites. A surviving nested cast is therefore a data computation

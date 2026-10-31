@@ -5,6 +5,7 @@
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/decide_frame_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/decide/decide_removed_spellings.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
@@ -12,42 +13,58 @@
 #include "duckdb/parser/result_modifier.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
-#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_constraints_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_objective_binder.hpp"
+#include "duckdb/planner/expression_binder/where_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 namespace duckdb {
+
+//! The binding BindDeclarations adds to hold the decisions, one column each.
+static constexpr const char *DECISIONS_BINDING = "decide_variables";
 
 // ABS, MIN/MAX and `<>` bind here as ordinary expressions -- a BoundFunctionExpression,
 // a BoundAggregateExpression, a BoundComparisonExpression. Choosing a mathematical
 // formulation for them is layer 5's job (`src/optimizer/decide/`), which is what lets
 // this layer resolve names and types without also deciding how a construct is encoded.
 
+//! Whether SQL reads the qualified name `colref` as it reads one anywhere: a column of a
+//! relation, or else a field of a struct column (`s.open`), tried in ExpressionBinder's
+//! order.
+static bool SqlReadsQualifiedName(Binder &binder, const ColumnRefExpression &colref) {
+	WhereBinder qualifier(binder, binder.context);
+	auto copy = colref.Copy();
+	ErrorData error;
+	return qualifier.QualifyColumnName(copy->Cast<ColumnRefExpression>(), error) != nullptr;
+}
+
 //! A decision is referenced by its bare name. `D.open`, where D is a relation of the FROM
-//! clause with no column `open` and `open` is a decision, is the removed table-qualified
-//! reference and is refused with the bare name; in a `when` condition, a `per` key or a
-//! `by` key it is a decision where only data may stand. A qualified name that binds to a
-//! column, a struct field or a USING column is left to the SQL binder. Subquery bodies are
-//! not entered: their names are their own.
-static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, BindContext &bind_context,
-                                              const case_insensitive_map_t<idx_t> &variables, bool data_position) {
+//! clause, `open` is a decision and SQL reads the name no other way, is the removed
+//! table-qualified reference and is refused with the bare name; where only data may stand
+//! (`position`) it is a decision there. A qualified name SQL reads -- a column, a struct
+//! field, a USING column -- is left to it. Subquery bodies are not entered: their names
+//! are their own.
+static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Binder &binder,
+                                              const case_insensitive_map_t<idx_t> &variables,
+                                              DecideDataPosition position) {
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
 		if (!colref.IsQualified() || !variables.count(colref.GetColumnName())) {
 			return;
 		}
 		ErrorData error;
-		auto binding = bind_context.GetBinding(colref.GetTableName(), error);
-		if (!binding || binding->HasMatchingBinding(colref.GetColumnName())) {
+		auto binding = binder.bind_context.GetBinding(colref.GetTableName(), error);
+		// The decisions' binding, added after this check, under a name no relation took.
+		bool decisions_binding = !binding && colref.column_names.size() == 2 &&
+		                         StringUtil::CIEquals(colref.GetTableName(), DECISIONS_BINDING);
+		if (!decisions_binding && (!binding || SqlReadsQualifiedName(binder, colref))) {
 			return;
 		}
-		if (data_position) {
-			throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data",
-			                      colref.ToString());
+		if (position != DecideDataPosition::NONE) {
+			throw BinderException(expr, DecideDecisionInDataFormat(position), colref.ToString());
 		}
 		throw BinderException(expr, "DECIDE: write %s, not %s; a decision is referenced by its bare name",
 		                      colref.GetColumnName(), colref.ToString());
@@ -58,16 +75,32 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		bool scope = func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG ||
 		                                  func.function_name == REDUCER_BY_TAG);
 		for (idx_t i = 0; i < func.children.size(); i++) {
-			RefuseQualifiedDecisionReferences(*func.children[i], bind_context, variables,
-			                                  data_position || (scope && i > 0));
+			auto child_position = scope && i > 0 && position == DecideDataPosition::NONE ? DecideDataPosition::SCOPE
+			                                                                             : position;
+			RefuseQualifiedDecisionReferences(*func.children[i], binder, variables, child_position);
 		}
 		if (func.filter) {
-			RefuseQualifiedDecisionReferences(*func.filter, bind_context, variables, data_position);
+			RefuseQualifiedDecisionReferences(*func.filter, binder, variables, position);
+		}
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_FRAME) {
+		// The order and within keys take data; the payload and fallback are values.
+		auto &frame = expr.Cast<DecideFrameExpression>();
+		auto key_position = position == DecideDataPosition::NONE ? DecideDataPosition::FRAME_KEY : position;
+		RefuseQualifiedDecisionReferences(*frame.order, binder, variables, key_position);
+		for (auto &key : frame.within) {
+			RefuseQualifiedDecisionReferences(*key, binder, variables, key_position);
+		}
+		for (auto *value : {frame.payload.get(), frame.fallback.get()}) {
+			if (value) {
+				RefuseQualifiedDecisionReferences(*value, binder, variables, position);
+			}
 		}
 		return;
 	}
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		RefuseQualifiedDecisionReferences(child, bind_context, variables, data_position);
+		RefuseQualifiedDecisionReferences(child, binder, variables, position);
 	});
 }
 
@@ -138,13 +171,14 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // every column of the FROM clause: GetMatchingBindings, not GetMatchingBinding, which
         // skips a column a USING or NATURAL join merges -- a bare name binds it ahead of every
         // relation, so it would hide the decision -- and throws on one two relations share.
-        case_insensitive_set_t declared_names;
+        // The binding that will hold the decisions is not added yet, so a key names none.
+        DecideKeyDecisions declared;
         for (const auto &expr_ptr : statement.decide_variables) {
             auto &name = SplitDeclaration(*expr_ptr).name->GetColumnName();
             if (!bind_context.GetMatchingBindings(name).empty()) {
                 throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
             }
-            if (!declared_names.insert(name).second) {
+            if (!declared.names.insert(name).second) {
                 throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
             }
         }
@@ -162,7 +196,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 variable_scopes.push_back(DecideVarScopeInfo::Scalar());
             } else if (declaration.per) {
                 auto key_text = DecideKeyToString(*declaration.per);
-                auto scope_idx = FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text,
+                auto scope_idx = FindOrCreateKeyScope(bind_context, *declaration.per, declared, key_text,
                                                       entity_scopes);
                 entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
                 variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
@@ -199,9 +233,18 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // Capture user var count BEFORE any rewrites that add auxiliary variables
         idx_t num_user_vars = var_names.size();
 
+        // In a clause a name reads as written: no column by position, no lambda parameter
+        // hiding a decision. Every parsed-tree rule below judges decisions by name.
+        if (statement.decide_constraints) {
+            ValidateDecideReferences(*statement.decide_constraints, decide_variable_names);
+        }
+        if (statement.decide_objective) {
+            ValidateDecideReferences(*statement.decide_objective, decide_variable_names);
+        }
+
         // A decision is referenced by its bare name, wherever the query names it.
         auto refuse_qualified = [&](const ParsedExpression &expr) {
-            RefuseQualifiedDecisionReferences(expr, bind_context, decide_variable_names, false);
+            RefuseQualifiedDecisionReferences(expr, binder, decide_variable_names, DecideDataPosition::NONE);
         };
         if (statement.decide_constraints) {
             refuse_qualified(*statement.decide_constraints);
@@ -282,7 +325,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             TagDecideSourceFragments(*statement.decide_objective, decide_source_fragments);
         }
 
-        bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
+        bind_context.AddGenericBinding(result.decide_index, DECISIONS_BINDING, var_names, var_types);
         // Query-wide decisions (`per (): x`), so the constraint and objective binders can
         // tell a query-wide decision from a per-row one.
         case_insensitive_set_t scalar_variable_names;
@@ -391,30 +434,16 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 }
 
 void DecideDeclarationsBinder::RefuseDecisionsInWhere(const Expression &where, const BoundSelectNode &result) {
-	auto refuse = [&](const ColumnBinding &binding) {
-		D_ASSERT(binding.column_index < result.decide_variables.size());
-		auto &name = result.decide_variables[binding.column_index]->GetAlias();
-		throw BinderException(where,
-		                      "DECIDE: %s is a decision; WHERE may only use data, since it picks the rows before the "
-		                      "solve. Filter on %s in an outer query",
-		                      name, name);
-	};
-	if (where.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = where.Cast<BoundColumnRefExpression>();
-		if (colref.binding.table_index == result.decide_index) {
-			refuse(colref.binding);
-		}
-	} else if (where.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
-		// A subquery's body has its own binder, which lists every column of this query read
-		// anywhere inside it as correlated.
-		for (auto &column : where.Cast<BoundSubqueryExpression>().binder->correlated_columns) {
-			if (column.binding.table_index == result.decide_index) {
-				refuse(column.binding);
-			}
-		}
+	auto read = FindDecisionRead(where, result.decide_index);
+	if (!read.node) {
+		return;
 	}
-	ExpressionIterator::EnumerateChildren(where,
-	                                      [&](const Expression &child) { RefuseDecisionsInWhere(child, result); });
+	D_ASSERT(read.column < result.decide_variables.size());
+	auto &name = result.decide_variables[read.column]->GetAlias();
+	throw BinderException(*read.node,
+	                      "DECIDE: %s is a decision; WHERE may only use data, since it picks the rows before the "
+	                      "solve. Filter on %s in an outer query",
+	                      name, name);
 }
 
 } // namespace duckdb

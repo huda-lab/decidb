@@ -30,7 +30,8 @@ oracle-verified (`test_cons_comparison.py` and others).
 ### IN
 
 - **Oracle-verified** (`test_cons_in.py`): `x IN (values)` on decision variable, non-integer values on REAL var, `x IN (0, 1)` on BOOL (no-op optimization), single-value IN rewritten to `x = v`, IN under a `when` in front.
-- Error tests (`test_error_binder.py`): `SUM(x) IN (...)` rejected, DECIDE var in IN RHS rejected.
+- Error tests (`test_error_binder.py`): `SUM(x) IN (...)` rejected, DECIDE var in IN RHS rejected. An aggregate among the values (`x IN (1, SUM(cap))`, under `by`, `when`, arithmetic, `count(*)`, alone) is refused by name, and the same total from a subquery answers, as does a frame
+(`test_cons_in.py`).
 
 ### Structural forms
 

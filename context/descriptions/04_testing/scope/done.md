@@ -304,9 +304,15 @@ docstring derives.
   DIAGNOSE, in a CTE, a nested DECIDE, a view and a prepared statement. A removed form
   written after a clause that already has a scope in front is a plain syntax error. A
   relation-qualified reference to a decision is refused in every position, with the
-  data-only message inside `when`, `per` and `by`; a struct field or column named like
-  a decision still binds. `scalar` is an ordinary name, the colon form stays, and a
-  suggested spelling pastes back and runs. Pinned message fragments.
+  data-only message inside `when`, `per`, `by` and a frame's keys; a struct field or column
+  named like a decision still binds, a struct column sharing its relation's alias included
+  (A11). The binding that holds the decisions, `decide_variables`, is no relation the query
+  wrote: `decide_variables.x` is D43's spelling of `x` in every position, the binding names
+  no key, and a relation or column the query names `decide_variables` is its own (A08). A
+  removed form inside a plain subquery is refused wherever in it it stands, its ORDER BY,
+  LIMIT, a join condition and a set operation's ORDER BY included (A10). `scalar` is an
+  ordinary name, the colon form stays, and a suggested spelling pastes back and runs.
+  Pinned message fragments.
 
 - **`test_anr_oracle_selfcheck.py`** — the ANR evaluator against five independent
   readings: the deck's and the fixtures' hand computations (every case's instances, optimum,

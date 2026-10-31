@@ -144,8 +144,8 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= 3 MAXIMIZE l_q
 statement ok
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= (SELECT SUM(l_quantity) FROM lineitem) MAXIMIZE SUM(x) LIMIT 1;
 
-# Non-scalar subquery
+# A subquery reading a decision
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem) MAXIMIZE SUM(x) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found.*
+<REGEX>:Binder Error: DECIDE: x is a decision; a subquery in a DECIDE clause may only use data.*

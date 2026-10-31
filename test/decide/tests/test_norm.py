@@ -14,6 +14,9 @@ import pytest
 
 from decidb_cli import DecidBCliError
 
+from ._brute_force import judge_rows
+from ._scope_cases import answer
+
 # Sole-norm objective so the achieved norm value *is* the objective (unique at
 # the optimum even when the assignment is not). l_orderkey <= 3 keeps it small.
 _BASE = """
@@ -450,3 +453,42 @@ def test_norm_in_arithmetic_on_highs(decidb_cli_highs):
     rows, cols = decidb_cli_highs.execute(_MIXED.format(
         obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
     assert rows  # solved and returned rows
+
+
+# ---------------------------------------------------------------------------
+# norm(e, 'inf') beside another term is the extremum it stands for (A06)
+# ---------------------------------------------------------------------------
+#
+# The clause's shape is decided before the norm is lowered to max(abs(e)), so it has to
+# be read as a MAX there: as a SUM, the clause took the aggregate row a MAX beside a
+# decision cannot have, and failed internally. Judged by enumeration on both solvers.
+
+#: Rows A, A, B with caps 3, 3, 2; `s` is one decision for the query, at most 3.
+_INF_SQL = """SELECT id, x, s FROM (VALUES (1, 'A', 3), (2, 'A', 3), (3, 'B', 2)) t(id, g, cap)
+    DECIDE x(INT), per (): s(INT) SUCH THAT x <= cap AND s <= 3 AND {clause} MAXIMIZE sum(x) + s ORDER BY id"""
+_INF_DOMAINS = {"x0": range(4), "x1": range(4), "x2": range(3), "s": range(4)}
+
+
+def _largest(a, *names):
+    return max(a[name] for name in names)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("clause, feasible", [
+    pytest.param("s + norm(x, 'inf') by (g) <= 3",
+                 lambda a: a["s"] + _largest(a, "x0", "x1") <= 3 and a["s"] + a["x2"] <= 3, id="by-a-key"),
+    pytest.param("sum(x) by (g) + norm(x, 'inf') by (g) <= 5",
+                 lambda a: a["x0"] + a["x1"] + _largest(a, "x0", "x1") <= 5 and 2 * a["x2"] <= 5,
+                 id="beside-a-sum"),
+    # A bound that varies by row holds the clause to its smallest value, 2.
+    pytest.param("s + norm(x, 'inf') <= cap", lambda a: a["s"] + _largest(a, "x0", "x1", "x2") <= 2,
+                 id="a-row-varying-bound"),
+    pytest.param("per g: norm(x, 'inf') by (g) + s <= 3",
+                 lambda a: a["s"] + _largest(a, "x0", "x1") <= 3 and a["s"] + a["x2"] <= 3, id="per-a-key"),
+    pytest.param("s + norm(x, 'inf') <= 3", lambda a: a["s"] + _largest(a, "x0", "x1", "x2") <= 3,
+                 id="query-wide"),
+])
+def test_an_infinity_norm_beside_another_term(request, cli_fixture, clause, feasible):
+    rows = answer(request.getfixturevalue(cli_fixture), _INF_SQL.format(clause=clause))
+    judge_rows(rows, _INF_DOMAINS, feasible, lambda a: a["x0"] + a["x1"] + a["x2"] + a["s"])

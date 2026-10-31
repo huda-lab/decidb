@@ -436,6 +436,14 @@ answer instead of demanding a bound on the ABS auxiliary.
 The two envelope rows keep the clause's `when` (`ScopeHelperRow`), so they read only the
 rows the clause keeps; the objective's keep the objective's `when`.
 
+**The auxiliary's scope.** An auxiliary has the scope its term had when the clause's shape
+was decided. Beside a clause's reducers, an ABS whose argument holds one value for the
+query (`abs(s - 1)` over a query-wide `s`, `DecideCanonicalizer::IsQueryWideExpression`,
+the test `ClassifyScoped` puts such a term in the aggregate row by) gets one query-wide
+auxiliary, and so does its sign indicator; any other ABS, a reducer's member included,
+gets one per row. A per-row auxiliary there turned the aggregate row into the shape of a
+value rewrite after that rewrite had run, and the clause failed internally (A07).
+
 **An ABS inside an ABS.** `FindAndReplaceAbs` rewrites the argument before the node, so
 an inner ABS becomes its own auxiliary first and the outer's envelope rows refer to it
 (an ABS left in a row was read by term extraction as its argument, and the sign

@@ -1,4 +1,6 @@
 #include "duckdb/planner/expression_binder/decide/decide_constraints_binder.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -13,6 +15,7 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -228,6 +231,35 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
         is_top_expression = false;
         auto result = ExpressionBinder::BindExpression(expr_ptr, depth);
         is_top_expression = was_top_expression;
+        // Each value multiplies an indicator of its own, so it is a coefficient: a reducer
+        // over the rows is no value of one row, as it is no factor on a decision. Read on
+        // the bound values, where the catalog has said what is an aggregate (a subquery's
+        // own aggregates are inside its body); a frame binds as one but reads one row.
+        if (!result.HasError() && result.expression->GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
+            qualifier_context && qualifier_context->source_fragments && qualifier_context->entity_scopes &&
+            qualifier_context->group_keys) {
+            auto &values = result.expression->Cast<BoundOperatorExpression>().children;
+            for (idx_t i = 1; i < values.size(); i++) {
+                bool aggregate = false;
+                std::function<void(const Expression &)> find = [&](const Expression &node) {
+                    idx_t frame;
+                    if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(node, frame)) {
+                        aggregate = true;
+                    }
+                    ExpressionIterator::EnumerateChildren(node, find);
+                };
+                find(*values[i]);
+                if (aggregate) {
+                    unordered_map<idx_t, string> no_relations;
+                    DecideSourceNames names {*qualifier_context->source_fragments, *qualifier_context->entity_scopes,
+                                             *qualifier_context->group_keys, no_relations};
+                    return BindResult(BinderException::Unsupported(
+                        expr, StringUtil::Format("DECIDE: an IN value cannot be an aggregate such as '%s'; compute it "
+                                                 "in a subquery or a CTE and list that value",
+                                                 RenderDecideSource(*values[i], names))));
+                }
+            }
+        }
         return result;
     }
     default:
@@ -313,19 +345,10 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
         return BindResult(std::move(body_error));
     }
 
-    // The condition takes data only (ValidateDecideScopeSpellings): plain SQL, no
-    // parentheses needed around a compound one.
+    // The condition takes data only: plain SQL, no parentheses needed around a compound one.
     auto bind_condition = [&](unique_ptr<ParsedExpression> &parsed, unique_ptr<Expression> &bound) {
-        ErrorData error;
         is_top_expression = false;
-        binding_when_condition = true;
-        try {
-            BindChild(parsed, depth, error);
-        } catch (...) {
-            binding_when_condition = false;
-            throw;
-        }
-        binding_when_condition = false;
+        auto error = BindData(parsed, depth, DecideDataPosition::SCOPE);
         if (!error.HasError()) {
             bound = BoundCastExpression::AddCastToType(context, std::move(BoundExpression::GetExpression(*parsed)),
                                                        LogicalType::BOOLEAN);
@@ -353,11 +376,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
             key_fragment = qualifier_context->source_fragments->size();
             qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
         }
-        case_insensitive_set_t decision_names;
-        for (auto &variable : variables) {
-            decision_names.insert(variable.first);
-        }
-        key = BindKeyColumns(binder.bind_context, *per, decision_names);
+        key = BindKeyColumns(binder.bind_context, *per, KeyDecisions());
     }
 
     // One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
@@ -404,20 +423,8 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
     return BindResult(scope(std::move(bound)));
 }
 
-BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
-    auto location = expr_ptr->GetQueryLocation();
-    auto result = BindExpressionInternal(expr_ptr, depth, root_expression);
-    if (!result.HasError() && result.expression) {
-        PreserveDecideSourceFragment(*expr_ptr, *result.expression);
-    }
-    return PreserveQueryLocation(location, std::move(result));
-}
-
-BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
-                                                            bool root_expression) {
-    if (binding_when_condition) {
-        return ExpressionBinder::BindExpression(expr_ptr, depth);
-    }
+BindResult DecideConstraintsBinder::BindNode(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                              bool root_expression) {
     if (depth > 0) {
         return ExpressionBinder::BindExpression(expr_ptr, depth);
     }
@@ -469,10 +476,10 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
     case ExpressionClass::CONJUNCTION:
         return BindConjunction(expr_ptr, depth);
     case ExpressionClass::SUBQUERY:
-        return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+        return DecideBinder::BindNode(expr_ptr, depth, root_expression);
     case ExpressionClass::DECIDE_FRAME:
         if (!is_top_expression) {
-            return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+            return DecideBinder::BindNode(expr_ptr, depth, root_expression);
         }
         // A frame alone, like a bare decision, says nothing to hold.
         return BindResult(BinderException::Unsupported(

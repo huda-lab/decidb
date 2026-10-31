@@ -127,10 +127,6 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 		result.qualify = TransformExpression(stmt.qualifyClause);
 		// sample
 		result.sample = TransformSampleOptions(stmt.sampleOptions);
-		// DecidB: the removed spellings still parse so that the error can name the new one.
-		// A subquery inside a DECIDE clause is read with its spellings too, so every node
-		// is checked, not only the one that holds the clause.
-		RefuseRemovedDecideSpellings(result);
 		break;
 	}
 	case duckdb_libpgquery::PG_SETOP_UNION:
@@ -175,6 +171,10 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 	}
 
 	TransformModifiers(stmt, *node);
+	// DecidB: the removed spellings still parse so that the error can name the new one.
+	// A subquery inside a DECIDE clause is read with its spellings too, so every node is
+	// checked, its ORDER BY and LIMIT included, not only the one that holds the clause.
+	RefuseRemovedDecideSpellings(*node);
 
 	return node;
 }

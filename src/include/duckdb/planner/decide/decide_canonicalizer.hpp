@@ -175,6 +175,11 @@ class DecideCanonicalizer {
 public:
 	//! Whether `expr` holds a reducer anywhere, itself included.
 	static bool ContainsReducer(const Expression &expr);
+	//! Whether `expr` holds one value for the whole query, decisions included: the test
+	//! that puts a term beside a clause's reducers in its aggregate row (ClassifyScoped).
+	//! Unlike IsQueryWideConstant, it admits query-wide (`per ()`) decisions while
+	//! rejecting row and keyed ones and row-varying columns.
+	bool IsQueryWideExpression(const Expression &expr) const;
 
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
@@ -400,10 +405,6 @@ private:
 	//! `(SELECT max(w) FROM p)` is shape-identical to `weight` -- and, importantly, to
 	//! a CORRELATED subquery, which is per-row and must not qualify.
 	bool IsQueryWideConstant(const Expression &expr) const;
-	//! Query-wide counterpart used for top-level aggregate terms. Unlike
-	//! IsQueryWideConstant, this admits scalar DECIDE variables while rejecting
-	//! row/entity decisions and ordinary row-varying columns.
-	bool IsQueryWideExpression(const Expression &expr) const;
 
 	//! Recompute semantic provenance for the complete canonical bound. A stale root
 	//! classification is removed before inspecting the rebuilt tree; only an RHS whose

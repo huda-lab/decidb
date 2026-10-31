@@ -24,6 +24,11 @@ classification.
   `SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`, `BETWEEN`, and ABS on both
   sides of a comparison. The stress corpus C33–C37 supplies an additional model-shape
   smoke check.
+- **An ABS of a query-wide decision beside a reducer**
+  (`test_an_abs_of_a_query_wide_decision_beside_a_reducer`, judged by enumeration on both
+  solvers, and once with every construct lowered): `sum(x) + abs(s - 1) <= 5` and its
+  `per ()`, `by`, `per g:` and `when` forms, the ABS subtracted, the ABS pushed up past its
+  envelope (`>= 8`), and in the objective. Its one query-wide auxiliary holds the value.
 - **Hard direction composed with `when` and `per`** (oracle-verified in
   `test_abs_linearization.py`): the sign-indicator envelope that pins each `d_i`
   is per-row and unconditional, while `when` and `per` act on the reducer that

@@ -2096,9 +2096,11 @@ private:
 			ExtractLinearAndBilinearTerms(expr, obj, sign, nullptr);
 			if (obj.squared_terms.size() != squared_before ||
 			    (obj.bilinear_terms.size() != bilinear_before && !ReadsOnlyQueryWideDecisions(expr))) {
-				throw InvalidInputException("DECIDE objective: '%s' multiplies decisions outside a reducer, which is "
-				                            "not supported yet",
-				                            RenderDecideSource(expr, op.source_fragments, op.entity_scopes, &op.group_keys));
+				// An auxiliary prints as what it stands for (`abs(s - 2)`), not by its name.
+				throw InvalidInputException(
+				    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
+				    RenderDecideSource(expr, DecidePlanNames(op.source_fragments, op.entity_scopes, op.group_keys,
+				                                             op.decide_index, op.aux_var_expressions)));
 			}
 			return;
 		}

@@ -417,7 +417,11 @@ reconciling types and spells arithmetic in call form. `RenderDecideSource` decid
 what to show by **authorship**: `TagDecideSourceFragments` recorded the written
 spelling of every cast and scalar subquery before binding could obscure it, so a
 tagged node replays its own SQL out of `source_fragments` and an untagged cast is
-dropped as reconciliation noise.
+dropped as reconciliation noise. A node it has no spelling of its own for -- an operator
+(`COALESCE`, `IS NULL`, `NOT`), a `CASE`, a `BETWEEN` -- prints through DuckDB's own
+printer template (`OperatorExpression::ToString` and its siblings, `RenderThroughDuckDB`)
+over children it renders itself, so a subquery inside one prints as written rather than as
+the column it was flattened into, and a column under it is quoted as SQL needs (A09, A26).
 
 `source_fragments` therefore rides on `LogicalDecide` (serialized as field 238)
 and is copied to `PhysicalDecide`, alongside the `constraint_sources` registry

@@ -1042,13 +1042,22 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	return value ? ScopedShape::VALUE : ScopedShape::AGGREGATE;
 }
 
+//! Whether `aggregate` is an extremum: a MIN or a MAX, or a `norm(e, 'inf')`, which the binder
+//! carries as an inert SUM marker until RewriteNorm lowers it to max(abs(e)). The shape is
+//! decided here, before that, by what the reducer is.
+static bool IsExtremumReducer(const BoundAggregateExpression &aggregate) {
+	auto name = StringUtil::Lower(aggregate.function.name);
+	string order;
+	return name == "min" || name == "max" ||
+	       (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order) && order == "inf");
+}
+
 bool DecideCanonicalizer::TakesComposedMinMax(const vector<Atom> &atoms) const {
 	bool has_minmax = false;
 	for (auto &atom : atoms) {
 		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
 		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && ReferencesDecideVar(*root)) {
-			auto name = StringUtil::Lower(root->Cast<BoundAggregateExpression>().function.name);
-			has_minmax = has_minmax || name == "min" || name == "max";
+			has_minmax = has_minmax || IsExtremumReducer(root->Cast<BoundAggregateExpression>());
 		}
 	}
 	return has_minmax &&

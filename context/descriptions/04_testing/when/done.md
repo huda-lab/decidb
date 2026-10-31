@@ -21,7 +21,12 @@ All oracle-verified unless noted:
   in the condition, every row kept (the same as no `when`), NULL in the condition column
   (the row is dropped), an explicit `IS NOT NULL` condition, conditional and
   unconditional constraints together, a different `when` per constraint, constraint
-  order invariance.
+  order invariance. A condition holding a subquery under `COALESCE`, `IS NULL`, `NOT` or
+  `BETWEEN` is quoted as written in the "matches no rows" and "has no rows" messages, in a
+  constraint, a reducer and the objective, with no internal name; a DIAGNOSE suggestion
+  over a column named `per` quotes it and pastes back
+  (`test_a_condition_holding_a_subquery_is_quoted_as_written`,
+  `test_a_condition_on_a_column_named_per_pastes_back`).
 - **`when` in front of a per-row constraint** (`test_when_perrow.py`): force to zero,
   force selection, a numeric row filter, every row kept, and a REAL decision with no
   implicit [0, 1] cap (`test_when_perrow_real`).

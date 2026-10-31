@@ -15,6 +15,10 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/tableref/expressionlistref.hpp"
+#include "duckdb/parser/tableref/joinref.hpp"
+#include "duckdb/parser/tableref/pivotref.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 
 namespace duckdb {
 
@@ -255,7 +259,7 @@ bool IsAnyDecideMarker(const ParsedExpression &expr) {
 }
 
 //! The first removed marker at or below `expr`, outermost first, with the way to it.
-//! Subquery bodies are not entered: a subquery is refused on its own (TransformSelectNode).
+//! Subquery bodies are not entered: a subquery is refused on its own (TransformSelectInternal).
 bool FindRemovedMarker(const ParsedExpression &expr, vector<PathStep> &path) {
 	path.push_back({&expr, 0, ChildCount(expr)});
 	if (IsRemovedMarker(expr)) {
@@ -925,29 +929,89 @@ void RefuseInExpression(const ParsedExpression &expr) {
 	RefusePostfixWhen(marker);
 }
 
-//! The removed forms in a select node's own expressions. Only a DECIDE clause's text is
-//! read with its spellings, so they reach a plain node only from a subquery inside a clause.
-void RefuseInExpressions(const SelectNode &node) {
+//! The expressions of a FROM clause's own: a join's condition, a VALUES row, a table
+//! function's arguments, a PIVOT's aggregates and its columns' expressions and IN lists. A
+//! subquery there is a query node of its own.
+void RefuseInTableRef(const TableRef &ref) {
+	switch (ref.type) {
+	case TableReferenceType::JOIN: {
+		auto &join = ref.Cast<JoinRef>();
+		RefuseInTableRef(*join.left);
+		RefuseInTableRef(*join.right);
+		if (join.condition) {
+			RefuseInExpression(*join.condition);
+		}
+		break;
+	}
+	case TableReferenceType::EXPRESSION_LIST:
+		for (auto &row : ref.Cast<ExpressionListRef>().values) {
+			for (auto &value : row) {
+				RefuseInExpression(*value);
+			}
+		}
+		break;
+	case TableReferenceType::TABLE_FUNCTION:
+		RefuseInExpression(*ref.Cast<TableFunctionRef>().function);
+		break;
+	case TableReferenceType::PIVOT: {
+		auto &pivot = ref.Cast<PivotRef>();
+		RefuseInTableRef(*pivot.source);
+		for (auto &aggregate : pivot.aggregates) {
+			RefuseInExpression(*aggregate);
+		}
+		for (auto &column : pivot.pivots) {
+			for (auto &expr : column.pivot_expressions) {
+				RefuseInExpression(*expr);
+			}
+			for (auto &entry : column.entries) {
+				if (entry.expr) {
+					RefuseInExpression(*entry.expr);
+				}
+			}
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+//! The removed forms in a query node's own expressions: everything it holds but the query
+//! nodes inside it. Only a DECIDE clause's text is read with its spellings, so they reach a
+//! plain node only from a subquery inside a clause, in any part of it.
+void RefuseInExpressions(const QueryNode &node) {
 	auto refuse = [](const unique_ptr<ParsedExpression> &expr) {
 		if (expr) {
 			RefuseInExpression(*expr);
 		}
 	};
-	for (auto &expr : node.select_list) {
-		refuse(expr);
+	if (node.type == QueryNodeType::SELECT_NODE) {
+		auto &select = node.Cast<SelectNode>();
+		for (auto &expr : select.select_list) {
+			refuse(expr);
+		}
+		refuse(select.where_clause);
+		for (auto &expr : select.groups.group_expressions) {
+			refuse(expr);
+		}
+		refuse(select.having);
+		refuse(select.qualify);
+		if (select.from_table) {
+			RefuseInTableRef(*select.from_table);
+		}
 	}
-	refuse(node.where_clause);
-	for (auto &expr : node.groups.group_expressions) {
-		refuse(expr);
-	}
-	refuse(node.having);
-	refuse(node.qualify);
+	// ORDER BY, LIMIT, OFFSET and DISTINCT ON, of a set operation as of a SELECT.
+	ParsedExpressionIterator::EnumerateQueryNodeModifiers(const_cast<QueryNode &>(node), refuse);
 }
 
 } // namespace
 
-void RefuseRemovedDecideSpellings(const SelectNode &node) {
-	RefuseInExpressions(node);
+void RefuseRemovedDecideSpellings(const QueryNode &queried) {
+	RefuseInExpressions(queried);
+	if (queried.type != QueryNodeType::SELECT_NODE) {
+		return;
+	}
+	auto &node = queried.Cast<SelectNode>();
 	for (auto &declaration : node.decide_variables) {
 		RefuseDeclaration(*declaration);
 	}

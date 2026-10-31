@@ -631,7 +631,11 @@ after binding means types, scopes and casts are already resolved.
   arithmetic is pinned separately (`test_norm_*_in_arithmetic_*`,
   `test_norm_scaled_*`, `test_norm_combined_l1_l2_objective`): each compares the
   *composed* objective against the same composition written out by hand, which is
-  the only spelling that can tell a dropped marker from a lowered one.
+  the only spelling that can tell a dropped marker from a lowered one. `norm(e, 'inf')`
+  beside another term -- under a `by`, beside a sum, against a row-varying bound, under
+  `per`, beside a query-wide decision -- is judged by enumeration on both solvers
+  (`test_an_infinity_norm_beside_another_term`): its clause takes the shape of the MAX
+  it stands for.
 
 ## Summary Table (Implemented Only)
 

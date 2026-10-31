@@ -14,12 +14,14 @@
 
 namespace duckdb {
 
-class SelectNode;
+class QueryNode;
 
-//! Throw a ParserException for the first removed spelling in a parsed DECIDE clause.
-//! Every message carries the phrase "is removed" and the new spelling. The transformer
-//! calls it on every DECIDE query it builds; the binder calls it on a parse tree it
+//! Throw a ParserException for the first removed spelling in `node`'s own expressions and
+//! DECIDE clause, if it has one; a query node inside it is refused on its own. Every
+//! message carries the phrase "is removed" and the new spelling. The transformer calls it
+//! on every query node it builds -- a subquery inside a DECIDE clause is lexed with the
+//! clause's spellings, wherever in it they stand -- and the binder on a DECIDE query it
 //! receives already built (a view or a macro stored before the spellings were removed).
-void RefuseRemovedDecideSpellings(const SelectNode &node);
+void RefuseRemovedDecideSpellings(const QueryNode &node);
 
 } // namespace duckdb

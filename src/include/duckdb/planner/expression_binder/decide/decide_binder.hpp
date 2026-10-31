@@ -21,6 +21,14 @@ class DecideFrameExpression;
 class FunctionExpression;
 struct DecideSourceNames;
 
+//! The decisions a key may not name, since a key takes data only: each by its declared
+//! name, and all of them by the binding that holds them (`decide_variables`), once
+//! BindDeclarations has added it -- the declarations' own keys resolve before that.
+struct DecideKeyDecisions {
+    case_insensitive_set_t names;
+    idx_t binding_index = DConstants::INVALID_INDEX;
+};
+
 //! Find or create the key scope of `per K: ...`, given the parser's `SCOPE_PER_TAG` marker
 //! (children: the body, then the elements of K). Each element resolves against the FROM
 //! clause alone, never an outer query: a declared decision is an error; otherwise it is a
@@ -28,14 +36,34 @@ struct DecideSourceNames;
 //! repetition aside -- share one scope. `key_text` is the key as written, kept for
 //! display. A reducer's `per ()` is the empty key: one scope every row belongs to.
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
-                           const case_insensitive_set_t &decision_names, const string &key_text,
+                           const DecideKeyDecisions &decisions, const string &key_text,
                            vector<EntityScopeInfo> &entity_scopes);
 
 //! The columns of `per K` (the parser's `SCOPE_PER_TAG` marker) as bound column
 //! references, resolved and ordered as FindOrCreateKeyScope resolves them; none for
 //! `per ()`. The bound form of a constraint's generation key.
 vector<unique_ptr<Expression>> BindKeyColumns(BindContext &bind_context, const FunctionExpression &per,
-                                              const case_insensitive_set_t &decision_names);
+                                              const DecideKeyDecisions &decisions);
+
+//! Where only data may stand: a `when` condition, a `per` key or a `by` key (SCOPE), or a
+//! frame's order or within key (FRAME_KEY).
+enum class DecideDataPosition : uint8_t { NONE, SCOPE, FRAME_KEY };
+
+//! The refusal of a decision at `position`, a format taking the decision as written.
+const char *DecideDecisionInDataFormat(DecideDataPosition position);
+
+//! A read of a decision in a bound expression: the node that reads it -- a column
+//! reference, or a subquery that reads it from inside -- and the decision's column.
+struct DecideDecisionRead {
+    optional_ptr<const Expression> node;
+    idx_t column = DConstants::INVALID_INDEX;
+};
+
+//! The first read of the decisions' binding (`decide_index`) in bound `expr`, a subquery's
+//! correlated columns included; no node when it reads none. Binding settles what a name
+//! stands for -- a SELECT alias, `decide_variables.x` and a correlated name all bind to the
+//! decision -- so a rule about where a decision may stand reads this, not the spelling.
+DecideDecisionRead FindDecisionRead(const Expression &expr, idx_t decide_index);
 
 //! What a reducer's own key (`sum(per K: e)`, `SUM(D: e)`) and `by` need in order to
 //! resolve. Owned by the declarations binder, which is still filling `entity_scopes` when
@@ -59,7 +87,16 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
                          bool allow_quadratic = false);
 
+//! Whether `expr` names a decision by its bare name, outside subquery bodies: a subquery's
+//! names are its own, and one that reads a decision from inside is refused when it binds
+//! (DecideBinder::BindExpression). ValidateDecideReferences makes the bare name exact.
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+
+//! Refuses, in a parsed constraint or objective, the two spellings after which a name in it
+//! could mean other than it reads: a column named by its position (`#2`), which may be a
+//! decision, and a lambda parameter named like a decision, which hides it. Subquery bodies
+//! are not entered. Runs before every other parsed-tree rule, which judge decisions by name.
+void ValidateDecideReferences(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 //! The one text for a CASE inside a constraint or an objective, whether it reaches a
 //! reducer's argument (ValidateSumArgument) or the clause itself: a user who writes one
@@ -224,10 +261,21 @@ protected:
                                               const DecideFrameExpression &frame, const string &alias,
                                               ErrorData &error);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-    BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
-    //! The dispatch itself. `BindExpression` wraps it so every bound node this binder
-    //! produces carries a source location, whatever path the dispatch takes.
-    BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
+    //! Binds `expr`, which stands at `position`, as plain SQL: past the DECIDE dispatch, and
+    //! with any decision it reads refused (BindExpression).
+    ErrorData BindData(unique_ptr<ParsedExpression> &expr, idx_t depth, DecideDataPosition position);
+    //! The one entry every node of a DECIDE clause binds through, whichever binder: it binds
+    //! the node (BindNode, or plain SQL at a data position), holds a column reference to the
+    //! reference rule, and stamps the source location and source fragment.
+    //!
+    //! The reference rule: a column reference that binds to a decision is refused from inside
+    //! a subquery and at a data position, and elsewhere must be the decision's bare name. It
+    //! reads what the reference bound to, so every spelling that reaches a decision -- the
+    //! bare name, `decide_variables.x`, the relation `decide_variables`, a correlated name --
+    //! is held to it, and a name that binds elsewhere (a subquery's own column) is not.
+    BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) final;
+    //! The dispatch itself, which the clause binders extend.
+    virtual BindResult BindNode(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
     virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {
         throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
     }
@@ -241,16 +289,24 @@ protected:
     bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg);
 
     bool is_top_expression;
-    //! Set while binding a `when` condition or a `per` column: both bypass DECIDE-specific
-    //! dispatch and bind through the base ExpressionBinder instead, since neither may
-    //! reference a DECIDE variable.
-    bool binding_when_condition = false;
+    //! The data position being bound (BindData), NONE elsewhere.
+    DecideDataPosition binding_data = DecideDataPosition::NONE;
+    //! Set while a column reference binds (BindExpression).
+    bool binding_reference = false;
     case_insensitive_map_t<idx_t> variables;
     //! Subset of `variables` that are query-wide (`per (): x`).
     case_insensitive_set_t scalar_variables;
     //! Null when the caller cannot resolve qualifiers (relation-qualified
     //! reducers are then rejected rather than silently ignored).
     optional_ptr<DecideQualifierContext> qualifier_context;
+
+    //! The decisions a key may not name (DecideKeyDecisions).
+    DecideKeyDecisions KeyDecisions() const;
+
+private:
+    //! Refuses `bound`, what the column reference `parsed` bound to at `depth`, when it reads
+    //! a decision where the reference rule (BindExpression) does not allow one.
+    void RefuseDecisionReference(const ParsedExpression &parsed, const Expression &bound, idx_t depth) const;
 };
 
 } // namespace duckdb

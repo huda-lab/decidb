@@ -39,12 +39,45 @@ binds ahead of every relation, so a decision named like it would never be read.
 
 A decision is registered under its bare name, and only that name references it.
 `RefuseQualifiedDecisionReferences` refuses `D.x`, where `D` is a relation of the FROM
-clause with no column `x` and `x` is a decision, over the constraints, the objective,
-the select list and `ORDER BY`, before anything else reads them: *"DECIDE: write x, not
-D.x; a decision is referenced by its bare name"*, or, in a `when` condition, a `per` key
-or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43).
-A qualified name that binds to a column, a struct field or a `USING` column is left to
-the SQL binder.
+clause, `x` is a decision and SQL reads the name no other way, over the constraints, the
+objective, the select list and `ORDER BY`, before anything else reads them: *"DECIDE:
+write x, not D.x; a decision is referenced by its bare name"*, or, in a `when` condition,
+a `per` key, a `by` key or a frame's order or `within` key, *"DECIDE: D.x is a decision;
+when, per and by may only use data"* (*"... a frame's order key and within may only use
+data"*) (D43). Whether SQL reads it otherwise is asked of DuckDB's own resolution
+(`ExpressionBinder::QualifyColumnName`, through `SqlReadsQualifiedName`): a column of
+`D`, else a field of a struct column `D` -- so `s.open` over a column `s` holding a struct
+is the field even where `s` is also the relation's alias (A11). The binding that will hold
+the decisions, `decide_variables` (`DECISIONS_BINDING`), counts as such a relation: no
+relation of the FROM clause took its name, and `decide_variables.x` is the decision `x`.
+
+#### The reference rule
+
+Every node of a DECIDE clause binds through one entry, `DecideBinder::BindExpression`,
+whichever binder (constraints, objective) holds it; the binders extend `BindNode`, the
+dispatch behind it. The entry holds each column reference to one rule, read off what it
+bound to (`FindDecisionRead`: a column of `decide_index`, or a subquery whose binder lists
+one among its correlated columns), never off its spelling:
+
+| A reference that binds to a decision | |
+|---|---|
+| from inside a subquery (bound past it, at depth > 0) | *"DECIDE: x is a decision; a subquery in a DECIDE clause may only use data"* |
+| at a data position: a `when` condition, a `by` key, a frame's order key (`BindData`, `DecideDataPosition`) | *"DECIDE: x is a decision; when, per and by may only use data"* (frame: *"... a frame's order key and within may only use data"*) |
+| elsewhere, spelled other than the bare name | *"DECIDE: write x, not decide_variables.x; ..."*, or for the binding read as a struct of the decisions *"DECIDE: decide_variables is neither a column nor a relation of the FROM clause"* |
+
+A reference SQL expands -- `decide_variables` binds `decide_variables.x` for each column --
+is judged once, as written. The parsed-tree rules that come before binding judge decisions
+by their bare name; two passes make that exact. `ValidateDecideReferences`, first among
+them, refuses the spellings after which a name could mean other than it reads: a column
+by position (*"DECIDE: #2 names a column by its position, which a DECIDE clause does not
+support; write the column's name"*), which may be a decision, and a lambda parameter named
+like a decision (*"DECIDE: the lambda parameter x has the name of a decision; rename it"*),
+which hides one. And none of them enters a subquery's body (`ExpressionContainsDecideVariable`,
+`FindDecisionName`, the cast and REAL-decision gates): a name there is the subquery's own,
+and one that reads a decision is refused as it binds. Key resolution by name -- a `per`
+key, a `within` key, a relation in `by`, the colon form -- does not bind expressions; it
+skips the decisions' binding by identity (`DecideKeyDecisions`), so `per decide_variables.x`
+is a decision where only data may stand and `per decide_variables` names no relation (A08).
 
 ### Not in WHERE
 
@@ -287,6 +320,14 @@ they reached the linear form as an internal error.
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 `BindConjunction`, `BindScopedConstraint` (§4a).
 
+`BindOperator` takes `x IN (v1, ..., vK)` on a bare decision with data values. Each value
+becomes the coefficient of an indicator of its own (`RewriteInDomain`), so a value that
+holds an aggregate -- read on the bound values, where the catalog has resolved one; a
+subquery's own aside, and a frame, which binds as one but reads one row -- is refused,
+quoted as written: *"DECIDE: an IN value cannot be an
+aggregate such as 'sum(cap)'; compute it in a subquery or a CTE and list that value"*. It
+reached the value rewrite as a reducer it does not replace, and failed internally (A05).
+
 Constraints are joined with `AND`. `BindConjunction` refuses any other conjunction in a
 constraint position (`x <= cap OR x <= 1`, also under a scope): every later walk reads a
 conjunction as `AND`, and no layer builds the indicator an `OR` needs. A conjunction's
@@ -325,8 +366,9 @@ tree.
 
 Both uncorrelated and correlated **scalar** subqueries are supported, and are
 delegated to DuckDB's standard `ExpressionBinder::BindExpression`. Non-scalar
-subqueries are rejected, as is any subquery referencing a decision variable
-(`ExpressionContainsDecideVariable`). Correlation is observed later, in
+subqueries are rejected, as is any subquery that reads a decision, by the reference rule
+(§1): the column binds past the subquery, at the DECIDE binder. A subquery's own column
+named like a decision, and a nested DECIDE's own decisions, are not one. Correlation is observed later, in
 `plan_select_node.cpp`, at the only point where it is still visible — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md).
 
@@ -628,7 +670,7 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`), the WHERE refusal (`RefuseDecisionsInWhere`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
-| Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes and frames may stand (`ValidateDecideScopeSpellings`, `ValidateFrame`), frame binding (`BindDecideFrame`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Shared DECIDE expression rules, the one binding entry and the reference rule (`BindExpression`, `RefuseDecisionReference`, `FindDecisionRead`, `BindData`), names as written (`ValidateDecideReferences`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`, `DecideKeyDecisions`), where scopes and frames may stand (`ValidateDecideScopeSpellings`, `ValidateFrame`), frame binding (`BindDecideFrame`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding and its scope | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |

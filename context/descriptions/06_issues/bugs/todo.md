@@ -110,7 +110,9 @@
   `by ((id % 2))`.
 - **Expected:** the text as written. That needs each node's source span, which the
   parser does not keep (only its start).
-- **Impact:** messages only; they stay recognizable.
+- **Impact:** messages only; they stay recognizable. A Boolean literal is one of these:
+  `when (cap > 30) = true:` is quoted `when cap > 30 = CAST('t' AS BOOLEAN)`, which does not
+  paste back as written.
 
 ## Messages raised while choosing a formulation name columns without their relation
 
@@ -220,7 +222,36 @@ Each reproduces on the current build.
   non-aggregate term: "/"(CAST((sum(x) + CAST(3 AS HUGEINT)) AS DOUBLE), ...)"*, a
   decision-free `count(*)` term is quoted `'COUNT_STAR(...)'` (`UserFacingName`,
   `decide_canonicalizer.cpp`), and `MAXIMIZE count(*)` names the function `'count_star'`.
+- **A constant is called a query-wide decision:** `sum(5) <= 2` and `sum((SELECT 2)) <= 2`
+  answer *"5 is a query-wide decision, so SUM(5) has nothing to aggregate over"*, and
+  `sum((SELECT x))` gets it in place of the subquery refusal: `IsRowInvariantExpression`
+  (`decide_binder.cpp`) counts any node with no children as invariant, and the message
+  calls every invariant body a decision.
+- **A norm is named by the MAX it becomes:** `norm(x - 2, 'inf') + sum(x) <> 6` answers
+  *"Composed MIN/MAX in DECIDE v1 supports only ..."* ("v1" names no thing the user can
+  see) and `MINIMIZE norm(x - 2, 'inf') + s` answers *"'s' beside MIN or MAX ..."*: the
+  refusals are layer 5's, after `RewriteNorm` dropped the marker.
+- **A removed spelling inside parentheses in a subquery's condition is misquoted:**
+  `WHERE (SUM(c) WHEN c > 0) = 1` suggests `sum(when c > 0 = 1: c)`, and so does a join
+  condition: outside a clause the written condition (`WrittenCondition`,
+  `decide_removed_spellings.cpp`) runs on through the comparison around it, as an unbracketed
+  one would; the parse tree keeps no parentheses to tell them apart.
 - **Impact:** messages only.
+
+## A source fragment's tag is read as part of the SQL
+
+- **Location:** `TagDecideSourceFragments` (`decide_source_provenance.cpp`) stamps every
+  cast and scalar subquery of a clause with the alias `__source_fragment_<n>__`, and DuckDB
+  reads a parsed node's alias in two places: a struct literal's field name and a named
+  argument (`name := value`).
+- **Observed:** `x <= {'a': cap::INT}.a - 1` (in a `when`, a `by` or the objective as well)
+  answers *"Could not find key "a" in struct. Candidate Entries: "a__source_fragment_0__""*;
+  `x <= nullif(cap::INT, 99)` and `when nullif(cap::INT, 3) IS NULL:` answer *"Positional
+  parameters cannot come after parameters with a default value!"*; a macro call
+  `plus1(cap, 1::INT)` is short of a positional argument; `sum(cap::INT) <= 2` quotes
+  *"'sum(__source_fragment_0__ := CAST(cap AS INTEGER))'"*.
+- **Expected:** the query as SQL reads it, the tag carried beside the node, not as its alias.
+- **Impact:** valid queries refused; an internal name in a message.
 
 ## Diagnosis text
 
@@ -256,42 +287,19 @@ Each reproduces on the current build.
 - **Impact:** a suggested change that does not repair the query, or names the wrong
   direction.
 
-## A decision named by position or by its internal relation passes the data-only checks
+## The decisions' binding is reachable outside the clauses
 
-- **Location:** the checks that a `when` condition, a `by` key, a frame's `over (...)` and
-  a subquery in a clause read data only run on the parsed tree and match bare names
-  (`IsVariableExpression`, `ExpressionContainsDecideVariable`, `decide_binder.cpp`). A
-  positional reference `#n` and `decide_variables.x` bind to the decisions' binding
-  anyway (`PositionToColumn`, the binding's internal name). WHERE does not have the
-  problem: its check reads the bound tree (`RefuseDecisionsInWhere`, `02_binder/done.md`).
-- **Observed:** over `t(g, cap)` with BIGINT columns, `SUM(x) BY (#3) <= 4` (`#3` is x)
-  returns x = (0, 4, 4), the answer grouped by `g`; `WHEN #3 = 1: x <= 1` returns
-  (1, 1, 7), the condition read on `g`; `over (#3)` orders by `g`. With INTEGER columns
-  all three fail with *"INTERNAL Error: Vector::Reference used on vector of different
-  type"* (`PhysicalDecide::RunScopeChecks`, `BuildGroupIds`). `x <= (SELECT
-  decide_variables.x) + cap` and `MAXIMIZE SUM(x * (SELECT decide_variables.x))` fail with
-  *"INTERNAL Error: Failed to bind column reference"*; `WHEN decide_variables.x > 4:`
-  reads an input column. `#3` in a constraint body is refused, but by *"SUCH THAT clause
-  does not support '#3'(ExpressionClass::POSITIONAL_REFERENCE)"*.
-- **Expected:** the refusal the bare name gets (*"DECIDE: x is a decision; when, per and
-  by may only use data"*, *"Subqueries in DECIDE clauses cannot reference DECIDE
-  variables."*), however the decision is named.
-- **Impact:** silent wrong answers. Same root as the ANR log's A08 (`decide_variables`
-  reachable through `per` and `by` keys): the data-only checks should read what a name
-  binds to, as WHERE's does.
-
-## A subquery or lambda in a clause is refused for a name that is not the decision
-
-- **Location:** the same parsed-tree name match (`ExpressionContainsDecideVariable`),
-  which enters a subquery's body and a lambda without knowing what binds there.
-- **Observed:** `x <= (SELECT max(x) FROM (VALUES (1)) u(x)) + cap` (the inner `x` is
-  `u.x`) and `x <= (SELECT len(list_filter(l, x -> x > 0))) + cap` (a lambda parameter)
-  are refused with *"Subqueries in DECIDE clauses cannot reference DECIDE variables."*;
-  `WHEN cap > (SELECT max(x) FROM (VALUES (4)) u(x)):` with *"DECIDE: x is a decision;
-  when, per and by may only use data"*. WHERE accepts the same shapes.
-- **Expected:** a name that binds to a column of the subquery or to a lambda parameter is
-  data.
-- **Impact:** valid queries refused.
+- **Location:** the decisions are a binding of the SELECT node's bind context, named
+  `decide_variables` (`DECISIONS_BINDING`, `decide_declarations_binder.cpp`). Inside a
+  DECIDE clause only the bare name reaches it (`02_binder/done.md` §1, the reference rule);
+  the select list, GROUP BY, HAVING, QUALIFY and ORDER BY bind through DuckDB's own
+  binders, where D43 refuses `decide_variables.x` in the select list and ORDER BY only.
+- **Observed:** `SELECT decide_variables` returns a struct of the decisions, `SELECT #4`
+  and `GROUP BY decide_variables.x` read a solved value, and a misspelled relation in any
+  clause lists it: *"Referenced table "main" not found! Candidate tables:
+  "decide_variables""*.
+- **Expected:** the decisions read by their names only, and no internal name in a message.
+- **Impact:** cosmetic: each reads the solved values it names; no answer changes.
 
 ## Parameters of a prepared statement or a table macro fail in a DECIDE clause
 

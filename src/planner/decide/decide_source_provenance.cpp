@@ -3,10 +3,15 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/between_expression.hpp"
+#include "duckdb/parser/expression/case_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -270,6 +275,81 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 	return RenderSource(expr, ctx);
 }
 
+namespace {
+//! A child rendered here, standing in its node's place for DuckDB's own printers (the
+//! ToString templates of OperatorExpression, CaseExpression and BetweenExpression): the
+//! node keeps DuckDB's spelling, and what is inside it prints as the query wrote it -- a
+//! subquery as its text, not as the column DuckDB flattened it into.
+struct RenderedChild {
+	string text;
+	ExpressionType type;
+	const string &ToString() const {
+		return text;
+	}
+	ExpressionType GetExpressionType() const {
+		return type;
+	}
+};
+
+struct RenderedOperator {
+	ExpressionType type;
+	vector<unique_ptr<RenderedChild>> children;
+	ExpressionType GetExpressionType() const {
+		return type;
+	}
+};
+
+struct RenderedCaseCheck {
+	unique_ptr<RenderedChild> when_expr;
+	unique_ptr<RenderedChild> then_expr;
+};
+
+struct RenderedCase {
+	vector<RenderedCaseCheck> case_checks;
+	unique_ptr<RenderedChild> else_expr;
+};
+
+struct RenderedBetween {
+	unique_ptr<RenderedChild> input;
+	unique_ptr<RenderedChild> lower;
+	unique_ptr<RenderedChild> upper;
+};
+} // namespace
+
+static unique_ptr<RenderedChild> RenderChild(const Expression &child, const RenderContext &ctx) {
+	return make_uniq<RenderedChild>(RenderedChild {RenderSource(child, ctx), child.GetExpressionType()});
+}
+
+//! An operator, a CASE or a BETWEEN, spelled as DuckDB spells it, its children rendered here.
+static string RenderThroughDuckDB(const Expression &expr, const RenderContext &ctx) {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_OPERATOR: {
+		RenderedOperator rendered {expr.GetExpressionType(), {}};
+		for (auto &child : expr.Cast<BoundOperatorExpression>().children) {
+			rendered.children.push_back(RenderChild(*child, ctx));
+		}
+		return OperatorExpression::ToString<RenderedOperator, RenderedChild>(rendered);
+	}
+	case ExpressionClass::BOUND_CASE: {
+		auto &case_expr = expr.Cast<BoundCaseExpression>();
+		RenderedCase rendered;
+		for (auto &check : case_expr.case_checks) {
+			rendered.case_checks.push_back({RenderChild(*check.when_expr, ctx), RenderChild(*check.then_expr, ctx)});
+		}
+		rendered.else_expr = RenderChild(*case_expr.else_expr, ctx);
+		return CaseExpression::ToString<RenderedCase, RenderedChild>(rendered);
+	}
+	case ExpressionClass::BOUND_BETWEEN: {
+		auto &between = expr.Cast<BoundBetweenExpression>();
+		RenderedBetween rendered {RenderChild(*between.input, ctx), RenderChild(*between.lower, ctx),
+		                          RenderChild(*between.upper, ctx)};
+		return BetweenExpression::ToString<RenderedBetween, RenderedChild>(rendered);
+	}
+	default:
+		return expr.ToString();
+	}
+}
+
 template <class CALLBACK>
 static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
@@ -349,26 +429,24 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		return result;
 	}
 	case ExpressionClass::BOUND_OPERATOR: {
-		// A DECIDE-variable IN is an opaque marker rather than a comparison, so without
-		// a case here it fell through to ToString() -- the one renderer that spells out
-		// the casts the binder inserted. Every other clause in the same plan is
-		// cast-free, so this one read as though the user had typed CAST(10 AS BIGINT).
-		if (expr.type != ExpressionType::COMPARE_IN) {
-			break;
-		}
-		auto &in = expr.Cast<BoundOperatorExpression>();
-		if (in.children.size() < 2) {
-			break;
-		}
-		string result = RenderSource(*in.children[0], ctx) + " IN (";
-		for (idx_t i = 1; i < in.children.size(); i++) {
-			if (i > 1) {
-				result += ", ";
+		// A DECIDE-variable IN is an opaque marker rather than a comparison: it prints as
+		// a constraint does, with no parentheses around it.
+		auto &op = expr.Cast<BoundOperatorExpression>();
+		if (expr.type == ExpressionType::COMPARE_IN && op.children.size() >= 2) {
+			string result = RenderSource(*op.children[0], ctx) + " IN (";
+			for (idx_t i = 1; i < op.children.size(); i++) {
+				if (i > 1) {
+					result += ", ";
+				}
+				result += RenderSource(*op.children[i], ctx);
 			}
-			result += RenderSource(*in.children[i], ctx);
+			return result + ")";
 		}
-		return result + ")";
+		return RenderThroughDuckDB(expr, ctx);
 	}
+	case ExpressionClass::BOUND_CASE:
+	case ExpressionClass::BOUND_BETWEEN:
+		return RenderThroughDuckDB(expr, ctx);
 	case ExpressionClass::BOUND_FUNCTION:
 		return RenderFunction(expr.Cast<BoundFunctionExpression>(), ctx, parent_precedence);
 	case ExpressionClass::BOUND_AGGREGATE:

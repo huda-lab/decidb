@@ -10,6 +10,7 @@ reference still binds (D43).
 
 import pytest
 
+from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import table
 
 COLUMNS = ("id", "cap", "g")
@@ -186,10 +187,22 @@ def test_old_spelling_refused_in_every_position(decidb_cli, sql):
                  id="select-list"),
     pytest.param("(SELECT 1 FROM (VALUES (1, 'A')) u(cap, g) HAVING SUM(cap) WHEN (g = 'A') > 0)",
                  "sum(when g = 'A': cap)", id="having"),
+    # These reached the binder as the internal __when_constraint__ (A10).
+    pytest.param("(SELECT max(cap) FROM (VALUES (1, 'A')) u(cap, g) GROUP BY g ORDER BY SUM(cap) WHEN (g = 'A') "
+                 "LIMIT 1)", "sum(when g = 'A': cap)", id="order-by"),
+    pytest.param("(SELECT max(cap) FROM (VALUES (1, 'A')) u(cap, g) "
+                 "LIMIT (SELECT SUM(cap) WHEN (g = 'A') FROM (VALUES (1, 'A')) u(cap, g)))",
+                 "sum(when g = 'A': cap)", id="limit"),
+    pytest.param("(SELECT max(u.cap) FROM (VALUES (1, 'A')) u(cap, g) JOIN (SELECT 1 AS k) w "
+                 "ON SUM(u.cap) WHEN (u.g = 'A') > 0)", "sum(when u.g = 'A': u.cap)", id="join-condition"),
+    pytest.param("(SELECT cap FROM (VALUES (1, 'A')) u(cap, g) UNION ALL SELECT 2 "
+                 "ORDER BY SUM(cap) WHEN (g = 'A') LIMIT 1)", "sum(when g = 'A': cap)", id="set-operation-order-by"),
+    pytest.param("(SELECT count(*) FROM (SELECT 1 AS cap, 2 AS d) UNPIVOT (v FOR k IN (SUM(cap) WHEN cap > 0)))",
+                 "sum(when cap > 0: cap)", id="unpivot-in-list"),
 ])
 def test_old_spelling_inside_a_plain_subquery_is_refused(decidb_cli, bound, fragment):
     """A subquery inside a clause is read with the clause's spellings, so a removed form there
-    is refused by name, never as an internal function."""
+    is refused by name, never as an internal function, wherever in the subquery it stands."""
     _refused(decidb_cli, _query(clauses=f"x <= cap AND x <= {bound}"), fragment)
 
 
@@ -206,6 +219,8 @@ def test_colon_form_inside_a_plain_subquery_is_named(decidb_cli):
 
 BARE = "DECIDE: write open, not t.open; a decision is referenced by its bare name"
 DATA = "DECIDE: t.open is a decision; when, per and by may only use data"
+FRAME_KEY = "DECIDE: t.open is a decision; a frame's order key and within may only use data"
+ORDER = "at(previous else 10: t.cap) over"
 
 
 @pytest.mark.parametrize("sql, message", [
@@ -224,6 +239,8 @@ DATA = "DECIDE: t.open is a decision; when, per and by may only use data"
                  id="per"),
     pytest.param(_query("per t: open(BOOL)", "sum(open) by (t.open) <= 1", "MAXIMIZE SUM(open)", "id, open"), DATA,
                  id="by"),
+    pytest.param(_query("open(INT)", f"open <= cap AND open <= {ORDER} (t.open)", "MAXIMIZE SUM(open)", "id, open"),
+                 FRAME_KEY, id="frame-order"),
 ])
 def test_relation_qualified_decision_reference_refused(decidb_cli, sql, message):
     """A decision is referenced by its bare name (D43); in a `when`, `per` or `by` it is
@@ -237,6 +254,94 @@ def test_qualified_names_that_are_not_decisions_still_bind(decidb_cli):
     sql = f"""SELECT id, open FROM (SELECT *, {{'open': cap}} AS s FROM (VALUES (1, 3), (2, 5)) v(id, cap)) t
         DECIDE open(INT) SUCH THAT open <= t.s.open AND open <= s.open MAXIMIZE SUM(open) ORDER BY id"""
     assert decidb_cli.execute(sql)[0] == decidb_cli.execute(sql.replace("t.s.open", "cap").replace("s.open", "cap"))[0]
+
+
+STRUCT = "(SELECT {'open': 2} AS s, 3 AS cap)"
+
+
+@pytest.mark.parametrize("source, bound", [
+    # SQL reads `s.open` as the field `open` of the column `s`, though `s` is also the
+    # relation's alias and `open` a decision: it was refused as `D.x` (A11).
+    pytest.param(f"{STRUCT} s", "s.open", id="relation-and-struct-share-a-name"),
+    pytest.param(f"{STRUCT} t", "t.s.open", id="relation-column-field"),
+    pytest.param(f"{STRUCT} t, (SELECT 1 AS z) s", "t.s.open", id="another-relation-named-like-the-struct"),
+])
+def test_a_struct_field_named_like_a_decision(decidb_cli, source, bound):
+    rows, _ = decidb_cli.execute(f"""
+        SELECT x FROM {source}
+        DECIDE open(INT), x(INT) SUCH THAT x <= {bound} AND open <= 1 MAXIMIZE sum(x) + sum(open)
+    """)
+    assert rows == [(2,)]
+
+
+def test_a_struct_field_named_like_a_decision_in_a_when(decidb_cli):
+    """s.open = 2 > 1, so x <= 1 holds."""
+    rows, _ = decidb_cli.execute(f"""
+        SELECT x FROM {STRUCT} s
+        DECIDE open(INT), x(INT) SUCH THAT x <= cap AND when s.open > 1: x <= 1 AND open <= 1
+        MAXIMIZE sum(x) + sum(open)
+    """)
+    assert rows == [(1,)]
+
+
+# `decide_variables` names the binding that holds the decisions. Neither it nor a column of
+# it is a relation the query wrote: `decide_variables.x` is D43's spelling of x, and the
+# binding is no key. Each read a decision where the checks saw data -- a wrong answer in a
+# key, a `when` or a frame -- or, under a reducer's `per`, failed internally (A08).
+DV_BARE = "DECIDE: write x, not decide_variables.x; a decision is referenced by its bare name"
+DV_DATA = "DECIDE: decide_variables.x is a decision; when, per and by may only use data"
+DV_FRAME_KEY = "DECIDE: decide_variables.x is a decision; a frame's order key and within may only use data"
+DV_NOT_A_RELATION = "DECIDE: decide_variables is neither a column nor a relation of the FROM clause"
+
+
+@pytest.mark.parametrize("sql, message", [
+    pytest.param(_query(clauses="decide_variables.x <= cap"), DV_BARE, id="constraint"),
+    pytest.param(_query(objective="MAXIMIZE SUM(decide_variables.x)"), DV_BARE, id="objective"),
+    pytest.param(_query(select="id, decide_variables.x"), DV_BARE, id="select-list"),
+    pytest.param(_query(clauses="x <= cap AND when decide_variables.x > 4: x <= 1"), DV_DATA, id="when"),
+    pytest.param(_query(clauses="x <= cap AND sum(when decide_variables.x > 1: x) <= 4"), DV_DATA,
+                 id="reducer-when"),
+    pytest.param(_query(clauses="x <= cap AND per decide_variables.x: x <= 1"), DV_DATA, id="per"),
+    pytest.param(_query(clauses="x <= cap AND sum(x) by (decide_variables.x) <= 4"), DV_DATA, id="by"),
+    pytest.param(_query(clauses="x <= cap AND sum(x) by (decide_variables.x + 1) <= 4"), DV_DATA,
+                 id="by-expression"),
+    pytest.param(_query(clauses=f"x <= cap AND x <= {ORDER} (decide_variables.x)"), DV_FRAME_KEY, id="frame-order"),
+    pytest.param(_query(clauses=f"x <= cap AND x <= {ORDER} (t.id within decide_variables.x)"), DV_FRAME_KEY,
+                 id="frame-within"),
+    pytest.param(_query(clauses="x <= cap AND per decide_variables: sum(x) <= 20"), DV_NOT_A_RELATION,
+                 id="relation-per"),
+    pytest.param(_query(clauses="x <= cap AND sum(x) by (decide_variables) <= 4"), DV_NOT_A_RELATION,
+                 id="relation-by"),
+    pytest.param(_query(clauses="x <= cap AND sum(per decide_variables: x) <= 4"), DV_NOT_A_RELATION,
+                 id="relation-reducer-per"),
+    pytest.param(_query("per decide_variables: x(INT)"), DV_NOT_A_RELATION, id="relation-declaration-key"),
+    # Read as a struct of the decisions, the binding shows a decision only once bound.
+    pytest.param(_query(clauses="x + CAST(decide_variables IS NULL AS INT) <= cap"), DV_NOT_A_RELATION,
+                 id="relation-as-a-struct"),
+    pytest.param(_query(clauses="x <= cap AND when decide_variables IS NOT NULL: x <= 1"),
+                 "DECIDE: x is a decision; when, per and by may only use data", id="relation-as-a-struct-in-a-when"),
+])
+def test_the_decisions_binding_is_not_a_relation(decidb_cli, sql, message):
+    result = decidb_cli.execute_raw(sql)
+    assert message in result.stderr, result.stderr
+    assert_no_internal_leak(result, "the decisions' binding named in a clause", sql)
+
+
+@pytest.mark.parametrize("source, clause, objective", [
+    # A relation or a column the query names decide_variables is its own: a key, a bound.
+    pytest.param("decide_variables(id, cap, g)", "sum(x) by (decide_variables.g) <= 4", 4, id="a-relation-key"),
+    pytest.param("decide_variables(id, cap, g)", "x <= decide_variables.cap", 8, id="a-relation-column"),
+    # The colon form takes the relation as a key does: it was ambiguous with the binding.
+    pytest.param("decide_variables(id, cap, g)", "sum(decide_variables: x) <= 4", 4, id="a-colon-form-relation"),
+    pytest.param("t(id, cap, decide_variables)", "sum(x) by (decide_variables) <= 4", 4, id="a-column-key"),
+])
+def test_a_relation_or_column_named_decide_variables(decidb_cli, source, clause, objective):
+    """x <= cap over caps 3 and 5 sums to 8; both rows share g, so a sum over g holds it to 4."""
+    rows, _ = decidb_cli.execute(f"""
+        SELECT id, x FROM (VALUES (1, 3, 'A'), (2, 5, 'A')) {source}
+        DECIDE x(INT) SUCH THAT x <= cap AND {clause} MAXIMIZE sum(x) ORDER BY id
+    """)
+    assert sum(x for _, x in rows) == objective
 
 
 # ---------------------------------------------------------------------------

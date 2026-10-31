@@ -33,7 +33,12 @@ its own name over a `USING` join answers. A decision in `WHERE` is refused by na
 through a SELECT alias, an aliased expression, `COLUMNS(*)`, a lambda body, the left of
 an `IN` subquery, and one or two correlated subqueries down; `WHERE` over data (a
 column, a correlated data subquery, a lambda parameter named like a decision) keeps its
-rows, and an outer query filters on the solved value, the refusal's suggestion.
+rows, and an outer query filters on the solved value, the refusal's suggestion. A decision
+read other than by its bare name in a clause is refused: by its position (`#4`, and a data
+column's `#2`) in a constraint, the objective, a `when`, a `by` and a frame's order; from
+inside a subquery, in a constraint, the objective and a `when`; past a lambda parameter of
+its name. A name that binds elsewhere is not the decision: a subquery's own column, a
+lambda parameter inside a subquery, a nested DECIDE's own decision.
 
 ## Feature interactions covered
 

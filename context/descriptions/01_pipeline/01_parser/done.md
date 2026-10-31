@@ -267,8 +267,9 @@ nothing changes.
 `src/parser/transform/statement/transform_select_node.cpp:104-121` moves the
 clause onto the `SelectNode`: `decide_variables` (via `TransformExpressionList`),
 `decide_constraints`, `decide_sense` (`MAXIMIZE` / `MINIMIZE` / `FEASIBILITY`
-when no objective was written), and `decide_objective`. It then calls
-`RefuseRemovedDecideSpellings` on the node.
+when no objective was written), and `decide_objective`. `TransformSelectInternal`
+calls `RefuseRemovedDecideSpellings` on every node once its ORDER BY and LIMIT are
+built.
 
 `src/parser/transform/statement/transform_show_select.cpp` turns the `DIAGNOSE` prefix
 into a `ShowRef` with `ShowType::DIAGNOSE` wrapping the inner query node — the same
@@ -313,11 +314,14 @@ sees inside a frame.
 `RefuseRemovedDecideSpellings` (`src/parser/decide/decide_removed_spellings.cpp`) walks
 the declarations, the constraints and the objective and throws a `ParserException` at
 the first removed form, outermost first: a form written after a whole constraint is named
-before one inside it. `TransformSelectNode` calls it on every select node, after the
-node's `WHERE`, `GROUP BY`, `HAVING` and `QUALIFY` are built: a subquery inside a clause
-is read with the clause's spellings, so its own expressions are checked as well
-(`RefuseInExpressions`). The walk itself does not enter a subquery body; each node is
-checked when it is transformed. Every message starts `DECIDE: `, carries the phrase
+before one inside it. `TransformSelectInternal` calls it on every query node it builds, once its modifiers are
+built too: a subquery inside a clause is read with the clause's spellings, so every
+expression a node holds is checked (`RefuseInExpressions`) -- its select list, `WHERE`,
+`GROUP BY`, `HAVING` and `QUALIFY`, its FROM clause's join conditions, `VALUES` rows,
+table-function arguments and `PIVOT`/`UNPIVOT` expressions and `IN` lists, and its
+`ORDER BY`, `LIMIT`, `OFFSET` and `DISTINCT ON`, a set operation's included (A10). A named
+`WINDOW` the query never uses is dropped by the transformer unread. The walk itself does not enter a query node inside it; each
+node is checked when it is transformed. Every message starts `DECIDE: `, carries the phrase
 "is removed", and names the new spelling built from the user's own expressions
 (`Written` drops the one pair of parentheses `ToString` puts around a comparison and
 prints `count_star()` as `count(*)`).
@@ -381,12 +385,13 @@ In execution order:
 | # | Operation | What it does |
 |---|---|---|
 | 1 | `RefuseRemovedDecideSpellings` | §3, for a parse tree stored before the removal. |
-| 2 | `RefuseQualifiedDecisionReferences` | Refuses `D.x` where `D` is a relation of the FROM clause with no column `x` and `x` is a decision, in the constraints, the objective, the select list and `ORDER BY`: *"DECIDE: write x, not D.x; a decision is referenced by its bare name"*; in a `when` condition, a `per` key or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43). A qualified name that binds to a column, a struct field or a `USING` column is left to the SQL binder. |
-| 3 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
-| 4 | `ValidateDecideNoExplicitDecisionCasts` | Rejects `CAST`, `TRY_CAST` and `::` whose child subtree contains a decision reference, in `SUCH THAT` and the objective. Target type is irrelevant. Must run here: a source cast and a binder cast are both `BoundCastExpression`, so authorship cannot be recovered later. The post-solve `SELECT` projection is not scanned. |
-| 5 | `ValidateDecideNoNonLinearScalar` | Rejects a scalar function over a decision other than `ABS` and `POWER(..., 2)`, a decision in a divisor, and a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before anything downstream has to interpret them. |
-| 6 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
-| 7 | `TagDecideSourceFragments` | Stamps each cast and scalar subquery of the constraints and the objective with an id, so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
+| 2 | `ValidateDecideReferences` | Refuses, in the constraints and the objective outside subquery bodies, a column named by its position (`#2`) and a lambda parameter named like a decision: after either a name could mean other than it reads, and every rule below judges decisions by name (`../02_binder/done.md` §1). |
+| 3 | `RefuseQualifiedDecisionReferences` | Refuses `D.x` where `D` is a relation of the FROM clause (or `decide_variables`, the binding the decisions are about to get), `x` is a decision and SQL reads the name no other way -- a column of `D`, else a field of a struct column `D` -- in the constraints, the objective, the select list and `ORDER BY`: *"DECIDE: write x, not D.x; a decision is referenced by its bare name"*; in a `when` condition, a `per` key, a `by` key or a frame's keys, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43). |
+| 4 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
+| 5 | `ValidateDecideNoExplicitDecisionCasts` | Rejects `CAST`, `TRY_CAST` and `::` whose child subtree contains a decision reference, in `SUCH THAT` and the objective. Target type is irrelevant. Must run here: a source cast and a binder cast are both `BoundCastExpression`, so authorship cannot be recovered later. The post-solve `SELECT` projection is not scanned. |
+| 6 | `ValidateDecideNoNonLinearScalar` | Rejects a scalar function over a decision other than `ABS` and `POWER(..., 2)`, a decision in a divisor, and a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before anything downstream has to interpret them. |
+| 7 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
+| 8 | `TagDecideSourceFragments` | Stamps each cast and scalar subquery of the constraints and the objective with an id, so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
 
 `norm()` and DECIDE-variable `IN (...)` are deliberately not rewritten here.
 The binder retains bound markers, and stage 05 chooses the indicator and linking

@@ -19,3 +19,21 @@ table of them, so a row is its terms; the diagnosis reads a row's provenance thr
 
 **Test.** `anr_scaling.py --only range-max --max 1000000` at an exponent near 1.0, and the
 diagnosis suites unchanged.
+
+## A query-wide auxiliary's rows are stated once per row
+
+**Why.** An ABS of a query-wide argument beside a clause's reducers has one query-wide
+auxiliary (`05_optimizer/done.md`, "The auxiliary's scope"), but its two envelope rows are
+per-row helper rows (`ScopeHelperRow`), so every kept row states the same two rows: over
+1000 rows `sum(x) + abs(s - 1) >= 8` builds 1000 identical ABS constraints natively and 4001
+rows lowered, and at 200k rows takes 1.98 s against 0.16 s with `s` in the ABS's place. It is
+the shape of the ANR log's A12 (a query-wide decision bounded by a data reducer, one row per
+input row): a row over query-wide values alone is the same on every row.
+
+**What it needs.** A helper row whose every term is query-wide stated once -- one class, as
+under `per ()` -- with its clause's `when` read as "some row is kept", and the expanded
+DIAGNOSE scope still one repair per kept row where the clause's own rows are (A12's
+constraint).
+
+**Test.** The dump of that query at 1000 rows shows the envelope's two rows once; the answer
+is unchanged on both solvers and lowered.

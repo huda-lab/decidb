@@ -136,7 +136,8 @@ A scope inside an ordinary SQL subquery written in the clause is refused
   names — `INT`, `BOOL`, `REAL`. A name without one is a parser error that names the
   three (§10.1).
 - Use: available in `SUCH THAT`, `MAXIMIZE/MINIMIZE`, and the `SELECT` list, always
-  by its bare name (§2.3); `GROUP BY`, `HAVING`, `QUALIFY` and `ORDER BY` read its solved
+  by its bare name (§2.3) -- not by its position, and not from inside a subquery of a
+  clause; `GROUP BY`, `HAVING`, `QUALIFY` and `ORDER BY` read its solved
   value. Never in `WHERE`, which picks the rows before the solve: filter on a solved value
   in an outer query (§10.1).
 - Name: it must differ from every column of the `FROM` clause, including a column a
@@ -314,7 +315,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
     - **Not refused**: the bound `K` itself (a fractional bound is handled by rounding, or for `<>` by dropping a tautology); a decision-free additive offset, which moves the bound rather than the lattice; `POWER(e, n)` with a whole, non-negative constant `n`; and an L0 count, which is integral whatever it counts. A fractional *multiplier* (`SUM(0.5 * x) < 5`) is refused, since it rescales the decision off the lattice, and so is an offset under anything not linear in it — a power, a product of decisions, a norm of order 1, 2 or `'inf'`, the `MIN`/`MAX` of §5.2 — which is part of the value there (`POWER(x + 0.25, 2) < 11`, `(x + 0.5) * y < 5`, `norm(x + 0.5, 'inf') > 3`).
     - **A NULL beside a decision** makes the expression NULL whatever the decisions are (`SUM(x + NULL) >= 3`); it is refused where it is written (*"DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in COALESCE(column, 0)"*).
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
-- **In**: `x IN (v1, ..., vK)` — works on both table columns and decision variables. On decision variables, rewritten to K binary indicator variables with cardinality + linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) is not supported.
+- **In**: `x IN (v1, ..., vK)` — works on both table columns and decision variables. On decision variables, rewritten to K binary indicator variables with cardinality + linking constraints, each value the coefficient of its indicator: a value is a constant, a column, a frame or a subquery, not an aggregate (*"DECIDE: an IN value cannot be an aggregate such as 'sum(cap)'; compute it in a subquery or a CTE and list that value"*). `IN` on aggregates (e.g., `SUM(x) IN (...)`) is not supported.
 - **Linearity**: Most sub-expressions involving a decision variable must be linear.
   - `x * 5`: OK.
   - `x + y`: OK.
@@ -1312,6 +1313,11 @@ Tests: `test/decide/tests/test_scope_explain_diagnose.py`, `test_anr_variants.py
 | A decision named like a column of the `FROM` clause, including a column two relations share or one a `USING` or `NATURAL` join merges | bind | `DECIDE variable 'k' conflicts with an existing column name.` |
 | A decision in `WHERE`, by name, through a `SELECT` alias or `COLUMNS(*)`, or inside a subquery | bind | `DECIDE: x is a decision; WHERE may only use data, since it picks the rows before the solve. Filter on x in an outer query` |
 | A decision in a `when`, a key or a `by` | bind | `DECIDE: x is a decision; when, per and by may only use data` |
+| A decision read from inside a subquery of a clause | bind | `DECIDE: x is a decision; a subquery in a DECIDE clause may only use data` |
+| A decision spelled other than by its bare name, through the binding that holds the decisions | bind | `DECIDE: write x, not decide_variables.x; a decision is referenced by its bare name` (in a `when`, a key or a `by`, the row above; `decide_variables` alone: `DECIDE: decide_variables is neither a column nor a relation of the FROM clause`) |
+| An aggregate among an `IN` list's values | bind | `DECIDE: an IN value cannot be an aggregate such as 'sum(cap)'; compute it in a subquery or a CTE and list that value` |
+| A column named by its position in a clause | bind | `DECIDE: #2 names a column by its position, which a DECIDE clause does not support; write the column's name` |
+| A lambda parameter in a clause named like a decision | bind | `DECIDE: the lambda parameter x has the name of a decision; rename it` |
 | A window function in a `when`, a key or a `by` | bind | `DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by` |
 | An unknown key element (a key resolves in its own query's `FROM` only) | bind | `DECIDE: depot is neither a column nor a relation of the FROM clause` |
 | `rowid` or a generated column in a key | bind | `DECIDE: g.b is not a stored column; a per key lists columns or relations of the FROM clause` |

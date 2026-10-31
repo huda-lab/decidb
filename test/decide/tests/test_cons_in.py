@@ -13,6 +13,7 @@ import pytest
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 from ._oracle_helpers import add_in_domain
+from ._output_helpers import assert_no_internal_leak
 
 
 def _common_lineitem(duckdb_conn, where_clause):
@@ -651,3 +652,55 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         n, n * 4, 1 + n, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+# ---------------------------------------------------------------------------
+# An aggregate is no IN value (A05)
+# ---------------------------------------------------------------------------
+
+_IN_ROWS = "(VALUES (1, 3, 'A'), (2, 5, 'A'), (3, 7, 'B')) t(id, cap, g)"
+
+
+@pytest.mark.cons_in
+@pytest.mark.error_binder
+@pytest.mark.error
+@pytest.mark.parametrize("clause, quoted", [
+    pytest.param("x IN (1, SUM(cap))", "sum(cap)", id="sum"),
+    pytest.param("x IN (1, sum(cap) by (g))", "sum(cap) by (g)", id="by"),
+    pytest.param("x IN (1, AVG(cap))", "avg(cap)", id="avg"),
+    pytest.param("x IN (1, COUNT(*))", "count(*)", id="count"),
+    pytest.param("x IN (1, 15 - SUM(cap))", "15 - sum(cap)", id="in-arithmetic"),
+    pytest.param("x IN (SUM(cap))", "sum(cap)", id="the-only-value"),
+    pytest.param("when g = 'A': x IN (1, SUM(cap))", "sum(cap)", id="under-a-when"),
+])
+def test_an_aggregate_in_value_is_refused(decidb_cli, clause, quoted):
+    """Each IN value multiplies an indicator of its own, a coefficient, and a reducer over
+    the rows is the value of no one row: refused by name, where it failed internally."""
+    sql = f"SELECT id, x FROM {_IN_ROWS} DECIDE x(INT) SUCH THAT x <= cap AND {clause} MAXIMIZE SUM(x)"
+    result = decidb_cli.execute_raw(sql)
+    message = (f"DECIDE: an IN value cannot be an aggregate such as '{quoted}'; compute it in a subquery or a "
+               "CTE and list that value")
+    assert message in result.stderr, result.stderr
+    assert_no_internal_leak(result, "an aggregate IN value", sql)
+
+
+@pytest.mark.cons_in
+def test_a_subquery_computes_an_aggregate_in_value(decidb_cli):
+    """The refusal's remedy: the total, 15, computed in a subquery, is a value; no cap
+    reaches it, so x = 1 on every row."""
+    rows, _ = decidb_cli.execute(f"""
+        SELECT id, x FROM {_IN_ROWS} DECIDE x(INT)
+        SUCH THAT x <= cap AND x IN (1, (SELECT sum(c) FROM (VALUES (3), (5), (7)) u(c)))
+        MAXIMIZE SUM(x) ORDER BY id""")
+    assert rows == [(1, 1), (2, 1), (3, 1)]
+
+
+@pytest.mark.cons_in
+def test_a_frame_in_value_is_a_value(decidb_cli):
+    """A frame binds as an aggregate but reads one row: the previous cap (0 before the
+    first row) is a value, so each x is the larger of 1 and it within its own cap."""
+    rows, _ = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1, 3), (2, 5), (3, 7)) t(id, cap) DECIDE x(INT)
+        SUCH THAT x <= cap AND x IN (1, at(previous else 0: t.cap) over (t.id))
+        MAXIMIZE SUM(x) ORDER BY id""")
+    assert rows == [(1, 1), (2, 3), (3, 5)]

@@ -11,6 +11,10 @@ Two binder rules, each closing a silent wrong answer:
   decision's position. It is refused however it is reached: by name, through a SELECT
   alias, `COLUMNS(*)`, a lambda body or a correlated subquery.
 
+A decision is then read by its bare name only (the reference rule): not by its position,
+not from inside a subquery, not past a lambda parameter of its name -- while a name that
+binds elsewhere, a subquery's own column, is not the decision.
+
 See `01_pipeline/02_binder/done.md` §1 and `syntax_reference.md` §10.1.
 """
 
@@ -134,3 +138,87 @@ def test_an_outer_query_filters_on_the_solved_value(decidb_cli):
         WHERE x > 1 ORDER BY id
     """)
     assert rows == [(2, 2), (3, 7)]
+
+
+# ---------------------------------------------------------------------------
+# A decision is read by its bare name only (the reference rule, 02_binder/done.md §1)
+# ---------------------------------------------------------------------------
+
+#: Three rows, BIGINT so that a decision read in place of an input column would answer
+#: rather than fail on the type: every refusal below is a wrong answer the rule closes.
+KEYED = ("(VALUES (1::BIGINT, 3::BIGINT, 'A'), (2::BIGINT, 5::BIGINT, 'A'), (3::BIGINT, 7::BIGINT, 'B')) "
+         "t(id, cap, g)")
+ORDER = "at(previous else 10: t.cap) over"
+
+
+def _data_only(name, frame=False):
+    where = "a frame's order key and within" if frame else "when, per and by"
+    return re.escape(f"DECIDE: {name} is a decision; {where} may only use data")
+
+
+def _by_position(written):
+    return re.escape(f"DECIDE: {written} names a column by its position, which a DECIDE clause does not support; "
+                     "write the column's name")
+
+
+SUBQUERY = re.escape("DECIDE: x is a decision; a subquery in a DECIDE clause may only use data")
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+class TestReferenceRule:
+    """A decision read other than by its bare name is refused in a DECIDE clause, whatever
+    position it stands in: by its position, from inside a subquery, or past a lambda
+    parameter that takes its name. Each read a decision where the checks saw data, and
+    answered wrongly or failed internally, or hid one. The spelling through the binding that
+    holds the decisions, `decide_variables.x`, is D43's (test_scope_removed_syntax.py)."""
+
+    @pytest.mark.parametrize("select, constraints, objective, message", [
+        # A column by its position: #4 is x here, #2 cap; neither is read.
+        pytest.param("x", "#4 <= cap", "sum(x)", _by_position("#4"), id="position-in-such-that"),
+        pytest.param("x", "x <= #2", "sum(x)", _by_position("#2"), id="position-of-data-in-such-that"),
+        pytest.param("x", "x <= cap", "sum(#4)", _by_position("#4"), id="position-in-the-objective"),
+        pytest.param("x", "x <= cap AND when #4 = 1: x <= 1", "sum(x)", _by_position("#4"), id="position-in-a-when"),
+        pytest.param("x", "x <= cap AND sum(x) by (#3) <= 4", "sum(x)", _by_position("#3"), id="position-in-a-by"),
+        pytest.param("x", f"x <= cap AND x <= {ORDER} (#4)", "sum(x)", _by_position("#4"),
+                     id="position-in-a-frame-order"),
+        # From inside a subquery: the first two failed internally.
+        pytest.param("x", "x <= (SELECT decide_variables.x) + cap", "sum(x)", SUBQUERY,
+                     id="through-its-binding-in-a-subquery"),
+        pytest.param("x", "x <= cap", "sum(x * (SELECT x))", SUBQUERY, id="bare-in-an-objective-subquery"),
+        pytest.param("x", "sum(x) <= (SELECT max(c) FROM (VALUES (1), (2)) u(c) WHERE c < x)", "sum(x)", SUBQUERY,
+                     id="in-a-subquery-where"),
+        pytest.param("x", "x <= cap AND when (SELECT x) > 0: x <= 1", "sum(x)", _data_only("x"),
+                     id="in-a-subquery-in-a-when"),
+        # A lambda parameter would hide the decision behind its name.
+        pytest.param("x", "x <= cap + len(list_filter([1, 2], x -> x > 1))", "sum(x)",
+                     re.escape("DECIDE: the lambda parameter x has the name of a decision; rename it"),
+                     id="lambda-parameter"),
+    ])
+    def test_refused(self, decidb_cli, select, constraints, objective, message):
+        sql = f"""
+            SELECT id, {select} FROM {KEYED}
+            DECIDE x(INT) SUCH THAT {constraints} MAXIMIZE {objective}
+        """
+        result = decidb_cli.execute_raw(sql)
+        assert re.search(message, result.stderr), result.stderr
+        assert_no_internal_leak(result, "a decision spelled other than by its bare name", sql)
+
+
+@pytest.mark.parametrize("constraints, xs", [
+    # A subquery's own column, or a lambda parameter inside one, named like the decision: these
+    # were refused as decisions. x <= 1 + cap, and only the caps 5 and 7 exceed the inner 4.
+    pytest.param("x <= (SELECT max(x) FROM (VALUES (1)) u(x)) + cap", [4, 6, 8], id="a-subquery-column"),
+    pytest.param("x <= (SELECT len(list_filter([1, 2], x -> x > 1))) + cap", [4, 6, 8],
+                 id="a-lambda-parameter-in-a-subquery"),
+    pytest.param("x <= cap AND when cap > (SELECT max(x) FROM (VALUES (4)) u(x)): x <= 1", [3, 1, 1],
+                 id="a-subquery-column-in-a-when"),
+    # A nested DECIDE's own decision x, solved first: its optimum is 2.
+    pytest.param("x <= (SELECT max(x) FROM (VALUES (2)) u(c) DECIDE x(INT) SUCH THAT x <= c MAXIMIZE sum(x)) + cap",
+                 [5, 7, 9], id="a-nested-decide-decision"),
+])
+def test_a_name_that_binds_elsewhere_is_not_the_decision(decidb_cli, constraints, xs):
+    rows, _ = decidb_cli.execute(f"""
+        SELECT id, x FROM {KEYED} DECIDE x(INT) SUCH THAT {constraints} MAXIMIZE sum(x) ORDER BY id
+    """)
+    assert [x for _, x in rows] == xs

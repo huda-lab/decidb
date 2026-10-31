@@ -10,6 +10,7 @@
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/lambda_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
@@ -19,6 +20,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/table_binding.hpp"
@@ -46,7 +48,9 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 }
 
 //! ParsedExpressionIterator::EnumerateChildren, plus the body (SELECT list, WHERE,
-//! FROM, ...) of a subquery, which EnumerateChildren does not enter.
+//! FROM, ...) of a subquery, which EnumerateChildren does not enter. For the scope markers,
+//! which the clause's keywords lex inside a subquery too; a name in a subquery's body is the
+//! subquery's own, so nothing that looks for decisions enters one.
 static void EnumerateChildrenAndSubqueries(const ParsedExpression &expr,
                                            const std::function<void(const ParsedExpression &child)> &callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
@@ -67,7 +71,7 @@ static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr
 	if (IsVariableExpression(expr, variables)) {
 		count++;
 	}
-	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		count += CountDecideVariableOccurrencesInternal(child, variables);
 	});
 	return count;
@@ -96,11 +100,34 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 		}
 	}
 
-	// Subquery bodies too, so a correlated decision reference cannot hide an
-	// explicit cast inside one.
-	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
+	// Not into a subquery's body: a decision cannot be read there at all (DecideBinder).
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		ValidateDecideNoExplicitDecisionCasts(child, variables);
 	});
+}
+
+void ValidateDecideReferences(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() == ExpressionClass::POSITIONAL_REFERENCE) {
+		throw BinderException(expr,
+		                      "DECIDE: %s names a column by its position, which a DECIDE clause does not support; "
+		                      "write the column's name",
+		                      expr.ToString());
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::LAMBDA) {
+		// `->` is also the JSON extract operator, whose left side is no parameter list.
+		string not_a_lambda;
+		auto parameters = const_cast<LambdaExpression &>(expr.Cast<LambdaExpression>())
+		                      .ExtractColumnRefExpressions(not_a_lambda);
+		for (auto &parameter : not_a_lambda.empty() ? parameters : vector<reference<ParsedExpression>>()) {
+			auto &name = parameter.get().Cast<ColumnRefExpression>().GetColumnName();
+			if (variables.count(name)) {
+				throw BinderException(expr, "DECIDE: the lambda parameter %s has the name of a decision; rename it",
+				                      name);
+			}
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { ValidateDecideReferences(child, variables); });
 }
 
 //===--------------------------------------------------------------------===//
@@ -135,12 +162,14 @@ static void ValidateNoScopeSpelling(const ParsedExpression &expr) {
 }
 
 //! The first decision `expr` names, as written, or empty: `when`, `per` and `by` take data.
+//! The bare name, before binding, so the refusal comes ahead of the rules about what a
+//! decision may be under; any other spelling is refused as it binds (DecideBinder).
 static string FindDecisionName(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	if (IsVariableExpression(expr, variables)) {
 		return expr.ToString();
 	}
 	string found;
-	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		if (found.empty()) {
 			found = FindDecisionName(child, variables);
 		}
@@ -173,12 +202,19 @@ static void ValidateNoFrame(const ParsedExpression &expr) {
 	}
 }
 
+const char *DecideDecisionInDataFormat(DecideDataPosition position) {
+	D_ASSERT(position != DecideDataPosition::NONE);
+	return position == DecideDataPosition::FRAME_KEY
+	           ? "DECIDE: %s is a decision; a frame's order key and within may only use data"
+	           : "DECIDE: %s is a decision; when, per and by may only use data";
+}
+
 //! A `when` condition, a key element or a `by` key: data only, no `when`/`per`/`by`, and
 //! no window function or frame selector, which read rows the scope has not chosen yet.
 static void ValidateScopeData(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	auto decision = FindDecisionName(expr, variables);
 	if (!decision.empty()) {
-		throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data", decision);
+		throw BinderException(expr, DecideDecisionInDataFormat(DecideDataPosition::SCOPE), decision);
 	}
 	auto window = FindExpressionOfClass(expr, ExpressionClass::WINDOW);
 	if (window) {
@@ -239,8 +275,7 @@ static string FrameHead(const DecideFrameExpression &frame) {
 static void ValidateFrameKey(const ParsedExpression &key, const case_insensitive_map_t<idx_t> &variables) {
 	auto decision = FindDecisionName(key, variables);
 	if (!decision.empty()) {
-		throw BinderException(key, "DECIDE: %s is a decision; a frame's order key and within may only use data",
-		                      decision);
+		throw BinderException(key, DecideDecisionInDataFormat(DecideDataPosition::FRAME_KEY), decision);
 	}
 	ValidateNoFrame(key);
 	auto window = FindExpressionOfClass(key, ExpressionClass::WINDOW);
@@ -651,15 +686,41 @@ static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context,
 	return bind_context.GetBinding(using_set->primary_binding, error);
 }
 
-//! Resolves one element of a `per` key into `columns`, against the FROM clause alone and
-//! the way SQL resolves the same name: a column (`c`, `R.c`, `S.R.c`, `C.S.R.c`), else a
-//! relation (`R`, `S.R`, `C.S.R`), standing for every column it stores.
+//! The relation of the FROM clause named `parts` (up to three), or null: the decisions'
+//! binding is not one, so a relation of the FROM clause that shares its name is not
+//! ambiguous with it.
+static optional_ptr<Binding> DataRelation(BindContext &bind_context, const vector<string> &parts,
+                                          const DecideKeyDecisions &decisions) {
+	ErrorData error;
+	auto alias = RelationAlias(parts);
+	optional_ptr<Binding> relation;
+	idx_t matches = 0;
+	for (auto &candidate : bind_context.GetBindings(alias, error)) {
+		if (candidate.get().index != decisions.binding_index) {
+			relation = &candidate.get();
+			matches++;
+		}
+	}
+	// Two relations of the FROM clause by one name: SQL's own message says which.
+	return matches > 1 ? bind_context.GetBinding(alias, error) : relation;
+}
+
+//! The word a message names a key by: `per` for a `per` key, `within` for a frame's.
+static const char *KeyWord(DecideDataPosition position) {
+	return position == DecideDataPosition::FRAME_KEY ? "within" : "per";
+}
+
+//! Resolves one element of a key at `position` -- a `per` key, or a frame's `within` key --
+//! into `columns`, against the FROM clause alone and the way SQL resolves the same name: a
+//! column (`c`, `R.c`, `S.R.c`, `C.S.R.c`), else a relation (`R`, `S.R`, `C.S.R`), standing
+//! for every column it stores. A decision is no column of it, whether named bare or through
+//! its binding (`decide_variables.x`).
 static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpression &element,
-                              const case_insensitive_set_t &decision_names, KeyColumns &columns, const char *key_word) {
+                              const DecideKeyDecisions &decisions, KeyColumns &columns, DecideDataPosition position) {
 	auto &names = element.column_names;
-	if (names.size() == 1 && decision_names.count(names[0])) {
-		throw BinderException(element, "DECIDE: %s is a decision; when, per and by may only use data",
-		                      element.ToString());
+	auto key_word = KeyWord(position);
+	if (names.size() == 1 && decisions.names.count(names[0])) {
+		throw BinderException(element, DecideDecisionInDataFormat(position), element.ToString());
 	}
 	ErrorData error;
 	optional_ptr<Binding> binding;
@@ -669,11 +730,14 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 		binding = bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(),
 		                                   error);
 	}
+	if (binding && binding->index == decisions.binding_index) {
+		throw BinderException(element, DecideDecisionInDataFormat(position), element.ToString());
+	}
 	if (binding) {
 		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, key_word);
 		return;
 	}
-	auto relation = names.size() <= 3 ? bind_context.GetBinding(RelationAlias(names), error) : nullptr;
+	auto relation = names.size() <= 3 ? DataRelation(bind_context, names, decisions) : nullptr;
 	if (!relation) {
 		throw BinderException(element, "DECIDE: %s is neither a column nor a relation of the FROM clause",
 		                      element.ToString());
@@ -697,25 +761,25 @@ static KeyColumns SortedKey(KeyColumns columns) {
 //! The columns of a key listed by `elements[first..]` (none for `()`), each element
 //! resolved by ResolveKeyElement.
 static KeyColumns ResolveKey(BindContext &bind_context, const vector<unique_ptr<ParsedExpression>> &elements,
-                             idx_t first, const case_insensitive_set_t &decision_names, const char *key_word) {
+                             idx_t first, const DecideKeyDecisions &decisions, DecideDataPosition position) {
 	KeyColumns columns;
 	for (idx_t i = first; i < elements.size(); i++) {
 		auto &element = *elements[i];
 		if (element.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-			throw InternalException("DECIDE %s key element '%s' is not a name", key_word, element.ToString());
+			throw InternalException("DECIDE %s key element '%s' is not a name", KeyWord(position), element.ToString());
 		}
-		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decision_names, columns, key_word);
+		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decisions, columns, position);
 	}
 	if (columns.empty() && elements.size() > first) {
-		throw InternalException("DECIDE %s key resolved to no column", key_word);
+		throw InternalException("DECIDE %s key resolved to no column", KeyWord(position));
 	}
 	return SortedKey(std::move(columns));
 }
 
 //! The columns of the key `per` lists: its children[1..].
 static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression &per,
-                             const case_insensitive_set_t &decision_names) {
-	return ResolveKey(bind_context, per.children, 1, decision_names, "per");
+                             const DecideKeyDecisions &decisions) {
+	return ResolveKey(bind_context, per.children, 1, decisions, DecideDataPosition::SCOPE);
 }
 
 //! The scope keyed on `columns` (a SortedKey): one per key, whichever spelling names it.
@@ -747,23 +811,25 @@ static idx_t FindOrCreateExactScope(const KeyColumns &columns, const string &key
 }
 
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
-                           const case_insensitive_set_t &decision_names, const string &key_text,
+                           const DecideKeyDecisions &decisions, const string &key_text,
                            vector<EntityScopeInfo> &entity_scopes) {
-	return FindOrCreateExactScope(ResolveKey(bind_context, per, decision_names), key_text, entity_scopes);
+	return FindOrCreateExactScope(ResolveKey(bind_context, per, decisions), key_text, entity_scopes);
 }
 
 vector<unique_ptr<Expression>> BindKeyColumns(BindContext &bind_context, const FunctionExpression &per,
-                                              const case_insensitive_set_t &decision_names) {
+                                              const DecideKeyDecisions &decisions) {
 	vector<unique_ptr<Expression>> result;
-	for (auto &column : ResolveKey(bind_context, per, decision_names)) {
+	for (auto &column : ResolveKey(bind_context, per, decisions)) {
 		result.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
 	}
 	return result;
 }
 
 //! The relation `element` names when it names no column of the FROM clause: `by (D)`
-//! stands for D's stored columns, as `per D` does. Null for a column or an unknown name.
-static optional_ptr<Binding> ResolveRelationName(BindContext &bind_context, const ColumnRefExpression &element) {
+//! stands for D's stored columns, as `per D` does. Null for a column or an unknown name;
+//! the decisions' binding is no relation of it.
+static optional_ptr<Binding> ResolveRelationName(BindContext &bind_context, const ColumnRefExpression &element,
+                                                 const DecideKeyDecisions &decisions) {
 	auto &names = element.column_names;
 	ErrorData error;
 	// A column wins, as it does in SQL; an ambiguous one is still a column, left for the
@@ -781,7 +847,12 @@ static optional_ptr<Binding> ResolveRelationName(BindContext &bind_context, cons
 	if (column || names.size() > 3) {
 		return nullptr;
 	}
-	return bind_context.GetBinding(RelationAlias(names), error);
+	auto relation = DataRelation(bind_context, names, decisions);
+	if (!relation && bind_context.GetBinding(RelationAlias(names), error)) {
+		throw BinderException(element, "DECIDE: %s is neither a column nor a relation of the FROM clause",
+		                      element.ToString());
+	}
+	return relation;
 }
 
 //! A relation's stored columns as bound column references, registered with the scan.
@@ -1026,9 +1097,8 @@ static bool IsIntegerValuedReducer(const ParsedExpression &expr) {
 }
 
 //! Name of the first REAL-declared decision variable referenced by `expr`, as the
-//! user spelled it, or empty if there is none. Walks scalar-subquery bodies for the
-//! same reason ValidateDecideNoExplicitDecisionCasts does: a correlated decision
-//! reference can sit inside one, and EnumerateChildren does not enter a QueryNode.
+//! user spelled it, or empty if there is none. Not inside a subquery's body, where a
+//! decision cannot be read (DecideBinder).
 //!
 //! Stops at an integer-valued reducer: what a comparison compares is the reducer's
 //! value, so a REAL decision counted by `norm(..., 0, M)` is not the compared
@@ -1051,7 +1121,7 @@ static string FindRealDecideVariable(const ParsedExpression &expr,
 	}
 
 	string found;
-	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		if (found.empty()) {
 			found = FindRealDecideVariable(child, variables, variable_types);
 		}
@@ -1636,13 +1706,10 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic);
 	}
     case ExpressionClass::SUBQUERY: {
+        // Data, unless it reads a decision from inside, which is refused as it binds.
         auto &subquery = expr.Cast<SubqueryExpression>();
         if (subquery.subquery_type != SubqueryType::SCALAR) {
             error_msg = "Subquery in DECIDE SUM expression must be scalar";
-            return false;
-        }
-        if (ExpressionContainsDecideVariable(expr, variables)) {
-            error_msg = "Subquery in DECIDE SUM expression cannot contain DECIDE variables";
             return false;
         }
         return true;
@@ -1868,10 +1935,12 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	}
 	auto &ctx = *qualifier_context;
 	KeyColumns key;
+	// Resolved as a key's relation is (DataRelation): the decisions' binding is none, and a
+	// relation of the FROM clause that shares its name is not ambiguous with it.
+	auto decisions = KeyDecisions();
 	for (auto &relation : relations) {
-		ErrorData binding_error;
-		auto binding = binder.bind_context.GetBinding(relation, binding_error);
-		if (!binding || binding->index == ctx.decide_index) {
+		auto binding = DataRelation(binder.bind_context, {relation}, decisions);
+		if (!binding) {
 			return BindResult(BinderException::Unsupported(
 			    qualified_expr, StringUtil::Format(
 			                        "Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
@@ -1908,13 +1977,15 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	return BindResult(std::move(aggregate_expr));
 }
 
-//! The names a key element may not take: every declared decision, as the user may spell it.
-static case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables) {
-	case_insensitive_set_t names;
+DecideKeyDecisions DecideBinder::KeyDecisions() const {
+	DecideKeyDecisions decisions;
 	for (auto &variable : variables) {
-		names.insert(variable.first);
+		decisions.names.insert(variable.first);
 	}
-	return names;
+	if (qualifier_context) {
+		decisions.binding_index = qualifier_context->decide_index;
+	}
+	return decisions;
 }
 
 //! The index of the `by` key equal to `key` as a set -- order and repetition aside --
@@ -1993,17 +2064,9 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 		throw InternalException("DECIDE: a scoped reducer did not bind to an aggregate");
 	}
 	if (condition) {
-		// The condition takes data only (ValidateDecideScopeSpellings), so it binds as plain
-		// SQL: a compound condition needs no parentheses.
-		ErrorData condition_error;
-		binding_when_condition = true;
-		try {
-			BindChild(condition, depth, condition_error);
-		} catch (...) {
-			binding_when_condition = false;
-			throw;
-		}
-		binding_when_condition = false;
+		// The condition takes data only, so it binds as plain SQL: a compound condition needs
+		// no parentheses.
+		auto condition_error = BindData(condition, depth, DecideDataPosition::SCOPE);
 		if (condition_error.HasError()) {
 			return BindResult(std::move(condition_error));
 		}
@@ -2015,8 +2078,8 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 			throw InternalException("DECIDE: a reducer's per needs the clause's key scopes");
 		}
 		auto &marker = per->Cast<FunctionExpression>();
-		auto scope_idx = FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables),
-		                                      DecideKeyToString(marker), *qualifier_context->entity_scopes);
+		auto scope_idx = FindOrCreateKeyScope(binder.bind_context, marker, KeyDecisions(), DecideKeyToString(marker),
+		                                      *qualifier_context->entity_scopes);
 		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
 	}
 	return result;
@@ -2045,7 +2108,8 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 	for (idx_t i = 1; i < by.children.size(); i++) {
 		auto &element = by.children[i];
 		if (element->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-			auto relation = ResolveRelationName(binder.bind_context, element->Cast<ColumnRefExpression>());
+			auto relation =
+			    ResolveRelationName(binder.bind_context, element->Cast<ColumnRefExpression>(), KeyDecisions());
 			if (relation) {
 				for (auto &column : BindRelationColumns(*relation)) {
 					names.push_back(column->GetName());
@@ -2055,15 +2119,7 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 			}
 		}
 		names.push_back(element->ToString());
-		ErrorData key_error;
-		binding_when_condition = true;
-		try {
-			BindChild(element, depth, key_error);
-		} catch (...) {
-			binding_when_condition = false;
-			throw;
-		}
-		binding_when_condition = false;
+		auto key_error = BindData(element, depth, DecideDataPosition::SCOPE);
 		if (key_error.HasError()) {
 			return BindResult(std::move(key_error));
 		}
@@ -2227,22 +2283,15 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	}
 
 	// The order key binds as plain SQL, as a `when` condition does.
-	ErrorData order_error;
-	binding_when_condition = true;
-	try {
-		BindChild(frame.order, depth, order_error);
-	} catch (...) {
-		binding_when_condition = false;
-		throw;
-	}
-	binding_when_condition = false;
+	auto order_error = BindData(frame.order, depth, DecideDataPosition::FRAME_KEY);
 	if (order_error.HasError()) {
 		return BindResult(std::move(order_error));
 	}
 	spec.order = std::move(BoundExpression::GetExpression(*frame.order));
 	// The within key resolves as a per key does: columns, and relations standing for theirs.
 	// Messages name both as written (DecideFrameSpec::timeline_names, order_name).
-	for (auto &column : ResolveKey(binder.bind_context, frame.within, 0, DecisionNames(variables), "within")) {
+	for (auto &column :
+	     ResolveKey(binder.bind_context, frame.within, 0, KeyDecisions(), DecideDataPosition::FRAME_KEY)) {
 		spec.within.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
 		spec.timeline_names.push_back(column.name);
 	}
@@ -2365,44 +2414,138 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
     return result;
 }
 
+DecideDecisionRead FindDecisionRead(const Expression &expr, idx_t decide_index) {
+	DecideDecisionRead read;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		if (colref.binding.table_index == decide_index) {
+			read.node = &expr;
+			read.column = colref.binding.column_index;
+		}
+		return read;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+		// A subquery's body has its own binder, which lists every column of the enclosing
+		// query read anywhere inside it as correlated.
+		for (auto &column : expr.Cast<BoundSubqueryExpression>().binder->correlated_columns) {
+			if (column.binding.table_index == decide_index) {
+				read.node = &expr;
+				read.column = column.binding.column_index;
+				return read;
+			}
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!read.node) {
+			read = FindDecisionRead(child, decide_index);
+		}
+	});
+	return read;
+}
+
+ErrorData DecideBinder::BindData(unique_ptr<ParsedExpression> &expr, idx_t depth, DecideDataPosition position) {
+	auto outer = binding_data;
+	binding_data = position;
+	ErrorData error;
+	try {
+		BindChild(expr, depth, error);
+	} catch (...) {
+		binding_data = outer;
+		throw;
+	}
+	binding_data = outer;
+	return error;
+}
+
+void DecideBinder::RefuseDecisionReference(const ParsedExpression &parsed, const Expression &bound, idx_t depth) const {
+	if (!qualifier_context) {
+		return;
+	}
+	auto read = FindDecisionRead(bound, qualifier_context->decide_index);
+	if (!read.node) {
+		return;
+	}
+	string name;
+	for (auto &variable : variables) {
+		if (variable.second == read.column) {
+			name = variable.first;
+		}
+	}
+	if (binding_data != DecideDataPosition::NONE) {
+		throw BinderException(parsed, DecideDecisionInDataFormat(binding_data), name);
+	}
+	// From inside a subquery: the column of a subquery is bound past it, at this binder's depth.
+	if (depth > 0) {
+		throw BinderException(parsed, "DECIDE: %s is a decision; a subquery in a DECIDE clause may only use data",
+		                      name);
+	}
+	if (IsVariableExpression(parsed, variables)) {
+		return;
+	}
+	auto &colref = parsed.Cast<ColumnRefExpression>();
+	if (colref.IsQualified() && variables.count(colref.GetColumnName())) {
+		throw BinderException(parsed, "DECIDE: write %s, not %s; a decision is referenced by its bare name",
+		                      colref.GetColumnName(), colref.ToString());
+	}
+	// The decisions' binding itself, read as a struct of them.
+	throw BinderException(parsed, "DECIDE: %s is neither a column nor a relation of the FROM clause",
+	                      colref.ToString());
+}
+
 BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
-    // Read the location before dispatching: BindFunction rewrites `expr_ptr` in place
-    // for the norm marker, so the node it names afterwards is not the one the user wrote.
-    auto location = expr_ptr->GetQueryLocation();
-    return PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression));
+	// Read before dispatching: BindFunction rewrites `expr_ptr` in place for the norm marker,
+	// so the node it names afterwards is not the one the user wrote. A column reference binds
+	// without replacing its node.
+	auto location = expr_ptr->GetQueryLocation();
+	// A reference SQL expands binds the references it expands to through here as well --
+	// `decide_variables`, a struct of the decisions, binds `decide_variables.x` -- and the
+	// rule judges it as written, once.
+	bool column_reference = expr_ptr->GetExpressionClass() == ExpressionClass::COLUMN_REF && !binding_reference;
+	auto outer_reference = binding_reference;
+	binding_reference = binding_reference || column_reference;
+	BindResult result;
+	try {
+		result = binding_data == DecideDataPosition::NONE ? BindNode(expr_ptr, depth, root_expression)
+		                                                  : ExpressionBinder::BindExpression(expr_ptr, depth);
+	} catch (...) {
+		binding_reference = outer_reference;
+		throw;
+	}
+	binding_reference = outer_reference;
+	if (!result.HasError() && result.expression) {
+		if (column_reference) {
+			RefuseDecisionReference(*expr_ptr, *result.expression, depth);
+		}
+		PreserveDecideSourceFragment(*expr_ptr, *result.expression);
+	}
+	return PreserveQueryLocation(location, std::move(result));
 }
 
-BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
-                                                bool root_expression) {
-    if (depth > 0) {
-        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
-    auto &expr = *expr_ptr;
-    switch (expr.GetExpressionClass()) {
-    case ExpressionClass::FUNCTION:
-        return BindFunction(expr_ptr, depth);
-    case ExpressionClass::DECIDE_FRAME:
-        return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
-    case ExpressionClass::SUBQUERY: {
-        auto &subquery = expr.Cast<SubqueryExpression>();
-        if (subquery.subquery_type != SubqueryType::SCALAR) {
-             return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
-        }
-        if (ExpressionContainsDecideVariable(expr, variables)) {
-            return BindResult(BinderException::Unsupported(expr,
-                "Subqueries in DECIDE clauses cannot reference DECIDE variables."));
-        }
-        // Standard binding handles both correlated and uncorrelated scalar subqueries.
-        // Uncorrelated: PlanSubqueries evaluates them as cross-joined scalars.
-        // Correlated: PlanSubqueries decorrelates them into joins, producing
-        //             per-row values that the DECIDE operator evaluates normally.
-        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
-    default:
-        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
+BindResult DecideBinder::BindNode(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+	if (depth > 0) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
+	auto &expr = *expr_ptr;
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::FUNCTION:
+		return BindFunction(expr_ptr, depth);
+	case ExpressionClass::DECIDE_FRAME:
+		return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
+	case ExpressionClass::SUBQUERY: {
+		auto &subquery = expr.Cast<SubqueryExpression>();
+		if (subquery.subquery_type != SubqueryType::SCALAR) {
+			return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
+		}
+		// Standard binding handles both correlated and uncorrelated scalar subqueries.
+		// Uncorrelated: PlanSubqueries evaluates them as cross-joined scalars.
+		// Correlated: PlanSubqueries decorrelates them into joins, producing per-row values
+		// that the DECIDE operator evaluates normally. One that reads a decision is refused as
+		// that column binds, past the subquery, at this binder (BindExpression).
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
+	default:
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
 }
-
-
 
 } // namespace duckdb

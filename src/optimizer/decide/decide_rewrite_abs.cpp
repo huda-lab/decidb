@@ -419,9 +419,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			// decision: the arm is known at the moment the variable would be allocated.
 			idx_t y_idx = DConstants::INVALID_INDEX;
 			if (!decide.use_native_constructs.abs) {
+				// The sign of what the auxiliary measures: one per auxiliary.
+				auto scope = pair.aux_idx < decide.variable_scopes.size() ? decide.variable_scopes[pair.aux_idx]
+				                                                         : DecideVarScopeInfo::Row();
 				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true,
-				                             DecideVarScopeInfo::Row(),
-				                             "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
+				                             scope, "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
 			}
 
 			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
@@ -508,8 +510,21 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				// derivation boxes them in: the outer range needs the inner box.
 				FindAndReplaceAbs(func.children[0], decide, abs_pairs, clause_alias, path);
 
+				// The auxiliary's scope is this pass's choice, and it must agree with the shape
+				// the canonicalizer gave the clause: beside a clause's reducers, an ABS of a
+				// query-wide argument (`abs(s - 1)` over a query-wide `s`) is one term of the
+				// aggregate row (ClassifyScoped), so one auxiliary for the query; any other is
+				// one per row, and inside a reducer it is a member's. So it asks the
+				// canonicalizer's own test, in the provenance form LogicalDecide::AddConstraint
+				// re-canonicalizes this pass's rows with; it decides no shape.
+				const bool query_wide =
+				    !path.innermost &&
+				    DecideCanonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes)
+				        .IsQueryWideExpression(*func.children[0]);
 				idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__", aux_type,
-				                                     false, DecideVarScopeInfo::Row(), label);
+				                                     false,
+				                                     query_wide ? DecideVarScopeInfo::Scalar() : DecideVarScopeInfo::Row(),
+				                                     label);
 
 				// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
 				// alias before the rewrite: the one place that decides exactness, for a
