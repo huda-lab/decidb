@@ -25,4 +25,6 @@ presolve could cost minutes on a large model.
 then the dual-backend verification list; the three models make regression tests once a
 fixed HiGHS is in.
 
-**Decision needed.** The upgrade is a dependency change, the user's call.
+**Decision (2026-10-30).** The user keeps 1.11.0 for now; the upgrade waits until they
+choose it. Meanwhile a HiGHS answer on a model shaped like these three may be wrong, and
+Gurobi is unaffected.

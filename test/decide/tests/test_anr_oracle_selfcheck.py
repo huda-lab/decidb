@@ -1,6 +1,5 @@
-"""Self-checks of the ANR reference evaluator, ``_anr_oracle.py``, before any engine change
-depends on it (phase 0 of ``context/descriptions/09_anr_language/
-anr_algorithm_and_frames_plan.md``, §6.2).
+"""Self-checks of the ANR reference evaluator, ``_anr_oracle.py``, which every engine suite of
+the full language relies on (``context/descriptions/04_testing/scope/done.md``).
 
 Five independent readings must agree with it:
 

@@ -85,6 +85,14 @@ formulation reads each term through the variable execution numbers it by
 (`ComposedMinMaxTermData::variables`), so a frame read inside one lands on its selected row
 like any other term.
 
+**Inlined helpers** (§9, "Inlining a helper"). A helper decision of the value rewrite that
+stage 06 writes into its readers has scope `INLINED`: no column (`NumInstances` is 0), and
+`Get` or `InstanceColumn` asked of it is an internal error, so a reader the inlining missed
+fails loudly rather than reading a column that is not there. It keeps the entity mapping
+that names its instances: `InstanceOf(var, row)` is the instance a row reads (0 for one
+that had one instance), and `IsQueryWide(var)` holds for a scalar and for an inlined helper
+that was one, so the once-beside-a-reducer rule (§4) reads it as before.
+
 ---
 
 ## 2. Variable types and bounds
@@ -184,6 +192,9 @@ carried the same way):
   uses, so its coefficient becomes the **sum of every counted row's data** — the
   scalar's contribution is `(Σ counted rows' coefficient) * cap`, not `1 * cap`.
 
+An inlined helper's term follows the same two rules, read through `IsQueryWide`, and
+then stands for its instance's members (§9, "Inlining a helper").
+
 Getting this backwards in either direction is a silent wrong answer, not a
 rejection: reading a `SUM`-reduced scalar term as `NONE` drops every row's
 contribution but one; reading a `NONE` term as `SUM` multiplies a row-invariant
@@ -214,6 +225,16 @@ AVG terms are already coefficient-scaled by stage 08, by the rows the reducer re
 its group: the kept rows of its `by` group, less those its own `when` drops, one per class
 under its own `per` (`08_execution/done.md` §5). The builder consumes the evaluated
 coefficients directly.
+
+Every term, in the three paths and in the linear objective, is written through one
+function (`AddTermColumns`): a decision at its column, or an inlined helper as the members
+of the instance its row reads, each member term at its own row's column, times the term's
+coefficient, accumulated with the row's other terms. The members' constants, scaled, join
+the row's fixed LHS terms, moved to the bound and recorded in `rhs_mechanism_offset` as
+those are (§7), so a diagnosis quotes the bound as written; in the objective they are its
+offset (`obj_offset`), the one constant it keeps. A row reading an instance with no member
+was skipped where it is absent (stage 08), and a helper written into another helper's
+members has no row reading it, so either reaching the builder is an internal error.
 
 ### Quadratic and bilinear constraints
 
@@ -546,6 +567,12 @@ needs both. A MIN/MAX constraint needs only the closing side: `MAX(e) >= K` need
 `z <= MAX(e)`, or a `z` inflated past every member would satisfy a bound nothing else
 does — but nothing pushes `z` down, so the envelope would be rows for nothing.
 
+**A family of one member is that member** (deck p. 112). `EmitExtremumLink` states it as
+one equality, `result - member = constant`, with no envelope, indicator or Big-M -- so a
+side no box bounds needs none -- of the kind of the side the site needs. It does so where
+that side is mechanism a diagnosis never loosens: a composed clause's closing rows are its
+user's clause, loosened one way, which an equality would not be, and keep their two rows.
+
 **Native is the closing side's alternative, never the envelope's.** The envelope costs
 one row per member, needs no constant to dominate anything, and is *implied* by a
 general constraint rather than contradicted by it. So where a spec asks for it, it is
@@ -664,7 +691,9 @@ its own, only ever tightening; an end no member bounds stays open. One box per d
 so an instance may be boxed wider than its own group (`05_optimizer/todo.md` §2).
 
 `DeriveReducerMemberBounds` is its backward half (`syntax_reference.md` §5.5): a helper's box bounds the helpers
-it is defined from. Through a SUM/AVG equality each term is at most the helper's top less
+it is defined from. A group none of whose terms is a helper -- every group of a reducer
+over decisions alone -- bounds nothing and is passed over unread, which is most of what
+this pass cost on a helper of half a million members (Q4). Through a SUM/AVG equality each term is at most the helper's top less
 every other term's floor, and at least its floor less every other term's top; through a
 MAX's envelope every member is at or under its top, a MIN's at or over its floor; a
 closing side alone bounds no member. Only helper columns are tightened, and only when
@@ -691,18 +720,67 @@ still finite, and the solver reports the model infeasible as for any empty box
 (DIAGNOSE formulates its own model). Each ABS derivation starts afresh
 (`range_unbounded` is reset), so a range open on one pass may close on the next.
 
-`LinearizeReducerValueLinks` then states each definition over the groups
-`BuildMinMaxGroups` splits the members into, consuming the evaluated rows. A SUM/AVG
-helper gets one flat equality per group in `global_constraints`:
+`LinearizeReducerValueLinks` then states each definition over the groups of its members,
+consuming them. A SUM/AVG helper gets one flat equality per group in `global_constraints`:
 `value - members' expressions = members' constants`, the members' columns accumulated
-first (a keyed decision may stand in several rows of a group), STRUCTURAL, with the
-clause's provenance. A MIN/MAX helper gets one extremum link per group through
+first in one sparse row reused by every group (a keyed decision may stand in several rows
+of a group), STRUCTURAL, with the clause's provenance. An inlined helper gets no
+definition: its members move to `SolverInput::inlined_helpers` for the builder, with the
+group each instance reads. A MIN/MAX helper gets one extremum link per group through
 `EmitExtremumLink`, its result column the helper's instance for that group, on the sides
 stage 05 recorded; the closing Big-M is the helper's box end against the family's far
 end (`upper_bounds[value] - family.lo` for MAX, `family.hi - lower_bounds[value]` for
 MIN), because the box is wider than one family. Where that constant does not exist the
 lowering arm refuses naming a column to bound and the native arm states the extremum, as
 for every other MIN/MAX.
+
+### Inlining a helper
+
+A helper decision costs a column, a definition row and its reads; written where it is
+read, it costs none of them, and its members' terms stand in each reader instead. An
+instance of `m` terms read `k` times costs `m·k` nonzeros inlined, against `m + 1` for its
+definition and `k` for its reads, so `InlineReducerValueLinks` (assembly, before
+`VarIndexer::Build`) inlines a helper where the sum over its instances adds no nonzero
+(D83): the model only ever loses columns and rows. On `x >= sum(from 2 previous to
+previous else 0: x) over (t.p within t.g) - t.w` over 200,000 rows, the 400,000 columns
+and 400,000 rows of a helper per window become 200,000 and 200,000, and Gurobi's solve
+falls from 0.82 s to 0.35 s on the same answer.
+
+Where it may write a helper in is the plan's (`ReducerValueLinkSpec::inlining`,
+`inline_outer`: the linear form's census, `05_optimizer/done.md`) -- into its readers, linear
+rows of plain clauses and the linear objective, or into one outer link's members -- with no
+clause folded into the helper's box. What it counts is the data, each instance's reads as
+the builder states them: a per-row clause's kept rows, an aggregate's groups (a group's rows
+reading one instance sum into one row), the objective once, an outer SUM's groups (its
+definition sums a group's terms) and an outer MIN/MAX's members (each stated in a row of its
+own). A read where the plan lists none -- a row or the objective reading a helper the plan
+writes into a link, another link's members reading one, a row that is not plain -- is an
+internal error, as is a read of an absent instance. Then, innermost first:
+
+- **Into another helper** (deck pp. 116–119, Q4's group sums under its MAX). A helper read
+  only by another link's members is written into them: each member term reading an
+  instance becomes that instance's terms, times the term's coefficient, its constants
+  joining the member's; the link is then gone. An outer MIN/MAX pinned on its closing side
+  may state it natively, over columns, where a member that is an expression costs a column
+  and a row of its own (`ExtremumArgumentColumn`), so such an outer takes a helper only
+  where every instance is read once (`max(sum(x + 1) by (g)) >= 15` keeps a sum two of
+  its members read).
+- **Into rows and the objective** (deck p. 115, the range frame above). Any other is marked
+  `inlined`: its variable's scope becomes `INLINED` (§1), and the builder writes its
+  members where a row or the objective reads it (§4), their constants into a row's bound or
+  the objective's offset (`SolverModel::obj_offset`, which each backend adds to the
+  objective it reports, as a kept helper's definition carried them into it). It stays among
+  the links through the bound fixed point, so a bound still flows through it to the helpers
+  among its members.
+
+A MIN/MAX helper is considered only when every group has one member, where it is linear. A
+helper is inlined as a whole: its instances share one variable, whose columns are laid out
+once, so a MIN/MAX with one singleton group among others keeps its columns and defines that
+one by an equality (`EmitExtremumLink`, below). What inlining leaves alone: execution still lists every member and its
+presence, and skips a clause's instances where a helper read at its root is absent, so an
+inlined helper's absence skips the same rows; DIAGNOSE re-formulates its repair model from
+the same assembly, so it inlines the same helpers, and its findings name the rows as written
+(`test_anr_inlining.py` holds the range form to the point frame's diagnosis).
 
 ### MIN/MAX objectives
 
@@ -938,6 +1016,9 @@ it read `abs(x - at(previous else 50: x) over (...))` at the first period as `|x
 called a feasible query infeasible on both arms. And the row states each column once
 (`MinMaxLinkRow`): two of C1's terms land on one column where a frame selects the row
 itself (`x - at(last: x) over (...)` at the last period), which Gurobi refused as a row.
+One such row is reused for every data row (`MinMaxLinkRow::Clear`) and written straight
+into the link row: built afresh per row, with a copy beside it, it cost Q10 a third of its
+model construction (300 ms against 232 before the ANR work; 198 ms reused).
 
 The lowering arm also **narrows the auxiliary's column box** to the `M` it derives. The rows it
 emits pin `aux = |inner|`, so `M` is a valid upper bound — and the only one anything

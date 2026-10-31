@@ -135,6 +135,11 @@ void DumpSolverModel(const SolverModel &model) {
 	out += "num_qrows: " + std::to_string(model.quadratic_constraints.size()) + "\n";
 	out += "num_genconstrs: " + std::to_string(model.general_constraints.size()) + "\n";
 	out += "num_indconstrs: " + std::to_string(model.indicator_constraints.size()) + "\n";
+	if (model.obj_offset != 0.0) {
+		out += "obj_offset: ";
+		AppendDouble(out, model.obj_offset);
+		out += "\n";
+	}
 
 	for (idx_t col = 0; col < model.num_vars; col++) {
 		out += "col " + std::to_string(col) + ": lb=";

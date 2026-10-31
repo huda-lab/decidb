@@ -438,6 +438,15 @@ struct ReducerValueLinkSpec {
     idx_t source_clause_id = DConstants::INVALID_INDEX;
     idx_t removal_group_id = DConstants::INVALID_INDEX;
     ReducerValueMembers members;
+    //! Where the plan lets stage 06 write it in (LogicalDecide::ReducerValueLink::
+    //! inlining, inline_outer: an index into reducer_value_links as execution lists them).
+    DecideHelperInlining inlining = DecideHelperInlining::NONE;
+    idx_t inline_outer = DConstants::INVALID_INDEX;
+    //! Set by InlineReducerValueLinks for one written into its rows and the objective (D83):
+    //! they read an instance's members in place of its column. Its bounds are still
+    //! derived (a bound flows through it to the helpers among its members); no definition
+    //! is emitted, and its members move to SolverInput::inlined_helpers.
+    bool inlined = false;
 };
 
 //! A construct handed to the backend whole, instead of being lowered into rows.
@@ -558,6 +567,19 @@ struct SolverInput {
     //! The value rewrite's helper decisions, each with its evaluated definition. Consumed
     //! (moved into `constraints` or emitted as extremum links) by the formulation pass.
     vector<ReducerValueLinkSpec> reducer_value_links;
+    //! The helpers stage 06 inlined into rows and the objective, moved here once their
+    //! bounds are derived (LinearizeReducerValueLinks): the model builder writes an
+    //! instance's members wherever a row or the objective reads it. `inlined_helper_of[v]`
+    //! is decision v's entry, INVALID_INDEX for every other decision.
+    struct InlinedHelper {
+        ReducerValueMembers members;
+        //! Per instance of the helper, its group in `members`; INVALID_INDEX for an
+        //! instance with no member, which no reader reads (it is absent).
+        vector<idx_t> group_of_instance;
+        string label;
+    };
+    vector<InlinedHelper> inlined_helpers;
+    vector<idx_t> inlined_helper_of;
 
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows

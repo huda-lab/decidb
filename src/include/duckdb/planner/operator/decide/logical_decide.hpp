@@ -534,6 +534,13 @@ public:
         //! range's own frame, a member frame, or a nested helper's; INVALID_INDEX when none
         //! can (D81).
         idx_t absence_frame = DConstants::INVALID_INDEX;
+        //! Where its readers can take its members in place of its column (D83): linear rows
+        //! of plain clauses and the linear objective, or the members of the one outer link
+        //! `inline_outer` (into reducer_value_links), with no clause folded into its box --
+        //! decided by the linear form (stage 05), once. Stage 06 inlines it where that adds
+        //! no nonzero (InlineReducerValueLinks).
+        DecideHelperInlining inlining = DecideHelperInlining::NONE;
+        idx_t inline_outer = DConstants::INVALID_INDEX;
 
         bool MayBeAbsent() const {
             return absence_frame != DConstants::INVALID_INDEX;
@@ -637,6 +644,12 @@ public:
     //! tightest of several `>=` bounds, and physical Finalize resolves anything still at
     //! the sentinel to the default 0 floor.
     static constexpr double ABSORBED_LOWER_UNSET = -1e30;
+    static constexpr double ABSORBED_UPPER_UNSET = 1e30;
+    //! Whether bound absorption folded a clause into decision `var`'s box.
+    bool HasAbsorbedBound(idx_t var) const {
+        return (var < absorbed_lower_bounds.size() && absorbed_lower_bounds[var] > ABSORBED_LOWER_UNSET) ||
+               (var < absorbed_upper_bounds.size() && absorbed_upper_bounds[var] < ABSORBED_UPPER_UNSET);
+    }
 
     //! Per-decision-variable box, sized to decide_variables. Physical execution copies
     //! these into SolverInput instead of re-walking the constraint tree.

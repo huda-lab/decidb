@@ -10,14 +10,15 @@ Tests live in:
 - `test/decide/tests/_scope_oracle.py` — the reference evaluator most suites below judge against
 - `test/decide/tests/_scope_cases.py` — the deck's data and shared helpers
 - `test/decide/tests/_brute_force.py` — enumeration for shapes the scope oracle cannot state
-- `test/decide/tests/_anr_oracle.py` — the reference evaluator for the full ANR language (variant signatures, nested reducers, frame selectors), ahead of the engine for the parts not built yet
-- `test/decide/tests/_anr_cases.py` — the ANR plan's fixtures, each as SQL and as oracle expressions with its hand-computed answer
+- `test/decide/tests/_anr_oracle.py` — the reference evaluator for the full ANR language (variant signatures, nested reducers, frame selectors), built before the engine took any of it
+- `test/decide/tests/_anr_cases.py` — the full language's fixtures (F1–F21), each as SQL and as oracle expressions with its hand-computed answer
 - `test/decide/tests/test_anr_oracle_selfcheck.py` — the checks that the ANR evaluator is right before any engine change relies on it
-- `test/decide/tests/test_anr_variants.py` — phase 1 of the ANR plan (variant signatures) through the engine
-- `test/decide/tests/test_anr_nested.py` — phase 2 of the ANR plan (nested reducers) through the engine
-- `test/decide/tests/test_anr_frames.py` — the ANR plan's frame selectors. `TestSyntax`: a point frame and a range echo as written through EXPLAIN (defaults, `else NULL` among them, left out), each refusal names its construct. `TestPoint` (phase 4): the 21 phase-4 fixtures of `_anr_cases` judged by `_anr_oracle` (or the error their data raises), and F2's model at six columns and one row per instance; `TestPointDeck`: deck examples 1, 4, 5 and the DeQL comparison (pp. 73–75) as written; `TestPointShapes`: root frames (a data factor, an affine payload, `<>`, two data frames, every position missing, a cyclic timeline of one row), frames that cannot miss inside SUM, AVG with `by`, an easy and a hard MAX and beside a reducer, `BETWEEN` and the tightest-bound collapse, a query-wide fallback, `first` and `previous` under `per`, peers of one payload, peers compared as linear forms (a zero coefficient, constants that sum alike, and the two ambiguous forms beside them), the objective's one position; `TestPointErrors`: D66 for a frame, the objective's missing position, a decision frame beside MAX in the objective, a NULL payload (D78) and one no anchor selects, DIAGNOSE; `TestRange` (phase 5): the ten phase-5 fixtures, every pair of six ends under both steps, each policy, open and cyclic (432 cases over decisions), each reducer over data (`count` included) and over decisions in every push direction, the helpers per window pinned in the model dump (one per timeline, one per position, tied rows sharing one), composition (ABS, `<>`, a reducer around a range, a data factor, a point frame beside it), the objective, a keyed payload with a decision `else`, variants under `per`, laziness, NULL and `count`, a range over data's SQL type; `TestRangeDeck`: deck examples 2 and 6 under each policy; `TestRangeErrors`: `count` over decisions, the objective that reads nothing, `decide_frame_limit`, EXPLAIN's helper lines, DIAGNOSE, the HiGHS presolve retry on both backends; `TestRangeReview`: the architecture review's findings (a fractional `else` or addend under each comparison, an `else` of another type, `count ... all` that cannot miss, a window `all` makes absent, `count` over a NULL `else`, parted windows against the limit, a reducer beside a range under ABS). `test/common/test_decidb_frame_predicates.cpp` holds `DecideFrameSpec`'s absence predicates to an enumeration of every position.
-- `test/decide/tests/test_anr_composition.py` — phase 6 (§6.7 of the plan), every case judged by `_anr_oracle`, on both solvers where a shape has two formulations; a product with one period makes a reducer absent. `TestMembersDropped`: a frame that may select nothing inside a reducer over decisions -- deck example 3, a group left with no row, a data frame dropping the decision beside it, AVG over the members left, easy and hard MIN and MAX, beside a decision, over every row, under ABS at the root, `<>`, its own `when` and `per`, a data factor, two frames in a member, a composed MIN/MAX, an `AND` beside it --, ranges that read nothing (every position missing, `all`, reversed, a MAX of a range, a range over data), absent nested reducers, the helper pinned in the model dump; `TestUnderAbs`: `abs` and `norm` (orders 1, `inf`, 0) over a frame that may miss inside a reducer, the smoothing objective, a data frame under `abs`, `abs` pushed up, MAX of `abs`, `abs` under the reducer's own `when`, and the two refusals; `TestObjective`: sum, avg, min, nested, composed MIN/MAX with a frame, and the objective left with no member; `TestComposition`: a frame inside a nested operand, a nest beside a frame, ABS over a range sum, `norm` under a bound, frames in composed MIN and MAX, `per K` with a `by` reducer, variants with frames over F3's depots, duplicate joined rows; `TestDefects`: the phase-4 instance skip that took a reducer's member rows (ABS and Boolean products), the older ABS-inside-a-reducer `when`, and an exact ABS's argument read whole (a column named twice, an `else` beyond the box).
-- `test/decide/tests/test_anr_diagnostics.py` — phase 6 (§6.8): F17 judged by the oracle, the structural rows of a range, a member helper and an ABS member never offered for repair (query and expanded scope), the expanded groups of a member helper, the unbounded remedy through a helper over a frame, F1 with its limits lowered (the repair re-solved by the oracle), an atomic DROP that keeps another clause's helper (re-solved by DeciDB), EXPLAIN's accounts, the objective with no member as an error.
+- `test/decide/tests/test_anr_variants.py` — variant signatures (D64–D66, D77) through the engine
+- `test/decide/tests/test_anr_nested.py` — nested reducers (D73–D75) through the engine, F1's model pinned at the deck's rows
+- `test/decide/tests/test_anr_frames.py` — frame selectors. `TestSyntax`: a point frame and a range echo as written through EXPLAIN (defaults, `else NULL` among them, left out), each refusal names its construct. `TestPoint` (phase 4): the 21 phase-4 fixtures of `_anr_cases` judged by `_anr_oracle` (or the error their data raises), and F2's model at six columns and one row per instance; `TestPointDeck`: deck examples 1, 4, 5 and the DeQL comparison (pp. 73–75) as written; `TestPointShapes`: root frames (a data factor, an affine payload, `<>`, two data frames, every position missing, a cyclic timeline of one row), frames that cannot miss inside SUM, AVG with `by`, an easy and a hard MAX and beside a reducer, `BETWEEN` and the tightest-bound collapse, a query-wide fallback, `first` and `previous` under `per`, peers of one payload, peers compared as linear forms (a zero coefficient, constants that sum alike, and the two ambiguous forms beside them), the objective's one position; `TestPointErrors`: D66 for a frame, the objective's missing position, a decision frame beside MAX in the objective, a NULL payload (D78) and one no anchor selects, DIAGNOSE; `TestRange` (phase 5): the ten phase-5 fixtures, every pair of six ends under both steps, each policy, open and cyclic (432 cases over decisions), each reducer over data (`count` included) and over decisions in every push direction, the helpers per window pinned in the model dump (one per timeline, one per position, tied rows sharing one), composition (ABS, `<>`, a reducer around a range, a data factor, a point frame beside it), the objective, a keyed payload with a decision `else`, variants under `per`, laziness, NULL and `count`, a range over data's SQL type; `TestRangeDeck`: deck examples 2 and 6 under each policy; `TestRangeErrors`: `count` over decisions, the objective that reads nothing, `decide_frame_limit`, EXPLAIN's helper lines, DIAGNOSE, the HiGHS presolve retry on both backends; `TestRangeReview`: the architecture review's findings (a fractional `else` or addend under each comparison, an `else` of another type, `count ... all` that cannot miss, a window `all` makes absent, `count` over a NULL `else`, parted windows against the limit, a reducer beside a range under ABS). `test/common/test_decidb_frame_predicates.cpp` holds `DecideFrameSpec`'s absence predicates to an enumeration of every position.
+- `test/decide/tests/test_anr_composition.py` — frames composed with reducers (D81, D82), every case judged by `_anr_oracle`, on both solvers where a shape has two formulations; a product with one period makes a reducer absent. `TestMembersDropped`: a frame that may select nothing inside a reducer over decisions -- deck example 3, a group left with no row, a data frame dropping the decision beside it, AVG over the members left, easy and hard MIN and MAX, beside a decision, over every row, under ABS at the root, `<>`, its own `when` and `per`, a data factor, two frames in a member, a composed MIN/MAX, an `AND` beside it --, ranges that read nothing (every position missing, `all`, reversed, a MAX of a range, a range over data), absent nested reducers, the helper pinned in the model dump; `TestUnderAbs`: `abs` and `norm` (orders 1, `inf`, 0) over a frame that may miss inside a reducer, the smoothing objective, a data frame under `abs`, `abs` pushed up, MAX of `abs`, `abs` under the reducer's own `when`, and the two refusals; `TestObjective`: sum, avg, min, nested, composed MIN/MAX with a frame, and the objective left with no member; `TestComposition`: a frame inside a nested operand, a nest beside a frame, ABS over a range sum, `norm` under a bound, frames in composed MIN and MAX, `per K` with a `by` reducer, variants with frames over F3's depots, duplicate joined rows; `TestDefects`: the phase-4 instance skip that took a reducer's member rows (ABS and Boolean products), the older ABS-inside-a-reducer `when`, and an exact ABS's argument read whole (a column named twice, an `else` beyond the box).
+- `test/decide/tests/test_anr_diagnostics.py` — DIAGNOSE and EXPLAIN over the full language: F17 judged by the oracle, the structural rows of a range, a member helper and an ABS member never offered for repair (query and expanded scope), the expanded groups of a member helper, the unbounded remedy through a helper over a frame (only `x` to name where the helper is written into the objective, the reducer as written where it keeps its column), F1 with its limits lowered (the repair re-solved by the oracle), an atomic DROP that keeps another clause's helper (re-solved by DeciDB), EXPLAIN's accounts, the objective with no member as an error.
+- `test/decide/tests/test_anr_inlining.py` — helpers written where they are read (D83), each case's model size worked out by hand and its answer judged by `_anr_oracle`. `TestRangeIntoRows`: a window read by its anchor's row alone (SUM with and without `else`, absent windows skipping their instances, AVG, an `else` constant moved to the bound) on both solvers, a window every row reads keeping its column, windows shared by a few rows inlined because the helper as a whole adds no nonzero, a range in the objective; `TestIntoMembers`: F1_sum's model pinned row by row at the deck's p. 119, Q4's group sums written into its objective's MAX, a range written into the reducer around it; `TestSingleton`: a MAX of one position per window written in with no binary, and a closing side with no bound to read answered on HiGHS; `TestKept`: `<>`, a bound absorbed into the helper's box, a native closing MAX two of whose members read one sum, and a MAX of several members keep the column; a diagnosis through an inlined range equal to the point frame's, in query and expanded scope; the achievable objective counting an inlined helper's constants (its offset), re-solved by the oracle, on both solvers.
 - `test/decide/tests/test_scope_*.py` — twelve suites, one per part of the language
 - `test/decide/tests/test_no_old_spellings_remain.py` with `_old_spellings.py` — the scanner that keeps removed spellings out of every test surface
 - `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "not supported yet"), quoted keywords as names, the exact parse errors, and the removed spellings' messages
@@ -94,10 +95,10 @@ statement and returns its objective.
 
 ### `_anr_oracle.py` — the full ANR language
 
-The evaluator the ANR algorithm's phases judge against
-(`09_anr_language/anr_algorithm_and_frames_plan.md`, decisions D64–D79). It is written
-ahead of the engine: phase 0 built it, and each later phase runs its cases through DeciDB
-against it. Like `_scope_oracle` it reads no SQL.
+The evaluator the full ANR language is judged against (`syntax_reference.md` §5.5, §5.6,
+§7.1; decisions D64–D82 in `09_anr_language/done.md`). It was written before the engine
+took any of the language, and every suite since runs its cases through DeciDB against
+it. Like `_scope_oracle` it reads no SQL.
 
 - **Statements.** Clauses and the objective are expression trees: `Col` (data), `Var`
   (a decision, read through its class at the row), `Terms` (a row's linear form, the
@@ -105,7 +106,7 @@ against it. Like `_scope_oracle` it reads no SQL.
   (`[when c] [per K]: body`), `Agg` (`kind(scope) by (key)`, built by `reduce`), `At` and
   `Range` (point and range frames over an `Over`). `clause` and `le`/`ge`/`eq`/`lt`/`gt`/
   `ne` build a constraint; `Objective` is produced once.
-- **Generation follows the plan's §3 literally.** A scope keeps its rows, splits them into
+- **Generation follows the language's semantics literally** (`syntax_reference.md` §5.5–§7.1). A scope keeps its rows, splits them into
   classes, and produces one value per distinct signature in each class, at its first
   row. A signature is the body's fields: the net value of its data terms (one field per
   additive context, constant factors distributed, so written associativity does not
@@ -137,7 +138,7 @@ against it. Like `_scope_oracle` it reads no SQL.
 
 ### `_anr_cases.py`
 
-Every fixture of the plan's §6.3 (F1–F21, with their variants) and the edge cases beside
+Every fixture of the full language (F1–F21, with their variants) and the edge cases beside
 them — an unused fallback that would fail, a reached one that does, an absent objective,
 cyclic repeats, a reversed range, COUNT of nothing and of NULLs, a NULL bound, a
 spanned timeline, D8 inside a nested reducer, a `when` that keeps nothing. A `Case`
@@ -146,6 +147,27 @@ instances, the optimum, the error or the status, and small domains for enumerati
 `Case.phase` is the first phase whose engine runs the SQL. `fixing_clauses` writes
 an assignment as `when t.id = 3: x = 2` clauses, and `decidb_feasible` reads DeciDB's
 verdict on the fixed query.
+
+## Verifying a change to the language
+
+Each phase of the full algorithm shipped on this list, both solvers and every native
+setting, with the golden models read before any re-capture (a change of answer among ties
+is recorded apart from a change of model):
+
+```sh
+make grammar-build                                   # a grammar change; else make release
+LC_ALL=C make decide-test                            # golden check + full pytest, Gurobi
+LC_ALL=C DECIDB_FORCE_SOLVER=highs make decide-test
+LC_ALL=C DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
+for m in on off force; do DECIDB_NATIVE_CONSTRUCTS=$m test/decide/.venv/bin/python3 -m pytest test/decide/tests -k 'anr'; done
+build/release/test/unittest "[decidb]"
+build/release/test/unittest "test/decidb/*"
+make format-check && git diff --check
+```
+
+Beside it, a differential fuzzer against `_anr_oracle` (random compositions of frames,
+nests, `abs` and MIN/MAX in clauses and the objective, on three solver settings) was run
+on each phase's final binary; it is kept outside the repository.
 
 ## The suites
 
@@ -204,7 +226,7 @@ docstring derives.
   `per` and no `per` give the tightest bound alike; the objective is produced once, its
   message naming the value, the decision or the `by` key as written (a subquery and a
   cast included), also under DIAGNOSE. Oracle and pinned messages.
-- **`test_anr_variants.py`** — the plan's phase-1 fixtures through the engine
+- **`test_anr_variants.py`** — the variant fixtures (`Case.phase` 1) through the engine
   (`_anr_cases`, `Case.phase == 1`: F3, F10, F11, F12, F13, F20), each judged by
   `_anr_oracle`; the rows shape's model size (one row per variant, the same for both
   spellings of F20); a NULL field value as a variant; two classes with equal bodies are
@@ -212,7 +234,7 @@ docstring derives.
   decision the key fixes is one row per class, `per ()` over a per-row decision one per
   row; EXPLAIN ANALYZE's variant line (and none in a plain EXPLAIN, none without
   variants); DIAGNOSE's variant label (`a, 2`). Oracle, dump and pinned text.
-- **`test_anr_nested.py`** — the plan's phase-2 fixtures through the engine on Gurobi and
+- **`test_anr_nested.py`** — the nesting fixtures (`Case.phase` 2) through the engine on Gurobi and
   HiGHS (`Case.phase == 2`: F1 with a MAX and a SUM inner reducer, F14, F16, F16_small,
   `count(e)` over a NULL, D8 inside a nest), each judged by `_anr_oracle`; F1's model (a
   helper per `(rid, cid)` path group and per region, twelve columns, no Big-M); D8's
@@ -287,7 +309,7 @@ docstring derives.
   suggested spelling pastes back and runs. Pinned message fragments.
 
 - **`test_anr_oracle_selfcheck.py`** — the ANR evaluator against five independent
-  readings: the deck's and the plan's hand computations (every case's instances, optimum,
+  readings: the deck's and the fixtures' hand computations (every case's instances, optimum,
   error and status; the shared extremum of deck p. 115 and the collapsed singleton of
   p. 112); exhaustive enumeration over small domains against the solved model;
   `_scope_oracle.ScopedModel`, which reads variants off its own statements, on the

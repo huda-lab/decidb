@@ -36,7 +36,21 @@ python3 benchmark/decide/run_benchmarks.py --compare abc1234
 python3 benchmark/decide/view_results.py {hash}
 python3 benchmark/decide/view_results.py dirty
 python3 benchmark/decide/view_results.py manual
+
+# How the ANR workloads grow with the input (synthetic tables, no database needed)
+python3 benchmark/decide/anr_scaling.py                  # 10^3 .. 10^5 rows
+python3 benchmark/decide/anr_scaling.py --max 1000000    # up to 10^6
+python3 benchmark/decide/anr_scaling.py --only range     # the workloads whose name matches
 ```
+
+`anr_scaling.py` runs nested reducers (depth 1 to 3 at ten keys a level), variants (ten
+per class), point frames, ranges of width 1 to 50 and step 1 to 7, a MAX over a range and a
+cyclic range with repeats, each over a synthetic `range(n)` table at fixed cardinalities, so
+only `n` grows. It records DeciDB's own time (optimizer plus model construction, the solve
+left out), the model's size and the ANR counters (`anr.helpers`, `anr.members`,
+`anr.inlined_helpers`, …; `01_pipeline/08_execution/done.md`), and prints each workload's
+growth exponent: the slope of log(own time) against log(n) between the two largest sizes,
+about 1 when it grows linearly. Results go to `results/anr_scaling.csv`.
 
 ## Database Sizes
 

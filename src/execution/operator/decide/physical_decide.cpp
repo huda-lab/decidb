@@ -2332,6 +2332,24 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
             BuildDecideFrameMap(context, frame, group_keys, gstate.data, num_rows, chunk_expr_cache));
     }
     AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, gstate.data, num_rows, chunk_expr_cache);
+    if (DecideProfileScope::Enabled()) {
+        // The positions the frames request: one per anchor of a point, and each value a
+        // range's window lists, once per window however many anchors share it.
+        idx_t windows = 0, positions = 0;
+        for (auto &map : gstate.frame_maps) {
+            if (!map.range) {
+                positions += std::count(map.anchors.begin(), map.anchors.end(), true);
+                continue;
+            }
+            windows += map.WindowCount();
+            for (idx_t w = 0; w < map.WindowCount(); w++) {
+                positions += map.ValueCount(w);
+            }
+        }
+        DecideProfileScope::Counter("anr.frames", frames.size());
+        DecideProfileScope::Counter("anr.frame_windows", windows);
+        DecideProfileScope::Counter("anr.frame_positions", positions);
+    }
 }
 
 void PhysicalDecide::CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -4419,6 +4437,8 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
         spec.label = link.label;
         spec.source_clause_id = link.source_clause_id;
         spec.removal_group_id = link.removal_group_id;
+        spec.inlining = link.inlining;
+        spec.inline_outer = link.inline_outer;
         if (link.frame != DConstants::INVALID_INDEX) {
             EvaluateFrameLink(context, gstate, num_rows, chunk_expr_cache, link, spec.members);
             // A window is an instance (BuildEntityMappings); one that reads nothing is absent.
@@ -4517,6 +4537,20 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
         }
         record_present(link, std::move(present));
         gstate.evaluated_value_links.push_back(std::move(spec));
+    }
+    if (DecideProfileScope::Enabled() && !gstate.evaluated_value_links.empty()) {
+        idx_t instances = 0, members = 0, terms = 0;
+        for (auto &present : gstate.helper_present) {
+            instances += present.size();
+        }
+        for (auto &spec : gstate.evaluated_value_links) {
+            members += spec.members.constants.size();
+            terms += spec.members.variables.size();
+        }
+        DecideProfileScope::Counter("anr.helpers", gstate.evaluated_value_links.size());
+        DecideProfileScope::Counter("anr.helper_instances", instances);
+        DecideProfileScope::Counter("anr.members", members);
+        DecideProfileScope::Counter("anr.member_terms", terms);
     }
 }
 
@@ -4843,6 +4877,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // (2) the SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
     // for solution readback after the solve. The owning form, so it survives past
     // `solver_input` once that is moved onto gstate.
+    // The helpers written where they are read own no column (stage 06, D83): decided here,
+    // on the assembled model, before the column space is laid out.
+    phase.Next("assembly.inline_helpers");
+    InlineReducerValueLinks(solver_input);
+
     phase.Next("assembly.var_indexer");
     VarIndexer var_indexer = VarIndexer::Build(solver_input);
 

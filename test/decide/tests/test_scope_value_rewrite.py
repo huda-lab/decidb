@@ -83,10 +83,11 @@ def test_a_decision_beside_a_reducer(decidb_cli, scope_solver, tmp_path):
 @pytest.mark.correctness
 def test_a_row_varying_factor_on_a_reducer(decidb_cli, scope_solver, tmp_path):
     """Deck example 5: each shipment within its depot's share of the depot's total. The
-    factor is read on the shipment's row; the helper is one per depot."""
+    factor is read on the shipment's row; the helper is one per depot, a sum of at most two
+    shipments read by as many rows, so written into them (phase 7): no column, no row."""
     sql = _ship_query("ship <= D.maxShipmentShare * sum(ship) by (D.depotID)")
     assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
-        "num_vars": len(SHIPMENTS) + len(DEPOTS), "num_rows": 2 * len(SHIPMENTS) + len(DEPOTS)}
+        "num_vars": len(SHIPMENTS), "num_rows": 2 * len(SHIPMENTS)}
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped((X,), "<=", (_ship_reduce(by=("depotID",), factor=lambda r: r["maxShipmentShare"]),))]
     # D1 (share 0.5): both shipments equal, 10 each. D2 (0.6): 22 and 15. D3 (0.7): a
@@ -140,13 +141,16 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
 @pytest.mark.correctness
 @pytest.mark.parametrize("clause, reducers, bound, helpers", [
     pytest.param("sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50",
-                 (("depotID",), ("region",)), 50, len(DEPOTS) + 2, id="two-keys"),
+                 (("depotID",), ("region",)), 50, 2, id="two-keys"),
     pytest.param("sum(ship) by (D.depotID) + sum(ship) by (D.region) + sum(ship) <= 90",
-                 (("depotID",), ("region",), ()), 90, len(DEPOTS) + 2 + 1, id="three-keys"),
+                 (("depotID",), ("region",), ()), 90, 2 + 1, id="three-keys"),
 ])
 def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, clause, reducers, bound, helpers):
-    """Each reducer reads its own group; the row adds the helpers. One helper per group
-    of every key, one definition row each."""
+    """Each reducer reads its own group; the row adds the helpers, one per group of every
+    key, defined once. Where that costs more nonzeros than writing a helper's members
+    into the rows that read it, it is written in (phase 7): each depot's sum, at most
+    two shipments read by as many rows. The region sums (East's is four shipments read by
+    four rows) and the query's total keep their columns and definitions."""
     sql = _ship_query(clause)
     assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
         "num_vars": len(SHIPMENTS) + helpers, "num_rows": 2 * len(SHIPMENTS) + helpers}

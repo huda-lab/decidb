@@ -1,5 +1,4 @@
-"""Nested reducers in the engine (phase 2 of
-``context/descriptions/09_anr_language/anr_algorithm_and_frames_plan.md``, §6.5; D73-D75).
+"""Nested reducers in the engine (``syntax_reference.md`` §5.5; D73-D75).
 
 A reducer nests in another to any depth, with `when`, `per` and `by` at every level. A
 nested reducer reads, at the row it stands for, the rows its path keeps -- the clause's
@@ -67,15 +66,21 @@ def test_the_engine_answers_each_fixture(request, scope_solver, cli_fixture, cas
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("case, rows", [pytest.param(F1_SUM, 8, id="F1_sum"), pytest.param(F1_MAX, 10, id="F1_max")])
-def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, case, rows):
+@pytest.mark.parametrize("case, counts", [pytest.param(F1_SUM, {"num_vars": 6, "num_rows": 3}, id="F1_sum"),
+                                          pytest.param(F1_MAX, {"num_vars": 10, "num_rows": 8}, id="F1_max")])
+def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, case, counts):
     """F1 (deck pp. 111-119): six shipments; the inner reducer a helper per (rid, cid)
     group among the rows `when t.p` keeps -- three, and a spare column for the row it
-    drops, which no row reads -- and the outer one a helper per region, two: twelve
-    columns. Three clause rows (d1 reads East and West, d2 West), three inner definitions
-    -- one equality, or one envelope row per member, five -- and two outer equalities."""
+    drops, which no row reads -- and the outer one a helper per region, read by three
+    clause rows (d1 reads East and West, d2 West). Inlined where it adds no nonzero
+    (phase 7), as the deck writes it: for F1_sum, each inner sum into its region's and
+    each region's into its rows (West's three terms into two rows, p. 119), the six
+    shipments and three rows alone. For F1_max, each region's sum into its rows (p. 115);
+    the inner MAX keeps its four columns -- two of its groups have two members -- the
+    lone c2 defined by an equality (p. 112), the others by an envelope row per member:
+    ten columns, three rows and five."""
     dump = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(case.sql, tmp_path / "f1.dump")
-    assert dump_counts(dump) == {"num_vars": 12, "num_rows": rows}
+    assert dump_counts(dump) == counts
     # A MAX pushed down needs only its envelope: no indicator, no Big-M (D73).
     assert "bin=1" not in dump, dump
 

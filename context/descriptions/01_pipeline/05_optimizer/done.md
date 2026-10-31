@@ -308,6 +308,18 @@ MIN/MAX member holds the frame where the clause did. Flattening lowers it
   argument that may select nothing (`AssertMembersListed`, read off the argument), and no
   term inside a reducer summed in place reads a helper that may be absent
   (`AssertNoAbsentHelperSummed`).
+- **Where a helper is read** (phase 7, D83). Last of all, the linear form decides once, over
+  everything it flattened, where stage 06 may write a helper's members in place of its
+  column (`MarkInlinableHelpers`, `ReducerValueLink::inlining`): into its readers, when
+  every one is a linear row of a plain clause (no `<>`, hard MIN/MAX, Big-M ABS pair,
+  product or square) or the linear objective (not a flat MIN/MAX's, whose terms stage 06
+  links column by column); or into one outer link (`inline_outer`), when that link's
+  members are its only reader and, if a MIN or MAX, it is pinned on one side, so each member
+  stands in one row. No clause may be folded into the helper's box (`LogicalDecide::
+  HasAbsorbedBound`: the bound would be lost with the column). A reader of any other kind --
+  a composed MIN/MAX term, a quadratic group, a McCormick link, a frame's payload, a clause
+  folded into a box -- keeps the column. Whether inlining pays is the data's, which stage 06
+  counts (`06_model_formulation/done.md`, "Inlining a helper").
 - **Member rows.** The rows the ABS, Boolean-product and L0 rewrites add for a construct
   inside a reducer over decisions define its members: each rewrite walks with a
   `DecideReducerPath`, whose `innermost` names that reducer, and `MarkMemberRow` tags the

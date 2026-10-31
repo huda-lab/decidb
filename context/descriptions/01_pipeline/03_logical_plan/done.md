@@ -188,8 +188,11 @@ adds when the union is new), the MIN/MAX sides any reader needs, the clause id a
 removal group, the frames that drop a member where they select nothing (`member_frames`),
 a frame that may leave an instance with none (`absence_frame`, D81) and whether its
 clause's instance rows read it outside their reducers (`read_at_root`), whence
-`SkipsInstancesOf` and `MayLeaveObjectiveUnset` as a frame's; `inner_terms` are flattened
-with the prepared form; innermost first, which execution and stage 06 rely on),
+`SkipsInstancesOf` and `MayLeaveObjectiveUnset` as a frame's, and where its members may be
+written in place of its column -- its readers, or the outer link `inline_outer` -- if
+anywhere (`inlining`, D83, set by the linear form);
+`inner_terms` are flattened with the prepared form; innermost first, which execution and
+stage 06 rely on),
 `ClauseMaySkipInstances` (a clause's frames and helpers that may skip an instance),
 `flat_objective_agg` / `flat_objective_is_easy`, the absorbed variable box, and the
 prepared linear form.

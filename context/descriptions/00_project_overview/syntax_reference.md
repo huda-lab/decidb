@@ -749,7 +749,11 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
 - **Positions** count peers (rows with equal `S`), not distances: `first` and `last` are
   the timeline's ends, `k previous` / `k next` the k-th peer before or after the anchor's.
   A range takes every `d`-th position from `F1` to `F2`, inclusive. `cyclic` wraps a
-  position around the timeline.
+  position around the timeline. Exactly, over a timeline of `n` peers with the anchor at
+  peer `a`: `first` is 0, `last` is `n - 1`, `k previous` is `a - k`, `k next` is `a + k`;
+  a range reads `q = L + j·d` for `j = 0, 1, …` while `q <= U`, and nothing when `L > U`
+  (cyclic or not); a position outside `[0, n)` is missing, or under `cyclic` is
+  `((q mod n) + n) mod n`, a repeated visit read again (D70).
 - **The parts**: `agg` is `sum`, `avg`, `min`, `max` or `count` (over data). `k` and `d`
   are positive whole numbers. `S` takes data and no reducer; `K` lists columns and
   relations, as a `per` key does. `e` is read at the selected row, `v` at the anchor row;
@@ -817,12 +821,13 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   multiplied or divided by a decision (a data factor on a frame over decisions is linear);
   a payload or fallback not linear in the decisions (`abs(x - 3)` inside: write `abs`
   outside the frame).
-  The full contract — peers, cyclic repeats, absence, NULL — is
-  `09_anr_language/anr_algorithm_and_frames_plan.md` §3.4–3.5.
+  The decisions behind this contract — peers (D67), NULL order keys (D68), the timeline
+  under `per` (D69), cyclic repeats (D70), `k` and `every` (D71), absence (D79–D82) — are
+  recorded in `09_anr_language/done.md`.
 
 
-**Status.** Point frames and ranges are formulated (the ANR plan's phases 4 and 5), and
-composed with every reducer (phase 6). A point frame over decisions reads the decision's
+**Status.** Point frames and ranges are formulated, and composed with every reducer. A
+point frame over decisions reads the decision's
 own column at the selected row, so `inventory >= at(previous: inventory) over (t.period
 within t.product)` over six rows is six columns and one row per instance, with no helper;
 so does one inside a reducer or a composed MIN/MAX that cannot miss. A range over
@@ -833,8 +838,12 @@ rows is one definition of n terms; every other construct reads the helper as an 
 decision (EXPLAIN: *"a helper decision per timeline"*, *"... per position"*). A range over
 data is one value per anchor. A reducer over decisions whose members a frame may drop is a
 helper decision per `by` group too (EXPLAIN: *"becomes a helper decision per group"*),
-whose members execution lists where the frame selects — one helper and one definition per
-group beside the bound, which the ANR plan's phase 7 folds back in. Not yet (§10.2): a
+whose members execution lists where the frame selects. A helper whose members can be
+written where it is read with no nonzero more — a window read by its anchor's row alone, a
+group read by its bound alone — is written there and has no column (D83; EXPLAIN still
+names the helper, as whether it is written in is decided on the data): `x >= sum(from 2
+previous to previous else 0: x) over (t.period within t.g)` over n rows is n rows over
+the n decisions, and a MIN or MAX of one member per window is that member. Not yet (§10.2): a
 reducer that may be absent under `abs` inside another reducer; a square or a product of
 decisions in a member a frame may drop; a fallback that reads a decision beside a payload
 that reads none; `count` over decisions, which counts nothing a decision decides.
@@ -984,9 +993,14 @@ term without a decision (§5); a decision as a factor is refused. Operators, `BE
   inside counted, so `<`, `>` and `<>` keep their rules where it is and are refused
   where it is not (`ship + sum(ship + 0.5) by (D.region) > 40`, §10.1); it may be
   negative. Deck examples 1, 5 and 8 take this shape; example 1 costs N rows of two
-  entries and one definition row, not N rows of N. A product or square of decisions
-  inside such a reducer is refused (§10.2). A reducer holding reducers takes this shape
-  at every level (§5.5).
+  entries and one definition row, not N rows of N. Where writing a helper's members
+  into the rows that read it adds no nonzero — a group read by one row, or a few terms
+  read by a few rows — the model does that instead, with no column and no definition
+  row for it (D83): examples 5 and 8 build their N rows alone, and the facility link is
+  the textbook row `sum(ship) - capacity * open <= 0` per depot. A product or square of
+  decisions inside such a reducer is refused (§10.2). A reducer holding reducers takes
+  this shape at every level (§5.5), each inner one written into the one around it where
+  that pays (deck pp. 115, 119).
 
 `EXPLAIN` names a helper by its reducer (`sum(ship) by (D.depotID)`) and says it became
 a helper decision; `DIAGNOSE` names the clause and never offers a definition row.

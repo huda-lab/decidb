@@ -6,9 +6,9 @@ The old `model_construction_ms` ends before `SolverModel::Build`. The old `solve
 
 ## Baseline before the full ANR algorithm
 
-Recorded 2026-10-28 at commit d20d23733b, before any engine change of the ANR plan
-(`09_anr_language/anr_algorithm_and_frames_plan.md`), so its phase 7 can check that the
-flat workloads did not regress. `make decide-bench-setup`, then
+Recorded 2026-10-28 at commit d20d23733b, before any engine change of the full ANR
+algorithm (`09_anr_language/done.md`, phases 0–7), so its last phase could check that the
+flat workloads did not regress (below, "After ANR phase 7"). `make decide-bench-setup`, then
 `DECIDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --sizes medium --iterations 3`
 on the default backend (Gurobi), macOS 13.6 on Apple silicon. Each figure is the median
 of three runs; all 33 runs succeeded. The full record is
@@ -73,3 +73,65 @@ The baseline's model construction is in parentheses. Q4 is phase 2's cost, as re
 above (752 ms then, 760 now): phase 5's listed members cost it nothing. Q10's peak memory
 is the solver's and spreads from 2,977 to 3,796 MiB across its three runs (the
 baseline's from 3,052 to 3,235).
+
+## After ANR phase 7
+
+Measured 2026-10-30 the same way (medium, Gurobi, medians of three runs, all 33
+succeeded), on the phase-7 working tree over commit d9a579e1fb, against the d20d23733b
+baseline. Every query builds the baseline's model exactly -- the same columns and rows, Q4's
+three helper columns and rows of phase 2 gone, its group sums written into its MAX's
+envelope (D83) -- and DeciDB's own time over the suite is 1,675 ms against 2,105 (the
+solver's 100.7 s against 104.6 s, within its spread).
+
+| Query | Model construction ms | Solver ms | Wall s | Peak MiB |
+|---|---|---|---|---|
+| Q1 | 247 (324) | 1,897 | 2.20 | 796 |
+| Q2 | 60 (59) | 6,230 | 6.34 | 2,072 |
+| Q3 | 14 (13) | 17,302 | 17.39 | 2,860 |
+| Q4 | 599 (622) | 5,528 | 6.19 | 2,142 |
+| Q5 | 1 (1) | 4,299 | 4.35 | 216 |
+| Q6 | 26 (54) | 19,576 | 19.68 | 3,476 |
+| Q7 | 8 (8) | 6,205 | 6.29 | 2,041 |
+| Q8 | 479 (745) | 74 | 0.63 | 455 |
+| Q9 | 2 (3) | 107 | 0.13 | 146 |
+| Q10 | 198 (232) | 39,352 | 39.77 | 3,702 |
+| Q11 | 3 (3) | 139 | 0.16 | 125 |
+
+The baseline's model construction is in parentheses. Q4 had built in 790 ms at phase 6:
+not its model -- three group sums cost three columns -- but two passes doing needless work
+on a helper of half a million members, the backward bound pass (`DeriveReducerMemberBounds`,
+122 ms on a query with no ABS) and the definitions (117 ms, a hash map per member); both
+now skip or accumulate (`../../01_pipeline/06_model_formulation/done.md`), and an extremum
+member's row scans while short, which also took a third off Q4's composed MIN/MAX. Q10 and
+Q3 had regressed in phase 6, an exact ABS's argument row built afresh per data row (Q10 300
+ms); one row reused brings them to 198 and 14.
+
+### How the ANR workloads grow
+
+`benchmark/decide/anr_scaling.py --max 1000000` (`../../02_operations/benchmarking.md`): each
+workload over a synthetic table of 10³ to 10⁶ rows at fixed key cardinalities, depth, variant
+count and frame width. DeciDB's own time (optimizer and model construction) at 10⁶ rows,
+the model's size there, and the growth exponent between 10⁵ and 10⁶ rows (1 is linear):
+
+| Workload | Own ms at 10⁶ | Columns | Rows | Exponent |
+|---|---|---|---|---|
+| `flat-sum` (no helper) | 66 | 1,000,000 | 10 | 0.83 |
+| `nested-1` (SUM of MAX) | 506 | 1,000,110 | 1,000,010 | 0.99 |
+| `nested-2` | 1,178 | 1,001,110 | 1,001,010 | 0.99 |
+| `nested-3` | 2,203 | 2,011,110 | 3,011,010 | 0.96 |
+| `variants-10` (ten per class) | 238 | 1,000,011 | 110 | 0.97 |
+| `point` | 208 | 1,000,000 | 1,000,000 | 1.01 |
+| `range-w1` | 347 | 1,000,000 | 1,000,000 | 1.02 |
+| `range-w5` (AVG) | 588 | 1,000,000 | 1,000,000 | 1.02 |
+| `range-w50` (AVG) | 3,709 | 1,000,000 | 1,000,000 | 1.04 |
+| `range-step7` | 685 | 1,000,000 | 1,000,000 | 1.00 |
+| `range-max` (MAX of five) | 1,705 | 2,000,000 | 5,999,000 | 1.07 |
+| `cyclic-repeats` | 407 | 1,000,000 | 1,000,000 | 0.98 |
+
+Every range over decisions is written into its anchor's row: a million rows over the
+million decisions, where a helper per window had doubled both. The flat workloads sit under
+1 because a fixed cost still shows at 10⁵. `range-max` keeps its helpers (a MAX of several
+members), six million rows whose provenance makes the model memory-bound
+(`../08_memory_and_scaling/todo.md`); building its extremum links one window at a time took
+it from 1.18 to 1.07. `range-w50` reads fifty million values at 10⁶ rows, above the default
+`decide_frame_limit`, which the script raises.

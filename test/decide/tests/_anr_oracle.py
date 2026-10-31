@@ -4,9 +4,10 @@ any depth, and frame selectors.
 It reads no SQL. A test states the query's result rows, its decisions with their keys and
 its clauses as expression trees in plain Python; the evaluator generates the instances the
 language defines and then either solves them through the ``OracleSolver`` interface or
-judges DeciDB's answer against them. The definitions it follows are the plan's
-(``context/descriptions/09_anr_language/anr_algorithm_and_frames_plan.md`` §3, decisions
-D64-D79), read literally, with no algorithmic shortcut:
+judges DeciDB's answer against them. The definitions it follows are the language's
+(``syntax_reference.md`` §5.5, §5.6 and §7.1; decisions D64-D82 in
+``context/descriptions/09_anr_language/done.md``), read literally, with no algorithmic
+shortcut:
 
 - **A scoped expression** ``[when c] [per K]: body`` keeps the rows ``c`` keeps, splits them
   into classes of ``K``, and produces one value per distinct *signature* in each class,

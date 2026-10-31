@@ -1,6 +1,8 @@
 # ANR language surface — implemented
 
-All seven items shipped. The language is
+All seven items shipped, and the full ANR algorithm built on them -- variant signatures,
+reducers nested to any depth, and frame selectors (items 8, 9 and 10) -- in the eight
+phases recorded below (0 to 7). The language is
 [`../00_project_overview/syntax_reference.md`](../00_project_overview/syntax_reference.md)
 §1.1–§7 and §10: `per` and `when` in front of a declaration, a constraint or the
 objective, `by` after a reducer, and `when`/`per` inside one. This file records what each
@@ -26,10 +28,13 @@ a later change may lift), `../01_pipeline/03_logical_plan/todo.md` and
 ## The full algorithm — phase 0
 
 The rest of the deck's ANR proposal — variant signatures, reducers nested to any depth,
-frame selectors — is planned in
-[`anr_algorithm_and_frames_plan.md`](anr_algorithm_and_frames_plan.md), whose
-decisions D64–D79 were settled on 2026-10-28; each enters the table below when the phase
-that implements it ships. Phase 0 shipped the same day and changed no engine code:
+frame selectors — was planned phase by phase in a plan of its own, written and reviewed on
+2026-10-27 and retired when its last phase shipped (its design notes moved into the
+stages' records, its contract into `syntax_reference.md` §5.5–§5.6 and §7.1, its
+capability matrix into `../03_expressivity/scope/done.md` §11a, its tests into
+`../04_testing/scope/done.md`). Its sixteen decisions, settled on 2026-10-28, are D64–D79;
+D80–D83 were settled as later phases needed them. Phase 0 shipped the same day and changed
+no engine code:
 
 - `test/decide/tests/_anr_oracle.py`, a reference evaluator for the whole planned
   language, and `_anr_cases.py`, the plan's fixtures with their hand-computed answers
@@ -973,8 +978,8 @@ where the frame selects, so members are dropped in one place.
 - **Choices beyond the plan's text.** A reducer whose members a frame may drop is a helper
   even where the aggregate shape would have summed it in place (deck example 3 costs a
   helper and a definition per product, `TestMembersDropped::test_a_helper_holds_each_group`)
-  -- the user's call of 2026-10-30, for one place that drops members; phase 7 folds such
-  helpers back in. A member row carries its innermost reducer's member frames even where
+  -- the user's call of 2026-10-30, for one place that drops members; phase 7 writes such
+  helpers back in where that pays (D83). A member row carries its innermost reducer's member frames even where
   the frame stands beside the construct (`sum(abs(x - 3) + at(previous: t.v))`): its
   auxiliary is then read by no member there, and leaving the rows out is exact. A decision
   or frame beside a MIN or MAX in the objective stays refused, as for any decision there
@@ -1019,6 +1024,129 @@ where the frame selects, so members are dropped in one place.
   hard MIN, and three models HiGHS 1.11.0's presolve answers wrongly -- a suboptimal point
   called optimal, two feasible models called infeasible -- which HiGHS 1.12.0 solves right
   (`../01_pipeline/07_solver/todo.md`).
+
+## The full algorithm — phase 7: inlining, performance, closure
+
+Shipped 2026-10-30. A helper decision of the value rewrite is written where it is read --
+into the rows, the linear objective or another helper's members that read it -- when that
+adds no nonzero to the model (D83), as the deck lowers its own example (pp. 112–119); a
+MIN or MAX group of one member is that member. Q4's model construction is back under the
+pre-ANR baseline, and the ANR workloads grow linearly in the input
+(`../05_performance/04_model_construction/done.md`). The plan is retired.
+
+- **Measured first.** On `x >= sum(from 2 previous to previous else 0: x) over (t.p within
+  t.g) - t.w` over 200,000 rows, a helper per window made 400,000 columns and 400,000 rows,
+  where writing each window into its anchor's row makes 200,000 of each, and Gurobi's solve
+  falls from 0.82 s to 0.35 s on the same answer: presolve does not make a helper free.
+  Q4's regression since phase 2 (`max(per l_returnflag: sum(keep * l_extendedprice) by
+  (l_returnflag))`, 622 ms of model construction before ANR, 790 ms at phase 6) was not its
+  model -- three group sums cost three columns -- but two passes doing needless work on a
+  helper of half a million members: the backward bound pass, 122 ms though Q4 has no ABS,
+  and the definitions, 117 ms, a hash map per member.
+- **Linear form** (`../01_pipeline/05_optimizer/done.md`). It decides once, over everything
+  it flattened, where each helper may be written in (`MarkInlinableHelpers`,
+  `ReducerValueLink::inlining`): into its readers, when each is a linear row of a plain
+  clause or the linear objective; or into one outer link's members (`inline_outer`), an
+  outer MIN or MAX pinned on one side; and never with a clause folded into its box.
+- **Formulation** (`../01_pipeline/06_model_formulation/done.md`, "Inlining a helper").
+  `InlineReducerValueLinks`, at assembly before the column space is laid out, counts each
+  instance's reads where the plan says it is read -- holding every read to the plan -- and,
+  where inlining adds no nonzero, writes it into the outer link's members (an outer MIN or
+  MAX that may close natively only where each instance is read once) or marks it inlined:
+  its variable `DecideVarScope::INLINED`, with no column, its bounds still derived, no
+  definition, and `SolverModel::Build` writing its members wherever a row or the objective
+  reads it (`AddTermColumns`), its constants to a row's bound or to the objective's offset
+  (`SolverModel::obj_offset`, which both backends add, so the objective a diagnosis reports
+  is the one a kept helper gave). A MIN/MAX family of one member is defined by an equality,
+  with no envelope, indicator or Big-M, wherever it is pinned on rigid rows
+  (`EmitExtremumLink`). Speed with no model change: the
+  backward bound pass skips a group with no helper term, a SUM definition is accumulated in
+  one sparse row, and an extremum member's row scans while short (`MinMaxLinkRow`) -- which
+  also took a third off Q4's composed MIN/MAX. The full benchmark found one regression of
+  phase 6's own, an exact ABS's argument row built afresh per data row (Q10 at 300 ms of
+  model construction against 232, Q3 at 19 against 13); one row reused for every data row
+  brings them to 198 and 14.
+- **Execution** (`../01_pipeline/08_execution/done.md`). Unchanged in what it computes --
+  every helper's members and presence, the instances a helper's absence skips -- it hands
+  `inlining` to stage 06 and runs the inlining just before the column space is built. It
+  reports the ANR counters (`anr.frames`, `anr.frame_windows`, `anr.frame_positions`,
+  `anr.helpers`, `anr.helper_instances`, `anr.members`, `anr.member_terms`,
+  `anr.inlined_helpers`) under `DECIDB_PROFILE`.
+- **Benchmarks.** `benchmark/decide/anr_scaling.py` (`../02_operations/benchmarking.md`) runs
+  the nested, variant, point, range and cyclic workloads over synthetic tables from 10³ to
+  10⁶ rows at fixed cardinalities and reports each one's growth: from 0.83 to 1.04 between
+  10⁵ and 10⁶ rows for all but a MAX over windows of five (`range-max`), at 1.07 -- six
+  million rows, each with its full provenance
+  (`../05_performance/08_memory_and_scaling/todo.md`). It found that MAX's extremum links
+  built for every window before any was emitted, 2.7 s at 10⁶ rows; built one window at a
+  time, 1.3 s. The flat suite builds every model the pre-ANR baseline did, DeciDB's own time
+  over it 1,675 ms against 2,105 (`../05_performance/04_model_construction/done.md`, "After
+  ANR phase 7").
+- **Choices beyond the plan's text.** The plan inlined a helper whose only consumer reads
+  it; D83 inlines where no nonzero is added, which takes that case and the deck's own --
+  West's sum of three terms written into the two rows reading it (p. 115) -- so F1 with an
+  inner SUM is the deck's three rows over six shipments (p. 119). A helper is inlined as a
+  whole, since its instances share one variable's columns: a MIN/MAX with a group of one
+  among groups of several keeps a column for it, defined by its equality
+  (`../01_pipeline/06_model_formulation/todo.md` §1). A clause folded into a helper's box
+  keeps the helper (§2 there). `InlineSumOfGroupSums` stays where it is: it removes, at
+  stage 05, a reducer whose square no helper could define (D75), before a helper exists,
+  where this removes a helper's column after its members are listed -- not a second inliner
+  of the same thing. EXPLAIN still names each helper, as inlining is decided on the data.
+- **Model pins moved**, each worked out by hand in its test: F1_sum from twelve columns and
+  eight rows to six and three, F1_max from twelve and ten to ten and eight
+  (`test_anr_nested.py`); deck examples 5 and 8 lose their definition rows
+  (`test_scope_deck_examples.py`, `test_scope_value_rewrite.py`, where two `by` keys keep
+  only the region sums); deck example 3's per-product helpers are written into their bounds
+  (`test_anr_composition.py`); the nested objective's sum over group extrema and its MIN
+  over group sums lose their inner columns (`test_auxiliary_bounds.py`). The golden corpus
+  changed in four models -- a MAX and a MIN over group sums, two `by` keys, the facility
+  link, now the textbook row `x1 + x2 - 10 open <= 0` -- with two answers among ties.
+- **Architecture review** (a `decidb-architect` pass over the phase-7 diff, no wrong answer
+  found; every place a decision's column is asked for was checked). Adopted: an outer MIN
+  or MAX that may close natively takes a helper only where each instance is read once,
+  since a native extremum over expressions costs a column and a row per member (the
+  reviewer's `max(sum(x + 1) by (t.product)) >= 15`, which had grown by a column and a row);
+  the plan hands down where to inline (`inlining`, `inline_outer`), and stage 06 only counts,
+  holding every read to the plan; every term of the builder goes through one function, the
+  query-wide and inlined branches merged; an inlined helper's constants are the objective's
+  offset, where they had been dropped, changing a diagnosis's achievable objective; reads of
+  an outer SUM counted once per group, as its definition states them; a read of an absent
+  instance, a fold whose outer link is not after it, and a row reading a folded helper are
+  internal errors; the one-member rule moved into `EmitExtremumLink`, for every MIN/MAX
+  site; the absorbed-bound test reads `LogicalDecide::HasAbsorbedBound`. Kept: `INLINED` is
+  a scope value, as `FRAME_READ` is, so every `switch` over scopes must name it; the instance
+  lookup stays where each stage reads it (execution, the inlining pass, `VarIndexer`).
+- Tests: `test_anr_inlining.py` (`../04_testing/scope/done.md`) and
+  `test/common/test_decidb_helper_inlining.cpp` (the pass on hand-built inputs: a sum
+  written into two rows with its constant at the bound and the bound quoted as written, one
+  written into the objective with its constants as the offset, a sum the plan does not allow
+  and one whose readers would grow the model kept, a sum written into a maximum's members
+  with its scale and constants, a closing maximum keeping a sum two members read, a plan
+  inlining into a maximum pinned on both sides and a read the plan does not list as internal
+  errors, a group of one member as an equality). The differential fuzzers against
+  `_anr_oracle` (phase 6's compositions and phase 5's ranges, three solver settings) ran
+  8,000 cases -- 4,000 on the build before the review, 4,000 on the final one -- with no wrong
+  answer and no internal error; what they report is the known order of two errors (a plan-time
+  "`abs` is never negative" before the oracle's data error).
+
+## What guards the full algorithm
+
+The risks its plan named, and what holds each now:
+
+| Risk | Guard |
+|---|---|
+| A duplicate signature's row lost while it still feeds a deeper member or a timeline | Signature grouping decides *instances*; a reducer's members are listed from the rows its path keeps, never from the instances; F11 and the scope grid pin it |
+| One `by` value under two ancestor groups sharing a helper instance | Helper keys are path keys (`syntax_reference.md` §5.5): F1's `West` reads rows of two depots and is one instance, a `(rid, cid)` pair one per pair |
+| An under-constrained MIN/MAX helper | Both link sides past any consumer of unknown sign (D73); the `DECIDB_NATIVE_CONSTRUCTS` matrix |
+| A stale Big-M in a repair model | Definitions are stated against the active `FormulationBox`, and inlining is decided at assembly, before the box: DIAGNOSE re-formulates the same model (`test_anr_diagnostics.py`, `test_anr_inlining.py`) |
+| A frame's expansion blowing up | `decide_frame_limit` before allocation; the interrupt polled per timeline and per window |
+| A variant silently undoing an inner `per`'s de-duplication (D65) | EXPLAIN ANALYZE's variant count; F11 pinned both ways; the trap in `syntax_reference.md` §5.3 |
+| The frame words breaking SQL windows in a clause's subquery | The lexer's depth-aware `OVER_DECIDE` state; a window inside a clause's subquery is a test |
+| A nested MIN/MAX refused on HiGHS where its bound is only at the root | The backward bound pass (`DeriveReducerMemberBounds`), which still flows through an inlined helper |
+| A reducer shared by two clauses duplicating a nested helper tree | A known limit (`../01_pipeline/05_optimizer/todo.md` §1), pinned in a dump as the baseline for a sharing rule |
+| A helper inlined where something still reads its column | The plan lists every reader (`MarkInlinableHelpers`), stage 06 holds every read to it, and `VarIndexer::Get` on an inlined helper is an internal error -- never a column that is not there |
+| Two engines for one language | None: each phase landed on the one path, and the two-level objective's special case was deleted when nesting shipped |
 
 ## Decisions
 
@@ -1094,6 +1222,7 @@ not the code.
 | D80 | `else NULL` written, or a fallback that is NULL before the query runs, is no fallback |
 | D81 | A reducer over decisions whose members a frame may drop is a helper decision: execution lists its members where the frame selects, and an instance left with none is absent -- its comparison skips that instance, a reducer around it drops that member, the objective is an error |
 | D82 | Under `abs` or `norm` inside a reducer, a member a frame drops goes with the rows that would define it; a reducer that may be absent under `abs` inside another reducer is refused |
+| D83 | A helper decision is written where it is read -- into rows, the linear objective, or another helper's members -- when that adds no nonzero to the model (an instance of `m` terms read `k` times: `m·k` against `m + 1 + k`), as a whole, and only where every reader can take it; a MIN or MAX group of one member is that member, an equality (deck p. 112) |
 
 | # | Call |
 |---|---|

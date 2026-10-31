@@ -478,7 +478,17 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   floor before the rigid box is captured, and keeps one the user wrote: a clause over a
   nest is, rewritten, a bound on its outer helper alone (`per g: sum(max(x) by (g, h)) by
   (g) >= 3`), which bound absorption folds into the helper's box. A refusal in
-  formulation names a helper by its reducer.
+  formulation names a helper by its reducer. The spec carries the plan's `inlining` and `inline_outer` too:
+  assembly runs stage 06's `InlineReducerValueLinks` just before the column space is laid
+  out (`assembly.inline_helpers`), so an inlined helper owns no column; everything above --
+  the members, the presence, the skipped instances -- is computed for it as for any.
+- **Counters** (`DECIDB_PROFILE`): `anr.frames`, `anr.frame_windows` and
+  `anr.frame_positions` (one per point anchor, each value a range's windows list) once the
+  frames are built; `anr.helpers`, `anr.helper_instances`, `anr.members` and
+  `anr.member_terms` once the helpers' members are listed; `anr.inlined_helpers` from
+  stage 06 -- beside the model's own `model.variables`, `model.linear_rows` and
+  `model.linear_nonzeros`. `benchmark/decide/anr_scaling.py` reads them
+  (`05_performance/04_model_construction/done.md`).
 - **A NULL subquery** is named by its text as DuckDB prints it:
   `NullSourceContext::fragments`, set wherever a prepared clause, the objective or a
   helper's members are read, maps the flattened column back to the subquery's source

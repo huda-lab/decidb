@@ -420,11 +420,42 @@ high-cardinality key multiplies the model. The optimizer's work on large models 
 constraint-to-bound conversion, skyband pruning, drop-solve-validate-refine — is in
 `../../01_pipeline/05_optimizer/done.md`.
 
+A helper decision of the VALUE shape costs a column and a definition row per instance;
+where writing its members into the rows that read it adds no nonzero — a window or a group
+read by one row, a few terms read by a few rows — stage 06 does that instead (D83,
+`../../01_pipeline/06_model_formulation/done.md`, "Inlining a helper"), so a range frame
+read by its anchor's row costs that row alone: over 200,000 rows, `x >= sum(from 2
+previous to previous else 0: x) over (t.p within t.g) - t.w` is 200,000 columns and rows,
+not 400,000, and solves in less than half the time. How the ANR workloads grow with the
+input is measured by `benchmark/decide/anr_scaling.py`
+(`../../05_performance/04_model_construction/done.md`).
+
+## 11a. What composes with what
+
+Where each construct of the full language is accepted (`syntax_reference.md` §5.5, §5.6,
+§10.2; the refusals are D74 and D82):
+
+| Construct | Constraint, either side | Reducer operand | Objective |
+|---|---|---|---|
+| SUM/AVG/MIN/MAX nested to any depth, `when`/`per`/`by` at each level | yes | yes | yes |
+| COUNT at any depth | data only | data only | data only |
+| `norm(e, p) [by]` | at the root | no | at the root |
+| ABS, POWER, a product of decisions | at the root; over a helper | no | yes |
+| point frame, data payload | yes (a value) | yes | yes |
+| point frame, decision payload | yes (read in place, D72) | yes: read in place, or, where it may miss, the member dropped through a helper (D81) | yes |
+| range frame SUM/AVG/MIN/MAX/COUNT, data payload | yes (a value) | yes | yes |
+| range frame SUM/AVG/MIN/MAX, decision payload | yes (a helper per window, written into its reader where that pays, D83) | yes; one that may read nothing drops the member | yes |
+| ABS or `norm` over a frame term | yes (the frame term is a linear term) | yes, the member and the rows defining it dropped together where the frame selects nothing (D82); a reducer that may be absent under `abs` inside another: no | yes |
+| a frame over decisions inside a composed MIN/MAX | yes | — | yes |
+| a frame term times a decision, a frame inside a frame, a reducer inside a payload | no | no | no |
+| strict `<`, `>`, `<>` over a fractional helper | refused (§10.1) | — | — |
+| quadratic / bilinear | today's limits | — | today's limits |
+
 ## 12. Tests
 
 The scope suites, the `_scope_oracle.py` reference model and the brute-force
 enumerator are described in `../../04_testing/scope/done.md`:
-`test/decide/tests/test_scope_{bare_clauses,combinations,deck_examples,declare,explain_diagnose,generation,objective,reducer_by,reducer_inner,removed_syntax,value_rewrite,variants}.py`, `test_anr_variants.py`, `test_anr_composition.py`, `test_anr_diagnostics.py`,
+`test/decide/tests/test_scope_{bare_clauses,combinations,deck_examples,declare,explain_diagnose,generation,objective,reducer_by,reducer_inner,removed_syntax,value_rewrite,variants}.py`, `test_anr_variants.py`, `test_anr_composition.py`, `test_anr_diagnostics.py`, `test_anr_inlining.py`,
 with `test/decidb/test_scope_parser.test` for the parser cases.
 `test_no_old_spellings_remain.py` keeps the refused spellings out of every test surface
 except `test_scope_removed_syntax.py`.

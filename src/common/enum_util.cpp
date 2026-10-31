@@ -1276,19 +1276,20 @@ const StringUtil::EnumStringLiteral *GetDecideVarScopeValues() {
 		{ static_cast<uint32_t>(DecideVarScope::ROW), "ROW" },
 		{ static_cast<uint32_t>(DecideVarScope::ENTITY), "ENTITY" },
 		{ static_cast<uint32_t>(DecideVarScope::SCALAR), "SCALAR" },
-		{ static_cast<uint32_t>(DecideVarScope::FRAME_READ), "FRAME_READ" }
+		{ static_cast<uint32_t>(DecideVarScope::FRAME_READ), "FRAME_READ" },
+		{ static_cast<uint32_t>(DecideVarScope::INLINED), "INLINED" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value) {
-	return StringUtil::EnumToString(GetDecideVarScopeValues(), 4, "DecideVarScope", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDecideVarScopeValues(), 5, "DecideVarScope", static_cast<uint32_t>(value));
 }
 
 template<>
 DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value) {
-	return static_cast<DecideVarScope>(StringUtil::StringToEnum(GetDecideVarScopeValues(), 4, "DecideVarScope", value));
+	return static_cast<DecideVarScope>(StringUtil::StringToEnum(GetDecideVarScopeValues(), 5, "DecideVarScope", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDefaultOrderByNullTypeValues() {

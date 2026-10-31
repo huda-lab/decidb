@@ -429,6 +429,8 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
     const idx_t num_rows = input.num_rows;
     auto abs_tag_map = BuildAbsTagMap(input);
 
+    // The argument's columns, one scratch row reused for every data row.
+    MinMaxLinkRow inner;
     for (auto &link : input.abs_maximize_links) {
         auto it = abs_tag_map.find(link.aux_idx);
         D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX);
@@ -482,7 +484,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             // The argument's columns, each once: two terms may land on one column -- a
             // frame read selecting the row itself (`abs(x - at(last: x) over (...))` at the
             // last period) -- and a row states a column once, or the solver refuses it.
-            MinMaxLinkRow inner;
+            inner.Clear();
             for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
                 idx_t v = c1.variable_indices[t];
                 if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
@@ -499,23 +501,30 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             // non-auxiliary column with coefficient -1 and a zero bound. Anything else —
             // `ABS(x - target)`, `ABS(2 * x)` — is a genuine expression, and a general
             // constraint relates columns, so it still earns one.
-            SolverInput::RawConstraint columns;
-            inner.AppendTo(columns);
-            bool renaming = columns.indices.size() == 1 && columns.coefficients[0] == -1.0 && k == 0.0;
+            // The renaming test reads the columns a row states: a coefficient cancelled to
+            // rounding is none (MinMaxLinkRow::AppendTo).
+            idx_t stated = 0, last = 0;
+            for (idx_t i = 0; i < inner.indices.size(); i++) {
+                if (std::abs(inner.coefficients[i]) >= 1e-15) {
+                    stated++;
+                    last = i;
+                }
+            }
+            bool renaming = stated == 1 && inner.coefficients[last] == -1.0 && k == 0.0;
 
             idx_t t_idx = DConstants::INVALID_INDEX;
             if (renaming) {
-                t_idx = static_cast<idx_t>(columns.indices[0]);
+                t_idx = static_cast<idx_t>(inner.indices[last]);
             } else {
                 t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
 
                 // `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
                 SolverInput::RawConstraint link_row;
+                link_row.indices.reserve(stated + 1);
+                link_row.coefficients.reserve(stated + 1);
                 link_row.indices.push_back(static_cast<int>(t_idx));
                 link_row.coefficients.push_back(1.0);
-                link_row.indices.insert(link_row.indices.end(), columns.indices.begin(), columns.indices.end());
-                link_row.coefficients.insert(link_row.coefficients.end(), columns.coefficients.begin(),
-                                             columns.coefficients.end());
+                inner.AppendTo(link_row);
                 link_row.sense = '=';
                 link_row.rhs = k;
                 link_row.kind = ConstraintKind::STRUCTURAL;

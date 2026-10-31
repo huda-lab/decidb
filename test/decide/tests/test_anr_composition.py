@@ -1,6 +1,5 @@
-"""Frames composed with reducers, ABS, `norm` and MIN/MAX (phase 6 of
-``context/descriptions/09_anr_language/anr_algorithm_and_frames_plan.md``, §6.7;
-``syntax_reference.md`` §5.6).
+"""Frames composed with reducers, ABS, `norm` and MIN/MAX (``syntax_reference.md`` §5.6;
+D81, D82).
 
 A frame that may select no position, inside a reducer over decisions, drops that member
 where it selects nothing (deck p. 50): an AVG divides by the members left, and a reducer
@@ -193,17 +192,18 @@ class TestMembersDropped:
                 [CAP, scoped], MAXIMIZE_X)
 
     def test_a_helper_holds_each_group(self, decidb_cli, tmp_path):
-        """Deck example 3 over five rows of two products: one helper decision per product,
-        defined once, and its bound, beside the five rows' decisions (their caps are a
-        column box) -- and no definition or bound for a product whose every member is
-        dropped (C, one period), whose helper column stands alone."""
+        """Deck example 3 over five rows of two products: a helper decision per product,
+        each read by its product's bound alone, so inlined (phase 7): the bound sums the
+        members the frame keeps, beside the five rows' decisions (their caps are a column
+        box), and nothing else -- no row for a product whose every member is dropped (C,
+        one period), whose helper is absent."""
         rows = EDGE_ROWS[:5]
         sql = _edge(f"per t.product: sum(at(previous: x) {TL}) by (t.product) <= 4", rows=rows)
         counts = dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))
-        assert counts == {"num_vars": 5 + 2, "num_rows": 2 + 2}, counts
+        assert counts == {"num_vars": 5, "num_rows": 2}, counts
         sql = _edge(f"per t.product: sum(at(previous: x) {TL}) by (t.product) <= 4", rows=EDGE_ROWS)
         counts = dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))
-        assert counts["num_rows"] == 2 + 2, counts
+        assert counts["num_rows"] == 2, counts
 
 
 # ---------------------------------------------------------------------------

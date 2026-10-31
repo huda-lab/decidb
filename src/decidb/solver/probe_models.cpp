@@ -9,6 +9,7 @@ namespace duckdb {
 SolverModel MakeZeroObjectiveProbeModel(const SolverModel &model) {
 	SolverModel probe = model;
 	probe.obj_coeffs.assign(probe.obj_coeffs.size(), 0.0);
+	probe.obj_offset = 0.0;
 
 	probe.q_rows.clear();
 	probe.q_cols.clear();

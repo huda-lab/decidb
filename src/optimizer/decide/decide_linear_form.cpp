@@ -294,6 +294,8 @@ public:
 			                        "%llu such clauses were flattened",
 			                        op.user_absorbed_bounds.size(), op.prepared.absorbed_constraints.size());
 		}
+
+		MarkInlinableHelpers();
 	}
 
 private:
@@ -1160,6 +1162,141 @@ private:
 			throw InternalException("DECIDE: a reducer whose members %s may drop is summed in place, its members "
 			                        "never listed: %s",
 			                        op.frames[member_frames[0]].text, agg.ToString());
+		}
+	}
+
+	//! Where each helper is read, over everything this pass flattened (ReducerValueLink::
+	//! inlining, D83): stage 06 may write a helper's members where it is read only if every
+	//! reader can take them -- linear rows of plain clauses and the linear objective, or the
+	//! members of one other link pinned on one side if a MIN or MAX -- and no clause is
+	//! folded into its box, which would be lost with its column. Whether that pays is the
+	//! data's, which stage 06 counts.
+	void MarkInlinableHelpers() {
+		auto &links = op.reducer_value_links;
+		if (links.empty()) {
+			return;
+		}
+		unordered_map<idx_t, idx_t> link_of;
+		for (idx_t i = 0; i < links.size(); i++) {
+			link_of[links[i].value_var] = i;
+		}
+		vector<bool> blocked(links.size(), false);
+		vector<bool> read_by_rows(links.size(), false);
+		vector<idx_t> outer(links.size(), DConstants::INVALID_INDEX);
+		auto helper_of = [&](idx_t var) {
+			auto entry = link_of.find(var);
+			return entry == link_of.end() ? DConstants::INVALID_INDEX : entry->second;
+		};
+		auto block = [&](idx_t var) {
+			auto helper = helper_of(var);
+			if (helper != DConstants::INVALID_INDEX) {
+				blocked[helper] = true;
+			}
+		};
+		auto read_terms = [&](const vector<DecideTerm> &terms, bool linear_reader) {
+			for (auto &term : terms) {
+				auto helper = helper_of(term.variable_index);
+				if (helper == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				if (linear_reader) {
+					read_by_rows[helper] = true;
+				} else {
+					blocked[helper] = true;
+				}
+			}
+		};
+		for (auto &constraint : op.prepared.constraints) {
+			const bool plain = !constraint->has_quadratic && !constraint->has_bilinear &&
+			                   constraint->ne_clause_idx == DConstants::INVALID_INDEX &&
+			                   constraint->minmax_clause_idx == DConstants::INVALID_INDEX &&
+			                   constraint->abs_aux_idx == DConstants::INVALID_INDEX;
+			read_terms(constraint->lhs_terms, plain);
+			for (auto &group : constraint->quadratic_groups) {
+				read_terms(group.inner_terms, false);
+			}
+			for (auto &term : constraint->bilinear_terms) {
+				block(term.var_a);
+				block(term.var_b);
+			}
+		}
+		for (auto &constraint : op.prepared.absorbed_constraints) {
+			read_terms(constraint->lhs_terms, false);
+		}
+		for (idx_t i = 0; i < links.size(); i++) {
+			if (op.HasAbsorbedBound(links[i].value_var)) {
+				blocked[i] = true;
+			}
+		}
+		if (op.prepared.objective) {
+			auto &objective = *op.prepared.objective;
+			// A flat MIN/MAX objective's terms are its members, which stage 06 links to its
+			// auxiliary column by column (LinearizeMinMaxObjective).
+			read_terms(objective.terms, op.flat_objective_agg == ObjectiveAggregateType::NONE);
+			read_terms(objective.squared_terms, false);
+			for (auto &term : objective.bilinear_terms) {
+				block(term.var_a);
+				block(term.var_b);
+			}
+		}
+		for (auto &spec : op.composed_minmax_constraints) {
+			for (auto &term : spec.terms) {
+				read_terms(term.inner_terms, false);
+			}
+		}
+		for (auto &term : op.composed_minmax_objective_terms) {
+			read_terms(term.inner_terms, false);
+		}
+		for (auto &link : op.bilinear_links) {
+			block(link.bool_var_idx);
+			block(link.other_var_idx);
+		}
+		for (auto &terms : op.prepared.frame_payload_terms) {
+			for (auto &term : terms) {
+				block(term.decision);
+			}
+		}
+		for (auto &decisions : op.prepared.frame_fallback_decisions) {
+			for (auto decision : decisions) {
+				block(decision);
+			}
+		}
+		// Another link's members: one link at most, and not beside rows reading it too.
+		for (idx_t i = 0; i < links.size(); i++) {
+			auto read_by_link = [&](const vector<DecideTerm> &terms) {
+				for (auto &term : terms) {
+					auto helper = helper_of(term.variable_index);
+					if (helper == DConstants::INVALID_INDEX) {
+						continue;
+					}
+					if (outer[helper] != DConstants::INVALID_INDEX && outer[helper] != i) {
+						blocked[helper] = true;
+					}
+					outer[helper] = i;
+				}
+			};
+			read_by_link(links[i].inner_terms);
+			read_by_link(links[i].fallback_terms);
+		}
+		for (idx_t i = 0; i < links.size(); i++) {
+			auto &link = links[i];
+			link.inlining = DecideHelperInlining::NONE;
+			link.inline_outer = DConstants::INVALID_INDEX;
+			if (blocked[i] || (outer[i] != DConstants::INVALID_INDEX && read_by_rows[i])) {
+				continue;
+			}
+			if (outer[i] == DConstants::INVALID_INDEX) {
+				link.inlining = DecideHelperInlining::INTO_READERS;
+				continue;
+			}
+			// An outer MIN or MAX pinned on both sides states each member in two rows.
+			auto &holder = links[outer[i]];
+			const bool extremum = holder.agg_name == "min" || holder.agg_name == "max";
+			if (extremum && holder.need_envelope && holder.need_closing) {
+				continue;
+			}
+			link.inlining = DecideHelperInlining::INTO_OUTER;
+			link.inline_outer = outer[i];
 		}
 	}
 

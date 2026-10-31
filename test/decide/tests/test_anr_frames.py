@@ -1,6 +1,4 @@
-"""Frame selectors (phases 3-5 of
-``context/descriptions/09_anr_language/anr_algorithm_and_frames_plan.md``, §6.6;
-``syntax_reference.md`` §5.6).
+"""Frame selectors (``syntax_reference.md`` §5.6; D67-D72, D76, D78-D80).
 
 A frame reads a payload at a position of the anchor row's timeline: ``at(F [else v]: e)
 over (S [desc] [cyclic] [within K])`` for one position, ``agg(from F1 to F2 [every d]

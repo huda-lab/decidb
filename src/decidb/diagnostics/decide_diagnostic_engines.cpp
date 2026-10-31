@@ -138,6 +138,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	for (auto &c : elastic.obj_coeffs) {
 		c = 0.0;
 	}
+	elastic.obj_offset = 0.0;
 	elastic.q_rows.clear();
 	elastic.q_cols.clear();
 	elastic.q_vals.clear();
@@ -630,6 +631,7 @@ static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &sl
 	for (auto &c : model.obj_coeffs) {
 		c = 0.0;
 	}
+	model.obj_offset = 0.0;
 	model.q_rows.clear();
 	model.q_cols.clear();
 	model.q_vals.clear();
@@ -704,6 +706,7 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	// solver reports is exactly cᵀx over the user's variables.
 	stage2.obj_coeffs = original.obj_coeffs;
 	stage2.obj_coeffs.resize(stage2.num_vars, 0.0);
+	stage2.obj_offset = original.obj_offset;
 	stage2.q_rows = original.q_rows;
 	stage2.q_cols = original.q_cols;
 	stage2.q_vals = original.q_vals;
@@ -767,7 +770,8 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 			return false; // constant objective: nothing to preserve, nothing to tie-break against
 		}
 		freeze.sense = tiebreak.maximize ? '>' : '<';
-		freeze.rhs = objective_value;
+		// The value a backend reports holds the objective's constant; the row does not.
+		freeze.rhs = objective_value - tiebreak.obj_offset;
 		freeze.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
 		tiebreak.constraints.push_back(std::move(freeze));
 	}
@@ -778,6 +782,7 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 	for (auto &c : tiebreak.obj_coeffs) {
 		c = 0.0;
 	}
+	tiebreak.obj_offset = 0.0;
 	for (idx_t i = 0; i < slacks.size(); i++) {
 		const auto &sl = slacks[i];
 		double coeff = SlackTierCoefficient(sl, sl.tier) * static_cast<double>(i + 1);

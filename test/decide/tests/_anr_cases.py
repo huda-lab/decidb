@@ -1,5 +1,5 @@
-"""The fixtures of the ANR plan (``context/descriptions/09_anr_language/
-anr_algorithm_and_frames_plan.md`` §6.3), each stated twice: as the query in the language
+"""The fixtures of the full ANR language (``context/descriptions/04_testing/scope/done.md``,
+"``_anr_cases.py``"), each stated twice: as the query in the language
 and as ``_anr_oracle`` expressions, with the answer computed by hand.
 
 ``Case.phase`` is the first phase whose engine runs ``Case.sql``; until then a case is

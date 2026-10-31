@@ -222,6 +222,18 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 //! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
 void LinearizeAbsMaximize(SolverInput &input);
 
+//! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 0, at
+//! assembly, before the column space is built: inline each helper where the plan allows
+//! (`inlining`) and doing so adds no nonzero to the model (D83), counted on the data. One the
+//! plan has read by an outer helper's members -- a nested reducer -- is written into them,
+//! each term reading an instance becoming that instance's terms; one read by rows and the
+//! objective is marked `inlined`, for the model builder to write its members where they
+//! read it. Either way its variable becomes DecideVarScope::INLINED, with no column. A MIN
+//! or MAX helper is linear, and so inlined, only when every instance has one member; an
+//! outer MIN or MAX that may close natively takes only instances read once. A read where
+//! the plan lists none is an internal error.
+void InlineReducerValueLinks(SolverInput &input);
+
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper by the reach of its members over every group -- the sum of their brackets
 //! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
@@ -246,8 +258,9 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
 //! (an AVG's members carry their 1/n). MIN/MAX: an extremum link (EmitExtremumLink) on
 //! the sides the clause needs, its closing Big-M sized off the helper's box against the
 //! family's far end, and refused naming a column to bound where no such constant exists
-//! on the lowering arm. The listed members are consumed here; none reaches
-//! `input.constraints`.
+//! on the lowering arm; an extremum group of one member is that member, an equality (deck
+//! p. 112). The listed members are consumed here; none reaches `input.constraints`. An
+//! inlined helper has no definition: its members move to SolverInput::inlined_helpers.
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
 
@@ -405,14 +418,35 @@ private:
 //! caller folds into the bound: `z <= expr + k` is `z - expr <= k`.
 //!
 //! Columns keep first-appearance order — emitting straight from the hash map
-//! would hand the solver a different matrix ordering run to run.
+//! would hand the solver a different matrix ordering run to run. A short row finds a
+//! repeated column by scanning, and builds the map only once it grows past
+//! `SCAN_LIMIT`: most members are a term or two, and a map per member was most of what
+//! listing half a million of them cost.
 struct MinMaxLinkRow {
+    static constexpr idx_t SCAN_LIMIT = 16;
+
     vector<int> indices;
     vector<double> coefficients;
     double constant = 0.0;
     std::unordered_map<int, idx_t> column_slot;
 
     void AddColumn(int column, double coefficient) {
+        if (column_slot.empty() && indices.size() < SCAN_LIMIT) {
+            for (idx_t i = 0; i < indices.size(); i++) {
+                if (indices[i] == column) {
+                    coefficients[i] += coefficient;
+                    return;
+                }
+            }
+            indices.push_back(column);
+            coefficients.push_back(coefficient);
+            return;
+        }
+        if (column_slot.empty()) {
+            for (idx_t i = 0; i < indices.size(); i++) {
+                column_slot.emplace(indices[i], i);
+            }
+        }
         auto entry = column_slot.find(column);
         if (entry == column_slot.end()) {
             column_slot.emplace(column, indices.size());
@@ -421,6 +455,15 @@ struct MinMaxLinkRow {
         } else {
             coefficients[entry->second] += coefficient;
         }
+    }
+
+    //! Empty the row for reuse, keeping its storage: a caller emitting one row per data row
+    //! pays for no allocation per row.
+    void Clear() {
+        indices.clear();
+        coefficients.clear();
+        column_slot.clear();
+        constant = 0.0;
     }
 
     void AppendTo(SolverInput::RawConstraint &rc) const {

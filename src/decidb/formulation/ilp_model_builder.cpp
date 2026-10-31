@@ -61,9 +61,14 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     // Row block: num_rows * num_row_vars
     idx.entity_block_start = input.num_rows * row_var_count;
 
-    // Entity block: assign base offsets per entity-scoped variable
+    // Entity block: assign base offsets per entity-scoped variable. An inlined helper owns
+    // no column, but keeps the mapping that names the instance a row reads.
     idx_t entity_offset = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
+        if (idx.var_scope[v] == DecideVarScope::INLINED) {
+            idx.var_entity_mapping_idx[v] = input.variable_scopes[v].entity_scope_idx;
+            continue;
+        }
         if (idx.var_scope[v] != DecideVarScope::ENTITY) {
             continue;
         }
@@ -195,6 +200,45 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
         if (gid == DConstants::INVALID_INDEX) continue;
         flat_rows[cursor[gid]++] = r;
     }
+}
+
+//! The columns a decision term stands for at `row`, each handed to `add` with its
+//! coefficient: the decision's own (a frame read resolving to its base's at the row it
+//! selects), or for a helper stage 06 inlined (SolverInput::inlined_helpers, D83) the terms
+//! of the instance `row` reads, each scaled by `coefficient` -- whose constants, scaled, it
+//! returns for the bound. A row reading an instance with no member was skipped where that
+//! instance is absent, so none reaches here; nor does a row reading a helper written into
+//! another helper's members, which no row reads.
+template <class ADD>
+static double AddTermColumns(const SolverInput &input, const VarIndexer &indexer, idx_t var, idx_t row,
+                             double coefficient, ADD &&add) {
+    if (indexer.var_scope[var] != DecideVarScope::INLINED) {
+        add(static_cast<int>(indexer.Get(var, row)), coefficient);
+        return 0.0;
+    }
+    if (coefficient == 0.0) {
+        return 0.0;
+    }
+    if (var >= input.inlined_helper_of.size() || input.inlined_helper_of[var] == DConstants::INVALID_INDEX) {
+        throw InternalException("DECIDE: a row reads a helper decision written into another helper's members");
+    }
+    auto &helper = input.inlined_helpers[input.inlined_helper_of[var]];
+    const idx_t instance = indexer.InstanceOf(var, row);
+    const idx_t group =
+        instance < helper.group_of_instance.size() ? helper.group_of_instance[instance] : DConstants::INVALID_INDEX;
+    if (group == DConstants::INVALID_INDEX) {
+        throw InternalException("DECIDE: a row reads %s where it is absent", helper.label);
+    }
+    auto &members = helper.members;
+    double constant = 0.0;
+    for (idx_t m = members.group_begin[group]; m < members.group_begin[group + 1]; m++) {
+        constant += coefficient * members.constants[m];
+        for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+            add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
+                coefficient * members.coefficients[t]);
+        }
+    }
+    return constant;
 }
 
 //! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
@@ -444,21 +488,26 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             auto &col = input.objective_coefficients[term_idx];
             bool is_reduced_scalar = term_idx < input.objective_term_reductions.size() &&
                                      input.objective_term_reductions[term_idx] == LinearTermReduction::SUM;
-            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
+            // A helper stage 06 inlined is its members; their constants are the objective's
+            // offset, as its definition would have carried them.
+            auto add_objective = [&](int column, double coefficient) {
+                model.obj_coeffs[column] += coefficient;
+            };
+            if (indexer.IsQueryWide(decide_var_idx) && !is_reduced_scalar) {
                 // A query-wide decision standing beside a reducer (not inside one) has one
                 // column and does not vary by row, so its term contributes once rather than
                 // once per row — otherwise the coefficient would be silently multiplied by
                 // the input cardinality. A scalar *inside* a reducer body (`SUM(cost * cap)`)
                 // is marked SUM-reduced and falls through to the per-row loop below instead,
                 // so its coefficient is the sum of every counted row's data.
-                model.obj_coeffs[indexer.Get(decide_var_idx, 0)] += col.Size() > 0 ? col.Get(0) : 1.0;
+                model.obj_offset += AddTermColumns(input, indexer, decide_var_idx, 0,
+                                                   col.Size() > 0 ? col.Get(0) : 1.0, add_objective);
                 continue;
             }
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
-                idx_t var_idx = indexer.Get(decide_var_idx, row);
-                // Use += because entity-scoped vars: multiple rows map to same solver var
-                model.obj_coeffs[var_idx] += col.Get(row);
+                // Accumulated: an entity-scoped decision maps many rows onto one column.
+                model.obj_offset += AddTermColumns(input, indexer, decide_var_idx, row, col.Get(row), add_objective);
             }
         }
     }
@@ -835,6 +884,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // FAST PATH: no `when`, no groups — one constraint summing all rows.
                 ModelConstraint constr;
                 bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
+                // The constants of the inlined helpers the row reads, which go to its bound.
+                double inlined_constant = 0.0;
 
                 if (row_scoped_fast) {
                     idx_t active_terms = 0;
@@ -860,6 +911,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // accumulate because multiple (term, row) pairs can map
                     // to the same flat solver index.
                     std::unordered_map<int, double> coeff_accum;
+                    auto add_accum = [&](int column, double coefficient) {
+                        coeff_accum[column] += coefficient;
+                    };
                     for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                         idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
@@ -867,7 +921,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             bool is_reduced_scalar =
                                 term_idx < eval_const.linear_term_reductions.size() &&
                                 eval_const.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
-                            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
+                            if (indexer.IsQueryWide(decide_var_idx) && !is_reduced_scalar) {
                                 // A query-wide decision standing beside a reducer (not inside
                                 // one) has one column and does not vary by row, so its term
                                 // contributes once rather than once per row — otherwise
@@ -876,14 +930,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                 // SUM-reduced and falls through to the per-row loop below
                                 // instead. The objective accumulator makes the same distinction.
                                 auto &col = eval_const.row_coefficients[term_idx];
-                                coeff_accum[static_cast<int>(indexer.Get(decide_var_idx, 0))] +=
-                                    col.Size() > 0 ? col.Get(0) : 1.0;
+                                inlined_constant += AddTermColumns(input, indexer, decide_var_idx, 0,
+                                                                   col.Size() > 0 ? col.Get(0) : 1.0, add_accum);
                                 continue;
                             }
                             for (idx_t row = 0; row < num_rows; row++) {
-                                double coeff = eval_const.row_coefficients[term_idx][row];
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                coeff_accum[var_idx] += coeff;
+                                inlined_constant += AddTermColumns(input, indexer, decide_var_idx, row,
+                                                                   eval_const.row_coefficients[term_idx][row], add_accum);
                             }
                         }
                     }
@@ -902,7 +955,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 D_ASSERT(RhsIsConstantWithinGroups(eval_const));
                 double rhs = eval_const.rhs_values.Get(0);
                 double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
-                                                               "fixed aggregate LHS term");
+                                                               "fixed aggregate LHS term") +
+                                    inlined_constant;
                 rhs -= lhs_offset;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
                 // F2 site 1: aggregate, ungrouped.
@@ -953,6 +1007,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                     idx_t g_size = g_end - g_begin;
                     ModelConstraint constr;
+                    double inlined_constant = 0.0;
 
                     if (row_scoped_fast) {
                         idx_t active_terms = 0;
@@ -975,6 +1030,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             }
                         }
                     } else {
+                        auto add_accum = [&](int column, double coefficient) {
+                            accum.Add(column, coefficient);
+                        };
                         for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                             if (decide_var_idx == DConstants::INVALID_INDEX) continue;
@@ -982,22 +1040,22 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             bool is_reduced_scalar =
                                 term_idx < eval_const.linear_term_reductions.size() &&
                                 eval_const.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
-                            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
+                            if (indexer.IsQueryWide(decide_var_idx) && !is_reduced_scalar) {
                                 // One column for the whole query, so a scalar beside a reducer
                                 // (not inside one) enters each group's row once — not once per
                                 // row of that group. Same rule the ungrouped path above applies;
                                 // a grouped constraint just has more rows to get it wrong in. A
                                 // scalar *inside* a reducer body is SUM-reduced and falls
                                 // through to the per-row loop below, summing the whole group.
-                                accum.Add(static_cast<int>(indexer.Get(decide_var_idx, 0)),
-                                          col.Size() > 0 ? col.Get(flat_rows[g_begin]) : 1.0);
+                                inlined_constant += AddTermColumns(input, indexer, decide_var_idx, flat_rows[g_begin],
+                                                                   col.Size() > 0 ? col.Get(flat_rows[g_begin]) : 1.0,
+                                                                   add_accum);
                                 continue;
                             }
                             for (idx_t k = g_begin; k < g_end; k++) {
                                 idx_t row = flat_rows[k];
-                                double coeff = col.Get(row);
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                accum.Add(var_idx, coeff);
+                                inlined_constant +=
+                                    AddTermColumns(input, indexer, decide_var_idx, row, col.Get(row), add_accum);
                             }
                         }
                         accum.Flush(constr.indices, constr.coefficients);
@@ -1010,7 +1068,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // and it may be excluded by WHEN.
                     double group_lhs_offset =
                         SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
-                                                   "fixed aggregate LHS term");
+                                                   "fixed aggregate LHS term") +
+                        inlined_constant;
                     double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality);
                     // F2 site 2: grouped aggregate (`by` and/or `when`).
@@ -1060,9 +1119,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     double coeff = eval_const.row_coefficients[term_idx][row];
 
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
+                        // An inlined helper's members' constants are the row's data, moved to
+                        // the bound with the rest.
                         if (coeff != 0.0) {
-                            int var_idx = (int)indexer.Get(decide_var_idx, row);
-                            coeff_by_var[var_idx] += coeff;
+                            rhs_adjustment += AddTermColumns(
+                                input, indexer, decide_var_idx, row, coeff,
+                                [&](int column, double coefficient) { coeff_by_var[column] += coefficient; });
                         }
                     } else {
                         // Constant / row-data LHS term: subtract from RHS.
@@ -1501,6 +1563,9 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
         // owns. Entity-scoped variables collapse multiple rows onto one column;
         // the repeated writes are idempotent (same var/label, instance pinned to
         // the entity id via Get's mapping).
+        if (indexer.var_scope[var] == DecideVarScope::INLINED) {
+            continue; // no column of its own
+        }
         for (idx_t row = 0; row < indexer.num_rows; row++) {
             idx_t col = indexer.Get(var, row);
             if (col >= provenance.size()) {

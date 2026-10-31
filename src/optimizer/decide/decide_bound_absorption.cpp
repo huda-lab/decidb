@@ -368,7 +368,7 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	// preceding passes is already counted.
 	idx_t num_decide_vars = decide.decide_variables.size();
 	decide.absorbed_lower_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_LOWER_UNSET);
-	decide.absorbed_upper_bounds.assign(num_decide_vars, 1e30);
+	decide.absorbed_upper_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_UPPER_UNSET);
 	decide.user_absorbed_bounds.clear();
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at

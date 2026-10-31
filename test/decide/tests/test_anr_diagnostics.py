@@ -1,5 +1,5 @@
-"""DIAGNOSE and EXPLAIN over variants, nests and frames (phase 6 of
-``context/descriptions/09_anr_language/anr_algorithm_and_frames_plan.md``, §6.8).
+"""DIAGNOSE and EXPLAIN over variants, nests and frames (``syntax_reference.md`` §5.5,
+§5.6, §6.4).
 
 A diagnosis loosens or drops what the user wrote: never a row a rewrite added to define a
 helper decision (a structural row), and it names each clause, group and decision as the
@@ -98,16 +98,21 @@ def test_an_expanded_diagnosis_names_the_groups_a_frame_leaves(decidb_cli):
 
 
 @pytest.mark.diagnose
-@pytest.mark.parametrize("objective_sql, named", [
-    pytest.param(f"MAXIMIZE sum(at(previous: x) {TL})", {f"sum(at(previous: x) {TL})"}, id="a-member-helper"),
-    pytest.param(f"MAXIMIZE sum(sum(from previous to next: x) {TL})", {f"sum(from previous to next: x) {TL}"},
-                 id="a-range-helper"),
+@pytest.mark.parametrize("clause_sql, objective_sql, named", [
+    pytest.param("", f"MAXIMIZE sum(at(previous: x) {TL})", set(), id="an-inlined-member-helper"),
+    pytest.param("", f"MAXIMIZE sum(sum(from previous to next: x) {TL})", set(), id="an-inlined-range-helper"),
+    pytest.param(f"AND x <= sum(at(previous: x) {TL}) + 1", "MAXIMIZE sum(x)", {f"sum(at(previous: x) {TL})"},
+                 id="a-member-helper"),
+    pytest.param(f"AND x <= sum(sum(from previous to next: x) {TL}) + 1", "MAXIMIZE sum(x)",
+                 {f"sum(sum(from previous to next: x) {TL})"}, id="a-range-helper"),
 ])
-def test_the_unbounded_remedy_names_decisions_and_reducers(decidb_cli, objective_sql, named):
-    """An objective that rises without end through a helper over a frame: the remedy bounds
-    `x` where a member reads it, or the reducer or range as written -- never the helper
-    by an internal name."""
-    sql = f"""SELECT id, x {table('t', EDGE, EDGE_ROWS)} DECIDE x(INT) SUCH THAT x >= 0 {objective_sql}"""
+def test_the_unbounded_remedy_names_decisions_and_reducers(decidb_cli, clause_sql, objective_sql, named):
+    """A model that rises without end through a helper over a frame: the remedy bounds `x`
+    where a member reads it, or the reducer as written -- never the helper by an internal
+    name. A helper the objective alone reads is written into it (phase 7) and has no
+    column to name; one every row reads keeps its column, the range inside it written
+    into its members."""
+    sql = f"""SELECT id, x {table('t', EDGE, EDGE_ROWS)} DECIDE x(INT) SUCH THAT x >= 0 {clause_sql} {objective_sql}"""
     findings = _findings(run_diagnose(decidb_cli, sql), sql)
     assert {row["state"] for row in findings} == {"unbounded"}, findings
     assert {row["clause"] for row in findings} == {"x"} | named, findings

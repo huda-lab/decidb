@@ -1,5 +1,4 @@
-"""Variant signatures in the engine (phase 1 of
-``context/descriptions/09_anr_language/anr_algorithm_and_frames_plan.md``, §6.4; D64-D66, D77).
+"""Variant signatures in the engine (``syntax_reference.md`` §7.1; D64-D66, D77).
 
 A scoped expression is one instance per class of its key and distinct value of its
 signature: its data terms by value (those of one additive context summed into one, D77),

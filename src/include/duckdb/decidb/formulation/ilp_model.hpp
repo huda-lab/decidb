@@ -78,6 +78,8 @@ struct VarIndexer {
             auto &read = frame_reads[var_idx - first_frame_read];
             return Get(read.base, read.rows[row]);
         }
+        case DecideVarScope::INLINED:
+            throw InternalException("DECIDE: a column was asked of an inlined helper decision");
         default: {
             auto &mapping = entity_mappings[var_entity_mapping_idx[var_idx]];
             idx_t entity_id = mapping.row_to_entity[row];
@@ -98,13 +100,15 @@ struct VarIndexer {
             return scalar_var_index[var_idx];
         case DecideVarScope::FRAME_READ:
             throw InternalException("DECIDE: a frame read has no instance of its own");
+        case DecideVarScope::INLINED:
+            throw InternalException("DECIDE: a column was asked of an inlined helper decision");
         default:
             return entity_var_base[var_idx] + inst;
         }
     }
 
     //! Get the number of instances (copies) for a given decide variable; none for a frame
-    //! read, whose columns are its base's.
+    //! read, whose columns are its base's, nor for an inlined helper, which has none.
     inline idx_t NumInstances(idx_t var_idx) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
@@ -112,11 +116,27 @@ struct VarIndexer {
         case DecideVarScope::SCALAR:
             return 1;
         case DecideVarScope::FRAME_READ:
+        case DecideVarScope::INLINED:
             return 0;
         default: {
             return entity_mappings[var_entity_mapping_idx[var_idx]].num_entities;
         }
         }
+    }
+
+    //! The instance of an entity-scoped, query-wide or inlined helper decision that `row`
+    //! reads: its entity id, or 0 when it has one instance.
+    inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
+        const idx_t mapping = var_entity_mapping_idx[var_idx];
+        return mapping == DConstants::INVALID_INDEX ? 0 : entity_mappings[mapping].row_to_entity[row];
+    }
+
+    //! Whether a decision has one instance for the whole query: a scalar, or a helper that
+    //! had one when stage 06 inlined it. A term of one beside a reducer counts once.
+    inline bool IsQueryWide(idx_t var_idx) const {
+        return var_scope[var_idx] == DecideVarScope::SCALAR ||
+               (var_scope[var_idx] == DecideVarScope::INLINED &&
+                var_entity_mapping_idx[var_idx] == DConstants::INVALID_INDEX);
     }
 
     //! Which decide variable a flat column instantiates — the inverse of `Get()` and
@@ -285,6 +305,12 @@ struct SolverModel {
     //! Linear objective: minimize/maximize c^T x
     vector<double> obj_coeffs; //!< Coefficient per variable (linear part)
     bool maximize;             //!< True = maximize, false = minimize
+    //! A constant the objective adds: the constants of the helpers stage 06 wrote into it
+    //! (D83), which a helper kept as a column carries in its definition -- so the objective
+    //! a backend reports (a diagnosis's achievable objective) is the same either way. Every
+    //! other constant term of the objective is left out, as it always was. A model whose
+    //! objective is replaced (a repair, a probe) sets it to 0.
+    double obj_offset = 0.0;
 
     //! Quadratic objective: x^T Q x, added to the linear part. NOT the (1/2) x^T Q x
     //! form some solvers take -- see the convention note below, which every backend

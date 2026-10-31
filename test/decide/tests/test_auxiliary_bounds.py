@@ -115,19 +115,21 @@ def _helper_columns(dump: str, decisions: int) -> list[tuple[float, float]]:
 @pytest.mark.per_clause
 @pytest.mark.correctness
 @pytest.mark.parametrize("objective, boxes", [
-    # Each group's extremum stays in the per-row range, and their sum in twice it.
-    pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 20.0), (0.0, 40.0)],
+    # Each group's extremum stays in the per-row range; their sum, read by the objective
+    # alone, is written into it (phase 7) and has no column.
+    pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 20.0)],
                  id="sum-over-group-extrema"),
     # The outer extremum over the groups' stays in the per-row range too.
     pytest.param("MAXIMIZE max(per g: max(x * c) by (g))", [(0.0, 20.0)] * 3, id="extremum-over-group-extrema"),
-    # Group 'a' reaches 3*4 + 5*4 = 32 and 'b' 2*4 = 8; one box covers every instance of a
-    # helper (05_optimizer/todo.md §2), so both group sums and their minimum live in [0, 32].
-    pytest.param("MAXIMIZE min(per g: sum(x * c) by (g))", [(0.0, 32.0)] * 3, id="extremum-over-group-sums"),
+    # Group 'a' reaches 3*4 + 5*4 = 32 and 'b' 2*4 = 8. The group sums are written into the
+    # minimum's members (phase 7), whose box covers them both: [0, 32].
+    pytest.param("MAXIMIZE min(per g: sum(x * c) by (g))", [(0.0, 32.0)], id="extremum-over-group-sums"),
 ])
 def test_a_nested_objectives_helpers_are_boxed(decidb_cli, tmp_path, objective, boxes):
     """A nested objective is a helper per group for the inner reducer and one for the outer
     (D75), each boxed by its members' reach (DeriveReducerValueBounds), so the outer one's
-    box is read off the inner ones'."""
+    box is read off the inner ones' -- or off their members, where an inner sum is written
+    into the outer reducer's members and an outer sum into the objective (phase 7)."""
     dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}

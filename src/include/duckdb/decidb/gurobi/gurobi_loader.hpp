@@ -56,6 +56,7 @@ static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
 static constexpr const char *GRB_INT_ATTR_SOLCOUNT = "SolCount";
 static constexpr const char *GRB_DBL_ATTR_X = "X";
 static constexpr const char *GRB_DBL_ATTR_OBJVAL = "ObjVal";
+static constexpr const char *GRB_DBL_ATTR_OBJCON = "ObjCon";
 static constexpr const char *GRB_DBL_ATTR_OBJBOUND = "ObjBound";
 static constexpr const char *GRB_DBL_ATTR_MIPGAP = "MIPGap";
 
@@ -81,6 +82,7 @@ struct GurobiAPI {
 
 	// Model building
 	int (*setintattr)(void *model, const char *attrname, int newvalue);
+	int (*setdblattr)(void *model, const char *attrname, double newvalue);
 	int (*addconstr)(void *model, int numnz, int *cind, double *cval,
 	                 char sense, double rhs, const char *constrname);
 	int (*addqpterms)(void *model, int numqnz, int *qrow, int *qcol, double *qval);

@@ -36,20 +36,33 @@ enum class DecideExpression : uint8_t {
 //!   FRAME_READ — never declared: a decision read at the row a frame selector selects for
 //!                each row (SolverInput::frame_reads). It owns no column; at a row it is
 //!                its base decision's column at the selected row. Execution creates it.
+//!   INLINED    — never declared: a helper decision stage 06 inlined (SolverInput::
+//!                inlined_helpers). It owns no column; a row reading it reads its members.
+//!                `entity_scope_idx` stays the scope it had, which names its instances.
 enum class DecideVarScope : uint8_t {
     ROW = 0,
     ENTITY = 1,
     SCALAR = 2,
-    FRAME_READ = 3
+    FRAME_READ = 3,
+    INLINED = 4
 };
+
+//! Where stage 06 may write a helper decision's members in place of its column (D83), as
+//! the linear form found its readers (LogicalDecide::ReducerValueLink::inlining):
+//!   NONE          — a reader needs the column: keep it
+//!   INTO_READERS  — read only by linear rows of plain clauses and the linear objective
+//!   INTO_OUTER    — read only by the members of one other, outer helper (`inline_outer`)
+//! Whether it pays is the data's, which stage 06 counts.
+enum class DecideHelperInlining : uint8_t { NONE, INTO_READERS, INTO_OUTER };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its entity index.
 struct DecideVarScopeInfo {
     DecideVarScope scope = DecideVarScope::ROW;
-    //! Index into entity_scopes / entity_mappings. Meaningful only when
-    //! scope == ENTITY; INVALID_INDEX otherwise.
+    //! Index into entity_scopes / entity_mappings. Meaningful when scope == ENTITY, and for
+    //! an INLINED helper that was keyed (the scope naming its instances); INVALID_INDEX
+    //! otherwise.
     idx_t entity_scope_idx = DConstants::INVALID_INDEX;
     //! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
     //! can name the decision the way it was declared. Empty for every other spelling.
