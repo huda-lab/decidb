@@ -412,3 +412,8 @@ context/presentations
 AGENT.md
 
 .pytest_cache/
+
+# The rule above for any settings.json is meant for editors; this one is shared
+!.claude/settings.json
+# Worktrees the Agent tool creates for isolated agents
+.claude/worktrees/

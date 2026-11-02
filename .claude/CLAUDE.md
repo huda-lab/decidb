@@ -28,6 +28,7 @@ its syntax tree. Prefer the fix with no case list, and add no code that does not
 
 | Command | Purpose |
 |---|---|
+| `./setup.sh` | set up a fresh clone (build, test environment, TPC-H database) |
 | `make release` | build the CLI and library |
 | `build/release/decidb` | SQL shell |
 | `make grammar-build` | regenerate the parser grammar and rebuild |

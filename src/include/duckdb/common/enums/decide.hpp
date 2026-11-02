@@ -11,6 +11,8 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/to_string.hpp"
 
+#include <cstring>
+
 namespace duckdb {
 
 class Serializer;

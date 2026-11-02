@@ -321,10 +321,10 @@ class TestTimeLimit:
         """A MIP HiGHS solves at its root returns without waiting for its symmetry search.
 
         HiGHS cancels the search once the root solves the MIP; BUG-3 checks for that cancellation at every search
-        node, not only at the search's leaves, so the answer comes back about 1.5 s in. Without it the solve waits
-        out the search (about 9 s) and the subprocess timeout kills it.
+        node, not only at the search's leaves, so the answer comes back in about 1.5-2.5 s, depending on the host.
+        Without it the solve waits out the search (about 9 s) and the subprocess timeout kills it.
         """
-        result = _run_decidb(decidb_cli_highs, _SYMMETRY_PAIRS_SQL, time_limit=30, subprocess_timeout=3)
+        result = _run_decidb(decidb_cli_highs, _SYMMETRY_PAIRS_SQL, time_limit=30, subprocess_timeout=6)
         assert re.search(r"\b100000\b", result.stdout), (
             f"Expected the row count 100000 but got:\n"
             f"  stdout: {result.stdout[:400]}\n"

@@ -74,7 +74,16 @@ For the full syntax specification, see [context/docs/language/guide.md](context/
 
 ## Building from Source
 
-DeciDB requires [CMake](https://cmake.org), Python3, and a C++11 compliant compiler.
+DeciDB requires [CMake](https://cmake.org), Python3 with the `venv` module, and a C++11 compliant compiler.
+[Ninja](https://ninja-build.org) is optional and is used when present.
+
+To set up a fresh clone in one step (build, test environment, and the TPC-H database from `config.txt`):
+
+```bash
+./setup.sh
+```
+
+To build only:
 
 ```bash
 make release
@@ -86,6 +95,15 @@ Build output:
 - **Library**: `build/release/src/libduckdb.so`
 
 ## Running Tests
+
+The tests compare DeciDB with a Gurobi oracle, so they need:
+
+- a full [Gurobi](https://www.gurobi.com) install with a valid license. The `gurobipy` package's bundled trial license
+  is limited in model size. Its major version must match your license; `make decide-setup` installs the latest allowed
+  by `test/decide/requirements.txt`.
+- DeciDB finds the Gurobi library through `GUROBI_HOME`, `LD_LIBRARY_PATH`, `~/gurobi*/linux64/lib` or
+  `/opt/gurobi*/linux64/lib`.
+- network access on the first run, to fetch Python packages and DuckDB's `tpch` extension.
 
 ```bash
 make decide-test       # Run DECIDE differential tests

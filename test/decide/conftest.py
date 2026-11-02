@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import duckdb
@@ -76,15 +77,22 @@ def _find_decidb_exe() -> Path | None:
 
 
 def _ensure_oracle_db() -> Path:
-    """Generate the vanilla TPC-H database if it doesn't already exist."""
+    """Generate the vanilla TPC-H database if it doesn't already exist.
+
+    Every pytest-xdist worker calls this, so the database is built aside and renamed into place: a worker sees no
+    file or a finished one, never one another worker still holds open for writing.
+    """
     if _ORACLE_DB_PATH.exists():
         return _ORACLE_DB_PATH
-    conn = duckdb.connect(str(_ORACLE_DB_PATH))
-    try:
-        conn.execute("INSTALL tpch; LOAD tpch;")
-        conn.execute(f"CALL dbgen(sf={_TPCH_SF})")
-    finally:
-        conn.close()
+    with tempfile.TemporaryDirectory(dir=_ORACLE_DB_PATH.parent, prefix=".tpch_oracle_") as build_dir:
+        build_path = Path(build_dir) / _ORACLE_DB_PATH.name
+        conn = duckdb.connect(str(build_path))
+        try:
+            conn.execute("INSTALL tpch; LOAD tpch;")
+            conn.execute(f"CALL dbgen(sf={_TPCH_SF})")
+        finally:
+            conn.close()
+        os.replace(build_path, _ORACLE_DB_PATH)
     return _ORACLE_DB_PATH
 
 

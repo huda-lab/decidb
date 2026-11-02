@@ -74,12 +74,12 @@ it in each brief in place of `<PHASE_BASE>`.
 One `Agent` call per lane, in one message: `subagent_type: "general-purpose"`, `model: "sonnet"`,
 `isolation: "worktree"`. The tool creates each worktree at `.claude/worktrees/agent-<id>` inside the repository, on a
 branch `worktree-agent-<id>`, starting from origin's default branch; the lane resets it to the phase base itself
-(lane rules). `.git/info/exclude` already ignores `.claude/worktrees/`. Then `git worktree list`: every lane
-worktree must sit there. The owner forbids hand-made folders beside the repo in `~/Code/`; if a worktree landed
+(lane rules). `.gitignore` ignores `.claude/worktrees/`. Then `git worktree list`: every lane
+worktree must sit there. The owner forbids hand-made folders beside the repo; if a worktree landed
 anywhere else, stop the lanes and ask. Never create a worktree or branch by hand. Tell the owner which lanes are
 running, then end the turn.
 
-Before the first phase on a machine: `ccache` must be installed (`brew install ccache`); the setup script points it at
+Before the first phase on a machine: `ccache` must be installed (`brew install ccache` or `apt install ccache`); the setup script points it at
 the shared base directory so lanes reuse each other's objects. A cold build per worktree is about 3.4 GB on disk.
 
 ## 4. While lanes run

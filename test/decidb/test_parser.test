@@ -2,11 +2,10 @@
 # description: Test DeciDB's Parser
 # group: [decidb]
 
-statement ok
-ATTACH 'build/decidb.db' AS decidb;
+require tpch
 
 statement ok
-SET search_path = 'decidb,main';
+CALL dbgen(sf=0.01);
 
 # Parse REAL
 statement ok

@@ -11,8 +11,8 @@ class. HiGHS is bundled and handles the classes in its capability table; a model
 than sent to HiGHS. Some problems skip the solver altogether: direct solve answers them with ordinary relational
 operators.
 
-The language is specified by `context/New_syntax.pdf` ("the deck"). These docs describe what is built; deck features
-not built yet are in [language/roadmap.md](language/roadmap.md).
+The language is specified by [`context/New_syntax.pdf`](../New_syntax.pdf) ("the deck"). These docs describe what is
+built; deck features not built yet are in [language/roadmap.md](language/roadmap.md).
 
 ## Map
 

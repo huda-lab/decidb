@@ -58,8 +58,12 @@ for solver in gurobi highs; do
         ok=0
     fi
     # Results are diffed separately so a changed ANSWER is never mistaken for a
-    # changed model, and vice versa.
-    if ! diff -u "$baseline.results" "$tmp/$solver.dump.results" > "$tmp/$solver.resdiff"; then
+    # changed model, and vice versa. Results compare at solver tolerance
+    # (normalize_results.py), since their last digits vary by solver version and
+    # CPU; the model diff above is the exact one.
+    python3 -I "$here/normalize_results.py" < "$baseline.results" > "$tmp/$solver.baseline.results"
+    python3 -I "$here/normalize_results.py" < "$tmp/$solver.dump.results" > "$tmp/$solver.current.results"
+    if ! diff -u "$tmp/$solver.baseline.results" "$tmp/$solver.current.results" > "$tmp/$solver.resdiff"; then
         echo "golden[$solver]: QUERY RESULTS CHANGED ($(grep -c '^[+-][^+-]' "$tmp/$solver.resdiff") lines)"
         head -40 "$tmp/$solver.resdiff"
         ok=0

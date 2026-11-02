@@ -443,6 +443,9 @@ tidy-fix:
 test_compile: # test compilation of individual cpp files
 	python3 scripts/amalgamation.py --compile
 
+# make decide-setup installs the pinned formatters in the test environment
+format-%: export PATH := $(CURDIR)/test/decide/.venv/bin:$(PATH)
+
 format-check:
 	python3 scripts/format.py --all --check
 

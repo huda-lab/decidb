@@ -6,3 +6,4 @@ __pycache__/
 .venv
 _tpch_oracle.duckdb
 _tpch_oracle.duckdb.wal
+.tpch_oracle_*/

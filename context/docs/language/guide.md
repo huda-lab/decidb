@@ -512,8 +512,8 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 
 ### 6.5 Deck examples 1–8
 
-From the language proposal (`context/New_syntax.pdf`, pp. 17–24). All run as written and fully explicit, over
-`FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(INT), per D.depotID: reserve(REAL)`:
+From the language proposal ([`context/New_syntax.pdf`](../../New_syntax.pdf), pp. 17–24). All run as written and fully
+explicit, over `FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(INT), per D.depotID: reserve(REAL)`:
 
 | # | As written | Constraints | Reducer reads | Must be determined |
 |---|---|---|---|---|

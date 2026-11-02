@@ -2,7 +2,7 @@
 # Prepare a lane's git worktree to build and test DeciDB. Run from inside the worktree.
 #
 # A worktree shares the repository but not its untracked files: the test databases, the oracle cache and the Python
-# environment live only in the main tree. This clones them in (APFS clones: no extra disk), links the Python
+# environment live only in the main tree. This copies them in (clones on APFS: no extra disk), links the Python
 # environment (third-party packages only), and builds with a capped job count so several lanes can build at once.
 set -euo pipefail
 
@@ -13,7 +13,7 @@ if [ "$WT" = "$MAIN" ]; then
 	exit 1
 fi
 
-for f in test/decide/decide.db test/decide/_tpch_oracle.duckdb test/decide/results/oracle_cache.json build/decidb.db; do
+for f in test/decide/_tpch_oracle.duckdb test/decide/results/oracle_cache.json build/decidb.db; do
 	if [ -f "$MAIN/$f" ] && [ ! -e "$WT/$f" ]; then
 		mkdir -p "$(dirname "$WT/$f")"
 		cp -c "$MAIN/$f" "$WT/$f" 2>/dev/null || cp "$MAIN/$f" "$WT/$f"

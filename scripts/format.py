@@ -100,6 +100,7 @@ ignored_files = [
 ]
 ignored_directories = [
     '.eggs',
+    '.venv',
     '__pycache__',
     'dbgen',
     os.path.join('tools', 'pythonpkg', 'duckdb'),

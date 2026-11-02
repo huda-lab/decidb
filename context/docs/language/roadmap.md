@@ -1,10 +1,10 @@
 # Language roadmap
 
-DeciDB is moving to the language proposal (`context/New_syntax.pdf`, "the deck"). This page lists what the move has
-not reached yet: deck features DeciDB does not implement, and current behavior the deck changes. Each item is planned
-transition work, not a bug: today's behavior is deliberate, documented in [guide.md](guide.md), and either refuses a
-query with a message or answers it correctly. None is scheduled; when one is, its work moves to the todo of the area
-that owns it.
+DeciDB is moving to the language proposal ([`context/New_syntax.pdf`](../../New_syntax.pdf), "the deck"). This page
+lists what the move has not reached yet: deck features DeciDB does not implement, and current behavior the deck changes.
+Each item is planned transition work, not a bug: today's behavior is deliberate, documented in [guide.md](guide.md), and
+either refuses a query with a message or answers it correctly. None is scheduled; when one is, its work moves to the
+todo of the area that owns it.
 
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
 postfix `by` with their defaults (p. 16), the determination rule (pp. 26–31), deck examples 1–8 (pp. 17–24), NULL keys
