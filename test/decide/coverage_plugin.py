@@ -17,7 +17,6 @@ the report counts what lands there so a profile that belongs to no test is not s
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import os
@@ -27,6 +26,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+from coverage_report import llvm_tool
 
 COVERAGE_DIR_ENV = "DECIDB_COVERAGE_DIR"
 
@@ -42,18 +43,13 @@ def profile_key(nodeid: str) -> str:
     return f"{readable}.{hashlib.sha1(nodeid.encode()).hexdigest()[:10]}"
 
 
-@functools.lru_cache(maxsize=None)
-def _llvm_profdata() -> str:
-    return (
-        os.environ.get("LLVM_PROFDATA")
-        or subprocess.run(["xcrun", "-f", "llvm-profdata"], capture_output=True, text=True, check=True).stdout.strip()
-    )
-
-
 def pytest_configure(config):
     root = _dir()
     if root is None:
         return
+    # A missing tool stops the run here, not after every test or at the report at the very end.
+    llvm_tool("llvm-profdata")
+    llvm_tool("llvm-cov")
     (root / "profiles").mkdir(parents=True, exist_ok=True)
     (root / "stray").mkdir(parents=True, exist_ok=True)
     os.environ["LLVM_PROFILE_FILE"] = str(root / "stray" / "%p.profraw")
@@ -96,7 +92,7 @@ def _per_test_coverage_profile(request):
         if raws:
             merged = (
                 subprocess.run(
-                    [_llvm_profdata(), "merge", "-sparse", *map(str, raws), "-o", str(out)],
+                    [llvm_tool("llvm-profdata"), "merge", "-sparse", *map(str, raws), "-o", str(out)],
                     capture_output=True,
                 ).returncode
                 == 0

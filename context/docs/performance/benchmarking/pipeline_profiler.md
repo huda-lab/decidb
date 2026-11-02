@@ -44,7 +44,7 @@ measures the solver on it.
 ## How a run is measured
 
 Each (query, backend, repeat) is one fresh `decidb` process on the database, opened `-readonly`, under
-`/usr/bin/time -l`. The script runs the query as `CREATE TEMP TABLE result AS <query>` under the CLI's `.timer on`,
+`/usr/bin/time` (`-l` on macOS, `-v` on Linux). The script runs the query as `CREATE TEMP TABLE result AS <query>` under the CLI's `.timer on`,
 then `SELECT count(*) FROM result`. CTAS makes the engine produce every output row without formatting millions of them
 for a terminal. `query_s` is the CLI's reported wall time for that statement, not a sum of spans.
 
@@ -85,7 +85,7 @@ span's.
 Counter columns: `variables`, `linear_rows`, `linear_nonzeros`, `quadratic_rows`, `objective`, `iterations`, `nodes`,
 `mip_gap`.
 
-`peak_rss_mib` is the whole process's peak resident set size from `/usr/bin/time -l`. It is recorded and never acted
+`peak_rss_mib` is the whole process's peak resident set size from `/usr/bin/time`. It is recorded and never acted
 on: there is no memory guard, cap or early stop.
 
 `status` is one of `ok`; `unsupported` (the backend refused the model, matched on the error text); `solver_limit`

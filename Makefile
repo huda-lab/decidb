@@ -566,18 +566,26 @@ upgrade-highs:
 COVERAGE_BUILD_DIR ?= build/coverage
 COVERAGE_RUN_DIR ?= build/coverage/run
 COVERAGE_COMPILE_FLAGS = -fprofile-instr-generate -fcoverage-mapping -fprofile-list=$(PROJ_DIR)$(COVERAGE_BUILD_DIR)/profile_list.txt
+# The instrumentation is Clang's on every platform. A build directory keeps the compiler it was configured with.
+COVERAGE_CC ?= clang
+COVERAGE_CXX ?= clang++
+# Configure only with a compiler that takes the flags and links the profile runtime: a failed configure leaves the
+# CMakeCache.txt that makes later runs skip configuring.
+COVERAGE_PROBE = echo 'int main() { return 0; }' | $(COVERAGE_CXX) $(COVERAGE_COMPILE_FLAGS) -x c++ - -o /dev/null \
+	|| { echo "decide-coverage: $(COVERAGE_CXX) cannot build with the coverage flags. It needs Clang and its LLVM tools (Ubuntu 24.04: apt install clang llvm libclang-rt-18-dev; macOS: the Xcode command line tools), or COVERAGE_CC and COVERAGE_CXX naming them." >&2; exit 1; }
 
 decide-coverage-build:
 	mkdir -p $(COVERAGE_BUILD_DIR)
-	printf '[clang]\nsrc:*/src/optimizer/decide/direct/*\nsrc:*/src/optimizer/decide/decide_rewrite_rhs_window.cpp\n' \
+	printf '[clang]\nsrc:*/src/optimizer/decide/direct/*\nsrc:*/src/optimizer/decide/decide_rewrite_rhs_bounds.cpp\n' \
 		> $(COVERAGE_BUILD_DIR)/profile_list.txt.new
 	cmp -s $(COVERAGE_BUILD_DIR)/profile_list.txt.new $(COVERAGE_BUILD_DIR)/profile_list.txt \
 		&& rm $(COVERAGE_BUILD_DIR)/profile_list.txt.new \
 		|| mv $(COVERAGE_BUILD_DIR)/profile_list.txt.new $(COVERAGE_BUILD_DIR)/profile_list.txt
 	cd $(COVERAGE_BUILD_DIR) && \
-	{ test -f CMakeCache.txt || cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_WARN_UNUSED_FLAG} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${DISABLE_SANITIZER_FLAG} ${STATIC_LIBCPP} ${CMAKE_VARS} ${CMAKE_VARS_BUILD} -DCMAKE_BUILD_TYPE=Release \
+	{ test -f CMakeCache.txt || { $(COVERAGE_PROBE) && cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_WARN_UNUSED_FLAG} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${DISABLE_SANITIZER_FLAG} ${STATIC_LIBCPP} ${CMAKE_VARS} ${CMAKE_VARS_BUILD} -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_COMPILER=$(COVERAGE_CC) -DCMAKE_CXX_COMPILER=$(COVERAGE_CXX) \
 		-DCMAKE_CXX_FLAGS="$(COVERAGE_COMPILE_FLAGS)" -DCMAKE_C_FLAGS="$(COVERAGE_COMPILE_FLAGS)" \
-		-DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" ../..; } && \
+		-DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" ../..; }; } && \
 	cmake --build . --config Release --target shell --target unittest -- -j$(BUILD_JOBS)
 
 decide-coverage: decide-coverage-build

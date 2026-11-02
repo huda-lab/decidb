@@ -133,7 +133,7 @@ def run_one(name: str, path: Path, backend: str, repeat: int) -> dict:
     database = str(bench.DATABASES_DIR / f"{DATABASE}.db")
     status = "ok"
     try:
-        done = subprocess.run(["/usr/bin/time", "-l", str(bench.DECIDB_EXE), database, "-readonly"],
+        done = subprocess.run(["/usr/bin/time", bench.get_time_flag(), str(bench.DECIDB_EXE), database, "-readonly"],
                               input=script, capture_output=True, text=True,
                               env=environment, timeout=PROCESS_SECONDS)
         stdout, stderr, code = done.stdout, done.stderr, done.returncode

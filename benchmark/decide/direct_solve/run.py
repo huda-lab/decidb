@@ -9,7 +9,7 @@ also returns the objective it reached.
 Modes. `direct` pins `decide_direct_solve='require'`, so a query the rule does not take fails instead of using the
 solver. `gurobi` and `highs` pin `'off'` and choose the backend with `DECIDB_FORCE_SOLVER`.
 
-Each measured run is a fresh `decidb` process that only opens the stored database, under `/usr/bin/time -l`, so its
+Each measured run is a fresh `decidb` process that only opens the stored database, under `/usr/bin/time`, so its
 wall time and peak memory are the query's own. Every mode runs `--repeats` times per cell; the table reports the
 median wall time with the min and max, and the largest peak memory. A run past `--timeout` is killed with its process
 group and reported as `timeout`; a failed run is reported as `error`. Neither is ever reported as a time.
@@ -47,6 +47,9 @@ QUERIES = HERE / "queries"
 RESULTS = HERE.parent / "results" / "direct_solve"  # own folder: view_results.py opens the newest JSON in results/
 DB_DIR = HERE.parent / "databases" / "direct_solve"
 
+sys.path.insert(0, str(HERE.parent))
+import run_benchmarks as bench  # noqa: E402  (the parent folder's /usr/bin/time flag and parser)
+
 # TPC-H scale factors; partsupp holds one decision per row: 800, 9.6K, 100K and 1.6M rows. dbgen drops the fraction of a
 # scale factor above 1 (sf=1.25 generates sf=1), so the largest is a whole number.
 SCALE_FACTORS = (0.00125, 0.0125, 0.125, 2)
@@ -78,7 +81,7 @@ def run(db, mode, sql, timeout):
         env["DECIDB_FORCE_SOLVER"] = mode
     command = [
         "/usr/bin/time",
-        "-l",
+        bench.get_time_flag(),
         str(BINARY),
         str(db),
         "-readonly",
@@ -98,9 +101,11 @@ def run(db, mode, sql, timeout):
         proc.communicate()
         return None, None, "timeout", ""
     wall = time.perf_counter() - start
-    peak = re.search(r"(\d+)\s+maximum resident set size", stderr)
-    peak_mib = int(peak.group(1)) / (1024 * 1024) if peak else None
-    before_stats = stderr.split("real")[0]
+    peak_kb = bench.parse_time_output(stderr).get("peak_rss_kb")
+    peak_mib = peak_kb / 1024 if peak_kb is not None else None
+    # What the process wrote comes first; `time` then starts its report with `real` (BSD) or the command line (GNU),
+    # which holds the query's text.
+    before_stats = re.split(r"real|^\s*Command ", stderr, flags=re.MULTILINE)[0]
     if proc.returncode != 0 or "Error" in before_stats:
         detail = before_stats.strip().splitlines()[0][:160] if before_stats.strip() else "failed"
         print(f"  [{mode}] error: {detail}", file=sys.stderr)
@@ -148,6 +153,14 @@ def command_output(command, cwd=None):
         return None
 
 
+def cpu_model(cpuinfo=Path("/proc/cpuinfo")):
+    """The processor's name: Linux keeps it in /proc/cpuinfo, macOS in sysctl."""
+    if cpuinfo.exists():
+        model = re.search(r"^model name\s*:\s*(.+)$", cpuinfo.read_text(), re.MULTILINE)
+        return model.group(1) if model else None
+    return command_output(["sysctl", "-n", "machdep.cpu.brand_string"])
+
+
 def manifest(args, stamp, output):
     """The setup a reader needs to reproduce or compare the run."""
     highs = dict(
@@ -175,9 +188,9 @@ def manifest(args, stamp, output):
         "highs": f"{highs['MAJOR']}.{highs['MINOR']}.{highs['PATCH']}",
         "solver_threads": "solver default (DeciDB sets no thread count)",
         "platform": platform.platform(),
-        "cpu": command_output(["sysctl", "-n", "machdep.cpu.brand_string"]),
+        "cpu": cpu_model(),
         "cores": os.cpu_count(),
-        "memory_bytes": int(command_output(["sysctl", "-n", "hw.memsize"]) or 0) or None,
+        "memory_bytes": os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
         "python": platform.python_version(),
     }
 

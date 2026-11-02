@@ -42,8 +42,10 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import json
 import re
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -51,9 +53,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-BINARY = REPO / "build" / "coverage" / "decidb"
-# The unittest binary links the library dynamically, so the instrumented code and its coverage map are in the dylib.
-UNITTEST_BINARY = REPO / "build" / "coverage" / "src" / "libduckdb.dylib"
+COVERAGE_BUILD = REPO / "build" / "coverage"
+BINARY = COVERAGE_BUILD / "decidb"
 CPP_NODEID = "unittest [decidb]"
 SCOPE_DIR = REPO / "src" / "optimizer" / "decide" / "direct"
 SCOPE = sorted(SCOPE_DIR.glob("*.cpp")) + [REPO / "src" / "optimizer" / "decide" / "decide_rewrite_rhs_bounds.cpp"]
@@ -61,8 +62,26 @@ SCOPE = sorted(SCOPE_DIR.glob("*.cpp")) + [REPO / "src" / "optimizer" / "decide"
 _KIND_BRANCH = 4  # llvm-cov branch region
 
 
-def _tool(name: str) -> str:
-    return subprocess.run(["xcrun", "-f", name], capture_output=True, text=True, check=True).stdout.strip()
+@functools.lru_cache(maxsize=None)
+def llvm_tool(name: str) -> str:
+    """Path of a tool, asked of the compiler that built build/coverage: only the tools of that compiler's version read
+    its profiles, and on every platform the compiler knows where they are."""
+    cache = (COVERAGE_BUILD / "CMakeCache.txt").read_text()
+    compiler = re.search(r"^CMAKE_CXX_COMPILER:\w+=(.+)$", cache, re.MULTILINE).group(1)
+    answer = subprocess.run(
+        [compiler, f"-print-prog-name={name}"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    # A compiler that finds nothing answers with the bare name.
+    path = shutil.which(answer)
+    if path is None:
+        raise RuntimeError(f"{compiler} finds no {name}: install the LLVM tools of the same version as that compiler")
+    return path
+
+
+def _unittest_binary() -> Path:
+    """The unittest binary links the library dynamically, so the instrumented code and its coverage map are in the
+    shared library, under whichever suffix this platform gives it."""
+    return next((COVERAGE_BUILD / "src").glob("libduckdb.*"))
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +133,7 @@ def _export(profdata: Path, binary: Path = BINARY) -> tuple[set[tuple], set[tupl
     """(all arms, covered arms) of the in-scope files for one profile of ``binary``."""
     out = subprocess.run(
         [
-            _tool("llvm-cov"),
+            llvm_tool("llvm-cov"),
             "export",
             str(binary),
             f"-instr-profile={profdata}",
@@ -163,7 +182,7 @@ def cmd_merge_cpp(args) -> int:
         print("no raw C++ profiles in", cpp / "raw")
         return 1
     subprocess.run(
-        [_tool("llvm-profdata"), "merge", "-sparse", *map(str, raws), "-o", str(cpp / "cpp.profdata")], check=True
+        [llvm_tool("llvm-profdata"), "merge", "-sparse", *map(str, raws), "-o", str(cpp / "cpp.profdata")], check=True
     )
     return 0
 
@@ -183,7 +202,7 @@ def _read_meta(root: Path) -> dict:
             "seconds": 0.0,
             "merged": True,
             "profdata": cpp,
-            "binary": UNITTEST_BINARY,
+            "binary": _unittest_binary(),
             "profdata_bytes": cpp.stat().st_size,
         }
     return meta
@@ -323,7 +342,7 @@ def _arm_functions(profdata: Path, binary: Path) -> dict[tuple, str]:
     (a changed signature keeps the name). Which function holds an arm does not depend on the counts, so any profile of
     ``binary`` will do."""
     out = subprocess.run(
-        [_tool("llvm-cov"), "export", str(binary), f"-instr-profile={profdata}", "-format=text", "-skip-expansions"]
+        [llvm_tool("llvm-cov"), "export", str(binary), f"-instr-profile={profdata}", "-format=text", "-skip-expansions"]
         + list(map(str, SCOPE)),
         capture_output=True,
         text=True,
@@ -340,7 +359,7 @@ def _arm_functions(profdata: Path, binary: Path) -> dict[tuple, str]:
     if names:
         # A static function is named "file.cpp:_Zmangled"; demangle the part after the colon.
         tails = [n.split(".cpp:", 1)[-1] for n in names]
-        lines = subprocess.run([_tool("c++filt")], input="\n".join(tails), capture_output=True, text=True).stdout
+        lines = subprocess.run([llvm_tool("c++filt")], input="\n".join(tails), capture_output=True, text=True).stdout
         demangled = {
             n: d.replace("(anonymous namespace)", "anon").split("(", 1)[0] for n, d in zip(names, lines.splitlines())
         }

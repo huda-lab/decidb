@@ -76,7 +76,7 @@ never be the solver timed against itself.
 
 ## Method
 
-- Every run is a fresh `decidb` process under `/usr/bin/time -l` that opens the stored database `-readonly` and runs
+- Every run is a fresh `decidb` process under `/usr/bin/time` that opens the stored database `-readonly` and runs
   one statement. Its wall time and peak resident set size are the query's own, plus process start and database open.
 - Every mode runs `--repeats` times per (query, scale factor) cell. The result reports the median wall time with the
   minimum and maximum, and the largest peak memory.

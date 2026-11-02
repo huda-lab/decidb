@@ -289,7 +289,8 @@ asks the solver's own question about which values a bound admits and which bound
   of results, an empty source and a prepared statement with a parameter.
 - Branch coverage: `make decide-coverage` (repository root) builds `build/coverage` when it is missing (an instrumented
   copy of the build; `-fprofile-list` instruments only `src/optimizer/decide/direct/*.cpp` and
-  `decide_rewrite_rhs_bounds.cpp`; `build/release` is untouched) and otherwise rebuilds what changed, runs the DECIDE
+  `decide_rewrite_rhs_bounds.cpp`; `build/release` is untouched; it needs Clang, `COVERAGE_CC` and `COVERAGE_CXX`, and
+  the LLVM tools of that Clang's version, which `coverage_report.py` asks the compiler for) and otherwise rebuilds what changed, runs the DECIDE
   pytest suite with one profile per test (`test/decide/run_coverage.sh`) and `unittest "[decidb]"` as one combined
   profile, and prints the report into `COVERAGE_RUN_DIR` (default `build/coverage/run`). A warm run takes about 4
   minutes. `coverage_report.py report DIR` prints, per file, per test function and per test, the arms reached and the
