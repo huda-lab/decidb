@@ -59,11 +59,11 @@ def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
 
 
 @pytest.mark.per_clause
-@pytest.mark.error
-def test_column_bound_varying_within_a_per_class_does_not_determine(decidb_cli):
-    """The `per grp:` spelling of the clause above generates it once per class, so a
-    cap that varies within the class is refused rather than collapsed to the tightest."""
-    decidb_cli.assert_error(
+@pytest.mark.correctness
+def test_column_bound_varying_within_a_per_class_is_one_instance_per_cap(decidb_cli):
+    """The `per grp:` spelling of the clause above is one instance per variant of the class
+    (D70): 'a' is bounded by 10 and by 15, so its tightest cap, 10, holds, as above."""
+    rows, cols = decidb_cli.execute(
         """
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
@@ -71,9 +71,13 @@ def test_column_bound_varying_within_a_per_class_does_not_determine(decidb_cli):
         DECIDE x(INT)
         SUCH THAT per grp: sum(x) by (grp) <= cap
         MAXIMIZE SUM(x)
-    """,
-        match=r"per grp does not determine cap\. grp = 'a' has more than one value: 10, 15\.",
+    """
     )
+    gi, xi = cols.index("grp"), cols.index("x")
+    by_group: dict[str, int] = {}
+    for r in rows:
+        by_group[r[gi]] = by_group.get(r[gi], 0) + int(r[xi])
+    assert by_group == {"a": 10, "b": 7}
 
 
 @pytest.mark.per_clause

@@ -7,8 +7,8 @@ means a separate sum(x) <= 5 constraint for each distinct s_nationkey value.
 Also covers:
   - `per` with <> operator (Big-M disjunction per group)
   - <> with a bound that itself varies within a by group (C3): every
-    excluded value is kept, not collapsed to one; under `per grp:` such a
-    bound does not determine
+    excluded value is kept, not collapsed to one; under `per grp:` each value
+    is a variant (D70), an exclusion of its own
   - NULL values in the per key (a class of their own; `when grp is not null`
     leaves them out)
   - Two `per` constraints on different grouping columns
@@ -308,11 +308,11 @@ def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_so
 
 @pytest.mark.per_clause
 @pytest.mark.cons_comparison
-@pytest.mark.error
-def test_per_not_equal_varying_bound_under_per_key_does_not_determine(decidb_cli):
-    """The `per grp:` spelling of the clause above generates it once per class, so a
-    bound that varies within the class is refused rather than read as two exclusions."""
-    decidb_cli.assert_error(
+@pytest.mark.correctness
+def test_per_not_equal_varying_bound_under_per_key_is_two_exclusions(decidb_cli):
+    """The `per grp:` spelling of the clause above is one instance per variant of the class
+    (D70): the class's total excludes 3 and 7 alike, so the optimum is 6 again."""
+    rows, cols = decidb_cli.execute(
         """
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 3), (2, 'a', 7)
@@ -322,9 +322,10 @@ def test_per_not_equal_varying_bound_under_per_key_does_not_determine(decidb_cli
             AND SUM(x) >= 3 AND SUM(x) <= 7
             AND per grp: sum(x) by (grp) <> cap
         MAXIMIZE SUM(x)
-    """,
-        match=r"per grp does not determine cap\. grp = 'a' has more than one value: 3, 7\.",
+    """
     )
+    xi = cols.index("x")
+    assert sum(int(r[xi]) for r in rows) == 6
 
 
 _NULL_KEY_ROWS = [

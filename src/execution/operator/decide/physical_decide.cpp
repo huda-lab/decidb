@@ -792,6 +792,179 @@ static vector<GroupName> GroupNames(const PerGroupCache &cache, idx_t key, const
 	return names;
 }
 
+//! Each row `rows` keeps (null: every row) numbered by its variant (language/guide.md §7.1, D70): the class of
+//! `signature`'s key -- a row whose written key column is NULL is in none -- split by the value of each of its fields,
+//! NULL a value, a decision by its instance. INVALID_INDEX on every other row, where no field is computed.
+static void BuildSignatureIds(const DecideSignature &signature, const vector<DecideKey> &keys,
+                              const vector<DecideVarScopeInfo> &variable_scopes,
+                              const vector<KeyedMapping> &keyed_mappings, ChunkExprCache &chunk_expr_cache,
+                              ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                              const vector<bool> *rows, vector<idx_t> &ids, idx_t &count) {
+	vector<const Expression *> exprs;
+	vector<bool> null_no_group;
+	auto add = [&](const Expression &expr, bool no_group) {
+		exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, expr, context));
+		null_no_group.push_back(no_group);
+	};
+	for (auto &element : DecideKeyElements(keys, signature.key)) {
+		add(element.Grouping(), element.null_mode == DecideKeyNullMode::NO_GROUP);
+	}
+	vector<const vector<idx_t> *> classes;
+	bool per_row = false;
+	for (auto &field : signature.fields) {
+		switch (field.kind) {
+		case DecideSignatureFieldKind::VALUE:
+			add(*field.value, false);
+			break;
+		case DecideSignatureFieldKind::BY_KEY:
+			for (auto &element : DecideKeyElements(keys, field.key)) {
+				add(element.Grouping(), false);
+			}
+			break;
+		case DecideSignatureFieldKind::DECISION: {
+			auto &scope = variable_scopes[field.decision];
+			if (scope.IsKeyed()) {
+				classes.push_back(&keyed_mappings[scope.keyed_scope_idx].row_to_class);
+			} else if (!scope.IsGlobal()) {
+				per_row = true;
+			}
+			break;
+		}
+		}
+	}
+	GroupRows group_rows;
+	BuildGroupIds(exprs, context, data, num_rows, std::function<bool(idx_t)> {}, ids, count, group_rows, rows,
+	              null_no_group);
+	if (per_row) {
+		// A per-row decision: every kept row is an instance of its own.
+		count = 0;
+		for (auto &id : ids) {
+			if (id != DConstants::INVALID_INDEX) {
+				id = count++;
+			}
+		}
+		return;
+	}
+	// A keyed decision splits each variant by the decision's class.
+	for (auto *row_class : classes) {
+		std::unordered_map<idx_t, std::unordered_map<idx_t, idx_t>> numbered;
+		idx_t next = 0;
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (ids[row] == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			auto inserted = numbered[ids[row]].emplace((*row_class)[row], next);
+			if (inserted.second) {
+				next++;
+			}
+			ids[row] = inserted.first->second;
+		}
+		count = next;
+	}
+}
+
+//! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` --
+//! a column's spelling -- as ORDER BY places it.
+static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
+                                       ClientContext &context, ColumnDataCollection &data) {
+	vector<idx_t> least(num_classes, DConstants::INVALID_INDEX);
+	vector<string> least_key(num_classes);
+	vector<bool> read(row_to_class.size());
+	for (idx_t row = 0; row < row_to_class.size(); row++) {
+		read[row] = row_to_class[row] != DConstants::INVALID_INDEX;
+	}
+	ExpressionExecutor executor(context);
+	executor.AddExpression(expr);
+	ColumnDataScanState scan;
+	data.InitializeScan(scan);
+	DataChunk chunk;
+	chunk.Initialize(context, data.Types());
+	DataChunk result;
+	result.Initialize(context, {expr.return_type});
+	Vector keys(LogicalType::BLOB);
+	idx_t offset = 0;
+	while (data.Scan(scan, chunk)) {
+		result.Reset();
+		ExecuteOnReadRows(executor, chunk, offset, &read, result);
+		CreateSortKeyHelpers::CreateSortKey(result.data[0], chunk.size(),
+		                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST), keys);
+		auto encoded = FlatVector::GetData<string_t>(keys);
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			auto cls = row_to_class[offset + i];
+			if (cls == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			auto key = encoded[i].GetString();
+			if (least[cls] == DConstants::INVALID_INDEX || key < least_key[cls]) {
+				least[cls] = offset + i;
+				least_key[cls] = std::move(key);
+			}
+		}
+		offset += chunk.size();
+	}
+	return least;
+}
+
+//! The names of a clause's variants, for a diagnosis (D28): each is named by its class's key values, followed by its
+//! own field values where its class holds more than one variant (`D1, 100` beside `D1, 90`). The names read the
+//! values from each variant's first row (`first_rows`) when a message needs them, through a key-values entry of the
+//! cache that no key owns, so assembly keeps their numbering (ResolveGroupNames).
+static vector<GroupName> NameVariants(const DecideSignature &signature, const vector<DecideKey> &keys,
+                                      const vector<idx_t> &first_rows, const vector<idx_t> &class_of,
+                                      const vector<idx_t> &variants_per_class, const vector<idx_t> &class_ids,
+                                      ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                      ColumnDataCollection &data, PerGroupCache &per_group_cache) {
+	SolverInput::KeyValues key_values;
+	vector<const Expression *> exprs;
+	auto add = [&](const Expression &expr, DecideKeyNullMode mode) {
+		exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, expr, context));
+		key_values.null_modes.push_back(mode);
+	};
+	auto &class_elements = DecideKeyElements(keys, signature.key);
+	for (auto &element : class_elements) {
+		add(*element.expression, element.null_mode);
+	}
+	for (auto &field : signature.fields) {
+		if (field.kind == DecideSignatureFieldKind::VALUE) {
+			add(*field.value, DecideKeyNullMode::NO_GROUP);
+		} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
+			for (auto &element : DecideKeyElements(keys, field.key)) {
+				add(*element.expression, DecideKeyNullMode::NO_GROUP);
+			}
+		}
+	}
+	GroupRows group_rows;
+	group_rows.first = first_rows;
+	group_rows.label.assign(exprs.size(), vector<idx_t>());
+	// A collated key column names a class by its least spelling among the class's rows, as a key's group is named
+	// (D69), so a label does not depend on row order.
+	for (idx_t c = 0; c < class_elements.size(); c++) {
+		if (!class_elements[c].collated) {
+			continue;
+		}
+		auto least = LeastSpellingRows(*exprs[c], class_ids, variants_per_class.size(), context, data);
+		for (auto class_of_variant : class_of) {
+			group_rows.label[c].push_back(least[class_of_variant]);
+		}
+	}
+	auto reader = make_shared_ptr<GroupKeyReader>(context, data, exprs, std::move(group_rows));
+	auto class_columns = class_elements.size();
+	key_values.values_of = [reader, class_of, variants_per_class, class_columns](idx_t variant) {
+		auto values = reader->Read(variant);
+		if (variants_per_class[class_of[variant]] <= 1) {
+			values.resize(class_columns);
+		}
+		return values;
+	};
+	auto entry = per_group_cache.key_values.size();
+	per_group_cache.key_values.push_back(std::move(key_values));
+	vector<GroupName> names;
+	for (idx_t variant = 0; variant < first_rows.size(); variant++) {
+		names.push_back({entry, variant, first_rows[variant]});
+	}
+	return names;
+}
+
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
 //! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
 //! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
@@ -1376,8 +1549,11 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	// What the optimizer made of the clauses: a column that stands for an expression
 	// prints it, and each rewrite's account follows its clause, the objective's its own.
 	auto names = DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
+	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints the variants under their clause.
+	auto accounts = rewrite_accounts;
+	accounts.insert(accounts.end(), variant_accounts.begin(), variant_accounts.end());
 	vector<string> objective_accounts;
-	for (auto &account : rewrite_accounts) {
+	for (auto &account : accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
 			objective_accounts.push_back(RenderDecideRewriteAccount(account));
 		}
@@ -1388,7 +1564,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	string constraints_text;
 	if (decide_constraints || !constraint_sources.empty()) {
 		auto layers = CollectDecideClauseLayers(decide_constraints.get(), names, constraint_sources, unattributed,
-		                                        objective_rows, rewrite_accounts);
+		                                        objective_rows, accounts);
 		constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	}
 	if (decide_objective) {
@@ -1434,7 +1610,7 @@ class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.is_boolean_var) {
+	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var) {
         // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
         // A variable whose box never had a lower bound written is one the query never
         // lowered, and Finalize resolves it to the default 0 floor.
@@ -1595,8 +1771,12 @@ static void ResolveGroupNames(const PerGroupCache &cache, DecideGlobalSinkState 
 			group_of_row[entry.second.key_values] = &entry.second.unfiltered_row_group_ids;
 		}
 	}
+	// A name whose values no key's entry holds (a variant's, NameVariants) keeps the numbering it was given.
 	auto resolve = [&](vector<GroupName> &names) {
 		for (auto &name : names) {
+			if (!group_of_row[name.key_values]) {
+				continue;
+			}
 			name.group = (*group_of_row[name.key_values])[name.row];
 			D_ASSERT(name.group != DConstants::INVALID_INDEX);
 		}
@@ -1968,6 +2148,26 @@ vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, 
 			LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
 			                         num_rows, is_member, &kept, member_ids, mapping.num_classes, &every_kept_row,
 			                         &mapping.row_to_class);
+		} else if (scope.signature != DConstants::INVALID_INDEX) {
+			// A relation-qualified reducer's scope: the classes of its key among the rows it reads, each split by its
+			// body's signature (D70, D71), so one value per instance -- not per class -- reaches the reducer. The
+			// decisions' scopes come first, so their classes are built by now.
+			auto &signature = signatures[scope.signature];
+			vector<bool> kept;
+			if (signature.rows) {
+				kept = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
+			}
+			const vector<bool> *read = signature.rows ? &kept : nullptr;
+			BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, chunk_expr_cache, context, gstate.data,
+			                  num_rows, read, mapping.row_to_class, mapping.num_classes);
+			// How many classes of the key those values come from, for EXPLAIN ANALYZE (D71).
+			vector<idx_t> class_ids;
+			idx_t num_classes = 0;
+			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data,
+			                         num_rows, std::function<bool(idx_t)> {}, read, class_ids, num_classes);
+			if (mapping.num_classes > num_classes) {
+				RecordVariants(signature, "values", mapping.num_classes, num_classes);
+			}
 		} else {
 			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
 			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_class, mapping.num_classes);
@@ -1997,6 +2197,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
+    variant_accounts.clear();
 
     if (bench) {
         model_timer.Start();
@@ -2039,7 +2240,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     phase.Next("execution.scope_checks");
-    RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
+    RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, keyed_mappings);
 
     //===--------------------------------------------------------------------===//
     // PHASE 2: Evaluate Coefficient Expressions
@@ -2121,61 +2322,153 @@ static string DescribeKeyValues(const vector<string> &names, const vector<Value>
 	return result;
 }
 
-//! The scope checks left for the operator: the determination of a keyed decision, which needs the class
-//! mapping the operator builds. Every other check is a plan under the DECIDE node (DirectAddRowChecks, installed by
-//! DecideOptimizer::InstallRowChecks) and has passed by now.
-void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                    ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                    const vector<KeyedMapping> &keyed_mappings) const {
-	for (auto &check : scope_checks) {
-		D_ASSERT(check.kind == DecideScopeCheckKind::DETERMINES && check.decision != DConstants::INVALID_INDEX &&
-		         variable_scopes[check.decision].IsKeyed());
-		vector<bool> rows(num_rows, true);
-		if (check.rows) {
-			rows = KeptRows(*check.rows, chunk_expr_cache, context, gstate.data, num_rows);
+//! `expr` on each row `rows` keeps (every row when null), NULL on the others, and which rows were read.
+static vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                   ColumnDataCollection &data, const vector<bool> *rows) {
+	ExpressionExecutor executor(context);
+	auto &transformed = CachedTransformToChunkExpression(chunk_expr_cache, expr, context);
+	executor.AddExpression(transformed);
+	vector<Value> values;
+	values.reserve(data.Count());
+	ColumnDataScanState scan;
+	data.InitializeScan(scan);
+	DataChunk chunk;
+	chunk.Initialize(context, data.Types());
+	DataChunk result;
+	result.Initialize(context, {transformed.return_type});
+	idx_t offset = 0;
+	while (data.Scan(scan, chunk)) {
+		result.Reset();
+		ExecuteOnReadRows(executor, chunk, offset, rows, result);
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			values.push_back(result.data[0].GetValue(i));
 		}
-		vector<bool> filter;
-		if (check.filter) {
-			filter = KeptRows(*check.filter, chunk_expr_cache, context, gstate.data, num_rows, &rows);
-		}
-		// The classes of the check's key, over the rows the reducer's own `when` keeps.
-		vector<bool> looked_at(num_rows);
-		for (idx_t row = 0; row < num_rows; row++) {
-			looked_at[row] = rows[row] && (filter.empty() || filter[row]);
-		}
-		std::function<bool(idx_t)> looked_at_row = [&](idx_t row) {
-			return looked_at[row];
+		offset += chunk.size();
+	}
+	return values;
+}
+
+//! What makes the rows of `ids` (a signature's numbering over the kept rows `rows`, null for every row) more than one
+//! variant, as a message says it: the first field that takes two values or instances over them, with its least and
+//! greatest value as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in.
+static string DescribeVariantDifference(const DecideSignature &signature, const vector<DecideKey> &keys,
+                                        const vector<DecideVarScopeInfo> &variable_scopes,
+                                        const vector<KeyedMapping> &keyed_mappings, const vector<idx_t> &ids,
+                                        ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                        ColumnDataCollection &data, const vector<bool> *rows) {
+	// The least and greatest value of `expr` over the kept rows, when it takes two.
+	auto varies = [&](const Expression &expr, string &values) {
+		auto at = ReadRowValues(expr, chunk_expr_cache, context, data, rows);
+		auto before = [](const Value &a, const Value &b) {
+			return !a.IsNull() && (b.IsNull() || a < b);
 		};
-		vector<idx_t> ids;
-		idx_t count = 0;
-		auto groups = LookupOrBuildPerGroupIds(per_group_cache, keys, check.key, chunk_expr_cache, context, gstate.data,
-		                                       num_rows, looked_at_row, &looked_at, ids, count);
-		auto &scope = variable_scopes[check.decision];
-		vector<idx_t> instance(count, DConstants::INVALID_INDEX);
-		// Several classes can fail; the message names the least by key value (the groups are numbered in that order).
-		idx_t failing = DConstants::INVALID_INDEX;
-		for (idx_t row = 0; row < num_rows; row++) {
-			auto group = ids[row];
-			if (group == DConstants::INVALID_INDEX || keyed_mappings[scope.keyed_scope_idx].IsAbsent(row)) {
-				continue; // no decision on this row: a reducer skips it
+		const Value *least = nullptr;
+		const Value *greatest = nullptr;
+		for (idx_t row = 0; row < ids.size(); row++) {
+			if (ids[row] == DConstants::INVALID_INDEX) {
+				continue;
 			}
-			auto id = keyed_mappings[scope.keyed_scope_idx].row_to_class[row];
-			if (instance[group] == DConstants::INVALID_INDEX) {
-				instance[group] = id;
-			} else if (instance[group] != id) {
-				failing = MinValue(failing, group);
+			if (!least || before(at[row], *least)) {
+				least = &at[row];
+			}
+			if (!greatest || before(*greatest, at[row])) {
+				greatest = &at[row];
 			}
 		}
-		if (failing != DConstants::INVALID_INDEX) {
-			auto text = check.DeterminesText();
-			auto &key_values = per_group_cache.key_values[per_group_cache.entries.at(check.key).key_values];
-			throw InvalidInputException(
-			    text.one_class
-			        ? StringUtil::Format(text.Format())
-			        : StringUtil::Format(text.Format(), DescribeKeyValues(keys[check.key].Names(),
-			                                                              key_values.values_of(groups[failing]))));
+		if (!least || Value::NotDistinctFrom(*least, *greatest)) {
+			return false;
+		}
+		values = DecideSqlLiteral(*least) + ", " + DecideSqlLiteral(*greatest);
+		return true;
+	};
+	for (auto &field : signature.fields) {
+		string values;
+		switch (field.kind) {
+		case DecideSignatureFieldKind::VALUE:
+			if (varies(*field.value, values)) {
+				return StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text,
+				                          values);
+			}
+			break;
+		case DecideSignatureFieldKind::BY_KEY:
+			for (auto &element : DecideKeyElements(keys, field.key)) {
+				if (varies(*element.expression, values)) {
+					return StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
+					                          element.name, field.text, values);
+				}
+			}
+			break;
+		case DecideSignatureFieldKind::DECISION: {
+			auto &scope = variable_scopes[field.decision];
+			idx_t instance = DConstants::INVALID_INDEX;
+			bool split = false;
+			for (idx_t row = 0; row < ids.size() && !split; row++) {
+				if (ids[row] == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				auto at = scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[row] : row;
+				split = instance != DConstants::INVALID_INDEX && at != instance;
+				instance = at;
+			}
+			if (split) {
+				return StringUtil::Format(
+				    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
+				    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
+			}
+			break;
+		}
 		}
 	}
+	throw InternalException("DECIDE: two variants of a signature agree on every field");
+}
+
+void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                    ChunkExprCache &chunk_expr_cache,
+                                    const vector<KeyedMapping> &keyed_mappings) const {
+	// The objective is produced once (D72): a field with a second value over its kept rows would be a second
+	// objective.
+	if (objective_signature == DConstants::INVALID_INDEX) {
+		return;
+	}
+	auto &signature = signatures[objective_signature];
+	vector<bool> rows;
+	if (signature.rows) {
+		rows = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
+	}
+	vector<idx_t> ids;
+	idx_t count = 0;
+	BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, chunk_expr_cache, context, gstate.data,
+	                  num_rows, signature.rows ? &rows : nullptr, ids, count);
+	if (count > 1) {
+		throw InvalidInputException(
+		    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or "
+		    "fix it with when.",
+		    DescribeVariantDifference(signature, keys, variable_scopes, keyed_mappings, ids, chunk_expr_cache, context,
+		                              gstate.data, signature.rows ? &rows : nullptr));
+	}
+}
+
+//! One line for EXPLAIN ANALYZE: a scoped expression whose classes held more than one variant (D70, D71), so the
+//! instances it generated -- or the values a reducer read -- outnumber its classes: `per P.depotID: 4 constraints
+//! from 2 classes, one per distinct (P.lim, by (P.region)) within a class`.
+void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants,
+                                    idx_t classes) const {
+	vector<string> fields;
+	for (auto &field : signature.fields) {
+		fields.push_back(field.text);
+	}
+	LogicalDecide::RewriteAccount account;
+	account.source_clause_id = signature.source_clause_id;
+	account.kind = LogicalDecide::RewriteAccount::Kind::VARIANTS;
+	account.subject = StringUtil::Format("%s: %llu %s from %llu %s, one per distinct (%s) within a class",
+	                                     signature.text, variants, unit, classes, classes == 1 ? "class" : "classes",
+	                                     StringUtil::Join(fields, ", "));
+	for (auto &recorded : variant_accounts) {
+		if (recorded.source_clause_id == account.source_clause_id && recorded.subject == account.subject) {
+			return; // a clause the rewrites made several rows of
+		}
+	}
+	variant_accounts.push_back(std::move(account));
 }
 
 //! A row in no class of a keyed decision's key has no decision there
@@ -2524,30 +2817,64 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					    one_group ? 1 : eval_const.num_groups, gstate.class_sets);
 				}
 			} else if (constraint->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
-				// One row per class of the `per` key among the kept rows: its first, which
-				// stands for the class because the key determines the whole clause.
+				// One row per variant of each class of the `per` key among the kept rows (D70): its first, which stands
+				// for the variant's rows because they agree on every field the clause reads -- its data, its
+				// decisions' instances, its reducers' `by` keys. Without a field, one row per class.
 				vector<idx_t> class_ids;
 				idx_t num_classes = 0;
 				auto classes = LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key,
 				                                        chunk_expr_cache, context, gstate.data, num_rows, kept,
 				                                        &scoped_kept, class_ids, num_classes);
+				const DecideSignature *signature = constraint->scope.signature == DConstants::INVALID_INDEX
+				                                       ? nullptr
+				                                       : &signatures[constraint->scope.signature];
+				vector<idx_t> variant_ids;
+				idx_t num_variants = num_classes;
+				if (signature) {
+					BuildSignatureIds(*signature, keys, variable_scopes, keyed_mappings, chunk_expr_cache, context,
+					                  gstate.data, num_rows, &scoped_kept, variant_ids, num_variants);
+				}
+				const auto &instance_ids = signature ? variant_ids : class_ids;
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-				vector<bool> seen(num_classes, false);
+				vector<idx_t> class_of(num_variants, DConstants::INVALID_INDEX);
+				vector<idx_t> first_rows(num_variants, DConstants::INVALID_INDEX);
+				vector<idx_t> variants_per_class(num_classes, 0);
 				for (idx_t row = 0; row < num_rows; row++) {
-					auto class_id = class_ids[row];
-					if (class_id != DConstants::INVALID_INDEX && !seen[class_id]) {
-						seen[class_id] = true;
-						eval_const.row_group_ids[row] = class_id;
+					auto id = instance_ids[row];
+					if (id != DConstants::INVALID_INDEX && class_of[id] == DConstants::INVALID_INDEX) {
+						class_of[id] = class_ids[row];
+						first_rows[id] = row;
+						variants_per_class[class_ids[row]]++;
+						eval_const.row_group_ids[row] = id;
 					}
 				}
-				eval_const.num_groups = num_classes;
-				eval_const.group_names = GroupNames(per_group_cache, constraint->scope.class_key, classes);
+				eval_const.num_groups = num_variants;
 				eval_const.rows_stand_with_their_class = !has_when;
-				// Each class's row stands for its class (D28), under DIAGNOSE only.
+				if (num_variants > num_classes) {
+					RecordVariants(*signature, "constraints", num_variants, num_classes);
+					// A variant is named by its class, and by its own field values where its class has more than one.
+					eval_const.group_names =
+					    NameVariants(*signature, keys, first_rows, class_of, variants_per_class, class_ids,
+					                 chunk_expr_cache, context, gstate.data, per_group_cache);
+				} else {
+					auto class_names = GroupNames(per_group_cache, constraint->scope.class_key, classes);
+					for (idx_t id = 0; id < num_variants && !class_names.empty(); id++) {
+						eval_const.group_names.push_back(class_names[class_of[id]]);
+					}
+				}
+				// Each variant's row stands for its class (D28), under DIAGNOSE only, and is named as its own where
+				// its class has more than one.
 				if (diagnose) {
 					eval_const.group_class_set = CollectGroupClasses(
 					    constraint->scope, keys, per_group_cache, chunk_expr_cache, context, gstate.data, num_rows,
-					    scoped_kept, eval_const.row_group_ids, num_classes, gstate.class_sets);
+					    scoped_kept, eval_const.row_group_ids, num_variants, gstate.class_sets);
+					for (idx_t id = 0; id < num_variants && num_variants > num_classes; id++) {
+						if (variants_per_class[class_of[id]] > 1) {
+							eval_const.group_class_set[id] = gstate.class_sets.size();
+							gstate.class_sets.push_back(
+							    {SolverInput::ClassSet::Kind::KEY_VALUES, {eval_const.group_names[id]}, {}});
+						}
+					}
 				}
 			} else if (has_when) {
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);

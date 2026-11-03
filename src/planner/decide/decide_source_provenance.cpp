@@ -1144,6 +1144,8 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::EXTREMUM_PER_GROUP_NATIVE:
 		became = "an extremum column per group stated to the solver natively";
 		break;
+	case Kind::VARIANTS:
+		return account.subject;
 	}
 	return account.subject + " becomes " + became;
 }

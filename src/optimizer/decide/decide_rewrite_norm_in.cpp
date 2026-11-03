@@ -41,7 +41,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> links;
 	idx_t l0_counter = 0;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.keyed_scopes, decide.is_boolean_var);
+	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
 
 	std::function<void(unique_ptr<Expression> &, const string &, DecideEnclosingScope)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const string &source_alias, DecideEnclosingScope scope) {
@@ -157,7 +157,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.keyed_scopes, decide.is_boolean_var);
+	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
 	// Every row an IN generates keeps its clause's `when`, and is one row per instance of the indicators' scope: an
 	// indicator is a column defined by the decision and its domain, so it is one per instance of their join.
 	DecideVarScopeInfo scope_of_in;

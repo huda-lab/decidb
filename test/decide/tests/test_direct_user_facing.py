@@ -869,17 +869,16 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
         _same_answers(direct, solver)
 
 
-# The side table of a bound, the verdict of a row check and the copy of a source (R1 reads it four times) are materialized
-# CTEs around the rule's plan. The row id and the payload pass through them like any source column, so the payload still
-# comes from a scan of its own whatever the plan holds. The scans: the rule's read (or the copy), the row check's read,
-# and the payload.
+# The side table of a bound, with the verdict of its NaN check, and the copy of a source (R1 reads it four times) are
+# materialized CTEs around the rule's plan. The row id and the payload pass through them like any source column, so the
+# payload still comes from a scan of its own whatever the plan holds. The scans: the rule's read (or the copy) and the
+# payload.
 _LATE_MATERIALIZATION_AROUND_CTES = {
     "side_table": (
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 100 MAXIMIZE SUM(score * x)",
         "direct_bound",
         2,
     ),
-    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 3),
     "copied_source": (
         "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(cap * x) <= 5000 MAXIMIZE SUM(score * x)",
         "direct_source",
@@ -946,15 +945,15 @@ def test_a1_verifies_then_streams_without_holding_rows(decidb_cli):
 
 @pytest.mark.correctness
 def test_a_scan_below_a_row_check_reads_only_the_columns_the_plan_needs(decidb_cli):
-    # The row check on cap (per g) gates every read of the source. A parent that reads no source column still leaves
-    # the payload out of the scans.
+    # The NaN check of the bound's side table (a sum of a DOUBLE by another key) gates every read of the source. A
+    # parent that reads no source column still leaves the payload out of the scans.
     setup = """
         CREATE TEMP TABLE gated_src AS
-        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5) AS cap, i % 5 AS g,
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5)::DOUBLE AS cap, i % 5 AS g,
                repeat('p', 200) AS payload
         FROM range(5000) t(i);
     """
-    decide = "FROM gated_src DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    decide = "FROM gated_src DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 4 MAXIMIZE SUM(score * x)"
     plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
     assert "S1_UNIFORM_MATROID" in plan and "direct_verdict" in plan, plan
     assert "payload" not in plan, plan
@@ -969,14 +968,14 @@ def test_a_copy_of_a_joined_source_holds_only_the_columns_the_plan_reads(decidb_
     # materialized CTE: it keeps the columns its reads use, and the payload only when the parent reads it.
     setup = """
         CREATE TEMP TABLE joined_src AS
-        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5) AS cap, i % 5 AS g,
+        SELECT i AS id, ((i * 37) % 5000)::DOUBLE AS score, (5 + i % 5)::DOUBLE AS cap, i % 5 AS g,
                repeat('p', 200) AS payload
         FROM range(5000) t(i);
         CREATE TEMP TABLE joined_one AS SELECT i AS k FROM range(5) t(i);
     """
     decide = (
         "FROM (SELECT s.* FROM joined_src s JOIN joined_one o ON o.k = s.g) s "
-        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)"
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(cap) by (g) / 4 MAXIMIZE SUM(score * x)"
     )
     plan = _raw(decidb_cli, setup + f"EXPLAIN SELECT COUNT(*), SUM(x) FROM ({decide}) q").stdout
     assert "S1_UNIFORM_MATROID" in plan and "direct_source" in plan, plan

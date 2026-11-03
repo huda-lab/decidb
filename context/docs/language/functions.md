@@ -141,7 +141,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   no Big-M; the choice is made once at execution from the backend's capability table, and both paths reach the same
   optimum. Classification and scaffolding: `RewriteMinMaxConstraints` (`decide_rewrite_minmax.cpp`).
 - **The colon form.** `SUM(D: e)` binds onto the exact key scope `sum(per D: e)` uses, so the two share one
-  `EntityMapping`, one de-duplication mask and one `DETERMINES` check. A composite qualifier's key is every named
+  `KeyedMapping` and one de-duplication mask, and read one value per variant of each tuple alike (D71). A composite qualifier's key is every named
   relation's stored columns, sorted by binding, so order does not matter. The grammar reads the qualifier as an
   argument list and checks its shape in the C action, because `sum(D, T: e)` and `sum(a, b)` share a prefix LALR(1)
   cannot split at the comma. Parse node `PG_AEXPR_QUALIFIED_REDUCER` → `QUALIFIED_REDUCER_TAG`

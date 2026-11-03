@@ -165,14 +165,14 @@ ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index);
 //! the shape.
 enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
 
-//! What building the scope checks of the user's clauses reads besides the bound tree,
-//! and the checks it builds (LogicalDecide::scope_checks), in clause order.
-struct DecideScopeChecks {
-	//! A check keyed by a scope's key and a `by` key together adds their union.
-	vector<DecideKey> &keys;
-	const vector<KeyedScopeInfo> &keyed_scopes;
-	const vector<string> &source_fragments;
-	vector<DecideScopeCheck> checks;
+//! What building the variant signatures of the user's clauses writes (LogicalDecide::signatures).
+struct DecideSignatures {
+	//! A relation-qualified reducer over decisions whose body has a field gets a scope of its own, appended here
+	//! (KeyedScopeInfo::signature), and its tag names it.
+	vector<KeyedScopeInfo> &keyed_scopes;
+	vector<DecideSignature> signatures;
+	//! The objective's, or INVALID_INDEX.
+	idx_t objective = DConstants::INVALID_INDEX;
 };
 
 class DecideCanonicalizer {
@@ -187,9 +187,12 @@ public:
 	//! is required by every constructor: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
 	//! decisions, wherever it classifies a user's clause.
 	//! `keyed_scopes` gives each keyed decision's key (KeyedScopeInfo::key), which decides whether a keyed decision
-	//! beside a reducer is one value per group (ClassifyScoped).
+	//! beside a reducer is one value per group (ClassifyScoped). `keys` (LogicalDecide::keys) gives each key's
+	//! elements, which decide whether a `per` key holds a value by construction (ScopeKeyOf, the signatures); the
+	//! canonicalizer reads the vector as it is when it asks, so keys added later are seen.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean);
+	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
+	                    const vector<bool> &is_boolean);
 
 	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
 	//! scalar subqueries flattened into, collected in plan_select_node.cpp at the only
@@ -207,8 +210,8 @@ public:
 	//! named "SUBQUERY", and reporting that -- or suggesting `SUM(x * SUBQUERY)` --
 	//! would name an object the user never typed.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean,
-	                    unordered_set<idx_t> query_wide_table_indexes,
+	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
+	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
 	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
 
 	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
@@ -216,19 +219,17 @@ public:
 	//! condition or key columns. Pure -- `constraints` is untouched.
 	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints) const;
 
-	//! The scope checks of every clause of the user's SUCH THAT tree, appended to `scope`
-	//! in clause order. Read-only, from the clauses as bound: before CanonicalizeTree,
-	//! which drops the `per K:` of a clause in the aggregate shape -- one model row per
-	//! `by` group already is one per class there -- while the checks are what that key
-	//! still requires of the data. Called once, by the planner; a rewrite's clause
-	//! (AddConstraint) never builds any.
-	void BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const;
+	//! The variant signature of every scoped expression of the canonical SUCH THAT tree with a field
+	//! (language/guide.md §7.1; D70): each `per K:` clause, its wrapper tagged with it (SIGNATURE_TAG_PREFIX), and
+	//! each relation-qualified reducer over decisions, given a scope of its own (KeyedScopeInfo::signature). Its
+	//! fields are the tuple terms and decisions outside reducers and the reducers' `by` keys, read on the canonical
+	//! tree so the data terms of one additive context are one field (D83); a field the key holds by construction is
+	//! none. Called once, by the planner, right after CanonicalizeTree.
+	void BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const;
 
-	//! The scope checks of the objective, built from
-	//! the bound objective before CanonicalizeObjective: its `when` keeps a row, it is
-	//! one value over the kept rows (`per ()`), and each reducer reads a row and is
-	//! determined by its own `per`.
-	void BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const;
+	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
+	//! second value -- and its qualified reducers', after CanonicalizeObjective. The two-level form has none.
+	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
 	//! these names, rather than through the bound tree's own names. Set by the planner,
@@ -402,8 +403,9 @@ private:
 	//! query runs: `b`, `-b`, `2 * b`. A reducer under such a factor takes the VALUE shape.
 	bool IsBooleanFactor(const Expression &expr) const;
 	//! The scope of a tuple term, as a key of the key lattice (JoinDecideKeys): the join of its factors' scopes. A
-	//! decision has its own key (decision_keys), data `data_key` -- the enclosing `per` key, whose scope check makes
-	//! it one value per class, or DECIDE_ROW_KEY with no `per` -- and a value known for the whole query the empty key.
+	//! decision has its own key (decision_keys); data `data_key` -- the enclosing `per` key -- where that key holds it
+	//! by construction (one of its elements), else DECIDE_ROW_KEY, since a value the key does not hold may take several
+	//! values in a class (D70); and a value known for the whole query the empty key.
 	idx_t ScopeKeyOf(const Expression &expr, idx_t data_key) const;
 
 	//! Recompute semantic provenance for the complete canonical bound. A stale root
@@ -458,14 +460,18 @@ private:
 	//! term, or alone under a factor whose sign is not known before the query runs.
 	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
 
-	//! The scope checks of one clause, `leaf` its
-	//! comparison (or other constraint) as bound.
-	void BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
-	                            DecideScopeChecks &scope) const;
-	//! The checks of one reducer: a row in every `by` group (D8), and its own `per`
-	//! determining its body. `rows` is the clause's `when`, null for every row.
-	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
-	                             DecideScopeChecks &scope) const;
+	//! The signature fields `expr` reads (D70, D83), appended to `fields` unless there or held by `key` already: a
+	//! decision by instance, a reducer's `by` key, and data by value -- the data terms of one additive context summed
+	//! into one field.
+	void CollectSignatureFields(const Expression &expr, idx_t key, Clause clause,
+	                            vector<DecideSignatureField> &fields) const;
+	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
+	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;
+	//! Gives every relation-qualified reducer over decisions in `expr` whose body has a field its signature and a
+	//! scope of its own. `rows` is the clause's `when`.
+	void SignQualifiedReducers(Expression &expr, const Expression *rows, Clause clause, idx_t source_clause_id,
+	                           DecideSignatures &out) const;
+	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`
 	//! is set (used for the terms that crossed the relation).
@@ -506,6 +512,9 @@ private:
 	optional_ptr<const DecideSourceNames> message_names;
 	//! Which decision columns are declared BOOL, indexed by decide-column index.
 	vector<bool> boolean_decisions;
+	//! The keyed scopes and keys (LogicalDecide::keyed_scopes, LogicalDecide::keys), read where they are.
+	const vector<KeyedScopeInfo> &keyed_scopes;
+	const vector<DecideKey> &keys;
 
 	//! `expr` as a scope refusal quotes it.
 	string Quote(const Expression &expr) const;

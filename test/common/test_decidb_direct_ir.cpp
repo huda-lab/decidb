@@ -398,22 +398,28 @@ TEST_CASE("Direct-solve IR reads an aggregate clause per class and leaves a per-
           "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// `per K: C` is one constraint per class; an aggregate clause bounds the total in each, so it reads as the clause,
-	// beside the scope check that the key determines the bound.
+	// `per K: C` is one constraint per class and variant (D70); an aggregate clause bounds the total of each group, and
+	// its instances differ only in their bound, which the group's tightest bound covers: it reads as the clause.
 	QueryIR aggregate(con, IRQuery("x(BOOL)", "per flag: SUM(x) <= cap", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(aggregate.ir.status == DirectAnalysisStatus::PROVED);
 	REQUIRE(aggregate.ir.constraints.size() == 1);
 	REQUIRE(aggregate.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(aggregate.ir.constraints[0].aggregate);
-	REQUIRE(aggregate.ir.row_checks.size() == 1);
-	REQUIRE(aggregate.ir.row_checks[0].kind == DirectRowCheckKind::DETERMINES);
-	REQUIRE(aggregate.ir.row_checks[0].text.object == "cap");
+	REQUIRE(aggregate.ir.row_checks.empty());
 
 	// A clause per row would hold in a class alone: no rule models it.
 	QueryIR per_row(con, IRQuery("x(BOOL)", "SUM(x) <= 2 AND per flag: x <= 1", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(per_row.ir.constraints.size() == 2);
 	REQUIRE(per_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(per_row.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+
+	// A reducer's own `per` over a body with variants reads the key's classes split by the body's values (D71), which
+	// the operator numbers and no rule's plan reads.
+	QueryIR variants(con, IRQuery("x(BOOL)", "sum(per flag: x) <= 1", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(variants.ir.status == DirectAnalysisStatus::NOT_PROVED);
+	// An objective with a field is produced once (D72), which the operator checks and no rule's plan does.
+	QueryIR once(con, IRQuery("x(BOOL), per (): s(INT)", "x <= 1 AND s <= 3", "MAXIMIZE SUM(w*x) + cap * s"));
+	REQUIRE(once.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
 }
 
 TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb]") {

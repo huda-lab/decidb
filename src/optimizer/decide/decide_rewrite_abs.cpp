@@ -274,7 +274,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// the ABS node was written in (the objective's rows carry OBJECTIVE_ROW_TAG).
 	vector<AbsPairInfo> abs_pairs;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.keyed_scopes, decide.is_boolean_var);
+	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
 	if (decide.decide_constraints) {
 		FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(),
 		                  DecideEnclosingScope());

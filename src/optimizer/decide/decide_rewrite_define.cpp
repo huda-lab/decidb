@@ -314,7 +314,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	}
 
 	using Kind = LogicalDecide::RewriteAccount::Kind;
-	DecideCanonicalizer canonicalizer(context, decide_index, decide.variable_scopes, decide.keyed_scopes,
+	DecideCanonicalizer canonicalizer(context, decide_index, decide.variable_scopes, decide.keyed_scopes, decide.keys,
 	                                  decide.is_boolean_var);
 	// The rows are appended after both walks, so neither walks a row this pass added.
 	vector<unique_ptr<Expression>> rows;

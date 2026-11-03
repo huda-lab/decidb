@@ -50,7 +50,8 @@ Terms:
 - **Key / class**: a key lists columns and relations (for `by`, also expressions); rows with equal key values form one
   class.
 - **Kept rows**: the result rows (after joins and `WHERE`) that pass the enclosing `when`.
-- **Determines**: `K` determines a value when every row of each `K`-class carries the same value (§7.1).
+- **Variant**: the rows of a `K`-class that agree on everything the body reads once per class; a class is generated
+  once per variant (§7.1).
 
 ```
 decide_list ::= declarator (',' declarator)*
@@ -147,8 +148,8 @@ MINIMIZE max_shortfall
 
 - **Output**: the value repeats on every row.
 - **In constraints**: compared against row data (`ship <= max_shortfall`) it makes one row per kept row, all
-  referencing the same column. It is determined by every key (§7.1), so it may stand beside a reducer or be its bound
-  under any `per`, and it counts once.
+  referencing the same column. It is one instance under every key (§7.1), so it may stand beside a reducer or be its
+  bound under any `per`, and it counts once.
 - **Inside a reducer**: a body of query-wide decisions only (`sum(cap)`, `sum(cap1 + cap2)`) is refused as a
   constraint's whole decision side. There is one column and nothing to reduce, and the two plausible readings
   (coefficient 1 or `n`) are different problems, so neither is chosen silently; write `cap`. A body mixing it with row
@@ -273,12 +274,12 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
 ```
 
 - **Produced once.** No `per` means `per ()`; any other `per` is a parse error.
-- **`when c`** filters the rows for the whole objective; one that keeps no row is an error (§7.3).
+- **`when c`** filters the rows for the whole objective; one that keeps no row leaves no term (D68).
 - **Body**: reducers (`SUM`, `AVG`, `MIN`, `MAX`, `norm`), decisions outside them, and sums of those, with at least one
   decision.
   - A decision outside the reducers is legal when it has one instance over the kept rows, and counts once: any
     `per ()` decision, or a per-row or keyed one when the `when` keeps one row or class (`MAXIMIZE when id = 3: x`).
-    Otherwise it is the determination error. Not beside a `MIN` or `MAX`.
+    Otherwise the objective would be produced more than once, an error (§7.3). Not beside a `MIN` or `MAX`.
   - A product of two query-wide decisions counts once (Gurobi). Any other product of two decisions outside a reducer
     is refused unless one is `BOOL`, which is linearized first.
   - A factor on a reducer must be one value over the kept rows (§5).
@@ -316,8 +317,8 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   `SUM(x) + 2 * MAX(x*v)`. A negative factor reverses the relation the reducer faces (`-2 * MAX(e) >= -8` is
   `MAX(e) <= 4`), and `-2 * max(e)` is `min(-2 * e)`.
   - In a **constraint** the factor may be any decision-free term: a literal, an uncorrelated subquery, a column or a
-    correlated subquery. It is a tuple term: under `per` the key must determine it, and a row-varying one gives the
-    helper-decision shape (§6.4).
+    correlated subquery. It is a tuple term: under `per`, each of its values in a class is a variant (§7.1), and a
+    row-varying one gives the helper-decision shape (§6.4).
   - In the **objective** it must be one value over the kept rows; a row-varying one is refused with a pointer to
     `SUM(x * weight)`.
   - A **`BOOL` decision** as the factor answers, in a constraint and in the objective: `b * sum(x) <= 4`,
@@ -333,8 +334,9 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
 - **The bound rule.** A side with no decision must give one value per generated constraint. With no `per`, a value
   that varies by row reduces to its tightest value within each `by` group of the kept rows (MIN for `<=`/`<`, MAX for
   `>=`/`>`) — a bare column as well as a subquery (`sum(ship) by (depotID) <= stock`, the paper's Figure 1). Under
-  `per` the key must determine it instead (§7.1). `=` refuses a bound that genuinely varies, since two different
-  numbers cannot both be *the* sum. `<>` keeps every value as its own exclusion.
+  `per`, each value in a class is a variant of its own (§7.1), so a group bound by several takes the tightest the same
+  way. `=` refuses a bound that genuinely varies, since two different numbers cannot both be *the* sum. `<>` keeps
+  every value as its own exclusion.
 - **`norm(e, p)`** is an L_p term with a user-supplied weight (`MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`). It
   takes a `when`/`per` in front of its clause and a `by`, but no scope inside and no colon form:
 
@@ -367,8 +369,9 @@ MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);   -- each depot's 
 
 - **Identity is the tuple, not the value**: two depots with equal cost are two terms (this is not `SUM(DISTINCT …)`).
 - **Scope is the surviving rows**: join, `WHERE` and `when` decide which tuples contribute.
-- **The named relations must determine the body**, checked on the data every run (§7.1). A column of an unnamed
-  relation stops the query rather than picking an arbitrary row.
+- **One value per variant of each tuple** (D71, §7.1): a body that reads only the named relations' columns and
+  decisions keyed by them is one value per tuple. A column of an unnamed relation, or a per-row decision, takes several
+  values in a tuple, and each is a value of its own: `SUM(D: T.unit_cost * ship)` reads every route of a depot.
 - **`AVG(D: e)`** divides by the number of classes. **`MIN`/`MAX`** are unaffected.
 - **Several relations** (`SUM(D, T: e)`): the identity is the concatenation of their keys. Naming a relation removes
   its fan-out; an unnamed one keeps its fan-out. Naming every joined relation is a no-op. Order does not matter.
@@ -386,7 +389,8 @@ sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)   -- an expression in th
   `by ()`.
 - Reads every kept row whose `Γ` equals the current row's, including rows outside the current class (§6.1).
 - A row whose `Γ` is NULL is in no group of it (D5): that reducer has no value there, and the NULL skips the instance;
-  the clause's other reducers still read the row. `Γ` must be determined by the enclosing `per` key (§7.1).
+  the clause's other reducers still read the row. A class whose rows read several `Γ` groups is one instance per group
+  (§7.1).
 - `by` belongs to the call right before it. A data-only reducer on the bound side reads its own groups:
   `count(*) by (g)` counts the current row's group.
 - A factor holds the reducer's value: `-2 * max(e) by (g)` is `min(-2 * e) by (g)`.
@@ -402,11 +406,14 @@ sum(per D: D.opening_cost * open)                   -- each D tuple once
 sum(when S.priority per D: D.opening_cost * open)   -- filter, then each remaining tuple once
 ```
 
-- **Order**: the rows `by` selects → the inner `when` → one value per class of the inner `per` (read at its first
-  kept row) → the aggregate.
+- **Order**: the rows `by` selects → the inner `when` → one value per variant of each class of the inner `per` (read
+  at its first kept row) → the aggregate.
 - **Inner `when`** filters this reducer only. A `when` in front of the clause applies first.
-- **Inner `per K'`** hands the reducer one value per class, so a tuple repeated by a join counts once. `K'` must
-  determine the body.
+- **Inner `per K'`** hands the reducer one value per variant of each class (D71), so a tuple repeated by a join counts
+  once while its body reads nothing that varies inside it. One that does is the **inner `per` trap**:
+  `sum(per D: D.opening_cost + T.unit_cost * ship)` over a depot with two routes reads two values — the opening cost
+  twice — because each route's `unit_cost` and per-row `ship` are a variant. `EXPLAIN ANALYZE` prints the count under
+  the clause (§9): *"↳ sum(per D: ...): 3 values from 2 classes, one per distinct (T.unit_cost, ship) within a class"*.
 - **A reducer with no row in a group is NULL** (D68), so that group's constraint is skipped; the other reducers of
   the clause do not save it. Written in front, the condition leaves the same depots out:
 
@@ -442,10 +449,10 @@ reducer's argument. Tests: `test_scope_generation.py`, `test_scope_combinations.
 ### 6.1 Evaluation
 
 1. **Filter.** Keep the rows where `c` is true.
-2. **Generate.** Split the kept rows into classes by `K`; the body is produced once per class.
-3. **Aggregate.** A reducer `agg(...) by (Γ)` reads all kept rows whose `Γ` equals the class's, not only the class's
-   own rows.
-4. **Well-defined.** `K` must determine every tuple term and every `Γ` (§7.1).
+2. **Generate.** Split the kept rows into classes by `K`; the body is produced once per variant of each class: once
+   per distinct value of its tuple terms, its decisions' instances and its reducers' `Γ` (§7.1).
+3. **Aggregate.** A reducer `agg(...) by (Γ)` reads all kept rows whose `Γ` equals the variant's, not only the
+   class's own rows.
 
 ```sql
 --   shipment  depot  region  ship  capacity
@@ -470,8 +477,9 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   compares case-sensitively.
 - **`per` does not group reducers** (D6): `per g: sum(x) <= 10` bounds the total over all kept rows, once per `g`
   (identical rows collapse to one). Write `per g: sum(x) by (g) <= 10` for each group's own total.
-- **An explicit `per` must determine the body**; no `per` always does. So `sum(x) <= cap` takes the tightest `cap`
-  (the bound rule, §5), while under `per g:` the same clause requires `g` to determine `cap`.
+- **A class is one instance per variant** (§7.1). So `sum(x) <= cap` takes the tightest `cap` (the bound rule, §5),
+  and under `per g:` the same clause bounds the total once per distinct `cap` of each class, which is the tightest
+  again.
 
 ### 6.3 `when c` — which rows
 
@@ -490,11 +498,12 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
 
 Tuple terms and reducers mix freely on either side. Each comparison takes one of three shapes:
 
-- **Rows** — no reducer on the decision side: one model row per class, from its first kept row.
+- **Rows** — no reducer on the decision side: one model row per variant of each class, from its first kept row.
 - **Grouped** — decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per
-  group (query-wide, or keyed by the `by` key: `per D: sum(ship) by (D) <= cap * open` with `open` declared
-  `per D:`): one model row per `by` group, under the group's tightest bound (`=` refuses differing bounds; `<>`
-  excludes each). A term beside the reducers counts once in its group's row.
+  group (query-wide, or keyed by the `by` key and held by it: a decision declared on the key, data that is one of the
+  key's own columns): one model row per `by` group, under the group's tightest bound (`=` refuses differing bounds;
+  `<>` excludes each). A term beside the reducers counts once in its group's row. Data the key does not hold may take
+  several values in a class, each a variant (§7.1), so beside a reducer it takes the helper-decision shape.
 - **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
   a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
@@ -515,43 +524,65 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 From the language proposal ([`context/New_syntax.pdf`](../../New_syntax.pdf), pp. 17–24). All run as written and fully
 explicit, over `FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(INT), per D.depotID: reserve(REAL)`:
 
-| # | As written | Constraints | Reducer reads | Must be determined |
+| # | As written | Constraints | Reducer reads | A variant per distinct |
 |---|---|---|---|---|
 | 1 | `ship <= 0.20 * sum(ship)` | one per shipment | all rows | — |
-| 2 | `per (): sum(ship) <= networkCapacity` | one | all rows | `networkCapacity` |
-| 3 | `per D.depotID: reserve >= D.networkReserveShare * sum(S.demand)` | one per depot | all rows | `reserve`, the share |
+| 2 | `per (): sum(ship) <= networkCapacity` | one per value | all rows | `networkCapacity` |
+| 3 | `per D.depotID: reserve >= D.networkReserveShare * sum(S.demand)` | one per depot | all rows | the share |
 | 4 | `per D.depotID: sum(ship) by (D.depotID) <= D.capacity` | one per depot | the depot's rows | `D.capacity` |
 | 5 | `ship <= D.maxShipmentShare * sum(ship) by (D.depotID)` | one per shipment | its depot's rows | — |
-| 6 | `per D.depotID: reserve >= 0.10 * sum(S.demand) by (D.region) + 0.02 * sum(S.demand) by (D.country)` | one per depot | region; country | `reserve`, region, country |
+| 6 | `per D.depotID: reserve >= 0.10 * sum(S.demand) by (D.region) + 0.02 * sum(S.demand) by (D.country)` | one per depot | region; country | region, country |
 | 7 | `per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity` | one per depot | its priority rows | `D.priorityCapacity` |
-| 8 | `per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)` | one per shipment | same depot and arrival day | `ship`, the key |
+| 8 | `per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)` | one per shipment | same depot and arrival day | the key |
 
-Example 7 is an error on data where a depot has no priority shipment (§5.3). Example 9 (nested reducers) is not in the
+Example 7 has no constraint for a depot with no priority shipment (§5.3). Example 9 (nested reducers) is not in the
 language yet ([roadmap.md](roadmap.md)). Tests: `test/decide/tests/test_scope_deck_examples.py`.
 
-## 7. Determination, NULL and empty sets
+## 7. Variants, NULL and empty sets
 
-### 7.1 The determination rule
+### 7.1 Variant signatures
 
-A term must have one value per generated constraint, so a `per` key must determine everything its body reads once per
-class: every tuple term (the bound and any factor included), every decision outside reducers, and every reducer's `by`
-key. An inner `per` key and a colon form's relations must likewise determine their reducer's body.
+A `per` key splits the kept rows into classes, and each class is generated once per **variant** (D70, deck pp.
+34–40): once per distinct combination of what the body reads once per class — its **signature**:
 
-- A **keyed** decision is determined when each `K`-class lies in one class of its own key; a **per-row** one only when
-  each `K`-class is one row; a **query-wide** one always.
-- Literals, uncorrelated subqueries and anything under `per row` are always determined.
-- `per ()`, and the objective, need each tuple term to have one value over all kept rows.
-- **Checked on the data**, every run, before solving, over kept rows only — so one query can pass on one dataset and
-  fail on another. A static check would have to refuse queries that are fine on the data they run on.
-- NULL counts as one value here.
+- every **tuple term**, by value: a column or expression outside reducers, including the bound and any factor on a
+  reducer. The data terms of one additive context, read through `+`, `-` and constant factors, are one value (D83):
+  `per g: x <= a + b` over rows with `(a, b)` = `(1, 2)` and `(2, 1)` is one variant, and so are `x - a <= b` and
+  `x <= a + sum(y) + b`. A term under a row-varying factor, or inside `abs`, is a value of its own;
+- every **decision** outside reducers, by instance: a per-row decision splits the class into its rows, a keyed one into
+  its classes, and a `per ()` decision splits nothing;
+- every reducer's **`by` key**, by value: each group a class reads is a variant.
+
+Each variant is generated at its first kept row, which stands for the variant's rows: they agree on everything the
+body reads. An inner `per` key, and the relations of a colon form, hand their reducer one value per variant of each of
+its classes the same way (D71, §5.3).
+
+- **Where the key fixes every one of them**, each class has one variant and the model is one constraint per class
+  (deck p. 39). A value the key's own columns hold (one of them, or a function of them), a decision keyed on them and a
+  `by` key inside the key never split a class.
+- **`per row`**, or no `per`, has one row per class, so one instance per kept row.
+- **NULL** is one value of a field. The variant that reads a NULL bound or coefficient skips its instance (§3).
+- **Equal bodies in two classes** stay two instances, two identical model rows.
+- **The objective is produced once** (§4, D72): its one class must hold one variant, else the query stops (§7.3).
 
 ```sql
-per D.depotID: sum(ship) by (D.region) <= 500    -- holds: each depot has one region
-per D.depotID: sum(ship) by (S.region) <= 500    -- fails if a depot ships to two regions
-per D.depotID: ship <= 10                        -- fails: ship is per row, a depot has several rows
+-- one constraint per depot: every depot has one region
+per D.depotID: sum(ship) by (D.region) <= 500
+
+-- a depot with shipments in two S.region values: one constraint per region it ships to
+per D.depotID: sum(ship) by (S.region) <= 500
+
+-- ship is per row: one constraint per row of the depot
+per D.depotID: ship <= 10
+
+-- one constraint per value of networkCapacity: the smallest binds
+per (): sum(ship) <= networkCapacity
 ```
 
-Tests: `test/decide/tests/test_scope_determination.py`.
+`EXPLAIN ANALYZE` prints, under a clause whose classes held more than one variant, how many instances they made
+(§9): *"↳ per t.g: 2 constraints from 1 class, one per distinct (t.a) within a class"*. A plain `EXPLAIN` reads no data,
+so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `test_anr_variants.py`,
+`test_scope_variant_paths.py` and the scope grid (`test_scope_combinations.py`).
 
 ### 7.2 NULL and empty sets
 
@@ -577,9 +608,11 @@ Run before solving, on every run, also under `DIAGNOSE`:
 
 | Check | Message |
 |---|---|
-| A `per` key determines what it must (§7.1) | `DECIDE: per D.depotID does not determine D.capacity. D.depotID = 'D1' has more than one value: 25, 40.` · for a decision: `... covers more than one ship.` · context: `(in by (S.region))`, `(in sum(D: ...))` · for `per ()`: `The kept rows have more than one value: 3, 5.` |
+| The objective is produced once (§4, D72) | `DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once; move it inside a reducer or fix it with when.` · for a decision: `the decision 'ship' (declared per row) has more than one instance over the kept rows, ...` · for a `by` key: `'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), ...` |
 
-The phrase `does not determine` is fixed; names and values come from the query and the data. Over a join a column is named with its relation.
+The phrase `would be produced more than once` is fixed; names and values come from the query and the data, the least
+and the greatest value as `ORDER BY` places them (NULL last), so the message does not depend on row order. Over a join
+a column is named with its relation.
 
 ## 8. `DIAGNOSE`
 
@@ -654,7 +687,7 @@ when the model differs: `≡` for the canonical form, `↳` for what each rewrit
 (`abs(ship - 20) becomes an auxiliary variable`, `sum(ship) by (D.region) becomes a helper decision per group`) and
 the rows the solver receives. An auxiliary prints as the expression it stands for, never an internal name; a bound
 derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
-timing.
+timing, and under a clause whose classes held more than one variant one `↳` line counting them (§7.1, D71).
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed, with the `when c per K:` qualifier in front and
 the defaults `per row:` and `by ()` left out. Text DeciDB writes itself (a rewritten row, a suggested edit) uses

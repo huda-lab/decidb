@@ -333,24 +333,32 @@ def test_max_of_a_decision_bounded_by_max_of_data(request, scope_solver, cli_fix
     "decisions, objective, message",
     [
         pytest.param(
-            "x(INT), per (): s(INT)", "MAXIMIZE SUM(x) - w * s", "per () does not determine w.", id="row-varying-data"
+            "x(INT), per (): s(INT)",
+            "MAXIMIZE SUM(x) - w * s",
+            "'w' takes more than one value over the kept rows",
+            id="row-varying-data",
         ),  # not read off row 0's w
         pytest.param(
-            "x(INT)", "MAXIMIZE x", "per () does not determine the decision x", id="per-row-decision"
+            "x(INT)",
+            "MAXIMIZE x",
+            "the decision 'x' (declared per row) has more than one instance",
+            id="per-row-decision",
         ),  # not "does not support 'x'(ExpressionClass::COLUMN_REF)"
         pytest.param(
             "x(INT), y(INT)",
             "MAXIMIZE SUM(x) + y",
-            "per () does not determine the decision y",
+            "the decision 'y' (declared per row) has more than one instance",
             id="per-row-decision-beside-a-reducer",
         ),  # not "contains a non-aggregate term: y"
     ],
 )
 def test_objective_term_must_be_one_value(decidb_cli, decisions, objective, message):
+    """The objective is produced once (D72)."""
     result = decidb_cli.execute_raw(
         _query(decisions, "x <= cap AND s <= 4" if "s(" in decisions else "x <= cap", objective)
     )
     assert message in result.stderr, result.stderr
+    assert "would be produced more than once" in result.stderr, result.stderr
 
 
 def test_a_per_row_objective_decision_on_one_row(decidb_cli, scope_solver):

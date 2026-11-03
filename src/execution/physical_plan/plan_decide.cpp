@@ -42,7 +42,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
 	if (op.decide_constraints || op.decide_objective) {
-        DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes,
+        DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
                                           op.is_boolean_var);
         if (op.decide_constraints) {
             canonicalizer.VerifyCanonical(*op.decide_constraints);
@@ -156,6 +156,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Resolved like every other expression the operator owns (EnumerateExpressions).
     decide_op->keys = std::move(op.keys);
     decide_op->scope_checks = std::move(op.scope_checks);
+    decide_op->signatures = std::move(op.signatures);
+    decide_op->objective_signature = op.objective_signature;
 
     // Resolve source column names for the surviving (post-pruning) child columns,
     // positionally aligned with the materialized data chunk. Used by the unbounded
@@ -232,12 +234,21 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         }
     }
     for (auto &check : decide_op->scope_checks) {
-        for (auto *expr : {check.rows.get(), check.value.get(), check.filter.get()}) {
-            if (expr) {
-                harvest(*expr);
-            }
+        if (check.value) {
+            harvest(*check.value);
         }
-        harvest_key(check.key);
+    }
+    for (auto &signature : decide_op->signatures) {
+        if (signature.rows) {
+            harvest(*signature.rows);
+        }
+        harvest_key(signature.key);
+        for (auto &field : signature.fields) {
+            if (field.value) {
+                harvest(*field.value);
+            }
+            harvest_key(field.key);
+        }
     }
     // A lifted reducer's expressions live beside the tree: a composed term's and a helper
     // decision's (reducer_value_links). The columns they read explain the answer too.

@@ -204,7 +204,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             ("depotID",),
-            0,
+            len(DEPOTS),
             id="data-under-the-by-key",
         ),
         pytest.param("sum(ship) by (D.depotID) <= 30 * open", ("depotID",), lambda r: 30, PER_ROW, 0, id="constant"),
@@ -231,10 +231,11 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
     request, cli_fixture, scope_solver, tmp_path, link, by, factor, per, helpers
 ):
     """A term beside the reducers stays in the group's row when it is one value per `by`
-    group: its decision is keyed by the `by` key and its data is a constant or is keyed by
-    it through the clause's `per`. Data read per row, a `per` finer than the `by` key, or a
-    `by` the decision's key does not determine take a helper decision per group. The answer
-    is the same either way."""
+    group: its decision is keyed by the `by` key and its data is a constant. Data the clause's
+    `per` does not hold by construction may take several values in a class, each a variant
+    (D70), so it takes a helper decision per group, as data read per row, a `per` finer than
+    the `by` key and a `by` the decision's key does not determine do. The answer is the same
+    either way."""
     cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
     sql = f"""
         SELECT shipmentID, ship, open {from_clause()}
@@ -1092,14 +1093,16 @@ def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op, why):
     assert decidb_cli.execute(_ship_query("ship + sum(ship + 0.5) by (D.region) >= 40"))[0]
 
 
-@pytest.mark.error
-def test_the_scope_checks_still_guard_the_rewritten_clause(decidb_cli):
-    """The checks run on the clause as written: a `per` that does not determine the
-    decision beside the reducer."""
-    assert (
-        "DECIDE: per D.region does not determine the decision ship (declared per row). D.region = 'East' "
-        "covers more than one ship."
-    ) in error_of(decidb_cli, _ship_query("per D.region: ship <= 0.5 * sum(ship) by (D.depotID)"))
+@pytest.mark.correctness
+def test_the_rewritten_clause_keeps_its_variants(decidb_cli, scope_solver):
+    """The signature is read on the clause as written (D70): `ship` is per row, and the `by`
+    key varies inside a region, so `per D.region` is one instance per row, each bounded by
+    half its own depot's total: a depot's two rows ship alike, and D3's lone row nothing."""
+    sql = _ship_query("per D.region: ship <= 0.5 * sum(ship) by (D.depotID)")
+    total = Reduce("sum", lambda r: {"ship": 1}, by=("depotID",), factor=lambda r: 0.5)
+    clauses = [SHIP_BOUND, Scoped((X,), "<=", (total,), per=("region",))]
+    ships = _judged(decidb_cli, scope_solver, sql, ScopedModel(joined(), SHIP), clauses)
+    assert ships[0] == ships[1] and ships[2] == ships[3] and ships[4] == 0
 
 
 @pytest.mark.diagnose

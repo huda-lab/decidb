@@ -5,8 +5,6 @@ decision; a message quotes the group's least spelling ('A'). The oracle states N
 lowercased key `gk`.
 """
 
-import re
-
 import pytest
 
 from . import _diagnose_relation
@@ -48,38 +46,36 @@ def test_a_by_group_groups_its_key_under_the_collation(decidb_cli, scope_solver)
 
 @pytest.mark.correctness
 def test_a_collated_per_key_determines_its_own_by_group(decidb_cli, scope_solver):
-    """`per g: sum(x) by (g) <= 1`: the class and the `by` group both group under NOCASE, so the key determines its
-    own `by` element by construction and no check is planned (KeyHolds); 'a' and 'A' are still one class."""
+    """`per g: sum(x) by (g) <= 1`: the class and the `by` group both group under NOCASE, so the key holds its own
+    `by` element by construction (KeyHoldsField); 'a' and 'A' are still one class."""
     sql = f"""
         SELECT id, x {_source()}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN {sql}")
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
     assert sum(row["x"] for row in result) == 2
 
 
-def test_a_by_key_under_another_collation_is_another_key(decidb_cli):
+@pytest.mark.correctness
+def test_a_by_key_under_another_collation_is_another_key(decidb_cli, scope_solver):
     """`per g: sum(x) by (g COLLATE noaccent) <= 1` over a NOCASE g: the two collations group differently, so they are
-    two keys (DecideGroupsAlike: the collations differ) and the class {a, A} holds two `by` groups."""
+    two keys (DecideGroupsAlike: the collations differ) and the class {a, A} holds two `by` groups, one variant each
+    (D70): 'a', 'A', 'b' (rows 3 and 5) and 'B' each take one row."""
     sql = f"""
         SELECT id, x {_source()}
-        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE noaccent) <= 1 MAXIMIZE SUM(t.p * x)"""
-    decidb_cli.assert_error(sql, match=r"per t\.g does not determine t\.g COLLATE noaccent")
+        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE noaccent) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("g",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
+    result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
+    assert [row["x"] for row in sorted(result, key=lambda row: row["id"])] == [1, 1, 1, 1, 0]
 
 
 @pytest.mark.correctness
 def test_a_by_key_written_under_the_columns_collation_is_the_same_key(decidb_cli, scope_solver):
     """`per g: sum(x) by (g COLLATE nocase) <= 1` over a NOCASE g: one collation, so one key (DecideGroupsAlike: the
-    collations are equal) and no check is planned."""
+    collations are equal), which holds the `by` key."""
     sql = f"""
         SELECT id, x {_source()}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE nocase) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN {sql}")
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
 
@@ -87,16 +83,11 @@ def test_a_by_key_written_under_the_columns_collation_is_the_same_key(decidb_cli
 @pytest.mark.correctness
 def test_the_default_collation_and_the_same_written_collation_are_one_key(decidb_cli, scope_solver):
     """Under `default_collation='nocase'`, a plain g and `g COLLATE NOCASE` group under one collation function, though
-    their types name different collations, so they are one key (Grouping: equal) and no check is planned."""
+    their types name different collations, so they are one key (Grouping: equal), which holds the `by` key."""
     sql = f"""
         SET default_collation='nocase';
         SELECT id, x {_source(collation="")}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE NOCASE) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(
-        sql.replace("SELECT", "EXPLAIN SELECT", 1)
-    )
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
 
@@ -129,11 +120,16 @@ def test_a_keyed_decision_has_one_value_per_collated_key(decidb_cli, scope_solve
     assert [row["y"] for row in result[:2]] == [1, 1]
 
 
-def test_a_message_quotes_the_least_spelling_of_the_group(decidb_cli):
-    """`per g` does not determine `cap` once 'a' (cap 1) and 'A' (cap 3) are one class; the message names 'A'."""
+@pytest.mark.diagnose
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)], ids=["a-first", "A-first"])
+def test_a_variant_is_named_by_its_class_s_least_spelling(decidb_cli, order):
+    """'a' (cap 1) and 'A' (cap 3) are one class with two variants of `t.cap - 2`; the one that cannot hold is named by
+    the class's least spelling, 'A', and its own value, whichever row comes first (D69, D70)."""
     rows = ((1, "a", 1, 5.0), (2, "A", 3, 4.0))
-    sql = f"SELECT id, x {_source(rows)} DECIDE x(BOOL) SUCH THAT per t.g: sum(x) <= t.cap MAXIMIZE SUM(t.p * x)"
-    decidb_cli.assert_error(sql, match=r"t\.g = 'A' has more than one value")
+    rows = tuple(rows[i] for i in order)
+    sql = f"SELECT id, y {_source(rows)} DECIDE per t.g: y(INT) SUCH THAT per t.g: y <= t.cap - 2 MAXIMIZE SUM(y)"
+    found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["A, -1"], found
 
 
 KEYED_COLUMNS = ("id", "k", "g", "cap", "p")

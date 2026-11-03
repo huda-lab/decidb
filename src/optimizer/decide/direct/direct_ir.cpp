@@ -46,7 +46,7 @@ public:
 	DirectFrontEnd(ClientContext &context_p, LogicalDecide &decide_p)
 	    : context(context_p), decide(decide_p), splitter(context_p, decide_p.decide_index, decide_p.decide_variables),
 	      canonicalizer(context_p, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
-	                    decide_p.is_boolean_var) {
+	                    decide_p.keys, decide_p.is_boolean_var) {
 	}
 
 	DirectIR Read() {
@@ -79,83 +79,35 @@ private:
 	//! Set while reading: a recorded bound a rule could not reduce.
 	mutable bool bounds_to_record = false;
 
-	//! A predicate a row check can evaluate under the rule's plan: it reads only source columns. One that raises does
-	//! so there, before any value is read, as in the solver's scope check.
+	//! A predicate the rule's plan can evaluate: it reads only source columns.
 	bool CheckablePredicate(const Expression *predicate) const {
 		return !predicate || DirectReferencesOnlySource(*predicate, source_bindings);
 	}
 
-	//! A determination check read as the plan makes it; false when the plan cannot make it: an expression that reads
-	//! more than the source, or a decision that is not one per row.
-	bool ReadDetermination(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
-		row_check.kind = DirectRowCheckKind::DETERMINES;
-		bool decision = check.decision != DConstants::INVALID_INDEX;
-		D_ASSERT(decision == !check.value);
-		if (decision && decide.variable_scopes[check.decision].scope != DecideVarScope::ROW) {
-			return false;
-		}
-		if (!CheckablePredicate(check.rows.get()) || !CheckablePredicate(check.filter.get()) ||
-		    !CheckablePredicate(check.value.get())) {
-			return false;
-		}
-		if (check.rows) {
-			row_check.rows = check.rows->Copy();
-		}
-		if (check.filter) {
-			row_check.filter = check.filter->Copy();
-		}
-		if (check.value) {
-			row_check.value = check.value->Copy();
-		}
-		if (check.key != DConstants::INVALID_INDEX) {
-			if (!ReadKey(check.key, row_check.key)) {
-				return false;
-			}
-		}
-		row_check.text = check.DeterminesText();
-		return true;
-	}
-
-	//! Reads a scope check into `row_check`; false for one the plan cannot make (a determination of a keyed decision,
-	//! or of an expression that reads more than the source). A decision for the whole query is never a check's: every
-	//! key determines it (KeyHolds).
-	bool ReadRowCheck(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
-		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
-			// The bound-side rewrite makes these over the source and the bounds' placeholders, with no `rows`.
-			D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
-			row_check.invalid = check.value->Copy();
-			return true;
-		}
-		return ReadDetermination(check, row_check);
+	//! A scope check as the plan makes it. The bound-side rewrite makes every check over the source and the bounds'
+	//! placeholders, so the plan makes each one.
+	DirectRowCheck ReadRowCheck(const DecideScopeCheck &check) const {
+		D_ASSERT(check.kind == DecideScopeCheckKind::VALUE_IS_VALID && CheckablePredicate(check.value.get()));
+		DirectRowCheck row_check;
+		row_check.invalid = check.value->Copy();
+		return row_check;
 	}
 
 	void ReadRowChecks(DirectIR &ir) const {
 		for (auto &check : decide.scope_checks) {
-			DirectRowCheck row_check;
-			if (ReadRowCheck(check, row_check)) {
-				ir.row_checks.push_back(std::move(row_check));
-			} else {
-				MarkNotProved(ir.status);
-			}
+			ir.row_checks.push_back(ReadRowCheck(check));
 		}
 	}
 
 public:
-	//! Moves the scope checks the plan can make out of the node: the solver path installs them under it
-	//! (DirectAddRowChecks). A check the plan cannot make stays for the operator.
+	//! Moves the scope checks out of the node: the solver path installs them under it (DirectAddRowChecks).
 	vector<DirectRowCheck> TakeRowChecks() {
 		source_bindings = decide.SourceBindings();
 		vector<DirectRowCheck> taken;
-		vector<DecideScopeCheck> left;
 		for (auto &check : decide.scope_checks) {
-			DirectRowCheck row_check;
-			if (ReadRowCheck(check, row_check)) {
-				taken.push_back(std::move(row_check));
-			} else {
-				left.push_back(std::move(check));
-			}
+			taken.push_back(ReadRowCheck(check));
 		}
-		decide.scope_checks = std::move(left);
+		decide.scope_checks.clear();
 		return taken;
 	}
 
@@ -189,6 +141,11 @@ private:
 			DirectIRKeyedScope ir_node;
 			// The IR is read before the value rewrite makes its helper scopes; a binder scope's key is columns.
 			D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
+			if (scope.signature != DConstants::INVALID_INDEX) {
+				// A reducer's own `per` over a body with variants (D71): its instances are the key's classes split
+				// by the body's values, which the operator numbers and no rule's plan reads.
+				MarkNotProved(ir.status);
+			}
 			for (auto &element : DecideKeyElements(decide.keys, scope.key)) {
 				auto &binding = element.expression->Cast<BoundColumnRefExpression>().binding;
 				if (std::find(ir_node.relations.begin(), ir_node.relations.end(), binding.table_index) ==
@@ -470,10 +427,10 @@ private:
 		                            });
 	}
 
-	//! `per K: C` is one constraint per class of K (D6). An aggregate clause bounds the whole total in each class, with
-	//! a bound the class determines: the solver reads it as the clause beside the scope checks that say K determines
-	//! what the clause reads (row_checks), which every rule's plan makes. A clause per row would hold in a class alone,
-	//! which no rule models.
+	//! `per K: C` is one constraint per class of K and variant of C (D6, D70). An aggregate clause bounds the whole
+	//! total of each `by` group, and every instance of a group differs only in its bound, which the group's tightest
+	//! bound covers, as for a clause with no `per`. A clause per row would hold in a variant alone, which no rule
+	//! models.
 	void ReadPerClass(idx_t key, DirectIRConstraint &constraint) const {
 		constraint.per_class = true;
 		if (!constraint.aggregate || (key != DConstants::INVALID_INDEX && !ReadKey(key, constraint.classes))) {
@@ -497,6 +454,12 @@ private:
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
 		    IsTwoLevelObjectiveWrapper(body->Cast<BoundConjunctionExpression>())) {
 			// No rule models the two-level objective `outer(per k: inner(e) by (k))` yet.
+			MarkNotProved(objective.status);
+			return;
+		}
+		if (decide.objective_signature != DConstants::INVALID_INDEX) {
+			// The objective is produced once (D72): the operator refuses a second variant of it, which no rule's plan
+			// checks.
 			MarkNotProved(objective.status);
 			return;
 		}

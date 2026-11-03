@@ -16,13 +16,14 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   its reducer, the reducer's own `when` and `by` key (`DirectPart::by`, grouped on `DecideKeyElement::Grouping()`, the
   collated expression), qualifier, factor, the clause's `when`, right side (with its `reduction` when the bound-side
   rewrite left it raw), a `per K:` in front of an aggregate clause (`per_class` and `classes`: D6, the whole total
-  bounded once per class), and the objective, and the row checks the plan must run (`row_checks`: value checks and
-  determination checks). A key element that is NULL puts its row in no group (D5), except a relation column, where
+  bounded once per class and variant, D70, which the group's tightest bound covers), and the objective, and the row
+  checks the plan must run (`row_checks`: the bound-side rewrite's value checks). A key element that is NULL puts its row in no group (D5), except a relation column, where
   NULL is a value. Parts the binder admits and no rule models are *not proved*, and building the IR never throws:
   `norm(e, 0)` (it needs indicator variables), any norm tag the front end does not expect, a `per K:` in front of a
-  per-row clause, a clause whose reducer value became a helper decision and the two-level objective are not-proved
-  parts; the determination of an entity-scoped decision, which only the DECIDE operator checks, makes the whole IR not
-  proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
+  per-row clause, a clause whose reducer value became a helper decision, the two-level objective and an objective with
+  a variant signature (it is produced once, D72, which only the DECIDE operator checks) are not-proved parts; a
+  reducer's own `per` whose body has variants (a keyed scope with a signature, D71, which only the DECIDE operator
+  numbers) makes the whole IR not proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
   (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
@@ -55,24 +56,21 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
   and `DirectNumberMessage`. Every check that raises is built with `DirectRaiseUnless(ok,
   error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
-  `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
-  the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
-  differ.
+  `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (the bound's NaN,
+  an `=` bound's disagreement, then the least row message); across failing groups the order may differ.
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
   One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
   from the real total, whether to recompute or materialize the source. `DirectAddRowChecks` gives each check its own
-  read and a grouped aggregate over only the columns the check reads (counts, least and greatest value, the least label
-  per key), then an ungrouped `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least
-  failing group, NULL keys last. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row
+  read and an ungrouped `min` over the per-row message. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row
   materialized CTE, and the reader is gated on it (`DirectSourceReader::Gate`): every later read is
   `Filter[v](CrossProduct(rows, CTERef v))` under the read's forwarding projection, which keeps the rows' bindings. A
   gated read passes a row only once the CTE is computed, whichever side of the product is built first, so a check raises
   before any rule-built raise. Gates chain: a rule gates the reader again on its own verdict (A1), computed from reads
-  the row checks gate, so a scope error raises before a rule's own, and every read after waits for the newest verdict
+  the row checks gate, so a bad value raises before a rule's own, and every read after waits for the newest verdict
   alone; the verdict CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path uses the same reader
   with one read plus the side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps
-  only an entity-scoped decision's determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over
+  only the objective's produced-once check (D72). A rule builds a plan over one read with `DirectBuildOverRead`, or over
   its only read with `DirectBuildOverOneRead`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
@@ -148,8 +146,9 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   `FILTER`. The table has one row per group, is materialized once (`direct_bound`), and every read of the source joins
   it back by the key with a SINGLE join on IS NOT DISTINCT FROM, so a NULL key is a group. This is how DuckDB
   decorrelates a scalar subquery (FlattenDependentJoins). A keyed or colon reducer counts each class of its key once:
-  an aggregate per group and class takes the class's body (`ARBITRARY`; a scope check proves the key determines it),
-  and the reducer runs over the classes of each group. On a row whose written `by` column is NULL the column is NULL,
+  an aggregate per group, class and body value takes each instance's body (`ARBITRARY` over rows that agree: a body of
+  data is its own signature, so each distinct value in a class is one instance, D71), and the reducer runs over the
+  instances of each group. On a row whose written `by` column is NULL the column is NULL,
   so the instance is skipped (D5), and a row whose inner `per` column is NULL is in no class. A `per K:` in front of the
   clause groups no reducer (D6). A table may read the tables added before it. The binder rejects `DISTINCT` and drops
   an `ORDER BY` inside these reducers, so neither reaches the rewrite. A data norm of order 0 is the count of its
@@ -172,8 +171,7 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   - Every value a bound reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both
-    paths make them with `DirectAddRowChecks` (above), so a scope error (a `per K:` that does not determine a value) is
-    always reported before a bad value, and both paths raise the same text.
+    paths make them with `DirectAddRowChecks` (above), so both paths raise the same text.
   - A data reducer on the bound side over exactly the clause's group is computed in the rule's group aggregate, not
     as a side table; one on another `by` key, qualified, or beside a column is a side table.
   - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1,

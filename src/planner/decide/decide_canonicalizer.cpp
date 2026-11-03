@@ -175,22 +175,23 @@ static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_sco
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
                                          vector<DecideVarScopeInfo> variable_scopes_p,
-                                         const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean)
+                                         const vector<KeyedScopeInfo> &keyed_scopes_p, const vector<DecideKey> &keys_p,
+                                         const vector<bool> &is_boolean)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, keyed_scopes)), boolean_decisions(is_boolean),
-      judge_column_refs(false) {
+      decision_keys(DecisionKeys(variable_scopes, keyed_scopes_p)), judge_column_refs(false),
+      boolean_decisions(is_boolean), keyed_scopes(keyed_scopes_p), keys(keys_p) {
 }
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
                                          vector<DecideVarScopeInfo> variable_scopes_p,
-                                         const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean,
-                                         unordered_set<idx_t> query_wide_table_indexes,
+                                         const vector<KeyedScopeInfo> &keyed_scopes_p, const vector<DecideKey> &keys_p,
+                                         const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
                                          unordered_set<idx_t> correlated_subquery_table_indexes)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, keyed_scopes)),
+      decision_keys(DecisionKeys(variable_scopes, keyed_scopes_p)),
       query_wide_table_indexes(std::move(query_wide_table_indexes)),
       correlated_subquery_table_indexes(std::move(correlated_subquery_table_indexes)), judge_column_refs(true),
-      boolean_decisions(is_boolean) {
+      boolean_decisions(is_boolean), keyed_scopes(keyed_scopes_p), keys(keys_p) {
 }
 
 bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
@@ -430,9 +431,48 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	return false;
 }
 
+//! Whether `key` holds `value` by construction, so every class shows it once: `value` is one of its elements as rows
+//! group on it (reflexivity, the trivial functional dependency), or a deterministic function of them and of
+//! constants (`CAST(cap AS DOUBLE)`, `cap + 1`). No key holds anything for the rows (DECIDE_ROW_KEY) or for the whole
+//! query (INVALID_INDEX, whose one class can show several values), and a value that reads no element is not held.
+static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression &value) {
+	if (key == DConstants::INVALID_INDEX || key == DECIDE_ROW_KEY) {
+		return false;
+	}
+	for (auto &element : DecideKeyElements(keys, key)) {
+		if (element.Grouping().Equals(value) || element.expression->Equals(value)) {
+			return true;
+		}
+	}
+	switch (value.GetExpressionClass()) {
+	case ExpressionClass::BOUND_COLUMN_REF:
+	case ExpressionClass::BOUND_SUBQUERY:
+	case ExpressionClass::BOUND_AGGREGATE:
+		return false;
+	default:
+		break;
+	}
+	if (value.IsVolatile()) {
+		return false;
+	}
+	bool reads_the_key = false;
+	bool held = true;
+	ExpressionIterator::EnumerateChildren(value, [&](const Expression &child) {
+		if (child.IsFoldable()) {
+			return;
+		}
+		reads_the_key = true;
+		held = held && KeyHolds(keys, key, child);
+	});
+	return reads_the_key && held;
+}
+
 idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) const {
 	if (IsQueryWideValueTag(expr.GetAlias())) {
 		return DConstants::INVALID_INDEX;
+	}
+	if (!ReferencesDecideVar(expr) && KeyHolds(keys, data_key, expr)) {
+		return data_key;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
@@ -440,10 +480,13 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 			auto var_idx = colref.binding.column_index;
 			return var_idx < decision_keys.size() ? decision_keys[var_idx] : DECIDE_ROW_KEY;
 		}
-		return judge_column_refs &&
-		               query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end()
-		           ? DConstants::INVALID_INDEX
-		           : data_key;
+		if (judge_column_refs &&
+		    query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end()) {
+			return DConstants::INVALID_INDEX;
+		}
+		// Data is one value per class only where the `per` key holds it by construction, as one of its elements: any
+		// other value may take several in a class, each a variant of its own (D70).
+		return KeyHolds(keys, data_key, expr) ? data_key : DECIDE_ROW_KEY;
 	}
 	// A reducer is one value per group of its own `by`: ClassifyScoped reads it as a reducer term, not here.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
@@ -452,7 +495,7 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
 		auto &subq = expr.Cast<BoundSubqueryExpression>();
 		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated() ? DConstants::INVALID_INDEX
-		                                                                          : data_key;
+		                                                                          : DECIDE_ROW_KEY;
 	}
 	if (expr.IsFoldable()) {
 		return DConstants::INVALID_INDEX;
@@ -1639,288 +1682,264 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &c
 	return result;
 }
 
-void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const {
-	ForEachScopedConstraintLeaf(constraints, [&](const Expression &leaf, const DecideEnclosingScope &enclosing) {
-		BuildClauseScopeChecks(leaf, enclosing, scope);
-	});
-}
-
 //===--------------------------------------------------------------------===//
-// Scope checks (language/guide.md §7)
+// Variant signatures (language/guide.md §7.1)
 //===--------------------------------------------------------------------===//
 
-namespace {
-//! What a clause reads once per class: its tuple terms -- data values and decisions
-//! outside reducers -- and its reducers, whose bodies are read per group instead.
-struct ClauseParts {
-	vector<const Expression *> values;
-	vector<const BoundColumnRefExpression *> decisions;
-	vector<const BoundAggregateExpression *> reducers;
-};
-} // namespace
-
-static bool HoldsReducer(const Expression &expr) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		return true;
+//! Whether two fields compare the same value: the same data, decision or `by` key.
+static bool SameSignatureField(const DecideSignatureField &a, const DecideSignatureField &b) {
+	if (a.kind != b.kind) {
+		return false;
 	}
-	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { found = found || HoldsReducer(child); });
-	return found;
-}
-
-//! Fills `parts` from `expr`. A value is a maximal subtree with neither a decision nor a
-//! reducer; a literal or a query-wide value has one value everywhere and is left out.
-static void CollectClauseParts(const Expression &expr, idx_t decide_index,
-                               const std::function<bool(const Expression &)> &query_wide, ClauseParts &parts) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		parts.reducers.push_back(&expr.Cast<BoundAggregateExpression>());
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-	    expr.Cast<BoundColumnRefExpression>().binding.table_index == decide_index) {
-		parts.decisions.push_back(&expr.Cast<BoundColumnRefExpression>());
-		return;
-	}
-	if (!BoundExpressionReferencesDecide(expr, decide_index) && !HoldsReducer(expr)) {
-		if (!expr.IsFoldable() && !query_wide(expr)) {
-			parts.values.push_back(&expr);
-		}
-		return;
-	}
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](const Expression &child) { CollectClauseParts(child, decide_index, query_wide, parts); });
-}
-
-//! The key of a scope check over `key` within each group of `by`: their union, added to
-//! `keys` when no key holds it yet. INVALID_INDEX is the empty key.
-static idx_t WithinGroups(idx_t key, idx_t by, vector<DecideKey> &keys) {
-	if (key == DConstants::INVALID_INDEX || by == DConstants::INVALID_INDEX) {
-		return key == DConstants::INVALID_INDEX ? by : key;
-	}
-	vector<DecideKeyElement> elements;
-	for (auto index : {key, by}) {
-		for (auto &element : keys[index].elements) {
-			elements.push_back(element.Copy());
-		}
-	}
-	auto text = keys[key].text + ", " + keys[by].text;
-	return FindOrCreateDecideKey(std::move(elements), text, keys);
-}
-
-//! How a message describes a decision's own key: `declared per row`, `declared per
-//! D.depotID`.
-static string DeclaredScope(const DecideVarScopeInfo &scope) {
-	if (scope.HasDeclaredKey()) {
-		return "declared per " + scope.declared_key;
-	}
-	return "declared per row";
-}
-
-//! Whether `key` determines `value` by construction: `value` is one of its elements as rows group on it, so every
-//! class shows it once (reflexivity, the trivial functional dependency). Such a check could never fail.
-static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression &value) {
-	for (auto &element : DecideKeyElements(keys, key)) {
-		if (element.Grouping().Equals(value)) {
-			return true;
-		}
+	switch (a.kind) {
+	case DecideSignatureFieldKind::VALUE:
+		return a.value->Equals(*b.value);
+	case DecideSignatureFieldKind::DECISION:
+		return a.decision == b.decision;
+	case DecideSignatureFieldKind::BY_KEY:
+		return a.key == b.key;
 	}
 	return false;
 }
 
-//! Whether `key` determines `decision` by construction: every element of the decision's own key is one of `key`'s
-//! (a key determines itself and every subset of it). A decision for the whole query has the empty key, which every key
-//! determines; one per row has no key of columns.
-static bool KeyHolds(const DecideScopeChecks &scope, idx_t key, const DecideVarScopeInfo &decision) {
-	if (decision.scope == DecideVarScope::ROW) {
-		return false;
-	}
-	auto own = decision.IsKeyed() ? scope.keyed_scopes[decision.keyed_scope_idx].key : DConstants::INVALID_INDEX;
-	for (auto &element : DecideKeyElements(scope.keys, own)) {
-		if (!KeyHolds(scope.keys, key, element.Grouping())) {
+bool DecideCanonicalizer::KeyHoldsField(idx_t key, const DecideSignatureField &field) const {
+	auto holds_every_element = [&](idx_t of) {
+		for (auto &element : DecideKeyElements(keys, of)) {
+			if (!KeyHolds(keys, key, element.Grouping())) {
+				return false;
+			}
+		}
+		return true;
+	};
+	switch (field.kind) {
+	case DecideSignatureFieldKind::VALUE:
+		return KeyHolds(keys, key, *field.value);
+	case DecideSignatureFieldKind::BY_KEY:
+		// `per g: sum(x) by (g)`: the class is the group.
+		return holds_every_element(field.key);
+	case DecideSignatureFieldKind::DECISION: {
+		if (field.decision >= variable_scopes.size()) {
 			return false;
 		}
+		auto &scope = variable_scopes[field.decision];
+		if (scope.IsGlobal()) {
+			return true; // one instance for the whole query
+		}
+		// Keyed on elements the key holds: one instance per class already.
+		return scope.IsKeyed() && scope.keyed_scope_idx < keyed_scopes.size() &&
+		       holds_every_element(keyed_scopes[scope.keyed_scope_idx].key);
 	}
-	return true;
+	}
+	return false;
 }
 
-void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
-                                                  DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
-	auto reducer_text = RenderDecideReducer(reducer, names);
-	idx_t by = DConstants::INVALID_INDEX;
-	TryParseGroupKeyTag(reducer.GetAlias(), by);
-	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- determines its
-	// body within each `by` group, over the rows its `when` keeps; one of the key's own
-	// elements, or a decision keyed by some of them, it determines by construction (KeyHolds).
-	idx_t scope_idx;
-	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.keyed_scopes.size() ||
-	    reducer.children.empty()) {
+void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t key, Clause clause,
+                                                 vector<DecideSignatureField> &fields) const {
+	auto add = [&](DecideSignatureField field) {
+		if (KeyHoldsField(key, field)) {
+			return;
+		}
+		for (auto &existing : fields) {
+			if (SameSignatureField(existing, field)) {
+				return;
+			}
+		}
+		fields.push_back(std::move(field));
+	};
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		// A reducer reads a group, not the row: its `by` key is the field, and its body is a scoped expression of its
+		// own.
+		idx_t by;
+		if (TryParseGroupKeyTag(expr.GetAlias(), by) && by < keys.size()) {
+			DecideSignatureField field;
+			field.kind = DecideSignatureFieldKind::BY_KEY;
+			field.key = by;
+			field.text = "by (" + DecideKeyText(keys, by) + ")";
+			add(std::move(field));
+		}
 		return;
 	}
-	auto key = WithinGroups(scope.keyed_scopes[scope_idx].key, by, scope.keys);
-	auto subject = DecideKeyText(scope.keys, scope.keyed_scopes[scope_idx].key);
-	ClauseParts body;
-	CollectClauseParts(
-	    *reducer.children[0], decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, body);
-	auto make_check = [&]() {
-		DecideScopeCheck check;
-		check.kind = DecideScopeCheckKind::DETERMINES;
-		check.rows = rows ? rows->Copy() : nullptr;
-		check.key = key;
-		check.filter = reducer.filter ? reducer.filter->Copy() : nullptr;
-		check.subject = subject;
-		check.context = "in " + reducer_text;
-		return check;
-	};
-	for (auto *value : body.values) {
-		if (KeyHolds(scope.keys, key, *value)) {
-			continue;
-		}
-		auto check = make_check();
-		check.value = value->Copy();
-		check.object = RenderDecideSource(*value, names);
-		scope.checks.push_back(std::move(check));
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	    expr.Cast<BoundColumnRefExpression>().binding.table_index == decide_index) {
+		// A decision is compared by instance.
+		DecideSignatureField field;
+		field.kind = DecideSignatureFieldKind::DECISION;
+		field.decision = expr.Cast<BoundColumnRefExpression>().binding.column_index;
+		field.text = StripDecideTags(expr.GetName());
+		add(std::move(field));
+		return;
 	}
-	for (auto *decision : body.decisions) {
-		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && KeyHolds(scope, key, variable_scopes[var_idx])) {
+	if (!ReferencesDecideVar(expr) && !ContainsReducer(expr)) {
+		// A literal or a query-wide value has one value everywhere.
+		if (!expr.IsFoldable() && !IsQueryWideConstant(expr)) {
+			DecideSignatureField field;
+			field.value = expr.Copy();
+			field.text = Quote(expr);
+			add(std::move(field));
+		}
+		return;
+	}
+	vector<Atom> atoms;
+	Decompose(expr, 1, atoms, clause);
+	if (atoms.size() == 1 && atoms[0].expr == &expr && !atoms[0].scale) {
+		// Not an additive context: each child is one of its own.
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](const Expression &child) { CollectSignatureFields(child, key, clause, fields); });
+		return;
+	}
+	// An additive context: its data terms, read through `+`, `-` and constant factors, are one field (D83), so written
+	// associativity never changes the count.
+	vector<Atom> data;
+	for (auto &atom : atoms) {
+		if (!ReferencesDecideVar(*atom.expr) && !ContainsReducer(*atom.expr)) {
+			if (!atom.expr->IsFoldable() && !IsQueryWideConstant(*atom.expr)) {
+				data.push_back(std::move(atom));
+			}
 			continue;
 		}
-		auto check = make_check();
-		check.decision = var_idx;
-		check.object = decision->GetName();
-		scope.checks.push_back(std::move(check));
+		CollectSignatureFields(*atom.expr, key, clause, fields);
+		if (atom.scale) {
+			CollectSignatureFields(*atom.scale, key, clause, fields);
+		}
+	}
+	if (!data.empty()) {
+		DecideSignatureField field;
+		field.value = BuildAdditive(data, false);
+		field.text = Quote(*field.value);
+		add(std::move(field));
 	}
 }
 
-void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
-                                                 DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
-	ClauseParts parts;
-	CollectClauseParts(
-	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
-	// The `per` key determines every tuple term, decision and `by` key of the clause; one of its own elements, or a
-	// decision keyed by some of them, it determines by construction (KeyHolds).
-	if (enclosing.per_wrapper) {
-		auto &per = *enclosing.per_wrapper;
-		auto key = enclosing.PerKey();
-		idx_t fragment;
-		auto key_text = TryParseSourceFragmentTag(per.GetAlias(), fragment) && fragment < scope.source_fragments.size()
-		                    ? scope.source_fragments[fragment]
-		                    : DecideKeyText(scope.keys, key);
-		auto make_check = [&]() {
-			DecideScopeCheck check;
-			check.kind = DecideScopeCheckKind::DETERMINES;
-			check.rows = enclosing.Condition() ? enclosing.Condition()->Copy() : nullptr;
-			check.key = key;
-			check.subject = key_text;
-			return check;
-		};
-		for (auto *value : parts.values) {
-			if (KeyHolds(scope.keys, key, *value)) {
-				continue;
-			}
-			auto check = make_check();
-			check.value = value->Copy();
-			check.object = RenderDecideSource(*value, names);
-			scope.checks.push_back(std::move(check));
-		}
-		for (auto *decision : parts.decisions) {
-			auto var_idx = decision->binding.column_index;
-			if (var_idx < variable_scopes.size() && KeyHolds(scope, key, variable_scopes[var_idx])) {
-				continue;
-			}
-			auto check = make_check();
-			check.decision = var_idx;
-			check.object = decision->GetName();
-			check.context =
-			    var_idx < variable_scopes.size() ? DeclaredScope(variable_scopes[var_idx]) : string("declared per row");
-			scope.checks.push_back(std::move(check));
-		}
-		for (auto *reducer : parts.reducers) {
-			idx_t group_key;
-			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key) || group_key >= scope.keys.size()) {
-				continue;
-			}
-			auto &by = scope.keys[group_key];
-			for (auto &element : by.elements) {
-				if (KeyHolds(scope.keys, key, element.Grouping())) {
-					continue;
-				}
-				auto check = make_check();
-				check.value = element.Grouping().Copy();
-				check.object = element.name;
-				check.context = "in by (" + by.text + ")";
-				scope.checks.push_back(std::move(check));
-			}
-		}
-	}
-	for (auto *reducer : parts.reducers) {
-		BuildReducerScopeChecks(*reducer, enclosing.Condition(), scope);
-	}
+//! Appends a signature to `out` and returns its index.
+static idx_t AddSignature(DecideSignatures &out, const Expression *rows, idx_t key, vector<DecideSignatureField> fields,
+                          string text, idx_t source_clause_id) {
+	DecideSignature signature;
+	signature.rows = rows ? rows->Copy() : nullptr;
+	signature.key = key;
+	signature.fields = std::move(fields);
+	signature.text = std::move(text);
+	signature.source_clause_id = source_clause_id;
+	out.signatures.push_back(std::move(signature));
+	return out.signatures.size() - 1;
 }
 
-void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const {
-	// The two-level form's PER wrapper and a `when` in front; the body is produced once.
-	const Expression *body = &objective;
-	DecideEnclosingScope enclosing;
-	bool two_level = false;
+void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const Expression *rows, Clause clause,
+                                                idx_t source_clause_id, DecideSignatures &out) const {
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](Expression &child) { SignQualifiedReducers(child, rows, clause, source_clause_id, out); });
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return;
+	}
+	auto &reducer = expr.Cast<BoundAggregateExpression>();
+	idx_t scope_idx;
+	// A reducer over data reads one value per class and value of its body: its table groups on both
+	// (DirectAddBoundTables), so it needs no scope of its own.
+	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= out.keyed_scopes.size() ||
+	    reducer.children.empty() || !ReferencesDecideVar(reducer)) {
+		return;
+	}
+	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- hands it one value per class and signature
+	// of its body (D70, D71), over the rows its `when` keeps.
+	auto key = out.keyed_scopes[scope_idx].key;
+	vector<DecideSignatureField> fields;
+	CollectSignatureFields(*reducer.children[0], key, clause, fields);
+	if (fields.empty()) {
+		return; // the key's classes are its instances already
+	}
+	unique_ptr<Expression> reducer_rows;
+	if (rows && reducer.filter) {
+		reducer_rows = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, rows->Copy(),
+		                                                     reducer.filter->Copy());
+	} else if (rows || reducer.filter) {
+		reducer_rows = (rows ? *rows : *reducer.filter).Copy();
+	}
+	auto text = message_names ? RenderDecideReducer(reducer, *message_names) : reducer.ToString();
+	auto signature = AddSignature(out, reducer_rows.get(), key, std::move(fields), std::move(text), source_clause_id);
+	// A scope of its own, on the same key: the classes it reads are the key's split by the signature, which no other
+	// reducer's or declaration's sharing the key are.
+	KeyedScopeInfo variant_scope;
+	variant_scope.key = key;
+	variant_scope.signature = signature;
+	out.keyed_scopes.push_back(std::move(variant_scope));
+	auto alias = reducer.GetAlias();
+	idx_t fragment = DConstants::INVALID_INDEX;
+	TryParseQualifiedReducerTextTag(alias, fragment);
+	RemoveDecideTag(alias, MakeQualifiedReducerTag(scope_idx, fragment));
+	AddDecideTag(alias, MakeQualifiedReducerTag(out.keyed_scopes.size() - 1, fragment));
+	reducer.SetAlias(std::move(alias));
+}
+
+void DecideCanonicalizer::BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const {
+	BuildConstraintSignatures(constraints, nullptr, out);
+}
+
+void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expression *when,
+                                                    DecideSignatures &out) const {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
+		idx_t source_clause_id = DConstants::INVALID_INDEX;
+		TryParseSourceClauseTag(expr.GetAlias(), source_clause_id);
+		SignQualifiedReducers(expr, when, Clause::CONSTRAINT, source_clause_id, out);
+		return;
+	}
+	auto &conj = expr.Cast<BoundConjunctionExpression>();
+	auto scope = EnterDecideScope(conj, DecideEnclosingScope());
+	const Expression *inner_when = scope.when_wrapper ? scope.Condition() : when;
+	for (idx_t i = 0; i < conj.children.size(); i++) {
+		if (IsConstraintChild(conj, i)) {
+			BuildConstraintSignatures(*conj.children[i], inner_when, out);
+		}
+	}
+	if (!scope.per_wrapper) {
+		return;
+	}
+	// `per K: C` is one instance per class of K and distinct value of C's fields (D70): its tuple terms and decisions
+	// outside reducers and its reducers' `by` keys, read on the canonical clause (D83). A `per` wrapper holds one
+	// clause (C0), under at most one `when`.
+	const Expression *rows = when;
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	vector<DecideSignatureField> fields;
+	auto key = scope.PerKey();
+	ForEachScopedConstraintLeaf(*conj.children[0], [&](const Expression &leaf, const DecideEnclosingScope &below) {
+		if (below.when_wrapper) {
+			rows = below.Condition();
+		}
+		CollectSignatureFields(leaf, key, Clause::CONSTRAINT, fields);
+		if (source_clause_id == DConstants::INVALID_INDEX) {
+			TryParseSourceClauseTag(leaf.GetAlias(), source_clause_id);
+		}
+	});
+	if (fields.empty()) {
+		return; // one instance per class, as the key alone gives
+	}
+	auto key_text = message_names ? RenderDecidePerKey(conj, message_names->fragments) : DecideKeyText(keys, key);
+	auto signature = AddSignature(out, rows, key, std::move(fields), "per " + key_text, source_clause_id);
+	auto alias = conj.GetAlias();
+	AddDecideTag(alias, MakeSignatureTag(signature));
+	conj.SetAlias(std::move(alias));
+}
+
+void DecideCanonicalizer::BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const {
+	Expression *body = &objective;
+	const Expression *when = nullptr;
 	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (!IsConstraintWrapper(conj) || conj.children.empty()) {
+		if (IsTwoLevelObjectiveWrapper(conj)) {
+			return; // the two-level form: its classes are its inner reducer's `by` groups
+		}
+		if (!IsWhenFilterWrapper(conj) || conj.children.size() != 2) {
 			break;
 		}
-		two_level = two_level || IsTwoLevelObjectiveWrapper(conj);
-		enclosing = EnterDecideScope(conj, enclosing);
+		when = conj.children[1].get();
 		body = conj.children[0].get();
 	}
-	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
-	if (two_level) {
-		return; // its classes are the inner reducer's own `by` groups, its key's
-	}
-	ClauseParts parts;
-	CollectClauseParts(
-	    *body, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
-	auto make_check = [&]() {
-		DecideScopeCheck check;
-		check.kind = DecideScopeCheckKind::DETERMINES;
-		check.rows = enclosing.Condition() ? enclosing.Condition()->Copy() : nullptr;
-		check.subject = "()";
-		return check;
-	};
-	// Produced once (`per ()`): every value and decision outside a reducer has one value or
-	// instance, and every top-level reducer one `by` group, over the kept rows.
-	for (auto *value : parts.values) {
-		auto check = make_check();
-		check.value = value->Copy();
-		check.object = RenderDecideSource(*value, names);
-		scope.checks.push_back(std::move(check));
-	}
-	for (auto *decision : parts.decisions) {
-		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && KeyHolds(scope, DConstants::INVALID_INDEX, variable_scopes[var_idx])) {
-			continue;
-		}
-		auto check = make_check();
-		check.decision = var_idx;
-		check.object = decision->GetName();
-		check.context =
-		    var_idx < variable_scopes.size() ? DeclaredScope(variable_scopes[var_idx]) : string("declared per row");
-		scope.checks.push_back(std::move(check));
-	}
-	for (auto *reducer : parts.reducers) {
-		idx_t group_key;
-		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key) && group_key < scope.keys.size()) {
-			auto &by = scope.keys[group_key];
-			for (auto &element : by.elements) {
-				auto check = make_check();
-				check.value = element.Grouping().Copy();
-				check.object = element.name;
-				check.context = "in by (" + by.text + ")";
-				scope.checks.push_back(std::move(check));
-			}
-		}
-		BuildReducerScopeChecks(*reducer, enclosing.Condition(), scope);
+	SignQualifiedReducers(*body, when, Clause::OBJECTIVE, DConstants::INVALID_INDEX, out);
+	// Produced once (`per ()`, D72): a field with a second value over the kept rows would be a second objective, which
+	// execution refuses.
+	vector<DecideSignatureField> fields;
+	CollectSignatureFields(*body, DConstants::INVALID_INDEX, Clause::OBJECTIVE, fields);
+	if (!fields.empty()) {
+		out.objective = AddSignature(out, when, DConstants::INVALID_INDEX, std::move(fields), "the objective",
+		                             DConstants::INVALID_INDEX);
 	}
 }
 

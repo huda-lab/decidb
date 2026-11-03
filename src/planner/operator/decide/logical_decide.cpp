@@ -215,7 +215,7 @@ string LogicalDecide::GetName() const {
 }
 
 void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
 	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
 	canonicalizer.VerifyCanonical(*canonical);
 
@@ -234,7 +234,7 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 		decide_objective = nullptr;
 		return;
 	}
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
 	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }
@@ -301,9 +301,17 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 		}
 	}
 	for (auto &check : scope_checks) {
-		for (auto *expr : {&check.rows, &check.value, &check.filter}) {
-			if (*expr) {
-				callback(expr);
+		if (check.value) {
+			callback(&check.value);
+		}
+	}
+	for (auto &signature : signatures) {
+		if (signature.rows) {
+			callback(&signature.rows);
+		}
+		for (auto &field : signature.fields) {
+			if (field.value) {
+				callback(&field.value);
 			}
 		}
 	}

@@ -86,14 +86,17 @@ struct DecideClauseScope {
 	//! The clause's `when`, or null for every row.
 	unique_ptr<Expression> when;
 	//! What the clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row shape emits one row per class of
-	//! `class_key` among the kept rows, the class's first (`per ()` is one class). NAMES_CLASSES: the aggregate shape,
-	//! the scoped easy MIN/MAX and the composed MIN/MAX emit their own rows, and the key only names the classes each
-	//! row stands for, which a diagnosis reports one by one (D28). NONE: no `per` written, so every kept row of a
-	//! group is a class of its own.
+	//! `class_key` and variant of `signature` among the kept rows, the variant's first (`per ()` is one class).
+	//! NAMES_CLASSES: the aggregate shape, the scoped easy MIN/MAX and the composed MIN/MAX emit their own rows, and
+	//! the key only names the classes each row stands for, which a diagnosis reports one by one (D28). NONE: no `per`
+	//! written, so every kept row of a group is a class of its own.
 	enum class PerRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
 	PerRole per = PerRole::NONE;
 	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX with NONE and for `per ()`.
 	idx_t class_key = DConstants::INVALID_INDEX;
+	//! The clause's variant signature (LogicalDecide::signatures), which splits each class into one instance per
+	//! distinct value of its fields (D70); INVALID_INDEX when it has none, so one instance per class.
+	idx_t signature = DConstants::INVALID_INDEX;
 
 	DecideClauseScope() = default;
 	//! The scope of a clause under `enclosing`: its `when`, and its `per` naming the classes its rows stand for.
@@ -104,6 +107,7 @@ struct DecideClauseScope {
 		if (enclosing.per_wrapper) {
 			per = PerRole::NAMES_CLASSES;
 			class_key = enclosing.PerKey();
+			TryParseSignatureTag(enclosing.per_wrapper->GetAlias(), signature);
 		}
 	}
 };

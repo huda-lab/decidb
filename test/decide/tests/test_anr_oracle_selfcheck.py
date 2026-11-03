@@ -9,9 +9,8 @@ Five independent readings must agree with it:
    indicators, strict stepping) and the numeric reading of the same instances find the
    same optimum.
 3. **``_scope_oracle.ScopedModel``** on the 784-cell scope grid and the two-level
-   objective: wherever today's determination rule holds, variant signatures generate
-   today's model (D70; deck p. 39), and the two-level objective is an ordinary nested
-   reducer (D81).
+   objective: both read variant signatures (D70; deck p. 39), so they generate one model
+   on every cell, and the two-level objective is an ordinary nested reducer (D81).
 4. **DeciDB**, on the cases today's language already runs (``Case.phase == 0``).
 5. **DeciDB's feasibility with every decision fixed**, against the oracle's, assignment
    by assignment (the status grid): a check no de-duplication after solving can pass.
@@ -225,12 +224,8 @@ def test_agrees_with_the_scope_oracle_on_the_grid(scope_solver, declaration, fro
     clauses = [X_BOUND, scope.Scoped(lhs, sense, rhs, when=when, per=per)]
     old, new = _both(scope_solver, table_rows(COLUMNS, ROWS), [DECISIONS[declaration]], clauses, MAXIMIZE_X)
     if not isinstance(old, Exception):
-        assert not isinstance(new, Exception), f"today's rule holds, so the answer is today's: {new}"
+        assert not isinstance(new, Exception), f"the scope oracle answers, so the answer is its: {new}"
         assert new.status == SolverStatus.OPTIMAL and new.objective == pytest.approx(old, abs=1e-6)
-    elif old.kind == "not_determined":
-        # D70: variants answer where today's rule refused
-        assert not isinstance(new, Exception), new
-        assert new.status == SolverStatus.OPTIMAL
     else:
         assert isinstance(new, ScopeError) and new.kind == old.kind, f"{old.kind} expected, got {new}"
 

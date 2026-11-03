@@ -36,7 +36,7 @@ public:
 
 	CheckPlan Build(const DirectRowCheck &check) {
 		read = reader.ReadSource();
-		return check.kind == DirectRowCheckKind::VALUE_IS_VALID ? ValueCheck(check) : DeterminationCheck(check);
+		return ValueCheck(check);
 	}
 
 private:
@@ -59,9 +59,6 @@ private:
 		return optimizer.BindAggregateFunction(name, std::move(children));
 	}
 
-	ExprPtr Result(const LogicalAggregate &aggregate, idx_t i) const {
-		return calc.Col(aggregate.expressions[i]->return_type, ColumnBinding(aggregate.aggregate_index, i));
-	}
 
 	//! A value check: the least message any row raises.
 	CheckPlan ValueCheck(const DirectRowCheck &check) {
@@ -70,131 +67,6 @@ private:
 		auto aggregate = DirectAggregateOver(optimizer, std::move(read.plan), {}, std::move(aggregates));
 		auto message = ColumnBinding(aggregate->aggregate_index, 0);
 		return {std::move(aggregate), message};
-	}
-
-	//! `value` as a message writes it: 'East', 10, NULL (DecideLiteralIsBare).
-	ExprPtr Literal(const ExprPtr &value) const {
-		auto text = calc.Cast(value, LogicalType::VARCHAR);
-		if (!DecideLiteralIsBare(value->return_type)) {
-			auto quote = calc.Constant(Value("'"));
-			auto doubled = calc.Fn("replace", {text, quote, calc.Constant(Value("''"))});
-			text = calc.Fn("concat", {quote, doubled, quote});
-		}
-		return calc.If(calc.IsNull(value), calc.Constant(Value("NULL")), text);
-	}
-
-	//! A determination check: an aggregate per class of the key counts the class's rows and finds its least and
-	//! greatest value, and a second aggregate over the classes that show more than one takes the message of the least
-	//! of them by key value.
-	CheckPlan DeterminationCheck(const DirectRowCheck &check) {
-		// The rows the check looks at: the clause's `when`, then the reducer's own, which is read on the rows the first
-		// keeps.
-		ExprPtr looked_at;
-		if (check.rows) {
-			looked_at = calc.Wrap(DirectActiveWhen(calc, check.rows.get()));
-		}
-		if (check.filter) {
-			auto own = calc.Wrap(DirectActiveWhen(calc, check.filter.get()));
-			looked_at = looked_at ? calc.If(looked_at, own, calc.Bool(false)) : own;
-		}
-		if (looked_at) {
-			looked_at = Over(*looked_at);
-		}
-		// The key is read on those rows alone, and a row whose key has a NULL in a NO_GROUP element is in no class.
-		vector<ExprPtr> keys;
-		auto in_class = looked_at;
-		for (auto &element : check.key) {
-			auto key = Over(*element.grouping);
-			keys.push_back(key);
-			if (element.no_group) {
-				auto read_key = DirectOnKeptRows(calc, looked_at, key);
-				auto present = calc.If(calc.IsNull(read_key), calc.Bool(false), calc.Bool(true));
-				in_class = in_class ? calc.If(in_class, present, calc.Bool(false)) : present;
-			}
-		}
-		unique_ptr<LogicalOperator> rows = std::move(read.plan);
-		if (in_class) {
-			auto filter = make_uniq<LogicalFilter>(calc.Out(in_class));
-			filter->children.push_back(std::move(rows));
-			rows = std::move(filter);
-		}
-		// Per class: its rows, and of a value its non-NULL rows, least and greatest, and the least spelling of each key
-		// element, which names the class.
-		vector<unique_ptr<Expression>> aggregates;
-		aggregates.push_back(Aggregate("count_star", {}));
-		if (check.value) {
-			auto value = Over(*check.value);
-			aggregates.push_back(Aggregate("count", {value}));
-			aggregates.push_back(Aggregate("min", {value}));
-			aggregates.push_back(Aggregate("max", {value}));
-		}
-		for (auto &element : check.key) {
-			// A class is named by its least spelling in binary order, as a collated key's classes are.
-			auto spelling = Over(*element.label);
-			if (spelling->return_type.id() == LogicalTypeId::VARCHAR) {
-				// Concatenating drops a collation, so MIN compares the spellings as bytes.
-				spelling = calc.If(calc.IsNull(spelling), calc.Constant(Value(LogicalType::VARCHAR)),
-				                   calc.Fn("concat", spelling, calc.Constant(Value(""))));
-			}
-			aggregates.push_back(Aggregate("min", {spelling}));
-		}
-		auto classes = DirectAggregateOver(optimizer, std::move(rows), keys, std::move(aggregates));
-		auto key_index = classes->group_index;
-		idx_t column = 0;
-		auto count = Result(*classes, column++);
-		auto bigint = [&](int64_t value) {
-			return calc.Constant(Value::BIGINT(value));
-		};
-		ExprPtr failing, least, greatest, with_null;
-		if (check.value) {
-			auto non_null = Result(*classes, column++);
-			least = Result(*classes, column++);
-			greatest = Result(*classes, column++);
-			with_null = calc.Cmp(ExpressionType::COMPARE_LESSTHAN, non_null, count);
-			// A class fails when it shows two values. NULL is a value of its own.
-			failing = calc.If(
-			    calc.Cmp(ExpressionType::COMPARE_EQUAL, non_null, bigint(0)), calc.Bool(false),
-			    calc.If(with_null, calc.Bool(true), calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, least, greatest)));
-		} else {
-			failing = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, count, bigint(1));
-		}
-		// The message, in the solver's text (DecideDeterminesText).
-		vector<ExprPtr> arguments {calc.Constant(Value(check.text.Format()))};
-		if (!check.key.empty()) {
-			string names;
-			vector<ExprPtr> labels {nullptr};
-			for (idx_t i = 0; i < check.key.size(); i++) {
-				names += (i > 0 ? ", " : "") + StringUtil::Replace(check.key[i].name, "%", "%%") + " = %s";
-				labels.push_back(Literal(Result(*classes, column++)));
-			}
-			labels[0] = calc.Constant(Value(names));
-			arguments.push_back(calc.Fn("printf", labels));
-		}
-		if (check.value) {
-			arguments.push_back(Literal(least));
-			arguments.push_back(calc.If(with_null, calc.Constant(Value("NULL")), Literal(greatest)));
-		}
-		auto message = calc.Fn("printf", arguments);
-		// The failing classes alone reach the second aggregate, so only theirs is written.
-		auto failing_classes = make_uniq<LogicalFilter>(calc.Out(failing));
-		failing_classes->children.push_back(std::move(classes));
-		vector<unique_ptr<Expression>> first;
-		if (check.key.empty()) {
-			first.push_back(Aggregate("min", {message}));
-		} else {
-			// Several classes can fail; the least by key value names its message. A struct orders its fields as ORDER
-			// BY does, NULL last, and is never NULL itself, so a class whose key is NULL is ordered too.
-			vector<ExprPtr> fields;
-			for (idx_t i = 0; i < keys.size(); i++) {
-				auto field = calc.Col(keys[i]->return_type, ColumnBinding(key_index, i));
-				field->SetAlias("k" + std::to_string(i));
-				fields.push_back(field);
-			}
-			first.push_back(Aggregate("arg_min", {message, calc.Fn("struct_pack", fields)}));
-		}
-		auto named = DirectAggregateOver(optimizer, std::move(failing_classes), {}, std::move(first));
-		auto binding = ColumnBinding(named->aggregate_index, 0);
-		return {std::move(named), binding};
 	}
 };
 

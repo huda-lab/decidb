@@ -554,15 +554,15 @@ TEST_CASE("An optimized DECIDE plan refuses to be copied", "[decidb]") {
 	REQUIRE_THROWS_AS(plan->Copy(*con.context), NotImplementedException);
 }
 
-TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark through a serialization round trip",
+TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark through a serialization round trip",
           "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SetUp(con);
 
-	// Two `by` keys, the determination checks of a `per` key and of a reducer's own `per`
-	// under its own `when`, and an objective written with a scope. The reducer's body is a
-	// decision per row, which its key must determine (a decision `per region` it would hold).
+	// Two `by` keys, the variant signature of a `per` key and of a reducer's own `per` under its own `when`, and an
+	// objective written with a scope. The clause's signature holds its bound (`cap`, which `per r_name` does not hold);
+	// the reducer's holds its body's decision per row, which gives the reducer a scope of its own.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 	                            "DECIDE x(INT), per region: open(BOOL) "
 	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= cap "
@@ -570,74 +570,118 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	                            "MAXIMIZE when cap > 0: sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	// The clause's `per r_name` and its `by (r_name)` are one key; the reducer's own
-	// `per region` within its `by (site.r_key)` groups adds their union for its check.
-	REQUIRE(before->keys.size() == 4);
-	REQUIRE(before->scope_checks[1].key == KeyWritten(*before, "region, site.r_key"));
+	// The clause's `per r_name` and its `by (r_name)` are one key.
+	REQUIRE(before->keys.size() == 3);
 	REQUIRE(KeyWritten(*before, "region") == before->keyed_scopes[0].key);
 	REQUIRE(before->keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
-	duckdb::vector<DecideScopeCheckKind> kinds;
-	for (auto &check : before->scope_checks) {
-		kinds.push_back(check.kind);
-	}
-	// The clause's per key over its bound (it holds its own `by` key by construction), then the reducer's own per key
-	// over the reducer's body.
-	REQUIRE(kinds ==
-	        duckdb::vector<DecideScopeCheckKind> {DecideScopeCheckKind::DETERMINES, DecideScopeCheckKind::DETERMINES});
-	REQUIRE(before->scope_checks[0].subject == "r_name");
-	REQUIRE(before->scope_checks[0].object == "cap");
-	REQUIRE(before->scope_checks[1].decision != DConstants::INVALID_INDEX);
+	REQUIRE(before->signatures.size() == 2);
+	auto &clause = before->signatures[0];
+	REQUIRE(clause.key == KeyWritten(*before, "r_name"));
+	REQUIRE(clause.text == "per r_name");
+	REQUIRE(clause.rows);
+	REQUIRE(clause.fields.size() == 1);
+	REQUIRE(clause.fields[0].kind == DecideSignatureFieldKind::VALUE);
+	REQUIRE(clause.fields[0].text == "cap");
+	auto &reducer = before->signatures[1];
+	REQUIRE(reducer.key == before->keyed_scopes[0].key);
+	REQUIRE(reducer.fields.size() == 1);
+	REQUIRE(reducer.fields[0].kind == DecideSignatureFieldKind::DECISION);
+	REQUIRE(before->keyed_scopes.size() == 2);
+	REQUIRE(before->keyed_scopes[1].key == before->keyed_scopes[0].key);
+	REQUIRE(before->keyed_scopes[1].signature == 1);
+	REQUIRE(before->objective_signature == DConstants::INVALID_INDEX);
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
 	RequireSameKeys(*after, *before);
-	REQUIRE(after->scope_checks.size() == before->scope_checks.size());
 	auto same = [](const duckdb::unique_ptr<Expression> &a, const duckdb::unique_ptr<Expression> &b) {
 		return a ? (b && a->Equals(*b)) : !b;
 	};
-	for (idx_t i = 0; i < before->scope_checks.size(); i++) {
-		auto &check = before->scope_checks[i];
-		auto &copy = after->scope_checks[i];
-		REQUIRE(copy.kind == check.kind);
-		REQUIRE(same(copy.rows, check.rows));
-		REQUIRE(same(copy.value, check.value));
-		REQUIRE(same(copy.filter, check.filter));
-		REQUIRE(copy.key == check.key);
-		REQUIRE(copy.decision == check.decision);
-		REQUIRE(copy.subject == check.subject);
-		REQUIRE(copy.object == check.object);
-		REQUIRE(copy.context == check.context);
+	REQUIRE(after->signatures.size() == before->signatures.size());
+	for (idx_t i = 0; i < before->signatures.size(); i++) {
+		auto &signature = before->signatures[i];
+		auto &copy = after->signatures[i];
+		REQUIRE(same(copy.rows, signature.rows));
+		REQUIRE(copy.key == signature.key);
+		REQUIRE(copy.text == signature.text);
+		REQUIRE(copy.source_clause_id == signature.source_clause_id);
+		REQUIRE(copy.fields.size() == signature.fields.size());
+		for (idx_t f = 0; f < signature.fields.size(); f++) {
+			REQUIRE(copy.fields[f].kind == signature.fields[f].kind);
+			REQUIRE(same(copy.fields[f].value, signature.fields[f].value));
+			REQUIRE(copy.fields[f].decision == signature.fields[f].decision);
+			REQUIRE(copy.fields[f].key == signature.fields[f].key);
+			REQUIRE(copy.fields[f].text == signature.fields[f].text);
+		}
 	}
+	REQUIRE(after->objective_signature == before->objective_signature);
 	REQUIRE(after->keyed_scopes.size() == before->keyed_scopes.size());
 	for (idx_t i = 0; i < before->keyed_scopes.size(); i++) {
 		REQUIRE(after->keyed_scopes[i].key == before->keyed_scopes[i].key);
+		REQUIRE(after->keyed_scopes[i].signature == before->keyed_scopes[i].signature);
 	}
 }
 
-TEST_CASE("A key that holds a keyed decision's own key plans no check that it determines the decision", "[decidb]") {
+TEST_CASE("A key that holds a keyed decision's own key gives the decision no signature field", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SetUp(con);
-	// Whether the plan checks that a key determines a decision; `open` is declared per region.
-	auto checks_a_decision = [&](const string &clause) {
+	// Whether some signature compares a decision by instance; `open` is declared per region.
+	auto signs_a_decision = [&](const string &clause) {
 		auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 		                            "DECIDE x(INT), per region: open(BOOL) SUCH THAT " +
 		                            clause + " MAXIMIZE sum(x)");
 		auto *decide = FindDecide(*plan);
 		REQUIRE(decide != nullptr);
-		for (auto &check : decide->scope_checks) {
-			if (check.decision != DConstants::INVALID_INDEX) {
-				return true;
+		for (auto &signature : decide->signatures) {
+			for (auto &field : signature.fields) {
+				if (field.kind == DecideSignatureFieldKind::DECISION) {
+					return true;
+				}
 			}
 		}
 		return false;
 	};
 	// The decision's own key, a key holding it, and a reducer's own key within its `by` groups.
-	REQUIRE_FALSE(checks_a_decision("per region: open <= 1"));
-	REQUIRE_FALSE(checks_a_decision("per region, site.s_key: open <= 1"));
-	REQUIRE_FALSE(checks_a_decision("sum(when cap > 30 per region: open) by (site.r_key) <= 1"));
+	REQUIRE_FALSE(signs_a_decision("per region: open <= 1"));
+	REQUIRE_FALSE(signs_a_decision("per region, site.s_key: open <= 1"));
+	REQUIRE_FALSE(signs_a_decision("sum(when cap > 30 per region: open) by (site.r_key) <= 1"));
 	// A key holding part of the decision's key, and a decision per row, which no key of columns holds.
-	REQUIRE(checks_a_decision("per r_name: open <= 1"));
-	REQUIRE(checks_a_decision("per region: x <= 1"));
+	REQUIRE(signs_a_decision("per r_name: open <= 1"));
+	REQUIRE(signs_a_decision("per region: x <= 1"));
+}
+
+TEST_CASE("A key gives no signature field to a value or a by key it holds by construction", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+	// The kinds of field the clause's signatures compare.
+	auto fields = [&](const string &clause) {
+		auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) SUCH THAT " +
+		                            clause + " MAXIMIZE sum(x)");
+		auto *decide = FindDecide(*plan);
+		REQUIRE(decide != nullptr);
+		duckdb::vector<DecideSignatureFieldKind> kinds;
+		for (auto &signature : decide->signatures) {
+			for (auto &field : signature.fields) {
+				kinds.push_back(field.kind);
+			}
+		}
+		return kinds;
+	};
+	using Kinds = duckdb::vector<DecideSignatureFieldKind>;
+	// Reflexivity (KeyHolds): a bound that is the key, a `by` key that is it, a relation's own column; the same
+	// expression under another key is a field.
+	REQUIRE(fields("per cap: sum(x) <= cap").empty());
+	REQUIRE(fields("per r_name: sum(x) <= cap") == Kinds {DecideSignatureFieldKind::VALUE});
+	REQUIRE(fields("per r_name: sum(x) by (r_name) <= 50").empty());
+	REQUIRE(fields("per s_key: sum(x) by (r_name) <= 50") == Kinds {DecideSignatureFieldKind::BY_KEY});
+	REQUIRE(fields("per site: sum(x) <= cap").empty());
+	// A reducer's own key: its body's decision per row is a field either way, its data only where the key does not
+	// hold it.
+	REQUIRE(fields("sum(per cap: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
+	REQUIRE(fields("sum(site: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
+	REQUIRE(fields("sum(per r_name: cap * x) <= 60") ==
+	        Kinds {DecideSignatureFieldKind::VALUE, DecideSignatureFieldKind::DECISION});
 }

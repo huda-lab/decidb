@@ -95,7 +95,7 @@ class DecideLinearFormBuilder {
 public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op)
 	    : context(context), op(op), decide_index(op.decide_index),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.is_boolean_var),
+	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var),
 	      splitter(context, op.decide_index, op.decide_variables) {
 	}
 

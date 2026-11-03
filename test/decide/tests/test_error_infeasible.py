@@ -220,9 +220,9 @@ class TestInfeasibleModels:
             match=r"(?i)cannot hold two different values.*infeasible",
         )
 
-    def test_equal_bound_varying_within_a_per_class_does_not_determine(self, decidb_cli):
-        """The `per grp:` spelling of the clause above generates it once per class, so a
-        bound that varies within the class is refused before any model is built."""
+    def test_equal_bound_varying_within_a_per_class_cannot_hold(self, decidb_cli):
+        """The `per grp:` spelling of the clause above is one instance per variant of the class
+        (D70): the class's total equals 500 and 350 at once, the same contradiction."""
         decidb_cli.assert_error(
             """
             SELECT id, grp, x FROM (
@@ -232,7 +232,7 @@ class TestInfeasibleModels:
             SUCH THAT per grp: sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
         """,
-            match=r"per grp does not determine cap\. grp = 'a' has more than one value: 350, 500\.",
+            match=r"(?i)cannot hold two different values.*infeasible",
         )
 
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):

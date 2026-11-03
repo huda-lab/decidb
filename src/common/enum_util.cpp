@@ -1213,21 +1213,40 @@ DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value) {
 
 const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
-	    {static_cast<uint32_t>(DecideScopeCheckKind::DETERMINES), "DETERMINES"},
 	    {static_cast<uint32_t>(DecideScopeCheckKind::VALUE_IS_VALID), "VALUE_IS_VALID"}};
 	return values;
 }
 
 template <>
 const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value) {
-	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 2, "DecideScopeCheckKind",
+	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 1, "DecideScopeCheckKind",
 	                                static_cast<uint32_t>(value));
 }
 
 template <>
 DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value) {
 	return static_cast<DecideScopeCheckKind>(
-	    StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 2, "DecideScopeCheckKind", value));
+	    StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 1, "DecideScopeCheckKind", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideSignatureFieldKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::VALUE), "VALUE"},
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::DECISION), "DECISION"},
+	    {static_cast<uint32_t>(DecideSignatureFieldKind::BY_KEY), "BY_KEY"}};
+	return values;
+}
+
+template <>
+const char *EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value) {
+	return StringUtil::EnumToString(GetDecideSignatureFieldKindValues(), 3, "DecideSignatureFieldKind",
+	                                static_cast<uint32_t>(value));
+}
+
+template <>
+DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value) {
+	return static_cast<DecideSignatureFieldKind>(
+	    StringUtil::StringToEnum(GetDecideSignatureFieldKindValues(), 3, "DecideSignatureFieldKind", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {

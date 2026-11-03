@@ -141,13 +141,18 @@ link (`KeyedScopeInfo::value_link`, deliberately absent from the serialization: 
 optimized plan is never serialized); its entities are the link's `by` groups among the
 rows the link's clause keeps, so it shares no scope with a binder scope on the same key.
 
-**From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
-run-time checks of every clause and of the objective (`DecideScopeCheck`: kind, the
-rows it looks at, the key, the value or decision, a reducer's own `when`, and the texts
-its message quotes; the key is an index into `keys`, its union with a `by` key for a
-check within groups). `PlanSubqueries` runs on the key elements as on the trees, and
-`EnumerateExpressions` visits the key table and the checks, so binding resolution and
-column pruning see their columns.
+**From the canonicalizer** — `objective_constant_offset`, and the variant signatures
+(D70): `signatures`, one `DecideSignature` per scoped expression with a field (the rows
+it reads, its `per` key as an index into `keys`, its fields, the text a plan names it by,
+its clause), indexed by a `per K:` wrapper's `__signature_<i>__` tag and by a reducer's
+own scope (`KeyedScopeInfo::signature`, a scope the canonicalizer appends for a
+relation-qualified reducer over decisions whose body has a field), and
+`objective_signature`, the objective's or `INVALID_INDEX`. A `DecideSignatureField` is a
+data `value`, a `decision` (an index into `decide_variables`) or a `by` key (an index
+into `keys`), with its text. `scope_checks` holds only the `VALUE_IS_VALID` checks the
+bound-side rewrite appends (stage 05). `PlanSubqueries` runs on the key elements as on
+the trees, and `EnumerateExpressions` visits the key table, the signatures and the
+checks, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
@@ -216,7 +221,7 @@ resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`keys`, `scope_checks`.
+`keys`, `scope_checks`, `signatures` (rows, fields' values).
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
@@ -311,7 +316,9 @@ renumbered freely: a serialized logical plan lives for microseconds inside one
 process and is never persisted, so there is no older layout to stay readable for. A
 retired field stays in the list as a `"deleted": true` entry, for which the generated
 serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`):
-`LogicalDecide`'s id 219 and `KeyedScopeInfo`'s id 105.
+`LogicalDecide`'s id 219, `KeyedScopeInfo`'s id 105 and `DecideScopeCheck`'s retired
+determination members. `LogicalDecide` writes `signatures` at 221 and
+`objective_signature` at 222, `KeyedScopeInfo` its `signature` at 108.
 
 ### What exercises it
 

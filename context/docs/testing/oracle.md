@@ -324,9 +324,9 @@ same `OracleSolver` interface.
   A NULL written key column is no class (`key_value`; a relation's columns compare NULL as a value). A
   NULL data value is skipped: a
   reducer leaves out a NULL member, an instance with a NULL part is not generated, and
-  the objective drops a NULL term. `check` raises `ScopeError` for the
-  three run-time errors (a `when` that keeps no row, a key that does not determine a
-  term, a reducer left with no rows) before any model is built.
+  the objective drops a NULL term. A class is generated once per variant of its body (D70).
+  `check` raises `ScopeError` for the one run-time error, an objective that would be
+  produced more than once (D72), before any model is built.
 - `solve_scoped` returns the oracle's optimum; `judge_scoped` checks DeciDB's answer
   against the same generated clauses and returns the objective it reaches. A test
   asserts the two agree.

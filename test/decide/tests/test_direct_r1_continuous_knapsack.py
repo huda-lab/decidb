@@ -3120,22 +3120,19 @@ def test_r1_leaves_clauses_of_different_scope_to_the_solver(decidb_cli):
 
 
 @pytest.mark.var_real
-@pytest.mark.error
 @pytest.mark.correctness
-def test_r1_a_limit_the_class_does_not_determine_raises_the_same_message_on_both_paths(decidb_cli):
+def test_r1_a_limit_that_varies_in_a_class_is_its_tightest_on_both_paths(decidb_cli):
+    # Classes a and c read several caps: one instance per variant (D70), each over the whole budget, so the budget is
+    # the tightest cap of all, 3, on both paths: 2 of the best value and 1 of the next.
     rows = "(1, 'c', 1.0, 1.0, 8), (2, 'c', 1.0, 2.0, 7), (3, 'a', 1.0, 3.0, 6), (4, 'a', 1.0, 4.0, 4), (5, 'b', 1.0, 5.0, 3)"
     sql = (
         f"SELECT id, amount FROM (FROM (VALUES {rows}) t(id, g, w, v, cap) "
         "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND per g: SUM(w*amount) <= cap "
-        "MAXIMIZE SUM(v*amount)) q"
+        "MAXIMIZE SUM(v*amount)) q ORDER BY id"
     )
-    messages = []
-    for mode in ("off", "require"):
-        with pytest.raises(DeciDBCliError) as error:
-            _run(decidb_cli, sql, mode)
-        messages.append(str(error.value))
-    assert "per g does not determine cap. g = 'a' has more than one value: 4.0, 6.0." in messages[0], messages[0]
-    assert messages[0] == messages[1]
+    answers = [_run(decidb_cli, sql, mode)[0] for mode in ("off", "require")]
+    for answer in answers:
+        assert [amount for _, amount in answer] == pytest.approx([0.0, 0.0, 0.0, 1.0, 2.0])
 
 
 @pytest.mark.var_real

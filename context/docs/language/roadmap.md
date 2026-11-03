@@ -7,7 +7,7 @@ either refuses a query with a message or answers it correctly. None is scheduled
 todo of the area that owns it.
 
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
-postfix `by` with their defaults (p. 16), the determination rule (pp. 26–31), deck examples 1–8 (pp. 17–24), NULL keys
+postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–8 (pp. 17–24), NULL keys
 and empty groups (pp. 30, 50, 56), and one nested shape, the two-level objective `outer(per k: inner(e) by (k))`.
 
 The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D86) and
@@ -54,14 +54,6 @@ reducers to any depth. Example 9: `sum(max(ship) by (S.customerID)) by (D.depotI
   outer clause's provenance.
 - **Test when built:** example 9 and `sum(x - avg(x) by (g)) <= 5`, one nested shape per reducer kind, judged against
   `test/decide/tests/_brute_force.py` on both solvers; the gate's message kept for every shape not admitted.
-
-## Variant signatures (pp. 34–40)
-
-When a `per` key does not determine a body expression or a `by` key, the deck makes one constraint per distinct
-combination (the class's *variant signatures*) instead of an error. Where every class has one signature, the result
-equals the current semantics, so it is a conservative extension. DeciDB raises the determination error instead
-([guide.md §7.1](guide.md#71-the-determination-rule)). `LogicalDecide::scope_checks` already lists the parts a
-signature is built from.
 
 ## Frame selectors (pp. 42–56, 66–69)
 

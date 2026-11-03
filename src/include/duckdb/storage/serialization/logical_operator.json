@@ -1050,6 +1050,17 @@
         "id": 220,
         "name": "keys",
         "type": "vector<DecideKey>"
+      },
+      {
+        "id": 221,
+        "name": "signatures",
+        "type": "vector<DecideSignature>"
+      },
+      {
+        "id": 222,
+        "name": "objective_signature",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
       }
     ]
   },

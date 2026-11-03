@@ -789,7 +789,8 @@ def test_bool_decision_factor_per_row_in_the_objective_is_refused(decidb_cli):
         SUCH THAT x <= 3
         MAXIMIZE c * SUM(x)
     """,
-        match=r"does not determine the decision c",
+        match=r"the decision 'c' \(declared per row\) has more than one instance over the kept rows, so the objective "
+        r"would be produced more than once",
     )
 
 

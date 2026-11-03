@@ -21,4 +21,4 @@ reprinting anything. Risk: libpg_query keeps only start positions, so span ends 
 balancing or grammar work; messages and goldens that quote a reprint would change. Found 2026-10-30 while scoping
 PERF-16 (architect review). The same cause shows in two more messages: `if(c, a, b)` and `iif` reach the binder as
 the parser's CASE, so `SUM(x * if(s = 'F', 1, 2))` is refused as a CASE the user never wrote, and `per g: SUM(x) by
-(CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message (lane AW, BUG-42).
+(CASE WHEN ...) <= 3` quoted the parser's expanded CASE in a message (lane AW, BUG-42).

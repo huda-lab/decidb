@@ -27,7 +27,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D35 | `norm(e, p)` takes a `by` |
 | D36 | A removed objective form with no exact equivalent gets its own message: a flat `MIN`/`MAX`/`AVG` with `PER` is told that an objective is produced once; an outer `AVG` is pointed to `sum` |
 | D37 | Removed-spelling messages carry the fixed phrase "is removed" and quote the user's own expressions, built by the transformer from the parse tree |
-| D38 | The colon form takes an exact key on `D`'s stored columns, the run-time data check and a keyed decision inside it, and echoes as written |
+| D38 | The colon form takes an exact key on `D`'s stored columns, one value per variant of each tuple (D71) and a keyed decision inside it, and echoes as written |
 | D40 | `OR` between constraints is refused; a data-only reducer on the decision side is refused with a message; no internal name appears in "does not reference a decision" |
 | D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed. A constant lower bound replaces the default floor of 0 on the rows it keeps: every row without a `when` or a reducer filter, and only the kept rows or members with one (the other rows keep 0). A keyed or query-wide decision takes the replaced floor when any row it reads is kept. The bound is read by value: any affine or scaled spelling with a constant other side (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`) is absorbed like the literal one, and so is a member scaled or shifted by constants (`max(-x) <= 2` is `x >= -2`, `max(2 * x) <= -10` is `x <= -5`) |
 | D43 | `D.x` is refused at bind time when `D` is a `FROM` relation and `D.x` binds to no column (*"write open, not D.open; a decision is referenced by its bare name"*); in a `when`, `per` or `by`: *"D.open is a decision; when, per and by may only use data"* |
@@ -43,7 +43,6 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D56 | The `T.x` message names `per T:` and says that `per T` keys on every column of `T` |
 | D60 | The scope oracle steps a strict sense onto whole numbers (`> K` → `floor(K) + 1`, `< K` → `ceil(K) - 1`), the same as stepping by one for a whole `K` |
 | D62 | The removed-`PER` message names the new spelling only: a NULL key is no group under both spellings (D5), so it needs no NULL note |
-| D63 | Determination messages print the colon form as written |
 | D64 | A bound on one decision admits what DuckDB admits: a whole-numbered decision takes `n` exactly when the written comparison, evaluated by DuckDB with `n` in place of the decision, is true (`0.1 * x <= 0.3` admits 3, since `0.1` is DECIMAL; `0.1::DOUBLE * x = 0.3::DOUBLE` admits nothing). Every such bound folds into the decision's box, a data coefficient (`cap * x <= 10`) included; only a bound whose interval is a constant replaces the default floor of 0, on the rows it keeps (D41); a bound of data only intersects with it |
 | D65 | An infinite bound keeps its SQL meaning: `x <= inf` and `x >= -inf` are no bound; `x >= inf`, `x <= -inf` and `x = ±inf` make the query infeasible on every backend, and `DIAGNOSE` names the clause. A literal `x >= -'inf'` frees `x` below, as `x >= -1e30` does |
 | D66 | A right side of magnitude 1e20 or more in the open direction (`x <= 1e30`) is no bound |
@@ -74,8 +73,8 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 |---|---|
 | S1 | `per row` is accepted as the written-out default |
 | S2 | Decisions are referenced by bare name; `D.open` is refused (D43) |
-| S3 | With no `per`, a constraint is per row, so `sum(x) <= cap` takes the tightest `cap`; with an explicit `per`, a varying bound is the determination error |
-| S4 | `SUM(D: e)` uses the same data check as `sum(per D: e)` |
+| S3 | With no `per`, a constraint is per row, so `sum(x) <= cap` takes the tightest `cap`; with an explicit `per`, each value of a varying bound is a variant (D70), the tightest again |
+| S4 | `SUM(D: e)` reads the same values as `sum(per D: e)` |
 | S6 | `per (a, b):` is refused with a message; parentheses mean only `per ()` |
 | S7 | Inside a DECIDE clause, `when`, `per` and `by` after a `)` are keywords; a column with such a name is quoted there |
 | S8 | `per` keys are columns and relations; expressions are allowed only in `by` |

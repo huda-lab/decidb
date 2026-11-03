@@ -448,10 +448,12 @@ is an internal error (the rewrite did not run).
 A term beside the reducers is one value per group when its scope, the join of its
 factors' scopes on the key lattice (`JoinDecideKeys`: query-wide < a key < per row), is the
 `by` key or query-wide. A decision brings its own key; data brings the enclosing `per`
-key, whose scope check makes it one value per class, or per row with no `per`. So the
-facility link `per D: sum(ship) by (D) <= cap * open`, with `open` declared `per D:`, is
-AGGREGATE: one row per depot with that depot's `open` column, where it used to take a
-helper per group. Execution counts the term once in each group's row (`CountOnce`, stage
+key where that key holds it by construction (`KeyHolds`: one of its elements, or a
+deterministic function of them), and per row otherwise, since a value the key does not
+hold may take several values in a class, each a variant (D70). So `per D: sum(ship) by
+(D) <= D.cap * open`, with `open` declared `per D:`, is AGGREGATE: one row per depot with
+that depot's `open` column. Under `per D.depotID`, `D.cap` is not one of the key's
+elements, so the same link takes a helper per group and one row per variant. Execution counts the term once in each group's row (`CountOnce`, stage
 08). Only `CanonicalizeTree` sees the enclosing scope, so it decides the shape once and
 stamps it; the linear form, direct solve and the window rewrite read the stamp
 (`VALUE_REWRITE_TAG`, else AGGREGATE for a reducer on the decision side and PER_ROW for
@@ -461,8 +463,8 @@ none) instead of classifying the bare comparison again.
 (`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
 rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
 (`IsPerClassWrapper`, a wrapper for every walker): one row per `by` group already stands
-for every class, whose constraints differ only in a bound the class determines, so the
-wrapper adds no row; it names the classes each group's row stands for, which the linear
+for every class and variant, whose constraints differ only in their bound, which the
+group's tightest bound covers (`=` refuses two), so the wrapper adds no row; it names the classes each group's row stands for, which the linear
 form reads as the clause's class key and a diagnosis reports one by one (D28). A
 VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
 
@@ -514,36 +516,29 @@ function and are **not** gated — those stay in release. Build `debug` or
 pins both the debug-mode throwing behavior and the release-mode no-op via a
 `REQUIRE_VERIFY_THROWS` macro that switches on `DEBUG`.
 
-### Scope checks
+### Variant signatures
 
-`BuildConstraintScopeChecks` and `BuildObjectiveScopeChecks` are read-only passes over
-the clauses and objective as bound, called once by `Binder::CreatePlan`, after
-`PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
-A rewrite's clause entering through
-`AddConstraint` builds none. Per clause, in this order: its `per` key determines each
-maximal decision- and reducer-free subexpression, each decision outside reducers and each
-`by` key (`DETERMINES`); then each reducer in turn: its own `per` key determines its body
-within its `by` group (`DETERMINES`). An empty set is no check: execution skips its
-instance (D68). The objective: `per ()` over its values and decisions,
-then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
-A `by` key's check reads the key as its rows group (`DecideKeyElement::Grouping()`, D69): over
-a NOCASE column, 'a' and 'A' are one value.
-The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check.
-Nor does one of the key's own elements as rows group on it (`KeyHolds`, reflexivity): a key determines its
-grouping expression by construction, so `per a: sum(x) by (a)` builds no check for `a`. The same rule covers a
-decision: a key determines a decision whose own key's elements are all among its own, so `per (a, b)` over a decision
-`per a` builds no check, and a query-wide decision (the empty key) never gets one. A per-row decision always does.
-A function of a key column
-still gets one, since rows that group together can differ under it (0.0 and -0.0 under `atan2(a, -1)`, '1 month'
-and '30 days' under `date_part('day', a)`). Key elements compare as rows group on them, collation included: a key
-element is bound as GROUP BY binds a group (`DecideKeyElement::Bind`, `PushCollation` at binding, so
-`default_collation` applies), and `FindOrCreateDecideKey` and `KeyHolds` compare `Grouping()`. `per t.g` over a NOCASE
-column and `by (t.g COLLATE noaccent)` are two keys, so the check runs and stops the query when 'a' and 'A' differ
-under `noaccent`; `by (t.g COLLATE NOCASE)` over that column is the same key. Collation names are never compared:
-`nocase.noaccent` and `noaccent.nocase` lower to different expressions and are two keys, as GROUP BY's duplicate-group
-removal sees them. The message texts are rendered
-here, through `RenderDecideSource`, from source fragments and relation aliases
-(`DecideScopeChecks`), since only planning still knows them.
+`BuildConstraintSignatures` and `BuildObjectiveSignatures` read the canonical tree, called
+once by `Binder::CreatePlan` right after `CanonicalizeTree` and `CanonicalizeObjective` (a
+rewrite's clause entering through `AddConstraint` builds none). They record what each
+scoped expression reads once per class (D70, [`../../language/guide.md`](../../language/guide.md)
+§7.1): a `per K:` clause (its wrapper tagged `__signature_<i>__`), a relation-qualified
+reducer over decisions (given a keyed scope of its own on the same key, its tag retargeted
+to it, `KeyedScopeInfo::signature`), and the objective. `CollectSignatureFields` walks the
+expression: a reducer is its `by` key (`BY_KEY`) and its body a scoped expression of its
+own; a decision is a field by instance (`DECISION`); a maximal decision- and reducer-free
+subtree is data by value (`VALUE`), and the data terms of one additive context, read
+through `+`, `-` and constant factors (`Decompose`), are one field (D83), rebuilt by
+`BuildAdditive`, so written associativity never changes the count. Literals and query-wide
+values are no field. Neither is anything the key holds by construction
+(`KeyHoldsField`): one of its elements as rows group on it (`DecideKeyElement::Grouping()`,
+collation included, D69), a deterministic function of them and of constants
+(`CAST(cap AS DOUBLE)`), a decision whose own key's elements it all holds, a query-wide
+decision, a `by` key all of whose elements it holds. An expression with no field has no
+signature: one instance per class, as the key alone gives. A data-only qualified reducer
+needs no scope of its own: its side table groups on the body's value too (stage 05).
+
+---
 
 ---
 
@@ -553,7 +548,7 @@ here, through `RenderDecideSource`, from source fragments and relation aliases
 - combine like terms;
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, L0 `norm()` or `IN`;
-- look inside reducer bodies, except to read them, unchanged, for the scope checks.
+- look inside reducer bodies, except to read them, unchanged, for the signatures.
   Splitting a body into `coefficient * variable` terms opens terms and can fail, so it
   lives beside this stage in `DecideTermSplitter` (`decide_term_split.cpp`), which reads
   canonical atoms;

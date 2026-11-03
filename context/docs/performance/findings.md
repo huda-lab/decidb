@@ -89,22 +89,9 @@ the same query (load 2.2): keyed mapping 252 → 109 ms, `solver.cleanup` 45 →
 (`BuildGroupIds`'s `out_rep_keys`), built in the mapping and destroyed with the model
 ([todo.md § PERF-13](todo.md#perf-13--q8s-key-values)).
 
-**Scope checks against constraint evaluation.** A join of `lineitem` and `orders` (1M rows), `DECIDE per o:
-assign(BOOL)`, one varying clause plus `per o.o_orderpriority: sum(assign) by (o.o_orderpriority) >= 20`, MAXIMIZE
-`sum(assign * l.l_extendedprice)`; Gurobi; operator times from DuckDB's JSON profile in separate runs; span times in
-ms. Load 1.9-2.1.
-
-| Clause | Checks | Query (ms) | Peak (MiB) | `scope_checks` | constraints | Window ops (CPU ms) |
-|---|---|---|---|---|---|---|
-| `per o: assign <= o.o_shippriority` | none needed | 571 | 838 | 15.5 | 97 | — |
-| `per l.l_orderkey: assign <= 1` | the operator's keyed check | 589 | 807 | 109 | 46 | — |
-| `per l.l_orderkey: assign <= o.o_shippriority` | keyed + a planned check | 1069 | 1667 | 87 | 97 | 569 + 877 + 125 |
-
-The operator's keyed check costs about twice constraint evaluation (109 against 46 ms). A planned determination check
-costs about 480 ms of wall time and 860 MiB of peak memory on 1M rows while passing, five times constraint
-evaluation: three window operators each materialize every row with every column, for the per-class count/min/max
-(569 ms CPU), a dense rank of all rows by the key to pick the least failing class (877 ms) and a global min for the
-message (125 ms) ([todo.md § PERF-3](todo.md#perf-3--a-passing-determination-check-materializes-every-row)).
+**Variant numbering.** The determination checks are gone (D70): a `per K:` clause in the per-row shape numbers its
+rows by key and signature (`BuildSignatureIds`) where its signature has a field, and nothing runs where it has none.
+Its cost on a 1M-row join is not yet measured ([todo.md § PERF-23](todo.md#perf-23--variant-numbering)).
 
 ## Model construction
 
@@ -273,14 +260,6 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   CSR buffer, each flush reallocated and copied the whole buffer: quadratic in the clause's rows. d1 (1M-row join,
   `per l.l_orderkey` over 250k kept rows) spent 5 s in `assembly.implied_bounds`. The reserve is gone and the vectors
   grow geometrically: d1 passing 6.2 → 0.98 s (three runs each, load 6-10). Q1, Q4 and P4 were too small to show it.
-- **Planned determination checks as side aggregates (PERF-3, closed).** A planned row check was three window operators
-  over the DECIDE source, each holding every row with every column (per-class counts and extremes, a dense rank of
-  every row to pick the least failing class, a global min for the message). Each check is now a grouped aggregate over
-  the columns it reads on its own read of the source, and the verdict a one-row CTE that gates every read (DuckDB's
-  uncorrelated scalar subquery). d1 (1M-row join, `per l.l_orderkey: assign <= o.o_shippriority + 1`), three runs
-  each against the build with BUG-40 fixed: passing 0.98 → 0.56 s and 1,543 → 817 MiB; failing 0.42 → 0.07 s and
-  1,476 → 436 MiB, same message. A key that
-  holds a decision's own key plans no check of it (FD reflexivity).
 - **Constant folding of direct-solve plans (PERF-16, closed with no change).** DuckDB folds constants before the
   DECIDE optimizer runs, so the trees a direct rule builds are not folded. A fold over the finished direct plan
   (`ExpressionRewriter` with `ConstantFoldingRule`, after `Apply`) does fold them (`CAST(100 AS DOUBLE)` → `100.0`)
@@ -304,7 +283,7 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   984 → 393 ms. Peak memory falls where rows were held wide and rises where a third read makes the reader copy the
   source (lineitem with a reducer 361 → 512 MiB; PERF-21). profile_direct_a1.py at 5M rows: 0.32 → 0.09 s.
 - **Column pruning below a materialized CTE.** DuckDB's `RemoveUnusedColumns` kept every column below a materialized
-  CTE, the consuming plan's included, so every gate verdict (PERF-3) and side table (PERF-15) wrapped around a direct
+  CTE, the consuming plan's included, so every gate verdict and side table (PERF-15) wrapped around a direct
   plan stopped pruning beneath it: `SELECT count(*)` over A1 scanned all 16 lineitem columns. The consuming plan is now
   pruned as any other, and the definition keeps only the union of the columns its references read (PERF-21).
 - **Late materialization under side tables, gates and copies (PERF-20 and PERF-21, closed).** Late materialization

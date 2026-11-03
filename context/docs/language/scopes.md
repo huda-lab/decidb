@@ -92,12 +92,15 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   side: `max(-x) <= 2` is `x >= -2`. With a `when` or a filter, an easy `min(m) >= K` is not absorbed; it replaces
   the default floor of 0 on the members it reads (D41). The reducer stays in the tree so EXPLAIN and DIAGNOSE quote
   the clause as written.
-- **Scope checks.** `BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks` and
-  `BuildObjectiveScopeChecks` build `DETERMINES` checks on `LogicalDecide::scope_checks`, from the clauses as bound.
-  The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read.
-  `PhysicalDecide::RunScopeChecks` runs them all before any clause is evaluated. An empty group is no check: execution
-  skips its instance (D68, `SkipGroupsWithAnEmptyReducer`). They are run on the data rather than proved statically because whether a key determines a
-  column is a property of the rows, and a static rule would refuse queries that are fine on their data.
+- **Variant signatures** (D70). `BuildConstraintSignatures` and `BuildObjectiveSignatures`
+  (`decide_canonicalizer.cpp`) record, right after canonicalization, the signature of every scoped expression with a
+  field (`LogicalDecide::signatures`): each `per K:` clause, tagged on its wrapper (`__signature_<i>__`), each
+  relation-qualified reducer over decisions, given a keyed scope of its own (`KeyedScopeInfo::signature`), and the
+  objective (`objective_signature`). A field is a data value (the data terms of one additive context summed into one,
+  D83), a decision by instance, or a reducer's `by` key; one the key holds by construction (`KeyHoldsField`) is none.
+  Execution numbers the rows by key and fields (`BuildSignatureIds`), so a class splits only where the data differs.
+  The bound-side rewrite adds `VALUE_IS_VALID` checks for the data values bounds read; an empty group is no check:
+  execution skips its instance (D68, `SkipGroupsWithAnEmptyReducer`).
 
 ## Optimizer
 
@@ -115,7 +118,8 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 In `src/execution/operator/decide/physical_decide.cpp`:
 
-- `RunScopeChecks` first. Then each clause reads only its kept rows: `KeptRows` / `KeepRowsWhere` evaluate a condition
+- `RunScopeChecks` first: the objective's signature must have one variant (D72). Then each clause reads only its kept
+  rows: `KeptRows` / `KeepRowsWhere` evaluate a condition
   (the `and`/`or` order of guide §6.3), and `ExecuteOnReadRows` runs every other expression only on the rows a mask
   marks, NULL elsewhere.
 - `BuildGroupIds` partitions rows by a key, NULL a class; `LookupOrBuildPerGroupIds` caches one partition per key so
@@ -124,8 +128,9 @@ In `src/execution/operator/decide/physical_decide.cpp`:
 - `BuildKeyedMappings` gives every row its class's solver column, for keyed decisions and for helpers.
 - `BuildQualifierKeepMask` keeps one row per class of an inner `per` (or colon form) in each group, among the rows
   the reducer reads; `ApplyQualifierToFilter` ANDs it into the term's filter. AVG's denominator then counts classes
-  without special code. Which row survives cannot matter, because `DETERMINES` has checked every row of a class
-  carries the same value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
+  without special code. A reducer whose body has a field keeps one row per variant of each class: its own keyed
+  scope numbers the rows by key and signature (D71), so every row it keeps stands for rows that read the same value.
+  The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
 - The prepared model (`decide_prepared_model.hpp`) carries a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
   (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition` and

@@ -176,7 +176,7 @@ which feeds McCormick envelopes.
 over the whole bound constraint tree, the objective and every `by` key: *"DECIDE:
 random() is not supported in a constraint"*. The check reads each function's own
 stability, since `IsVolatile()` is also true for every expression above a volatile one.
-Every later stage reads a clause more than once (the scope checks, the rows, the
+Every later stage reads a clause more than once (the signatures, the rows, the
 bound-side window, direct solve's plan), so one volatile value would select different
 rows each time; refusing it here is what lets those stages evaluate a clause freely.
 A value computed once per row in a subquery or CTE before DECIDE is data and stays
@@ -241,10 +241,10 @@ reducer counts once. `per row` adds nothing. A `by` after the reducer is
 of the FROM clause, its stored columns form the key (`AddRelationColumns`), and `FindOrCreateScope` — shared with `FindOrCreateKeyScope` —
 finds or creates the key's scope, so `SUM(D: e)` and `sum(per D: e)` share one
 scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's alias). `COLON_FORM_TAG` keeps the
-spelling for the echo (D38). Nothing is checked against the body at bind time: that `D`
-determines it — every column, per-row and keyed decision in it — is the DETERMINES
-check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the
-decision y (in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation
+spelling for the echo (D38). Nothing is checked against the body at bind time: a body
+that reads more than `D` holds -- a column of another relation, a per-row decision -- is
+one value per variant of each tuple (D71), which the signature of stage 04 records, as for
+`per`. Refused at bind time: a qualifier that is not a relation
 name, a relation not in the FROM clause, a qualifier on anything but `SUM`, `AVG`,
 `MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions alone
 (`ClassifyReducerCall`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)`
@@ -306,8 +306,8 @@ is the bound, and `IsAllowedDecisionFreeBoundExpression` decides which shapes it
 take: constants, data columns, operators and functions over allowed operands, casts,
 scalar subqueries, and data-only reducers with their own `when`, `per` and `by`. A data
 column is a bound like any other: a clause with no `per` is generated once per kept
-row, so the tightest row's value binds; under `per K:` the key must determine it, which
-is a run-time check (stage 04, "Scope checks"). Arithmetic composes freely, `-`
+row, so the tightest row's value binds; under `per K:` each of its values in a class is a
+variant (D70, stage 04, "Variant signatures"), so the tightest binds again. Arithmetic composes freely, `-`
 included: a bound is evaluated as an expression over the row, so subtraction is no
 different from addition, and `-5.0::DOUBLE` is a negative bound like any other. A colon-form or `by` marker recurses
 into child 0 only: its relations or key are not values on that side. A data-only

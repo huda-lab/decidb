@@ -308,9 +308,9 @@ Tests live in `test/decide/tests/test_qualified_reducer.py`, plus
 qualified reducer in the split clause order.
 
 `SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result
-rows: it means `sum(per D: expr)`, one value per class of `D`'s columns, and `D`
-must determine the body, checked against the data at run time ("per D does not
-determine ..."). Semantics: `../language/functions.md` and
+rows: it means `sum(per D: expr)`, one value per variant of each class of `D`'s
+columns (D71): a body that reads more than `D` holds reads one value per distinct
+value of what it reads. Semantics: `../language/functions.md` and
 `../language/scopes.md`; syntax: `../language/guide.md`
 §5.1. The equivalence with `sum(per D: e)` is pinned in `test_scope_reducer_inner.py`
 and `test_scope_removed_syntax.py::test_colon_form_stays`.
@@ -392,17 +392,14 @@ makes the row-weighted and identity-weighted optima diverge.
   inside a multi-relation list
   (`test_unknown_relation_in_multi_relation_qualifier_rejected`), and a row-invariant
   body, i.e. a query-wide decision standing alone inside the reducer
-  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`). At run time,
-  the data check `sum(per n: ...)` takes: a column from another relation ("per n does
-  not determine c.c_acctbal (in sum(n: c.c_acctbal * keepN))") and a per-row decision
-  ("per n does not determine the decision y (in sum(n: ...))").
+  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`). One value per
+  variant (D71): a column from another relation reads each distinct balance of a nation
+  (`test_foreign_column_inside_qualified_reducer_is_one_value_per_variant`, `SUM(DISTINCT
+  c_acctbal)` as DuckDB computes it), and a per-row decision reads every row, as the
+  unqualified form does (`test_row_scoped_decision_inside_qualified_reducer_is_one_value_per_row`).
 
 ### Caveats
 
-- `test_row_scoped_decision_inside_qualified_reducer_rejected` pins settled
-  semantics: `n` does not determine a per-row decision, so de-duplicating a
-  repeated identity cannot pick one of its values. The message quotes the reducer
-  as written.
 - `test_query_wide_decision_alone_inside_qualified_reducer_rejected` pins the
   general row-invariance rule (a body with nothing to aggregate over), while the
   paper's §3.2.2 carve-out for a weighted query-wide decision is covered by the
@@ -496,7 +493,7 @@ signed column and negative constant literal multiplier
 |-----------|-----------|--------|
 | Comparison operators | aggregate SUM | ✓ (all 6) |
 | Comparison operators | per-row | ✓ (all 6) |
-| `<>` | a bound varying within a `by` group | ✓ (`test_per_clause.py`: every exclusion kept without a `per` key; the determination error under one) |
+| `<>` | a bound varying within a `by` group | ✓ (`test_per_clause.py`: every exclusion kept, with a `per` key or without one) |
 | `<>` | keyed decision | ✓ |
 | `<>` | REAL LHS (rejected) | ✓ |
 | BETWEEN | keyed decision | ✓ |
@@ -606,7 +603,7 @@ Tests live in:
 - `test/decide/tests/test_per_objective.py` — the two-level objective `outer(per k: inner(e) by (k))`
 - `test/decide/tests/test_per_interactions.py` — `per` composed with auxiliary-variable features (hard MIN/MAX, ABS, several decisions)
 
-The scoping language's own suites (generation, `by`, determination, the grid) are in
+The scoping language's own suites (generation, `by`, variants, the grid) are in
 [`scope_suite.md`](scope_suite.md). Syntax: `../language/guide.md`
 §4, §5.2 and §6.2.
 
@@ -627,8 +624,8 @@ All oracle-verified:
   is NULL, and a relation key compares NULL as a value. Judged by the scope oracle.
 - **Bounds that vary within a group** (`test_per_clause.py`): with no `per` key,
   `sum(x) by (grp) <> cap` is generated once per row, so every excluded value is kept;
-  under `per grp:` a bound that varies within a class is the determination error
-  (`test_per_not_equal_varying_bound_under_per_key_does_not_determine`).
+  under `per grp:` each value of a bound that varies within a class is an exclusion of its
+  own (`test_per_not_equal_varying_bound_under_per_key_is_two_exclusions`).
 - **Qualified key columns** (`test_per_qualified.py`): one and several qualified
   columns, mixed qualified and bare, equivalence with the unqualified spelling, a
   table alias, a qualified column in a `when` and in the two-level objective, and an
@@ -1040,8 +1037,7 @@ All oracle-verified:
   `test_correlated_subquery_aggregate_per_rhs_tightest_per_group`); a reducer's own
   `when` does not narrow the rows the bound is read on
   (`test_correlated_subquery_rhs_ignores_aggregate_local_when`). Under a `per` key a
-  bound that varies within a class is the determination error
-  (`test_scope_determination.py`).
+  bound that varies within a class is one instance per value (`test_scope_variants.py`).
 
 #### Error cases
 
@@ -1111,9 +1107,8 @@ Categories covered in `test_error_binder.py` unless noted:
   (`test_correlated_subquery_aggregate_equality_rhs_rejected`).
 - `OR` between constraints, in every scope spelling, and data-only aggregates as
   divisors (`TestRefusalsInEverySpelling`).
-- The scope errors — a key that does not determine, a `when` that keeps no row, a
-  reducer with no row for a group, key errors — are in the `test_scope_*.py` suites
-  ([`scope_suite.md`](scope_suite.md)).
+- The scope errors — an objective produced more than once, key errors — are in the
+  `test_scope_*.py` suites ([`scope_suite.md`](scope_suite.md)).
 
 ### Infeasibility detection
 
@@ -1123,9 +1118,9 @@ bounds (`x >= 10 AND x <= 5`), impossible SUM constraint (`SUM(x) >= 1000`
 with too few rows), negative SUM upper bound, a `when` that forces every row to
 zero beside `SUM(x) >= 1` (`when l_quantity > 0: x <= 0`), and
 `sum(x) by (grp) = cap` with two caps in one group
-(`test_equal_bound_varying_per_group_is_infeasible`). Its `per grp:` form raises
-the determination error, "per grp does not determine cap", instead
-(`test_equal_bound_varying_within_a_per_class_does_not_determine`).
+(`test_equal_bound_varying_per_group_is_infeasible`). Its `per grp:` form is one
+instance per cap and raises the same contradiction
+(`test_equal_bound_varying_within_a_per_class_cannot_hold`).
 
 ### Unboundedness detection
 

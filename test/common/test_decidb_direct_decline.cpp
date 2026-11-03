@@ -55,6 +55,16 @@ const char *SOURCE_ROWS =
 constexpr idx_t FLAG_SLOT = 3;
 constexpr idx_t NAME_SLOT = 4;
 
+//! An objective part reducing by `flag`: the front end declines an objective whose `by` key takes several values (it
+//! is produced once, D72, which the operator checks), so the shape is an edit of a readable IR.
+void ObjectiveByFlag(DirectIR &ir) {
+	DirectKeyElement element;
+	element.grouping = make_uniq<BoundColumnRefExpression>(LogicalType::BOOLEAN, ir.source_bindings[FLAG_SLOT]);
+	element.label = element.grouping->Copy();
+	element.name = "flag";
+	ir.objective.parts[0].by.push_back(std::move(element));
+}
+
 //! Offers the IR to `target`, after the edit, and records the answer. It always declines, so the query keeps its
 //! solver plan and EXPLAIN has nothing to run.
 class ProbeRule final : public DirectSolveRule {
@@ -256,7 +266,7 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
 	// CheckCondition: the objective.
 	shapes.push_back(S1("an objective WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
-	shapes.push_back(S1("an objective with a by key", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
+	shapes.push_back(S1("an objective with a by key", "SUM(x) <= 2", ObjectiveByFlag, "MAXIMIZE SUM(w*x)"));
 	shapes.push_back(
 	    S1("a sense with no objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts.clear(); }));
 	// ProveScope.
@@ -427,7 +437,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a bound on a decision that is not declared", "x <= cap",
 	                    [](DirectIR &ir) { ir.constraints[0].bound.var_idx = 1; }));
 	// CheckCondition: the objective.
-	shapes.push_back(A1("an objective with a by key", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
+	shapes.push_back(A1("an objective with a by key", "x <= cap", ObjectiveByFlag, "MAXIMIZE SUM(w*x)"));
 	shapes.push_back(A1("an average objective", "x <= cap", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(A1("a nested objective part", "x <= cap",
 	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
@@ -717,7 +727,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
 	// CheckCondition and ProveObjective: the objective.
 	shapes.push_back(
-	    R1("an objective with a by key", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
+	    R1("an objective with a by key", "x <= cap AND SUM(cap*x) <= 5", ObjectiveByFlag, "MAXIMIZE SUM(w*x)"));
 	shapes.push_back(R1("a budget key that reads a decision", "SUM(cap*x) by (name) <= 5", [](DirectIR &ir) {
 		LeftPart(ir).by[0].grouping =
 		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));

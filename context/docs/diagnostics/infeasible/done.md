@@ -539,7 +539,7 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   execution that holds the source runs, so a reader never outlives the data it reads. `FormatPerGroupKey`
   (`decide_diagnostic_render.cpp`) is the one formatter: it joins composite columns with `, `; a
   relation key (`per D`, which compares NULL as a value) writes each value as an SQL literal, as
-  the determination messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key
+  DeciDB's messages do (`DecideSqlLiteral`: `'NULL'` quoted, NULL bare); a written key
   keeps its spelling, where an empty-string key renders `''` so it is not confused with
   "ungrouped". `StampConstraintProvenance` derives the name from the group key it stamps, so no
   emission site stamps a group without its name. A hard MIN/MAX whose bound no row in a group can

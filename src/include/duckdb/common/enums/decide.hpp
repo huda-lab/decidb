@@ -106,10 +106,16 @@ inline idx_t JoinDecideKeys(idx_t a, idx_t b) {
 }
 
 //! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
-//!   DETERMINES     — every class of a key shows one value, or one instance of a decision
 //!   VALUE_IS_VALID — every row holds a value the model can read: a computed message, NULL on a valid row
-//! An empty group is no check: it skips its constraint (deck p. 56).
-enum class DecideScopeCheckKind : uint8_t { DETERMINES = 1, VALUE_IS_VALID = 3 };
+//! An empty group is no check: it skips its constraint (deck p. 56). A value that varies within a class is a variant,
+//! not an error (D70, LogicalDecide::signatures); 1 was the retired determination check.
+enum class DecideScopeCheckKind : uint8_t { VALUE_IS_VALID = 3 };
+
+//! What one field of a variant signature (LogicalDecide::signatures) compares, at a row:
+//!   VALUE    — a data expression, by value (NULL a value)
+//!   DECISION — a decision, by instance: a per-row one by its row, a keyed one by its class
+//!   BY_KEY   — a reducer's `by` key, by the value of each of its elements
+enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2 };
 
 //! How one column of a key (LogicalDecide::keys) compares NULL.
 //!   NO_GROUP — a column the user wrote: rows group as SQL's `=` compares them, so a NULL
@@ -308,6 +314,15 @@ static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
 //! constraint is generated once per class of the key among the kept rows; it groups no
 //! reducer, and NULL is a class.
 static constexpr const char *PER_CLASS_TAG = "__per_class__";
+
+//! Tag prefix naming the variant signature of a `per K:` clause (on its PER_CLASS_TAG wrapper):
+//! "__signature_<i>__" indexes LogicalDecide::signatures. The clause is one instance per class of K and value of the
+//! signature's fields (D70); no tag means it has no field, so one instance per class.
+static constexpr const char *SIGNATURE_TAG_PREFIX = "__signature_";
+
+inline string MakeSignatureTag(idx_t signature_idx) {
+	return string(SIGNATURE_TAG_PREFIX) + to_string(signature_idx) + "__";
+}
 
 //! Tag on a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE): the
 //! canonicalizer stamps it once, and DecideOptimizer::RewriteScopedReducers replaces each
@@ -519,6 +534,11 @@ inline bool TryParseGroupKeyTextTag(const string &alias, idx_t &text_fragment) {
 
 inline bool TryParsePerKeyTag(const string &alias, idx_t &key_idx) {
 	return TryParseDecideIndexTag(alias, PER_KEY_TAG_PREFIX, key_idx);
+}
+
+//! Reads back the signature index from an alias written by MakeSignatureTag.
+inline bool TryParseSignatureTag(const string &alias, idx_t &signature_idx) {
+	return TryParseDecideIndexTag(alias, SIGNATURE_TAG_PREFIX, signature_idx);
 }
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when

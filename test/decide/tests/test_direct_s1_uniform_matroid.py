@@ -1869,22 +1869,18 @@ def test_s1_leaves_clauses_of_different_scope_to_the_solver(decidb_cli):
 
 
 @pytest.mark.var_boolean
-@pytest.mark.error
 @pytest.mark.correctness
-def test_s1_a_bound_the_class_does_not_determine_raises_the_same_message_on_both_paths(decidb_cli):
-    # Classes a and c both fail; the message names the least and quotes its least and greatest value.
+def test_s1_a_bound_that_varies_in_a_class_is_its_tightest_on_both_paths(decidb_cli):
+    # Classes a and c read several caps: one instance per variant (D70), each over the whole total, so the total is
+    # held by the tightest cap of all, 3, on both paths: the three best scores.
     rows = "(1, 'c', 9.0, 8), (2, 'c', 8.0, 7), (3, 'a', 7.0, 6), (4, 'a', 6.0, 4), (5, 'a', 5.0, 5), (6, 'b', 4.0, 3)"
     sql = (
         f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, score, cap) "
-        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score*x)) q"
+        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
-    messages = []
-    for mode in ("off", "require"):
-        with pytest.raises(DeciDBCliError) as error:
-            _run(decidb_cli, sql, mode)
-        messages.append(str(error.value))
-    assert "per g does not determine cap. g = 'a' has more than one value: 4, 6." in messages[0], messages[0]
-    assert messages[0] == messages[1]
+    answers = [_run(decidb_cli, sql, mode)[0] for mode in ("off", "require")]
+    assert answers[0] == answers[1]
+    assert [bool(x) for _, x in answers[0]] == [True, True, True, False, False, False]
 
 
 @pytest.mark.var_boolean

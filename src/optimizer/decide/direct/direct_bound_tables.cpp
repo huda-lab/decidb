@@ -63,10 +63,11 @@ private:
 		return DirectAggregateOver(optimizer, std::move(read.plan), keys, std::move(aggregates));
 	}
 
-	//! The reducer's function over the classes of its `per` key that its group has: the rows it reads, with a class
-	//! (no NULL in a NO_GROUP element), are grouped by key and class to read the class's body, and the function runs
-	//! over the classes of each group. Only SUM, AVG, MIN and MAX take a `per`, so a group with no class gives NULL
-	//! whether its row is in the table or not.
+	//! The reducer's function over the instances of its `per` key that its group has: the rows it reads, with a class
+	//! (no NULL in a NO_GROUP element), are grouped by key, class and the body's value -- a body of data is its own
+	//! signature, so each distinct value in a class is one instance (D70, D71) -- and the function runs over the
+	//! instances of each group. Only SUM, AVG, MIN and MAX take a `per`, so a group with no class gives NULL whether
+	//! its row is in the table or not.
 	unique_ptr<LogicalOperator> CountedByClass(const DecideBoundAggregate &record, const vector<ExprPtr> &keys) {
 		D_ASSERT(record.argument);
 		ExprPtr counted = record.reads ? Over(*record.reads) : nullptr;
@@ -85,7 +86,8 @@ private:
 			filter->children.push_back(std::move(rows));
 			rows = std::move(filter);
 		}
-		// The key determines the body (a scope check), so any row of a class reads it.
+		classes.push_back(Over(*record.argument));
+		// Every row of an instance reads the same body.
 		vector<unique_ptr<Expression>> body;
 		body.push_back(Arbitrary(Over(*record.argument)));
 		auto per_class = DirectAggregateOver(optimizer, std::move(rows), classes, std::move(body));

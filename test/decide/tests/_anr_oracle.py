@@ -583,36 +583,45 @@ class AnrModel:
             return _SKIP
         return self._fields(body, t, kept)
 
-    def _collect(self, expr, scale: float, pure: list, impure: list) -> None:
+    def _collect(self, expr, scale: float, data: list, other: list) -> None:
         """Flatten one additive context through ``+``, ``-`` and constant factors, as the
-        canonical tree does (D83): ``x + a <= b + sum(y)`` has the one pure field
-        ``x + a - b``. A row-varying factor is a field of its own (``mul``)."""
+        canonical tree does (D83): its data terms are one field, so ``x + a <= b + sum(y)``
+        has the data field ``a - b`` beside the decision ``x`` and the reducer's ``by``."""
         if isinstance(expr, Add):
             for term in expr.terms:
-                self._collect(term, scale, pure, impure)
+                self._collect(term, scale, data, other)
         elif isinstance(expr, Mul) and isinstance(expr.left, Const):
-            self._collect(expr.right, scale * expr.left.value, pure, impure)
+            self._collect(expr.right, scale * expr.left.value, data, other)
         elif isinstance(expr, Mul) and isinstance(expr.right, Const):
-            self._collect(expr.left, scale * expr.right.value, pure, impure)
-        elif self._is_pure(expr):
-            pure.append((scale, expr))
+            self._collect(expr.left, scale * expr.right.value, data, other)
+        elif self._is_data(expr):
+            data.append((scale, expr))
         else:
-            impure.append(expr)
+            other.append(expr)
 
     def _fields(self, expr, t, kept) -> tuple:
-        """The fields of one additive context: each impure term's fields, then the net
-        value of the pure terms as one field (D83)."""
-        pure, impure = [], []
-        self._collect(expr, 1.0, pure, impure)
-        fields = [self._impure_fields(node, t, kept) for node in impure]
-        if pure:
+        """The fields of one additive context: each other term's fields, then the net
+        value of the data terms as one field (D83)."""
+        data, other = [], []
+        self._collect(expr, 1.0, data, other)
+        fields = [self._term_fields(node, t, kept) for node in other]
+        if data:
             total: dict = {}
-            for scale, node in pure:
+            for scale, node in data:
                 _add_into(total, self._form(node, t, kept), scale)
             fields.append(("terms", _freeze(total)))
         return tuple(fields)
 
-    def _impure_fields(self, node, t, kept) -> tuple:
+    def _term_fields(self, node, t, kept) -> tuple:
+        """A term that is not data: a decision by its instance, whatever its coefficient
+        (D83); a linear form by its every coefficient; a reducer by its ``by`` value; a
+        frame by its keys (D82); and a product or an ``abs`` by the fields of each
+        context it holds."""
+        if isinstance(node, Var):
+            return ("decision", frozenset(self._form(node, t, kept)))
+        if isinstance(node, Terms):
+            form = self._form(node, t, kept)
+            return ("linear", frozenset((atom, round(float(c), _DIGITS)) for atom, c in form.items()))
         if isinstance(node, Agg):
             return ("by", _key_of(self.rows[t], node.by))
         if isinstance(node, (At, Range)):
@@ -633,6 +642,18 @@ class AnrModel:
         if node.fallback is not None and self._missing(node, t, kept):
             fields.append(("fallback", _freeze(self._form(node.fallback, t, kept))))
         return tuple(fields)
+
+    def _is_data(self, expr) -> bool:
+        """Free of decisions, reducers and frames: a data term of its context (D83)."""
+        if isinstance(expr, (Const, Col)):
+            return True
+        if isinstance(expr, Add):
+            return all(self._is_data(term) for term in expr.terms)
+        if isinstance(expr, Mul):
+            return self._is_data(expr.left) and self._is_data(expr.right)
+        if isinstance(expr, Abs):
+            return self._is_data(expr.operand)
+        return False
 
     def _is_pure(self, expr) -> bool:
         """Free of reducers and frames (a maximal subtree of these is a field, D83)."""

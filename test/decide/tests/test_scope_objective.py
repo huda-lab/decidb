@@ -137,19 +137,20 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
     [
         pytest.param(
             "MAXIMIZE when S.priority: sum(ship) + D.capacity * s",
-            "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 20, 40.",
+            "DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective "
+            "would be produced more than once",
             id="data-value",
         ),
         pytest.param(
             "MAXIMIZE when S.priority: ship",
-            "DECIDE: per () does not determine the decision ship (declared per row). The kept rows cover more "
-            "than one ship.",
+            "DECIDE objective: the decision 'ship' (declared per row) has more than one instance over the kept rows, "
+            "so the objective would be produced more than once",
             id="per-row-decision",
         ),
         pytest.param(
             "MAXIMIZE sum(ship) by (D.region)",
-            "DECIDE: per () does not determine D.region (in by (D.region)). The kept rows have more than one "
-            "value: 'East', 'West'.",
+            "DECIDE objective: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', "
+            "'West'), so the objective would be produced more than once",
             id="top-level-by",
         ),
         pytest.param(

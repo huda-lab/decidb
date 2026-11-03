@@ -4,18 +4,17 @@ two reducers with different `by` keys, the reducer's own scope none / `when` / `
 both, SUM / AVG / MIN / MAX, over a per-row decision and one keyed by `h` (the only one a
 reducer's `per t.h` can count once) -- every cell against `_scope_oracle.ScopedModel`.
 
-Two outcomes are allowed, and nothing else: the oracle's optimum, or the error the
-language defines for the data (the oracle raises it: a key that does not determine, a
-`when` that keeps no row, a reducer with no row for a group), with the same phrase.
-Every cell is handled, so no cell is refused; never a wrong answer, never an internal
-error.
+Every cell answers the oracle's optimum: a class whose rows read several values is one
+instance per variant (D70), a `when` that keeps no row and a reducer with no row for a
+group skip their instances (D68). Every cell is handled, so no cell is refused; never a
+wrong answer, never an internal error.
 """
 
 import pytest
 
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import aligned, answer, scope_solver, table, table_rows  # noqa: F401 -- fixture
-from ._scope_oracle import CONSTANT, GLOBAL, PER_ROW, Decision, Reduce, ScopeError, Scoped, ScopedModel, ScopedObjective
+from ._scope_oracle import CONSTANT, GLOBAL, PER_ROW, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
 #: Two groups of `g`, two of `h` crossing them, a condition that drops row 2, a per-row
@@ -109,15 +108,9 @@ def test_grid_cell(decidb_cli, scope_solver, declaration, front, body, agg, inne
     clauses = [X_BOUND, Scoped(lhs, sense, rhs, when=when, per=per)]
     model = ScopedModel(table_rows(COLUMNS, ROWS), [DECISIONS[declaration]])
 
-    try:
-        expected = model.solve_scoped(scope_solver, clauses, MAXIMIZE_X)
-    except ScopeError as error:
-        expected = error
+    expected = model.solve_scoped(scope_solver, clauses, MAXIMIZE_X)
     result = decidb_cli.execute_raw(sql)
     assert_no_internal_leak(result, f"grid cell {front}{sql_of(agg, inner)}")
-    if isinstance(expected, ScopeError):
-        assert expected.phrase in result.stderr, f"the language refuses this data ({expected}); got:\n{result.stderr}"
-        return
     assert "not supported yet" not in result.stderr, f"items 3 to 5 handle every cell; got:\n{result.stderr}"
     assert result.returncode == 0 and not result.stderr.strip(), result.stderr
     rows = aligned(answer(decidb_cli, sql), model, "id")

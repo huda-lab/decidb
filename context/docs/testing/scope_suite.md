@@ -52,9 +52,12 @@ same thing.
 - **An empty group has no clause.** A `when` that keeps no row generates nothing, and a group in which
   a reducer reads no row has no instance (the reducer is NULL); an objective part that reads no row is
   dropped. COUNT over no rows is 0.
+- **Variants.** A class is generated once per distinct signature of its body (D70): the net value of
+  its tuple terms (decisions by instance, data summed, NULL a value) and each reducer's factor and `by`
+  value; a reducer's own `per` hands it one member per variant of each class (D71).
 - **The run-time error.** `check` raises `ScopeError` before any model is built, carrying the phrase
-  DeciDB's message carries: `not_determined` ("does not determine": every tuple term, factor and `by`
-  value must be one value over a class).
+  DeciDB's message carries: `objective_variants` ("would be produced more than once": the objective's
+  one class holds two variants, D72).
 - **Solving and judging share one generator.** `solve_scoped` returns the optimum of the
   model; `judge_scoped` checks DeciDB's answer, row-aligned with the oracle's rows, and
   returns the objective it reaches: every row of a decision's class shows one value, a
@@ -185,8 +188,9 @@ one group at a time. No test asserts an answer its docstring derives.
   filters its own reducer only; an inner `per` counts each class once, from its first
   kept row; the colon form `SUM(D: e)` builds the model of `sum(per D: e)` and takes a
   `by`; inner `per ()`; AVG divides by the values it receives; MAX is unaffected by an
-  inner `per`; an inner key must determine its body; a `when` in front leaves out the groups
-  it keeps no row of. Oracle, dump and pinned messages.
+  inner `per`; an inner key reads one value per variant of its classes (D71), and the colon form
+  reads a per-row decision once per row; a `when` in front leaves out the groups it keeps no row
+  of. Oracle, dump and pinned messages.
 - **`test_scope_objective.py`** — `MAXIMIZE|MINIMIZE [when c] [per ()]: E`. An omitted
   `per` is `per ()`; the `when` in front builds the same model as a `when` inside each
   reducer; a query-wide decision, or a keyed decision with one instance, beside a
@@ -194,13 +198,22 @@ one group at a time. No test asserts an answer its docstring derives.
   form, also under a `when`, and its refusals (an outer AVG); a reducer nested in a
   constraint is refused; an objective `when` that keeps no row and an objective reducer
   with no row are errors. Oracle, dump and pinned messages.
-- **`test_scope_determination.py`** — the determination rule. A `per` key must determine
-  every tuple term (a bound, a factor), every decision outside reducers, every `by` key,
-  and an inner key its reducer's body. Each case is a pair: the query runs on data where
-  the key determines the value and stops with the named error where it does not. Only
-  kept rows are compared and NULL is one value; without `per` the same clause is legal
-  and takes the tightest bound; the errors are raised under DIAGNOSE too; messages quote
-  the user's SQL only. Pinned messages.
+- **`test_scope_variants.py`** — variant signatures (D70-D72). A class whose rows differ in
+  a tuple term (a bound, a factor), a decision outside reducers, a `by` key, or an inner
+  key's body is one instance per variant. Each case runs on data where the key fixes the
+  value and on data where it does not, judged by the oracle. Only kept rows are compared;
+  a NULL variant skips its instance; `per` and no `per` give the tightest bound alike; an
+  objective that would be produced more than once is an error, under DIAGNOSE too, naming
+  the field and its least and greatest value in the user's SQL. Oracle and pinned messages.
+- **`test_scope_variant_paths.py`** — a `per K:` clause whose classes hold several bounds
+  answers alike on the solver path and the direct path (S1): a relation's NULL column is a
+  class, a column key's NULL row is in none, a collated key, a join and a table source.
+- **`test_anr_variants.py`** — the variant fixtures of `_anr_cases` through DeciDB, judged
+  by `_anr_oracle`: one instance per variant (D83: `a + b` is one field, written
+  associativity does not change the rows), a row in no `by` group skipped, equal bodies of
+  two classes kept as two rows, `=` with two values infeasible, `<>` keeping each value,
+  EXPLAIN ANALYZE's variant count (silent without variants and under a plain EXPLAIN), and
+  DIAGNOSE naming the variant it loosens (`a, 2`). Oracle, dump and pinned text.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built
@@ -264,10 +277,10 @@ one group at a time. No test asserts an answer its docstring derives.
   readings: the deck's and the rulings' hand computations (every case's instances,
   optimum, error and status; the shared extremum of deck p. 115 and the collapsed
   singleton of p. 112); exhaustive enumeration over small domains against the solved
-  model; `_scope_oracle.ScopedModel` on the 784-cell grid of `test_scope_combinations.py`
-  — the cells today's rule answers give today's answer exactly, and those it refuses
-  with "does not determine" answer as variants — and on all 32 two-level objectives read
-  as nested reducers (D81); DeciDB on the cases the engine runs; and DeciDB's feasibility
+  model; `_scope_oracle.ScopedModel` on the 784-cell grid of `test_scope_combinations.py`,
+  whose variants, read off its own statements, are the ones this oracle's signatures give
+  (D70, D83), cell by cell, and on all 32 two-level objectives read as nested reducers
+  (D81); DeciDB on the cases the engine runs; and DeciDB's feasibility
   with every decision fixed, assignment by assignment, over a helper-decision clause and a
   keyed decision (the status grid). Oracle, hand-checked and brute force.
 
@@ -305,6 +318,6 @@ one group at a time. No test asserts an answer its docstring derives.
 | Brute force (`_brute_force`) | bare_clauses, generation, reducer_by, value_rewrite |
 | ANR oracle (`_anr_oracle`) | anr_oracle_selfcheck, and every `test_anr_*.py` suite |
 | Model dump | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, deck_examples |
-| Error / message pins | determination, removed_syntax, and the error cases of every suite |
+| Error / message pins | variants (the objective), removed_syntax, and the error cases of every suite |
 | Output text pins | explain_diagnose, and the echo cases of generation and value_rewrite |
 | Scanner and guards | `test_no_old_spellings_remain.py`, `decidb_cli.py` |

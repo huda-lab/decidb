@@ -51,7 +51,7 @@ separate objective-side copy.
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 3 | `Finalize` → `BuildKeyedMappings` | Build the row → class maps of the key scopes |
-| 3a | `Finalize` → `RunScopeChecks` | Run the scope checks (§4a); the first failure stops the query |
+| 3a | `Finalize` → `RunScopeChecks` | The objective is produced once (§4a); a second variant stops the query |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
@@ -253,31 +253,45 @@ The result is an `EntityMapping { num_entities, row_to_entity, absent_entity }` 
 
 ---
 
-## 4a. PHASE 1.6 — scope checks, and how a clause is read
+## 4a. PHASE 1.6 — variants, and how a clause is read
 
-`RunScopeChecks` runs `LogicalDecide::scope_checks` (stage 04) in order, before any
-coefficient is evaluated, over the materialized rows — an empty input runs none. They are
-the data checks of [`../../language/guide.md`](../../language/guide.md)
-§7.3:
+A scoped expression with a variant signature (stage 04, D70) is numbered by
+`BuildSignatureIds`: the kept rows grouped by its `per` key (a NULL in a written key
+column puts a row in no class, D5) and each field -- a `VALUE` by value, a `BY_KEY` by
+its elements' values, NULL a value of both -- then each class of a keyed `DECISION` field,
+and every row of a per-row one, splits its group again. Three readers:
 
-| Kind | Fails when | Message |
-|---|---|---|
-| `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
-| `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
+- `RunScopeChecks` numbers the objective's signature over its kept rows: a second variant
+  is the data check of [`../../language/guide.md`](../../language/guide.md) §7.3 (*"the
+  objective would be produced more than once"*), naming the first field that takes two
+  values with its least and greatest one (`DescribeVariantDifference`, NULL last) or a
+  decision with two instances.
+- `EvaluateConstraints` emits a per-row clause under `per K:` (`ONE_ROW_PER_CLASS`) once per
+  variant of each class, at the variant's first row, which stands for the variant's rows:
+  they agree on every field. Where a class holds more than one variant the clause records
+  an EXPLAIN ANALYZE line (`RecordVariants`, `Kind::VARIANTS`, printed by `ParamsToString`
+  from `variant_accounts`, which a plain EXPLAIN never fills) and names each variant for a
+  diagnosis by its class's key values followed by its own field values (`NameVariants`: a
+  key-values entry no key owns, so `ResolveGroupNames` keeps its numbering; a collated key
+  column quotes the class's least spelling, D69). Under DIAGNOSE such a variant's row
+  stands for its own class set.
+- `BuildKeyedMappings` gives a reducer's variant scope (`KeyedScopeInfo::signature`) the
+  signature's numbering over the rows the reducer reads, so `BuildQualifierKeepMask` keeps
+  one row per variant of each class (below).
 
-`DETERMINES` comes from the canonicalizer (stage 04). The bound-side rewrite
-(`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a
-scope error is reported before a bad value, and a bad bound before a bad coefficient. An
-empty group is no check: a reducer over no rows is NULL, so its instance is skipped where
-the clause is read (D68; below).
+`RunScopeChecks` runs no other check: the `VALUE_IS_VALID` checks the bound-side rewrite
+(`RewriteRhsAggregates`, stage 05) appends are made by a plan under the DECIDE node
+(`DecideOptimizer::InstallRowChecks`) before the operator reads a row: a bound's NaN, a NaN
+in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound
+that takes two values in its group (`` `<bound>` takes more than one value here (a and b)
+... infeasible.``). An empty group is no check: a reducer over no rows is NULL, so its
+instance is skipped where the clause is read (D68; below).
 
-A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'`); over
-`()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds`: a row
-with NULL in a written key column (`DecideKeyNullMode::NO_GROUP`) is in no group, and a relation's columns
-(`VALUE`) compare NULL as a value. A key with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group
-of every row the filter keeps: `BuildGroupIds` says so once, for every caller. A check reads its `when` on every row
-(`KeptRows`), a reducer's own `when` on the rows that keeps, and its key and value only on
-the rows it looks at.
+Groups come from `LookupOrBuildPerGroupIds`: a row with NULL in a written key column
+(`DecideKeyNullMode::NO_GROUP`) is in no group, and a relation's columns (`VALUE`) compare NULL as a value. A key
+with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group of every row the filter keeps: `BuildGroupIds`
+says so once, for every caller. A signature reads its `when` on every row (`KeptRows`), and its key and fields only
+on the rows it keeps.
 
 Every clause is then read by these rules; §5 gives the row maps they produce:
 
@@ -489,9 +503,9 @@ its second reducer is NULL there.
 `SUM(D: e)` is `sum(per D: e)` with `K` every column of `D`; a join repeats each class
 once per matching row. De-duplication (`BuildQualifierKeepMask`) keeps the first row of
 each class among the rows the reducer reads — the kept rows its own `when` keeps — and
-zeroes the rest. That is sound because the scope checks have already proved that every
-row of a class carries the same value (`DETERMINES`, *"per D does not determine ..."*), so
-whichever row is kept gives the same answer. A class whose first joined row the `when`
+zeroes the rest. A reducer whose body reads more than the key holds has a variant scope
+of its own (D71), so its classes are the key's split by the body's values: every row of a
+kept identity carries the same value, and whichever row is kept gives the same answer. A class whose first joined row the `when`
 drops is still counted once.
 
 De-duplication runs **inside** each `by` group, after the clause's `when`, the reducer's

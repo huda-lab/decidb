@@ -51,9 +51,12 @@ duckdb::unique_ptr<Expression> Comparison(ExpressionType type, duckdb::unique_pt
 TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifier]") {
 	DuckDB db(nullptr);
 	Connection con(db);
+	// The canonicalizer reads the keyed scopes and keys where they are, so they outlive it.
+	duckdb::vector<KeyedScopeInfo> keyed_scopes;
+	duckdb::vector<DecideKey> keys;
 	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX,
-	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()},
-	                                  duckdb::vector<KeyedScopeInfo>(), duckdb::vector<bool> {false, false});
+	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()}, keyed_scopes, keys,
+	                                  duckdb::vector<bool> {false, false});
 
 	SECTION("canonical reversed comparison is a fixed point") {
 		auto written = Comparison(ExpressionType::COMPARE_GREATERTHANOREQUALTO,

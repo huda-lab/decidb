@@ -174,30 +174,10 @@ struct DirectIRObjective {
 	DirectIRScope scope;
 };
 
-enum class DirectRowCheckKind : uint8_t {
-	//! The input raises `invalid`, a per-row message that is NULL on a valid row.
-	VALUE_IS_VALID,
-	//! The input raises when a class of `key` shows more than one `value`, or, with no `value`, holds more than one row
-	//! of a row-scoped decision. The classes are the groups of the rows that pass `rows` and then `filter` (NULL drops
-	//! a row), among rows whose key has no NULL in a NO_GROUP element. The message names the least failing group and
-	//! quotes the least and greatest value (DecideDeterminesText), as PhysicalDecide::RunScopeChecks does.
-	DETERMINES
-};
-
-//! A run-time scope check the solver makes before it reads a value, which the plan makes on the source rows. Every
-//! expression reads source columns only.
+//! A run-time scope check the solver makes before it reads a value, which the plan makes on the source rows: the input
+//! raises `invalid`, a per-row message that is NULL on a valid row, over source columns only.
 struct DirectRowCheck {
-	DirectRowCheckKind kind = DirectRowCheckKind::VALUE_IS_VALID;
-	//! VALUE_IS_VALID: the message a row raises, NULL on a valid row.
 	unique_ptr<Expression> invalid;
-	//! DETERMINES: the rows considered (a clause's `when`, D4) and the reducer's own `when`; null for every row.
-	unique_ptr<Expression> rows;
-	unique_ptr<Expression> filter;
-	//! DETERMINES: the classes; empty for one class.
-	vector<DirectKeyElement> key;
-	//! DETERMINES: the data value each class shows once; null for a decision, which a class holds in one row.
-	unique_ptr<Expression> value;
-	DecideDeterminesText text;
 };
 
 struct DirectIR {
@@ -219,8 +199,8 @@ struct DirectIR {
 	//! A bound the bound-side rewrite left to the rule cannot be computed by it (its sum has a `when` of its own): the
 	//! driver records the aggregates of its group (RecordReducedBounds) and reads the IR again.
 	bool bounds_to_record = false;
-	//! NOT_PROVED when the DECIDE operator owes the rows a scope check the plan cannot make: a determination of an
-	//! keyed decision.
+	//! NOT_PROVED when the DECIDE operator owes the rows a check the plan cannot make: a reducer's own `per` whose
+	//! classes split by the variants of its body (KeyedScopeInfo::signature).
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
