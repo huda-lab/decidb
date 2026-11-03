@@ -50,4 +50,12 @@ idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer);
 //! its parts are; INVALID_INDEX when every key is `by ()`.
 idx_t FindOrCreateDecidePathKey(const vector<idx_t> &path_keys, vector<DecideKey> &keys);
 
+//! The frame selector `expr` is the marker of -- the aggregate the binder binds a frame to,
+//! tagged with its index into LogicalDecide::frames -- or false. A frame is a tuple term
+//! read at another row (language/guide.md §5.6): no layer reads its marker as a reducer,
+//! and its payload holds none (D80).
+bool TryGetDecideFrame(const Expression &expr, idx_t &frame);
+//! Whether `expr` holds a frame marker anywhere, itself included.
+bool ContainsDecideFrame(const Expression &expr);
+
 } // namespace duckdb

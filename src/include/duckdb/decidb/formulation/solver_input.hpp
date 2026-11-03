@@ -790,11 +790,31 @@ struct SolverInput {
     //! `per K:` or colon-form qualifier, a helper decision's `by` key)
     vector<KeyedMapping> keyed_mappings;
 
-    //! Per-variable scope (row / keyed / query-wide).
-    //! For a keyed variable, keyed_scope_idx indexes keyed_mappings.
-    vector<DecideVarScopeInfo> variable_scopes;
+	//! Per-variable scope (row / keyed / query-wide / frame read).
+	//! For a keyed variable, keyed_scope_idx indexes keyed_mappings.
+	vector<DecideVarScopeInfo> variable_scopes;
 
-    //! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one
+	//! A decision read at the row a frame selector selects (language/guide.md §5.6):
+	//! variable `first_frame_read + i` is decision `base` read, at each row, at `rows[row]`
+	//! -- the selected row, or the row itself where the frame selects none, where every term
+	//! reading it has coefficient 0. It owns no column (DecideVarScope::FRAME_READ); its
+	//! type and box are its base's, so a pass reading a term's box reads a sound one.
+	struct FrameRead {
+		idx_t base = DConstants::INVALID_INDEX;
+		vector<idx_t> rows;
+	};
+	vector<FrameRead> frame_reads;
+	//! The first frame read's variable index: the plan's decisions come first.
+	idx_t first_frame_read = 0;
+	//! The plan's decision variable `var` reads: itself, or a frame read's base. What a
+	//! table of the plan's decisions (a name, a domain) is looked up by.
+	idx_t BaseVariable(idx_t var) const {
+		return var >= first_frame_read && var - first_frame_read < frame_reads.size()
+		           ? frame_reads[var - first_frame_read].base
+		           : var;
+	}
+
+	//! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one
     //! decision as a row instead of folding it into the column box, so the elastic engine can relax
     //! the row and quote its clause. Off by default: the fold is faster to solve.
     bool keep_singleton_rows = false;

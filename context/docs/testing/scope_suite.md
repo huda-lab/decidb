@@ -147,7 +147,7 @@ NULL at a selected row and inside a range, a NULL `within` key and a NULL inner 
 A `Case` holds the SQL in the language, the oracle statement, and what is computed by
 hand: the instances, the optimum, the error or the status, and small domains for
 enumeration. `Case.phase` is the first build step of the engine that runs the SQL (1
-variants and 2 nesting run today; 4 point frames, 5 range frames, 6 composition).
+variants, 2 nesting and 4 point frames run today; 5 range frames, 6 composition).
 `fixing_clauses` writes an assignment as `when t.id = 3: x = 2` clauses, and
 `decidb_feasible` reads DeciDB's verdict on the fixed query.
 
@@ -219,11 +219,22 @@ one group at a time. No test asserts an answer its docstring derives.
   EXPLAIN ANALYZE's variant count (silent without variants and under a plain EXPLAIN), and
   DIAGNOSE naming the variant it loosens (`a, 2`), by its row where two of a class share
   their values. Oracle, dump and pinned text.
-- **`test_anr_frames.py`** — frame selectors (guide §5.6): every frame fixture of
-  `_anr_cases` binds and stops at the one place that refuses frames until they are
-  formulated, and every refusal of D80 names its construct. The parse errors and the
-  echo are `test/decidb/test_frame_parser.test`'s (sqllogic; ordinary SQL windows, `AT TIME
-  ZONE` and `WITHIN GROUP` unchanged) and `test_decidb_plan_serialization.cpp`'s.
+- **`test_anr_frames.py`** — frame selectors (guide §5.6). `TestSyntax`: every range
+  fixture of `_anr_cases` binds and stops at the one place that refuses ranges, a point
+  frame echoes as written, and every refusal of D80 names its construct. `TestPoint`:
+  every point fixture (F19 and F21 aside, refused: a frame on the bound side of a group)
+  on both solvers, judged by `_anr_oracle`, and F2's model pinned at its six columns and
+  one row per instance (D78). `TestPointDeck`: the deck's examples 1, 4 and 5 and the
+  DeQL comparison as written. `TestPointShapes` and `TestPointErrors`: a data factor, an
+  affine payload, `<>`, data frames on the bound side, every position missing, a frame
+  that cannot miss inside a reducer, a `BETWEEN` half skipped, a NULL read through a frame
+  dropping a member or skipping an instance (D84), a keyed decision with no class at the
+  selected row, variants by position, timeline and fallback (D82), one payload per
+  position (D73), the objective produced once (D72) and its term dropped where its frame
+  selects nothing, and the refusals not yet lifted. The parse errors, answers and the echo
+  are `test/decidb/test_frame_parser.test`'s (sqllogic; ordinary SQL windows, `AT TIME
+  ZONE` and `WITHIN GROUP` unchanged; a FROM-first query) and
+  `test_decidb_plan_serialization.cpp`'s.
 - **`test_anr_nested.py`** — reducers nested to any depth (guide §5.5, D79-D81): the
   nesting fixtures of `_anr_cases` on both solvers, judged by `_anr_oracle`, an empty group
   inside a nest skipped (D68); F1's model, a helper per path group with one-sided

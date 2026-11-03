@@ -176,6 +176,19 @@ struct DecideSignatures {
 	idx_t objective = DConstants::INVALID_INDEX;
 };
 
+//! What placing the frame selectors of the user's clauses writes (PlaceFrames): each frame's
+//! place (DecideFrameSpec::rows, timeline_key, its D75 partition key), the keys its timelines
+//! and partitions are split by appended to the key table when new.
+struct DecideFramePlacement {
+	vector<DecideFrameSpec> &frames;
+	//! The key table, which placing appends the frames' timeline and partition keys to when new; the canonicalizer
+	//! reads the same vector (its `keys`).
+	vector<DecideKey> &keys;
+	const vector<KeyedScopeInfo> &keyed_scopes;
+	//! Which frames are placed: each stands in exactly one place.
+	vector<bool> placed;
+};
+
 class DecideCanonicalizer {
 public:
 	//! Whether `expr` holds a reducer anywhere, itself included.
@@ -234,6 +247,19 @@ public:
 	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
 	//! second value -- and its qualified reducers', after CanonicalizeObjective.
 	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
+	//! Where every frame selector of the canonical SUCH THAT tree stands (language/guide.md §5.6): the rows its
+	//! timelines read, which are its scoped expression's path rows (§5.5); the key they are grouped by, the path's
+	//! `by` keys then `within`; the comparison it is written in; and whether it is inside a reducer
+	//! (DecideFrameSpec::rows, timeline_key, source_clause_id, reduced). Records the partition check (D75) of each
+	//! frame a `per` key reads directly -- a clause's `per K:`, or a reducer's own `per` -- unless the key determines
+	//! its timeline already (DecideFrameSpec::partition_key). Called once, by the planner, after CanonicalizeTree.
+	void PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const;
+	//! The same for the objective, after CanonicalizeObjective. Its root has one class (D72), whose fields the
+	//! objective's signature checks, so only a reducer's own `per` gets a partition check there.
+	void PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const;
+	//! The frames a signature field may name (LogicalDecide::frames); null when the plan has none. Set by the
+	//! planner before it builds the signatures.
+	const vector<DecideFrameSpec> *frames = nullptr;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
 	//! these names, rather than through the bound tree's own names. Set by the planner,
@@ -475,6 +501,26 @@ private:
 	void SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause, idx_t source_clause_id,
 	                           DecideSignatures &out) const;
 	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
+
+	//! The `per` key a scoped expression is read under, for its frames' partition check (D75):
+	//! its key and the key as written.
+	struct FramePerKey {
+		//! Into `keys`; INVALID_INDEX for `per ()`, one class.
+		idx_t key = DConstants::INVALID_INDEX;
+		string text;
+	};
+	void PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
+	                       DecideFramePlacement &placement) const;
+	//! The frames of `expr` along `path`: one outside every reducer of its comparison
+	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
+	//! members -- `reducer` is the innermost reducer around `expr`, null at the root. `per`
+	//! is the key of the scoped expression `expr` is the body of; null for `per row`, which
+	//! no frame's timeline can span.
+	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const BoundAggregateExpression *reducer,
+	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement) const;
+	//! The key of a reducer's own `per` (or of the colon form), when it has one.
+	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
+	                   FramePerKey &out) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`
 	//! is set (used for the terms that crossed the relation).

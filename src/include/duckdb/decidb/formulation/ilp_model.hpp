@@ -62,15 +62,24 @@ struct VarIndexer {
     //! Owned keyed mappings. The indexer can therefore outlive its SolverInput.
     vector<KeyedMapping> keyed_mappings;
 
-    //! Get the flat solver variable index for a given decide variable at a given row.
-    //! A scalar variable ignores `row` — every row resolves to the same column.
-    inline idx_t Get(idx_t var_idx, idx_t row) const {
+	//! Owned frame reads (SolverInput::frame_reads), variables `first_frame_read` on.
+	vector<SolverInput::FrameRead> frame_reads;
+	idx_t first_frame_read = 0;
+
+	//! Get the flat solver variable index for a given decide variable at a given row.
+	//! A scalar variable ignores `row` — every row resolves to the same column. A frame
+	//! read is its base decision's column at the row its frame selects.
+	inline idx_t Get(idx_t var_idx, idx_t row) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return row * num_row_vars + row_var_offset[var_idx];
         case DecideVarScope::GLOBAL:
             return scalar_var_index[var_idx];
-        default: {
+		case DecideVarScope::FRAME_READ: {
+			auto &read = frame_reads[var_idx - first_frame_read];
+			return Get(read.base, read.rows[row]);
+		}
+		default: {
             auto &mapping = keyed_mappings[var_keyed_mapping_idx[var_idx]];
             idx_t class_id = mapping.row_to_class[row];
             return keyed_var_base[var_idx] + class_id;
@@ -88,12 +97,24 @@ struct VarIndexer {
             return inst * num_row_vars + row_var_offset[var_idx];
         case DecideVarScope::GLOBAL:
             return scalar_var_index[var_idx];
-        default:
+		case DecideVarScope::FRAME_READ:
+			throw InternalException("DECIDE: a frame read has no instance of its own");
+		default:
             return keyed_var_base[var_idx] + inst;
         }
     }
 
-    //! The instance of a variable that data row `row` reads: the row itself, its class, or the single query-wide
+	//! A frame read at `row` is its base decision read at the row its frame selects (SolverInput::frame_reads); any
+	//! other variable is itself, read at `row`.
+	inline void ResolveRead(idx_t &var_idx, idx_t &row) const {
+		if (var_scope[var_idx] == DecideVarScope::FRAME_READ) {
+			auto &read = frame_reads[var_idx - first_frame_read];
+			var_idx = read.base;
+			row = read.rows[row];
+		}
+	}
+
+	//! The instance of a variable that data row `row` reads: the row itself, its class, or the single query-wide
     //! instance. Up to the block offset the inverse of Get(): `InstanceColumn(v, InstanceOf(v, row)) == Get(v, row)`.
     inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
         switch (var_scope[var_idx]) {
@@ -101,7 +122,9 @@ struct VarIndexer {
             return row;
         case DecideVarScope::GLOBAL:
             return 0;
-        default:
+		case DecideVarScope::FRAME_READ:
+			throw InternalException("DECIDE: a frame read has no instance of its own");
+		default:
             return keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
         }
     }
@@ -133,14 +156,17 @@ struct VarIndexer {
         }
     }
 
-    //! Get the number of instances (copies) for a given decide variable
-    inline idx_t NumInstances(idx_t var_idx) const {
+	//! Get the number of instances (copies) for a given decide variable; none for a frame
+	//! read, whose columns are its base's.
+	inline idx_t NumInstances(idx_t var_idx) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return num_rows;
         case DecideVarScope::GLOBAL:
             return 1;
-        default: {
+		case DecideVarScope::FRAME_READ:
+			return 0;
+		default: {
             return keyed_mappings[var_keyed_mapping_idx[var_idx]].num_classes;
         }
         }
@@ -174,7 +200,8 @@ struct InstanceBox {
 
     //! The floor of `var` as data row `row` reads it, against the box floors `box_lower`.
     double LowerOfRow(idx_t var, idx_t row, const vector<double> &box_lower) const {
-        idx_t instance = indexer.InstanceOf(var, row);
+		indexer.ResolveRead(var, row);
+		idx_t instance = indexer.InstanceOf(var, row);
         double floor = input.InstanceLower(var, instance, box_lower);
         return reach ? std::max(floor, InstanceReachLower(input.instance_reach_lower, var, instance)) : floor;
     }
@@ -184,7 +211,8 @@ struct InstanceBox {
         if (!reach) {
             return box_upper[var];
         }
-        idx_t instance = indexer.InstanceOf(var, row);
+		indexer.ResolveRead(var, row);
+		idx_t instance = indexer.InstanceOf(var, row);
         return std::min(box_upper[var], InstanceReachUpper(input.instance_reach_upper, var, instance));
     }
 };

@@ -544,6 +544,26 @@ needs no scope of its own: its side table groups on the body's value too (stage 
 qualified reducer nested in another is counted over the rows its path keeps
 (`DecideReducerPath`, `decide_reducer_path.hpp`: the clause's `when` and every enclosing
 reducer's own; `SignQualifiedReducers` signs the inner reducers first, along the path).
+A frame selector is a field by its keys (`FRAME`, D82): its timeline, the anchor's position
+on it when it reads relative to the anchor, and its fallback where reached; a `first` or
+`last` frame whose `within` the key holds is no field.
+
+### Frame selectors
+
+A frame's marker -- the aggregate the binder bound it to, tagged `__frame_<i>__` -- is a
+tuple term read at another row, never a reducer (`ContainsReducer`,
+`TryMatchScaledAggregate`, `IsLoneNegatedReducer`): a frame over decisions sits left as any
+decision term does, one over data right, and it decides no shape. `PlaceFrames` and
+`PlaceObjectiveFrames`, run right after canonicalization, place each frame on the
+`DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
+the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
+`within` (`timeline_key`, a key-table entry made when new); it notes its clause and whether
+it stands in a reducer. A frame that may select no position inside a reducer over decisions
+is refused, not supported yet. Under a `per K` whose key, with the path's, does not hold the
+frame's `within`, the frame records the D75 check execution runs (`partition_key`,
+`partition_subject`). `SkipNullData` tests a frame inside a reducer over decisions whole
+(`marker IS NOT NULL`), as it tests a column: the frame reads another row, or nothing, so no
+column of the row itself says whether it has a value (D84); stage 05 makes the test a column.
 
 ---
 

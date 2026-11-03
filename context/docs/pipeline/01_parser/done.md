@@ -241,7 +241,10 @@ the lexer emits DECIDE-only tokens inside the clause:
   name comes before the `(` (`sum(from first ...)` is a range frame, `(FROM t ...)` a query). `decide_over_parens`
   has bit d set while the parenthesis at depth d is a frame's `OVER_DECIDE` one, so a window or frame inside an order
   key leaves the outer `within` its own. A clause nested in a subquery saves and restores its subquery depth and
-  `decide_in_body` with the rest of its state. So a window, a named window or a `WITHIN GROUP` inside a subquery
+  `decide_in_body` with the rest of its state. A declaration with no `FROM` after it (`FROM t DECIDE x(INT) SUCH
+  THAT ...`, `SELECT x DECIDE x(INT) SUCH THAT ...`) reduces only once `SUCH` is read as its lookahead, which has
+  opened the body already: its action drops the state it saved instead of restoring it (`PGDecideDropLexState`), or
+  the body would lex as the declaration list and read no frame. So a window, a named window or a `WITHIN GROUP` inside a subquery
   written in the clause keeps its SQL meaning, and so does a function called `at` there; at the clause's level it is
   written quoted, `"at"(...)`.
 

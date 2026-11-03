@@ -165,7 +165,13 @@ reducer (`avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`, guide §5.5) is record
 grouped by its path key over the rows its path keeps (`DecideReducerPath`), NULL on a row
 in no group of it; the table built after it reads its column, so the reducer around it
 skips that member as a NULL. Such a bound is never a group bound a rule computes itself. The column carries the reducer as written
-and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. With several threads the
+and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. A frame selector's value
+is a column stage 08 computes from the rows it selects, so no side table reads one: a frame in a row-wise bound stays
+in it, read as a column is; in a bound of a clause over groups it stays only where it has one value per group -- a
+`first` or `last` frame whose timeline key the group key holds -- and execution checks its NaN as it reads it. One
+that would need its group's tightest value (D85), or one inside a reducer of a bound, is refused, not supported yet
+(*"DECIDE: at(previous: t.cap) over (t.period within t.g) on the bound side of sum(x) by (t.g) is not supported
+yet"*). With several threads the
 source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
 so the model's row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread
@@ -261,6 +267,23 @@ product of decisions left there is refused (*"... multiplies decisions outside a
 which is not supported yet"*), since it has no once-only reading in the model.
 `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
 
+**Frame selectors** (`../../language/guide.md` §5.6, D78). The term splitter reads a frame over decisions as one
+`FRAME` term: its factor (1 for a bare frame, the data factors around it, a divisor) and its payload's linear terms.
+`AppendFrameTerms` turns it into the terms the model reads: each payload term `c·x` becomes `f·READ(c)·x`, its decision
+read at the row the frame selects (`DecideTerm::frame_read`), and each term `c'·y` of the `else` becomes
+`f·FALLBACK(c')·y`, read at the row itself. `READ`, `FALLBACK`, `VALUE` and `DEFINED` are columns stage 08 appends to
+the input after its own (`DecidePreparedModel::frame_columns`, from `frame_column_base`), so every evaluator reads a
+frame as data and none learns what one is: `READ` is `c` at the selected row, 0 where a missing position has an `else`
+and NULL where it has none; `FALLBACK` is `c'` at a row whose position is missing, 0 elsewhere. NULL is no value
+(D84): a comparison reading it skips that instance, the objective drops the term (`DropNullObjectiveTerms`). The
+payload's terms are recorded once per frame (`frame_payload_terms`, for D73), and the decisions its `else` reads
+(`frame_fallback_decisions`, for D82). `LowerFramesInPreparedModel` then replaces each frame left in an expression
+stage 08 evaluates -- a frame over data, in a coefficient, a bound, a filter -- by its `VALUE` column (the payload at
+the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type), and a
+reducer's NULL test of a frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's
+`READ` and `FALLBACK` columns holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is refused
+here (`RefuseComposedFrameRead`): the composed formulation reads each term at its own row.
+
 ### Like-term collection
 
 After flattening, every list that becomes a **linear** solver row is grouped:
@@ -280,6 +303,7 @@ across any of that:
 | `filter` | The reducer's own `when`. `sum(when a: x)` and `sum(when b: x)` are one column over two row sets |
 | `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
 | `qualifier_scope_idx` | Selects a de-duplication mask (the reducer's own `per`, or `SUM(D: ...)`) — again a statement about which rows contribute |
+| `frame_read` | `x - at(previous: x) over (...)` names one decision at two rows |
 
 Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS is
 not a repeated column. Quadratic and bilinear terms are left alone too — they feed
@@ -811,6 +835,11 @@ smaller model, tighter presolve. The pass folds every bound on one decision that
 before the query runs (a `BETWEEN` arrives as its two comparisons, split by the binder)
 into one `DecideBoundBox` per decision (`singleton_row_boxes` on `LogicalDecide`), and
 tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
+
+A comparison that holds a frame selector is no bound on one decision: it reads another row, or nothing, which no
+interval over the row says. And a clause whose frame outside its reducers may select no position holds only where the
+frame selects, as under a `when`: no comparison of it, the rows a rewrite made of it included (an ABS's envelope
+carries its clause's id), folds into a box (`DecideFrameSpec::SkipsInstancesOf`).
 
 **One classifier reads every bound on one decision** (`DecideReadSingletonRow`,
 `decide_singleton_row_folding.hpp`). This pass, the linear form (a data bound, stage 06)

@@ -580,7 +580,14 @@ decide_clause:
 decide_declaration:
 			DECIDE typed_decide_variable_list
 				{
-					PGDecidePopLexState(pg_yyget_extra(yyscanner));
+					/* With no FROM after the declaration (`FROM t DECIDE x ... SUCH THAT`,
+					 * `SELECT x DECIDE x ... SUCH THAT`), SUCH is already read as the lookahead
+					 * and has opened the body: its state stays, and only the declaration's
+					 * saved one is dropped. */
+					if (yychar == SUCH)
+						PGDecideDropLexState(pg_yyget_extra(yyscanner));
+					else
+						PGDecidePopLexState(pg_yyget_extra(yyscanner));
 					pg_yyget_extra(yyscanner)->decide_declared_before_from = true;
 					$$ = $2;
 				}

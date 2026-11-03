@@ -195,6 +195,13 @@ static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
 	}
 }
 
+/* DeciDB: forget the enclosing state saved last, keeping the current one: a clause
+ * whose next push (its SUCH) was read before the clause closed its own part. */
+static inline void PGDecideDropLexState(base_yy_extra_type *yyextra) {
+	if (yyextra->decide_state_depth > 0)
+		yyextra->decide_state_depth--;
+}
+
 /* from parser.c */
 int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner);
 

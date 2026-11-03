@@ -1,4 +1,6 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
+#include "duckdb/execution/operator/decide/decide_frame_map.hpp"
+#include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/executor.hpp"
@@ -140,9 +142,8 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 //! are stable for the duration of one Finalize. The cache owns lifetime; callers that
 //! pass the returned reference to ExpressionExecutor must keep the cache alive until
 //! the executor is no longer used.
-static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
-                                                          const Expression &expr,
-                                                          ClientContext &context) {
+const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache, const Expression &expr,
+                                                   ClientContext &context) {
 	auto it = cache.find(&expr);
 	if (it != cache.end()) {
 		return *it->second;
@@ -203,8 +204,8 @@ static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, id
 }
 
 //! The same, with one set of rows for every expression; without one, every row.
-static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
-                              const vector<bool> *rows, DataChunk &results) {
+void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset, const vector<bool> *rows,
+                       DataChunk &results) {
 	if (!rows) {
 		executor.Execute(chunk, results);
 		return;
@@ -718,16 +719,17 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 //!
 //! Returns the kept groups: the call's group g is group `[g]` of the key's cache entry,
 //! whose representative values a caller that names a group reads (`GroupNames`).
-static vector<idx_t> LookupOrBuildPerGroupIds(
-    PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key, ChunkExprCache &chunk_expr_cache,
-    ClientContext &context, ColumnDataCollection &data, idx_t num_rows, const std::function<bool(idx_t)> &row_filter,
-    const vector<bool> *read_rows, vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
-    // Optional second map over the SAME group numbering but a
-    // looser row filter. The right-hand side needs this: its
-    // reducers must not inherit the LHS reducers' own `when`,
-    // which `row_filter` folds in. Groups that no strict row
-    // reached emit no constraint, so their rows stay excluded.
-    const std::function<bool(idx_t)> *loose_row_filter = nullptr, vector<idx_t> *out_loose_row_group_ids = nullptr) {
+//!
+//! The optional second map is over the SAME group numbering but a looser row filter. The right-hand side needs this:
+//! its reducers must not inherit the LHS reducers' own `when`, which `row_filter` folds in. Groups that no strict row
+//! reached emit no constraint, so their rows stay excluded.
+vector<idx_t> LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
+                                       ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                       ColumnDataCollection &data, idx_t num_rows,
+                                       const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
+                                       vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
+                                       const std::function<bool(idx_t)> *loose_row_filter,
+                                       vector<idx_t> *out_loose_row_group_ids) {
 	auto *entry = &CachedKeyGroups(cache, keys, key, chunk_expr_cache, context, data, num_rows, read_rows);
 
 	// The call's kept groups, renumbered densely in key-value order.
@@ -792,14 +794,23 @@ static vector<GroupName> GroupNames(const PerGroupCache &cache, idx_t key, const
 	return names;
 }
 
+//! What a signature's FRAME field reads (D82): the frames, their maps over the input, and
+//! the columns and decisions their fallbacks read.
+struct SignatureFrames {
+	const vector<DecideFrameSpec> &frames;
+	const vector<DecideFrameMap> &maps;
+	const DecidePreparedModel &prepared;
+};
+
 //! Each row `rows` keeps (null: every row) numbered by its variant (language/guide.md §7.1, D70): the class of
 //! `signature`'s key -- a row whose written key column is NULL is in none -- split by the value of each of its fields,
-//! NULL a value, a decision by its instance. INVALID_INDEX on every other row, where no field is computed.
+//! NULL a value, a decision by its instance, a frame by its keys (D82). INVALID_INDEX on every other row, where no
+//! field is computed.
 static void BuildSignatureIds(const DecideSignature &signature, const vector<DecideKey> &keys,
                               const vector<DecideVarScopeInfo> &variable_scopes,
-                              const vector<KeyedMapping> &keyed_mappings, ChunkExprCache &chunk_expr_cache,
-                              ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
-                              const vector<bool> *rows, vector<idx_t> &ids, idx_t &count) {
+                              const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
+                              ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
+                              idx_t num_rows, const vector<bool> *rows, vector<idx_t> &ids, idx_t &count) {
 	vector<const Expression *> exprs;
 	vector<bool> null_no_group;
 	auto add = [&](const Expression &expr, bool no_group) {
@@ -810,12 +821,61 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 		add(element.Grouping(), element.null_mode == DecideKeyNullMode::NO_GROUP);
 	}
 	vector<const vector<idx_t> *> classes;
+	vector<unique_ptr<vector<idx_t>>> frame_classes;
 	bool per_row = false;
 	for (auto &field : signature.fields) {
 		switch (field.kind) {
 		case DecideSignatureFieldKind::VALUE:
 			add(*field.value, false);
 			break;
+		case DecideSignatureFieldKind::FRAME: {
+			// Its timeline -- its anchor's position there, when it reads relative to the
+			// anchor --, and what its fallback reads where the anchor reaches it: its data (a
+			// frame over data's VALUE there, a frame over decisions' FALLBACK coefficients),
+			// and its decisions' instances (D82).
+			auto &frame = frames.frames[field.frame];
+			auto &map = frames.maps[field.frame];
+			classes.push_back(frame.Relative() ? &map.peer : &map.timeline);
+			if (!frame.fallback) {
+				break;
+			}
+			auto &columns = frames.prepared.frame_columns;
+			vector<unique_ptr<Expression>> reached_columns;
+			vector<const Expression *> reached;
+			for (idx_t j = 0; j < columns.size(); j++) {
+				const bool fallback_data = columns[j].kind == DecideFrameColumn::Kind::VALUE ||
+				                           columns[j].kind == DecideFrameColumn::Kind::FALLBACK;
+				if (columns[j].frame == field.frame && fallback_data) {
+					reached_columns.push_back(
+					    make_uniq<BoundReferenceExpression>(columns[j].type, frames.prepared.frame_column_base + j));
+					reached.push_back(reached_columns.back().get());
+				}
+			}
+			if (!reached.empty()) {
+				frame_classes.push_back(make_uniq<vector<idx_t>>());
+				idx_t reached_count;
+				GroupRows reached_rows;
+				BuildGroupIds(
+				    reached, context, data, num_rows, [&](idx_t row) { return map.Missing(row); },
+				    *frame_classes.back(), reached_count, reached_rows, rows);
+				classes.push_back(frame_classes.back().get());
+			}
+			for (auto decision : frames.prepared.frame_fallback_decisions[field.frame]) {
+				auto scope = decision < variable_scopes.size() ? variable_scopes[decision] : DecideVarScopeInfo::Row();
+				if (scope.IsGlobal()) {
+					continue;
+				}
+				frame_classes.push_back(make_uniq<vector<idx_t>>(num_rows, num_rows));
+				auto &instance = *frame_classes.back();
+				for (idx_t row = 0; row < num_rows; row++) {
+					if (map.Missing(row)) {
+						instance[row] = scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[row] : row;
+					}
+				}
+				classes.push_back(&instance);
+			}
+			break;
+		}
 		case DecideSignatureFieldKind::BY_KEY:
 			for (auto &element : DecideKeyElements(keys, field.key)) {
 				add(element.Grouping(), false);
@@ -910,10 +970,11 @@ static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_
 //! values from each variant's first row (`first_rows`) when a message needs them, through a key-values entry of the
 //! cache that no key owns, so assembly keeps their numbering (ResolveGroupNames).
 static vector<GroupName> NameVariants(const DecideSignature &signature, const vector<DecideKey> &keys,
-                                      const vector<idx_t> &first_rows, const vector<idx_t> &class_of,
-                                      const vector<idx_t> &variants_per_class, const vector<idx_t> &class_ids,
-                                      ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                      ColumnDataCollection &data, PerGroupCache &per_group_cache) {
+                                      const vector<DecideFrameSpec> &frames, const vector<idx_t> &first_rows,
+                                      const vector<idx_t> &class_of, const vector<idx_t> &variants_per_class,
+                                      const vector<idx_t> &class_ids, ChunkExprCache &chunk_expr_cache,
+                                      ClientContext &context, ColumnDataCollection &data,
+                                      PerGroupCache &per_group_cache) {
 	SolverInput::KeyValues key_values;
 	vector<const Expression *> exprs;
 	auto add = [&](const Expression &expr, DecideKeyNullMode mode) {
@@ -930,6 +991,15 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 		} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
 			for (auto &element : DecideKeyElements(keys, field.key)) {
 				add(*element.expression, DecideKeyNullMode::NO_GROUP);
+			}
+		} else if (field.kind == DecideSignatureFieldKind::FRAME) {
+			// Its timeline, and its anchor's place there when it reads relative to it.
+			auto &frame = frames[field.frame];
+			for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
+				add(*element.expression, DecideKeyNullMode::NO_GROUP);
+			}
+			if (frame.Relative()) {
+				add(*frame.order, DecideKeyNullMode::NO_GROUP);
 			}
 		}
 	}
@@ -1231,8 +1301,8 @@ static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &con
 }
 
 //! The rows among `read` (every row when null) that a scoped clause's `condition` keeps.
-static vector<bool> KeptRows(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                             ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read = nullptr) {
+vector<bool> KeptRows(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                      ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read) {
 	return std::move(KeptRowsOfEach({&condition}, read, chunk_expr_cache, context, data, num_rows)[0]);
 }
 
@@ -1798,7 +1868,34 @@ public:
     vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
 
-    //! Set when the solve failed under DIAGNOSE: the findings were handed off instead of
+	//! The frame selectors' timelines and selections (PhysicalDecide::BuildFrames), one per
+	//! frame, in LogicalDecide::frames order.
+	vector<DecideFrameMap> frame_maps;
+	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
+	//! a decision and a frame once, the variable after the plan's decisions.
+	vector<std::pair<idx_t, idx_t>> frame_reads;
+
+	//! The variable a term reads at each row: its own, or -- for a frame's payload term --
+	//! the read of it at the row the frame selects. A query-wide decision has one column,
+	//! which every row reads, so it is its own read.
+	idx_t ReadVariable(const DecideTerm &term) {
+		if (term.frame_read == DConstants::INVALID_INDEX) {
+			return term.variable_index;
+		}
+		auto var = term.variable_index;
+		if (var < op.variable_scopes.size() && op.variable_scopes[var].IsGlobal()) {
+			return var;
+		}
+		auto read = std::make_pair(var, term.frame_read);
+		auto it = std::find(frame_reads.begin(), frame_reads.end(), read);
+		if (it == frame_reads.end()) {
+			frame_reads.push_back(read);
+			it = frame_reads.end() - 1;
+		}
+		return op.decide_variables.size() + static_cast<idx_t>(it - frame_reads.begin());
+	}
+
+	//! Set when the solve failed under DIAGNOSE: the findings were handed off instead of
     //! raised, so there is no solution to read back and this operator emits no rows. The
     //! DIAGNOSE operator above turns the handoff into the answer.
     bool diagnosis_only = false;
@@ -2164,6 +2261,50 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 // Finalize: PHASE 1.5 — Build Keyed Mappings for Keyed Decisions
 //===--------------------------------------------------------------------===//
 
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 1.4 — Frame selectors
+//===--------------------------------------------------------------------===//
+
+void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache) const {
+	if (frames.empty()) {
+		return;
+	}
+	for (auto &frame : frames) {
+		gstate.frame_maps.push_back(
+		    BuildDecideFrameMap(context, frame, keys, per_group_cache, gstate.data, num_rows, chunk_expr_cache));
+		// D75: each class of a `per` key reads one timeline.
+		CheckDecideFramePartition(context, frame, gstate.frame_maps.back(), keys, per_group_cache, gstate.data,
+		                          num_rows, chunk_expr_cache);
+	}
+	AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, gstate.data, num_rows, chunk_expr_cache);
+}
+
+void PhysicalDecide::CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                     ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                     const vector<KeyedMapping> &keyed_mappings) const {
+	CheckDecideFramePeers(context, frames, gstate.frame_maps, prepared, variable_scopes, keyed_mappings, keys,
+	                      gstate.data, num_rows, chunk_expr_cache);
+}
+
+vector<bool> PhysicalDecide::FramesPresent(const DecideGlobalSinkState &gstate, idx_t source_clause_id,
+                                           idx_t num_rows) const {
+	vector<bool> present;
+	for (idx_t f = 0; f < frames.size(); f++) {
+		if (!frames[f].SkipsInstancesOf(source_clause_id)) {
+			continue;
+		}
+		if (present.empty()) {
+			present.assign(num_rows, true);
+		}
+		auto &map = gstate.frame_maps[f];
+		for (idx_t row = 0; row < num_rows; row++) {
+			present[row] = present[row] && !map.Missing(row);
+		}
+	}
+	return present;
+}
+
 vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate,
                                                           idx_t num_rows, ChunkExprCache &chunk_expr_cache,
                                                           PerGroupCache &per_group_cache) const {
@@ -2201,8 +2342,9 @@ vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, 
 				kept = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
 			}
 			const vector<bool> *read = signature.rows ? &kept : nullptr;
-			BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, chunk_expr_cache, context, gstate.data,
-			                  num_rows, read, mapping.row_to_class, mapping.num_classes);
+			BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings,
+			                  SignatureFrames {frames, gstate.frame_maps, prepared}, chunk_expr_cache, context,
+			                  gstate.data, num_rows, read, mapping.row_to_class, mapping.num_classes);
 			// How many classes of the key those values come from, for EXPLAIN ANALYZE (D71).
 			vector<idx_t> class_ids;
 			idx_t num_classes = 0;
@@ -2270,12 +2412,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // by every other call site that asks for the same expression set.
     PerGroupCache per_group_cache;
 
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// PHASE 1.4: Frame selectors -- their timelines, and the values they read as columns
+	//===--------------------------------------------------------------------===//
+
+	DecideProfileScope phase("execution.frames");
+	BuildFrames(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
+
+	//===--------------------------------------------------------------------===//
     // PHASE 1.5: Build Keyed Mappings for Keyed Decisions
     //===--------------------------------------------------------------------===//
 
-    DecideProfileScope phase("execution.keyed_mapping");
-    vector<KeyedMapping> keyed_mappings =
+	phase.Next("execution.keyed_mapping");
+	vector<KeyedMapping> keyed_mappings =
         BuildKeyedMappings(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
 
     //===--------------------------------------------------------------------===//
@@ -2284,8 +2433,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     phase.Next("execution.scope_checks");
     RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, keyed_mappings);
+	// A frame's selected position must hold one payload (D73), read once the decisions' classes are known.
+	CheckFramePeers(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
 
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
     // PHASE 2: Evaluate Coefficient Expressions
     //===--------------------------------------------------------------------===//
 
@@ -2357,7 +2508,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
 //! A class or group, as a message names it: `D.depotID = 'D1', D.region = 'East'`.
 //! `values` holds the group's value of each column.
-static string DescribeKeyValues(const vector<string> &names, const vector<Value> &values) {
+string DescribeKeyValues(const vector<string> &names, const vector<Value> &values) {
 	string result;
 	for (idx_t i = 0; i < names.size(); i++) {
 		result += (i > 0 ? ", " : "") + names[i] + " = " + DecideSqlLiteral(values[i]);
@@ -2366,8 +2517,8 @@ static string DescribeKeyValues(const vector<string> &names, const vector<Value>
 }
 
 //! `expr` on each row `rows` keeps (every row when null), NULL on the others, and which rows were read.
-static vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                   ColumnDataCollection &data, const vector<bool> *rows) {
+vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                            ColumnDataCollection &data, const vector<bool> *rows) {
 	ExpressionExecutor executor(context);
 	auto &transformed = CachedTransformToChunkExpression(chunk_expr_cache, expr, context);
 	executor.AddExpression(transformed);
@@ -2396,9 +2547,9 @@ static vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk
 //! greatest value as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in.
 static string DescribeVariantDifference(const DecideSignature &signature, const vector<DecideKey> &keys,
                                         const vector<DecideVarScopeInfo> &variable_scopes,
-                                        const vector<KeyedMapping> &keyed_mappings, const vector<idx_t> &ids,
-                                        ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                        ColumnDataCollection &data, const vector<bool> *rows) {
+                                        const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
+                                        const vector<idx_t> &ids, ChunkExprCache &chunk_expr_cache,
+                                        ClientContext &context, ColumnDataCollection &data, const vector<bool> *rows) {
 	// The least and greatest value of `expr` over the kept rows, when it takes two.
 	auto varies = [&](const Expression &expr, string &values) {
 		auto at = ReadRowValues(expr, chunk_expr_cache, context, data, rows);
@@ -2460,6 +2611,47 @@ static string DescribeVariantDifference(const DecideSignature &signature, const 
 			}
 			break;
 		}
+		case DecideSignatureFieldKind::FRAME: {
+			auto &frame = frames.frames[field.frame];
+			auto &map = frames.maps[field.frame];
+			// What tells the kept rows apart: the anchor's position on one timeline, when the frame reads relative
+			// to it, else its timeline, else the value its fallback reads.
+			idx_t first = DConstants::INVALID_INDEX;
+			bool timelines = false;
+			bool positions = false;
+			std::unordered_map<idx_t, idx_t> peer_of_timeline;
+			for (idx_t row = 0; row < ids.size(); row++) {
+				if (ids[row] == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				auto seen = peer_of_timeline.emplace(map.timeline[row], map.peer[row]).first;
+				positions = positions || seen->second != map.peer[row];
+				if (first == DConstants::INVALID_INDEX) {
+					first = row;
+					continue;
+				}
+				timelines = timelines || map.timeline[row] != map.timeline[first];
+			}
+			if (frame.Relative() && positions) {
+				varies(*frame.order, values);
+				return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s)", field.text,
+				                          frame.order_name, values);
+			}
+			if (timelines) {
+				auto &elements = DecideKeyElements(keys, frame.timeline_key);
+				for (auto &element : elements) {
+					if (varies(*element.expression, values)) {
+						return StringUtil::Format("'%s' reads more than one timeline over the kept rows (%s = %s)",
+						                          field.text, element.name, values);
+					}
+				}
+				return StringUtil::Format("'%s' reads more than one timeline over the kept rows", field.text);
+			}
+			if (frame.fallback) {
+				return StringUtil::Format("'%s' falls back to more than one value over the kept rows", field.text);
+			}
+			break;
+		}
 		}
 	}
 	throw InternalException("DECIDE: two variants of a signature agree on every field");
@@ -2480,14 +2672,15 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 	}
 	vector<idx_t> ids;
 	idx_t count = 0;
-	BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, chunk_expr_cache, context, gstate.data,
-	                  num_rows, signature.rows ? &rows : nullptr, ids, count);
+	SignatureFrames signature_frames {frames, gstate.frame_maps, prepared};
+	BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, signature_frames, chunk_expr_cache, context,
+	                  gstate.data, num_rows, signature.rows ? &rows : nullptr, ids, count);
 	if (count > 1) {
 		throw InvalidInputException(
 		    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or "
 		    "fix it with when.",
-		    DescribeVariantDifference(signature, keys, variable_scopes, keyed_mappings, ids, chunk_expr_cache, context,
-		                              gstate.data, signature.rows ? &rows : nullptr));
+		    DescribeVariantDifference(signature, keys, variable_scopes, keyed_mappings, signature_frames, ids,
+		                              chunk_expr_cache, context, gstate.data, signature.rows ? &rows : nullptr));
 	}
 }
 
@@ -2518,10 +2711,11 @@ void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char
 //! (KeyedMapping::absent_class), which reads like a NULL: a term that reads it on that row
 //! marks the row in `null_rows`, so its instance is skipped. A reducer over the decision never
 //! reads the row (DecideCanonicalizer::SkipNullData), and a row outside the clause's `when`
-//! is no instance.
+//! is no instance. A frame's payload term reads the decision at the row the frame selects
+//! (`read_at`), so that is the row whose class counts; where it selects none, nothing is read.
 static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, const vector<KeyedMapping> &mappings,
                                     idx_t var, const vector<bool> &scoped_kept, const TermFilterState &filter,
-                                    vector<bool> &null_rows) {
+                                    vector<bool> &null_rows, const DecideFrameMap *read_at = nullptr) {
 	if (var >= scopes.size() || !scopes[var].IsKeyed()) {
 		return;
 	}
@@ -2530,7 +2724,9 @@ static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, co
 		return;
 	}
 	for (idx_t row = 0; row < null_rows.size(); row++) {
-		if (scoped_kept[row] && (!filter.has_filter || filter.mask[row]) && mapping.IsAbsent(row)) {
+		auto read = read_at ? read_at->SelectedRow(row) : row;
+		if (scoped_kept[row] && (!filter.has_filter || filter.mask[row]) && read != DConstants::INVALID_INDEX &&
+		    mapping.IsAbsent(read)) {
 			null_rows[row] = true;
 		}
 	}
@@ -2650,8 +2846,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // infeasible diagnosis can render a data-weighted SUM clause symbolically instead of
         // dumping the per-row numeric fan-out.
         for (auto &term : constraint->lhs_terms) {
-            eval_const.variable_indices.push_back(term.variable_index);
-            eval_const.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName()
+			eval_const.variable_indices.push_back(gstate.ReadVariable(term));
+			eval_const.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName()
                                                                       : string());
         }
 
@@ -2874,7 +3070,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				vector<idx_t> variant_ids;
 				idx_t num_variants = num_classes;
 				if (signature) {
-					BuildSignatureIds(*signature, keys, variable_scopes, keyed_mappings, chunk_expr_cache, context,
+					BuildSignatureIds(*signature, keys, variable_scopes, keyed_mappings,
+					                  SignatureFrames {frames, gstate.frame_maps, prepared}, chunk_expr_cache, context,
 					                  gstate.data, num_rows, &scoped_kept, variant_ids, num_variants);
 				}
 				const auto &instance_ids = signature ? variant_ids : class_ids;
@@ -2897,7 +3094,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					RecordVariants(*signature, "constraints", num_variants, num_classes);
 					// A variant is named by its class, and by its own field values where its class has more than one.
 					eval_const.group_names =
-					    NameVariants(*signature, keys, first_rows, class_of, variants_per_class, class_ids,
+					    NameVariants(*signature, keys, frames, first_rows, class_of, variants_per_class, class_ids,
 					                 chunk_expr_cache, context, gstate.data, per_group_cache);
 				} else {
 					auto class_names = GroupNames(per_group_cache, constraint->scope.class_key, classes);
@@ -3256,8 +3453,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 eqg.row_coefficients.resize(qg.inner_terms.size());
                 for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
                     auto &term = qg.inner_terms[inner_idx];
-                    eqg.variable_indices.push_back(term.variable_index);
-                    const Expression &cached =
+					eqg.variable_indices.push_back(gstate.ReadVariable(term));
+					const Expression &cached =
                         CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
                     q_types.push_back(cached.return_type);
                     q_executor.AddExpression(cached);
@@ -3318,9 +3515,21 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
+		// A comparison holds only where every frame it reads outside its reducers selects a position; elsewhere it
+		// reads no value (D84), as at a NULL. The rows a rewrite made of it (an ABS's envelope) carry its id.
+		auto present = FramesPresent(gstate, constraint->source_clause_id, num_rows);
+		for (idx_t row = 0; row < present.size(); row++) {
+			if (scoped_kept[row] && !present[row]) {
+				null_rows[row] = true;
+			}
+		}
+		auto read_at = [&](const DecideTerm &term) {
+			return term.frame_read == DConstants::INVALID_INDEX ? nullptr : &gstate.frame_maps[term.frame_read];
+		};
 		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-			MarkAbsentDecisionReads(variable_scopes, keyed_mappings, constraint->lhs_terms[term_idx].variable_index,
-			                        scoped_kept, term_filters[term_idx], null_rows);
+			auto &term = constraint->lhs_terms[term_idx];
+			MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
+			                        term_filters[term_idx], null_rows, read_at(term));
 		}
 		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
 			for (auto var : {constraint->bilinear_terms[term_idx].var_a, constraint->bilinear_terms[term_idx].var_b}) {
@@ -3331,7 +3540,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
 			for (auto &term : constraint->quadratic_groups[group_idx].inner_terms) {
 				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
-				                        quadratic_filters[group_idx], null_rows);
+				                        quadratic_filters[group_idx], null_rows, read_at(term));
 			}
 		}
 		SkipNullInstances(null_rows, constraint->lhs_is_aggregate || constraint->was_minmax_easy, num_rows,
@@ -3425,8 +3634,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     if (term.filter) {
                         obj_filter_slots.push_back({term.filter.get(), &(*b.out_term_filters)[term_idx]});
                     }
-                    b.out_var_indices->push_back(term.variable_index);
-                }
+					b.out_var_indices->push_back(gstate.ReadVariable(term));
+				}
             }
 
             ReadTermFilters(obj_filter_slots, objective_has_when ? &objective_when_mask : nullptr, chunk_expr_cache,
@@ -3862,7 +4071,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		EvaluateTermColumns(context, gstate.data, chunk_expr_cache, link.inner_terms, read, num_rows, Names(),
 		                    link.label, ec.row_coefficients);
 		for (auto &term : link.inner_terms) {
-			ec.variable_indices.push_back(term.variable_index);
+			ec.variable_indices.push_back(gstate.ReadVariable(term));
 			ec.coefficient_labels.push_back(term.coefficient->GetName());
 		}
 		// Its own `per`: one member per class of that key within each group. A row the
@@ -3896,6 +4105,23 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 // Finalize: PHASE 3a, assembly -- BuildSolverInput
 //===--------------------------------------------------------------------===//
 
+//! A frame read is its base decision read at another row, so its type and its box are its
+//! base's (SolverInput::frame_reads): every pass that reads a term's box -- a Big-M, a row's
+//! range -- then reads one that holds at every row the read lands on. Called wherever the
+//! boxes are rewritten wholesale: after the floors and implied bounds, and after a diagnosis
+//! widens them.
+static void SyncFrameReadBoxes(SolverInput &input) {
+	for (idx_t i = 0; i < input.frame_reads.size(); i++) {
+		auto read = input.first_frame_read + i;
+		auto base = input.frame_reads[i].base;
+		input.variable_types[read] = input.variable_types[base];
+		input.lower_bounds[read] = input.lower_bounds[base];
+		input.upper_bounds[read] = input.upper_bounds[base];
+		input.rigid_lower_bounds[read] = input.rigid_lower_bounds[base];
+		input.rigid_upper_bounds[read] = input.rigid_upper_bounds[base];
+	}
+}
+
 SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
                                              vector<KeyedMapping> keyed_mappings,
                                              vector<SolverInput::KeyValues> key_values,
@@ -3910,8 +4136,29 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.num_decide_vars = num_decide_vars;
     solver_input.keyed_mappings = std::move(keyed_mappings);
     solver_input.variable_scopes = variable_scopes;
+	// The decisions frames read at another row (SolverInput::frame_reads), after the plan's
+	// own: each its base read, at each row, at the row its frame selects -- or the row
+	// itself where it selects none, where every term reading it has no value or 0.
+	solver_input.first_frame_read = num_decide_vars;
+	if (!gstate.frame_reads.empty()) {
+		solver_input.variable_scopes.resize(num_decide_vars, DecideVarScopeInfo::Row());
+		solver_input.num_decide_vars = num_decide_vars + gstate.frame_reads.size();
+	}
+	for (auto &read : gstate.frame_reads) {
+		SolverInput::FrameRead frame_read;
+		frame_read.base = read.first;
+		auto &map = gstate.frame_maps[read.second];
+		frame_read.rows.resize(num_rows);
+		for (idx_t row = 0; row < num_rows; row++) {
+			auto selected = map.SelectedRow(row);
+			frame_read.rows[row] = selected == DConstants::INVALID_INDEX ? row : selected;
+		}
+		solver_input.frame_reads.push_back(std::move(frame_read));
+		solver_input.variable_scopes.push_back(
+		    DecideVarScopeInfo(DecideVarScope::FRAME_READ, DConstants::INVALID_INDEX));
+	}
 
-    // The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the class
+	// The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the class
     // mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance
     // map before the first box pass.
     //
@@ -3941,8 +4188,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         bool bool_domain = var < is_boolean_var.size() && is_boolean_var[var];
         solver_input.variable_types[var] = bool_domain ? LogicalType::BOOLEAN : decide_var.return_type;
     }
+	solver_input.variable_types.resize(solver_input.num_decide_vars);
 
-    // Bounds were folded in the gstate constructor from simple
+	// Bounds were folded in the gstate constructor from simple
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
     solver_input.constraint_sources = constraint_sources;
@@ -3958,6 +4206,10 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         solver_input.lower_bounds[var] = gstate.singleton_row_boxes[var].EffectiveLower();
         solver_input.upper_bounds[var] = gstate.singleton_row_boxes[var].upper;
     }
+	if (!solver_input.frame_reads.empty()) {
+		solver_input.lower_bounds.resize(solver_input.num_decide_vars);
+		solver_input.upper_bounds.resize(solver_input.num_decide_vars);
+	}
 
 	// Everything below this point is stage 06 working on the evaluated model, so
 	// hand the constraints and the formulation links over before the first pass.
@@ -4002,14 +4254,16 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
     phase.Next("assembly.lifted_floors");
     ResolveLiftedFloors(solver_input, out_var_indexer, gstate.singleton_row_boxes);
-    phase.Next("assembly.implied_bounds");
+	SyncFrameReadBoxes(solver_input);
+	phase.Next("assembly.implied_bounds");
 
     // Data-driven implied-bound propagation: derive finite upper bounds for
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
     DecidePropagateImpliedBounds(solver_input, out_var_indexer, num_rows);
-    phase.Next("assembly.objective_and_avg");
+	SyncFrameReadBoxes(solver_input);
+	phase.Next("assembly.objective_and_avg");
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
@@ -4134,12 +4388,16 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // Plain declared names, for the refusals the linearization can raise. `alias`
     // lives on BaseExpression, so no cast is needed to read it.
     vector<string> decide_var_names;
-    decide_var_names.reserve(decide_variables.size());
-    for (auto &v : decide_variables) {
+	decide_var_names.reserve(solver_input.num_decide_vars);
+	for (auto &v : decide_variables) {
         decide_var_names.push_back(v->alias);
     }
+	// A frame read is named as its base is: the bound a refusal asks for is the base's.
+	for (auto &read : solver_input.frame_reads) {
+		decide_var_names.push_back(decide_var_names[read.base]);
+	}
 
-    // Auto-M for L0 `norm(e, 0)`: the binder emitted the raw links `e <= M*z` and
+	// Auto-M for L0 `norm(e, 0)`: the binder emitted the raw links `e <= M*z` and
     // `-e <= M*z` with a placeholder coefficient on each `__l0auto_ind_*` indicator.
     // Now that implied bounds are known, fill a tight, data-driven Big-M (mirrors
     // the <> path): zero the indicator's own coefficient, compute M from the
@@ -4169,15 +4427,16 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
                     }
                     if (l0_auto.count(v)) {
                         z_term = t;
-                    } else if (!StringUtil::StartsWith(decide_variables[v]->GetName(), "__abs_aux_")) {
-                        // The REVERSE link `ABS(inner) >= TOL*z` also references the L0
+					} else if (!StringUtil::StartsWith(decide_variables[solver_input.BaseVariable(v)]->GetName(),
+					                                   "__abs_aux_")) {
+						// The REVERSE link `ABS(inner) >= TOL*z` also references the L0
                         // indicator, but its only other variable is the ABS aux and its
                         // z-coefficient is the fixed tolerance — it must NOT be refilled.
                         // Only the FORWARD links carry the inner decision variable, so an
                         // ABS-aux companion marks the reverse link to skip.
                         has_inner_var = true;
-                    }
-                }
+					}
+				}
                 if (z_term == DConstants::INVALID_INDEX || !has_inner_var) {
                     continue;
                 }
@@ -4497,6 +4756,7 @@ static void OpenElasticColumnBox(SolverInput &input) {
             input.upper_bounds[var] = std::min(rigid_upper, input.upper_bounds[var] + room);
         }
     }
+	SyncFrameReadBoxes(input);
 }
 
 //===--------------------------------------------------------------------===//
@@ -4656,6 +4916,11 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
                 var_labels[i] = decide_variables[i]->GetName();
             }
         }
+		// A frame read is labelled as its base is.
+		for (auto &read : solver_input.frame_reads) {
+			var_labels.push_back(var_labels[read.base]);
+			var_is_aux.push_back(var_is_aux[read.base]);
+		}
     };
 
     // Under DIAGNOSE, a failure is the ANSWER, not an error: hand off the findings to the
@@ -5111,11 +5376,14 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
         return SourceResultType::FINISHED;
     }
 
-    // Reference the scanned columns into the leading columns of the wide output chunk.
-    for (idx_t col = 0; col < source_state.scan_chunk.ColumnCount(); col++) {
-        chunk.data[col].Reference(source_state.scan_chunk.data[col]);
-    }
-    chunk.SetCardinality(source_state.scan_chunk.size());
+	// Reference the input's columns into the leading columns of the wide output chunk. The
+	// collection may hold more after them -- the values frame selectors read
+	// (BuildFrames) -- which are no output.
+	const idx_t input_columns = types.size() - decide_variables.size();
+	for (idx_t col = 0; col < input_columns; col++) {
+		chunk.data[col].Reference(source_state.scan_chunk.data[col]);
+	}
+	chunk.SetCardinality(source_state.scan_chunk.size());
 
     // All DECIDE vars (user + auxiliary) are in the output; projection above prunes aux vars
     idx_t total_decide_vars = decide_variables.size();

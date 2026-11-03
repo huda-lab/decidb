@@ -456,6 +456,14 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(110, "cyclic", cyclic);
 	serializer.WritePropertyWithDefault<idx_t>(111, "within_key", within_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<string>(112, "text", text);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(113, "rows", rows);
+	serializer.WritePropertyWithDefault<idx_t>(114, "timeline_key", timeline_key, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<idx_t>(115, "source_clause_id", source_clause_id, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<bool>(116, "reduced", reduced);
+	serializer.WritePropertyWithDefault<vector<string>>(117, "timeline_names", timeline_names);
+	serializer.WritePropertyWithDefault<string>(118, "order_name", order_name);
+	serializer.WritePropertyWithDefault<idx_t>(119, "partition_key", partition_key, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<string>(120, "partition_subject", partition_subject);
 }
 
 DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
@@ -473,6 +481,14 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<bool>(110, "cyclic", result.cyclic);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(111, "within_key", result.within_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<string>(112, "text", result.text);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(113, "rows", result.rows);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(114, "timeline_key", result.timeline_key, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(115, "source_clause_id", result.source_clause_id, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithDefault<bool>(116, "reduced", result.reduced);
+	deserializer.ReadPropertyWithDefault<vector<string>>(117, "timeline_names", result.timeline_names);
+	deserializer.ReadPropertyWithDefault<string>(118, "order_name", result.order_name);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(119, "partition_key", result.partition_key, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithDefault<string>(120, "partition_subject", result.partition_subject);
 	return result;
 }
 
@@ -560,6 +576,7 @@ void DecideSignatureField::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<idx_t>(102, "decision", decision, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<idx_t>(103, "key", key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<string>(104, "text", text);
+	serializer.WritePropertyWithDefault<idx_t>(105, "frame", frame, DConstants::INVALID_INDEX);
 }
 
 DecideSignatureField DecideSignatureField::Deserialize(Deserializer &deserializer) {
@@ -569,6 +586,7 @@ DecideSignatureField DecideSignatureField::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(102, "decision", result.decision, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(103, "key", result.key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<string>(104, "text", result.text);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(105, "frame", result.frame, DConstants::INVALID_INDEX);
 	return result;
 }
 

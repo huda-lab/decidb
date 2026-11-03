@@ -127,8 +127,19 @@ VarIndexer VarIndexer::Build(const SolverInput &input) {
     VarIndexer idx;
     // Own a copy so this VarIndexer can outlive the SolverInput
     idx.keyed_mappings = input.keyed_mappings;
-    BuildVarIndexer(idx, input);
-    return idx;
+	idx.frame_reads = input.frame_reads;
+	idx.first_frame_read = input.first_frame_read;
+	BuildVarIndexer(idx, input);
+	for (idx_t i = 0; i < idx.frame_reads.size(); i++) {
+		auto v = idx.first_frame_read + i;
+		if (v >= idx.var_scope.size() || idx.var_scope[v] != DecideVarScope::FRAME_READ ||
+		    idx.frame_reads[i].base >= idx.first_frame_read ||
+		    idx.var_scope[idx.frame_reads[i].base] == DecideVarScope::FRAME_READ ||
+		    idx.frame_reads[i].rows.size() != idx.num_rows) {
+			throw InternalException("DECIDE: frame read %llu does not read a decision of the plan at every row", v);
+		}
+	}
+	return idx;
 }
 
 #ifdef DEBUG

@@ -3,6 +3,8 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -459,6 +461,15 @@ void DecideTermSplitter::Split(const Expression &expr, int sign, vector<DecideSp
 			AddAbs(func, nullptr, sign, out);
 			return;
 		}
+		if (fname == "*" && ContainsDecideFrame(func) && FindVariable(func) != DConstants::INVALID_INDEX) {
+			// A frame term under data factors (the binder refuses a decision beside one): SplitLinear reads it.
+			auto before = out.size();
+			SplitLinear(func, out);
+			if (sign == -1) {
+				FlipSigns(out, before);
+			}
+			return;
+		}
 		if (fname == "*") {
 			// Distribute before classifying: `K * (1 - pick)` reaches here from the MIN/MAX hard-direction
 			// rewrites and other paths that leave an additive factor.
@@ -520,6 +531,22 @@ void DecideTermSplitter::SplitLinear(const Expression &expr, vector<DecideSplitT
 		result.coefficient = std::move(coefficient);
 		out.push_back(std::move(result));
 	};
+	// A frame over decisions: its payload's terms, read at the row it selects.
+	auto frame_term = [&](const Expression &marker, idx_t frame, unique_ptr<Expression> coefficient) {
+		DecideSplitTerm result;
+		result.kind = DecideTermKind::FRAME;
+		result.frame = frame;
+		result.marker = &marker;
+		result.coefficient = std::move(coefficient);
+		SplitLinear(*marker.Cast<BoundAggregateExpression>().children[0], result.inner);
+		out.push_back(std::move(result));
+	};
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame) && FindVariable(expr) != DConstants::INVALID_INDEX &&
+	    expr.Cast<BoundAggregateExpression>().children.size() == 1) {
+		frame_term(expr, frame, make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
+		return;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		if (func.function.name == "+") {
@@ -560,18 +587,32 @@ void DecideTermSplitter::SplitLinear(const Expression &expr, vector<DecideSplitT
 				constant(func);
 				return;
 			}
-			// Linear means exactly one factor is a decision, and it is bare.
+			// Linear means exactly one factor is a decision, and it is bare -- or a frame over decisions.
 			vector<const Expression *> factors;
 			CollectMultiplicativeFactors(func, decide_index, factors);
 			idx_t decision_factors = 0;
 			bool bare = true;
+			const Expression *frame_factor = nullptr;
+			vector<const Expression *> data_factors;
 			for (auto *factor : factors) {
 				if (FindVariable(*factor) == DConstants::INVALID_INDEX) {
+					data_factors.push_back(factor);
 					continue;
 				}
 				decision_factors++;
 				idx_t ignored;
+				auto *unwrapped = UnwrapDecideCasts(*factor, decide_index);
+				if (TryGetDecideFrame(*unwrapped, ignored)) {
+					frame_factor = unwrapped;
+					continue;
+				}
 				bare = bare && TryGetBareDecideFactor(*factor, ignored);
+			}
+			if (decision_factors == 1 && frame_factor &&
+			    frame_factor->Cast<BoundAggregateExpression>().children.size() == 1) {
+				TryGetDecideFrame(*frame_factor, frame);
+				frame_term(*frame_factor, frame, BuildCoefficientFromFactors(context, data_factors));
+				return;
 			}
 			if (decision_factors != 1 || !bare) {
 				out.push_back(UnknownTerm(1,

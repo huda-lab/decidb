@@ -502,23 +502,41 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   `per` key does, and a row whose written `within` column is NULL is in no timeline (D5, D75). `e` is read at the
   selected row, `v` at the anchor row; `v` is a number (`else true`, `else 0.5`, `else c` all are), and keeps its own
   type.
-- **A frame's term is linear**: its payload and fallback square or multiply no decision.
+- **A frame's term is linear**: its payload and fallback square or multiply no decision, and take no `abs` of one.
+  A data factor on a frame over decisions is linear: `t.w * at(previous: x) over (t.period)`.
 - **A missing position** (before the first row, after the last): `else v` supplies `v`; `all` makes the whole range
   select nothing; otherwise a range keeps the positions that exist. A point frame that selects nothing, a NULL read at
   its selected row and a NULL fallback are no value (D84): its comparison skips that instance, a reducer drops that
   member, and an objective term holding it is dropped.
+- **One row per position** (D73): the rows of a selected position must read one payload -- one value of data, one
+  linear form over decisions (`0 * x` reads no `x`) -- else *"DECIDE: at(previous: x) over (t.period within
+  t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row."*
+- **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an
+  error naming the class and the timelines. A frame is a field of the clause's signature by its keys (D82): its
+  timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached -- so
+  `per t.product: x <= at(previous: t.v) over (t.period within t.product)` is one instance per period with a previous
+  one, and `at(first: ...)` one per product.
+- **The objective** is produced once (D72): a root frame that reads more than one position, timeline or fallback
+  over the kept rows is an error saying so.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
   inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
   over decisions is linear).
 
-**Status.** Every spelling parses and binds, and its subqueries are planned; a query that holds a frame then stops,
-from one place, before canonicalization reads a frame, with *"DECIDE: frame selectors are not supported yet:
-at(previous: x) over (t.period)"* — `EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` included, since each plans the query, and
-before any later layer could refuse the clause for a reason of its own ([roadmap.md](roadmap.md)).
+**Status.** A point frame is formulated, over data or decisions, in constraints and the objective, inside a reducer
+over decisions too (D78): a decision read at the selected row is that row's own column, with no helper decision. A
+range stops, from one place, before canonicalization reads it, with *"DECIDE: a range frame selector is not supported
+yet: sum(from previous to next: x) over (t.period)"* -- `EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` included
+([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a point frame that may
+select no position inside a reducer over decisions (give it an `else`, or make its timeline cyclic); a frame inside a
+reducer of a bound, or in the bound of a clause over groups that would take its group's tightest value (D85) -- a
+`first` or `last` frame whose timeline lies within each group reads one row per group, and is read; a frame over
+decisions inside or beside a `MIN`/`MAX` of several terms; an `else` that reads a decision while the payload reads
+none.
 
-Tests: `test/decidb/test_frame_parser.test` (parse and bind errors, ordinary SQL windows unchanged),
-`test/decide/tests/test_anr_frames.py` (`TestSyntax`: every frame fixture binds),
-`test/common/test_decidb_plan_serialization.cpp` (round trips).
+Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
+`test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint`: every point fixture of `_anr_cases`, judged by
+the oracle; the deck's examples 1, 4 and 5 and the DeQL comparison; shapes and errors),
+`test/common/test_decidb_plan_serialization.cpp` (a placed frame round-trips).
 
 ## 6. Scoped constraints — `[when c] [per K]: C`
 

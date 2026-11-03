@@ -13,6 +13,7 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
 #include <cmath>
@@ -223,6 +224,10 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	    type != ExpressionType::COMPARE_EQUAL) {
 		return false;
 	}
+	// A frame selector reads another row, or nothing, which no admitted interval over the row says.
+	if (ContainsDecideFrame(comparison)) {
+		return false;
+	}
 	ExpressionBuilder calc(context);
 	DecideTermSplitter splitter(context, decide.decide_index, decide.decide_variables);
 	unique_ptr<Expression> member_filter;
@@ -373,6 +378,14 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
+		// A comparison holds only at the rows where every frame it reads outside its reducers selects a position
+		// (language/guide.md §5.6) -- a condition, as a `when` is -- so it must not become a global bound either. The
+		// row an ABS lowers from `abs(x - at(previous: x) over (...)) <= K` carries its clause's id, not the frame.
+		for (auto &frame : decide.frames) {
+			if (frame.SkipsInstancesOf(source_clause_id)) {
+				return;
+			}
+		}
 
 		DecideSingletonRow bound;
 		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound) || !bound.folds) {

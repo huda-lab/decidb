@@ -135,6 +135,44 @@ struct DecideFrameSpec {
 	//! The frame as written, for messages
 	string text;
 
+	//! Where the frame stands, set by DecideCanonicalizer (PlaceFrames). Its timelines are read over the rows its
+	//! scoped expression reads -- its path's (language/guide.md §5.5), `rows` keeps them, null for every row -- grouped
+	//! by `timeline_key` (into LogicalDecide::keys): the path's `by` keys, then `within`; INVALID_INDEX for one
+	//! timeline.
+	unique_ptr<Expression> rows;
+	idx_t timeline_key = DConstants::INVALID_INDEX;
+	//! The comparison it is written in (LogicalDecide::constraint_sources); INVALID_INDEX exactly in the objective, as
+	//! placement holds every constraint's frame to an id.
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	//! Inside a reducer's argument, where a position it misses drops the member; outside every reducer it skips the
+	//! comparison's instance, and drops the objective's term (D84).
+	bool reduced = false;
+	//! How a message names each element its timelines are split by (`T.productID`) and its order key (`T.period`).
+	vector<string> timeline_names;
+	string order_name;
+	//! D75: the key whose every class among `rows` lies in one timeline -- the path's `by` keys and the `per` key
+	//! of the scoped expression it stands in, an index into LogicalDecide::keys -- and the message's subject;
+	//! INVALID_INDEX when that key determines the timeline already.
+	idx_t partition_key = DConstants::INVALID_INDEX;
+	string partition_subject;
+
+	//! Whether its position is read relative to the anchor's: `previous` or `next`.
+	bool Relative() const {
+		return from == DecideFrameAnchor::PREVIOUS || from == DecideFrameAnchor::NEXT ||
+		       (range && (to == DecideFrameAnchor::PREVIOUS || to == DecideFrameAnchor::NEXT));
+	}
+	//! Whether some anchor may find its position missing with nothing to stand in: a relative position on a timeline
+	//! that does not wrap, with no `else`. `first` and `last` always exist, as the anchor is on its own timeline.
+	bool MaySelectNothing() const {
+		return Relative() && !cyclic && !fallback;
+	}
+	//! Whether it stands outside every reducer of the comparison of clause `clause_id` and may select nothing, so that
+	//! comparison has no instance at a row where it selects none (D84). False for a comparison with no id.
+	bool SkipsInstancesOf(idx_t clause_id) const {
+		return clause_id != DConstants::INVALID_INDEX && source_clause_id == clause_id && !reduced &&
+		       MaySelectNothing();
+	}
+
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static DecideFrameSpec Deserialize(Deserializer &deserializer);
@@ -163,7 +201,9 @@ struct DecideSignatureField {
 	idx_t decision = DConstants::INVALID_INDEX;
 	//! BY_KEY: the reducer's `by` key (index into LogicalDecide::keys).
 	idx_t key = DConstants::INVALID_INDEX;
-	//! The field as a message names it: `P.lim`, `ship`, `by (P.region)`.
+	//! FRAME: the frame (index into LogicalDecide::frames).
+	idx_t frame = DConstants::INVALID_INDEX;
+	//! The field as a message names it: `P.lim`, `ship`, `by (P.region)`, a frame as written.
 	string text;
 
 	//! Generated from `storage/serialization/nodes.json`.

@@ -47,6 +47,10 @@ enum class DecideTermKind : uint8_t {
 	//! `coefficient * |inner|`. `inner` is linear; a null coefficient means 1. Only a tree that has not been
 	//! lowered holds one: RewriteAbs replaces every ABS before the solver path reads terms.
 	ABS,
+	//! `coefficient * at(F: payload) over (...)`, a frame selector over decisions (language/guide.md §5.6): `inner`
+	//! holds its payload's terms, linear, each read at the row the frame `frame` selects; `marker` is the frame's
+	//! marker. Only the solver path reads one (it reads the frame's fallback off LogicalDecide::frames).
+	FRAME,
 	//! Not one of the above. `reason` says why; `user_error` says whether the query or the engine is at fault.
 	UNKNOWN
 };
@@ -60,6 +64,9 @@ struct DecideSplitTerm {
 	idx_t var_a = DConstants::INVALID_INDEX;
 	idx_t var_b = DConstants::INVALID_INDEX;
 	vector<DecideSplitTerm> inner;
+	//! FRAME: the frame (into LogicalDecide::frames) and its marker, the aggregate the binder bound it to.
+	idx_t frame = DConstants::INVALID_INDEX;
+	const Expression *marker = nullptr;
 	string reason;
 	bool user_error = false;
 };

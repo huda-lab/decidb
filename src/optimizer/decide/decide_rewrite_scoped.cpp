@@ -59,9 +59,13 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 		return; // data holds no decision reducer
 	}
 	switch (expr->GetExpressionClass()) {
-	case ExpressionClass::BOUND_AGGREGATE:
-		out.push_back({&expr, sign, under_decision});
+	case ExpressionClass::BOUND_AGGREGATE: {
+		idx_t frame;
+		if (!TryGetDecideFrame(*expr, frame)) {
+			out.push_back({&expr, sign, under_decision}); // a frame is a tuple term of the row, no reducer
+		}
 		return;
+	}
 	case ExpressionClass::BOUND_CAST:
 		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, booleans, out,
 		                    under_decision);

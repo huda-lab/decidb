@@ -8,8 +8,8 @@ todo of the area that owns it.
 
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
 postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–9 (pp. 17–25), NULL keys
-and empty groups (pp. 30, 50, 56), and reducers nested to any depth (pp. 25, 28–32), the two-level objective
-`outer(per k: inner(e) by (k))` among them.
+and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
+`outer(per k: inner(e) by (k))` among them, and point frame selectors `at(...) over (...)` (pp. 42–56).
 
 The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D86) and
 encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
@@ -42,11 +42,13 @@ reaching the comparison skips that constraint instance (p. 50). Well-definedness
 partition `π`. The deck's reasons for not reusing SQL windows: windows run after `GROUP BY`, and SQL has no cyclic
 order, no stepped range and no fill or complete-frame boundary policy.
 
-- **Today:** every spelling parses and binds (`DecideFrameExpression`, `LogicalDecide::frames`, guide §5.6), and a
-  query holding one stops before canonicalization with *"DECIDE: frame selectors are not supported yet: ..."*
-  (`plan_select_node.cpp`).
-- **What is left:** formulating point frames (read in place, D78), then ranges (a helper decision per window, D78),
-  then their composition with variants and nesting (D82).
+- **Today:** every spelling parses and binds (`DecideFrameExpression`, `LogicalDecide::frames`, guide §5.6). A point
+  frame is formulated, read in place (D78); a range stops before canonicalization with *"DECIDE: a range frame
+  selector is not supported yet: ..."* (`plan_select_node.cpp`).
+- **What is left:** ranges (a helper decision per window, D78), then their composition with variants and nesting
+  (D82); a point frame that may select no position inside a reducer over decisions, the member dropped (D84); a
+  frame in a bound that takes its group's tightest value (D85) or inside a reducer of a bound; a frame over decisions
+  in a `MIN`/`MAX` of several terms.
 
 ## Conditional generation with `if` (pp. 58–59)
 

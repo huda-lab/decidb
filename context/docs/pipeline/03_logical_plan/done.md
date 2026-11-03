@@ -148,12 +148,15 @@ its clause), indexed by a `per K:` wrapper's `__signature_<i>__` tag and by a re
 own scope (`KeyedScopeInfo::signature`, a scope the canonicalizer appends for a
 relation-qualified reducer over decisions whose body has a field), and
 `objective_signature`, the objective's or `INVALID_INDEX`. A `DecideSignatureField` is a
-data `value`, a `decision` (an index into `decide_variables`) or a `by` key (an index
-into `keys`), with its text. `frames` holds one `DecideFrameSpec` per frame selector
-(`../../language/guide.md` §5.6, property 223), indexed by the `__frame_<i>__` tag on the
-aggregate it binds to: its anchors and their `k`, `every`, `all`, its fallback and order
-key, `desc`, `cyclic`, and its `within` key as an index into `keys`. No plan holding one
-is built yet: planning stops it before canonicalization (stage 02, §4b). `scope_checks`
+data `value`, a `decision` (an index into `decide_variables`), a `by` key (an index
+into `keys`) or a `frame` (an index into `frames`, D82), with its text. `frames` holds one
+`DecideFrameSpec` per frame selector (`../../language/guide.md` §5.6, property 223),
+indexed by the `__frame_<i>__` tag on the aggregate it binds to: its anchors and their
+`k`, `every`, `all`, its fallback and order key, `desc`, `cyclic`, and its `within` key as
+an index into `keys`; then where the canonicalizer placed it (stage 04, ids 113-120):
+`rows`, the rows its timelines read (its path's, null for every row), `timeline_key`,
+`source_clause_id` (INVALID_INDEX exactly in the objective), `reduced`, the names its
+messages use, and `partition_key` with `partition_subject`, its D75 check. `scope_checks`
 holds only the `VALUE_IS_VALID` checks the bound-side rewrite appends (stage 05).
 `PlanSubqueries` runs on the key elements, the frames' order keys and fallbacks as on
 the trees, and `EnumerateExpressions` visits the key table, the frames, the signatures
@@ -226,7 +229,7 @@ resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`keys`, `frames` (order key, fallback), `scope_checks`, `signatures` (rows, fields' values).
+`keys`, `frames` (order key, fallback, rows), `scope_checks`, `signatures` (rows, fields' values).
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of

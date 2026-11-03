@@ -23,7 +23,9 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   per-row clause, a clause whose reducer value became a helper decision, an objective holding a nested reducer and an objective with
   a variant signature (it is produced once, D72, which only the DECIDE operator checks) are not-proved parts; a
   reducer's own `per` whose body has variants (a keyed scope with a signature, D71, which only the DECIDE operator
-  numbers) makes the whole IR not proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
+  numbers) makes the whole IR not proved (`DirectIR::status`), and so does a frame selector, which reads the row its
+  position selects on a timeline the DECIDE operator builds (a frame's term is not proved, and its marker, an
+  aggregate `first`, is never read as a reducer). Shapes the binder never produces are `D_ASSERT`s
   (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The

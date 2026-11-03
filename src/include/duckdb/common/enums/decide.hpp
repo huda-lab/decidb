@@ -31,15 +31,14 @@ enum class DecideExpression : uint8_t {
 };
 
 //! How one DECIDE declaration maps onto solver columns.
-//!   ROW    — `x(INT)`, `per row: x(INT)` one column per result row
-//!   KEYED  — `per K: x(INT)`             one column per distinct value of the key
-//!   GLOBAL — `per (): x(INT)`            one column for the whole query
+//!   ROW        — `x(INT)`, `per row: x(INT)` one column per result row
+//!   KEYED      — `per K: x(INT)`             one column per distinct value of the key
+//!   GLOBAL     — `per (): x(INT)`            one column for the whole query
+//!   FRAME_READ — never declared: a decision read at the row a frame selector selects for
+//!                each row (SolverInput::frame_reads). It owns no column; at a row it is
+//!                its base decision's column at the selected row. Execution creates it.
 //! The values are serialized, so a stored plan reads under any rename.
-enum class DecideVarScope : uint8_t {
-    ROW = 0,
-    KEYED = 1,
-    GLOBAL = 2
-};
+enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ = 3 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
@@ -115,7 +114,10 @@ enum class DecideScopeCheckKind : uint8_t { VALUE_IS_VALID = 3 };
 //!   VALUE    — a data expression, by value (NULL a value)
 //!   DECISION — a decision, by instance: a per-row one by its row, a keyed one by its class
 //!   BY_KEY   — a reducer's `by` key, by the value of each of its elements
-enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2 };
+//!   FRAME    — a frame selector, by its keys (D82): its timeline, the anchor's order key
+//!              when its position is relative to the anchor, and its fallback where the
+//!              anchor reaches it
+enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2, FRAME = 3 };
 
 //! How one column of a key (LogicalDecide::keys) compares NULL.
 //!   NO_GROUP — a column the user wrote: rows group as SQL's `=` compares them, so a NULL

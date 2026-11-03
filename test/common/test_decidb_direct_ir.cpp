@@ -433,6 +433,20 @@ TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb
 	REQUIRE(ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
 }
 
+TEST_CASE("Direct-solve IR declines a frame selector", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	// A frame reads the row its position selects on a timeline, which the operator computes and no rule's plan reads:
+	// the IR is not read. Its marker, an aggregate `first`, is never taken for a reducer.
+	QueryIR root(con, IRQuery("x(INT)", "x <= at(previous else 3: cap) over (id)", "MAXIMIZE SUM(x)"));
+	REQUIRE(root.ir.status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE_FALSE(DirectIRIsReadable(root.ir));
+	QueryIR reduced(con, IRQuery("x(INT)", "x <= 3 AND SUM(at(first: x) over (id)) <= 4", "MAXIMIZE SUM(x)"));
+	REQUIRE_FALSE(DirectIRIsReadable(reduced.ir));
+	REQUIRE(reduced.ir.constraints.size() == 2);
+	REQUIRE(reduced.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+}
+
 TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's box", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

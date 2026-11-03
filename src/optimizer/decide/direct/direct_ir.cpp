@@ -9,6 +9,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -23,10 +24,11 @@ namespace duckdb {
 
 namespace {
 
-//! Whether any term is unknown, including terms nested in a square or an absolute value.
+//! Whether any term is unknown, including terms nested in a square or an absolute value. A frame selector's term reads
+//! a row the operator selects, which no rule's plan reads.
 bool HasUnknownTerm(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
-		if (term.kind == DecideTermKind::UNKNOWN) {
+		if (term.kind == DecideTermKind::UNKNOWN || term.kind == DecideTermKind::FRAME) {
 			return true;
 		}
 		if (HasUnknownTerm(term.inner)) {
@@ -62,6 +64,11 @@ public:
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 		source_bindings = decide.SourceBindings();
 		ir.source_bindings = source_bindings;
+		// A frame selector reads the row its position selects on a timeline (language/guide.md §5.6), which the
+		// operator computes and no rule's plan reads.
+		if (!decide.frames.empty()) {
+			MarkNotProved(ir.status);
+		}
 		ReadDecisions(ir);
 		ReadKeyedScopes(ir);
 		ReadConstraints(ir);
@@ -237,6 +244,11 @@ private:
 	}
 
 	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
+		idx_t frame;
+		if (TryGetDecideFrame(aggregate, frame)) {
+			MarkNotProved(part.status); // a frame's marker, no reducer
+			return;
+		}
 		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
 		string order;
 		auto name = StringUtil::Lower(aggregate.function.name);

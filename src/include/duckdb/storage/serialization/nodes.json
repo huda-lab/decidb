@@ -1262,6 +1262,49 @@
         "id": 112,
         "name": "text",
         "type": "string"
+      },
+      {
+        "id": 113,
+        "name": "rows",
+        "type": "Expression*"
+      },
+      {
+        "id": 114,
+        "name": "timeline_key",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 115,
+        "name": "source_clause_id",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 116,
+        "name": "reduced",
+        "type": "bool"
+      },
+      {
+        "id": 117,
+        "name": "timeline_names",
+        "type": "vector<string>"
+      },
+      {
+        "id": 118,
+        "name": "order_name",
+        "type": "string"
+      },
+      {
+        "id": 119,
+        "name": "partition_key",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 120,
+        "name": "partition_subject",
+        "type": "string"
       }
     ],
     "pointer_type": "none"
@@ -1371,6 +1414,12 @@
         "id": 104,
         "name": "text",
         "type": "string"
+      },
+      {
+        "id": 105,
+        "name": "frame",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
       }
     ],
     "pointer_type": "none"

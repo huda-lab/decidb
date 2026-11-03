@@ -50,8 +50,9 @@ separate objective-side copy.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
+| 2a | `Finalize` → `BuildFrames` | The frame selectors' timelines and selections, their D75 checks, and the values they read appended to the input as columns (§4b) |
 | 3 | `Finalize` → `BuildKeyedMappings` | Build the row → class maps of the key scopes |
-| 3a | `Finalize` → `RunScopeChecks` | The objective is produced once (§4a); a second variant stops the query |
+| 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | The objective is produced once (§4a); a second variant stops the query. A frame's selected position holds one payload (D73) |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
@@ -253,6 +254,34 @@ The result is an `EntityMapping { num_entities, row_to_entity, absent_entity }` 
 `SolverInput`, which is what makes several rows share one solver column.
 
 ---
+
+## 4b. PHASE 1.4 — frame selectors
+
+Before anything else reads the input, `BuildFrames` (`physical_decide_frames.cpp`, `decide_frame_map.hpp`) builds a
+`DecideFrameMap` per frame selector (`../../language/guide.md` §5.6): its anchors are the rows its scoped expression
+reads (`DecideFrameSpec::rows`), grouped into timelines by its timeline key through the one key cache, so a row whose
+written `within` column is NULL is in no timeline (D75). Each anchor's order key becomes a DuckDB sort key -- the
+frame's direction, NULL where `default_null_order` puts it (D74) -- and each timeline's anchors are stably sorted into
+peers, rows of one order-key value. A position counts peers: `first`, `last`, `k previous`, `k next`, wrapped when
+cyclic, missing past either end. Under a `per` that does not hold the timeline, `CheckDecideFramePartition` stops a
+class that spans two timelines (D75).
+
+`AppendDecideFrameColumns` then appends to the materialized input, after its own columns, each column stage 05
+registered (`DecidePreparedModel::frame_columns`): a payload is evaluated on the first row of each selected peer only,
+an `else` on the anchors that reach it only, so an unused one never runs (a cast that would fail there does not), and
+the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
+the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds a selected peer of several
+rows to one payload (D73): one value over data, one linear form over decisions, a decision by its instance. A
+frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
+(`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
+
+Where a frame has nothing to read, its column holds NULL, which is no value (D84) as any NULL a clause reads: the
+instance is skipped (`SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. A
+comparison whose frame outside its reducers may select no position marks those rows too (`FramesPresent`, by the
+clause's id), so the rows a rewrite made of the clause -- an ABS's envelope, a `<>`'s indicator rows -- skip them as
+well. A keyed decision read through a frame is absent where the selected row is in no class (`MarkAbsentDecisionReads`
+reads the selected row). A frame field of a signature (D82) splits by the frame's timeline, the anchor's peer when it
+reads relative to the anchor, and what a reached `else` reads, its data and its decisions' instances.
 
 ## 4a. PHASE 1.6 — variants, and how a clause is read
 

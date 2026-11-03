@@ -65,6 +65,18 @@ Construction and ownership:
 There is no non-owning constructor. Focused tests use the same owning path as
 production, so entity-mapping lifetime has one contract everywhere.
 
+**A frame read** (`DecideVarScope::FRAME_READ`, `SolverInput::frame_reads`) is a decision read at the row a frame
+selector selects (`../../language/guide.md` §5.6, D78): variable `first_frame_read + i`, after the plan's decisions,
+is decision `base` read at `rows[row]` -- the selected row, or the row itself where the frame selects none, where every
+term reading it has no value or 0. It owns no column: `Get` returns its base's column at that row, the redirect living
+where every column resolution already passes rather than at each emission site; `InstanceColumn` and `InstanceOf`
+refuse it, and `NumInstances` is 0. `ResolveRead` turns it into its base at the selected row for the readers of an
+instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
+wholesale (after the floors, the implied bounds and a diagnosis's widening, `SyncFrameReadBoxes` in stage 08), and
+`BaseVariable` maps it to its base for a table of the plan's decisions (a name, an `__abs_aux_` test). The composed
+MIN/MAX formulation reads each term at its own row, so a frame read reaching it is an internal error (stage 05 refuses
+the query).
+
 ---
 
 ## 2. Variable types and bounds

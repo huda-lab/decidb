@@ -23,6 +23,11 @@
 // sum(cap) by (g)`). A direct-solve rule computes its aggregates in the group aggregate it already runs; the solver
 // path records their aggregates (RecordGroupBounds) as it does for every other bound.
 //
+// A frame selector's values are columns execution computes from the rows it selects
+// (DecidePreparedModel::frame_columns), so no side table can read one: a row-wise bound reads a frame as it reads a
+// column, as does a bound over groups that has one value per group, which execution checks as it reads it. A frame in a
+// bound that takes its group's tightest value, or inside a reducer of a bound, is refused as not supported yet.
+//
 // The values the side tables hold are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
 // NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
 // report it. A NULL bound is no value: the reducer skips it as SQL's does, and a group whose tightest bound
@@ -35,6 +40,7 @@
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -130,6 +136,7 @@ private:
 		    canonicalizer.ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::AGGREGATE;
 		bool query_wide = IsQueryWideBoundTag(comparison.right->GetAlias());
 		auto text = Written(*comparison.right);
+		auto frame = FrameText(*comparison.right);
 		if (aggregate_data_bound && IsGroupBound(comparison)) {
 			RecordReducers(comparison, text);
 			return;
@@ -140,6 +147,13 @@ private:
 		}
 		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
 		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
+		if (!frame.empty()) {
+			if (reduces) {
+				throw BinderException("DECIDE: %s on the bound side of %s is not supported yet", frame,
+				                      Written(*comparison.left));
+			}
+			return; // execution reads the bound, and its NaN, as it reads a row-wise one
+		}
 		if (reduces) {
 			InClassOnly(comparison.right);
 		}
@@ -165,13 +179,19 @@ private:
 	}
 
 	bool ReadsOnlyGroupReducers(const Expression &expr, const vector<const Expression *> &keys, idx_t &reducers) const {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			return false;
+		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			idx_t scope_idx;
 			auto own = GroupKeyOf(expr);
 			reducers++;
-			// A reducer holding a reducer reads its inner one per group of a path key: a side table.
+			// A reducer holding a reducer reads its inner one per group of a path key: a side table. One holding a
+			// frame is refused there (MakeReducerColumn).
 			auto &reducer = expr.Cast<BoundAggregateExpression>();
-			if (!reducer.children.empty() && DecideCanonicalizer::ContainsReducer(*reducer.children[0])) {
+			if (!reducer.children.empty() && (DecideCanonicalizer::ContainsReducer(*reducer.children[0]) ||
+			                                  ContainsDecideFrame(*reducer.children[0]))) {
 				return false;
 			}
 			return !TryParseQualifiedReducerTag(expr.GetAlias(), scope_idx) && own.size() == keys.size() &&
@@ -262,6 +282,10 @@ private:
 
 	//! `path` holds the reducers around `expr`: their own `when`s and `by` keys (the clause's `when` is `when`).
 	void ReplaceReducers(unique_ptr<Expression> &expr, const DecideReducerPath &path = DecideReducerPath()) {
+		idx_t frame;
+		if (TryGetDecideFrame(*expr, frame)) {
+			return; // a row-wise value execution computes, whose payload holds no reducer
+		}
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			expr = MakeReducerColumn(expr->Cast<BoundAggregateExpression>(), path);
 			return;
@@ -276,6 +300,11 @@ private:
 	//! path key and the rows it reads pass every enclosing `when` too; the reducers in its argument are recorded
 	//! first, and its argument reads their columns.
 	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+		auto frame = reducer.children.empty() ? string() : FrameText(*reducer.children[0]);
+		if (!frame.empty()) {
+			throw BinderException("DECIDE: %s inside %s on the bound side is not supported yet", frame,
+			                      Written(reducer));
+		}
 		unique_ptr<Expression> argument;
 		if (!reducer.children.empty()) {
 			argument = reducer.children[0]->Copy();
@@ -430,6 +459,22 @@ private:
 	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers
 	//! whose `by` key is part of `keys`.
 	bool OneValuePerGroup(const Expression &bound, const vector<const Expression *> &keys) const {
+		idx_t frame;
+		if (TryGetDecideFrame(bound, frame)) {
+			// `first` or `last` reads one row of each timeline, so one value in a group that lies in one timeline:
+			// every element of the timeline key is part of the group key.
+			auto &spec = decide.frames[frame];
+			if (spec.Relative()) {
+				return false;
+			}
+			for (auto &element : DecideKeyElements(decide.keys, spec.timeline_key)) {
+				if (std::none_of(keys.begin(), keys.end(),
+				                 [&](const Expression *key) { return key->Equals(element.Grouping()); })) {
+					return false;
+				}
+			}
+			return true;
+		}
 		// A column of the group key is one value in each group.
 		if (std::any_of(keys.begin(), keys.end(), [&](const Expression *key) { return key->Equals(bound); })) {
 			return true;
@@ -540,6 +585,21 @@ private:
 
 	string Written(const Expression &expr) const {
 		return RenderDecideSource(expr, decide.source_fragments, decide.keyed_scopes, &decide.keys);
+	}
+
+	//! The first frame selector `expr` holds, as written; empty for none.
+	string FrameText(const Expression &expr) const {
+		idx_t frame;
+		if (TryGetDecideFrame(expr, frame)) {
+			return frame < decide.frames.size() ? decide.frames[frame].text : Written(expr);
+		}
+		string text;
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+			if (text.empty()) {
+				text = FrameText(child);
+			}
+		});
+		return text;
 	}
 
 	Optimizer &optimizer;
