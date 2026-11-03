@@ -10,6 +10,10 @@ Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6�
 postfix `by` with their defaults (p. 16), the determination rule (pp. 26–31), deck examples 1–8 (pp. 17–24), NULL keys
 and empty groups (pp. 30, 50, 56), and one nested shape, the two-level objective `outer(per k: inner(e) by (k))`.
 
+The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D86) and
+encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
+the sections below say how far the engine builds them.
+
 ## Current behavior the deck changes
 
 DeciDB refuses in one place where the deck answers. The guard was added for a reason that still holds until the

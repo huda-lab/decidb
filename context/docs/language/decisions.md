@@ -50,6 +50,23 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D67 | A NULL data value is skipped where it is read (deck pp. 50, 56): a reducer skips a row whose summand is NULL, as SQL does; a NULL that reaches a constraint unreduced skips that instance; a NULL objective term is dropped before like terms merge. A NULL written in the query beside a decision, and NaN, stay errors |
 | D68 | An empty group skips its constraint (deck p. 56): a reducer over no rows is NULL, and a NULL that reaches the comparison skips the instance. A `when` that keeps no row yields no constraint; a group in which some reducer reads no row yields none; an objective term over no rows is dropped. `count(*)` over no rows is 0, as in SQL (owner, 2026-10-28) |
 | D69 | A key groups rows under its column's collation, as `GROUP BY` does (`PushCollation` on each key element): `per K:` classes, `by` groups, bound-side reducers and keyed decisions alike. A label quotes the group's least raw spelling, so it does not depend on row order (owner, 2026-10-27) |
+| D70 | Variant signatures replace the determination errors (deck pp. 34–40): a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands (owner, 2026-10-28) |
+| D71 | An inner `per` and the colon form follow D70 too: a tuple whose body varies is one value per variant, which `EXPLAIN ANALYZE` counts |
+| D72 | The objective is produced once (deck p. 62): a second variant is an error saying it would be produced more than once |
+| D73 | A frame's selected position holding rows that read different payloads is an error naming the position; rows reading one payload — one value of data, one linear form over decisions — select once |
+| D74 | A frame's order key orders peers as `ORDER BY` does, NULL where `default_null_order` puts it |
+| D75 | Under `per K`, each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines (deck pp. 53–55). A row whose `within` key is NULL is in no timeline (D5): its frame selects nothing, and no anchor selects it |
+| D76 | A cyclic range keeps every repeated visit: on three positions, `from 4 previous to 4 next` reads nine |
+| D77 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
+| D78 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range over decisions is a helper decision per window, a timeline or a position on one |
+| D79 | A nested MIN/MAX is pinned on the side its readers push it through SUM and AVG levels, and on both sides under any other reader |
+| D80 | Stays refused, each by name: `norm` inside a reducer and a reducer inside `norm`, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone (`count` included) added inside one over decisions, inside a reducer a reducer times a decision and `abs` over a reducer on a path that keeps rows; a frame in `when`/`per`/`by`/`within`/an order key, a reducer or frame inside a frame's payload, a square or product of decisions in it, a frame term times a decision |
+| D81 | The two-level objective (D2) keeps its spelling and loses its special path: it is a nested reducer |
+| D82 | A frame is a signature field by its keys (deck p. 99): its timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached; not by the value it reads |
+| D83 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |
+| D84 | A frame that selects nothing, a NULL read at its selected row and a NULL a reached fallback gives are no value (deck p. 50, D67, D68): unreduced, it skips the instance; a reducer or a range skips it; an objective term holding it is dropped |
+| D85 | Under the tightest-bound collapse (S3) an anchor whose frame selects nothing bounds nothing; a group with no such anchor present has no row |
+| D86 | `else NULL` written, or a fallback that is NULL before the query runs, is no fallback |
 
 ## Spelling calls
 
