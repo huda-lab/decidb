@@ -300,6 +300,14 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
+	// A frame's `within` key is an entry of `keys`, enumerated with them.
+	for (auto &frame : frames) {
+		for (auto *expr : {&frame.fallback, &frame.order}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+	}
 	for (auto &check : scope_checks) {
 		if (check.value) {
 			callback(&check.value);

@@ -80,6 +80,15 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             if (statement.decide_objective) {
                 collect_subqueries(statement.decide_objective);
             }
+            // A frame's order key and its fallback are data expressions read beside the
+            // clause, so a subquery in one carries the same evidence.
+            for (auto &frame : statement.decide_frames) {
+                for (auto *expr : {&frame.order, &frame.fallback}) {
+                    if (*expr) {
+                        collect_subqueries(*expr);
+                    }
+                }
+            }
         }
 
         // Flatten now, even when this select node is itself being planned inside an
@@ -100,6 +109,14 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		for (auto &key : statement.decide_keys) {
 			for (auto &element : key.elements) {
 				PlanSubqueries(element.expression, root);
+			}
+		}
+		// So is a frame's order key and its fallback.
+		for (auto &frame : statement.decide_frames) {
+			for (auto *expr : {&frame.order, &frame.fallback}) {
+				if (*expr) {
+					PlanSubqueries(*expr, root);
+				}
 			}
 		}
 		is_outside_flattened = outer_flatten_state;
@@ -150,6 +167,13 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         };
         tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
         tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
+        // Frame selectors parse, bind and have their subqueries planned. Canonicalization
+        // is the first layer that would read one, and it does not yet: every frame query
+        // stops here, before any later layer can refuse it for a reason of its own.
+        if (!statement.decide_frames.empty()) {
+            throw BinderException("DECIDE: frame selectors are not supported yet: %s",
+                                  statement.decide_frames[0].text);
+        }
         // Canonicalization: the single point at which the shape of a user-written
         // constraint is decided (decision terms left, data right). Runs here rather
         // than during binding because it needs bound expressions -- a decision
@@ -230,6 +254,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		decide_op->signatures = std::move(signatures.signatures);
 		decide_op->objective_signature = signatures.objective;
 		decide_op->keys = std::move(statement.decide_keys);
+		decide_op->frames = std::move(statement.decide_frames);
 		// ne_clause_sources, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)
         decide_op->AddChild(std::move(root));

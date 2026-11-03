@@ -475,6 +475,51 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
 Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, a grid of nests at depth 2 and 3, the bounds through a
 nest), `test_scope_objective.py` (the objective).
 
+### 5.6 Frame selectors — `at(...) over (...)`
+
+A frame reads a value at another row of the anchor row's **timeline**: the rows that share its `within` key, ordered
+by `S`.
+
+```sql
+at(F [else v]: e) over (S [asc | desc] [cyclic] [within K])
+agg(from F1 to F2 [every d] [else v | all]: e) over (S [asc | desc] [cyclic] [within K])
+F ::= first | last | [k] previous | [k] next
+
+-- inventory carries over from the previous period of the same product
+inventory = at(previous else 0: inventory) over (t.period within t.product) + produce - t.demand
+-- deliveries over the current and the next two periods
+sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
+```
+
+- **Defaults**: `asc`, not cyclic, `within ()` (one timeline over the rows), `k` = 1, `every 1`, no `else`. A message
+  names a frame without them: `sum(from 1 previous to 1 next every 1: x) over (t.period asc within ())` is
+  `sum(from previous to next: x) over (t.period)`.
+- **Positions** count peers (rows with equal `S`), not distances: `first` and `last` are the timeline's ends,
+  `k previous` / `k next` the k-th peer before or after the anchor's. A range takes every `d`-th position from `F1` to
+  `F2`, inclusive. `cyclic` wraps a position around the timeline (D76).
+- **The parts**: `agg` is `sum`, `avg`, `min`, `max` or `count` (over data). `k` and `d` are positive whole numbers
+  (D77). `S` takes data and no reducer, and orders peers as `ORDER BY` does (D74); `K` lists columns and relations, as a
+  `per` key does, and a row whose written `within` column is NULL is in no timeline (D5, D75). `e` is read at the
+  selected row, `v` at the anchor row; `v` is a number (`else true`, `else 0.5`, `else c` all are), and keeps its own
+  type.
+- **A frame's term is linear**: its payload and fallback square or multiply no decision.
+- **A missing position** (before the first row, after the last): `else v` supplies `v`; `all` makes the whole range
+  select nothing; otherwise a range keeps the positions that exist. A point frame that selects nothing, a NULL read at
+  its selected row and a NULL fallback are no value (D84): its comparison skips that instance, a reducer drops that
+  member, and an objective term holding it is dropped.
+- **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
+  inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
+  over decisions is linear).
+
+**Status.** Every spelling parses and binds, and its subqueries are planned; a query that holds a frame then stops,
+from one place, before canonicalization reads a frame, with *"DECIDE: frame selectors are not supported yet:
+at(previous: x) over (t.period)"* — `EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` included, since each plans the query, and
+before any later layer could refuse the clause for a reason of its own ([roadmap.md](roadmap.md)).
+
+Tests: `test/decidb/test_frame_parser.test` (parse and bind errors, ordinary SQL windows unchanged),
+`test/decide/tests/test_anr_frames.py` (`TestSyntax`: every frame fixture binds),
+`test/common/test_decidb_plan_serialization.cpp` (round trips).
+
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
 ```sql

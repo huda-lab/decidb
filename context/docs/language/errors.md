@@ -27,7 +27,14 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A reducer in a `when` or a `by` key | bind | `DECIDE: a reducer such as 'sum(cap)' is not supported in when, per or by` |
 | A volatile function (`random()`) in a constraint, the objective or a `by` key | bind | `DECIDE: random() is not supported in a constraint` (`the objective`, `a by key`) |
 | An unknown key element (keys resolve in their own query's `FROM`) | bind | `DECIDE: depot is neither a column nor a relation of the FROM clause` |
-| `rowid` or a generated column in a key | bind | `DECIDE: g.b is not a stored column; a per key lists columns or relations of the FROM clause` |
+| `rowid` or a generated column in a key | bind | `DECIDE: g.b is not a stored column; a per key lists columns or relations of the FROM clause` (`a within key` in a frame) |
+| A frame's `k` or `every` that is not a positive whole number | parse | `... must be a positive whole number` |
+| A frame word misspelled (`prev`, `evry`, `cyclc`) | parse | `DECIDE: a frame position is first, last, [k] previous or [k] next, found prev` (`expected every d ...`, `expected cyclic or within ...`) |
+| An expression in a frame's `within` | parse | `DECIDE: within lists columns or relations, as a per key does` |
+| A range frame over more than one expression, or a reducer other than `sum`, `avg`, `min`, `max`, `count` | parse / bind | `sum(from first to last: e) reduces one expression, found 2` · `DECIDE: a range frame reduces with sum, avg, min, max or count, found ...` |
+| A frame's `else` that is not a number | bind | `DECIDE: in at(previous else 'a': x) over (t.period), else 'a' is not a number` |
+| A decision in a frame's order key or `within` | bind | `DECIDE: x is a decision; a frame's order key and within may only use data` |
+| A frame selector outside a DECIDE clause's constraints and objective | bind | `DECIDE: a frame selector is not supported here: it reads the rows of the DECIDE query whose constraints or objective it stands in, and only those` |
 | An unqualified `FULL OUTER JOIN USING` column in a key | bind | `DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key` |
 | A reducer or `norm` with no argument | bind | `SUM needs one argument, found 'sum()'` · `NORM needs an expression and an order, as in norm(e, 1), found 'norm()'` |
 | A colon form naming a relation not in `FROM` | bind | `Relation 'X' is not in the FROM clause, so a reducer cannot be qualified by it.` |
@@ -72,6 +79,11 @@ formulates; their open work is in the owning stage's `todo.md`.
 | **D80** Inside a reducer, a reducer times a decision | `DECIDE: '(x - 1) * max(x) BY (t.g)' multiplies a reducer by a decision; only data can scale a reducer` |
 | **D80** Inside a reducer, `abs` over a reducer an enclosing `when`, `per` or `by` chooses the rows of | `DECIDE: abs over a reducer inside another reducer is not supported yet: abs(max(x) BY (t.g))` |
 | **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective not read in place | `DECIDE: 'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers, which is not supported yet` |
+| **roadmap** A frame selector, any spelling: parsed and bound, not formulated yet ([roadmap.md](roadmap.md#frame-selectors-pp-4256-6669)) | `DECIDE: frame selectors are not supported yet: at(previous: x) over (t.period)` |
+| **D80** A frame in a `when`, `per`, `by`, `within` or an order key | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
+| **D80** A reducer or a frame inside a frame's payload or fallback | `DECIDE: a reducer inside at(...) is not supported; reduce outside the frame` · `DECIDE: a frame selector inside at(...) is not supported` |
+| **D80** A square or product of decisions in a frame's payload | `DECIDE: 'x * x' squares or multiplies decisions inside at(...), which is not supported yet` |
+| **D80** A frame term times a decision | `DECIDE: '(x * at(previous: x) over (t.period))' multiplies a decision by a value from another row, which is not supported yet` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: power(x, 2) <> 9` |
 | `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates.` |

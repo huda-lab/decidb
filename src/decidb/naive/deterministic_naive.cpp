@@ -627,6 +627,17 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
     highs.setOptionValue("time_limit", time_limit_seconds);
 
     HighsStatus status = highs.run();
+    // HiGHS searches a MIP to `mip_feasibility_tolerance` (1e-6), the distance at which it
+    // calls a value integral, then checks the optimum's rows against the tighter
+    // `primal_feasibility_tolerance` (1e-7). A binary that far from 1 under a Big-M row
+    // misses the row by M times as much, so the check fails and HiGHS reports a solve
+    // error ("MIP solver claims optimality, but with ... infeasibilities"). Solving once
+    // more with integrality held to 1e-9 keeps such a row within the check.
+    if (status == HighsStatus::kError && is_mip && highs.getModelStatus() == HighsModelStatus::kSolveError) {
+        highs.setOptionValue("mip_feasibility_tolerance", 1e-9);
+        status = highs.run();
+        highs.setOptionValue("mip_feasibility_tolerance", DECIDE_INTEGRALITY_TOLERANCE);
+    }
     phase.Next("highs.status_and_readback");
     if (DecideProfileScope::Enabled()) {
         const auto &info = highs.getInfo();

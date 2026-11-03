@@ -73,8 +73,9 @@ struct RenderContext {
 	//! which print as that expression; null prints a column's name.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
-	//! False when the caller writes the `by` itself.
-	bool print_by = true;
+	//! The one reducer whose `by` is left out, for a message that names its group apart
+	//! (RenderDecideReducer); the reducers inside it keep theirs.
+	const BoundAggregateExpression *without_by = nullptr;
 };
 } // namespace
 
@@ -268,8 +269,8 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	    StringUtil::CIEquals(agg.function.name, "count_star")) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
-		bool has_by =
-		    ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size();
+		bool has_by = ctx.keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key) &&
+		              group_key < ctx.keys->size();
 		return (scope.empty() ? "count(*)" : "sum(" + scope + ": 1)") +
 		       (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
@@ -292,7 +293,8 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
-	if (ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size()) {
+	if (ctx.keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key) &&
+	    group_key < ctx.keys->size()) {
 		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
 	return result;
@@ -756,7 +758,7 @@ DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
 	auto ctx = ContextOf(names);
-	ctx.print_by = false;
+	ctx.without_by = &reducer;
 	return RenderSource(reducer, ctx);
 }
 

@@ -2222,3 +2222,17 @@ def test_a_product_in_a_helpers_scope_links_only_the_groups_it_has(decidb_cli_gu
             lambda a: a["b"] * a["x1"] <= 3 and a["b"] * a["x2"] <= 3,
             lambda a: a["x0"] + a["x1"] + a["x2"] + 8 * a["b"],
         )
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, objective, expected", [
+    pytest.param("b * (y - 1) >= 2", "MINIMIZE sum(b) + sum(y)", [(1, 3)], id="shifted"),
+    pytest.param("b * (y + 3) <= 5", "MAXIMIZE sum(b) + sum(y)", [(0, 5)], id="shifted-up"),
+])
+def test_a_bool_times_a_shifted_decision_distributes(decidb_cli, clause, objective, expected):
+    """A BOOL times a factor that is no multiple of its decision (`y - 1`) distributes over
+    the factor's terms, `b * y - b`, each product its own column: the `- b` is kept."""
+    rows, _ = decidb_cli.execute(
+        "SELECT b, y FROM (VALUES (1)) t(id) DECIDE b(BOOL), y(INT) "
+        f"SUCH THAT y <= 5 AND {clause} {objective}")
+    assert rows == expected

@@ -572,6 +572,31 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 
 ---
 
+## 4b. Frame selectors
+
+`ValidateDecideScopeSpellings` reads a frame before it binds (`ValidateFrame`, `decide_binder.cpp`; D80): its order
+key and `within` key take data only (*"DECIDE: x is a decision; a frame's order key and within may only use data"*),
+no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame and square or
+multiply no decision (*"... squares or multiplies decisions inside at(...)"*); a `*`, `/` or power that multiplies a
+frame term by a decision is refused (`ValidateFrameProduct`: *"... multiplies a decision by a value from another row,
+which is not supported yet"*). `ValidateScopeData` refuses a frame in a `when`, a key or a `by`
+(`ValidateNoFrame`: *"DECIDE: a frame selector is not allowed in when, per, by, within or an order key"*).
+
+`DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
+range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
+records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate tagged
+`__frame_<i>__` and with the frame as written (its defaults left out) as a source fragment of its own: the anchors and
+their `k`, `every`, `all`, the fallback (a number, *"in at(...), else 'a' is not a number"*), the order key bound as
+plain SQL, `desc`, `cyclic`, and the `within` key, resolved as a `per` key is into the one key table
+(`within_key`), so a row whose written `within` column is NULL is in no timeline (D5, D75). A frame over data is data
+on a bound's side (`IsDataOperand` sends it to the DECIDE binder all the same); alone at a clause's top it is
+refused as a bare decision is. Any other binder refuses one (`ExpressionBinder`: *"DECIDE: a frame selector is not
+supported here: ..."*).
+
+Planning (`Binder::CreatePlan`, `plan_select_node.cpp`) plans the subqueries of every frame's order key and fallback
+with the clause's, then stops a query that holds a frame before canonicalization, the first layer that would read
+one: *"DECIDE: frame selectors are not supported yet: at(previous: x) over (t.period)"*.
+
 ## 5. Objective
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same

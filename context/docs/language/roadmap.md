@@ -42,6 +42,12 @@ reaching the comparison skips that constraint instance (p. 50). Well-definedness
 partition `π`. The deck's reasons for not reusing SQL windows: windows run after `GROUP BY`, and SQL has no cyclic
 order, no stepped range and no fill or complete-frame boundary policy.
 
+- **Today:** every spelling parses and binds (`DecideFrameExpression`, `LogicalDecide::frames`, guide §5.6), and a
+  query holding one stops before canonicalization with *"DECIDE: frame selectors are not supported yet: ..."*
+  (`plan_select_node.cpp`).
+- **What is left:** formulating point frames (read in place, D78), then ranges (a helper decision per window, D78),
+  then their composition with variants and nesting (D82).
+
 ## Conditional generation with `if` (pp. 58–59)
 
 `[when θ][per K][if b]: B`, where `b` is a Boolean over decisions: each instance is `b ⇒ B`. `when` filters known

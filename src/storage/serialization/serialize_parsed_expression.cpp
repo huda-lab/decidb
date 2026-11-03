@@ -48,6 +48,9 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &deseria
 	case ExpressionClass::CONSTANT:
 		result = ConstantExpression::Deserialize(deserializer);
 		break;
+	case ExpressionClass::DECIDE_FRAME:
+		result = DecideFrameExpression::Deserialize(deserializer);
+		break;
 	case ExpressionClass::DEFAULT:
 		result = DefaultExpression::Deserialize(deserializer);
 		break;
@@ -186,6 +189,41 @@ void ConstantExpression::Serialize(Serializer &serializer) const {
 unique_ptr<ParsedExpression> ConstantExpression::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<ConstantExpression>(new ConstantExpression());
 	deserializer.ReadProperty<Value>(200, "value", result->value);
+	return std::move(result);
+}
+
+void DecideFrameExpression::Serialize(Serializer &serializer) const {
+	ParsedExpression::Serialize(serializer);
+	serializer.WritePropertyWithDefault<string>(200, "reducer", reducer);
+	serializer.WriteProperty<DecideFrameAnchor>(201, "from", from);
+	serializer.WritePropertyWithDefault<int64_t>(202, "from_k", from_k);
+	serializer.WriteProperty<DecideFrameAnchor>(203, "to", to);
+	serializer.WritePropertyWithDefault<int64_t>(204, "to_k", to_k);
+	serializer.WritePropertyWithDefault<int64_t>(205, "every", every);
+	serializer.WritePropertyWithDefault<bool>(206, "all", all);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(207, "payload", payload);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(208, "fallback", fallback);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(209, "order", order);
+	serializer.WritePropertyWithDefault<bool>(210, "descending", descending);
+	serializer.WritePropertyWithDefault<bool>(211, "cyclic", cyclic);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(212, "within", within);
+}
+
+unique_ptr<ParsedExpression> DecideFrameExpression::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<DecideFrameExpression>(new DecideFrameExpression());
+	deserializer.ReadPropertyWithDefault<string>(200, "reducer", result->reducer);
+	deserializer.ReadProperty<DecideFrameAnchor>(201, "from", result->from);
+	deserializer.ReadPropertyWithDefault<int64_t>(202, "from_k", result->from_k);
+	deserializer.ReadProperty<DecideFrameAnchor>(203, "to", result->to);
+	deserializer.ReadPropertyWithDefault<int64_t>(204, "to_k", result->to_k);
+	deserializer.ReadPropertyWithDefault<int64_t>(205, "every", result->every);
+	deserializer.ReadPropertyWithDefault<bool>(206, "all", result->all);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(207, "payload", result->payload);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(208, "fallback", result->fallback);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(209, "order", result->order);
+	deserializer.ReadPropertyWithDefault<bool>(210, "descending", result->descending);
+	deserializer.ReadPropertyWithDefault<bool>(211, "cyclic", result->cyclic);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(212, "within", result->within);
 	return std::move(result);
 }
 

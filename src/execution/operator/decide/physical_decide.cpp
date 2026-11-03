@@ -949,10 +949,41 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 	}
 	auto reader = make_shared_ptr<GroupKeyReader>(context, data, exprs, std::move(group_rows));
 	auto class_columns = class_elements.size();
-	key_values.values_of = [reader, class_of, variants_per_class, class_columns](idx_t variant) {
+	// Variants that differ only by the decision instance they read (`per t.g: x <= t.v` over two rows of one class with
+	// one `v`) show the same values: each is named by the row it is read at as well.
+	const bool reads_decisions =
+	    std::any_of(signature.fields.begin(), signature.fields.end(),
+	                [](const DecideSignatureField &field) { return field.kind == DecideSignatureFieldKind::DECISION; });
+	if (reads_decisions) {
+		key_values.null_modes.push_back(DecideKeyNullMode::NO_GROUP);
+	}
+	vector<vector<idx_t>> variants_of_class(variants_per_class.size());
+	for (idx_t variant = 0; variant < class_of.size(); variant++) {
+		variants_of_class[class_of[variant]].push_back(variant);
+	}
+	key_values.values_of = [reader, class_of, variants_per_class, class_columns, reads_decisions, variants_of_class,
+	                        first_rows](idx_t variant) {
 		auto values = reader->Read(variant);
 		if (variants_per_class[class_of[variant]] <= 1) {
 			values.resize(class_columns);
+			return values;
+		}
+		auto same = [&](const vector<Value> &other) {
+			if (other.size() != values.size()) {
+				return false;
+			}
+			for (idx_t i = 0; i < values.size(); i++) {
+				if (!Value::NotDistinctFrom(values[i], other[i])) {
+					return false;
+				}
+			}
+			return true;
+		};
+		for (auto other : variants_of_class[class_of[variant]]) {
+			if (reads_decisions && other != variant && same(reader->Read(other))) {
+				values.push_back(Value(StringUtil::Format("row %llu", first_rows[variant] + 1)));
+				break;
+			}
 		}
 		return values;
 	};

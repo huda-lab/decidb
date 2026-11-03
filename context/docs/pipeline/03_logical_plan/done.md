@@ -149,10 +149,15 @@ own scope (`KeyedScopeInfo::signature`, a scope the canonicalizer appends for a
 relation-qualified reducer over decisions whose body has a field), and
 `objective_signature`, the objective's or `INVALID_INDEX`. A `DecideSignatureField` is a
 data `value`, a `decision` (an index into `decide_variables`) or a `by` key (an index
-into `keys`), with its text. `scope_checks` holds only the `VALUE_IS_VALID` checks the
-bound-side rewrite appends (stage 05). `PlanSubqueries` runs on the key elements as on
-the trees, and `EnumerateExpressions` visits the key table, the signatures and the
-checks, so binding resolution and column pruning see their columns.
+into `keys`), with its text. `frames` holds one `DecideFrameSpec` per frame selector
+(`../../language/guide.md` §5.6, property 223), indexed by the `__frame_<i>__` tag on the
+aggregate it binds to: its anchors and their `k`, `every`, `all`, its fallback and order
+key, `desc`, `cyclic`, and its `within` key as an index into `keys`. No plan holding one
+is built yet: planning stops it before canonicalization (stage 02, §4b). `scope_checks`
+holds only the `VALUE_IS_VALID` checks the bound-side rewrite appends (stage 05).
+`PlanSubqueries` runs on the key elements, the frames' order keys and fallbacks as on
+the trees, and `EnumerateExpressions` visits the key table, the frames, the signatures
+and the checks, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
@@ -221,7 +226,7 @@ resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`keys`, `scope_checks`, `signatures` (rows, fields' values).
+`keys`, `frames` (order key, fallback), `scope_checks`, `signatures` (rows, fields' values).
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of

@@ -129,7 +129,10 @@ ahead of the engine: a case runs through DeciDB once the engine builds its featu
   `objective_variants`, `frame_partition`, `ambiguous_peer`. A construct the language
   refuses at bind or plan time raises `Unsupported` (a reducer inside a frame, a product
   of decisions, COUNT over a decision, a `k` or `every` that is not a positive whole
-  number).
+  number, a strict comparison over a fractional side, any of `<`, `>`, `<>` over a REAL
+  decision; `<>` over AVG's 1/n coefficients is the SUM with the bound times n). A case
+  must not state a shape DeciDB refuses for other reasons, and states a negative floor on
+  a decision itself (`Decision.lb`, D41).
 - `render` spells an instance with its first term positive (`x1 - x2 <= 0`), a per-row
   decision by its row from 1 (`x3`), a keyed one by its key (`open[D1]`); the cases pin
   generated instances in that spelling.
@@ -214,7 +217,13 @@ one group at a time. No test asserts an answer its docstring derives.
   associativity does not change the rows), a row in no `by` group skipped, equal bodies of
   two classes kept as two rows, `=` with two values infeasible, `<>` keeping each value,
   EXPLAIN ANALYZE's variant count (silent without variants and under a plain EXPLAIN), and
-  DIAGNOSE naming the variant it loosens (`a, 2`). Oracle, dump and pinned text.
+  DIAGNOSE naming the variant it loosens (`a, 2`), by its row where two of a class share
+  their values. Oracle, dump and pinned text.
+- **`test_anr_frames.py`** — frame selectors (guide §5.6): every frame fixture of
+  `_anr_cases` binds and stops at the one place that refuses frames until they are
+  formulated, and every refusal of D80 names its construct. The parse errors and the
+  echo are `test/decidb/test_frame_parser.test`'s (sqllogic; ordinary SQL windows, `AT TIME
+  ZONE` and `WITHIN GROUP` unchanged) and `test_decidb_plan_serialization.cpp`'s.
 - **`test_anr_nested.py`** — reducers nested to any depth (guide §5.5, D79-D81): the
   nesting fixtures of `_anr_cases` on both solvers, judged by `_anr_oracle`, an empty group
   inside a nest skipped (D68); F1's model, a helper per path group with one-sided

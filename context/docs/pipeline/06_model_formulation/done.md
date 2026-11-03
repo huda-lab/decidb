@@ -92,11 +92,13 @@ one type-driven path.
 - **Upper** — intersected with `min`, because the type default is a true ceiling
   (`1.0` for BOOLEAN).
 
-Afterwards, a `binary` column whose bounds ended up outside `[0,1]` — an unusual
-explicit user pin such as `x >= -1` on a declared `BOOL` — is **downgraded to a
-plain bounded integer**. Backends do not accept a binary paired with an
-out-of-range bound; the solve result is the same, the column is just not flagged
-binary.
+A box inverted by rounding alone is one point: a floor above its top by no more than one
+part in 1e9 is closed onto the top (`close_rounded_box`), since boxes are derived in
+floating point from several sources (a bound divided by its coefficient, a helper's box
+through an AVG's 1/n); a wider inversion stays, an infeasible model. Afterwards, a
+`binary` column's bounds are clamped to `[0,1]`: a BOOLEAN is 0 or 1 whatever is written
+on it (`x >= -1` widens nothing; D41 lowers a numeric decision's floor, not a
+BOOLEAN's).
 
 Bounds and type flags then expand across `NumInstances(var)` for each variable, each
 instance's floor read through `SolverInput::InstanceLower`.
@@ -463,7 +465,9 @@ negative; an aggregate one (`lhs_is_aggregate`, `SUM(x) = -3`) sums every row's
 instance and keeps the sign condition. This turns declared-unbounded variables
 into bounded ones, which is what makes a finite and tight Big-M possible. Only
 provably-implied bounds are applied, so the feasible region and the optimum are
-unchanged. The pass reads a grouped aggregate's instances from the row lists the builder
+unchanged. A bound below the column's floor is applied too: the box is empty, which
+proves the model infeasible, and the solver says so (the model builder closes one under
+the floor by rounding alone). The pass reads a grouped aggregate's instances from the row lists the builder
 emits from (`ClauseRows`: one row per group, built once and kept on the clause, also read
 by the `<>` expansion), so a bound and the rows it is derived from cannot disagree;
 ungrouped and per-row clauses are read in place.

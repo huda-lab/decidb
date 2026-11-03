@@ -108,6 +108,38 @@ struct KeyedScopeInfo {
     static KeyedScopeInfo Deserialize(Deserializer &deserializer);
 };
 
+//! A frame selector (language/guide.md §5.6), named by a FRAME_TAG_PREFIX tag on the aggregate it binds to:
+//! `first(e)` for a point frame, the frame's reducer for a range. At an anchor row it reads the anchor's timeline --
+//! the rows sharing its `within` key, ordered by `order` -- at the positions it selects.
+struct DecideFrameSpec {
+	//! A range, agg(from F1 to F2 ...: e); else a point, at(F: e)
+	bool range = false;
+	//! The point, or the range's first end, and its k
+	DecideFrameAnchor from = DecideFrameAnchor::FIRST;
+	int64_t from_k = 1;
+	//! The range's last end
+	DecideFrameAnchor to = DecideFrameAnchor::FIRST;
+	int64_t to_k = 1;
+	int64_t every = 1;
+	//! `all`: a range with a missing position selects nothing
+	bool all = false;
+	//! `else v`, read at the anchor row for a missing position, a number; null when unwritten
+	unique_ptr<Expression> fallback;
+	//! The timeline's order key, and its direction
+	unique_ptr<Expression> order;
+	bool descending = false;
+	bool cyclic = false;
+	//! The timeline's partition, the `within` key: an index into LogicalDecide::keys, INVALID_INDEX for one timeline.
+	//! A row whose written `within` column is NULL is in no timeline (D5, D75).
+	idx_t within_key = DConstants::INVALID_INDEX;
+	//! The frame as written, for messages
+	string text;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideFrameSpec Deserialize(Deserializer &deserializer);
+};
+
 //! One run-time requirement of a value a bound reads (language/guide.md §7.3), appended by the bound-side rewrite
 //! (DecideOptimizer::RewriteRhsAggregates) and made under the DECIDE node before any model is built.
 struct DecideScopeCheck {
@@ -597,6 +629,9 @@ public:
     //! Per-variable scope assignment (row / keyed / query-wide).
     //! Defaults to row-scoped; keyed_scope_idx indexes keyed_scopes.
     vector<DecideVarScopeInfo> variable_scopes;
+
+	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
+	vector<DecideFrameSpec> frames;
 
 	//! The run-time requirements of the values the bounds read: the optimizer's right-hand-side rewrite appends the
 	//! VALUE_IS_VALID checks of the bounds it computes, which a plan under the node makes before any model is built.

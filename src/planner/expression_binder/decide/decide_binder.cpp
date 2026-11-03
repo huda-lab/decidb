@@ -4,6 +4,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
+#include "duckdb/parser/expression/decide_frame_expression.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/operator_expression.hpp"
@@ -184,8 +185,25 @@ static optional_ptr<const ParsedExpression> FindNode(const ParsedExpression &exp
 	return found;
 }
 
+//! The first node of class `expression_class` in `expr` outside its subqueries, or null.
+static optional_ptr<const ParsedExpression> FindExpressionOfClass(const ParsedExpression &expr,
+                                                                  ExpressionClass expression_class) {
+	return FindNode(expr,
+	                [&](const ParsedExpression &node) { return node.GetExpressionClass() == expression_class; });
+}
+
+//! A frame selector reads rows by a timeline the scope itself chooses, so none stands in
+//! a `when`, a key or an order key (D80).
+static void ValidateNoFrame(const ParsedExpression &expr) {
+	auto frame = FindExpressionOfClass(expr, ExpressionClass::DECIDE_FRAME);
+	if (frame) {
+		throw BinderException(*frame,
+		                      "DECIDE: a frame selector is not allowed in when, per, by, within or an order key");
+	}
+}
+
 //! A `when` condition, a key element or a `by` key: data only, no `when`/`per`/`by`, and
-//! no window function or reducer, which read rows the scope has not chosen yet.
+//! no window function, reducer or frame selector, which read rows the scope has not chosen yet.
 static void ValidateScopeData(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	auto decision = FindDecisionName(expr, variables);
 	if (!decision.empty()) {
@@ -202,7 +220,140 @@ static void ValidateScopeData(const ParsedExpression &expr, const case_insensiti
 		throw BinderException(*reducer, "DECIDE: a reducer such as '%s' is not supported in when, per or by",
 		                      reducer->ToString());
 	}
+	ValidateNoFrame(expr);
 	ValidateNoScopeSpelling(expr);
+}
+
+//! A power that is no first power: `power(e, k)`, `pow`, `e ** k`, `e ^ k` with `k` other
+//! than the constant 1.
+static bool IsNonlinearPower(const FunctionExpression &func) {
+	auto name = StringUtil::Lower(func.function_name);
+	bool power = (func.is_operator && (name == "**" || name == "^")) ||
+	             (!func.is_operator && (name == "power" || name == "pow"));
+	if (!power || func.children.size() != 2) {
+		return false;
+	}
+	auto &exponent = *func.children[1];
+	if (exponent.GetExpressionClass() == ExpressionClass::CONSTANT) {
+		auto &value = exponent.Cast<ConstantExpression>().value;
+		return value.IsNull() || !value.type().IsNumeric() || value.GetValue<double>() != 1.0;
+	}
+	return true;
+}
+
+//! Whether `expr` squares or multiplies decisions: a product with a decision in two of
+//! its factors, or a power of a decision other than the first.
+static bool MultipliesDecisions(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<FunctionExpression>();
+		if (IsNonlinearPower(func) && ExpressionContainsDecideVariable(*func.children[0], variables)) {
+			return true;
+		}
+		if (func.is_operator && func.function_name == "*") {
+			idx_t factors = 0;
+			for (auto &child : func.children) {
+				factors += ExpressionContainsDecideVariable(*child, variables) ? 1 : 0;
+			}
+			if (factors > 1) {
+				return true;
+			}
+		}
+	}
+	bool found = false;
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { found = found || MultipliesDecisions(child, variables); });
+	return found;
+}
+
+//! How a message names a frame: `at(...)`, `sum(from ...)`.
+static string FrameHead(const DecideFrameExpression &frame) {
+	return frame.IsRange() ? frame.reducer + "(from ...)" : "at(...)";
+}
+
+//! A frame's order key or `within` key: data only, with no frame or window inside.
+static void ValidateFrameKey(const ParsedExpression &key, const case_insensitive_map_t<idx_t> &variables) {
+	auto decision = FindDecisionName(key, variables);
+	if (!decision.empty()) {
+		throw BinderException(key, "DECIDE: %s is a decision; a frame's order key and within may only use data",
+		                      decision);
+	}
+	ValidateNoFrame(key);
+	auto window = FindExpressionOfClass(key, ExpressionClass::WINDOW);
+	if (window) {
+		throw BinderException(*window, "DECIDE: a window function such as '%s' is not supported in a frame's order key",
+		                      window->ToString());
+	}
+	std::function<void(const ParsedExpression &)> refuse_reducer = [&](const ParsedExpression &node) {
+		if (TakesReducerBy(UnwrapReducerMarkers(node))) {
+			throw BinderException(node, "DECIDE: a reducer such as '%s' is not allowed in a frame's order key",
+			                      node.ToString());
+		}
+		ParsedExpressionIterator::EnumerateChildren(node, refuse_reducer);
+	};
+	refuse_reducer(key);
+	ValidateNoScopeSpelling(key);
+}
+
+//! A frame's payload and fallback are read at one row, so neither holds a reducer or
+//! another frame (D80).
+static void ValidateFramePayload(const ParsedExpression &expr, const DecideFrameExpression &frame) {
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_FRAME) {
+		throw BinderException(expr, "DECIDE: a frame selector inside %s is not supported", FrameHead(frame));
+	}
+	if (TakesReducerBy(UnwrapReducerMarkers(expr))) {
+		throw BinderException(expr, "DECIDE: a reducer inside %s is not supported; reduce outside the frame",
+		                      FrameHead(frame));
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { ValidateFramePayload(child, frame); });
+}
+
+static void ValidateFrame(const DecideFrameExpression &frame, const case_insensitive_map_t<idx_t> &variables) {
+	ValidateFrameKey(*frame.order, variables);
+	for (auto &key : frame.within) {
+		ValidateFrameKey(*key, variables);
+	}
+	for (auto *value : {frame.payload.get(), frame.fallback.get()}) {
+		if (value) {
+			ValidateFramePayload(*value, frame);
+			ValidateNoScopeSpelling(*value);
+			// A frame's term is linear: its payload is read at another row, and a square
+			// there is a product across rows once the frame is written out (D80).
+			if (MultipliesDecisions(*value, variables)) {
+				throw BinderException(*value,
+				                      "DECIDE: '%s' squares or multiplies decisions inside %s, which is not supported "
+				                      "yet",
+				                      value->ToString(), FrameHead(frame));
+			}
+		}
+	}
+}
+
+//! A product, quotient or square that multiplies a frame term by a decision reads a
+//! decision at one row and a value at another (D80): refused, data factors aside.
+static void ValidateFrameProduct(const FunctionExpression &func, const case_insensitive_map_t<idx_t> &variables) {
+	auto name = StringUtil::Lower(func.function_name);
+	bool product = func.is_operator && (name == "*" || name == "/");
+	bool square = IsNonlinearPower(func);
+	if (!product && !square) {
+		return;
+	}
+	for (idx_t i = 0; i < func.children.size(); i++) {
+		if (!FindExpressionOfClass(*func.children[i], ExpressionClass::DECIDE_FRAME)) {
+			continue;
+		}
+		bool times_decision = square && i == 0 && ExpressionContainsDecideVariable(*func.children[i], variables);
+		for (idx_t j = 0; j < func.children.size(); j++) {
+			times_decision =
+			    times_decision || (product && j != i && ExpressionContainsDecideVariable(*func.children[j], variables));
+		}
+		if (times_decision) {
+			throw BinderException(func,
+			                      "DECIDE: '%s' multiplies a decision by a value from another row, which is not "
+			                      "supported yet",
+			                      func.ToString());
+		}
+	}
 }
 
 //! `[when c] [per K]:` off a clause or a reducer's argument: the key elements and the
@@ -251,12 +402,17 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		ValidateNoScopeSpelling(expr);
 		return;
 	}
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_FRAME) {
+		ValidateFrame(expr.Cast<DecideFrameExpression>(), placement.variables);
+		return;
+	}
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		ParsedExpressionIterator::EnumerateChildren(
 		    expr, [&](const ParsedExpression &child) { ValidateScopePlacement(child, placement); });
 		return;
 	}
 	auto &func = expr.Cast<const FunctionExpression>();
+	ValidateFrameProduct(func, placement.variables);
 	if (func.is_operator && func.function_name == REDUCER_BY_TAG) {
 		if (!TakesReducerBy(UnwrapReducerMarkers(*func.children[0]))) {
 			throw BinderException(expr, "DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count");
@@ -425,14 +581,15 @@ static void AddRelationColumns(Binding &relation, KeyColumns &columns) {
 	}
 }
 
-//! Adds column `column_index` of `binding`, which `element` names, to `columns`.
+//! Adds column `column_index` of `binding`, which `element` names, to `columns`. `key_word`
+//! names the key in a message: `per`, `within`.
 static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, column_t column_index,
-                         KeyColumns &columns) {
+                         KeyColumns &columns, const char *key_word) {
 	if (!IsStoredColumn(binding, column_index)) {
 		throw BinderException(element,
-		                      "DECIDE: %s is not a stored column; a per key lists columns or relations of the "
+		                      "DECIDE: %s is not a stored column; a %s key lists columns or relations of the "
 		                      "FROM clause",
-		                      element.ToString());
+		                      element.ToString(), key_word);
 	}
 	auto column = MakeKeyColumn(binding, column_index);
 	column.name = element.ToString();
@@ -456,7 +613,8 @@ static BindingAlias RelationAlias(const vector<string> &parts) {
 //! The column `name` written unqualified, as it binds anywhere else in the query: a USING
 //! column means its primary relation's, and after a FULL OUTER JOIN, which has none, the
 //! key must say which side it means. Null when no relation has the column.
-static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context, const ColumnRefExpression &element) {
+static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context, const ColumnRefExpression &element,
+                                                      const char *key_word) {
 	auto &name = element.GetColumnName();
 	auto using_set = bind_context.GetUsingBinding(name);
 	if (!using_set) {
@@ -468,8 +626,8 @@ static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context,
 			choices.push_back(KeywordHelper::WriteOptionallyQuoted(side.GetAlias()) + "." +
 			                  KeywordHelper::WriteOptionallyQuoted(name));
 		}
-		throw BinderException(element, "DECIDE: %s is merged by a FULL OUTER JOIN USING; write %s in the per key",
-		                      element.ToString(), StringUtil::Join(choices, " or "));
+		throw BinderException(element, "DECIDE: %s is merged by a FULL OUTER JOIN USING; write %s in the %s key",
+		                      element.ToString(), StringUtil::Join(choices, " or "), key_word);
 	}
 	ErrorData error;
 	return bind_context.GetBinding(using_set->primary_binding, error);
@@ -479,7 +637,7 @@ static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context,
 //! the way SQL resolves the same name: a column (`c`, `R.c`, `S.R.c`, `C.S.R.c`), else a
 //! relation (`R`, `S.R`, `C.S.R`), standing for every column it stores.
 static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpression &element,
-                              const case_insensitive_set_t &decision_names, KeyColumns &columns) {
+                              const case_insensitive_set_t &decision_names, KeyColumns &columns, const char *key_word) {
 	auto &names = element.column_names;
 	if (names.size() == 1 && decision_names.count(names[0])) {
 		throw BinderException(element, "DECIDE: %s is a decision; when, per and by may only use data",
@@ -488,13 +646,13 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 	ErrorData error;
 	optional_ptr<Binding> binding;
 	if (names.size() == 1) {
-		binding = UnqualifiedColumnBinding(bind_context, element);
+		binding = UnqualifiedColumnBinding(bind_context, element, key_word);
 	} else if (names.size() <= 4) {
 		binding =
 		    bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(), error);
 	}
 	if (binding) {
-		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns);
+		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, key_word);
 		return;
 	}
 	auto relation = names.size() <= 3 ? bind_context.GetBinding(RelationAlias(names), error) : nullptr;
@@ -505,22 +663,28 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 	AddRelationColumns(*relation, columns);
 }
 
-//! The columns of the key `per` lists (its children[1..]; none for `per ()`), each element
-//! resolved by ResolveKeyElement.
-static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression &per,
-                             const case_insensitive_set_t &decision_names) {
+//! The columns of a key listed by `elements[first..]` (none for `()`), each element resolved
+//! by ResolveKeyElement. `key_word` names the key in a message: `per`, `within`.
+static KeyColumns ResolveKey(BindContext &bind_context, const vector<unique_ptr<ParsedExpression>> &elements,
+                             idx_t first, const case_insensitive_set_t &decision_names, const char *key_word) {
 	KeyColumns columns;
-	for (idx_t i = 1; i < per.children.size(); i++) {
-		auto &element = *per.children[i];
+	for (idx_t i = first; i < elements.size(); i++) {
+		auto &element = *elements[i];
 		if (element.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-			throw InternalException("DECIDE per key element '%s' is not a name", element.ToString());
+			throw InternalException("DECIDE %s key element '%s' is not a name", key_word, element.ToString());
 		}
-		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decision_names, columns);
+		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decision_names, columns, key_word);
 	}
-	if (columns.empty() && per.children.size() > 1) {
-		throw InternalException("DECIDE per key '%s' resolved to no column", DecideKeyToString(per));
+	if (columns.empty() && elements.size() > first) {
+		throw InternalException("DECIDE %s key resolved to no column", key_word);
 	}
 	return columns;
+}
+
+//! The columns of the key `per` lists: its children[1..].
+static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression &per,
+                             const case_insensitive_set_t &decision_names) {
+	return ResolveKey(bind_context, per.children, 1, decision_names, "per");
 }
 
 //! `columns` as key elements, for FindOrCreateDecideKey to order and de-duplicate.
@@ -1446,6 +1610,18 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
         }
         return true;
     }
+    case ExpressionClass::DECIDE_FRAME: {
+        // A frame term is its payload read at another row, held to the rule of the operand it
+        // stands in, and its fallback is read at the anchor row.
+        auto &frame = expr.Cast<DecideFrameExpression>();
+        for (auto *value : {frame.payload.get(), frame.fallback.get()}) {
+            if (value &&
+                !ValidateSumArgumentInternal(*value, variables, has_decide_variable, error_msg, allow_quadratic)) {
+                return false;
+            }
+        }
+        return true;
+    }
     default:
 		// Any other shape that reads no decision (a comparison, a parameter, a lambda) is a
 		// per-row coefficient DuckDB evaluates, like the data-only operators above.
@@ -1530,7 +1706,9 @@ bool DecideBinder::IsDataOperand(const ParsedExpression &expr) const {
 	case ExpressionClass::SUBQUERY:
 		return false;
 	default:
-		return !ExpressionContainsDecideVariable(expr, variables);
+		// A frame selector over data is a value read at another row, which only the DECIDE binder reads.
+		return !ExpressionContainsDecideVariable(expr, variables) &&
+		       !FindExpressionOfClass(expr, ExpressionClass::DECIDE_FRAME);
 	}
 }
 
@@ -1876,6 +2054,126 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 	return result;
 }
 
+BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t depth) {
+	if (!qualifier_context || !qualifier_context->frames) {
+		throw InternalException("DECIDE: a frame selector needs the clause's frames");
+	}
+	// Read before the parts bind in place. ValidateDecideScopeSpellings has already held the
+	// order key and the within key to data, and the payload and fallback to one row each.
+	DecideFrameSpec spec;
+	spec.range = frame.IsRange();
+	spec.from = frame.from;
+	spec.from_k = frame.from_k;
+	spec.to = frame.to;
+	spec.to_k = frame.to_k;
+	spec.every = frame.every;
+	spec.all = frame.all;
+	spec.descending = frame.descending;
+	spec.cyclic = frame.cyclic;
+	spec.text = frame.ToString();
+	auto fallback_text = frame.fallback ? frame.fallback->ToString() : string();
+
+	// The payload, under the aggregate that reads it at the selected rows: the range's
+	// reducer, else `first`, which reads the one row a point selects.
+	unique_ptr<Expression> result;
+	if (frame.IsRange()) {
+		auto name = StringUtil::Lower(frame.reducer);
+		if (!IsDecideAggregateName(name) && name != "count") {
+			throw BinderException(frame, "DECIDE: a range frame reduces with sum, avg, min, max or count, found %s",
+			                      frame.reducer);
+		}
+		vector<unique_ptr<ParsedExpression>> arguments;
+		arguments.push_back(std::move(frame.payload));
+		unique_ptr<ParsedExpression> call = make_uniq<FunctionExpression>(name, std::move(arguments));
+		call->SetQueryLocation(frame.GetQueryLocation());
+		auto bound = BindFunction(call, depth);
+		if (bound.HasError()) {
+			return bound;
+		}
+		result = std::move(bound.expression);
+	} else {
+		ErrorData payload_error;
+		BindChild(frame.payload, depth, payload_error);
+		if (payload_error.HasError()) {
+			return BindResult(std::move(payload_error));
+		}
+		vector<unique_ptr<Expression>> children;
+		children.push_back(std::move(BoundExpression::GetExpression(*frame.payload)));
+		auto &first =
+		    Catalog::GetEntry<AggregateFunctionCatalogEntry>(context, SYSTEM_CATALOG, DEFAULT_SCHEMA, "first");
+		FunctionBinder function_binder(binder);
+		ErrorData first_error;
+		auto first_idx =
+		    function_binder.BindFunction(first.name, first.functions, {children[0]->return_type}, first_error);
+		if (!first_idx.IsValid()) {
+			first_error.AddQueryLocation(frame);
+			return BindResult(std::move(first_error));
+		}
+		result = function_binder.BindAggregateFunction(first.functions.GetFunctionByOffset(first_idx.GetIndex()),
+		                                               std::move(children));
+	}
+	auto *aggregate = GetBoundAggregate(*result);
+	if (!aggregate || aggregate->children.size() != 1) {
+		throw InternalException("DECIDE: a frame selector did not bind to an aggregate over its payload");
+	}
+
+	// The order key binds as plain SQL, as a `when` condition does.
+	ErrorData order_error;
+	binding_when_condition = true;
+	try {
+		BindChild(frame.order, depth, order_error);
+	} catch (...) {
+		binding_when_condition = false;
+		throw;
+	}
+	binding_when_condition = false;
+	if (order_error.HasError()) {
+		return BindResult(std::move(order_error));
+	}
+	spec.order = std::move(BoundExpression::GetExpression(*frame.order));
+	// The within key resolves as a per key does -- columns, and relations standing for theirs -- into the key table,
+	// so a row whose written `within` column is NULL is in no timeline (D5, D75).
+	if (!qualifier_context->keys) {
+		throw InternalException("DECIDE: a frame selector needs the clause's keys");
+	}
+	vector<string> within_text;
+	for (auto &element : frame.within) {
+		within_text.push_back(element->ToString());
+	}
+	spec.within_key = FindOrCreateDecideKey(
+	    KeyElements(context, ResolveKey(binder.bind_context, frame.within, 0, DecisionNames(variables), "within")),
+	    StringUtil::Join(within_text, ", "), *qualifier_context->keys);
+	// The fallback stands in for the payload at a missing position: a number, as the
+	// payload is a number to the model. It keeps its own type -- `else 0.5` over a whole-
+	// numbered payload is 0.5 there, and a model reads both as numbers.
+	if (frame.fallback) {
+		ErrorData fallback_error;
+		BindChild(frame.fallback, depth, fallback_error);
+		if (fallback_error.HasError()) {
+			return BindResult(std::move(fallback_error));
+		}
+		auto fallback = std::move(BoundExpression::GetExpression(*frame.fallback));
+		auto &type = fallback->return_type;
+		if (!type.IsNumeric() && type.id() != LogicalTypeId::BOOLEAN && type.id() != LogicalTypeId::SQLNULL) {
+			throw BinderException(frame, "DECIDE: in %s, else %s is not a number", spec.text, fallback_text);
+		}
+		spec.fallback = std::move(fallback);
+	}
+
+	// The aggregate prints as the frame written, a source fragment of its own. Tagged here
+	// rather than by TagDecideSourceFragments: ExpressionBinder::Bind gives a bound node
+	// the alias its parsed node had before binding, which would drop the frame's tag.
+	if (qualifier_context->source_fragments) {
+		auto &fragments = *qualifier_context->source_fragments;
+		AddDecideTag(aggregate->alias, MakeSourceFragmentTag(fragments.size()));
+		fragments.push_back(spec.text);
+	}
+	auto &frames = *qualifier_context->frames;
+	AddDecideTag(aggregate->alias, MakeFrameTag(frames.size()));
+	frames.push_back(std::move(spec));
+	return BindResult(std::move(result));
+}
+
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &function = expr.Cast<FunctionExpression>();
@@ -1997,6 +2295,8 @@ BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &ex
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::FUNCTION:
         return BindFunction(expr_ptr, depth);
+    case ExpressionClass::DECIDE_FRAME:
+        return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
     case ExpressionClass::SUBQUERY: {
         auto &subquery = expr.Cast<SubqueryExpression>();
         if (subquery.subquery_type != SubqueryType::SCALAR) {

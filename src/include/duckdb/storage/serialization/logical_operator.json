@@ -1061,6 +1061,11 @@
         "name": "objective_signature",
         "type": "idx_t",
         "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 223,
+        "name": "frames",
+        "type": "vector<DecideFrameSpec>"
       }
     ]
   },

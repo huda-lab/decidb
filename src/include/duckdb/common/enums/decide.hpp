@@ -123,6 +123,9 @@ enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY 
 //!   VALUE    — a column a relation element stands for (`per D`, `by (D)`): NULL is a value,
 //!              so every row of D is one class whatever its NULLs
 enum class DecideKeyNullMode : uint8_t { NO_GROUP = 0, VALUE = 1 };
+//! A frame selector's position on the anchor row's timeline (language/guide.md §5.6):
+//! the first or last peer, or k peers before or after the anchor's.
+enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT = 3 };
 
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
@@ -344,6 +347,16 @@ inline string MakePerKeyTag(idx_t key_idx) {
 	return string(PER_KEY_TAG_PREFIX) + to_string(key_idx) + "__";
 }
 
+//! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
+//! stands on the aggregate a frame binds to -- `first(e)` for a point frame, its reducer
+//! for a range -- whose rows at an anchor row are the ones the frame selects there
+//! (language/guide.md §5.6).
+static constexpr const char *FRAME_TAG_PREFIX = "__frame_";
+
+inline string MakeFrameTag(idx_t frame_idx) {
+	return string(FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
+}
+
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
@@ -532,6 +545,10 @@ inline bool TryParsePerKeyTag(const string &alias, idx_t &key_idx) {
 //! Reads back the signature index from an alias written by MakeSignatureTag.
 inline bool TryParseSignatureTag(const string &alias, idx_t &signature_idx) {
 	return TryParseDecideIndexTag(alias, SIGNATURE_TAG_PREFIX, signature_idx);
+}
+
+inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
+	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
 }
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when

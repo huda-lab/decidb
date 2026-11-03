@@ -320,6 +320,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         qualifier_context.decide_index = result.decide_index;
         qualifier_context.keyed_scopes = &keyed_scopes;
 	    qualifier_context.keys = &keys;
+        vector<DecideFrameSpec> frames;
+        qualifier_context.frames = &frames;
 	    qualifier_context.source_fragments = &decide_source_fragments;
 	    qualifier_context.source_text = &statement.decide_text;
         // Isolate with brackets to avoid multiple active binders.
@@ -377,6 +379,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         result.is_boolean_var = is_boolean_var;
 
 	    result.decide_keys = std::move(keys);
+        result.decide_frames = std::move(frames);
 
 	    result.keyed_scopes = std::move(keyed_scopes);
         result.variable_scopes = variable_scopes;

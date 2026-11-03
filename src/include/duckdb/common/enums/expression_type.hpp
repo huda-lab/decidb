@@ -134,6 +134,8 @@ enum class ExpressionType : uint8_t {
 	FUNCTION_REF = 204,
 	TABLE_REF = 205,
 	LAMBDA_REF = 206,
+	// DeciDB: a frame selector inside a DECIDE clause
+	DECIDE_FRAME = 207,
 
 	// -----------------------------
 	// Miscellaneous
@@ -176,6 +178,8 @@ enum class ExpressionClass : uint8_t {
 	POSITIONAL_REFERENCE = 18,
 	BETWEEN = 19,
 	LAMBDA_REF = 20,
+	// DeciDB: a frame selector inside a DECIDE clause (DecideFrameExpression)
+	DECIDE_FRAME = 21,
 	//===--------------------------------------------------------------------===//
 	// Bound Expressions
 	//===--------------------------------------------------------------------===//
