@@ -65,7 +65,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 | An aggregate constraint (`SUM(x) <= 5`, `norm(x, 1) <= 5`) | Rows are coupled. Count bounds on one `BOOL` are S1. |
 | `x <> k`, `x IN (...)` | Not an interval. The solver reads them as a split or discrete domain. |
 | Two decisions in one constraint or one objective term (`x + y <= 3`, `x*y`), `ABS`, a squared constraint | Decisions are coupled. |
-| An objective with a `per` or a two-level reducer; `AVG`, `MIN`, `MAX`, `norm` of order 1 or ∞ | Not a sum of one term per row. |
+| An objective with a `per` or a nested reducer; `AVG`, `MIN`, `MAX`, `norm` of order 1 or ∞ | Not a sum of one term per row. |
 | Entity-scoped (`T.x`) or scalar decisions | Not one decision per row. |
 | `random()`, a correlated subquery, a parameter, in a bound, a coefficient or a `when` | Not a deterministic source value. A scalar subquery that does not depend on the row is read as a source column and is admitted. |
 | A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | The solver rejects these itself, with the same message, on both paths. |

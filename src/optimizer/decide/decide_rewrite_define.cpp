@@ -35,7 +35,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // ---------------------------------------------------------------------------
 //
 // Every extremum the later passes build reads its members as linear: the hard rows, the
-// composed terms, the flat and the two-level objective. A body that squares or multiplies
+// composed terms, the objective's and the value rewrite's helpers. A body that squares or multiplies
 // decisions (`max(power(x, 2))`, once RewriteBilinear has taken the Boolean products)
 // would lose its square there. This pass names such a body first: one helper decision `t`
 // per instance of the scopes the body reads (ScopeOf: per row once it reads a data column)
@@ -60,8 +60,8 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // Which bodies: every MIN or MAX's; in a constraint that holds a MIN or MAX, every SUM and
 // AVG term's too (the composed row reads them as linear); in a constraint the value rewrite
 // takes (VALUE shape), every SUM and AVG term's (the helper decision that holds the reducer
-// is defined over linear members, and it is the same epigraph form); and the inner
-// reducer's of a two-level objective under an outer MIN or MAX. A plain constraint whose one
+// is defined over linear members, and it is the same epigraph form); and in the objective,
+// every reducer's under a MIN or MAX, a nested one's included. A plain constraint whose one
 // MIN or MAX is pushed its cheap way (`max(q) <= K`) is left alone: the MIN/MAX rewrite makes
 // it one quadratic row per member and needs no helper. An objective's SUM beside a MIN or MAX
 // stays on the objective's own quadratic path.
@@ -136,7 +136,7 @@ void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx
 }
 
 //! The reducers under `expr` whose body is not linear and holds no reducer. A SUM or AVG qualifies with `sums`
-//! (a constraint that holds a MIN or MAX) or `under_extremum` (the inner reducer of a two-level objective). A reducer
+//! (a constraint that holds a MIN or MAX) or `under_extremum` (a reducer inside a MIN or MAX). A reducer
 //! the polarity walk did not reach (`signs`) is pushed neither way.
 void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extremum_clause, bool under_extremum,
                       ExtremumPush outer, const unordered_map<const Expression *, int> &signs,
@@ -270,7 +270,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		walk(*decide.decide_constraints, string(), DecideEnclosingScope());
 	}
 
-	// The objective reads as one expression under its sense; a two-level `per` wrapper and a `when` carry no sign,
+	// The objective reads as one expression under its sense; a `when` carries no sign,
 	// and the `when` keeps the rows its helper rows read. It is detached while its reducers are rewritten.
 	unique_ptr<Expression> objective;
 	const idx_t constraint_sites = sites.size();

@@ -7,8 +7,9 @@ either refuses a query with a message or answers it correctly. None is scheduled
 todo of the area that owns it.
 
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
-postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–8 (pp. 17–24), NULL keys
-and empty groups (pp. 30, 50, 56), and one nested shape, the two-level objective `outer(per k: inner(e) by (k))`.
+postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–9 (pp. 17–25), NULL keys
+and empty groups (pp. 30, 50, 56), and reducers nested to any depth (pp. 25, 28–32), the two-level objective
+`outer(per k: inner(e) by (k))` among them.
 
 The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D86) and
 encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
@@ -27,33 +28,6 @@ deck's behavior is built; the move replaces it.
 - **Why today:** so a qualifier is never read as a scope, which the removed `T.x(TYPE)` spelling did.
 - **Deck:** "Reason 3": a qualifier keeps its SQL role and only resolves the name; with the same scope, `T.ship(INT)`
   and `ship(INT)` differ only in name resolution.
-
-## Nested reducers (ANR, pp. 25, 28–32)
-
-The grammar `B ::= f(e…, G…)`, `E ::= [when θ][per K]: B`, `G ::= agg(E)[by (Γ)]` lets a reducer's argument hold
-reducers to any depth. Example 9: `sum(max(ship) by (S.customerID)) by (D.depotID) <= D.priorityCapacity`.
-
-- **Today:** one gate refuses it, *"DECIDE: an aggregate inside an aggregate is not supported yet"*
-  (`ValidateScopePlacement`, `decide_binder.cpp`), except for the two-level objective.
-- **What is ready:** the grammar is already recursive, and a reducer's scope lives as tags on its own bound aggregate
-  (`filter`, `__qualified_by_<i>__`, `__group_key_<i>__`), so depth is encoded nowhere else in the binder.
-- **The two-level objective's open restrictions.** It is the one nested shape built, and each of these is refused
-  with "not supported yet" ([errors.md §2](errors.md#2-not-supported-yet)):
-  - a `when` inside either reducer: needs a per-class filter in the two-level rewrite (stage 05) and in the per-class
-    grouping at execution;
-  - a `per` inside the inner reducer: needs the inner reducer's own key scope inside each class, and its determination
-    check within the class;
-  - a `by` key other than the `per` key: needs inner groups that differ from the outer classes in the two-level
-    rewrite;
-  - `avg` as the outer reducer: needs an average over classes, whose count is data;
-  - the two-level objective beside another term or under a factor.
-- **What admitting a shape takes:** lift the gate for it, and let the value rewrite (`RewriteScopedReducers`) recurse:
-  one inner helper per class of the inner `by`, inside the outer group, defined before the outer reducer that reads
-  it.
-- **Open questions:** which shapes enter first (example 9 first); whether an inner helper's definition belongs to the
-  outer clause's provenance.
-- **Test when built:** example 9 and `sum(x - avg(x) by (g)) <= 5`, one nested shape per reducer kind, judged against
-  `test/decide/tests/_brute_force.py` on both solvers; the gate's message kept for every shape not admitted.
 
 ## Frame selectors (pp. 42–56, 66–69)
 

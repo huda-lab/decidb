@@ -112,7 +112,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
 `REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with
 different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that are infinite, NaN or above 2^53
-(not exactly representable); an objective with a `when`, a `per` or a two-level reducer, other reducers (`MIN`, `MAX`,
+(not exactly representable); an objective with a `when`, a `per` or a nested reducer, other reducers (`MIN`, `MAX`,
 `AVG`), `norm`; `DIAGNOSE`.
 
 ## Verified by

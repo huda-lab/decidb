@@ -108,8 +108,8 @@ struct DirectPart {
 	unique_ptr<Expression> filter;
 	//! Keyed scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
-	//! The body's terms. Empty when `inner` holds a nested reducer (the two-level objective
-	//! `outer(per k: inner(e) by (k))`, which the front end declines today).
+	//! The body's terms. Empty when `inner` holds a nested reducer, which the front end
+	//! declines today (a helper decision, D81).
 	vector<DecideSplitTerm> terms;
 	unique_ptr<DirectPart> inner;
 };

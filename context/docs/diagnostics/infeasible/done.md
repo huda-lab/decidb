@@ -566,8 +566,8 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   the clause are the text cut from the query, so a clause reads identically wherever it
   is quoted back (`../../language/explain.md`, Rendering).
 
-The two-level objective's `per` key passes a throwaway labels vector (objective groups
-are not diagnosed by clause key). A composite key is written as a comma list
+A nested objective's groups are its helper decisions' (D81), whose definitions are part
+of the fixed model and are not diagnosed by clause key. A composite key is written as a comma list
 (`per region, year:`); parentheses are only for `per ()`, and `per (region, year):` is a
 parse error that names the comma spelling. An easy `max(x) <= K` is a column bound, not a
 grouped clause — see "An easy MIN/MAX over one decision is a column bound" above.

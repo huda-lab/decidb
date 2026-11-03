@@ -116,7 +116,7 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper, a `per K:` wrapper (`PER_CLASS_TAG`) or the two-level objective's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`) recurses into child 0 only; a `when` condition is copied unchanged. A wrapper holds one clause: a plain `AND` or a `when` inside a `when` under a wrapper is an `InternalException` in every build, since nothing builds either shape and each walker would read it differently. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
+| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper or a `per K:` wrapper (`PER_CLASS_TAG`) recurses into child 0 only; a `when` condition is copied unchanged. A wrapper holds one clause: a plain `AND` or a `when` inside a `when` under a wrapper is an `InternalException` in every build, since nothing builds either shape and each walker would read it differently. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
@@ -388,7 +388,7 @@ reason objectives get a boundary instead of their own normalizer.
 
 | ID | Rule | Shared with |
 |---|---|---|
-| **O0** | A `when` wrapper or the two-level objective's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`) recurses into child 0 only. | C0, same predicate |
+| **O0** | A `when` wrapper recurses into child 0 only. | C0, same predicate |
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
@@ -419,8 +419,12 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
 | decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per group | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else: a term beside a reducer finer than the `by` key, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| anything else: a term beside a reducer finer than the `by` key, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a reducer holding a reducer (guide §5.5), a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group (a nested one per group of its path key), then one row per class |
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
+
+In the objective, which has no shape, `CanonicalizeObjective` tags the outermost reducer
+of each nest `VALUE_REWRITE_TAG` (`TagNestedObjectiveReducers`, D81): the shape of a nest
+is decided here, once, and the value rewrite reads the tag.
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
 exact only when every term is a plain `AVG` over all of them. Neither way around it pays
@@ -536,7 +540,10 @@ collation included, D69), a deterministic function of them and of constants
 (`CAST(cap AS DOUBLE)`), a decision whose own key's elements it all holds, a query-wide
 decision, a `by` key all of whose elements it holds. An expression with no field has no
 signature: one instance per class, as the key alone gives. A data-only qualified reducer
-needs no scope of its own: its side table groups on the body's value too (stage 05).
+needs no scope of its own: its side table groups on the body's value too (stage 05). A
+qualified reducer nested in another is counted over the rows its path keeps
+(`DecideReducerPath`, `decide_reducer_path.hpp`: the clause's `when` and every enclosing
+reducer's own; `SignQualifiedReducers` signs the inner reducers first, along the path).
 
 ---
 

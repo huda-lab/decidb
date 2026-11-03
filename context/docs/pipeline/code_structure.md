@@ -24,7 +24,8 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `KeyedScopeInfo`, every metadata field |
 | `planner/operator/decide/logical_decide_diagnose.hpp` | 03 | `LogicalDecideDiagnose` — the `DIAGNOSE <select>` plan node and the shape of the relation it returns |
 | `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
-| `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when`, `per K:` and two-level objective wrappers, and the constraint-position walk every stage shares |
+| `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when` and `per K:` wrappers, and the constraint-position walk every stage shares |
+| `planner/decide/decide_reducer_path.hpp` | 04 | `DecideReducerPath` — the path rule: the rows and key a nested reducer reads, shared by the canonicalizer, the bound-side rewrite and the value rewrite |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
 | `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
 | `planner/decide/decide_prepared_model.hpp` | 05/08 | The prepared linear form — stage 05's flattened terms, stage 08's coefficients |
@@ -55,7 +56,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `parser/decide/decide_removed_spellings.cpp` | 01 | Refuses the removed DECIDE spellings, naming the new spelling from the user's own text; called by the transformer and, for a stored parse tree, by `BindDeclarations` |
 | `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, the colon form, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
-| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective, its scope and the two-level form |
+| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective and its scope |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations and their scopes, the parsed-tree validators (`RefuseQualifiedDecisionReferences` among them), and the `SUCH THAT` / objective binds |
 | `planner/expression_binder/decide/decide_degree.cpp` | 02 | The degree walk, `DecideExpressionDegree`, and the constraint-degree validator |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
@@ -63,6 +64,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/operator/decide/logical_decide.cpp` | 03 | `AddConstraint`, `SetObjective`, EXPLAIN strings |
 | `planner/operator/decide/logical_decide_diagnose.cpp` | 03 | The DIAGNOSE node: EXPLAIN strings and serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | The one shape boundary |
+| `planner/decide/decide_reducer_path.cpp` | 04 | The path rule (`DecideReducerPath`, `FindOrCreateDecidePathKey`) |
 | `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
 | `optimizer/decide/decide_optimizer.cpp` | 05 | The eleven-pass dispatcher and the helpers the passes share |
@@ -132,7 +134,6 @@ classDiagram
     class DecideObjectiveBinder {
         +BindExpression()
         +BindScopedObjective()
-        +BindTwoLevelObjective()
         +GetExpressionType()
     }
 
@@ -225,16 +226,15 @@ Polynomial degree, not occurrence count, is `DecideExpressionDegree()` in
 
 ### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
 Header-only, and the one place that answers "which children of this node are
-constraints". A bound constraint tree is AND-conjunctions plus wrappers — `when c:`,
-`per K:` and the two-level objective's `TWO_LEVEL_OBJECTIVE_TAG` — and a wrapper's trailing children are
+constraints". A bound constraint tree is AND-conjunctions plus wrappers — `when c:` and
+`per K:` — and a wrapper's trailing children are
 metadata — the `when` condition, the key columns — so descending into them would read
 a condition as another constraint.
-- **`IsWhenFilterWrapper()` / `IsPerClassWrapper()` / `IsTwoLevelObjectiveWrapper()`
-  (the two-level objective's) / `IsConstraintWrapper()` / `IsConstraintChild()`** —
-  the predicates. Every site that walks a bound constraint tree asks these, including
-  the few that deliberately act differently on the answer: singleton-row folding refuses to
-  descend into a `when`, and the MIN/MAX objective rewrite unwraps the two-level wrapper as
-  it goes. They bring their own descent, not their own definition of a wrapper, so a
+- **`IsWhenFilterWrapper()` / `IsPerClassWrapper()` / `IsConstraintWrapper()` /
+  `IsConstraintChild()`** — the predicates. Every site that walks a bound constraint tree
+  asks these, including the few that deliberately act differently on the answer:
+  singleton-row folding refuses to descend into a `when`. They bring their own descent,
+  not their own definition of a wrapper, so a
   new wrapper kind is a one-line change here.
 - **`VisitConstraintTree()`** — parents before children, skipping metadata, with a
   visitor that can stop the walk. Const and mutating overloads. Neither hands out

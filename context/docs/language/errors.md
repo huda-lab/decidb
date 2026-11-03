@@ -60,18 +60,18 @@ the clause otherwise.
 
 ## 2. Not supported yet
 
-Each shape is refused with a message, never answered wrongly. Rows marked **roadmap** are deck features the move to
-the new language has not reached ([roadmap.md](roadmap.md#nested-reducers-anr-pp-25-2832)). The others are limits on
-what DeciDB formulates; their open work is in the owning stage's `todo.md`.
+Each shape is refused with a message, never answered wrongly. Rows marked **D80** are the nesting limits the language
+keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)). The others are limits on what DeciDB
+formulates; their open work is in the owning stage's `todo.md`.
 
 | Shape | Message |
 |---|---|
-| **roadmap** A reducer inside a reducer, except the two-level objective | `DECIDE: an aggregate inside an aggregate is not supported yet` |
-| **roadmap** The two-level objective beside another term or under a factor | the same |
-| **roadmap** A `per` inside the two-level objective's inner reducer | `DECIDE: per inside the inner reducer of min(per g: sum(...) by (g)) is not supported yet` |
-| **roadmap** A `when` inside either reducer of the two-level objective | `DECIDE: when inside the outer reducer of min(per g: ...) is not supported yet; write it in front of the objective` (inner reducer likewise) |
-| **roadmap** A two-level `by` key other than its `per` key | `DECIDE: in min(per g: sum(...) by (id)) the by key must be the per key; any other is not supported yet` |
-| **roadmap** An outer `AVG` in the two-level objective | `DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not supported yet; write sum, min or max over them` |
+| **D80** `norm` inside a reducer | `DECIDE: norm inside a reducer is not supported yet` |
+| **D80** A reducer inside `norm` | `DECIDE: a reducer inside norm is not supported yet` |
+| **D80** A reducer over data alone added inside one over decisions | `DECIDE: max(...) over data alone inside a reducer over decisions is not supported yet; compute it in a subquery, or reduce it outside` |
+| **D80** Inside a reducer, a reducer times a decision | `DECIDE: '(x - 1) * max(x) BY (t.g)' multiplies a reducer by a decision; only data can scale a reducer` |
+| **D80** Inside a reducer, `abs` over a reducer an enclosing `when`, `per` or `by` chooses the rows of | `DECIDE: abs over a reducer inside another reducer is not supported yet: abs(max(x) BY (t.g))` |
+| **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective not read in place | `DECIDE: 'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers, which is not supported yet` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: power(x, 2) <> 9` |
 | `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates.` |
@@ -105,8 +105,8 @@ plain syntax error, as does a removed form after a clause that already has a sco
 | `COUNT(*) WHEN c` · `norm(e, p) WHEN c` | `sum(when c: 1)` · `when c:` in front | `... write sum(when g = 'A': 1)` · `... norm takes no when inside it: write when g = 'A': in front of the constraint when the condition holds for all of it` |
 | `SUM(D: e) WHEN c` | `sum(when c per D: e)` | `the WHEN after sum(t: x) is removed; write sum(when g = 'A' per t: x)` |
 | `MAXIMIZE E WHEN c` | `MAXIMIZE when c: E` | `the postfix WHEN is removed; write MAXIMIZE when g = 'A': sum(x)` |
-| `MINIMIZE OUTER(INNER(e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`; an outer `AVG` becomes `sum`; a `WHEN` inside goes in front | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g))` |
-| `MINIMIZE OUTER(INNER(D: e)) PER g` · `MINIMIZE c * OUTER(INNER(e)) PER g` | no spelling yet | `the postfix PER is removed; the two-level form ... takes no per inside its inner reducer yet` · `... takes one reducer call inside the outer one ... is not supported yet` |
+| `MINIMIZE OUTER(INNER(e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`; a `WHEN` inside goes in front, the colon form inside stays (`max(per t: x)`) | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g))` |
+| `MINIMIZE c * OUTER(INNER(e)) PER g` | the nested reducer where it stands | `the postfix PER is removed; write the nested reducer in 2 * sum(max(x)) where it stands as outer(per g: inner(e) by (g)), as in MINIMIZE sum(per g: max(e) by (g))` |
 | `MAXIMIZE SUM(e) PER g` | `MAXIMIZE sum(e)` | `the postfix PER is removed; an objective is produced once: write MAXIMIZE sum(x)` |
 | `MAXIMIZE MAX(e) PER g` | `MAXIMIZE max(e)`, or `sum(per g: max(e) by (g))` | `... an objective is produced once: write MAXIMIZE max(x), or MAXIMIZE sum(per g: max(x) by (g)) to combine one value per class` |
 | `MAXIMIZE AVG(e) PER g` | `MAXIMIZE sum(per g: avg(e) by (g))`, or `MAXIMIZE avg(e)` | `the postfix PER is removed; write MAXIMIZE sum(per g: avg(x) by (g)) to add up one average per class as before, or MAXIMIZE avg(x) for one average over all rows` |

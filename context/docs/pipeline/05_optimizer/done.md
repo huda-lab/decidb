@@ -160,7 +160,11 @@ node builds each record as a side table of the source (`DirectAddBoundTables`, o
 the same DuckDB aggregate over another read of the source, grouped by the reducer's `by` key
 (under the key's collation, D69) over the rows the clause's `when` keeps, and joined back to
 every read by the key. It reads its argument as that SQL aggregate does: a NULL is
-skipped, and only a NaN is checked (`COUNT` counts one). The column carries the reducer as written
+skipped, and only a NaN is checked (`COUNT` counts one). A reducer nested in a bound's
+reducer (`avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`, guide §5.5) is recorded first,
+grouped by its path key over the rows its path keeps (`DecideReducerPath`), NULL on a row
+in no group of it; the table built after it reads its column, so the reducer around it
+skips that member as a NULL. Such a bound is never a group bound a rule computes itself. The column carries the reducer as written
 and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. With several threads the
 source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
 so the model's row and column order and the group a scope check names first can differ between runs of
@@ -246,9 +250,10 @@ second. So is a term that holds a decision under anything but a bare reference
 (`ExtractTerms`): no rewrite lowered it, and reading it as its decision would drop the
 construct without a word.
 
-The objective's `when` wrapper gives `DecideObjective::when_condition`, and the two-level
-form's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`, outside the `when`) gives `DecideObjective::two_level_key`,
-the key `k` of `outer(per k: inner(e) by (k))`. A decision outside the objective's reducers
+The objective's `when` wrapper gives `DecideObjective::when_condition`. An AVG term with a
+`by` key -- a `sum(per K: avg(e) by (G))` the value rewrite read in place -- carries it as
+`avg_group_key`, so execution divides each row by its `G` group's count; like terms merge
+only with the same one (`TermsAreLike`). A decision outside the objective's reducers
 — query-wide or not — is a `NONE` term, counted once at execution, and so is a product of
 two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a bilinear term with `reduction`
 NONE; inside a reducer it is SUM and weighted by every row, `SUM(w * s * u)`). Any other
@@ -462,7 +467,7 @@ one auxiliary and one row set, not one per row. The ABS Big-M and the L0 auto bo
 ### Non-linear reducer bodies — `DefineNonlinearReducerBodies`
 
 Every extremum the later passes build reads its members as linear: the hard rows, the
-composed terms, the flat and the two-level objective, and the value rewrite's links. A body
+composed terms, the flat objective, and the value rewrite's links. A body
 that squares or multiplies decisions (`max(power(x, 2))`, `min(x * y)`) would lose its
 square there. This pass names such a body first (`decide_rewrite_define.cpp`): one helper
 decision `t` per row (`__body_<n>__`, labelled by the body) and one quadratic row defining
@@ -496,9 +501,9 @@ reads always holds), and each reading clause accounts for the helper in its own 
 a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
 reads them as linear (`sum(power(x, 2)) + max(x) <= 30`); and in a constraint of the VALUE shape, whose helper is
 defined over linear members (`sum(power(x, 2)) + gcap * s <= 30`). A SUM or AVG that no MIN or MAX reads needs no
-native MIN/MAX: its rows are quadratic, which the model-class gate refuses on HiGHS. In the objective, the inner
-reducer of a two-level form under an outer MIN or MAX
-(`max(per g: sum(power(x - t, 2)) by (g))`); a SUM beside a MIN or MAX stays on the
+native MIN/MAX: its rows are quadratic, which the model-class gate refuses on HiGHS. In the objective, a reducer
+nested under a MIN or MAX (`max(per g: sum(power(x - t, 2)) by (g))`), which the value rewrite then holds in a
+helper over the defined members; a SUM beside a MIN or MAX stays on the
 objective's own quadratic path. A plain constraint whose one MIN or MAX is pushed its
 cheap way (`max(power(x, 2)) <= 16`) is left alone: `RewriteMinMax` bounds each member,
 which is one quadratic row per member with no helper. `IsCheapLoneExtremum` reads that
@@ -520,8 +525,8 @@ before a row is read, through the same sentence the model-class gate raises
 (`ThrowDecideSolverGap`): `'max(power(x, 2))' takes the maximum of a squared or multiplied
 expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace
 power(x, 2) with an expression linear in the decision variables.` A SUM term reads
-`squares or multiplies decision variables beside a MIN or MAX` (`inside` for a two-level
-inner reducer). The refusal names the reducer and not a column to bound, because bounding
+`squares or multiplies decision variables beside a MIN or MAX` (`inside` for a reducer
+nested in one). The refusal names the reducer and not a column to bound, because bounding
 `x` would not give `t` a box.
 
 EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decision per row,
@@ -544,7 +549,8 @@ exempt. A body this pass misses fails there by name instead of losing its square
 A comparison whose decision side one model row per `by` group cannot hold is in the
 **VALUE shape**: a per-row or keyed decision beside a reducer (deck example 1,
 `ship <= 0.20 * sum(ship)`), a factor on a reducer that varies by row, reducers with
-different `by` keys, a reducer inside another expression. Stage 04 decides the shape once
+different `by` keys, a reducer inside another expression, a reducer holding a reducer.
+Stage 04 decides the shape once
 (`CanonicalConstraintClass::VALUE`, `VALUE_REWRITE_TAG`, stage 04 §3.10); this pass reads
 the tag and turns the clause into an ordinary per-row one, so stage 06 needs no new
 constraint path. It runs after the ABS and bilinear rewrites, whose auxiliaries may stand
@@ -557,13 +563,13 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
    INTEGER when the reducer's value is whole by declared types, every constant inside
    counted (`DecideValueIsWholeNumbered`, shared with stage 02), so a strict bound on the
    rewritten row still steps on the lattice; else DOUBLE. It is query-wide
-   (`DecideVarScopeInfo::Global()`) for `by ()`, else keyed by a scope of its own
-   (`KeyedScopeInfo::value_link`), whose classes are the `by` groups among the rows the
-   clause keeps, built by stage 08. Its label is the reducer's SQL, `by` included
+   (`DecideVarScopeInfo::Global()`) when its path key is `by ()` throughout, else keyed by
+   a scope of its own (`KeyedScopeInfo::value_link`), whose classes are the groups of that
+   key among the rows its path keeps, built by stage 08. Its label is the reducer's SQL, `by` included
    (`aux_var_expressions`, `ReducerValueLink::label`), so EXPLAIN and DIAGNOSE name it by
    what it holds;
 2. records a `LogicalDecide::ReducerValueLink`: the reducer kind, its body, its own `when`
-   and `per`, its `by` key, the clause's `when`, the clause id and removal group;
+   and `per`, its path key and the rows its path keeps;
 3. replaces the reducer node by a reference to the helper, in place, as `RewriteAbs` does.
 
 The comparison then holds no decision reducer and the tag is removed: it is one row per
@@ -581,8 +587,22 @@ can take fractional values in this constraint ..."*). The aggregate shape accept
 reducer, because there its constant moves to the bound when the reducer is summed in place
 (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`).
 
+**Nested reducers** (guide §5.5, D79-D81). The reducers inside a reducer's argument are
+replaced first, each by a helper keyed by its path (`DecideReducerPath`,
+`decide_reducer_path.hpp`): it reads the rows the clause's `when` and every enclosing
+reducer's own `when` keep, grouped by every enclosing `by` key and its own, a key of the
+table `FindOrCreateDecidePathKey` finds or adds. So what the outer helper holds is affine
+in helpers, decisions and data, and links are stored innermost first. A member of a SUM or
+AVG is pushed as its helper is, through the sign it carries in the argument; a member of a
+MIN or MAX is pinned from both sides (D79). A body that would still square or multiply
+decisions there is refused (D80): `DefineNonlinearReducerBodies` has defined every such
+body a constraint, or a MIN or MAX of the objective, reads, so what is left is a nest of
+sums in the objective not read in place. The binder has refused the shapes the passes
+before this one would rewrite out of their path (an ABS or a norm around a nested reducer,
+a decision times one; stage 02).
+
 One helper per **reducer over one set of rows**: a second site holding the same reducer
-(`Equals`, alias included) under the same `when` reuses the first helper
+(`Equals`, alias included) over the same rows and path key reuses the first helper
 (`Helpers::Find`), whichever clause it is in. The rows `RewriteAbs` derived from one clause
 each hold a copy of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`),
 and two helpers pinned on different sides would let the pair drift apart; two clauses
@@ -613,7 +633,15 @@ known, so only the `BOOL` factor keeps the push.
 **The objective** is walked the same way when stage 04 stamped it `VALUE_REWRITE_TAG`
 (a reducer under a `BOOL` factor): `MAXIMIZE b * sum(x)` replaces `sum(x)` by a helper
 pushed by the sense and the term's sign, and the product is one auxiliary the objective reads
-once. A reducer no decision multiplies stays in the objective. A factor declared per row is
+once. A reducer stage 04 tagged for holding a reducer (D81) becomes a helper the same way,
+the reducers inside it helpers keyed by their paths, so the objective reads the outermost
+helper once: `MINIMIZE max(per g: sum(x) by (g))` is a helper per `g` and one over them.
+`sum([when c] per K: inner([when c'] e) by (G))`, `inner` a SUM or AVG with no `per` and
+no reducer inside, every element of `K` in `G`, is read in place instead
+(`InlineSumOfGroupSums`): each `G` group is one member, so the sum of the members is
+`inner` over every group, `c` joined to `c'`, and a square inside it stays a quadratic
+objective (an AVG divides by its group's size, `avg_group_key`). A reducer no decision
+multiplies and none nests in stays in the objective. A factor declared per row is
 refused by the objective's scope check.
 
 A body that multiplies decisions (a square, a product of two non-Booleans) is defined per row
@@ -667,15 +695,12 @@ the clause's own relation over it, so a negative factor goes inside the hard hal
 reducer (`build_hard_lhs`): the hard `-2 * MAX(e) <= K` is stated as `MIN(-2 * e) <= K`.
 A positive one stays outside.
 
-**Objectives.** The flat form and the two-level `outer(per k: inner(e) by (k))` are
-detected and the easy/hard classification is precomputed into typed metadata —
-`flat_objective_agg` / `flat_objective_is_easy`, and `per_inner_agg` / `per_outer_agg` /
-`per_inner_is_easy` / `per_outer_is_easy` / `per_inner_was_avg` — so the physical
-layer reads the decision rather than re-deriving it. The outer level is SUM, MIN or MAX
-(the binder refuses an outer AVG); an inner AVG becomes a SUM with `per_inner_was_avg`
-set. `RewriteMinMaxObjectiveTree` is split out from `RewriteMinMaxObjective` because the
-rewrite writes through a pointer that walks *into* the tree past the two-level form's
-wrapper, the `when` wrapper and casts, and has early returns: the objective must be
+**Objectives.** The flat form is detected and the easy/hard classification is
+precomputed into typed metadata — `flat_objective_agg` / `flat_objective_is_easy` — so the
+physical layer reads the decision rather than re-deriving it. A nested one is a helper
+decision by now (the value rewrite, D81). `RewriteMinMaxObjectiveTree` is split out from
+`RewriteMinMaxObjective` because the rewrite writes through a pointer that walks *into*
+the tree past the `when` wrapper and casts, and has early returns: the objective must be
 detached, rewritten, and reinstalled through `SetObjective`.
 
 ### Composed MIN/MAX — `RewriteComposedMinMax`
@@ -730,20 +755,18 @@ quietly costing a benchmark. A free auxiliary *box* is sound; the same condition
 Big-M side is not, and there it refuses the query rather than substituting a constant
 (`../06_model_formulation/done.md` §9).
 
-The five continuous auxiliaries and the family each is boxed by:
+The continuous auxiliaries and the family each is boxed by:
 
 | Auxiliary | Reduces over | Box |
 | --- | --- | --- |
 | flat `z` | the objective's rows | per-row family |
-| `z_g` (the two-level objective's inner MIN/MAX) | rows of its class of `k` | per-row family |
-| `w` (outer over `z_g`) | the `z_g` values | per-row family |
-| `w` (outer over group sums) | per-group sums | **group-sum family** |
+| a value helper (a nested reducer's among them) | its group's members | each instance its own group's reach (`DeriveReducerValueBounds`) |
 | `z_k` (composed term) | rows the term's filter admits | that term's own family |
 
-The group-sum `w` is the one that does *not* share the per-row family: a group sum
-leaves any single row's range as soon as the group holds more than one row. It is
-derived from the actual per-group sums under the same inner-AVG scale the pinning rows
-use — correct, and tighter than widening the per-row range by the row count.
+A helper over group sums does *not* share the per-row family: a group sum leaves any
+single row's range as soon as the group holds more than one row. Its box is read off its
+members' boxes, so an outer helper over inner helpers is boxed by theirs, and a bound
+written only at the root flows back down a nest (`DeriveReducerMemberBounds`, stage 06).
 
 Why every auxiliary gets its box: a free continuous column leaves the root simplex with
 no box, so it walks to the answer one pivot at a time and the walk lengthens with row

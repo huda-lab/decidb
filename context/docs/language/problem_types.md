@@ -53,8 +53,8 @@ supported; a signed variable needs a finite lower bound.
 - **Constraints.** `SUM(POWER(e, 2)) <= K` or per row `POWER(e, 2) <= K`. Constants of the inner move to the bound.
   Quadratic constraints compose with scopes and with linear terms in the same clause.
 - **Under MIN or MAX.** A square or product inside a `MIN`/`MAX` (`MAX(POWER(x - t, 2)) >= K`,
-  `MINIMIZE MAX(POWER(x - t, 2))`), a squared `SUM` beside one (`SUM(POWER(x, 2)) + MAX(x) <= K`), or the inner
-  reducer of a two-level objective under one (`MAX(per g: SUM(POWER(x - t, 2)) by (g))`): each member becomes a
+  `MINIMIZE MAX(POWER(x - t, 2))`), a squared `SUM` beside one (`SUM(POWER(x, 2)) + MAX(x) <= K`), or a reducer
+  nested under one (`MAX(per g: SUM(POWER(x - t, 2)) by (g))`): each member becomes a
   helper decision per row with one quadratic row, and the extremum is stated to the solver natively, so it is Gurobi
   only; HiGHS refuses, naming the reducer. `MAX(POWER(e, 2)) <= K` and `MIN(POWER(e, 2)) >= K` need no helper: they
   are one quadratic row per member.

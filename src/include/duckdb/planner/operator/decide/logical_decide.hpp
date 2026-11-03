@@ -50,8 +50,8 @@ struct DecideKeyElement {
 
 //! A grouping key: the expressions whose values decide which rows share a class. Every
 //! key the clause writes is one entry of LogicalDecide::keys -- a declaration's `per K:`,
-//! a reducer's own `per K'` and the colon form `SUM(D: e)`, a reducer's `by (key)`, and a
-//! constraint's or the two-level objective's `per K:` -- and keys with the same columns
+//! a reducer's own `per K'` and the colon form `SUM(D: e)`, a reducer's `by (key)`, a
+//! constraint's `per K:` and a nested reducer's path key -- and keys with the same columns
 //! share it, whichever spelling wrote them. A relation element (`per D`) stands for every
 //! column D stores. The empty key (`per ()`, `by ()`) is no entry: INVALID_INDEX, one
 //! class.
@@ -487,15 +487,17 @@ public:
     struct ReducerValueLink {
         idx_t value_var = DConstants::INVALID_INDEX;
         string agg_name;                   //!< "sum", "avg", "min" or "max"
-        string label;                      //!< the reducer as the user wrote it, for messages
+        string label;                      //!< the reducer as the user wrote it, `by` included, for messages
         unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
         unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
         //! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
         //! for per row.
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-        //! Γ, into `keys`; INVALID_INDEX for `by ()`, every kept row.
+        //! Its path key (language/guide.md §5.5), into `keys`: every enclosing reducer's `by`
+        //! key and its own; INVALID_INDEX for `by ()` throughout, every kept row.
         idx_t group_key = DConstants::INVALID_INDEX;
-        unique_ptr<Expression> when; //!< the clause's `when`, or null
+        //! The rows its path keeps: the clause's `when`, then each enclosing reducer's own; null for every row.
+        unique_ptr<Expression> when;
         //! The sides that pin the helper, read from the way the clause pushes it; both when the sign of its
         //! factor is not known before the query runs or the comparison is `=` or `<>`. MIN/MAX: the
         //! extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
@@ -530,14 +532,11 @@ public:
             VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
             EXTREMUM,                     //!< a MIN/MAX held by its envelope
             EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
-            EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
-            EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
             NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
             BODY_AT_LEAST,                //!< a reducer's non-linear body, a helper per row at least its value
             BODY_AT_MOST,                 //!< the same, at most its value
             BODY_EQUAL,                   //!< the same, equal to its value
             EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
-            EXTREMUM_PER_GROUP_NATIVE,    //!< a two-level objective's inner MIN/MAX over defined bodies, the same
             //! What the data made of a scoped expression's classes (D70, D71): more instances than classes. Recorded
             //! by execution, so only EXPLAIN ANALYZE prints it, and `subject` is the whole line.
             VARIANTS,
@@ -579,19 +578,11 @@ public:
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // Flat (not two-level) objective: original aggregate type before rewrite to SUM
+    // A MIN/MAX objective: original aggregate type before rewrite to SUM. A nested one is
+    // a helper decision instead (RewriteScopedReducers, D81).
     ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
     // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
     bool flat_objective_is_easy = false;
-
-    // The two-level objective, outer(per k: inner(e) by (k))
-    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-    // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
-    bool per_inner_is_easy = false;
-    bool per_outer_is_easy = false;
-    // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
-    bool per_inner_was_avg = false;
 
     // --- Key scopes ---
 

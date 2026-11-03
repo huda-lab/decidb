@@ -143,8 +143,8 @@ spanned timeline, an empty member inside a nested reducer, a `when` that keeps n
 NULL at a selected row and inside a range, a NULL `within` key and a NULL inner `by` key.
 A `Case` holds the SQL in the language, the oracle statement, and what is computed by
 hand: the instances, the optimum, the error or the status, and small domains for
-enumeration. `Case.phase` is the first build step of the engine that runs the SQL (0
-today; 1 variants, 2 nesting, 4 point frames, 5 range frames, 6 composition).
+enumeration. `Case.phase` is the first build step of the engine that runs the SQL (1
+variants and 2 nesting run today; 4 point frames, 5 range frames, 6 composition).
 `fixing_clauses` writes an assignment as `when t.id = 3: x = 2` clauses, and
 `decidb_feasible` reads DeciDB's verdict on the fixed query.
 
@@ -195,9 +195,10 @@ one group at a time. No test asserts an answer its docstring derives.
   `per` is `per ()`; the `when` in front builds the same model as a `when` inside each
   reducer; a query-wide decision, or a keyed decision with one instance, beside a
   reducer counts once; tuple terms that are not one value are errors; the two-level
-  form, also under a `when`, and its refusals (an outer AVG); a reducer nested in a
-  constraint is refused; an objective `when` that keeps no row and an objective reducer
-  with no row are errors. Oracle, dump and pinned messages.
+  form, also under a `when`, and the forms it once refused (a `when` inside either
+  reducer, another `by` key, an outer AVG, a third level) answering as nested reducers
+  (D81); deck example 9 in a constraint; a keyed objective refused; an objective `when`
+  that keeps no row and an objective reducer with no row. Oracle, dump and pinned messages.
 - **`test_scope_variants.py`** — variant signatures (D70-D72). A class whose rows differ in
   a tuple term (a bound, a factor), a decision outside reducers, a `by` key, or an inner
   key's body is one instance per variant. Each case runs on data where the key fixes the
@@ -214,6 +215,16 @@ one group at a time. No test asserts an answer its docstring derives.
   two classes kept as two rows, `=` with two values infeasible, `<>` keeping each value,
   EXPLAIN ANALYZE's variant count (silent without variants and under a plain EXPLAIN), and
   DIAGNOSE naming the variant it loosens (`a, 2`). Oracle, dump and pinned text.
+- **`test_anr_nested.py`** — reducers nested to any depth (guide §5.5, D79-D81): the
+  nesting fixtures of `_anr_cases` on both solvers, judged by `_anr_oracle`, an empty group
+  inside a nest skipped (D68); F1's model, a helper per path group with one-sided
+  definitions and its clause rows folded into boxes; a grid of nests at depth 2 and 3,
+  every level's kind and scope, cell by cell; constant bounds through a nest, a root bound
+  reaching a nested closing link, two helper levels, a nest no value can meet
+  (infeasible, not an internal error), negative bounds over negative terms, a weighted sum
+  of one helper; group averages in the objective, an inlined average kept apart from
+  another; a square defined where a MAX reads it (Gurobi; HiGHS refuses by name); and the
+  refusals of D80 by name. Oracle, dump and pinned messages.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built
@@ -228,8 +239,8 @@ one group at a time. No test asserts an answer its docstring derives.
 - **`test_scope_bare_clauses.py`** — a clause with no `when`, `per` or `by` means its
   explicit form (`per row:` in front, `by ()` on each reducer, the objective once).
   Strict bounds step onto whole numbers; a negative factor on a hard MAX; an objective
-  term must be one value; a reducer inside a reducer, and one in a `when` or a `by` key,
-  is refused at bind time; an easy `min(x) >= K`
+  term must be one value; a reducer inside a reducer is read at every row (`SUM(MAX(x))`),
+  and one in a `when` or a `by` key is refused at bind time; an easy `min(x) >= K`
   or `max(x) <= K` is absorbed into the decision's box (D41), so a negative K makes `x`
   signed and the model is the one the column bound builds; a constant inside MIN/MAX
   under a strict step is refused; query-wide decisions beside reducers under `<>`,
@@ -255,7 +266,8 @@ one group at a time. No test asserts an answer its docstring derives.
 - **`test_scope_explain_diagnose.py`** — what EXPLAIN and DIAGNOSE print. EXPLAIN shows
   a clause as written, its canonical reading when that differs, auxiliaries as the
   expression they stand for and one account line per rewrite, including the objective's
-  rewrites and the two-level key. The echo quotes each clause as typed, `when c per K:` in
+  rewrites and a nested objective's key as written, each of its reducers accounted a
+  helper decision. The echo quotes each clause as typed, `when c per K:` in
   front, and no `per row:` or `by ()`. DIAGNOSE, in the expanded slack scope, reports a `by`-grouped
   clause once per class: per value of its `per` key, or per kept row when it has none
   (D28); covers easy and hard MIN/MAX, absorbed and keyed bounds, unreachable bounds,

@@ -20,9 +20,9 @@ on `PhysicalDecide`, in call order:
 |---|---|
 | `BuildKeyedMappings` | 1.5 — row → class maps for every key scope: a keyed decision's key, a reducer's own `per` or colon form, a helper decision's `by` key |
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
-| `EvaluateObjective` | 2, objective — per-term filters with the objective's `when` folded in, and the two-level form's classes |
+| `EvaluateObjective` | 2, objective — per-term filters with the objective's `when` folded in, and the groups an AVG read in place divides by |
 | `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, filter masks, constant RHS |
-| `EvaluateReducerValueLinks` | 2, the value rewrite's helper decisions — each reducer's members on the rows the clause and the reducer keep, grouped by its `by` key |
+| `EvaluateReducerValueLinks` | 2, the value rewrite's helper decisions — each reducer's members on the rows its path and the reducer keep, grouped by its path key |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
@@ -201,8 +201,8 @@ filter (its reducer's own `when`), an AVG-scaling flag and the key scope of its
 reducer's own `per` (`qualifier_scope_idx`); plus the RHS expression, the comparison
 type, the clause's scope (`DecideClauseScope`: `when`, `per`, `class_key`), its `by` key (`group_key`), and the metadata
 linking it to indicators and diagnosis provenance. The
-objective arrives the same way, with its `when`, the two-level form's key
-(`two_level_key`, an index into the key table), and `squared_terms` and `bilinear_terms` alongside `terms`.
+objective arrives the same way, with its `when`, each AVG term's `avg_group_key` (an index into the key table, set
+for a nested AVG read in place), and `squared_terms` and `bilinear_terms` alongside `terms`.
 `ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
 construct is left re-deriving its own.
 
@@ -233,7 +233,8 @@ coefficient evaluation:
    NULL in a written key column is in no class; a relation's columns compare NULL as a
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
 2. A helper decision's scope (`KeyedScopeInfo::value_link`, the value rewrite) reads its
-   link's `by` key on the rows the link's clause `when` keeps only, so the key is never
+   link's path key on the rows its path keeps only (`ReducerValueLink::when`: the clause's
+   `when` and every enclosing reducer's own), so the key is never
    evaluated where the clause never reads: one entity per group that holds a member,
    numbered as its definition numbers them. A group with no member has no helper (its
    reducer is NULL there, D68), so its rows map to the absent entity below.
@@ -329,9 +330,8 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`CountTupleTermsOnce`, over `CountOnce`), and so does a product of two query-wide decisions there (one inside a
   reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted
   once, in the objective and in each group's row of an aggregate clause; stage 06 sums every
-  row, and a debug build checks no writer left such a term on two rows (`VerifyCountedOnce`). The two-level form
-  puts a row whose written key is NULL in no class. A flat MIN/MAX that reads no row is
-  dropped in formulation (D68).
+  row, and a debug build checks no writer left such a term on two rows (`VerifyCountedOnce`). A flat MIN/MAX
+  that reads no row is dropped in formulation (D68).
 - **Composed clauses** read the rows their folded filter keeps and de-duplicate among
   them. A clause in which some term reads no row is skipped, and an objective term that
   reads none is dropped (D68). Each takes its repair id here, after every prepared
@@ -351,15 +351,18 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   evaluated `class_set`, over the rows its `when` keeps); the model keeps the table and an
   expanded diagnosis reports the group once per class (`FanOutByClass`).
 - **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
-  reducer is read on the rows the clause's `when` keeps and its own `when` keeps among
-  them, grouped by its `by` key over the kept rows (`LookupOrBuildPerGroupIds`, a NULL
+  reducer is read on the rows its path keeps and its own `when` keeps among them, grouped
+  by its path key over those rows (`LookupOrBuildPerGroupIds`, a NULL
   written key in no group, only the groups that hold a member); its coefficients come from
   `EvaluateTermColumns`, one scan for every term; its `per` de-duplicates within each
   group, a dropped row leaves the group, and AVG divides by the members left. The result
   is a `ReducerValueLinkSpec` carrying the members alone, with the link's label and
-  provenance; stage 06 states the definition over them (an equality per group for
-  SUM/AVG, an extremum link for MIN/MAX). `BuildSolverInput` frees a helper's floor before
-  the rigid box is captured; a refusal in formulation names a helper by its reducer.
+  provenance; stage 06 states the definition over them (a row per group for SUM/AVG on the
+  sides the clauses push, an extremum link for MIN/MAX). A helper's floor is free
+  (`FoldSingletonRows` marks it written) before the rigid box is captured, so a bound a
+  clause folds into its box stands, and the static domain check skips it: a helper holds a
+  reducer's value, negative wherever its terms are. A refusal in formulation names a helper
+  by its reducer.
 
 ---
 
@@ -528,8 +531,10 @@ marked `avg_scale` are divided by the number of rows the reducer reads in the ro
 | a reducer's own `when` | further, only the rows it keeps |
 | a reducer's own `per` | further, one row per class (the de-duplication above) |
 
-In the objective the two-level form's classes are the groups. A class no row reads is no
-group, so no denominator is zero.
+In the objective, an AVG read in place from a nest (`sum(per k: avg(e) by (k))`, D81)
+divides each row by its `avg_group_key` group's count among the rows it reads; any other
+objective AVG by the rows it reads. A group no row reads is no group, so no denominator is
+zero.
 
 Quadratic AVG terms scale their inner linear coefficients by `1/√N`, so the
 resulting outer product is scaled by `1/N`.
@@ -648,9 +653,8 @@ it is not immediately using, and nothing here re-selects.
 
 **Only two constructs choose between two emitters.** `<>` does not choose: it is emitted once, as conditional rows, and
 `LowerDecideConstructs` turns those into Big-M rows where the backend cannot state a
-condition. Every MIN/MAX — a constraint, a flat objective, a two-level objective, an
-outer aggregate over groups or group sums, a composed term and a MIN/MAX helper of the
-value rewrite — goes through one
+condition. Every MIN/MAX — a constraint, a flat objective, a composed term and a MIN/MAX
+helper of the value rewrite, a nested reducer's among them — goes through one
 `EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
 where the two formulations are genuinely different objects rather than projections of
 one description: see [`../06_model_formulation/done.md`](../06_model_formulation/done.md)
@@ -717,7 +721,7 @@ and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). The hand-off happ
 early: `solver_input.constraints` is populated as soon as bounds are resolved, and
 the linearization passes then work on it in place.
 
-The MIN/MAX objective (flat and two-level) and the composed MIN/MAX clauses are
+The MIN/MAX objective and the composed MIN/MAX clauses are
 emitted by stage 06, not here. What stays is the evaluation they need — a composed
 term's per-row coefficients, the query-wide factor on a reducer, its filter mask,
 the constant RHS, and the objective's member rows. The evaluated terms travel to stage 06 as

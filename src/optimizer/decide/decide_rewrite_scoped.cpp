@@ -20,8 +20,10 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -126,17 +128,17 @@ struct Helpers {
 	LogicalDecide &decide;
 	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
 
-	//! The link holding `agg` over the rows `scope` keeps, or INVALID_INDEX.
-	idx_t Find(const BoundAggregateExpression &agg, const DecideEnclosingScope &scope) const {
-		auto when = scope.Condition();
+	//! The link holding `agg` over `rows` grouped by `group_key` -- its path's (language/guide.md §5.5) --, or
+	//! INVALID_INDEX.
+	idx_t Find(const BoundAggregateExpression &agg, const Expression *rows, idx_t group_key) const {
 		for (idx_t i = 0; i < reducers.size(); i++) {
 			auto &link = decide.reducer_value_links[i];
-			if (!reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
+			if (link.group_key != group_key || !reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
 				continue;
 			}
 			// A clause's rows carry copies of its `when`: the same condition.
-			const bool same_when = when ? link.when && link.when->Equals(*when) : !link.when;
-			if (same_when) {
+			const bool same_rows = rows ? link.when && link.when->Equals(*rows) : !link.when;
+			if (same_rows) {
 				return i;
 			}
 		}
@@ -172,14 +174,20 @@ void RefuseFractionalStep(const BoundAggregateExpression &agg, const DecideSourc
 }
 
 //! Replace the reducer at `site` by its helper decision: the clause's existing one for a
-//! repeated occurrence, else a new one, recording what it holds. `outer` is the push of the side the reducer
-//! stands in: the comparison's, or the objective's sense.
-void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const DecideEnclosingScope &scope,
-                    ExtremumPush outer, idx_t source_clause_id, const ReducerSite &site) {
+//! repeated occurrence, else a new one, recording what it holds. The reducers inside its
+//! argument are replaced first, each by a helper keyed by its path (language/guide.md §5.5), so that what the
+//! helper holds is affine in helpers, decisions and data. `outer` is the push of the side the reducer stands in: the
+//! comparison's, the objective's sense, or for a nested one its reader's.
+void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const BooleanDecisions &booleans,
+                    const DecideReducerPath &path, ExtremumPush outer, idx_t source_clause_id,
+                    const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
-	auto label = RenderDecideReducer(agg, names);
+	const bool extremum = agg_name == "min" || agg_name == "max";
+	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
+	// reducers inside it become helpers.
+	auto plan_label = RenderDecideSource(agg, names);
 	// Which side pins the helper is the one the row would otherwise let it escape through
 	// (the epigraph form; the Plaisted-Greenbaum polarity of DefineNonlinearReducerBodies). Under
 	// `<=` a positive term is pushed down, so a MAX needs its envelope (`value >= member`) and a
@@ -193,16 +201,40 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	const bool need_envelope = push == ExtremumPush::NONE || easy;
 	const bool need_closing = push == ExtremumPush::NONE || !easy;
 
+	// A member of a SUM or AVG is pushed as the helper is, through the sign it carries in the argument; a member of a
+	// MIN or MAX is pinned from both sides (D79).
+	vector<ReducerSite> nested;
+	if (!agg.children.empty()) {
+		CollectReducerSites(agg.children[0], 1, helpers.context, decide.decide_index, booleans, nested);
+	}
+	auto below = path.Below(agg);
+	for (auto &inner : nested) {
+		// The binder refuses a decision times a reducer inside a reducer (D80).
+		D_ASSERT(!inner.under_decision);
+		ReplaceReducer(helpers, names, booleans, below, extremum ? ExtremumPush::NONE : push, source_clause_id,
+		               inner);
+	}
+	// Among nested reducers every one is a helper, so none is summed in place: a square or product of decisions in
+	// its body would make the helper's definition quadratic (D80). DefineNonlinearReducerBodies has named such a
+	// body by now wherever a constraint, or a MIN or MAX of the objective, reads it.
+	if ((!path.keys.empty() || !nested.empty()) &&
+	    !DecideExpressionDegree(*agg.children[0], decide.decide_index).IsLinear()) {
+		throw BinderException("DECIDE: '%s' squares or multiplies decisions inside nested reducers, which is not "
+		                      "supported yet",
+		                      plan_label);
+	}
+
+	// Read once the reducers inside it are helpers, each whole-numbered when its value is.
 	const bool whole = DecideValueIsWholeNumbered(agg, decide.decide_index);
 
-	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included.
-	auto plan_label = RenderDecideSource(agg, names);
-	idx_t group_key = DConstants::INVALID_INDEX;
-	TryParseGroupKeyTag(agg.alias, group_key);
+	// It reads the rows its path keeps, grouped by its path key: for a reducer at the top, the clause's kept rows by
+	// its own `by` key.
+	auto rows = path.Rows();
+	const idx_t group_key = FindOrCreateDecidePathKey(path.KeysOf(DecideReducerGroupKey(agg)), decide.keys);
 	auto account_kind = group_key == DConstants::INVALID_INDEX
 	                        ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER
 	                        : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP;
-	idx_t link_idx = helpers.Find(agg, scope);
+	idx_t link_idx = helpers.Find(agg, rows.get(), group_key);
 	if (link_idx != DConstants::INVALID_INDEX) {
 		auto &link = decide.reducer_value_links[link_idx];
 		link.need_envelope = link.need_envelope || need_envelope;
@@ -222,24 +254,24 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 
 	LogicalDecide::ReducerValueLink link;
 	link.agg_name = agg_name;
-	link.label = label;
+	// Its columns are named by the reducer it holds, `by` included: a refusal's remedy bounds that (F6).
+	link.label = plan_label;
 	link.group_key = group_key;
 	TryParseQualifiedReducerTag(agg.alias, link.qualifier_scope_idx);
 	link.inner_expr = agg.children[0]->Copy();
 	if (agg.filter) {
 		link.filter = agg.filter->Copy();
 	}
-	if (scope.Condition()) {
-		link.when = scope.Condition()->Copy();
-	}
+	link.when = std::move(rows);
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
 	link_idx = decide.reducer_value_links.size();
 
 	// The helper decision: whole-numbered when the reducer's value is, so a strict bound on
-	// the rewritten row still steps on the integer lattice; a query-wide decision for `by ()`,
-	// else one instance per group of the `by` key among the rows the clause keeps -- a
-	// scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
+	// the rewritten row still steps on the integer lattice; a query-wide decision when its
+	// path key is `by ()` throughout, else one instance per group of that key among the rows
+	// its path keeps -- a scope of its own (KeyedScopeInfo::value_link), which execution
+	// builds from the link.
 	auto var_scope = DecideVarScopeInfo::Global();
 	if (link.group_key != DConstants::INVALID_INDEX) {
 		KeyedScopeInfo helper_scope;
@@ -257,6 +289,55 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	helpers.reducers.push_back(agg.Copy());
 	ReplaceWithDecision(helpers.context, decide, link.value_var, *site.slot);
 	decide.reducer_value_links.push_back(std::move(link));
+}
+
+//! `sum([when c] per K: inner([when c'] e) by (G))` in the objective, `inner` a SUM or AVG with no `per` and no
+//! reducer inside, every element of K in G: each G group is one member, so the sum of the members is `inner` read
+//! over every group, `c` joined to `c'`. Written so, the objective sums -- or averages per G group -- `e` itself, a
+//! square included, which a helper could not define linearly (D81). Replaces the reducer at `slot` and returns true;
+//! false when it is not that shape.
+bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_ptr<Expression> &slot) {
+	auto &outer = slot->Cast<BoundAggregateExpression>();
+	idx_t qualifier;
+	if (!StringUtil::CIEquals(outer.function.name, "sum") || outer.children.size() != 1 ||
+	    DecideReducerGroupKey(outer) != DConstants::INVALID_INDEX ||
+	    !TryParseQualifiedReducerTag(outer.GetAlias(), qualifier) || qualifier >= decide.keyed_scopes.size()) {
+		return false;
+	}
+	auto *body = UnwrapDecideCasts(*outer.children[0], decide.decide_index);
+	if (body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	auto &inner = body->Cast<BoundAggregateExpression>();
+	idx_t inner_qualifier;
+	const bool sum_or_avg =
+	    StringUtil::CIEquals(inner.function.name, "sum") || StringUtil::CIEquals(inner.function.name, "avg");
+	if (!sum_or_avg || inner.children.size() != 1 || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
+	    TryParseQualifiedReducerTag(inner.GetAlias(), inner_qualifier)) {
+		return false;
+	}
+	auto &by = DecideKeyElements(decide.keys, DecideReducerGroupKey(inner));
+	for (auto &element : DecideKeyElements(decide.keys, decide.keyed_scopes[qualifier].key)) {
+		bool in_by = false;
+		for (auto &part : by) {
+			in_by = in_by || part.Grouping().Equals(element.Grouping());
+		}
+		if (!in_by) {
+			return false; // a G group holding two classes of K would be counted twice
+		}
+	}
+	auto inlined = inner.Copy();
+	auto &reducer = inlined->Cast<BoundAggregateExpression>();
+	if (outer.filter && reducer.filter) {
+		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		both->children.push_back(outer.filter->Copy());
+		both->children.push_back(std::move(reducer.filter));
+		reducer.filter = std::move(both);
+	} else if (outer.filter) {
+		reducer.filter = outer.filter->Copy();
+	}
+	slot = BoundCastExpression::AddCastToType(context, std::move(inlined), outer.return_type);
+	return true;
 }
 
 } // namespace
@@ -303,10 +384,14 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
 		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, booleans, sites);
+		DecideReducerPath path;
+		if (scope.Condition()) {
+			path.conditions.push_back(scope.Condition());
+		}
 		for (auto &site : sites) {
 			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index,
 			                     cmp.type);
-			ReplaceReducer(helpers, names, scope, ExtremumPushOf(cmp.type), source_clause_id, site);
+			ReplaceReducer(helpers, names, booleans, path, ExtremumPushOf(cmp.type), source_clause_id, site);
 		}
 		HandProductsToBilinear(cmp.left, cmp.GetAlias());
 		// One row per class from here on: the shape tag has done its work.
@@ -319,8 +404,10 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	}
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
-	// takes a helper decision the same way. The push is the sense times the term's sign, as for the body definitions.
-	// A reducer no decision multiplies stays in the objective as it is.
+	// takes a helper decision the same way, and so does a reducer that holds a reducer, the canonicalizer's tag on it
+	// (D81), unless it is a sum of group sums read in place; every reducer inside it takes one keyed by its path. The
+	// push is the sense times the term's sign, as for the body definitions. A reducer no decision multiplies and none
+	// nests in stays in the objective as it is.
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		auto *body = &objective;
@@ -333,15 +420,24 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			scope = EnterDecideScope(conjunction, scope);
 			body = &conjunction.children[0];
 		}
-		if (HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG)) {
-			vector<ReducerSite> sites;
-			CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, booleans, sites);
-			const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
-			for (auto &site : sites) {
-				if (site.under_decision) {
-					ReplaceReducer(helpers, names, scope, outer, DConstants::INVALID_INDEX, site);
-				}
+		const bool products = HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG);
+		vector<ReducerSite> sites;
+		CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, booleans, sites);
+		DecideReducerPath path;
+		if (scope.Condition()) {
+			path.conditions.push_back(scope.Condition());
+		}
+		const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
+		for (auto &site : sites) {
+			const bool nest = HasDecideTag((*site.slot)->GetAlias(), VALUE_REWRITE_TAG);
+			if (nest && !site.under_decision && InlineSumOfGroupSums(decide, optimizer.context, *site.slot)) {
+				continue;
 			}
+			if (nest || (products && site.under_decision)) {
+				ReplaceReducer(helpers, names, booleans, path, outer, DConstants::INVALID_INDEX, site);
+			}
+		}
+		if (products) {
 			HandProductsToBilinear(*body, OBJECTIVE_ROW_TAG);
 		}
 		decide.SetObjective(optimizer.context, std::move(objective));

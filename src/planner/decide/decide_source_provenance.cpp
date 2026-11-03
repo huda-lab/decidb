@@ -784,67 +784,6 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
-DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
-                                        const vector<KeyedScopeInfo> &keyed_scopes) {
-	DecideTwoLevelParts parts;
-	parts.body = per.children[0].get();
-	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-	    IsWhenFilterWrapper(parts.body->Cast<BoundConjunctionExpression>())) {
-		auto &wrapper = parts.body->Cast<BoundConjunctionExpression>();
-		parts.when = WrittenWhen(wrapper, fragments, keyed_scopes);
-		parts.body = wrapper.children[0].get();
-	}
-	parts.key = RenderDecidePerKey(per, fragments);
-	return parts;
-}
-
-string RenderDecideTwoLevelInner(const string &inner, const string &key) {
-	return inner + " by (" + key + ")";
-}
-
-string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, const string &inner) {
-	return outer_name + "(per " + key + ": " + inner + ")";
-}
-
-//! The two-level objective `outer(per k: inner(e) by (k))`, which binds to the nested
-//! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k: rendered as written
-//! when the wrapper still holds the nested reducer, else null.
-static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per,
-                                                  const vector<string> &fragments,
-                                                  const vector<KeyedScopeInfo> &keyed_scopes) {
-	auto parts = SplitDecideTwoLevel(per, fragments, keyed_scopes);
-	if (parts.body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
-	auto &outer = parts.body->Cast<BoundAggregateExpression>();
-	if (outer.children.size() != 1 || outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
-	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
-	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], fragments, keyed_scopes);
-	auto inner_text =
-	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
-	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
-	                         RenderDecideTwoLevelOuter(StringUtil::Lower(outer.function.name), parts.key, inner_text));
-}
-
-//! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
-//! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
-//! inner value per class); null when the body is not a single reducer.
-static unique_ptr<string> RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
-	auto parts = SplitDecideTwoLevel(per, names.fragments, names.keyed_scopes);
-	if (parts.body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
-	auto &inner = parts.body->Cast<BoundAggregateExpression>();
-	auto ctx = ContextOf(names);
-	ctx.print_by = false; // the `by` is the per key, written once below
-	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], ctx);
-	return make_uniq<string>(
-	    (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
-	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key));
-}
-
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                      const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids,
@@ -853,26 +792,6 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 	auto &keyed_scopes = names.keyed_scopes;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsTwoLevelObjectiveWrapper(conj)) {
-			const auto front = ScopeQualifier(scope, fragments, keyed_scopes);
-			auto two_level = RenderTwoLevelObjective(conj, fragments, keyed_scopes);
-			if (two_level) {
-				PushClause(out, out_source_ids, *two_level, DConstants::INVALID_INDEX);
-				return;
-			}
-			// The two-level objective after its rewrite: the inner reducer, once per class,
-			// written in front, with the `by` the form fixes to its `per` key.
-			auto inner = RenderTwoLevelInner(conj, names);
-			if (inner) {
-				PushClause(out, out_source_ids, AppendQualifier(FrontQualifier(front), *inner),
-				           DConstants::INVALID_INDEX);
-				return;
-			}
-			auto keyed = scope;
-			keyed.per_wrapper = &conj;
-			CollectExpressionStrings(*conj.children[0], names, out, sources, out_source_ids, keyed);
-			return;
-		}
 		// A clause's `when c per K:` prints in front. A plain AND is the constraint list itself, so each child is its
 		// own clause.
 		auto inner = EnterDecideScope(conj, scope);
@@ -1120,12 +1039,6 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::EXTREMUM_PINNED:
 		became = "an extremum column pinned by indicator rows";
 		break;
-	case Kind::EXTREMUM_PER_GROUP:
-		became = "an extremum column per group";
-		break;
-	case Kind::EXTREMUM_PER_GROUP_PINNED:
-		became = "an extremum column per group pinned by indicator rows";
-		break;
 	case Kind::NOT_EQUAL:
 		became = "two conditional rows with an indicator";
 		break;
@@ -1140,9 +1053,6 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 		break;
 	case Kind::EXTREMUM_NATIVE:
 		became = "an extremum column stated to the solver natively";
-		break;
-	case Kind::EXTREMUM_PER_GROUP_NATIVE:
-		became = "an extremum column per group stated to the solver natively";
 		break;
 	case Kind::VARIANTS:
 		return account.subject;

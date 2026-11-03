@@ -232,10 +232,12 @@ TOO_LARGE = [
         "MINIMIZE sum(x) + max(x + b + b)",
         "1e308",
     ),
+    # A nested objective's group sums are a helper decision (D81), which serves every clause that reads its reducer:
+    # it names the reducer as written.
     (
-        "group_sums_of_a_two_level_objective",
+        "group_sums_of_a_nested_objective",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 MINIMIZE max(per g: sum(b * y) by (g))",
-        "MINIMIZE max(per g: sum(b * y) by (g))",
+        "sum(b * y) by (g)",
         "1e308",
     ),
 ]

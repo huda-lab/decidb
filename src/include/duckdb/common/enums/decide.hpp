@@ -235,16 +235,9 @@ static constexpr const char *POSTFIX_WHEN_TAG = "__when_constraint__";
 static constexpr const char *POSTFIX_PER_TAG = "__per_constraint__";
 
 //! The bound form of a `when c:` in front of a constraint or the objective: a conjunction whose child 0 is the body
-//! and child 1 the condition. The body reads only the rows where the condition is true.
+//! and child 1 the condition. The body reads only the rows where the condition is true. A nested objective is a nested
+//! reducer (D81).
 static constexpr const char *WHEN_FILTER_TAG = "__when_filter__";
-
-//! The bound form of the two-level objective, `outer(per k: inner(e) by (k))`: a conjunction whose child 0 is the
-//! objective `outer(inner(e))`, keyed on k (PER_KEY_TAG_PREFIX). A constraint's `per K:` is PER_CLASS_TAG.
-static constexpr const char *TWO_LEVEL_OBJECTIVE_TAG = "__two_level_objective__";
-
-inline bool IsTwoLevelObjectiveTag(const string &alias) {
-	return HasDecideTag(alias, TWO_LEVEL_OBJECTIVE_TAG);
-}
 
 //! Tag used by the parser to mark the colon form, `sum(D: expr)`: children[0] is the
 //! aggregate, children[1..] the relation names before the colon. The binder consumes
@@ -343,7 +336,7 @@ inline string MakeGroupKeyTag(idx_t group_key_idx, idx_t text_fragment = DConsta
 	       (text_fragment == DConstants::INVALID_INDEX ? string() : "_" + to_string(text_fragment)) + "__";
 }
 
-//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG, TWO_LEVEL_OBJECTIVE_TAG):
+//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG):
 //! "__per_key_<i>__" indexes LogicalDecide::keys. No tag means `per ()`: one class.
 static constexpr const char *PER_KEY_TAG_PREFIX = "__per_key_";
 

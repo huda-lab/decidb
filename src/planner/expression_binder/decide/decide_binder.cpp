@@ -233,11 +233,16 @@ struct ScopePlacement {
 	const case_insensitive_map_t<idx_t> &variables;
 	//! Inside a reducer's argument.
 	bool in_reducer = false;
-	//! The objective's two-level form: its one inner reducer is allowed.
-	bool two_level = false;
+	//! Inside the argument of a reducer over decisions.
+	bool in_decision_reducer = false;
 	//! Under a `*` or `/` that holds a decision: a reducer over data alone there scales the
 	//! decision, a coefficient ValidateDecideNoNonLinearScalar refuses with its remedy.
 	bool scales_a_decision = false;
+	//! Inside a reducer whose `when`, `per` or `by` chooses the rows a reducer below reads
+	//! (its path, language/guide.md §5.5), or below one that does.
+	bool path_keeps_rows = false;
+	//! Directly under a `by (...)` with a key, or the colon form's relations.
+	bool under_by = false;
 };
 } // namespace
 
@@ -259,7 +264,9 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		for (idx_t i = 1; i < func.children.size(); i++) {
 			ValidateScopeData(*func.children[i], placement.variables);
 		}
-		ValidateScopePlacement(*func.children[0], placement);
+		auto reducer_placement = placement;
+		reducer_placement.under_by = func.children.size() > 1;
+		ValidateScopePlacement(*func.children[0], reducer_placement);
 		return;
 	}
 	if (IsDecideScopeMarker(expr)) {
@@ -271,22 +278,68 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		throw BinderException(expr, "DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope "
 		                            "in front of the constraint or inside a reducer");
 	}
-	bool reducer = !func.is_operator &&
-	               (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm"));
-	if (reducer && placement.in_reducer && !placement.two_level &&
-	    !(placement.scales_a_decision && !ExpressionContainsDecideVariable(expr, placement.variables))) {
-		throw BinderException(expr, "DECIDE: an aggregate inside an aggregate is not supported yet");
+	// Every reducer, `count` among them: one over data alone added inside a reducer over
+	// decisions is the refusal below, whatever its kind.
+	bool reducer = TakesReducerBy(func);
+	const bool reads_decision = ExpressionContainsDecideVariable(expr, placement.variables);
+	// What a reducer inside another may not stand under (D80), each rewritten before the
+	// value rewrite reads the path, so the inner reducer would lose the enclosing `when`
+	// and `by`: an ABS, a norm, and a product with a decision.
+	if (!func.is_operator && !func.children.empty() && ContainsDecideAggregate(*func.children[0]) &&
+	    ExpressionContainsDecideVariable(*func.children[0], placement.variables)) {
+		if (StringUtil::CIEquals(func.function_name, "norm")) {
+			throw BinderException(expr, "DECIDE: a reducer inside norm is not supported yet");
+		}
+		if (StringUtil::CIEquals(func.function_name, "abs") && placement.path_keeps_rows) {
+			throw BinderException(expr, "DECIDE: abs over a reducer inside another reducer is not supported yet: %s",
+			                      expr.ToString());
+		}
 	}
-	if (func.is_operator && (func.function_name == "*" || func.function_name == "/") &&
-	    ExpressionContainsDecideVariable(expr, placement.variables)) {
+	if (placement.in_reducer && func.is_operator && func.function_name == "*") {
+		for (idx_t i = 0; i < func.children.size(); i++) {
+			// A reducer over decisions: one over data alone scaling a decision is the
+			// coefficient ValidateDecideNoNonLinearScalar refuses with its remedy.
+			if (!ContainsDecideAggregate(*func.children[i]) ||
+			    !ExpressionContainsDecideVariable(*func.children[i], placement.variables)) {
+				continue;
+			}
+			for (idx_t j = 0; j < func.children.size(); j++) {
+				if (j != i && ExpressionContainsDecideVariable(*func.children[j], placement.variables)) {
+					throw BinderException(expr,
+					                      "DECIDE: '%s' multiplies a reducer by a decision; only data can scale a "
+					                      "reducer",
+					                      expr.ToString());
+				}
+			}
+		}
+	}
+	// A reducer nests in another to any depth (language/guide.md §5.5), with two exceptions
+	// (D80): a norm, and a reducer over data alone in the argument of one over decisions --
+	// unless it scales a decision there, a coefficient ValidateDecideNoNonLinearScalar
+	// refuses with its remedy.
+	if (reducer && placement.in_reducer && StringUtil::CIEquals(func.function_name, "norm")) {
+		throw BinderException(expr, "DECIDE: norm inside a reducer is not supported yet");
+	}
+	if (reducer && placement.in_decision_reducer && !reads_decision && !placement.scales_a_decision) {
+		throw BinderException(expr,
+		                      "DECIDE: %s(...) over data alone inside a reducer over decisions is not supported yet; "
+		                      "compute it in a subquery, or reduce it outside",
+		                      func.function_name == "count_star" ? string("count")
+		                                                         : StringUtil::Lower(func.function_name));
+	}
+	if (func.is_operator && (func.function_name == "*" || func.function_name == "/") && reads_decision) {
 		placement.scales_a_decision = true;
 	}
 	auto inner = placement;
 	if (reducer) {
-		// The two-level objective allows the outer reducer's one inner reducer, no deeper.
-		inner.two_level = placement.two_level && !placement.in_reducer;
 		inner.in_reducer = true;
+		inner.in_decision_reducer = reads_decision;
+		inner.scales_a_decision = false;
+		inner.path_keeps_rows = placement.path_keeps_rows || placement.under_by || scoped_argument;
 	}
+	inner.under_by = false;
+	// The colon form's relations keep one row of each class, as a `per` does.
+	placement.under_by = IsDecideMarker(expr, QUALIFIED_REDUCER_TAG);
 	for (idx_t i = 0; i < func.children.size(); i++) {
 		auto &child =
 		    i == 0 && scoped_argument ? PeelScopeSpelling(*func.children[0], placement.variables) : *func.children[i];
@@ -297,43 +350,11 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	}
 }
 
-bool IsTwoLevelObjective(const ParsedExpression &body) {
-	const ParsedExpression *outer = &body;
-	if (IsDecideMarker(*outer, REDUCER_BY_TAG)) {
-		auto &by = outer->Cast<const FunctionExpression>();
-		if (by.children.size() != 1) {
-			return false;
-		}
-		outer = by.children[0].get();
-	}
-	if (!IsScopedReducerCall(*outer)) {
-		return false;
-	}
-	auto &outer_call = outer->Cast<const FunctionExpression>();
-	if (outer_call.children.size() != 1 || !IsDecideMarker(*outer_call.children[0], SCOPE_PER_TAG)) {
-		return false;
-	}
-	auto &per = outer_call.children[0]->Cast<const FunctionExpression>();
-	if (per.children.size() < 2) {
-		return false;
-	}
-	// `outer(when c per k: inner(e) by (k))` is the same form with a `when` the binder
-	// refuses by name.
-	auto *inner = per.children[0].get();
-	if (IsDecideMarker(*inner, SCOPE_WHEN_TAG)) {
-		inner = inner->Cast<const FunctionExpression>().children[0].get();
-	}
-	return IsDecideMarker(*inner, REDUCER_BY_TAG) &&
-	       IsScopedReducerCall(*inner->Cast<const FunctionExpression>().children[0]);
-}
-
 static void ValidateScopeClause(const ParsedExpression &clause, const case_insensitive_map_t<idx_t> &variables,
                                 bool objective) {
 	auto &body = PeelScopeSpelling(clause, variables);
 	// Every clause follows the scope rules (D30).
-	ScopePlacement placement {variables};
-	placement.two_level = objective && IsTwoLevelObjective(body);
-	ValidateScopePlacement(body, placement);
+	ValidateScopePlacement(body, ScopePlacement {variables});
 }
 
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
@@ -1307,11 +1328,11 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg, "POWER(..., 2)");
 			}
 			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" || func_name_lower == "avg") {
-				// Nested aggregates (the two-level objective `sum(per k: max(e) by (k))`) are allowed.
-				// The optimizer will detect and rewrite them.
+				// A nested reducer (language/guide.md §5.5): its body is held to the rule of any reducer's.
 				if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
-					has_decide_variable = true;
-					return true;
+					auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children[0]));
+					return ValidateSumArgumentInternal(body, variables, has_decide_variable, error_msg,
+					                                   allow_quadratic);
 				}
 				error_msg = StringUtil::Format("Nested %s() inside DECIDE expression must reference a DECIDE variable",
 				                               StringUtil::Upper(func_name_lower));
@@ -1338,6 +1359,11 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				return false;
 			}
 			return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg, "expr ** 2");
+		}
+		if (func.function_name == REDUCER_BY_TAG || func.function_name == QUALIFIED_REDUCER_TAG) {
+			// A nested reducer's `by (G)` or relation qualifier: the reducer is the first child.
+			return ValidateSumArgumentInternal(*func.children[0], variables, has_decide_variable, error_msg,
+			                                   allow_quadratic);
 		}
 		if (func_name_lower == "-") {
 			for (auto &child : func.children) {

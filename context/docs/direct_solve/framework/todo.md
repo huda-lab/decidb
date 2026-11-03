@@ -27,13 +27,15 @@ solver path answers those queries, so none of them is wrong, only slower.
 - Never without the owner: large-tier benchmarks or other long CPU-bound runs, regenerating goldens before reading the
   diff, pushing, new branches or worktrees, `git stash`.
 
-## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
+## H-06 — Nested reducers, the objective's `outer(per k: inner(e) by (k))` among them
 
-- **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. `ReadObjective`
-  (`direct_ir.cpp`) declines on `IsTwoLevelObjectiveWrapper`. The nested-reducer reading (`DirectPart::inner` in
-  `ReadReducer`) exists, but no query reaches it: the binder rejects a nested reducer anywhere else.
-- **Change.** Read the two-level objective into the IR through the nested-reducer reading.
-- **Done when.** `test_decidb_direct_ir.cpp`, "declines a two-level objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
+- **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. A reducer nests in another to any depth
+  (D81, `../../language/guide.md` §5.5), and the solver path holds every level in a helper decision. `ReadObjective`
+  (`direct_ir.cpp`) declines an objective holding one (`HoldsValueRewrite`, the canonicalizer's `VALUE_REWRITE_TAG`
+  on the nest); a constraint holding one is a VALUE-shape clause (H-08). The nested-reducer reading
+  (`DirectPart::inner` in `ReadReducer`) is reached only by such a constraint, already not proved.
+- **Change.** Read a nest into the IR through the nested-reducer reading.
+- **Done when.** `test_decidb_direct_ir.cpp`, "declines a nested objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
 - **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
   reached only by an IR test, so it was removed; this task waits for A2–A4 (`../todo.md`).
 

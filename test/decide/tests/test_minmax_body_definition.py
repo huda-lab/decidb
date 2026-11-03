@@ -611,7 +611,7 @@ _REFUSAL_CASES = [
         "x(REAL)",
         "x <= 7",
         "MINIMIZE max(per id: sum(power(x, 2)) by (id))",
-        "'sum(power(x, 2))' squares or multiplies decision variables inside a MIN or MAX",
+        "'sum(power(x, 2)) by (id)' squares or multiplies decision variables inside a MIN or MAX",
     ),
 ]
 

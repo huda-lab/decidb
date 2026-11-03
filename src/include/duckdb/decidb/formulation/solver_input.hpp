@@ -658,13 +658,6 @@ struct SolverInput {
     };
     vector<BilinearObjectiveTerm> bilinear_objective_terms;
 
-    // The two-level objective's grouping (mirrors constraint row_group_ids pattern)
-    vector<idx_t> objective_row_group_ids; // per-row group assignment
-    idx_t objective_num_groups = 0;        // 0 = ungrouped
-    //! CSR-style group→rows index for objectives (mirrors EvaluatedConstraint).
-    vector<idx_t> objective_group_offsets;
-    vector<idx_t> objective_group_row_ids;
-
     // Global auxiliary variables (exist once, not replicated per row)
     // Appended after the per-row grid at indices num_rows * num_decide_vars + i
     idx_t num_global_vars = 0;

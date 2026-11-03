@@ -34,7 +34,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D44 | A NULL class in DIAGNOSE's `group` column prints bare `NULL`; a relation key's values print as SQL literals, so the string `'NULL'` is quoted |
 | D45 | Every column prints as the user wrote it (`S.cap`, `cap`), at every stage: the binder cuts its spelling and tags the bound reference |
 | D46 | The scope enum is `ROW / KEYED / GLOBAL` with its values kept, DIAGNOSE's label is `keyed`, and a tag is named for its job: a parser marker for the spelling it marks, a bound wrapper for what it means |
-| D47 | A clause's scope is one `DecideClauseScope`, read through one walker step (`EnterDecideScope`); the two-level objective is split once (`SplitDecideTwoLevel`) |
+| D47 | A clause's scope is one `DecideClauseScope`, read through one walker step (`EnterDecideScope`) |
 | D50 | `DECIDE scalar cap` and `DECIDE lineitem.x` (no type) get the removed-spelling error, naming a typed declaration; `per (): cap` gets "needs a type" |
 | D51 | `SCALAR` is an unreserved keyword, used only by the error rule; `scalar` is an ordinary identifier |
 | D52 | The paper's Figure 1 query runs (`test_reduced_bound_data_column.py`) |
@@ -59,7 +59,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D77 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
 | D78 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range over decisions is a helper decision per window, a timeline or a position on one |
 | D79 | A nested MIN/MAX is pinned on the side its readers push it through SUM and AVG levels, and on both sides under any other reader |
-| D80 | Stays refused, each by name: `norm` inside a reducer and a reducer inside `norm`, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone (`count` included) added inside one over decisions, inside a reducer a reducer times a decision and `abs` over a reducer on a path that keeps rows; a frame in `when`/`per`/`by`/`within`/an order key, a reducer or frame inside a frame's payload, a square or product of decisions in it, a frame term times a decision |
+| D80 | Stays refused, each by name: `norm` inside a reducer and a reducer inside `norm`, a square or product of decisions inside nested reducers that no body definition names first (one a constraint or an objective's MIN/MAX reads is defined; the objective's direct sums of group sums are read in place), a reducer over data alone (`count` included) added inside one over decisions, inside a reducer a reducer times a decision and `abs` over a reducer on a path that keeps rows; a frame in `when`/`per`/`by`/`within`/an order key, a reducer or frame inside a frame's payload, a square or product of decisions in it, a frame term times a decision |
 | D81 | The two-level objective (D2) keeps its spelling and loses its special path: it is a nested reducer |
 | D82 | A frame is a signature field by its keys (deck p. 99): its timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached; not by the value it reads |
 | D83 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |

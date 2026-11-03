@@ -385,8 +385,7 @@ static void VerifyExtremumBodiesLinear(LogicalDecide &decide) {
 	auto is_extremum_agg = [](ObjectiveAggregateType agg) {
 		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
 	};
-	if (decide.decide_objective && (is_extremum_agg(decide.flat_objective_agg) ||
-	                                is_extremum_agg(decide.per_inner_agg) || is_extremum_agg(decide.per_outer_agg))) {
+	if (decide.decide_objective && is_extremum_agg(decide.flat_objective_agg)) {
 		std::function<void(const Expression &)> bodies = [&](const Expression &expr) {
 			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 				for (auto &child : expr.Cast<BoundAggregateExpression>().children) {

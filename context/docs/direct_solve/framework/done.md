@@ -20,7 +20,7 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   checks the plan must run (`row_checks`: the bound-side rewrite's value checks). A key element that is NULL puts its row in no group (D5), except a relation column, where
   NULL is a value. Parts the binder admits and no rule models are *not proved*, and building the IR never throws:
   `norm(e, 0)` (it needs indicator variables), any norm tag the front end does not expect, a `per K:` in front of a
-  per-row clause, a clause whose reducer value became a helper decision, the two-level objective and an objective with
+  per-row clause, a clause whose reducer value became a helper decision, an objective holding a nested reducer and an objective with
   a variant signature (it is produced once, D72, which only the DECIDE operator checks) are not-proved parts; a
   reducer's own `per` whose body has variants (a keyed scope with a signature, D71, which only the DECIDE operator
   numbers) makes the whole IR not proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
@@ -299,7 +299,7 @@ asks the solver's own question about which values a bound admits and which bound
   `default` arms of the `ExpressionType` switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the
   extension-name check in late materialization's `VisitForAdapters`, which keeps an operator of another extension from
   being cast to the adapter. The other three are the nested-reducer reading in `ReadReducer` (`DirectPart::inner`),
-  which no query reaches until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans run from
+  which only a VALUE-shape clause, already not proved, reaches (`todo.md` H-06). The keyed S1 and R1 plans run from
   queries in the S1 and R1 suites, and from an IR against the solver with NULL-key rows (`test/common/
   test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a query reaches it and a test runs it; a
   check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,

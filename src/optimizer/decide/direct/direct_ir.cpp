@@ -17,6 +17,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
@@ -442,6 +443,19 @@ private:
 	// Objective
 	//===--------------------------------------------------------------------===//
 
+	//! Whether `expr` holds a reducer the canonicalizer tagged for the value rewrite: one holding a reducer (D81).
+	static bool HoldsValueRewrite(const Expression &expr) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG)) {
+			return true;
+		}
+		bool holds = false;
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+			holds = holds || HoldsValueRewrite(child);
+		});
+		return holds;
+	}
+
 	void ReadObjective(DirectIRObjective &objective) const {
 		objective.sense = decide.decide_sense;
 		objective.offset = decide.objective_constant_offset;
@@ -451,9 +465,8 @@ private:
 		}
 		auto index = decide.decide_index;
 		const Expression *body = UnwrapDecideCasts(*decide.decide_objective, index);
-		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-		    IsTwoLevelObjectiveWrapper(body->Cast<BoundConjunctionExpression>())) {
-			// No rule models the two-level objective `outer(per k: inner(e) by (k))` yet.
+		if (HoldsValueRewrite(*body)) {
+			// No rule models the helper decision a nested reducer becomes (D81).
 			MarkNotProved(objective.status);
 			return;
 		}

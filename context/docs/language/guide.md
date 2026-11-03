@@ -270,7 +270,7 @@ backends take doubles, so every value ends up there.
 MAXIMIZE sum(ship)                                         -- produced once: per () implied
 MAXIMIZE when S.priority: sum(ship)                        -- over the priority rows
 MINIMIZE sum(S.unit_cost * ship) + sum(per D: D.opening_cost * open)
-MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
+MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (§5.5)
 ```
 
 - **Produced once.** No `per` means `per ()`; any other `per` is a parse error.
@@ -285,10 +285,12 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
   - A factor on a reducer must be one value over the kept rows (§5).
 - **`by` on a top-level reducer** must be one group over the kept rows: `by ()`, or a `Γ` with one value there
   (`MAXIMIZE when g = 'A': sum(x) by (g)`).
-- **Two-level form** `outer(per k: inner(e) by (k))`, the whole objective: `inner` once per class of `k` (NULL a
-  class), then `outer` over those values. All nine `SUM`/`MIN`/`MAX` pairs; `k` may list several columns. It takes a
-  `when` in front, not inside; the inner reducer takes no `per`; the `by` key must be the `per` key; an outer `AVG` is
-  refused, since `sum` over the classes ranks solutions the same way.
+- **Nested reducers** (§5.5) work in the objective as in a constraint. The two-level form `outer(per k: inner(e) by
+  (k))` (D2) is one of them (D81): `inner` once per class of `k` (a row whose `k` is NULL is in none, D5), then
+  `outer` over those values. Any kind at either level, a `when` inside either, another `by` key, more levels, other
+  terms beside it and a factor on it all work. A `sum(per K: inner(e) by (G))` whose `K` lies in `G`, `inner` a `SUM`
+  or `AVG`, is the objective's own sum over the groups of `G`, so a square inside it stays a quadratic objective
+  (`MINIMIZE sum(per g: sum(power(x - t, 2)) by (g))` is a convex QP).
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
   and the Q matrix is non-singular). `-POWER(...)` under `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))`
   is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi.
@@ -434,6 +436,45 @@ Tests: `test/decide/tests/test_scope_reducer_inner.py`.
 | `per D.depotID: sum(ship) by (D.depotID) <= D.capacity` | one per depot | that depot's rows |
 | `ship <= D.maxShare * sum(ship) by (D.depotID)` | one per row | that row's depot |
 
+### 5.5 Reducers inside reducers — the path rule
+
+```sql
+-- each depot's largest shipment, summed over the depots (deck example 9)
+sum(per D.depotID: max(ship) by (D.depotID)) <= 50
+-- the running example (deck pp. 111-119): per depot, the regional sum of each customer's
+-- largest shipment, plus 10% of the mode's demand
+per t.id: sum(when t.p per t.cid: max(ship) by (t.cid)) by (t.rid) + 0.10 * sum(t.d) by (t.m) <= t.c
+-- three levels
+per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by (t.g) <= t.cap
+```
+
+- **Any depth, any kind**: `SUM`, `AVG`, `MIN` and `MAX` nest to any depth, with `when`, `per` and `by` at every
+  level, on either side of a constraint and in the objective. `count` nests over data only.
+- **The path rule.** A nested reducer reads, at the row it stands for, the kept rows that every enclosing reducer's
+  own `when` keeps and that agree with that row on every enclosing `by` key and on its own. In `sum(max(x) by (g)) by
+  (h)` the inner maximum is one per `(h, g)` pair, not one per `g` across the `h` groups. Those keys together are the
+  reducer's **path key**. A row whose path key holds a NULL is in no group (D5): the reducer has no value there.
+- **Members.** An enclosing reducer receives one value per row it reads, or one per class and variant of its own
+  `per` (§5.3, §7.1); `AVG` divides by the values it receives. A group of the path key that the inner `when` keeps no
+  row of has no value, and the reducer around it skips that member (D68).
+- **Over data alone** a nest is a value, computed innermost first on the bound side as any data reducer:
+  `x <= avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`.
+- **How it is solved.** Every reducer of a nest over decisions is a helper decision (§6.4) keyed by its path, one
+  instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is
+  pinned on the side its readers push it, through `SUM` and `AVG` levels; under a `MIN` or `MAX`, on both (D79). So
+  the running example needs no Big-M: each inner `MAX` is pushed down, and its envelope alone holds it. A bound
+  written only at the root reaches an inner `MIN`/`MAX` that needs its closing side: in `per t.g: sum(max(x) by (t.g,
+  t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper's Big-M is read off the outer one's box.
+- **A square or product of decisions** inside a nest is defined first, where a constraint or a `MIN`/`MAX` of the
+  objective reads it: a helper per row at least (or at most) its value, the way the clause pushes it, which needs a
+  backend that states `MIN`/`MAX` natively when one reads it (Gurobi). Refused where a helper would have to hold it
+  with no such definition (D80): a nest of sums in the objective that is not read in place (§4).
+- **Refused** (D80): `norm` inside a reducer; a reducer over data alone added inside one over decisions (as a factor,
+  the coefficient rule of §5 refuses it); a reducer times a decision inside a reducer.
+
+Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, a grid of nests at depth 2 and 3, the bounds through a
+nest), `test_scope_objective.py` (the objective).
+
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
 ```sql
@@ -535,8 +576,8 @@ explicit, over `FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(
 | 7 | `per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity` | one per depot | its priority rows | `D.priorityCapacity` |
 | 8 | `per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)` | one per shipment | same depot and arrival day | the key |
 
-Example 7 has no constraint for a depot with no priority shipment (§5.3). Example 9 (nested reducers) is not in the
-language yet ([roadmap.md](roadmap.md)). Tests: `test/decide/tests/test_scope_deck_examples.py`.
+Example 7 has no constraint for a depot with no priority shipment (§5.3). Example 9 (nested reducers) is in §5.5.
+Tests: `test/decide/tests/test_scope_deck_examples.py`.
 
 ## 7. Variants, NULL and empty sets
 

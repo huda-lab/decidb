@@ -104,6 +104,7 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/unordered_set.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -177,6 +178,9 @@ struct DecideSignatures {
 
 class DecideCanonicalizer {
 public:
+	//! Whether `expr` holds a reducer anywhere, itself included.
+	static bool ContainsReducer(const Expression &expr);
+
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
 	//! still honored. Variable scopes remain available for homogeneity validation.
@@ -228,7 +232,7 @@ public:
 	void BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const;
 
 	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
-	//! second value -- and its qualified reducers', after CanonicalizeObjective. The two-level form has none.
+	//! second value -- and its qualified reducers', after CanonicalizeObjective.
 	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
@@ -421,7 +425,6 @@ private:
 	Placement Classify(const Expression &expr) const;
 
 	bool ReferencesDecideVar(const Expression &expr) const;
-	static bool ContainsReducer(const Expression &expr);
 	void ValidateCanonicalTree(const Expression &constraints) const;
 	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const;
 	void VerifyCanonicalTree(const Expression &constraints) const;
@@ -468,8 +471,8 @@ private:
 	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
 	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;
 	//! Gives every relation-qualified reducer over decisions in `expr` whose body has a field its signature and a
-	//! scope of its own. `rows` is the clause's `when`.
-	void SignQualifiedReducers(Expression &expr, const Expression *rows, Clause clause, idx_t source_clause_id,
+	//! scope of its own, counted over the rows its path keeps (language/guide.md §5.5).
+	void SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause, idx_t source_clause_id,
 	                           DecideSignatures &out) const;
 	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
 

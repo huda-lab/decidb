@@ -121,7 +121,7 @@ Grouped by who writes it:
 `variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
 reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
-constraint's `per K:` and the two-level objective's key -- is one entry, and keys with
+constraint's `per K:` and a nested reducer's path key -- is one entry, and keys with
 the same elements share it, whichever spelling wrote them (`FindOrCreateDecideKey`
 compares elements as a set). An entry holds the key as first written and its elements
 (`DecideKeyElement`: the bound expression, its name as a message prints it, and its
@@ -130,8 +130,8 @@ for one written on its own, which the written one keeps when both name it), sort
 by binding, then other expressions by text), and `written_as_by` when a `by` names it. The
 empty key (`per ()`, `by ()`) has no entry: it is `INVALID_INDEX`. A key holding
 a subquery is recognised by its text instead, since bound subqueries do not compare. Tags
-name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG` or
-`TWO_LEVEL_OBJECTIVE_TAG` wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
+name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG`
+wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
 `per ()`). The two tags differ so a walker that reads `by` keys never reads a `per` key.
 `keyed_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
 `per` (`KeyedScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
@@ -162,12 +162,12 @@ replaced -- the construct as a plan prints it and what it became, `RewriteAccoun
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
 never serialized),
 `reducer_value_links` (the value rewrite's helper
-decisions, one per occurrence of a reducer in a clause: each `ReducerValueLink` holds
-the reducer a helper replaced — kind, body, its own `when` and `per`, its `by` key, its
-SQL as a label — the clause's `when`, the MIN/MAX sides any row of the clause needs, the
-clause id and removal group; `inner_terms` are flattened with the prepared form),
-`flat_objective_agg` / `flat_objective_is_easy`, the five `per_*` fields of the
-two-level objective, the folded variable box, and the prepared linear form.
+decisions, one per reducer over one set of rows, shared by every clause that reads it:
+each `ReducerValueLink` holds the reducer a helper replaced — kind, body, its own `when`
+and `per`, its path key (its `by` key under every enclosing one), its SQL as a label —
+the rows its path keeps, and the sides any reader needs; innermost first, and
+`inner_terms` are flattened with the prepared form),
+`flat_objective_agg` / `flat_objective_is_easy`, the folded variable box, and the prepared linear form.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -350,8 +350,8 @@ The guarded suite passes every test.
 output, using `CollectDecideExpressionStrings` to print every clause in one style
 (D32): each clause as typed, the `when` and `per` wrappers as one qualifier in front (`when c per K:`), and the
 defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as written (`sum(D: x)`,
-D38). The two-level objective prints as `outer(per k: inner(e) by (k))`, a `when` in
-front of it, its key as written: `RenderDecidePerKey` reads the source fragment both
+D38). A nested reducer prints as written, `outer(per k: inner(e) by (k))`, a `when` in
+front of it, each key as written: `RenderDecidePerKey` reads the source fragment both
 binders record for a `per` key, falling back to the key columns' names, which
 `BindKeyColumns` made SQL text. A row the solver receives is left out where it reads as
 the clause above it. The renderers read the clause

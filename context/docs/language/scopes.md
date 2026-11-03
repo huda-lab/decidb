@@ -50,8 +50,8 @@ the clause the user wrote.
   same key scope as `sum(per D: e)` and adds `COLON_FORM_TAG`, which only affects how it prints. Tags are composable
   (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM rewrite.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
-  nothing. `BindTwoLevelObjective` binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a
-  `TWO_LEVEL_OBJECTIVE_TAG` wrapper (child 0 the objective) tagged with the key's entry.
+  nothing. `outer(per k: inner(e) by (k))` binds as any nested reducer (D81): `outer` qualified by `k`, `inner`
+  tagged with its `by` key.
 - `CASE WHEN` is refused with one message in every operand and term (`ValidateDecideNoCase`, before any binder
   classifies a shape); a `when` condition, a key and a `by` key are SQL over the rows and accept one.
 
@@ -104,14 +104,16 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 ## Optimizer
 
-- `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes.
-- `RewriteMinMaxObjective` (`decide_rewrite_minmax.cpp`) reads the two-level wrapper into `per_inner_*` /
-  `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::two_level_key`. An inner
-  `MIN`/`MAX` emits linking rows only for rows with a nonzero coefficient; a group with none has its auxiliary pinned
-  to 0.
+- `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes. It also takes
+  nested reducers (guide §5.5): the canonicalizer gives a clause that holds a nest the VALUE shape, and tags the
+  outermost reducer of each nest in the objective (`TagNestedObjectiveReducers`, D81). Every reducer of a nest becomes
+  a helper decision keyed by its path key (`DecideReducerPath`, `FindOrCreateDecidePathKey`), innermost first, over
+  the rows its path keeps; a member of a `MIN`/`MAX` is pinned from both sides (D79). The objective's `sum(per K:
+  inner(e) by (G))` with `K` in `G` is read in place instead (`InlineSumOfGroupSums`).
 - `RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) turns every reducer on a bound into a side-table column of
   the source, grouped by its `by` key over the rows the clause keeps, and reduces a varying bound to its group's
-  tightest value (keeping every value for `<>`).
+  tightest value (keeping every value for `<>`). A reducer nested in a bound's reducer is recorded first, grouped by
+  its path key over the rows its path keeps, and the reducer around it reads its column.
 - Rows a rewrite adds for a clause (`IN`, `ABS`, `norm` L0) keep the clause's `when`.
 
 ## Execution
@@ -133,14 +135,14 @@ In `src/execution/operator/decide/physical_decide.cpp`:
   The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
 - The prepared model (`decide_prepared_model.hpp`) carries a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
-  (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition` and
-  `two_level_key`. Each key is an index into `LogicalDecide::keys`.
+  (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition`; an objective
+  AVG read in place divides by the groups of its `avg_group_key`. Each key is an index into `LogicalDecide::keys`.
 
 ## Rendering
 
 `CollectDecideExpressionStrings` (`decide_source_provenance.cpp`) walks the wrappers, building the front qualifier
-from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`), which read the cut text. `RenderTwoLevelObjective`
-prints the two-level form; `RenderReducer` prints a reducer's own scope and `by`. See [explain.md](explain.md).
+from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`), which read the cut text. `RenderReducer` prints a
+reducer's own scope and `by`, at every level of a nest. See [explain.md](explain.md).
 
 ## Scale
 

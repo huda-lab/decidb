@@ -41,7 +41,7 @@ class Optimizer;
 //!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
-//!     or SUM+indicator, handles objectives (flat and two-level)
+//!     or SUM+indicator, handles a MIN/MAX objective
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
 //!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
@@ -136,9 +136,12 @@ private:
 	//! The value rewrite (language/guide.md §6.4): every decision reducer of a
 	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
 	//! once per `by` group (LogicalDecide::reducer_value_links), and the comparison is then
-	//! one row per class. Runs after ABS and bilinear, whose auxiliaries may stand inside a
-	//! reducer's body, and before the MIN/MAX passes, which never see these reducers. A
-	//! product of decisions left inside such a reducer is refused (language/errors.md §2).
+	//! one row per class. A reducer nested in it becomes one too, innermost first, keyed by
+	//! its path (language/guide.md §5.5); so does every objective reducer the canonicalizer
+	//! tagged for holding one, which the objective then reads once (D81). Runs after ABS and
+	//! bilinear, whose auxiliaries may stand inside a reducer's body, and before the MIN/MAX
+	//! passes, which never see these reducers. A product of decisions left inside such a
+	//! reducer is refused (language/errors.md §2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
@@ -161,8 +164,8 @@ private:
 
 	//! Rewrite MIN/MAX aggregates in constraints and objectives.
 	//! Constraints: easy cases (MAX<=K, MIN>=K) keep the reducer, tagged, and bound each
-	//! member; hard cases create an extremum column. Objectives: detect the flat and the
-	//! two-level form, set metadata, rewrite to SUM.
+	//! member; hard cases create an extremum column. Objectives: detect a MIN/MAX objective,
+	//! set metadata, rewrite to SUM (a nested one is a helper decision by now, D81).
 	void RewriteMinMax(LogicalDecide &decide);
 
 	//! Top-level constraint-side MIN/MAX rewrite
@@ -175,7 +178,6 @@ private:
 	                               DecideEnclosingScope scope = DecideEnclosingScope());
 
 	//! Objective-side MIN/MAX detection and rewriting.
-	//! Handles the flat and the two-level objective.
 	void RewriteMinMaxObjective(LogicalDecide &decide);
 	//! The tree half of RewriteMinMaxObjective, split out so the objective can be
 	//! detached, rewritten, and reinstalled through LogicalDecide::SetObjective. It

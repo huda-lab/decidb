@@ -21,7 +21,7 @@ rewrite cannot follow from a gap in the front end. A decline carries no reason: 
 
 Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm,
 a `per K:` in front of a per-row clause, a clause whose reducer value became a helper decision
-(`VALUE_REWRITE_TAG`), the two-level objective and an objective with a variant signature (produced once, D72, which
+(`VALUE_REWRITE_TAG`), an objective holding a nested reducer (D81) and an objective with a variant signature (produced once, D72, which
 the DECIDE operator checks). A reducer's own `per` whose body has variants (`KeyedScopeInfo::signature`, D71) makes the
 whole IR not proved; every scope check the bound-side rewrite appends is a row check the plan makes.
 The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison

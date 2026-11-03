@@ -48,7 +48,7 @@ from S1, which counts `BOOL` decisions.
 
 | Shape | Why |
 |---|---|
-| An objective with a `when`, a `per` or a two-level reducer | Not a separable value per row. |
+| An objective with a `when`, a `per` or a nested reducer | Not a separable value per row. |
 | Budget clauses with different `when`s | Two budgets have no single price per unit. |
 | A decision that is not `REAL`, or not row-scoped | `BOOL` and `INT` cannot fill part of an item. |
 | A per-row constraint that reads two decisions, or an objective product of two decisions | It links items, so they are no longer separate in the ranking. |

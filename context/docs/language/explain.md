@@ -66,8 +66,8 @@ verbatim (`__source_clause_0__`).
 **The style** (D32): quoted text as typed; written text with reducers, `norm` and keywords in lower case; the
 `when c per K:` qualifier in front; a
 reducer's own scope inside it and its `by (G)` after it; keys as written (`per D.depotID`), never as binding indexes;
-the defaults `per row:` and `by ()` not printed; the colon form kept as `sum(D: e)` (D38); the two-level objective
-printed whole.
+the defaults `per row:` and `by ()` not printed; the colon form kept as `sum(D: e)` (D38); a nested reducer printed
+as written, its own scope and `by` at every level.
 
 **Casts by authorship.** `TagDecideSourceFragments` records the written spelling of every cast and scalar subquery
 before binding. A tagged node replays its own SQL; an untagged one, which the binder added, is dropped. So
@@ -80,7 +80,6 @@ before binding. A tagged node replays its own SQL; an untagged one, which the bi
 |---|---|
 | `PER_CLASS_TAG` (`per K:`) | add `per K`, key as written (`PerClassQualifier`); recurse |
 | `WHEN_FILTER_TAG` (`when c:`) | add `when c` in front (`WhenQualifier`); recurse |
-| `TWO_LEVEL_OBJECTIVE_TAG` (two-level objective) | print it whole (`RenderTwoLevelObjective`) |
 | `AND` | recurse into each child |
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
 | leaf | the cut text (else `RenderDecideSource`), quoted with its qualifier by `QuoteWrittenClause` |

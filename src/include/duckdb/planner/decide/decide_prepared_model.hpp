@@ -43,6 +43,10 @@ struct DecideTerm {
 	int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
 	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+	//! An objective AVG's `by` key, into LogicalDecide::keys: it divides each row by
+	//! its group's count, not the objective's (a nested `sum(per k: avg(e) by (k))`, D81).
+	//! INVALID_INDEX for one group.
+	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	LinearTermReduction reduction = LinearTermReduction::NONE;
 	//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
 	//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
@@ -190,11 +194,8 @@ struct DecideConstraint {
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
-	//! The two-level form's key (index into LogicalDecide::keys); INVALID_INDEX for none.
-	idx_t two_level_key = DConstants::INVALID_INDEX;
-	//! The objective reads only the rows its `when` keeps, its two-level form's key puts
-	//! a row whose written key is NULL in no class, and a term beside its reducers counts once, read on the first
-	//! kept row.
+	//! The objective reads only the rows its `when` keeps, and a term beside its reducers
+	//! counts once, read on the first kept row.
 
 	//! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
 	//! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
@@ -213,6 +214,7 @@ struct DecideObjective {
 		int sign = 1;                       // +1 or -1
 		unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+		idx_t avg_group_key = DConstants::INVALID_INDEX; //!< as DecideTerm's
 		//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
 		//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
 		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity

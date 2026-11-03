@@ -248,8 +248,10 @@ private:
 		if (a.variable_index == DConstants::INVALID_INDEX || a.variable_index != b.variable_index) {
 			return false;
 		}
+		// `avg_group_key` too: an inlined `sum(per K: avg(e) by (G))` divides by each G
+		// group's size, another AVG of the same decision by the whole relation's.
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
-		    a.qualifier_scope_idx != b.qualifier_scope_idx) {
+		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.avg_group_key != b.avg_group_key) {
 			return false;
 		}
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {
@@ -928,6 +930,7 @@ private:
 		}
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
+		idx_t avg_group_key = is_avg ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;
 
 		idx_t before = obj.terms.size();
 		idx_t bilinear_before = obj.bilinear_terms.size();
@@ -935,16 +938,19 @@ private:
 		ExtractLinearAndBilinearTerms(*agg.children[0], obj, sign, agg.filter.get());
 		for (idx_t i = before; i < obj.terms.size(); i++) {
 			obj.terms[i].avg_scale = is_avg;
+			obj.terms[i].avg_group_key = avg_group_key;
 			obj.terms[i].qualifier_scope_idx = qualifier_scope;
 			obj.terms[i].reduction = LinearTermReduction::SUM;
 		}
 		for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
 			obj.bilinear_terms[i].avg_scale = is_avg;
+			obj.bilinear_terms[i].avg_group_key = avg_group_key;
 			obj.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
 			obj.bilinear_terms[i].reduction = LinearTermReduction::SUM;
 		}
 		for (idx_t i = squared_before; i < obj.squared_terms.size(); i++) {
 			obj.squared_terms[i].avg_scale = is_avg;
+			obj.squared_terms[i].avg_group_key = avg_group_key;
 			obj.squared_terms[i].qualifier_scope_idx = qualifier_scope;
 		}
 	}
@@ -952,18 +958,7 @@ private:
 	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr) {
 		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
 
-		// DeciDB: Check for PER wrapper on objective (outermost layer)
-		idx_t two_level_key = DConstants::INVALID_INDEX;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsTwoLevelObjectiveWrapper(conj) && !conj.children.empty()) {
-				// `per ()` groups nothing: the objective is read once.
-				two_level_key = PerWrapperKey(conj);
-				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
-			}
-		}
-
-		// DeciDB: Check for WHEN wrapper on objective (inside PER, if present)
+		// DeciDB: Check for WHEN wrapper on objective
 		unique_ptr<Expression> when_cond;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
@@ -991,30 +986,32 @@ private:
 			ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1, agg.filter.get());
 			bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 			idx_t qualifier_scope = QualifierScopeOf(agg);
+			idx_t avg_group_key = is_avg ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;
 			for (idx_t i = before; i < objective->terms.size(); i++) {
 				objective->terms[i].avg_scale = is_avg;
+				objective->terms[i].avg_group_key = avg_group_key;
 				objective->terms[i].qualifier_scope_idx = qualifier_scope;
 				objective->terms[i].reduction = LinearTermReduction::SUM;
 			}
 			for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
 				objective->bilinear_terms[i].avg_scale = is_avg;
+				objective->bilinear_terms[i].avg_group_key = avg_group_key;
 				objective->bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
 				objective->bilinear_terms[i].reduction = LinearTermReduction::SUM;
 			}
 			for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
 				objective->squared_terms[i].avg_scale = is_avg;
+				objective->squared_terms[i].avg_group_key = avg_group_key;
 				objective->squared_terms[i].qualifier_scope_idx = qualifier_scope;
 			}
 
 			objective->when_condition = std::move(when_cond);
-			objective->two_level_key = two_level_key;
 		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
 			objective = make_uniq<DecideObjective>();
 			ExtractAggregateObjectiveTerms(*expr, *objective);
 			objective->when_condition = std::move(when_cond);
-			objective->two_level_key = two_level_key;
 		}
 	}
 

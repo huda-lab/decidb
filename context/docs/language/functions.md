@@ -106,12 +106,12 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   auxiliary and walker as composed constraints; the sense plays the comparison's role. A keyed reducer inside keeps
   its de-duplication (`ComposedMinMaxTerm::qualifier_scope_idx`); for `MIN`/`MAX` that is a no-op, applied anyway so
   there is one code path.
-- **Quadratic inner in the two-level form**: `sum(per g: sum(power(x - t, 2)) by (g))` reaches the QP extractor
-  intact, since nothing expands it before binding. A `MIN`/`MAX` over a squared body is modelled as a sum of squares —
-  a known wrong answer (`../issues/bugs.md`).
+- **Quadratic inner in a nested objective**: `sum(per g: sum(power(x - t, 2)) by (g))` is read in place as the
+  objective's own sum (D81), so it reaches the QP extractor intact. A `MIN`/`MAX` over a squared body reads a helper
+  per row defined by it (`DefineNonlinearReducerBodies`), Gurobi only.
 - **Linear objectives** become the `c` vector; a `when` in front zeroes other rows' coefficients, a reducer's own
   `when` zeroes only its term's. Additive constants accumulate on `LogicalDecide::objective_constant_offset`.
-- Code: `decide_objective_binder.cpp` (`BindScopedObjective`, `BindTwoLevelObjective`); `AnalyzeObjective` and
+- Code: `decide_objective_binder.cpp` (`BindScopedObjective`); `AnalyzeObjective` and
   `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`).
 
 ## Reducers
@@ -129,7 +129,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   fractional value: the AVG→SUM rewrite skips an `AVG` with no decision. Tests: `test_cons_rhs_aggregate.py`.
 - **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The optimizer
   rewrites it to `SUM` tagged `AVG_REWRITE_TAG`; execution scales linear and bilinear coefficients by `1/n` and
-  quadratic inner terms by `1/√n`. In the two-level objective, `avg` inside scales each row by `1/n_g`. Flat
+  quadratic inner terms by `1/√n`. In a nested objective read in place, `avg` inside scales each row by `1/n_g`. Flat
   `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so `AVG(a) + SUM(b)` is
   not `SUM(a) + SUM(b)`. Tests: `test_avg.py`.
 - **`MIN`/`MAX`.** The inner expression is any linear combination plus a constant (`max((cost + 1) * x)`,

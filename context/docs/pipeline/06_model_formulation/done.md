@@ -569,11 +569,10 @@ rather than answering a comparison.
 
 Every MIN/MAX in the model is the same statement: some auxiliary column equals the
 extremum of a family of linear expressions. `EmitExtremumLink()` is the only thing
-that writes one, and `ExtremumLinkSpec` is the only description of one. Six sites
-feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, the
-two-level objective's `z_g` per class, the outer `w` over those or over group sums, each
-composed term's `z_k`, and a MIN/MAX helper of the value rewrite per group. None writes
-a formulation by hand.
+that writes one, and `ExtremumLinkSpec` is the only description of one. Four sites
+feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, each
+composed term's `z_k`, and a MIN/MAX helper of the value rewrite per group, a nested
+reducer's among them. None writes a formulation by hand.
 
 A link has **two independent sides**, and which of them the surrounding model already
 supplies is a property of the *site*, not of the construct:
@@ -601,8 +600,8 @@ is underivable and there is therefore no Big-M at all.
 
 A member stage 05 defined for a non-linear body (`max(power(x, 2))`) is a helper column
 with no box (`../05_optimizer/done.md`, "Non-linear reducer bodies"), so its family is
-always underivable and every extremum over it takes the native arm, the outer extremum of a
-two-level objective over defined inner members included. `ExtremumArgumentColumn` hands the
+always underivable and every extremum over it takes the native arm, an extremum over a
+nested helper defined over such members included. `ExtremumArgumentColumn` hands the
 helper itself to the general constraint (a sole column), so no pinned copy is added. Stage
 05 refuses such a query on a backend with no native MIN/MAX, so the lowering arm never meets
 one.
@@ -712,9 +711,21 @@ the instance box (`InstanceBox` with `reach` set); the `<>` range collapse keeps
 view (`InstanceBox` default) and never reads a reach. A member may be an ABS
 auxiliary, a product with a helper (`b * sum(x)`) or hold one, so when a model has helpers
 `FormulateModel` alternates `DeriveBilinearAuxiliaryBounds` and `DeriveAbsAuxiliaryBounds`
-(neither refusing) with this derivation until no box moves — a reducer holds no reducer, so
-the chain is finite — and only then runs the two that refuse (a bilinear factor with no
-ceiling names the unbounded member, not the helper). Each ABS derivation starts afresh
+(neither refusing) with this derivation and its backward half until no box moves, and only
+then runs the two that refuse (a bilinear factor with no ceiling names the unbounded member,
+not the helper). The backward half, `DeriveReducerMemberBounds`, lets a helper's box bound
+the helpers it is defined from (a nest, guide §5.5): each term of a SUM or AVG is at most the
+helper's top less every other term's floor where the definition states `value >= members`,
+at least its floor less every other's top where it states `value <= members`; a MAX's
+envelope keeps every member under its top, a MIN's over its floor. Repeated columns of one
+group are summed first (`CombineColumns`: `sum(t.w * max(x))` is `2m + m`), and one box
+covers every instance, so it tightens only when every instance was bounded, by the loosest.
+So a nested MIN/MAX whose closing side needs a Big-M finds one in a bound written only at the
+root (`per t.g: sum(max(x) by (t.g, t.h)) by (t.g) = 10`). Every derivation only tightens.
+The loop stops when no box moves; at the first box that crosses, which proves the model
+infeasible (the solver then reports it as for any empty box); or after twice as many passes
+as there are ABS, product and helper links plus one, a box still closing in by ever smaller
+steps then standing as it is. Each ABS derivation starts afresh
 (`range_unbounded` is reset), so a range open on one pass may close on the next.
 
 `LinearizeReducerValueLinks` then states each definition over the groups
@@ -737,9 +748,9 @@ for every other MIN/MAX.
 
 `LinearizeMinMaxObjective()` is the objective-side counterpart. A MIN/MAX
 objective cannot be a coefficient vector, so it becomes a global auxiliary the
-rows pin: `z` for the flat `MAXIMIZE max(e)`, and for the two-level
-`outer(per k: inner(e) by (k))` a `z_g` per class of `k` plus an outer `w` over
-them. The objective is then just that auxiliary.
+rows pin: `z` for the flat `MAXIMIZE max(e)`. A nested one,
+`outer(per k: inner(e) by (k))`, arrives as value helpers instead (D81), defined by
+`LinearizeReducerValueLinks` above. The objective is then just that auxiliary.
 
 Each level is *easy* or *hard*, and that classification is exactly which of the two
 sides of an extremum link the objective supplies for free. Easy (`MINIMIZE`+`MAX`,
@@ -750,20 +761,16 @@ envelope is free and the closing side is emitted instead. `M` is the global span
 the objective expression over the rows (`max_r exprmax - min_r exprmin`, constants
 included), which dominates `|z - expr_r|` at every row.
 
-This function builds members and specs; it emits nothing itself. All four of its links
-go through `EmitExtremumLink`, so which formulation each takes is decided once, in one
-place, by the rule described above — and a query cannot take the native arm for its
-inner aggregate and the lowered arm for its outer one, because all four read the same
-row family's derivability.
+This function builds members and specs; it emits nothing itself. Its link goes through
+`EmitExtremumLink`, so which formulation it takes is decided once, in one place, by the
+rule described above.
 
 The members are the rows the objective's reducer reads, `MinMaxObjectiveSpec::member_rows`
 (stage 08 folds the objective's `when` into the terms' filters), whatever their
-coefficients: a row whose data is 0 is the member 0, not an absent one, and every class of
-the two-level form, an all-zero one included, is a member of the outer link. A flat
+coefficients: a row whose data is 0 is the member 0, not an absent one. A flat
 objective with no member row reads no row, so it is NULL and dropped: the model keeps no
-objective term (D68). The shape flags (`flat_agg`, `per_inner_agg`,
-easy/hard per level, the inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`;
-the coefficients arrive evaluated.
+objective term (D68). The shape flags (`flat_agg`, easy or hard) arrive from stage 05 as
+`MinMaxObjectiveSpec`; the coefficients arrive evaluated.
 
 ### Composed MIN/MAX
 

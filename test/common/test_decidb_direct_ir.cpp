@@ -377,7 +377,7 @@ TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, ne
 	}
 }
 
-TEST_CASE("Direct-solve IR models products and squares, and declines a two-level objective", "[decidb]") {
+TEST_CASE("Direct-solve IR models products and squares, and declines a nested objective", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryIR products(con,
@@ -388,7 +388,7 @@ TEST_CASE("Direct-solve IR models products and squares, and declines a two-level
 	REQUIRE(constraints[0].degree == 2);
 	REQUIRE(constraints[1].lhs[0].terms[0].kind == DecideTermKind::SQUARE);
 
-	// No rule models `outer(per k: inner(e) by (k))` yet.
+	// No rule models the helper decision a nested reducer becomes (D81), `outer(per k: inner(e) by (k))` included.
 	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
 	REQUIRE(nested.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(nested.ir.objective.parts.empty());
