@@ -464,6 +464,7 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(118, "order_name", order_name);
 	serializer.WritePropertyWithDefault<idx_t>(119, "partition_key", partition_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<string>(120, "partition_subject", partition_subject);
+	serializer.WritePropertyWithDefault<string>(121, "reducer", reducer);
 }
 
 DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
@@ -489,6 +490,7 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<string>(118, "order_name", result.order_name);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(119, "partition_key", result.partition_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<string>(120, "partition_subject", result.partition_subject);
+	deserializer.ReadPropertyWithDefault<string>(121, "reducer", result.reducer);
 	return result;
 }
 

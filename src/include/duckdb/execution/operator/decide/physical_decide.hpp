@@ -382,8 +382,14 @@ private:
     void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                    const vector<KeyedMapping> &keyed_mappings) const;
+	//! A range frame's helper (`link.frame`), into `out`: one group per window that reads something, read at its
+	//! anchor; a member per row the window reads, and one for its `else` where a position is missing
+	//! (language/guide.md §5.6).
+	void EvaluateFrameLink(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+	                       ChunkExprCache &chunk_expr_cache, const LogicalDecide::ReducerValueLink &link,
+	                       ReducerValueMembers &out) const;
 
-    //! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
+	//! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
     //! types and the column box, implied-bound propagation, the objective transfer with
     //! its qualifier de-duplication and AVG scaling, and the flat column space. Runs
     //! once per query: it moves the evaluated data off `gstate`, and the box it settles

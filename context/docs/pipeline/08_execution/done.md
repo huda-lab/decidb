@@ -283,6 +283,23 @@ well. A keyed decision read through a frame is absent where the selected row is 
 reads the selected row). A frame field of a signature (D82) splits by the frame's timeline, the anchor's peer when it
 reads relative to the anchor, and what a reached `else` reads, its data and its decisions' instances.
 
+A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
+one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- every
+row of every `every`-th position from its first end to its last, a cyclic position as often as it is visited (D76) --
+and counts its missing positions, each of which reads the `else` once; a position off a timeline that does not wrap
+is counted, never visited, so the work is O(values). One frame may list at most `decide_frame_limit` values (checked
+before the work that lists them; an interrupt is polled per timeline and per position). An anchor whose window reads
+nothing -- a reversed range, `all` meeting a missing position, no value at all -- is absent (`DecideFrameMap::absent`),
+and a frame the plan says cannot be absent (`DecideFrameSpec::MaySelectNothing`) that is, but for an anchor in no
+timeline, is an internal error. A range over data's `REDUCED` column runs the frame's own bound aggregate through its
+state functions over each window's values (`ReduceRangeValues`), so SQL's types and NULL handling hold: a NULL value
+is skipped, `count` counts the rest. A range over decisions is its helper decision's instances, one per window
+(`BuildKeyedMappings` reads the windows; an absent anchor is in no class), and its members are listed per window
+(`EvaluateFrameLink`): a member per row read, times its visits for SUM and AVG, one for the `else` times the missing
+positions, AVG dividing by the window's values. A value read as NULL -- a payload coefficient at a row, an `else`
+coefficient at the anchor -- is no member (`SkipDecideRangeNullReads`, before the windows are numbered), and a window
+left with none is absent.
+
 ## 4a. PHASE 1.6 — variants, and how a clause is read
 
 A scoped expression with a variant signature (stage 04, D70) is numbered by

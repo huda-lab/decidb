@@ -147,7 +147,7 @@ NULL at a selected row and inside a range, a NULL `within` key and a NULL inner 
 A `Case` holds the SQL in the language, the oracle statement, and what is computed by
 hand: the instances, the optimum, the error or the status, and small domains for
 enumeration. `Case.phase` is the first build step of the engine that runs the SQL (1
-variants, 2 nesting and 4 point frames run today; 5 range frames, 6 composition).
+variants, 2 nesting, 4 point frames and 5 range frames run today; 6 composition).
 `fixing_clauses` writes an assignment as `when t.id = 3: x = 2` clauses, and
 `decidb_feasible` reads DeciDB's verdict on the fixed query.
 
@@ -219,9 +219,9 @@ one group at a time. No test asserts an answer its docstring derives.
   EXPLAIN ANALYZE's variant count (silent without variants and under a plain EXPLAIN), and
   DIAGNOSE naming the variant it loosens (`a, 2`), by its row where two of a class share
   their values. Oracle, dump and pinned text.
-- **`test_anr_frames.py`** — frame selectors (guide §5.6). `TestSyntax`: every range
-  fixture of `_anr_cases` binds and stops at the one place that refuses ranges, a point
-  frame echoes as written, and every refusal of D80 names its construct. `TestPoint`:
+- **`test_anr_frames.py`** — frame selectors (guide §5.6). `TestSyntax`: a point and a
+  range echo as written, every refusal of D80 names its construct, and an AVG range under
+  `<>` is fractional. `TestPoint`:
   every point fixture (F19 and F21 aside, refused: a frame on the bound side of a group)
   on both solvers, judged by `_anr_oracle`, and F2's model pinned at its six columns and
   one row per instance (D78). `TestPointDeck`: the deck's examples 1, 4 and 5 and the
@@ -231,9 +231,19 @@ one group at a time. No test asserts an answer its docstring derives.
   dropping a member or skipping an instance (D84), a keyed decision with no class at the
   selected row, variants by position, timeline and fallback (D82), one payload per
   position (D73), the objective produced once (D72) and its term dropped where its frame
-  selects nothing, and the refusals not yet lifted. The parse errors, answers and the echo
-  are `test/decidb/test_frame_parser.test`'s (sqllogic; ordinary SQL windows, `AT TIME
-  ZONE` and `WITHIN GROUP` unchanged; a FROM-first query) and
+  selects nothing, and the refusals not yet lifted. `TestRange`: every range fixture, every
+  pair of six ends under both steps, each policy, open and cyclic (432 cases), each reducer
+  over data and over decisions in every push direction, a helper per window pinned in the
+  model dump, composition with ABS, `<>`, a reducer around the range, a data factor and a
+  point frame, the objective, a keyed payload and a decision `else`, variants under `per`,
+  laziness, NULL skipped (D84) and `count`, SQL types of a range over data; `TestRangeDeck`:
+  the deck's examples 2 and 6 under each policy; `TestRangeErrors` and `TestRangeReview`:
+  the refusals with their remedies, `count` over decisions, `decide_frame_limit`,
+  EXPLAIN's helper lines, DIAGNOSE, an infeasible model on both backends, fractional
+  helpers. The parse errors, answers and the echo are `test/decidb/test_frame_parser.test`'s
+  (sqllogic; ordinary SQL windows, `AT TIME ZONE` and `WITHIN GROUP` unchanged; a FROM-first
+  query), the absence predicates `test_decidb_frame_predicates.cpp`'s (every end, step,
+  policy and shape against every position on timelines of up to 10), and the round trips
   `test_decidb_plan_serialization.cpp`'s.
 - **`test_anr_nested.py`** — reducers nested to any depth (guide §5.5, D79-D81): the
   nesting fixtures of `_anr_cases` on both solvers, judged by `_anr_oracle`, an empty group

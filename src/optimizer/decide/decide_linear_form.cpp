@@ -120,9 +120,14 @@ public:
 			ExtractLinearTerms(*term.inner_expr, term.inner_terms);
 			RefuseComposedFrameRead(term);
 		}
-		// The reducers the value rewrite lifted into helper decisions, the same way.
+		// The reducers the value rewrite lifted into helper decisions, the same way; a range frame's helper also reads
+		// its `else`, at the window's anchor.
+		const BoundConstantExpression one(Value::INTEGER(1));
 		for (auto &link : op.reducer_value_links) {
 			ExtractLinearTerms(*link.inner_expr, link.inner_terms);
+			if (link.frame != DConstants::INVALID_INDEX) {
+				AppendFallbackTerms(link.frame, one, 1, link.fallback_terms);
+			}
 		}
 
 		// Group like terms, once, over every list that becomes a linear solver row.
@@ -143,6 +148,7 @@ public:
 		}
 		for (auto &link : op.reducer_value_links) {
 			CollectLikeTerms(link.inner_terms);
+			CollectLikeTerms(link.fallback_terms);
 		}
 
 		// Every frame left in an expression execution evaluates is over data -- a frame over
@@ -272,11 +278,16 @@ private:
 		column.value = value ? value->Copy() : nullptr;
 		column.type = value ? value->return_type : LogicalType::BOOLEAN;
 		auto &fallback = op.frames[frame].fallback;
-		if (kind == DecideFrameColumn::Kind::VALUE && fallback) {
-			// The binder gave payload and fallback one type (BindDecideFrame).
-			if (fallback->return_type != column.type) {
+		const bool reads_fallback = kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
+		if (reads_fallback && fallback) {
+			// The binder gave payload and fallback one type (BindDecideFrame): a point's value, a range's reducer
+			// argument.
+			auto &payload_type = kind == DecideFrameColumn::Kind::REDUCED
+			                         ? value->Cast<BoundAggregateExpression>().children[0]->return_type
+			                         : column.type;
+			if (fallback->return_type != payload_type) {
 				throw InternalException("DECIDE: %s reads a payload of type %s and an else of type %s",
-				                        op.frames[frame].text, column.type.ToString(),
+				                        op.frames[frame].text, payload_type.ToString(),
 				                        fallback->return_type.ToString());
 			}
 			column.fallback = fallback->Copy();
@@ -315,29 +326,18 @@ private:
 		if (frame >= op.frames.size() || !term.coefficient) {
 			throw InternalException("DECIDE: a frame marker names no frame of the plan");
 		}
-		auto &spec = op.frames[frame];
+		// A range over decisions became a helper decision before any rewrite (RewriteFrameRanges).
+		if (op.frames[frame].range) {
+			throw InternalException("DECIDE: a range frame over decisions reached term extraction: %s",
+			                        op.frames[frame].text);
+		}
 		auto &payload_terms = op.prepared.frame_payload_terms;
-		auto &fallback_decisions = op.prepared.frame_fallback_decisions;
 		payload_terms.resize(op.frames.size());
-		fallback_decisions.resize(op.frames.size());
-		auto append = [&](DecideSplitTerm &inner, DecideFrameColumn::Kind kind) {
-			if (inner.kind == DecideTermKind::UNKNOWN) {
-				ThrowUnknownTerm(inner);
-			}
-			if ((inner.kind != DecideTermKind::CONSTANT && inner.kind != DecideTermKind::LINEAR) ||
-			    !inner.coefficient) {
-				throw InternalException("DECIDE: %s reads a term that is not linear", spec.text);
-			}
-			auto slot = FrameColumnSlot(kind, frame, inner.coefficient.get());
-			auto column = FrameColumnRef(kind, frame, inner.coefficient.get());
-			out.push_back(DecideTerm(inner.var_a, ScaleFrameColumn(*term.coefficient, std::move(column)),
-			                         term.sign * inner.sign));
-			return slot;
-		};
 		// Every read of the frame extracts the same terms: the payload is recorded once.
 		const bool record = payload_terms[frame].empty();
 		for (auto &inner : term.inner) {
-			auto slot = append(inner, DecideFrameColumn::Kind::READ);
+			auto slot =
+			    AppendFrameColumnTerm(frame, DecideFrameColumn::Kind::READ, inner, *term.coefficient, term.sign, out);
 			if (inner.var_a != DConstants::INVALID_INDEX) {
 				out.back().frame_read = frame;
 			}
@@ -345,17 +345,61 @@ private:
 				payload_terms[frame].push_back(DecideFramePayloadTerm {inner.var_a, slot, inner.sign});
 			}
 		}
+		AppendFallbackTerms(frame, *term.coefficient, term.sign, out);
+	}
+
+	//! `factor * c * v` for the term `c * v` of frame `frame`'s payload or `else`, its coefficient `c` read through
+	//! the frame column of `kind`; the column's index.
+	idx_t AppendFrameColumnTerm(idx_t frame, DecideFrameColumn::Kind kind, DecideSplitTerm &inner,
+	                            const Expression &factor, int sign, vector<DecideTerm> &out) {
+		if (inner.kind == DecideTermKind::UNKNOWN) {
+			ThrowUnknownTerm(inner);
+		}
+		if ((inner.kind != DecideTermKind::CONSTANT && inner.kind != DecideTermKind::LINEAR) || !inner.coefficient) {
+			throw InternalException("DECIDE: %s reads a term that is not linear", op.frames[frame].text);
+		}
+		auto slot = FrameColumnSlot(kind, frame, inner.coefficient.get());
+		auto column = FrameColumnRef(kind, frame, inner.coefficient.get());
+		out.push_back(DecideTerm(inner.var_a, ScaleFrameColumn(factor, std::move(column)), sign * inner.sign));
+		return slot;
+	}
+
+	//! A frame's `else` as its terms, each read at the anchor -- its coefficient a FALLBACK column, 0 where no position
+	//! is missing -- each times `factor`, and its decisions recorded (DecidePreparedModel::frame_fallback_decisions).
+	//! Nothing for a frame with none.
+	void AppendFallbackTerms(idx_t frame, const Expression &factor, int sign, vector<DecideTerm> &out) {
+		auto &fallback_decisions = op.prepared.frame_fallback_decisions;
+		fallback_decisions.resize(op.frames.size());
+		auto &spec = op.frames[frame];
 		if (!spec.fallback) {
 			return;
 		}
 		vector<DecideSplitTerm> fallback;
 		splitter.SplitLinear(*spec.fallback, fallback);
 		for (auto &inner : fallback) {
-			append(inner, DecideFrameColumn::Kind::FALLBACK);
+			AppendFrameColumnTerm(frame, DecideFrameColumn::Kind::FALLBACK, inner, factor, sign, out);
 			auto &into = fallback_decisions[frame];
 			if (inner.var_a != DConstants::INVALID_INDEX &&
 			    std::find(into.begin(), into.end(), inner.var_a) == into.end()) {
 				into.push_back(inner.var_a);
+			}
+		}
+	}
+
+	//! What a signature keys each frame's reached `else` by (DecidePreparedModel::frame_fallback_columns): the
+	//! FALLBACK column of each of its terms, which the frame's own reading may already have registered
+	//! (FrameColumnSlot keeps each once).
+	void RecordFallbackColumns() {
+		auto &columns = op.prepared.frame_fallback_columns;
+		columns.assign(op.frames.size(), vector<idx_t>());
+		op.prepared.frame_fallback_decisions.resize(op.frames.size());
+		const BoundConstantExpression one(Value::INTEGER(1));
+		for (idx_t f = 0; f < op.frames.size(); f++) {
+			vector<DecideTerm> terms;
+			AppendFallbackTerms(f, one, 1, terms);
+			for (auto &term : terms) {
+				auto &ref = term.coefficient->Cast<BoundReferenceExpression>();
+				columns[f].push_back(ref.index - op.prepared.frame_column_base);
 			}
 		}
 	}
@@ -394,7 +438,11 @@ private:
 				                        op.frames[frame].text);
 			}
 			auto &marker = expr->Cast<BoundAggregateExpression>();
-			auto value = FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
+			// A point reads its payload at one row; a range reduces its payload's values, its `else` read where a
+			// position is missing.
+			auto value = op.frames[frame].range
+			                 ? FrameColumnRef(DecideFrameColumn::Kind::REDUCED, frame, &marker)
+			                 : FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
 			// The marker's parent was bound to the marker's type.
 			expr = BoundCastExpression::AddCastToType(context, std::move(value), marker.return_type);
 			return;
@@ -473,11 +521,12 @@ private:
 		}
 		for (auto &link : op.reducer_value_links) {
 			LowerFrames(link.inner_terms);
+			LowerFrames(link.fallback_terms);
 			LowerFrames(link.filter);
 			LowerFrames(link.when);
 		}
 		op.prepared.frame_payload_terms.resize(op.frames.size());
-		op.prepared.frame_fallback_decisions.resize(op.frames.size());
+		RecordFallbackColumns();
 	}
 
 	//===------------------------------------------------------------------===//

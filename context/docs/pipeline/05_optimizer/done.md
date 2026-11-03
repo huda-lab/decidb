@@ -179,10 +179,11 @@ one query. Neither changes the answer's optimum. Tests that compare models run o
 ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes
 below.
 
-`DecideOptimizer::OptimizeDecide` runs twelve passes, and the order is load-bearing:
+`DecideOptimizer::OptimizeDecide` runs thirteen passes, and the order is load-bearing:
 
 | # | Pass | Why here |
 |---|---|---|
+| 0 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before any rewrite copies the clause (below), so every later pass reads an ordinary keyed decision. |
 | 1 | `RewriteNorm` | Lowers L0 NORM markers to their indicator links and drops the display tag canonicalization left on desugared L1/L2/infinity norms, before later passes see them. |
 | 2 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
 | 3 | `TagAbsForBigM` | Marks the ABS nodes, in the constraints and the objective, that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
@@ -279,10 +280,14 @@ and NULL where it has none; `FALLBACK` is `c'` at a row whose position is missin
 payload's terms are recorded once per frame (`frame_payload_terms`, for D73), and the decisions its `else` reads
 (`frame_fallback_decisions`, for D82). `LowerFramesInPreparedModel` then replaces each frame left in an expression
 stage 08 evaluates -- a frame over data, in a coefficient, a bound, a filter -- by its `VALUE` column (the payload at
-the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type), and a
+the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type) or, for a
+range, its `REDUCED` column (the frame's reducer over the window's values), and a
 reducer's NULL test of a frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's
 `READ` and `FALLBACK` columns holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is refused
-here (`RefuseComposedFrameRead`): the composed formulation reads each term at its own row.
+here (`RefuseComposedFrameRead`): the composed formulation reads each term at its own row. A range over decisions reaches no term: it is a
+helper by now (§2, `RewriteFrameRanges`), whose link also reads the range's `else` as terms, each coefficient a
+FALLBACK column (`ReducerValueLink::fallback_terms`). What a signature reads of a reached `else` is recorded per frame
+(`frame_fallback_columns`).
 
 ### Like-term collection
 
@@ -826,6 +831,23 @@ objective are each detached, rewritten and reinstalled through `AddConstraint` a
 `SetObjective`, which canonicalize them again. Keeping the tag on
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
+
+### Range frames — `RewriteFrameRanges`
+
+A range over decisions, `agg(from F1 to F2 ...: e) over (...)` (`../../language/guide.md` §5.6, D78), is a reducer
+whose groups are the frame's **windows** -- the range several anchors share: one per timeline when neither end depends
+on the anchor, one per position (peer) otherwise. `decide_rewrite_frames.cpp` replaces each by a helper decision with
+one instance per window (a keyed scope of its own, `KeyedScopeInfo::value_link`, its key the frame's timeline key for a
+plan to name it by; stage 08 numbers the windows from the frame map) and a `ReducerValueLink` naming the frame, one per
+frame however many copies the clause holds. It goes through the value rewrite's door (`AddValueHelper`,
+`DecideHelperSides`): the helper's sides are read off the way its comparison pushes it, through `+`, `-`, data factors
+and enclosing SUM and AVG (`WalkPolarity`), both sides under a MIN, a MAX or a norm (D79). It runs first among the
+rewrites, so ABS, `norm`, `<>`, MIN/MAX and the value rewrite each read the helper as a keyed decision and the canonical
+shape stands. A reducer's own `when` keeps the copy of the range its NULL test holds (stage 04), which the linear form
+reads as the frame's DEFINED column. The value rewrite's helpers no longer stand at their own link's index
+(`Helpers::links`): a range's link comes first. A row a later rewrite adds for a range's helper stays one per row
+(`ScopeRowPerInstance`): no key's classes name its windows, and the rows of one window say the same. A range over data
+stays a value of the row, which the linear form makes one REDUCED column.
 
 ### Singleton-row folding — `FoldSingletonRows`
 

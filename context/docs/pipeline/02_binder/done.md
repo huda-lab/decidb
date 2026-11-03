@@ -601,10 +601,16 @@ whole payload), so a frame over data reads one value of that type, a DATE or a B
 binder refuses one (`ExpressionBinder`: *"DECIDE: a frame selector is not supported here: ..."*).
 
 Planning (`Binder::CreatePlan`, `plan_select_node.cpp`) plans the subqueries of every frame's order key and fallback
-with the clause's, then stops a query that holds a range before canonicalization, the first layer that would read
-one: *"DECIDE: a range frame selector is not supported yet: sum(from previous to next: x) over (t.period)"*. A point
-frame goes on: the canonicalizer places it after canonicalizing the tree (`PlaceFrames`, `PlaceObjectiveFrames`), and
-a frame no walk placed is an internal error.
+with the clause's; the canonicalizer then places every frame after canonicalizing the tree (`PlaceFrames`,
+`PlaceObjectiveFrames`), and a frame no walk placed is an internal error.
+
+A range's `else` is one of the values its reducer reads, so payload and `else` take one type, as a point's do, and the
+reducer is bound again over it (`BindFrameAggregate`, the catalog aggregate over a bound payload, a point's `first`
+too): `else 0.5` over a whole payload sums decimals, and the `else` takes the type the bound reducer reads, which its
+overload may widen (`sum` of a FLOAT reads a DOUBLE). The range's reducer name is recorded
+(`DecideFrameSpec::reducer`). A frame is a value of the row to the strict-comparison check
+(`DecideSideIsWholeNumbered`): whole when the type its payload and `else` share is, an AVG range never; and an AVG
+range is no AVG the `<>` hoist multiplies through (`IsBoundAvgAggregate`), so under `<>` it is refused as fractional.
 
 ## 5. Objective
 

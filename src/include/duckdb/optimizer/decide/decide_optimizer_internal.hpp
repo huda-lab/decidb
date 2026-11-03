@@ -54,7 +54,8 @@ unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string())
 unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const Expression *when);
 
 //! `row` once per instance of `scope`: under `per K:` for a scope keyed by K, under `per ():` for a query-wide one,
-//! and as it is for one per row. A row that reads only columns of `scope` is the same on every row of an instance.
+//! and as it is for one per row or for a range frame's helper, whose windows no key's classes name. A row that reads
+//! only columns of `scope` is the same on every row of an instance.
 unique_ptr<Expression> ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
                                            const DecideVarScopeInfo &scope);
 
@@ -124,6 +125,18 @@ void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDec
                        string subject);
 void AddRewriteAccount(LogicalDecide &decide, const string &clause_alias, LogicalDecide::RewriteAccount::Kind kind,
                        string subject);
+
+//! The sides a helper decision holding `agg_name` (a reducer, or a range frame's reducer) pushed `push` needs: its
+//! envelope (`value >= members` for SUM, AVG and MAX, the extremum link's envelope) when pushed its cheap way, its
+//! closing side the other way, both under NONE (ReducerValueLink::need_envelope, need_closing).
+void DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_envelope, bool &need_closing);
+
+//! The helper decision holding `link`'s value, appended to the plan's (LogicalDecide::reducer_value_links), its floor
+//! free: whole-numbered when `whole`; one instance per class of `scope` -- a copy of which becomes the helper's own,
+//! naming the link -- or one for the query when `scope` is null; named by `link.label` in a plan and a diagnosis, and
+//! under `account` in EXPLAIN for the clause `source_clause_id`. Returns the link's index.
+idx_t AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link, const KeyedScopeInfo *scope,
+                     bool whole, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind account);
 
 } // namespace decide_rewrite
 } // namespace duckdb

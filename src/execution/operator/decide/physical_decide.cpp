@@ -830,9 +830,9 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 			break;
 		case DecideSignatureFieldKind::FRAME: {
 			// Its timeline -- its anchor's position there, when it reads relative to the
-			// anchor --, and what its fallback reads where the anchor reaches it: its data (a
-			// frame over data's VALUE there, a frame over decisions' FALLBACK coefficients),
-			// and its decisions' instances (D82).
+			// anchor --, and what its fallback reads where the anchor reaches it: its terms'
+			// FALLBACK coefficients, and its decisions' instances (D82;
+			// DecidePreparedModel::frame_fallback_columns).
 			auto &frame = frames.frames[field.frame];
 			auto &map = frames.maps[field.frame];
 			classes.push_back(frame.Relative() ? &map.peer : &map.timeline);
@@ -842,14 +842,10 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 			auto &columns = frames.prepared.frame_columns;
 			vector<unique_ptr<Expression>> reached_columns;
 			vector<const Expression *> reached;
-			for (idx_t j = 0; j < columns.size(); j++) {
-				const bool fallback_data = columns[j].kind == DecideFrameColumn::Kind::VALUE ||
-				                           columns[j].kind == DecideFrameColumn::Kind::FALLBACK;
-				if (columns[j].frame == field.frame && fallback_data) {
-					reached_columns.push_back(
-					    make_uniq<BoundReferenceExpression>(columns[j].type, frames.prepared.frame_column_base + j));
-					reached.push_back(reached_columns.back().get());
-				}
+			for (auto j : frames.prepared.frame_fallback_columns[field.frame]) {
+				reached_columns.push_back(
+				    make_uniq<BoundReferenceExpression>(columns[j].type, frames.prepared.frame_column_base + j));
+				reached.push_back(reached_columns.back().get());
 			}
 			if (!reached.empty()) {
 				frame_classes.push_back(make_uniq<vector<idx_t>>());
@@ -1926,9 +1922,6 @@ static void ResolveGroupNames(const PerGroupCache &cache, DecideGlobalSinkState 
 			resolve(ec.group_names);
 		}
 	}
-	for (auto &link : gstate.evaluated_value_links) {
-		resolve(link.rows.group_names);
-	}
 	for (auto &set : gstate.class_sets) {
 		resolve(set.classes);
 	}
@@ -2277,6 +2270,24 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 		CheckDecideFramePartition(context, frame, gstate.frame_maps.back(), keys, per_group_cache, gstate.data,
 		                          num_rows, chunk_expr_cache);
 	}
+	// A range over decisions is a helper (RewriteFrameRanges) whose members skip the values its windows read as NULL,
+	// read before any window is numbered or listed: its payload's coefficients, and its `else`'s (FALLBACK columns).
+	for (auto &link : reducer_value_links) {
+		if (link.frame == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		vector<const Expression *> payload, fallback;
+		for (auto &term : link.inner_terms) {
+			payload.push_back(term.coefficient.get());
+		}
+		for (auto &column : prepared.frame_columns) {
+			if (column.frame == link.frame && column.kind == DecideFrameColumn::Kind::FALLBACK) {
+				fallback.push_back(column.value.get());
+			}
+		}
+		SkipDecideRangeNullReads(context, payload, fallback, gstate.frame_maps[link.frame], gstate.data, num_rows,
+		                         chunk_expr_cache);
+	}
 	AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, gstate.data, num_rows, chunk_expr_cache);
 }
 
@@ -2299,7 +2310,7 @@ vector<bool> PhysicalDecide::FramesPresent(const DecideGlobalSinkState &gstate, 
 		}
 		auto &map = gstate.frame_maps[f];
 		for (idx_t row = 0; row < num_rows; row++) {
-			present[row] = present[row] && !map.Missing(row);
+			present[row] = present[row] && !map.Absent(row);
 		}
 	}
 	return present;
@@ -2316,7 +2327,19 @@ vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, 
 		// that hold a member, numbered as its definition numbers them; the key is never
 		// evaluated on a row the clause drops. A group with no member has no helper: its
 		// reducer is NULL there, so a read of it skips its instance.
-		if (scope.value_link != DConstants::INVALID_INDEX) {
+		if (scope.value_link != DConstants::INVALID_INDEX &&
+		    reducer_value_links[scope.value_link].frame != DConstants::INVALID_INDEX) {
+			// A range frame's helper (DecideOptimizer::RewriteFrameRanges): one class per window of its frame, read by
+			// the window's anchors; an anchor whose window reads nothing is in none.
+			auto &map = gstate.frame_maps[reducer_value_links[scope.value_link].frame];
+			mapping.num_classes = map.WindowCount();
+			mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (map.anchors[row] && !map.Absent(row)) {
+					mapping.row_to_class[row] = map.window[row];
+				}
+			}
+		} else if (scope.value_link != DConstants::INVALID_INDEX) {
 			auto &link = reducer_value_links[scope.value_link];
 			vector<bool> kept(num_rows, true);
 			if (link.when) {
@@ -4028,6 +4051,103 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 // Finalize: PHASE 2, sub-phase 4 -- the value rewrite's helper decisions
 //===--------------------------------------------------------------------===//
 
+//! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
+//! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
+static void ListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row,
+                       double scale, const string &label, ReducerValueMembers &out) {
+	double constant = 0.0;
+	for (idx_t t = 0; t < variables.size(); t++) {
+		if (variables[t] == DConstants::INVALID_INDEX) {
+			constant += columns[t].Get(row) * scale;
+		}
+	}
+	if (!std::isfinite(constant)) {
+		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, label));
+	}
+	out.AddMember(constant);
+	for (idx_t t = 0; t < variables.size(); t++) {
+		const double c = columns[t].Get(row) * scale;
+		if (variables[t] != DConstants::INVALID_INDEX && c != 0.0) {
+			out.AddTerm(variables[t], row, c);
+		}
+	}
+}
+
+//! `ec`'s members -- its rows, each in the group `row_group_ids` names, a reducer's `by` groups partitioning them --
+//! listed per group (ReducerValueMembers), each group read at its first member row; a group with no member is left
+//! out.
+static void ListRowMembers(const EvaluatedConstraint &ec, idx_t num_rows, const string &label,
+                           ReducerValueMembers &out) {
+	const bool grouped = !ec.row_group_ids.empty();
+	const idx_t num_groups = grouped ? ec.num_groups : 1;
+	vector<vector<idx_t>> rows_of(num_groups);
+	for (idx_t row = 0; row < num_rows; row++) {
+		const idx_t group = grouped ? ec.row_group_ids[row] : 0;
+		if (group != DConstants::INVALID_INDEX && group < num_groups) {
+			rows_of[group].push_back(row);
+		}
+	}
+	for (auto &rows : rows_of) {
+		if (rows.empty()) {
+			continue;
+		}
+		out.AddGroup(rows[0]);
+		for (auto row : rows) {
+			ListMember(ec.row_coefficients, ec.variable_indices, row, 1.0, label, out);
+		}
+	}
+}
+
+void PhysicalDecide::EvaluateFrameLink(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                       ChunkExprCache &chunk_expr_cache, const LogicalDecide::ReducerValueLink &link,
+                                       ReducerValueMembers &out) const {
+	auto &map = gstate.frame_maps[link.frame];
+	// An `else` of no term (`else 0`) is a constant member; terms with no `else` are a slip.
+	if (!map.fallback && !link.fallback_terms.empty()) {
+		throw InternalException("DECIDE: %s's helper reads an else its frame does not have", frames[link.frame].text);
+	}
+	// The payload's coefficients on the rows some window reads, the else's at the anchors a window reads it at:
+	// nothing is computed on any other row, so an `else` no anchor reaches is never evaluated, and a value read as
+	// NULL is no member (BuildFrames, SkipDecideRangeNullReads).
+	vector<CoefficientColumn> payload, fallback;
+	EvaluateTermColumns(context, gstate.data, chunk_expr_cache, link.inner_terms, map.ReadRows(), num_rows, Names(),
+	                    link.label, payload);
+	EvaluateTermColumns(context, gstate.data, chunk_expr_cache, link.fallback_terms, map.FallbackAnchors(), num_rows,
+	                    Names(), link.label, fallback);
+	vector<idx_t> payload_vars, fallback_vars;
+	for (auto &term : link.inner_terms) {
+		payload_vars.push_back(gstate.ReadVariable(term));
+	}
+	for (auto &term : link.fallback_terms) {
+		fallback_vars.push_back(gstate.ReadVariable(term));
+	}
+	// One group per window that reads something, read at its anchor: a member per row the window reads, and one for
+	// its `else`. A SUM or AVG counts each value -- a row once per visit, the `else` once per missing position -- and
+	// an AVG divides by their number; a MIN or MAX reads each once.
+	const bool extremum = link.agg_name == "min" || link.agg_name == "max";
+	const bool is_avg = link.agg_name == "avg";
+	for (idx_t w = 0; w < map.WindowCount(); w++) {
+		if (map.WindowAbsent(w)) {
+			continue;
+		}
+		const idx_t values = map.ValueCount(w);
+		if (values == 0) {
+			throw InternalException("DECIDE: %s's window reads nothing but is not absent", frames[link.frame].text);
+		}
+		const double share = is_avg ? 1.0 / static_cast<double>(values) : 1.0;
+		out.AddGroup(map.window_anchor[w]);
+		map.ForEachRead(w, [&](idx_t row, idx_t times) {
+			ListMember(payload, payload_vars, row, (extremum ? 1.0 : static_cast<double>(times)) * share, link.label,
+			           out);
+		});
+		const idx_t fallbacks = map.WindowFallbacks(w);
+		if (fallbacks > 0) {
+			ListMember(fallback, fallback_vars, map.window_anchor[w],
+			           (extremum ? 1.0 : static_cast<double>(fallbacks)) * share, link.label, out);
+		}
+	}
+}
+
 void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                                ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                                const vector<KeyedMapping> &keyed_mappings) const {
@@ -4039,12 +4159,12 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		spec.need_envelope = link.need_envelope;
 		spec.need_closing = link.need_closing;
 		spec.label = link.label;
-		auto &ec = spec.rows;
-		ec.kind = ConstraintKind::STRUCTURAL;
-		ec.lhs_is_aggregate = true;
-		ec.comparison_type = ExpressionType::COMPARE_EQUAL;
-		ec.rhs_values.AssignScalar(num_rows, 0.0);
-		ec.rhs_is_shared_scalar = true;
+		if (link.frame != DConstants::INVALID_INDEX) {
+			EvaluateFrameLink(context, gstate, num_rows, chunk_expr_cache, link, spec.members);
+			gstate.evaluated_value_links.push_back(std::move(spec));
+			continue;
+		}
+		EvaluatedConstraint ec;
 
 		// The rows the clause keeps, then those the reducer's own `when` keeps: its
 		// members. Nothing is computed on any other row.
@@ -4061,10 +4181,8 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		std::function<bool(idx_t)> is_member = [&](idx_t row) {
 			return read[row];
 		};
-		auto groups =
-		    LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
-		                             num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups);
-		ec.group_names = GroupNames(per_group_cache, link.group_key, groups);
+		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
+		                         num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups);
 
 		// The members' coefficients, computed on the member rows alone. A helper serves every clause that reads its
 		// reducer, so a number past a DOUBLE names the reducer as written (as LinearizeReducerValueLinks does).
@@ -4072,7 +4190,6 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		                    link.label, ec.row_coefficients);
 		for (auto &term : link.inner_terms) {
 			ec.variable_indices.push_back(gstate.ReadVariable(term));
-			ec.coefficient_labels.push_back(term.coefficient->GetName());
 		}
 		// Its own `per`: one member per class of that key within each group. A row the
 		// de-duplication drops leaves the group, so that a MIN/MAX reads no member pinned
@@ -4096,7 +4213,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 				             ec.num_groups);
 			}
 		}
-		ec.avg_scaled = is_avg;
+		ListRowMembers(ec, num_rows, link.label, spec.members);
 		gstate.evaluated_value_links.push_back(std::move(spec));
 	}
 }

@@ -12,6 +12,9 @@
 // definition), and the comparison is then an ordinary row per class. Deck example 1,
 // `ship <= 0.20 * sum(ship)`, costs N rows and one helper rather than N rows of N terms.
 //
+// A range frame over decisions (language/guide.md §5.6) is a reducer whose groups are the frame's windows, and becomes
+// a helper through the same door (AddValueHelper, DecideHelperSides; RewriteFrameRanges in decide_rewrite_frames.cpp).
+//
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
@@ -38,6 +41,43 @@
 namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
+
+void decide_rewrite::DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_envelope,
+                                       bool &need_closing) {
+	// Which side pins the helper is the one the row would otherwise let it escape through (the epigraph form; the
+	// Plaisted-Greenbaum polarity of DefineNonlinearReducerBodies). Under `<=` a positive term is pushed down, so a
+	// MAX needs its envelope (`value >= member`) and a MIN its closing side (`value >= some member`, with indicators);
+	// a SUM or AVG, which like a MAX never decreases when a member grows, needs `value >= sum`, its envelope. The
+	// mirror holds for `>=` and for a negative term. An unknown sign, `=` and `<>` need both.
+	const bool easy = IsEasyExtremum(agg_name != "min", push);
+	need_envelope = push == ExtremumPush::NONE || easy;
+	need_closing = push == ExtremumPush::NONE || !easy;
+}
+
+idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link,
+                                     const KeyedScopeInfo *scope, bool whole, idx_t source_clause_id,
+                                     LogicalDecide::RewriteAccount::Kind account) {
+	const idx_t link_idx = decide.reducer_value_links.size();
+	// A query-wide decision, or one instance per class of a scope of its own (KeyedScopeInfo::value_link), which
+	// execution builds from the link.
+	auto var_scope = DecideVarScopeInfo::Global();
+	if (scope) {
+		KeyedScopeInfo helper_scope = *scope;
+		helper_scope.value_link = link_idx;
+		decide.keyed_scopes.push_back(std::move(helper_scope));
+		var_scope = DecideVarScopeInfo::Keyed(decide.keyed_scopes.size() - 1);
+	}
+	// Whole-numbered when the value is, so a strict bound on a row reading it still steps on the integer lattice.
+	// F6: a diagnosis, and a plan, name the helper by what it holds.
+	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
+	link.value_var =
+	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, link.label);
+	AddRewriteAccount(decide, source_clause_id, account, link.label);
+	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
+	decide.signed_helper_vars.push_back(link.value_var);
+	decide.reducer_value_links.push_back(std::move(link));
+	return link_idx;
+}
 
 namespace {
 
@@ -130,20 +170,21 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 struct Helpers {
 	ClientContext &context;
 	LogicalDecide &decide;
-	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
+	vector<unique_ptr<Expression>> reducers; //!< each helper's reducer, as written
+	vector<idx_t> links;                     //!< parallel: its link, into decide.reducer_value_links
 
 	//! The link holding `agg` over `rows` grouped by `group_key` -- its path's (language/guide.md §5.5) --, or
-	//! INVALID_INDEX.
+	//! INVALID_INDEX. Other links -- a range frame's (RewriteFrameRanges) -- stand among these.
 	idx_t Find(const BoundAggregateExpression &agg, const Expression *rows, idx_t group_key) const {
 		for (idx_t i = 0; i < reducers.size(); i++) {
-			auto &link = decide.reducer_value_links[i];
+			auto &link = decide.reducer_value_links[links[i]];
 			if (link.group_key != group_key || !reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
 				continue;
 			}
 			// A clause's rows carry copies of its `when`: the same condition.
 			const bool same_rows = rows ? link.when && link.when->Equals(*rows) : !link.when;
 			if (same_rows) {
-				return i;
+				return links[i];
 			}
 		}
 		return DConstants::INVALID_INDEX;
@@ -192,18 +233,12 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
 	// reducers inside it become helpers.
 	auto plan_label = RenderDecideSource(agg, names);
-	// Which side pins the helper is the one the row would otherwise let it escape through
-	// (the epigraph form; the Plaisted-Greenbaum polarity of DefineNonlinearReducerBodies). Under
-	// `<=` a positive term is pushed down, so a MAX needs its envelope (`value >= member`) and a
-	// MIN its closing side (`value >= some member`, with indicators); a SUM or AVG, which like a
-	// MAX never decreases when a member grows, needs `value >= sum`, its envelope. The mirror
-	// holds for `>=` and for a negative term. An unknown sign, `=` and `<>` need both. A helper
-	// several rows read needs every side any of them does, and the rows read the helper alone:
-	// a slack value is harmless.
+	// Which side pins the helper is the one the row would otherwise let it escape through (DecideHelperSides). A
+	// helper several rows read needs every side any of them does, and the rows read the helper alone: a slack value
+	// is harmless.
 	const ExtremumPush push = ExtremumPushOf(outer, site.sign);
-	const bool easy = IsEasyExtremum(agg_name != "min", push);
-	const bool need_envelope = push == ExtremumPush::NONE || easy;
-	const bool need_closing = push == ExtremumPush::NONE || !easy;
+	bool need_envelope, need_closing;
+	DecideHelperSides(agg_name, push, need_envelope, need_closing);
 
 	// A member of a SUM or AVG is pushed as the helper is, through the sign it carries in the argument; a member of a
 	// MIN or MAX is pinned from both sides (D79).
@@ -269,30 +304,16 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	link.when = std::move(rows);
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
-	link_idx = decide.reducer_value_links.size();
 
-	// The helper decision: whole-numbered when the reducer's value is, so a strict bound on
-	// the rewritten row still steps on the integer lattice; a query-wide decision when its
-	// path key is `by ()` throughout, else one instance per group of that key among the rows
-	// its path keeps -- a scope of its own (KeyedScopeInfo::value_link), which execution
-	// builds from the link.
-	auto var_scope = DecideVarScopeInfo::Global();
-	if (link.group_key != DConstants::INVALID_INDEX) {
-		KeyedScopeInfo helper_scope;
-		helper_scope.key = link.group_key;
-		helper_scope.value_link = link_idx;
-		decide.keyed_scopes.push_back(std::move(helper_scope));
-		var_scope = DecideVarScopeInfo::Keyed(decide.keyed_scopes.size() - 1);
-	}
-	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
-	link.value_var =
-	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
-	AddRewriteAccount(decide, source_clause_id, account_kind, plan_label);
-	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
-	decide.signed_helper_vars.push_back(link.value_var);
+	// The helper decision: a query-wide decision when its path key is `by ()` throughout, else one instance per group
+	// of that key among the rows its path keeps.
+	KeyedScopeInfo scope;
+	scope.key = link.group_key;
+	const bool keyed = link.group_key != DConstants::INVALID_INDEX;
+	link_idx = AddValueHelper(decide, std::move(link), keyed ? &scope : nullptr, whole, source_clause_id, account_kind);
 	helpers.reducers.push_back(agg.Copy());
-	ReplaceWithDecision(helpers.context, decide, link.value_var, *site.slot);
-	decide.reducer_value_links.push_back(std::move(link));
+	helpers.links.push_back(link_idx);
+	ReplaceWithDecision(helpers.context, decide, decide.reducer_value_links[link_idx].value_var, *site.slot);
 }
 
 //! `sum([when c] per K: inner([when c'] e) by (G))` in the objective, `inner` a SUM or AVG with no `per` and no
@@ -353,7 +374,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
 	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
-	Helpers helpers {optimizer.context, decide, {}};
+	Helpers helpers {optimizer.context, decide, {}, {}};
 
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
 	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: hand it to its one-product

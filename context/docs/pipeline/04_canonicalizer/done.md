@@ -558,8 +558,9 @@ decision term does, one over data right, and it decides no shape. `PlaceFrames` 
 `DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
 the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
 `within` (`timeline_key`, a key-table entry made when new); it notes its clause and whether
-it stands in a reducer. A frame that may select no position inside a reducer over decisions
-is refused, not supported yet. Under a `per K` whose key, with the path's, does not hold the
+it stands in a reducer. A frame that may read nothing inside a reducer over decisions
+(`DecideFrameSpec::MaySelectNothing`) is refused, not supported yet, the message ending on what makes it so and how to
+cure it (`DecideFrameAbsenceRemedy`). Under a `per K` whose key, with the path's, does not hold the
 frame's `within`, the frame records the D75 check execution runs (`partition_key`,
 `partition_subject`). `SkipNullData` tests a frame inside a reducer over decisions whole
 (`marker IS NOT NULL`), as it tests a column: the frame reads another row, or nothing, so no

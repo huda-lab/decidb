@@ -71,6 +71,11 @@ void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector
 idx_t FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
                                const vector<double> &upper_bounds);
 
+//! The first decision among a helper's listed members whose box is open, which a refusal names; INVALID_INDEX when
+//! every one is boxed.
+idx_t FirstUnboundedMemberVariable(const ReducerValueMembers &members, const vector<double> &lower_bounds,
+                                   const vector<double> &upper_bounds);
+
 //! The family one group of a MIN/MAX row reduces over: the active rows it reads, in row
 //! order. The members themselves are not built here (MinMaxRowMembers builds each when
 //! the link asks for it), only the reach of the whole group.

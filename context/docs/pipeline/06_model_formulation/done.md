@@ -705,12 +705,15 @@ members it actually writes, so the native arm allocates none at all.
 
 ### Helper decisions of the value rewrite
 
-Stage 05 replaced each decision reducer of a VALUE-shape clause by a helper
-decision (`../05_optimizer/done.md`); stage 08 evaluated that reducer's members per `by`
-group into a `ReducerValueLinkSpec` (`solver_input.hpp`): an `EvaluatedConstraint` whose
-terms are the body's, nonzero only on the rows the clause and the reducer keep, grouped
-by the `by` key over the kept rows, with the link's label and provenance. The helper's
-own column enters only here (`linearization_reducer_value.cpp`).
+Stage 05 replaced each decision reducer of a VALUE-shape clause, and each range frame over
+decisions, by a helper decision (`../05_optimizer/done.md`); stage 08 lists its members per
+group -- a `by` group, or a frame's window -- into a `ReducerValueLinkSpec` (`solver_input.hpp`):
+`ReducerValueMembers`, per group the row it is read at and its members, each a constant and
+terms (decision, row, coefficient), with the link's label. Listed, not rows with a group each,
+because a range's windows share rows where a `by` key's groups partition them; one form for
+every link, which the three passes below read. The helper's own column enters only here
+(`linearization_reducer_value.cpp`); a member's terms reach the extremum link through an
+`ExtremumMemberSource` as a row's do.
 
 `DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
 members' signed brackets for SUM/AVG (an AVG's coefficients already carry the 1/n), their

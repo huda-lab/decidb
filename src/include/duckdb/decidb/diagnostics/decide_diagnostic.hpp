@@ -323,6 +323,10 @@ void RegisterDecideDiagnosticOptions(DBConfig &config);
 //! 1e-4). Clamped to the floor (>= 1e-5) so the indicator link is always enforced.
 double GetDecideL0Tolerance(ClientContext &context);
 
+//! The most values one range frame may read across its ranges (`decide_frame_limit`, default 10,000,000;
+//! language/guide.md §5.6).
+idx_t GetDecideFrameLimit(ClientContext &context);
+
 //! Read the relative MIP gap a query's solve may stop at (`decide_mip_gap`, default 0: prove the optimum).
 double GetDecideMipGap(ClientContext &context);
 

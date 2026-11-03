@@ -893,15 +893,11 @@ class AnrModel:
             return ABSENT
         within, anchor = timeline.position[t]
         peers = timeline.peers[within]
-        values, missing = [], 0
-        for q in self._requested(node, anchor, len(peers)):
-            p = self._wrap(q, len(peers), node.over.cyclic)
-            if p is None:
-                missing += 1
-                continue
-            values.extend(self._form(node.payload, r, kept) for r in peers[p])
+        selected = [self._wrap(q, len(peers), node.over.cyclic) for q in self._requested(node, anchor, len(peers))]
+        missing = sum(1 for p in selected if p is None)
         if node.all and missing:
-            return ABSENT
+            return ABSENT  # nothing is read, so no value it would read can fail
+        values = [self._form(node.payload, r, kept) for p in selected if p is not None for r in peers[p]]
         if missing and node.fallback is not None:
             values.extend([self._form(node.fallback, t, kept)] * missing)
         return self._combine(node.kind, values)

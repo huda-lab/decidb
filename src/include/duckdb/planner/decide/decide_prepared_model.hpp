@@ -244,23 +244,29 @@ struct DecideObjective {
 //! reads NULL there, which is no value (D84): the comparison's instance is skipped, the
 //! reducer's member dropped, the objective's term dropped -- as for a NULL the row holds.
 //! A frame over data reads one value:
-//!   VALUE    — `value`, its payload, at the row the frame selects for the row; `fallback`,
-//!              its `else`, at the row itself where it selects none; NULL where neither
-//!              stands
+//!   VALUE    — a point: `value`, its payload, at the row the frame selects for the row;
+//!              `fallback`, its `else`, at the row itself where it selects none; NULL where
+//!              neither stands
+//!   REDUCED  — a range: `value`, its marker -- the frame's reducer over its payload -- over
+//!              the values the row's range reads, `fallback` read at the row once per missing
+//!              position; a NULL among them skipped, as SQL's aggregate skips it; NULL where it
+//!              reads nothing
 //! A frame over decisions reads its terms' coefficients:
 //!   READ     — `value` at the row the frame selects for the row; where it selects none, 0
 //!              when the frame has an `else` (which stands in), else NULL
-//!   FALLBACK — `value` at the row itself where the frame selects none and has an `else`;
-//!              0 everywhere else
-//!   DEFINED  — TRUE where every READ and FALLBACK column of the frame holds a value, NULL
-//!              elsewhere (BOOLEAN; `value` is null): what a reducer's NULL test reads for a
-//!              frame over decisions in its argument (DecideCanonicalizer::SkipNullData)
+//!   FALLBACK — `value` at the row itself where a position the frame requests is missing and
+//!              it has an `else`; 0 everywhere else. A range has these too, over data or
+//!              decisions: its helper's definition and its signature field read them
+//!   DEFINED  — TRUE where the frame has a value: a point's every READ and FALLBACK column
+//!              holds one, a range's window reads something; NULL elsewhere (BOOLEAN; `value`
+//!              is null): what a reducer's NULL test reads for a frame over decisions in its
+//!              argument (DecideCanonicalizer::SkipNullData)
 struct DecideFrameColumn {
-	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED };
+	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED };
 	Kind kind = Kind::READ;
 	idx_t frame = DConstants::INVALID_INDEX;
 	unique_ptr<Expression> value;
-	//! VALUE: the frame's `else`, of `value`'s type; null when it has none.
+	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
 };
@@ -297,8 +303,10 @@ struct DecidePreparedModel {
 	//! decision instance -- or the position is ambiguous (D73). Empty for a frame over data,
 	//! whose one VALUE column is its whole payload.
 	vector<vector<DecideFramePayloadTerm>> frame_payload_terms;
-	//! Per frame, the decisions its fallback reads at the row itself: with its FALLBACK
-	//! columns, what tells two anchors that reach the fallback apart (D82).
+	//! Per frame, its `else` as a signature keys it where an anchor reaches it (D82): the
+	//! FALLBACK columns of its terms (into frame_columns), and the decisions it reads at the
+	//! row itself. Both empty for a frame with no `else`.
+	vector<vector<idx_t>> frame_fallback_columns;
 	vector<vector<idx_t>> frame_fallback_decisions;
 };
 

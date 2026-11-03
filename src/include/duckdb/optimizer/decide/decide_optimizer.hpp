@@ -144,6 +144,13 @@ private:
 	//! reducer is refused (language/errors.md §2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
+	//! Range frames over decisions (language/guide.md §5.6, D78): each becomes a helper decision with one instance per
+	//! window of the frame -- a timeline, or a position on one -- defined once per window
+	//! (LogicalDecide::reducer_value_links, with its frame), so every later rewrite reads it as an ordinary keyed
+	//! decision and the canonical shape stands. Runs first among the rewrites, before any copies a clause; a MIN/MAX
+	//! helper is pinned on the side its comparison pushes it, through SUM and AVG (D79).
+	void RewriteFrameRanges(LogicalDecide &decide);
+
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
 	//! Extracts each term's metadata into decide.composed_minmax_constraints and replaces
 	//! the comparison with a no-op placeholder so the physical layer owns emission.

@@ -14,6 +14,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -48,13 +49,179 @@ static Vector EvaluateOnRows(ClientContext &context, const Expression &expr, Col
 	return values;
 }
 
+//! Every layer above reads DecideFrameSpec::MaySelectNothing to know whether a frame can skip an instance, drop a
+//! member or leave the objective's term without a value; a frame that reads nothing where it says it cannot would be
+//! read as present there. What only the data decides is no absence the plan foresees, and is read as a NULL is (D84):
+//! a NULL read (SkipNullReads), an anchor in no timeline (D75).
+static void CheckAbsenceForeseen(const DecideFrameSpec &frame, const DecideFrameMap &map) {
+	if (frame.MaySelectNothing()) {
+		return;
+	}
+	for (idx_t row = 0; row < map.absent.size(); row++) {
+		if (map.absent[row] && map.timeline[row] != DConstants::INVALID_INDEX) {
+			throw InternalException("DECIDE: %s reads nothing at an anchor although it was planned never to",
+			                        frame.text);
+		}
+	}
+}
+
+//! The position `end` names on a timeline of `peers` positions for an anchor at `at` (language/guide.md §5.6):
+//! `first` 0, `last` the last, `k previous` and `k next` the anchor's less or plus k -- off the timeline, it may be,
+//! before a cyclic one wraps it. `k` is a 32-bit whole number (the grammar's Iconst) and positions count rows, so
+//! every position fits an int64_t.
+static int64_t LiftFramePosition(DecideFrameAnchor end, int64_t k, int64_t at, int64_t peers) {
+	switch (end) {
+	case DecideFrameAnchor::FIRST:
+		return 0;
+	case DecideFrameAnchor::LAST:
+		return peers - 1;
+	case DecideFrameAnchor::PREVIOUS:
+		return at - k;
+	case DecideFrameAnchor::NEXT:
+		return at + k;
+	}
+	throw InternalException("DECIDE: a frame position of no known kind");
+}
+
+//! A range's windows over `map`'s timelines, `first_peer[t]` the first peer of timeline `t` (DecideFrameMap): every
+//! `every`-th position from its first end to its last (LiftFramePosition), none when the first comes after the last.
+static void ListRangeWindows(ClientContext &context, const DecideFrameSpec &frame, const vector<idx_t> &first_peer,
+                             DecideFrameMap &map) {
+	const idx_t num_rows = map.anchors.size();
+	const idx_t timelines = first_peer.size() - 1;
+	const idx_t limit = GetDecideFrameLimit(context);
+	map.window.assign(num_rows, DConstants::INVALID_INDEX);
+	map.absent.assign(num_rows, false);
+	// The values listed so far, every row read and every `else` standing in, against the limit: `more` is checked
+	// before the work that lists it, so the work stays bounded too.
+	idx_t values = 0;
+	auto check = [&](idx_t more) {
+		if (more > limit || values > limit - more) {
+			throw InvalidInputException("DECIDE: %s reads more than %llu values over its ranges, above "
+			                            "decide_frame_limit (%llu). Narrow the range, or raise the setting.",
+			                            frame.text, limit, limit);
+		}
+	};
+	auto charge = [&](idx_t more) {
+		check(more);
+		values += more;
+	};
+	// Per peer of the timeline at hand, how often the list being built visits it, and the peers visited in the order
+	// first visited; both reset as the list is closed.
+	vector<idx_t> visits;
+	vector<idx_t> visited;
+	// The list read from position `at` of timeline `t`.
+	auto list_from = [&](idx_t t, int64_t at) {
+		const auto peers = static_cast<int64_t>(first_peer[t + 1] - first_peer[t]);
+		const int64_t lo = LiftFramePosition(frame.from, frame.from_k, at, peers);
+		const int64_t hi = LiftFramePosition(frame.to, frame.to_k, at, peers);
+		const int64_t step = frame.every;
+		idx_t missing = 0;
+		if (lo <= hi) {
+			const int64_t requested = (hi - lo) / step + 1;
+			if (frame.cyclic) {
+				// Every requested position exists, wrapped, and one visited again is read again (D76); each reads a
+				// row at least.
+				check(static_cast<idx_t>(requested));
+				for (int64_t j = 0; j < requested; j++) {
+					const auto p = static_cast<idx_t>(((lo + j * step) % peers + peers) % peers);
+					if (visits[p]++ == 0) {
+						visited.push_back(p);
+					}
+				}
+			} else {
+				// A position off the timeline is missing: counted, never visited.
+				const int64_t first = lo >= 0 ? lo : lo + ((-lo + step - 1) / step) * step;
+				const int64_t last = MinValue<int64_t>(hi, peers - 1);
+				const int64_t present = first <= last ? (last - first) / step + 1 : 0;
+				missing = static_cast<idx_t>(requested - present);
+				// Under `all` a missing position leaves the window nothing to read: none of its rows is listed, so none
+				// is evaluated.
+				if (!(frame.all && missing > 0)) {
+					check(static_cast<idx_t>(present));
+					charge(frame.fallback ? missing : 0);
+					for (int64_t q = first; q <= last; q += step) {
+						visits[static_cast<idx_t>(q)] = 1;
+						visited.push_back(static_cast<idx_t>(q));
+					}
+				}
+			}
+		}
+		for (auto p : visited) {
+			const idx_t peer = first_peer[t] + p;
+			charge(visits[p] * map.PeerSize(peer));
+			for (idx_t i = map.peer_begin[peer]; i < map.peer_begin[peer + 1]; i++) {
+				map.list_rows.push_back(map.peer_rows[i]);
+				map.list_visits.push_back(visits[p]);
+			}
+			visits[p] = 0;
+		}
+		visited.clear();
+		map.list_missing.push_back(missing);
+		map.list_begin.push_back(map.list_rows.size());
+		return map.list_missing.size() - 1;
+	};
+	// What a list reads nothing from: no position (a reversed range), `all` meeting a missing one, or no value at all;
+	// `count` of no value is 0.
+	auto reads_nothing = [&](idx_t list) {
+		const idx_t missing = map.list_missing[list];
+		const bool rows = map.list_begin[list + 1] > map.list_begin[list];
+		return (frame.all && missing > 0) || (frame.reducer != "count" && !rows && (missing == 0 || !frame.fallback));
+	};
+	auto add_window = [&](idx_t anchor, idx_t list) {
+		map.window_anchor.push_back(anchor);
+		map.window_list.push_back(list);
+		return map.window_anchor.size() - 1;
+	};
+	// An `else` that reads the anchor's own row parts a position's window at each anchor that reaches it; a constant
+	// one reads alike at every anchor.
+	const bool anchor_fallback = frame.fallback && !frame.fallback->IsFoldable();
+	for (idx_t t = 0; t < timelines; t++) {
+		if (context.interrupted) {
+			throw InterruptException();
+		}
+		visits.assign(first_peer[t + 1] - first_peer[t], 0);
+		if (!frame.Relative()) {
+			// Neither end depends on the anchor: one window for the timeline.
+			const auto list = list_from(t, 0);
+			const auto window = add_window(map.peer_rows[map.peer_begin[first_peer[t]]], list);
+			const bool nothing = reads_nothing(list);
+			for (idx_t i = map.peer_begin[first_peer[t]]; i < map.peer_begin[first_peer[t + 1]]; i++) {
+				map.window[map.peer_rows[i]] = window;
+				map.absent[map.peer_rows[i]] = nothing;
+			}
+			continue;
+		}
+		for (idx_t peer = first_peer[t]; peer < first_peer[t + 1]; peer++) {
+			if (context.interrupted) {
+				throw InterruptException();
+			}
+			const auto list = list_from(t, static_cast<int64_t>(peer - first_peer[t]));
+			const bool split = anchor_fallback && map.list_missing[list] > 0;
+			const bool nothing = reads_nothing(list);
+			auto window = DConstants::INVALID_INDEX;
+			for (idx_t i = map.peer_begin[peer]; i < map.peer_begin[peer + 1]; i++) {
+				const auto row = map.peer_rows[i];
+				if (window == DConstants::INVALID_INDEX) {
+					window = add_window(row, list);
+				} else if (split) {
+					// Each window of a parted position reads the list again: its values count.
+					charge(map.ValueCount(window));
+					window = add_window(row, list);
+				}
+				map.window[row] = window;
+				map.absent[row] = nothing;
+			}
+		}
+	}
+}
+
 DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec &frame, const vector<DecideKey> &keys,
                                    PerGroupCache &per_group_cache, ColumnDataCollection &data, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache) {
-	if (frame.range) {
-		throw InternalException("DECIDE: a range frame reached execution: %s", frame.text);
-	}
 	DecideFrameMap map;
+	map.range = frame.range;
+	map.fallback = frame.fallback != nullptr;
 	map.anchors =
 	    frame.rows ? KeptRows(*frame.rows, chunk_expr_cache, context, data, num_rows) : vector<bool>(num_rows, true);
 	idx_t timelines = 0;
@@ -126,6 +293,11 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 	}
 	first_peer[timelines] = map.peer_begin.size();
 	map.peer_begin.push_back(map.peer_rows.size());
+	if (frame.range) {
+		ListRangeWindows(context, frame, first_peer, map);
+		CheckAbsenceForeseen(frame, map);
+		return map;
+	}
 
 	// The position each anchor selects (language/guide.md §5.6): over peers, not over
 	// distances in the order key.
@@ -161,6 +333,11 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 		}
 		map.selected_peer[row] = first_peer[t] + static_cast<idx_t>(position);
 	}
+	map.absent.assign(num_rows, false);
+	for (idx_t row = 0; row < num_rows; row++) {
+		map.absent[row] = map.Missing(row) && !frame.fallback;
+	}
+	CheckAbsenceForeseen(frame, map);
 	return map;
 }
 
@@ -246,6 +423,143 @@ void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &fr
 	}
 }
 
+//! The states of one aggregate, one per window, initialized on construction and destroyed however the reduction ends:
+//! what `list_aggregate` keeps per list.
+struct FrameAggregateStates {
+	FrameAggregateStates(const AggregateFunction &function_p, AggregateInputData &input_p, idx_t count_p)
+	    : function(function_p), input(input_p), count(count_p), size(function.state_size(function)),
+	      buffer(make_unsafe_uniq_array_uninitialized<data_t>(MaxValue<idx_t>(size * count, 1))),
+	      pointers(LogicalType::POINTER, MaxValue<idx_t>(count, 1)) {
+		auto states = FlatVector::GetData<data_ptr_t>(pointers);
+		for (idx_t i = 0; i < count; i++) {
+			states[i] = buffer.get() + size * i;
+			function.initialize(function, states[i]);
+		}
+	}
+	~FrameAggregateStates() {
+		if (function.destructor) {
+			function.destructor(pointers, input, count);
+		}
+	}
+	data_ptr_t At(idx_t i) {
+		return FlatVector::GetData<data_ptr_t>(pointers)[i];
+	}
+
+	const AggregateFunction &function;
+	AggregateInputData &input;
+	idx_t count;
+	idx_t size;
+	unsafe_unique_array<data_t> buffer;
+	Vector pointers;
+};
+
+//! A range over data's REDUCED column (DecideFrameColumn) into `out`: the frame's own reducer run, through its
+//! aggregate's state functions, over each window's values -- the payload at each row it reads, once per visit, and
+//! the `else` at its anchor once per missing position -- so the value has SQL's type and arithmetic, and a NULL among
+//! them is skipped as SQL's aggregate skips it (D84; `count` counts the others, and of none is 0). Each value is
+//! computed on the rows that read it only. An anchor whose window reads nothing reads NULL.
+static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameColumn &column,
+                              const DecideFrameMap &map, ColumnDataCollection &data, idx_t num_rows,
+                              ChunkExprCache &chunk_expr_cache, Vector &out) {
+	auto &marker = column.value->Cast<BoundAggregateExpression>();
+	if (marker.children.size() != 1) {
+		throw InternalException("DECIDE: %s's column reads no reducer over its payload", frame.text);
+	}
+	const idx_t windows = map.WindowCount();
+	if (windows == 0) {
+		FlatVector::Validity(out).SetAllInvalid(num_rows); // no anchor: nothing to read
+		return;
+	}
+	if (map.fallback != (column.fallback != nullptr)) {
+		throw InternalException("DECIDE: %s's column and its map disagree on its else", frame.text);
+	}
+	// One source to reduce from: the payload's values at [0, n), the else's at [n, 2n).
+	Vector source(marker.children[0]->return_type, 2 * num_rows);
+	auto payload = EvaluateOnRows(context, *marker.children[0], data, num_rows, map.ReadRows(), chunk_expr_cache);
+	VectorOperations::Copy(payload, source, num_rows, 0, 0);
+	if (map.fallback) {
+		auto fallback =
+		    EvaluateOnRows(context, *column.fallback, data, num_rows, map.FallbackAnchors(), chunk_expr_cache);
+		VectorOperations::Copy(fallback, source, num_rows, 0, num_rows);
+	}
+
+	ArenaAllocator allocator(BufferAllocator::Get(context));
+	AggregateInputData input(marker.bind_info.get(), allocator);
+	FrameAggregateStates states(marker.function, input, windows);
+	SelectionVector selection(STANDARD_VECTOR_SIZE);
+	Vector targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE);
+	auto target_states = FlatVector::GetData<data_ptr_t>(targets);
+	idx_t pending = 0;
+	auto flush = [&]() {
+		if (pending > 0) {
+			Vector slice(source, selection, pending);
+			marker.function.update(&slice, input, 1, targets, pending);
+			pending = 0;
+		}
+	};
+	auto feed = [&](idx_t index, idx_t window, idx_t times) {
+		for (idx_t i = 0; i < times; i++) {
+			if (pending == STANDARD_VECTOR_SIZE) {
+				flush();
+			}
+			selection.set_index(pending, index);
+			target_states[pending++] = states.At(window);
+		}
+	};
+	for (idx_t w = 0; w < windows; w++) {
+		if (map.WindowAbsent(w)) {
+			continue;
+		}
+		map.ForEachRead(w, [&](idx_t row, idx_t times) { feed(row, w, times); });
+		const auto fallbacks = map.WindowFallbacks(w);
+		if (fallbacks > 0) {
+			feed(num_rows + map.window_anchor[w], w, fallbacks);
+		}
+	}
+	flush();
+	Vector values(column.type, windows);
+	marker.function.finalize(states.pointers, input, values, windows, 0);
+	// Each anchor reads its window's value; every other row, and an anchor whose window reads nothing, reads NULL.
+	SelectionVector gather(num_rows);
+	vector<bool> unread(num_rows, false);
+	for (idx_t row = 0; row < num_rows; row++) {
+		const auto window = map.anchors[row] ? map.window[row] : DConstants::INVALID_INDEX;
+		unread[row] = window == DConstants::INVALID_INDEX || map.Absent(row);
+		gather.set_index(row, unread[row] ? 0 : window);
+	}
+	VectorOperations::Copy(values, out, gather, num_rows, 0, 0);
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (unread[row]) {
+			FlatVector::SetNull(out, row, true);
+		}
+	}
+}
+
+void SkipDecideRangeNullReads(ClientContext &context, const vector<const Expression *> &payload,
+                              const vector<const Expression *> &fallback, DecideFrameMap &map,
+                              ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
+	auto null_on = [&](const vector<const Expression *> &exprs, const vector<bool> &rows) {
+		vector<bool> nulls(num_rows, false);
+		bool any = false;
+		for (auto *expr : exprs) {
+			auto values = EvaluateOnRows(context, *expr, data, num_rows, rows, chunk_expr_cache);
+			UnifiedVectorFormat format;
+			values.ToUnifiedFormat(num_rows, format);
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (rows[row] && !format.validity.RowIsValid(format.sel->get_index(row))) {
+					nulls[row] = any = true;
+				}
+			}
+		}
+		return any ? nulls : vector<bool>();
+	};
+	auto payload_nulls = null_on(payload, map.ReadRows());
+	auto fallback_nulls = null_on(fallback, map.FallbackAnchors());
+	if (!payload_nulls.empty() || !fallback_nulls.empty()) {
+		map.SkipNullReads(std::move(payload_nulls), std::move(fallback_nulls));
+	}
+}
+
 //! Whether some anchor selects `peer`, for each peer of `map`.
 static vector<bool> SelectedPeers(const DecideFrameMap &map) {
 	vector<bool> selected(map.peer_begin.size(), false);
@@ -279,6 +593,8 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		auto out = make_uniq<Vector>(column.type, num_rows);
 		if (column.kind == DecideFrameColumn::Kind::DEFINED) {
 			defined.push_back(j);
+		} else if (column.kind == DecideFrameColumn::Kind::REDUCED) {
+			ReduceRangeValues(context, frames[column.frame], column, map, data, num_rows, chunk_expr_cache, *out);
 		} else {
 			// A payload is read at the first row of each selected peer, the row every anchor of
 			// the peer reads (D73 holds the others to it); an `else` at the anchors whose
@@ -296,7 +612,7 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 				if (selected_row != DConstants::INVALID_INDEX) {
 					selected_rows[selected_row] = true;
 				}
-				missing_rows[row] = fallback && map.Missing(row);
+				missing_rows[row] = fallback && map.Missing(row) && !map.Absent(row);
 			}
 			// One source to gather from: the payload's values at [0, n), the default at n, the
 			// else's at [n + 1, 2n + 1).
@@ -325,14 +641,19 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		values_of.push_back(std::move(out));
 	}
 	for (auto j : defined) {
-		// TRUE where every READ and FALLBACK column of the frame holds a value, NULL elsewhere.
+		// TRUE where the frame has a value, NULL elsewhere: a range's window reads something, a point's every READ and
+		// FALLBACK column holds a value.
 		auto &out = *values_of[j];
 		auto result = FlatVector::GetData<bool>(out);
 		auto &validity = FlatVector::Validity(out);
+		auto &map = maps[columns[j].frame];
 		for (idx_t row = 0; row < num_rows; row++) {
 			result[row] = true;
+			if (map.range && (!map.anchors[row] || map.Absent(row))) {
+				validity.SetInvalid(row);
+			}
 		}
-		for (idx_t k = 0; k < columns.size(); k++) {
+		for (idx_t k = 0; k < columns.size() && !map.range; k++) {
 			auto kind = columns[k].kind;
 			if (columns[k].frame != columns[j].frame ||
 			    (kind != DecideFrameColumn::Kind::READ && kind != DecideFrameColumn::Kind::FALLBACK)) {
@@ -388,6 +709,9 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
 	static const vector<DecideFramePayloadTerm> NO_TERMS;
 	for (idx_t f = 0; f < maps.size(); f++) {
 		auto &map = maps[f];
+		if (map.range) {
+			continue; // a range reads every row of a position it selects
+		}
 		auto &terms = f < prepared.frame_payload_terms.size() ? prepared.frame_payload_terms[f] : NO_TERMS;
 		// The selected peers of several rows -- the only ones whose rows can disagree -- and
 		// their rows.

@@ -458,7 +458,10 @@ value integral, then checks the optimum's rows against the tighter
 `primal_feasibility_tolerance` (1e-7). A binary that far from 1 under a Big-M row misses the
 row by M times as much, so the check fails and HiGHS reports a solve error ("MIP solver
 claims optimality, but with ... infeasibilities"). `HighsSession::RunAndReadback` then solves
-once more with integrality held to 1e-9, which keeps such a row within the check.
+once more with integrality held to 1e-9, which keeps such a row within the check. HiGHS's MIP
+presolve can also call a point optimal that violates a bound or a row outright, on a model with
+no integer point at all (`3 * y = 1`, `y` whole, beside columns presolve fixes), and report the
+same solve error; a last run without presolve then settles the model's status itself.
 
 A `kError` from `highs.run()` is a solve HiGHS could not finish, not a DeciDB fault, so
 `HighsSession` returns it as `SolverStatus::OTHER` with the model status's text in

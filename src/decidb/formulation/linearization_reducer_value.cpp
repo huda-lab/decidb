@@ -5,11 +5,12 @@
 //
 // Stage 06 — the helper decisions of the value rewrite (language/guide.md §6.4;
 // 05_optimizer/done.md, "The value rewrite"). Stage 05 replaced each decision reducer
-// of a VALUE-shape clause by a helper decision and recorded what it holds; stage 08
-// evaluated that reducer's members per `by` group. This boxes every helper by its
-// members' reach and emits its definition: an equality row per group for SUM and AVG,
-// an extremum link per group for MIN and MAX. The helper's own column enters only
-// here: stage 08 hands over the members alone.
+// of a VALUE-shape clause, and each range frame over decisions, by a helper decision and
+// recorded what it holds; stage 08 listed its members per group -- a `by` group, or a
+// frame's window (ReducerValueMembers). This boxes every helper by its members' reach and
+// emits its definition: a row per group for SUM and AVG, an extremum link per group for
+// MIN and MAX. The helper's own column enters only here: stage 08 hands over the members
+// alone.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
@@ -28,18 +29,70 @@ bool IsExtremum(const ReducerValueLinkSpec &link) {
 	return link.agg_name == "min" || link.agg_name == "max";
 }
 
+//! The members of group `group`: [first, last).
+struct MemberSpan {
+	idx_t first;
+	idx_t last;
+};
+
+MemberSpan MembersOf(const ReducerValueMembers &members, idx_t group) {
+	return MemberSpan {members.group_begin[group], members.group_begin[group + 1]};
+}
+
+//! The signed reachable interval of member `member`'s terms under the box, its constant left out, an end a term
+//! leaves open infinite: DecideRowSignedRange's reading, over a listed member instead of a row.
+void MemberRange(const ReducerValueMembers &members, idx_t member, const SolverInput &input, double &out_lo,
+                 double &out_hi) {
+	constexpr double INF = std::numeric_limits<double>::infinity();
+	double lo = 0.0, hi = 0.0;
+	bool lo_open = false, hi_open = false;
+	for (idx_t t = members.member_begin[member]; t < members.member_begin[member + 1]; t++) {
+		const double coef = members.coefficients[t];
+		if (std::abs(coef) < 1e-15) {
+			continue;
+		}
+		const idx_t v = members.variables[t];
+		const double lb = input.lower_bounds[v];
+		const double ub = input.upper_bounds[v];
+		// The low end of a positive term comes from the variable's low end, and from its high end when the
+		// coefficient flips the sense.
+		const bool flips = coef < 0.0;
+		if (flips ? ub >= 1e20 : lb <= -1e20) {
+			lo_open = true;
+		} else {
+			lo += coef * (flips ? ub : lb);
+		}
+		if (flips ? lb <= -1e20 : ub >= 1e20) {
+			hi_open = true;
+		} else {
+			hi += coef * (flips ? lb : ub);
+		}
+	}
+	out_lo = lo_open ? -INF : lo;
+	out_hi = hi_open ? INF : hi;
+}
+
+//! The reach of member `member`, its constant included.
+AuxRange MemberReach(const ReducerValueMembers &members, idx_t member, const SolverInput &input) {
+	double lo, hi;
+	MemberRange(members, member, input, lo, hi);
+	AuxRange range;
+	range.CoverRowSided(lo + members.constants[member], hi + members.constants[member], DConstants::INVALID_INDEX);
+	return range;
+}
+
 //! The reach of one group's value: the sum of its members' brackets for SUM and AVG
 //! (an AVG's coefficients already carry the 1/n), their cover for MIN and MAX. Each
 //! end is folded or marked open on its own, like every other auxiliary box.
-AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, const vector<idx_t> &rows) {
+AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, idx_t group) {
 	AuxRange reach;
 	const bool extremum = IsExtremum(link);
 	double sum_lo = 0.0, sum_hi = 0.0;
-	for (auto row : rows) {
+	auto span = MembersOf(link.members, group);
+	for (idx_t m = span.first; m < span.last; m++) {
 		double lo, hi;
-		DecideRowSignedRange(link.rows, row, input.lower_bounds, input.upper_bounds, lo, hi);
-		double constant =
-		    DecideRowFixedLhsOffset(link.rows.variable_indices, link.rows.row_coefficients, row, link.label);
+		MemberRange(link.members, m, input, lo, hi);
+		const double constant = link.members.constants[m];
 		if (extremum) {
 			reach.CoverRowSided(lo + constant, hi + constant, DConstants::INVALID_INDEX);
 			continue;
@@ -68,15 +121,7 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 	input.instance_reach_lower.resize(input.num_decide_vars);
 	input.instance_reach_upper.resize(input.num_decide_vars);
 	for (auto &link : input.reducer_value_links) {
-		auto &ec = link.rows;
-		const bool grouped = !ec.row_group_ids.empty();
-		vector<vector<idx_t>> members(grouped ? ec.num_groups : 1);
-		for (idx_t row = 0; row < input.num_rows; row++) {
-			idx_t group = grouped ? ec.row_group_ids[row] : 0;
-			if (group != DConstants::INVALID_INDEX) {
-				members[group].push_back(row);
-			}
-		}
+		auto &members = link.members;
 		// Each instance is boxed by the reach of the group it stands for: the helper has one instance per group, so a
 		// small group is not boxed as wide as the largest. An instance no group reaches keeps the open ends, and
 		// reads the decision's box.
@@ -85,12 +130,13 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 		vector<AuxRange> reach(num_instances);
 		vector<bool> reached(num_instances, false);
 		AuxRange box;
-		for (auto &rows : members) {
-			if (rows.empty()) {
+		for (idx_t group = 0; group < members.GroupCount(); group++) {
+			auto span = MembersOf(members, group);
+			if (span.first == span.last) {
 				continue;
 			}
-			auto group_reach = GroupReach(link, input, rows);
-			auto instance = indexer.InstanceOf(value_var, rows.front());
+			auto group_reach = GroupReach(link, input, group);
+			auto instance = indexer.InstanceOf(value_var, members.group_rows[group]);
 			reach[instance].Cover(group_reach);
 			reached[instance] = true;
 			box.Cover(group_reach);
@@ -242,7 +288,7 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 	// a nest in one sweep.
 	for (idx_t i = input.reducer_value_links.size(); i-- > 0;) {
 		auto &link = input.reducer_value_links[i];
-		auto &ec = link.rows;
+		auto &members = link.members;
 		const double value_lo = input.lower_bounds[link.value_var] <= -1e20 ? -INF : input.lower_bounds[link.value_var];
 		const double value_hi = input.upper_bounds[link.value_var] >= 1e20 ? INF : input.upper_bounds[link.value_var];
 		if (std::isinf(value_lo) && std::isinf(value_hi)) {
@@ -252,70 +298,55 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 		if (extremum && !link.need_envelope) {
 			continue; // a closing side alone pins no member
 		}
-		const bool grouped = !ec.row_group_ids.empty();
-		const idx_t num_groups = grouped ? ec.num_groups : 1;
-		vector<vector<MemberTerm>> group_terms(num_groups);
-		vector<double> group_constant(num_groups, 0.0);
-		for (idx_t row = 0; row < input.num_rows; row++) {
-			const idx_t group = grouped ? ec.row_group_ids[row] : 0;
-			if (group == DConstants::INVALID_INDEX || group >= num_groups) {
-				continue;
-			}
-			vector<MemberTerm> member;
-			double constant = 0.0;
-			for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-				const double c = ec.row_coefficients[t].Get(row);
-				if (std::abs(c) < 1e-15) {
-					continue;
-				}
-				const idx_t var = ec.variable_indices[t];
-				if (var == DConstants::INVALID_INDEX) {
-					constant += c;
-					continue;
-				}
-				member.push_back(MakeMemberTerm(input, var, indexer.Get(var, row), c));
-			}
-			if (extremum) {
-				// A MAX's envelope keeps every member at or under the helper's top, a
-				// MIN's at or over its floor.
-				const bool is_max = link.agg_name == "max";
-				BoundTermsOfASum(CombineColumns(input, member), constant, is_max ? -INF : value_lo,
-				                 is_max ? value_hi : INF, is_helper, column_lo, column_hi);
-				continue;
-			}
-			for (auto &term : member) {
-				group_terms[group].push_back(term);
-			}
-			group_constant[group] += constant;
-		}
-		if (extremum) {
-			continue;
-		}
 		// A SUM or AVG helper bounds its group's members on the sides its definition states: at most its top under
 		// `value >= members` (the envelope), at least its floor under `value <= members` (the closing side).
 		const double sum_lo = link.need_closing ? value_lo : -INF;
 		const double sum_hi = link.need_envelope ? value_hi : INF;
-		for (idx_t group = 0; group < num_groups; group++) {
-			if (!group_terms[group].empty()) {
-				BoundTermsOfASum(CombineColumns(input, group_terms[group]), group_constant[group], sum_lo, sum_hi,
-				                 is_helper, column_lo, column_hi);
+		for (idx_t group = 0; group < members.GroupCount(); group++) {
+			auto span = MembersOf(members, group);
+			vector<MemberTerm> group_terms;
+			double group_constant = 0.0;
+			for (idx_t m = span.first; m < span.last; m++) {
+				vector<MemberTerm> member;
+				for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+					const double c = members.coefficients[t];
+					if (std::abs(c) >= 1e-15) {
+						const idx_t var = members.variables[t];
+						member.push_back(MakeMemberTerm(input, var, indexer.Get(var, members.rows[t]), c));
+					}
+				}
+				if (extremum) {
+					// A MAX's envelope keeps every member at or under the helper's top, a
+					// MIN's at or over its floor.
+					const bool is_max = link.agg_name == "max";
+					BoundTermsOfASum(CombineColumns(input, member), members.constants[m], is_max ? -INF : value_lo,
+					                 is_max ? value_hi : INF, is_helper, column_lo, column_hi);
+					continue;
+				}
+				group_terms.insert(group_terms.end(), member.begin(), member.end());
+				group_constant += members.constants[m];
+			}
+			if (!extremum && !group_terms.empty()) {
+				BoundTermsOfASum(CombineColumns(input, group_terms), group_constant, sum_lo, sum_hi, is_helper,
+				                 column_lo, column_hi);
 			}
 		}
 	}
 	// A helper's box is one for every instance it defines: tightened only when each of
-	// them was bounded, by the loosest. Its other columns -- the rows its path drops -- are
-	// read by no row.
+	// them was bounded, by the loosest. Its other columns -- the rows its path drops, the
+	// windows that read nothing -- are read by no row.
 	for (auto &link : input.reducer_value_links) {
 		const idx_t var = link.value_var;
-		auto &ec = link.rows;
+		auto &members = link.members;
 		double loosest_lo = INF, loosest_hi = -INF;
 		bool every_lo = true, every_hi = true, any = false;
-		for (idx_t row = 0; row < input.num_rows; row++) {
-			if (!ec.row_group_ids.empty() && ec.row_group_ids[row] == DConstants::INVALID_INDEX) {
+		for (idx_t group = 0; group < members.GroupCount(); group++) {
+			auto span = MembersOf(members, group);
+			if (span.first == span.last) {
 				continue;
 			}
 			any = true;
-			const idx_t column = indexer.Get(var, row);
+			const idx_t column = indexer.Get(var, members.group_rows[group]);
 			auto lo = column_lo.find(column);
 			auto hi = column_hi.find(column);
 			every_lo = every_lo && lo != column_lo.end();
@@ -344,48 +375,64 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy) {
-	SparseCoeffAccumulator sum_terms;
+	SparseCoeffAccumulator member_terms;
 	for (auto &link : input.reducer_value_links) {
 		const bool is_max = link.agg_name == "max";
 		const idx_t value_var = link.value_var;
-		// A member is a row's expression negated with its constant apart, the shape the
-		// extremum link takes; the equality reads it the same way.
-		// A helper serves every clause that reads its reducer, so a sum past a DOUBLE names the reducer as written.
-		auto groups = BuildMinMaxGroups(input, link.rows, link.label);
-		MinMaxRowMembers row_members(input, indexer, link.rows, link.label);
-		for (auto &group : groups) {
-			if (group.rows.empty()) {
+		auto &members = link.members;
+		// A member is its expression negated with its constant apart, the shape the extremum link takes; the equality
+		// reads it the same way. Its columns are accumulated: a keyed decision may stand in several terms, and a row
+		// states each column once. A helper serves every clause that reads it, so a sum past a DOUBLE names it as
+		// written.
+		auto fill_member = [&](idx_t m, MinMaxLinkRow &member) {
+			member_terms.BeginForDecisions(indexer, members.member_begin[m + 1] - members.member_begin[m], link.label);
+			for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+				if (members.coefficients[t] != 0.0) {
+					member_terms.Add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
+					                 -members.coefficients[t]);
+				}
+			}
+			member_terms.Flush(member.indices, member.coefficients);
+			member.constant = members.constants[m];
+		};
+		for (idx_t group = 0; group < members.GroupCount(); group++) {
+			auto span = MembersOf(members, group);
+			if (span.first == span.last) {
 				continue;
 			}
+			const idx_t group_row = members.group_rows[group];
 			if (!IsExtremum(link)) {
-				// `value - sum of members' expressions` against `sum of their constants`: the
-				// side the clauses push the value against (`value >= sum` when they push it
-				// down, `value <= sum` when up), the equality only when both sides are needed.
-				// The members' columns are accumulated first: a keyed decision may stand in
-				// several rows of the group, and a row states each column once.
+				// `value - sum of members' expressions` against `sum of their constants`: the side the clauses push
+				// the value against (`value >= sum` when they push it down, `value <= sum` when up), the equality only
+				// when both sides are needed. The members' columns are accumulated first: a keyed decision may stand
+				// in several members of the group, and a row states each column once.
+				SparseCoeffAccumulator sum_terms;
 				sum_terms.BeginForDecisions(indexer, 0, link.label);
 				double constants = 0.0;
-				MinMaxLinkRow member;
-				for (idx_t row : group.rows) {
-					member.indices.clear();
-					member.coefficients.clear();
-					row_members.FillLink(row, member);
-					for (idx_t i = 0; i < member.indices.size(); i++) {
-						sum_terms.Add(member.indices[i], member.coefficients[i]);
+				for (idx_t m = span.first; m < span.last; m++) {
+					for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+						if (members.coefficients[t] != 0.0) {
+							sum_terms.Add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
+							              -members.coefficients[t]);
+						}
 					}
-					AddCoefficient(constants, member.constant, link.label);
+					AddCoefficient(constants, members.constants[m], link.label);
 				}
 				MinMaxLinkRow sum;
 				sum_terms.Flush(sum.indices, sum.coefficients);
-				auto rc = sum.LeftHandSide(static_cast<int>(indexer.Get(value_var, group.first_row)));
+				auto rc = sum.LeftHandSide(static_cast<int>(indexer.Get(value_var, group_row)));
 				rc.sense = link.need_envelope && link.need_closing ? '=' : link.need_envelope ? '>' : '<';
 				rc.rhs = constants;
 				rc.kind = ConstraintKind::STRUCTURAL;
 				input.global_constraints.push_back(std::move(rc));
 				continue;
 			}
+			AuxRange family;
+			for (idx_t m = span.first; m < span.last; m++) {
+				family.Cover(MemberReach(members, m, input));
+			}
 			ExtremumLinkSpec spec;
-			spec.result_column = indexer.Get(value_var, group.first_row);
+			spec.result_column = indexer.Get(value_var, group_row);
 			spec.is_max = is_max;
 			spec.need_envelope = link.need_envelope;
 			spec.need_closing = link.need_closing;
@@ -393,27 +440,46 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			// MIN): the helper's box end against the family's far end. The end is this
 			// group's own instance's (its reach, DeriveReducerValueBounds), not the
 			// decision's cover of every group's.
-			const idx_t instance = indexer.InstanceOf(value_var, group.first_row);
+			const idx_t instance = indexer.InstanceOf(value_var, group_row);
 			const double value_hi = input.InstanceBoxUpper(value_var, instance, input.upper_bounds);
 			const double value_lo = input.InstanceBoxLower(value_var, instance, input.lower_bounds);
 			const bool value_hi_open = value_hi >= 1e20;
 			const bool value_lo_open = value_lo <= -1e20;
 			spec.closing_underivable =
-			    is_max ? (value_hi_open || group.family.lo_unbounded) : (value_lo_open || group.family.hi_unbounded);
-			spec.closing_big_m = spec.closing_underivable ? 0.0
-			                     : is_max                 ? value_hi - group.family.lo
-			                                              : group.family.hi - value_lo;
+			    is_max ? (value_hi_open || family.lo_unbounded) : (value_lo_open || family.hi_unbounded);
+			spec.closing_big_m = spec.closing_underivable ? 0.0 : is_max ? value_hi - family.lo : family.hi - value_lo;
 			if (spec.closing_underivable) {
-				spec.blame_var = FindUnboundedContributor(link.rows, input.lower_bounds, input.upper_bounds);
+				spec.blame_var = FirstUnboundedMemberVariable(members, input.lower_bounds, input.upper_bounds);
 			}
 			spec.written = link.label;
 			spec.label = link.label;
 			spec.envelope_kind = ConstraintKind::STRUCTURAL;
 			spec.closing_kind = ConstraintKind::STRUCTURAL;
-			EmitExtremumLink(input, indexer, spec, row_members.Source(group), var_names, policy);
+			ExtremumMemberSource source;
+			source.count = span.last - span.first;
+			source.fill_link = [&](idx_t i, MinMaxLinkRow &member) {
+				fill_member(span.first + i, member);
+			};
+			source.range = [&](idx_t i) {
+				return MemberReach(members, span.first + i, input);
+			};
+			EmitExtremumLink(input, indexer, spec, source, var_names, policy);
 		}
 	}
 	input.reducer_value_links.clear();
+}
+
+idx_t decide_linearize::FirstUnboundedMemberVariable(const ReducerValueMembers &members,
+                                                     const vector<double> &lower_bounds,
+                                                     const vector<double> &upper_bounds) {
+	for (idx_t t = 0; t < members.variables.size(); t++) {
+		const idx_t v = members.variables[t];
+		if (members.coefficients[t] != 0.0 && v < lower_bounds.size() && v < upper_bounds.size() &&
+		    (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v]))) {
+			return v;
+		}
+	}
+	return DConstants::INVALID_INDEX;
 }
 
 } // namespace duckdb

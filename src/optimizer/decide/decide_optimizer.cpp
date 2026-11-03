@@ -117,6 +117,8 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.record_bounds", [&] { RecordReducedBounds(optimizer, decide); });
 	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
+	// A range over decisions becomes a helper before any rewrite copies it.
+	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
 	// Must run before RewriteAbs: marks ABS nodes that need Big-M
@@ -488,6 +490,15 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
                                                            const DecideVarScopeInfo &scope) {
 	if (!scope.IsGlobal() && !scope.IsKeyed()) {
 		return row;
+	}
+	// A range frame's helper has one instance per window of its frame, which no key's classes name
+	// (RewriteFrameRanges): a row of it stays one per row, each reading its window's instance, and the rows of one
+	// window say the same.
+	if (scope.IsKeyed()) {
+		auto link = decide.keyed_scopes[scope.keyed_scope_idx].value_link;
+		if (link != DConstants::INVALID_INDEX && decide.reducer_value_links[link].frame != DConstants::INVALID_INDEX) {
+			return row;
+		}
 	}
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(row));

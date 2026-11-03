@@ -75,6 +75,18 @@ static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value
 	}
 }
 
+// A range frame reads, for each window, every row of every position it selects: a frame from `first` to `last` over
+// n rows of one peer each reads n values per timeline, but one relative to the anchor over n tied rows reads n per
+// anchor. This caps what one frame may list, so a query whose frame would read billions of values is refused in its
+// own words instead of exhausting memory.
+static constexpr int64_t DECIDE_FRAME_LIMIT_DEFAULT = 10000000;
+
+static void FrameLimitSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.GetValue<int64_t>() < 1) {
+		throw InvalidInputException("decide_frame_limit must be >= 1; got " + parameter.ToString() + ".");
+	}
+}
+
 static void MipGapSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v >= 0.0)) {
@@ -118,6 +130,13 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "enforced, so >= 1e-5. Default 1e-4. Lower it toward the floor for small-magnitude "
 	    "data; raise it to treat larger residuals as zero.",
 	    LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
+	// Frame expansion limit (expressivity knob, beside the L0 threshold).
+	config.AddExtensionOption(
+	    "decide_frame_limit",
+	    "Range frame selectors (agg(from ... to ...: e) over (...)): the most values one frame may read across its "
+	    "ranges -- every row of every selected position, and every else standing in for a missing one. A frame "
+	    "reading more is refused. Must be >= 1. Default 10000000.",
+	    LogicalType::BIGINT, Value::BIGINT(DECIDE_FRAME_LIMIT_DEFAULT), FrameLimitSetCallback);
 	config.AddExtensionOption(
 	    "decide_mip_gap",
 	    "Relative gap at which a DECIDE solve may stop with a near-optimal answer. Default 0: the answer is the "
@@ -132,6 +151,15 @@ double GetDecideMipGap(ClientContext &context) {
 	D_ASSERT(found && !value.IsNull());
 	(void)found;
 	return value.GetValue<double>();
+}
+
+idx_t GetDecideFrameLimit(ClientContext &context) {
+	Value value;
+	// The option is registered with a default, and its callback rejects a limit below 1.
+	bool found = context.TryGetCurrentSetting("decide_frame_limit", value);
+	D_ASSERT(found && !value.IsNull());
+	(void)found;
+	return static_cast<idx_t>(value.GetValue<int64_t>());
 }
 
 double GetDecideL0Tolerance(ClientContext &context) {

@@ -37,8 +37,8 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
             idx_t blame = link.other_var_idx;
             for (const auto &helper : input.reducer_value_links) {
                 if (helper.value_var == link.other_var_idx) {
-                    idx_t member = FindUnboundedContributor(helper.rows, box.lower, box.upper);
-                    blame = member == DConstants::INVALID_INDEX ? blame : member;
+					idx_t member = FirstUnboundedMemberVariable(helper.members, box.lower, box.upper);
+					blame = member == DConstants::INVALID_INDEX ? blame : member;
                 }
             }
             throw InvalidInputException(

@@ -504,10 +504,21 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   type.
 - **A frame's term is linear**: its payload and fallback square or multiply no decision, and take no `abs` of one.
   A data factor on a frame over decisions is linear: `t.w * at(previous: x) over (t.period)`.
-- **A missing position** (before the first row, after the last): `else v` supplies `v`; `all` makes the whole range
-  select nothing; otherwise a range keeps the positions that exist. A point frame that selects nothing, a NULL read at
-  its selected row and a NULL fallback are no value (D84): its comparison skips that instance, a reducer drops that
-  member, and an objective term holding it is dropped.
+- **A missing position** (before the first row, after the last): `else v` supplies `v` -- a range reads it once per
+  missing position; `all` makes the whole range select nothing; otherwise a range keeps the positions that exist. A
+  point frame that selects nothing, a NULL read at its selected row and a NULL fallback are no value (D84), and so is a
+  range that reads nothing -- a reversed one (`from next to previous`), `all` meeting a missing position, or every
+  position missing with no `else`: its comparison skips that instance, a reducer drops that member, and an objective
+  term holding it is dropped.
+- **A range** reduces the values it reads as SQL's aggregate does: a NULL among them is skipped, `count` counts the
+  rest and reads 0 where there are none, and a cyclic range keeps every repeated visit (D76; on three positions, `from
+  4 previous to 4 next` reads nine). Over data it is one value per anchor of the reducer's own type (`max` of a DATE is a
+  DATE). Over decisions it is a helper decision per window (D78) -- the range several anchors share: one per timeline
+  when neither end depends on the anchor, one per position otherwise -- defined once, so `x <= sum(from first to
+  last: x) over (t.period)` over n rows is one definition of n terms. `count` over decisions is refused, as `count(x)`
+  is. One frame may read at most `decide_frame_limit` values over its ranges (default 10,000,000; `SET
+  decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over (t.period) reads more than 4 values over
+  its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting."*
 - **One row per position** (D73): the rows of a selected position must read one payload -- one value of data, one
   linear form over decisions (`0 * x` reads no `x`) -- else *"DECIDE: at(previous: x) over (t.period within
   t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row."*
@@ -522,21 +533,23 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
   over decisions is linear).
 
-**Status.** A point frame is formulated, over data or decisions, in constraints and the objective, inside a reducer
-over decisions too (D78): a decision read at the selected row is that row's own column, with no helper decision. A
-range stops, from one place, before canonicalization reads it, with *"DECIDE: a range frame selector is not supported
-yet: sum(from previous to next: x) over (t.period)"* -- `EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` included
-([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a point frame that may
-select no position inside a reducer over decisions (give it an `else`, or make its timeline cyclic); a frame inside a
-reducer of a bound, or in the bound of a clause over groups that would take its group's tightest value (D85) -- a
-`first` or `last` frame whose timeline lies within each group reads one row per group, and is read; a frame over
-decisions inside or beside a `MIN`/`MAX` of several terms; an `else` that reads a decision while the payload reads
-none.
+**Status.** Points and ranges are formulated, over data or decisions, in constraints and the objective, inside a
+reducer over decisions too: a point reads a decision at the selected row's own column, with no helper decision; a
+range over decisions is its helper per window ([roadmap.md](roadmap.md)). Not supported yet ([errors.md
+§2](errors.md#2-not-supported-yet)): a frame that may read nothing inside a reducer over decisions -- the message says
+why, and how to cure it (give it an `else`, make its timeline cyclic, drop `all`); a frame inside a reducer of a bound,
+or in the bound of a clause over groups that would take its group's tightest value (D85) -- a `first` or `last` frame,
+or a range from `first` to `last`, whose timeline lies within each group reads one value per group, and is read; a
+frame over decisions inside or beside a `MIN`/`MAX` of several terms; an `else` that reads a decision while the payload
+reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from first to
+last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
 
 Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
-`test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint`: every point fixture of `_anr_cases`, judged by
-the oracle; the deck's examples 1, 4 and 5 and the DeQL comparison; shapes and errors),
-`test/common/test_decidb_plan_serialization.cpp` (a placed frame round-trips).
+`test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint` and `TestRange`: every frame fixture of
+`_anr_cases`, every pair of ends under both steps, each policy, open and cyclic, judged by the oracle; the deck's
+examples 1, 2, 4, 5 and 6 and the DeQL comparison; shapes and errors), `test/common/test_decidb_frame_predicates.cpp`
+(the absence predicates against every position they summarize), `test/common/test_decidb_plan_serialization.cpp` (a
+placed point and range round-trip).
 
 ## 6. Scoped constraints — `[when c] [per K]: C`
 

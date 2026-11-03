@@ -114,6 +114,8 @@ struct KeyedScopeInfo {
 struct DecideFrameSpec {
 	//! A range, agg(from F1 to F2 ...: e); else a point, at(F: e)
 	bool range = false;
+	//! A range's reducer, lower case: sum, avg, min, max or count; empty for a point
+	string reducer;
 	//! The point, or the range's first end, and its k
 	DecideFrameAnchor from = DecideFrameAnchor::FIRST;
 	int64_t from_k = 1;
@@ -161,10 +163,77 @@ struct DecideFrameSpec {
 		return from == DecideFrameAnchor::PREVIOUS || from == DecideFrameAnchor::NEXT ||
 		       (range && (to == DecideFrameAnchor::PREVIOUS || to == DecideFrameAnchor::NEXT));
 	}
-	//! Whether some anchor may find its position missing with nothing to stand in: a relative position on a timeline
-	//! that does not wrap, with no `else`. `first` and `last` always exist, as the anchor is on its own timeline.
+	//! Whether some requested position may lie off its timeline, at some anchor of some timeline that does not wrap.
+	//! `first` and `last` always exist, as the anchor is on its own timeline, and so does every position between them:
+	//! a position is missed only past a relative end -- a point's `k previous` or `k next`; a range starting
+	//! `k previous` (unless it ends `j previous`, j > k, and so requests nothing), one ending `k next` after a start at
+	//! or before it, or past `last` by a step of at most k.
+	bool MayMissAPosition() const {
+		using A = DecideFrameAnchor;
+		if (cyclic) {
+			return false;
+		}
+		if (!range) {
+			return from == A::PREVIOUS || from == A::NEXT;
+		}
+		switch (from) {
+		case A::PREVIOUS:
+			return !(to == A::PREVIOUS && to_k > from_k);
+		case A::NEXT:
+			return to == A::NEXT && to_k >= from_k;
+		case A::FIRST:
+			return to == A::NEXT;
+		case A::LAST:
+			return to == A::NEXT && every <= to_k;
+		}
+		return true;
+	}
+	//! Whether some anchor may read nothing there (language/guide.md §5.6, D84). A point: its position may be missing,
+	//! with no `else` to stand in. A range: it may request no position (MayBeEmpty), `all` may meet a missing one, or,
+	//! with no `else`, every position it requests may be missing; `count` reads 0 rather than nothing, but under `all`.
 	bool MaySelectNothing() const {
-		return Relative() && !cyclic && !fallback;
+		if (!range) {
+			return MayMissAPosition() && !fallback;
+		}
+		if (all && MayMissAPosition()) {
+			return true;
+		}
+		if (reducer == "count") {
+			return false;
+		}
+		return MayBeEmpty() || (!fallback && MayMissAPosition() && MayMissEveryPosition());
+	}
+	//! A range whose first end may come after its last for some anchor of some timeline: it requests nothing there,
+	//! cyclic or not. `from previous to next` never does; `from next to previous` always does, and `from first to
+	//! 2 previous` at the first two positions.
+	bool MayBeEmpty() const {
+		using A = DecideFrameAnchor;
+		switch (from) {
+		case A::FIRST:
+			return to == A::PREVIOUS;
+		case A::LAST:
+			return to != A::LAST;
+		case A::PREVIOUS:
+			return to == A::FIRST || (to == A::PREVIOUS && to_k > from_k);
+		case A::NEXT:
+			return to != A::NEXT || to_k < from_k;
+		}
+		return true;
+	}
+	//! A range none of whose requested positions need exist, at some anchor of some timeline that does not wrap. One
+	//! does when the range starts at an end of the timeline (`first`, `last`), its first position; when it ends at
+	//! `last` and either steps by 1 or starts on the timeline (`k next`), so every position it requests lies on it;
+	//! and when it starts `k previous`, steps onto the anchor (`k` a multiple of `every`) and ends at or after it.
+	bool MayMissEveryPosition() const {
+		using A = DecideFrameAnchor;
+		if (from == A::FIRST || from == A::LAST) {
+			return false;
+		}
+		if (to == A::LAST && (every == 1 || from != A::PREVIOUS)) {
+			return false;
+		}
+		const bool reaches_anchor = to == A::NEXT || to == A::LAST;
+		return !(from == A::PREVIOUS && from_k % every == 0 && reaches_anchor);
 	}
 	//! Whether it stands outside every reducer of the comparison of clause `clause_id` and may select nothing, so that
 	//! comparison has no instance at a row where it selects none (D84). False for a comparison with no id.
@@ -578,7 +647,14 @@ public:
         bool need_closing = false;
         //! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.
         vector<DecideTerm> inner_terms;
-    };
+		//! A range frame over decisions (index into `frames`; DecideOptimizer::RewriteFrameRanges): the helper has
+		//! one instance per window of the frame, its members the payload `inner_expr` at the rows the window reads
+		//! and, with an `else`, `fallback_terms` at the window's anchor once per missing position. INVALID_INDEX for
+		//! a reducer, whose groups are its path key's.
+		idx_t frame = DConstants::INVALID_INDEX;
+		//! The frame's `else` flattened, each coefficient its FALLBACK column (stage 05).
+		vector<DecideTerm> fallback_terms;
+	};
     vector<ReducerValueLink> reducer_value_links;
 
     //! What a rewrite made of a construct, for EXPLAIN: the construct as a plan prints it
@@ -587,33 +663,35 @@ public:
     //! clause it came from; INVALID_INDEX is the objective. Produced by the rewrites; an
     //! optimized plan is never serialized.
     struct RewriteAccount {
-        enum class Kind : uint8_t {
-            AVG_SUM,                      //!< an AVG over decisions, a sum scaled by its row count
-            NORM_SUM_ABS,                 //!< `norm(e, 1)`, a sum of absolute values
-            NORM_SUM_SQUARES,             //!< `norm(e, 2)`, a sum of squares
-            NORM_MAX_ABS,                 //!< `norm(e, 'inf')`, a maximum of absolute values
-            EXTREMUM_EACH_MEMBER,         //!< a MIN/MAX in its cheap direction, a bound on each member
-            ABS_AUXILIARY,                //!< an ABS held by solver pressure alone
-            ABS_AUXILIARY_SIGN_INDICATOR, //!< an ABS pinned by Big-M rows and a sign binary
-            ABS_AUXILIARY_NATIVE,         //!< an ABS stated to the solver as an absolute value
-            PRODUCT_AND,                  //!< a Boolean product, AND rows
-            PRODUCT_MCCORMICK,            //!< a Boolean times a bounded decision, McCormick rows
-            IN_INDICATORS,                //!< `x IN (...)`, one indicator per value
-            L0_INDICATORS,                //!< `norm(e, 0)`, one indicator per row
-            VALUE_HELPER,                 //!< a reducer held by one helper decision
-            VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
-            EXTREMUM,                     //!< a MIN/MAX held by its envelope
-            EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
-            NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
-            BODY_AT_LEAST,                //!< a reducer's non-linear body, a helper per row at least its value
-            BODY_AT_MOST,                 //!< the same, at most its value
-            BODY_EQUAL,                   //!< the same, equal to its value
-            EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
-            //! What the data made of a scoped expression's classes (D70, D71): more instances than classes. Recorded
-            //! by execution, so only EXPLAIN ANALYZE prints it, and `subject` is the whole line.
-            VARIANTS,
-        };
-        idx_t source_clause_id = DConstants::INVALID_INDEX;
+		enum class Kind : uint8_t {
+			AVG_SUM,                      //!< an AVG over decisions, a sum scaled by its row count
+			NORM_SUM_ABS,                 //!< `norm(e, 1)`, a sum of absolute values
+			NORM_SUM_SQUARES,             //!< `norm(e, 2)`, a sum of squares
+			NORM_MAX_ABS,                 //!< `norm(e, 'inf')`, a maximum of absolute values
+			EXTREMUM_EACH_MEMBER,         //!< a MIN/MAX in its cheap direction, a bound on each member
+			ABS_AUXILIARY,                //!< an ABS held by solver pressure alone
+			ABS_AUXILIARY_SIGN_INDICATOR, //!< an ABS pinned by Big-M rows and a sign binary
+			ABS_AUXILIARY_NATIVE,         //!< an ABS stated to the solver as an absolute value
+			PRODUCT_AND,                  //!< a Boolean product, AND rows
+			PRODUCT_MCCORMICK,            //!< a Boolean times a bounded decision, McCormick rows
+			IN_INDICATORS,                //!< `x IN (...)`, one indicator per value
+			L0_INDICATORS,                //!< `norm(e, 0)`, one indicator per row
+			VALUE_HELPER,                 //!< a reducer held by one helper decision
+			VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
+			FRAME_HELPER_PER_TIMELINE,    //!< a range frame held by a helper decision per timeline
+			FRAME_HELPER_PER_POSITION,    //!< a range frame held by a helper decision per position
+			EXTREMUM,                     //!< a MIN/MAX held by its envelope
+			EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
+			NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
+			BODY_AT_LEAST,                //!< a reducer's non-linear body, a helper per row at least its value
+			BODY_AT_MOST,                 //!< the same, at most its value
+			BODY_EQUAL,                   //!< the same, equal to its value
+			EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
+			//! What the data made of a scoped expression's classes (D70, D71): more instances than classes. Recorded
+			//! by execution, so only EXPLAIN ANALYZE prints it, and `subject` is the whole line.
+			VARIANTS,
+		};
+		idx_t source_clause_id = DConstants::INVALID_INDEX;
         Kind kind = Kind::ABS_AUXILIARY;
         string subject;
     };

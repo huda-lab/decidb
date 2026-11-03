@@ -1305,6 +1305,11 @@
         "id": 120,
         "name": "partition_subject",
         "type": "string"
+      },
+      {
+        "id": 121,
+        "name": "reducer",
+        "type": "string"
       }
     ],
     "pointer_type": "none"
