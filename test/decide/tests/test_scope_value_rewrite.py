@@ -134,11 +134,12 @@ def test_two_clauses_share_one_helper(decidb_cli, scope_solver, tmp_path):
 @pytest.mark.correctness
 def test_a_row_varying_factor_on_a_reducer(decidb_cli, scope_solver, tmp_path):
     """Deck example 5: each shipment within its depot's share of the depot's total. The
-    factor is read on the shipment's row; the helper is one per depot."""
+    factor is read on the shipment's row; the helper is one per depot, a sum of at most two
+    shipments read by as many rows, so written into them (D89): no column, no row."""
     sql = _ship_query("ship <= D.maxShipmentShare * sum(ship) by (D.depotID)")
     assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
-        "num_vars": len(SHIPMENTS) + len(DEPOTS),
-        "num_rows": len(SHIPMENTS) + len(DEPOTS),
+        "num_vars": len(SHIPMENTS),
+        "num_rows": len(SHIPMENTS),
     }
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped((X,), "<=", (_ship_reduce(by=("depotID",), factor=lambda r: r["maxShipmentShare"]),))]
@@ -204,7 +205,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             ("depotID",),
-            len(DEPOTS),
+            0,
             id="data-under-the-by-key",
         ),
         pytest.param("sum(ship) by (D.depotID) <= 30 * open", ("depotID",), lambda r: 30, PER_ROW, 0, id="constant"),
@@ -213,7 +214,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             PER_ROW,
-            len(DEPOTS),
+            0,
             id="data-per-row",
         ),
         pytest.param(
@@ -221,7 +222,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             ("shipmentID",),
-            len(DEPOTS),
+            0,
             id="data-under-a-finer-key",
         ),
         pytest.param("sum(ship) <= 60 * open", (), lambda r: 60, PER_ROW, 1, id="by-nothing"),
@@ -234,8 +235,9 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
     group: its decision is keyed by the `by` key and its data is a constant. Data the clause's
     `per` does not hold by construction may take several values in a class, each a variant
     (D70), so it takes a helper decision per group, as data read per row, a `per` finer than
-    the `by` key and a `by` the decision's key does not determine do. The answer is the same
-    either way."""
+    the `by` key and a `by` the decision's key does not determine do. A depot's sum, read by
+    its group's rows alone, is then written into them (D89): no column. The answer is the
+    same either way."""
     cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
     sql = f"""
         SELECT shipmentID, ship, open {from_clause()}
@@ -265,21 +267,24 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50",
             (("depotID",), ("region",)),
             50,
-            len(DEPOTS) + 2,
+            2,
             id="two-keys",
         ),
         pytest.param(
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) + sum(ship) <= 90",
             (("depotID",), ("region",), ()),
             90,
-            len(DEPOTS) + 2 + 1,
+            2 + 1,
             id="three-keys",
         ),
     ],
 )
 def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, clause, reducers, bound, helpers):
-    """Each reducer reads its own group; the row adds the helpers. One helper per group
-    of every key, one definition row each."""
+    """Each reducer reads its own group; the row adds the helpers, one per group of every
+    key, defined once. Where that costs more nonzeros than writing a helper's members into
+    the rows that read it, it is written in (D89): each depot's sum, at most two shipments
+    read by as many rows. The region sums (East's is four shipments read by four rows) and
+    the query's total keep their columns and definitions."""
     sql = _ship_query(clause)
     assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
         "num_vars": len(SHIPMENTS) + helpers,
@@ -500,7 +505,8 @@ def test_a_max_helper_instance_is_boxed_and_closed_by_its_own_group(
 ):
     """`ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1` with `ship <= 10`: the helper's three instances
     reach 30 (D1's 3 * 10), 20 and 10. Each instance's column is boxed by its own group's reach, and each closing row
-    carries that reach as its Big-M, not the cover of all three (30) that a box per decision gave every group."""
+    carries that reach as its Big-M, not the cover of all three (30) that a box per decision gave every group. D3's
+    group has one member, which it is: an equality, no closing row (deck p. 112)."""
     sql = _ship_query("ship <= 10 AND ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1")
     model = ScopedModel(joined(), SHIP)
     clauses = [
@@ -511,9 +517,10 @@ def test_a_max_helper_instance_is_boxed_and_closed_by_its_own_group(
     for cli in (decidb_cli_highs, decidb_cli_gurobi):
         dump, helper = _helper_dump(cli, sql, tmp_path)
         assert helper == [(0.0, 30.0), (0.0, 20.0), (0.0, 10.0)]
-        # One closing row per member, `value - weight * ship <= M`: D1's two, D2's two and D3's one.
+        # One closing row per member, `value - weight * ship <= M`: D1's two and D2's two; D3's `value = weight * ship`.
         closing = re.findall(r"^row \d+: sense=< rhs=(\S+) nnz=3 ", dump, re.M)
-        assert [float(m) for m in closing] == [30, 30, 20, 20, 10]
+        assert [float(m) for m in closing] == [30, 30, 20, 20]
+        assert len(re.findall(r"^row \d+: sense== rhs=0 nnz=2 ", dump, re.M)) == 1, dump
         assert _judged(cli, scope_solver, sql, model, clauses) == [10, 10, 10, 10, 2]
 
 

@@ -248,6 +248,18 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 //! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
 void LinearizeAbsMaximize(SolverInput &input);
 
+//! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 0, at the end of assembly, once the
+//! rows and the objective are final: inline each helper where the plan allows (`inlining`) and doing so adds no
+//! nonzero to the model (D89), counted on the data -- an instance of `m` terms read `k` times costs `m * k` written
+//! in, against `m + 1` for its definition and `k` for its reads. One the plan has read by an outer helper's members --
+//! a nested reducer -- is written into them, each term reading an instance becoming that instance's terms; one read
+//! by rows and the objective is marked `inlined`, for the model builder to write its members where they read it.
+//! Either way its variable becomes DecideVarScope::INLINED, with no column. A MIN or MAX helper is linear, and so
+//! inlined, only when every instance has one member; an outer MIN or MAX that may close natively takes only instances
+//! read once. A read where the plan lists none is an internal error. Returns whether any helper was inlined: the
+//! column space must then be laid out again.
+bool InlineReducerValueLinks(SolverInput &input);
+
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper instance by the reach of its own group's members -- the sum of their brackets
 //! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
@@ -274,8 +286,9 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
 //! the flat equality `value - members = constants` (an AVG's members carry their 1/n).
 //! MIN/MAX: an extremum link (EmitExtremumLink) on the sides the clause needs, its
 //! closing Big-M sized off the helper's box against the family's far end, and refused
-//! naming a column to bound where no such constant exists on the lowering arm. The
-//! evaluated member rows are consumed here; none reaches `input.constraints`.
+//! naming a column to bound where no such constant exists on the lowering arm; an extremum group of one member is that
+//! member, an equality (deck p. 112). The evaluated member rows are consumed here; none reaches `input.constraints`.
+//! An inlined helper has no definition: its members move to SolverInput::inlined_helpers.
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
 

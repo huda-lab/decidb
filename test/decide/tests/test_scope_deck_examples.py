@@ -4,8 +4,10 @@ explicit form.
 Each runs over the deck's query -- `FROM Shipment S JOIN Depot D USING (depotID)` with
 `DECIDE ship(INT), per D.depotID: reserve(REAL)` -- and is checked four ways: both forms
 build the same model (DECIDB_DUMP_MODEL), the model has one row per generated class (plus,
-for examples 1, 5 and 8, one definition row per helper the value rewrite adds; examples 3
-and 6 bound one decision, so their classes fold into the reserve column's box), the
+for example 1, one definition row for the helper the value rewrite adds: read by every
+shipment's row, it keeps its column, where examples 5 and 8 write their few members into
+the rows that read them, D89; examples 3 and 6 bound one decision, so their classes fold
+into the reserve column's box), the
 optimum is the oracle's (`_scope_oracle.ScopedModel`, which follows the ANR definition
 literally), and the answer satisfies every clause the language generates. Example 7 is
 also run on data where one depot has no priority shipment: the reducer has no row for
@@ -124,10 +126,10 @@ EXAMPLES = [
             "<=",
             (Reduce("sum", lambda r: {"ship": 1}, by=("depotID",), factor=lambda r: r["maxShipmentShare"]),),
         ),
-        5 + 3,
+        5,
         MAXIMIZE_SHIP,
         id="5",
-    ),  # one row per shipment, one definition row per depot
+    ),  # one row per shipment, each depot's sum written into its rows (D89)
     pytest.param(
         "per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity",
         "per D.depotID: sum(when S.priority per row: ship) by (D.depotID) <= D.priorityCapacity",
@@ -157,10 +159,10 @@ EXAMPLES = [
             ),
             per=("shipmentID",),
         ),
-        5 + 5,
+        5,
         MAXIMIZE_SHIP,
         id="8",
-    ),  # one row per shipment, each arriving alone: one definition row each
+    ),  # one row per shipment, each arriving alone: its group's sum is itself (D89)
 ]
 
 
@@ -171,8 +173,8 @@ def test_deck_example(decidb_cli, scope_solver, tmp_path, written, explicit, cla
     sql = _query(written, sql_objective)
     dump = decidb_cli.dump_model(sql, tmp_path / "written.dump")
     assert dump == decidb_cli.dump_model(_query(explicit, sql_objective), tmp_path / "explicit.dump")
-    # One row per generated class for the example (and one definition row per helper of the
-    # value rewrite, examples 1, 5 and 8); `ship <= S.demand` is the ship columns' bound.
+    # One row per generated class for the example (and, for example 1, the definition row of its
+    # helper); `ship <= S.demand` is the ship columns' bound.
     assert dump_counts(dump)["num_rows"] == classes
 
     model = ScopedModel(joined(), DECISIONS)

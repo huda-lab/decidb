@@ -11,7 +11,7 @@ postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck
 and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
 `outer(per k: inner(e) by (k))` among them, and frame selectors, points and ranges (pp. 42–56).
 
-The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D88) and
+The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D89) and
 encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
 the sections below say how far the engine builds them.
 
@@ -79,7 +79,9 @@ The deck's evaluation strategy for nested ANR: build an annotated AST whose scop
 bottom-up into constraints. Runtime containers follow the node role: a reducer is a map from `by` key to operand; a
 scoped expression is a vector for `per row`, otherwise a set of distinct signatures. Frames are built the same way
 over partition and order. `MAX` inside `SUM` becomes helper variables (`x₁,₂ = max(x₁, x₂)`); `SUM` inside `SUM`
-flattens. DeciDB evaluates through DuckDB plans and window columns instead.
+flattens. DeciDB evaluates through DuckDB plans and window columns instead, and reaches the deck's model: a helper is
+written where it is read when that adds no nonzero, so a `SUM` inside a `SUM` flattens, and a `MAX` of one member is
+that member (D89).
 
 ## Beyond the deck (pp. 2, 76)
 

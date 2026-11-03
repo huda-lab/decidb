@@ -2289,6 +2289,24 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 		                         chunk_expr_cache);
 	}
 	AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, gstate.data, num_rows, chunk_expr_cache);
+	if (DecideProfileScope::Enabled()) {
+		// The positions the frames request: one per anchor of a point, and each value a range's window lists, once per
+		// window however many anchors share it.
+		idx_t windows = 0, positions = 0;
+		for (auto &map : gstate.frame_maps) {
+			if (!map.range) {
+				positions += std::count(map.anchors.begin(), map.anchors.end(), true);
+				continue;
+			}
+			windows += map.WindowCount();
+			for (idx_t w = 0; w < map.WindowCount(); w++) {
+				positions += map.ValueCount(w);
+			}
+		}
+		DecideProfileScope::Counter("anr.frames", static_cast<double>(frames.size()));
+		DecideProfileScope::Counter("anr.frame_windows", static_cast<double>(windows));
+		DecideProfileScope::Counter("anr.frame_positions", static_cast<double>(positions));
+	}
 }
 
 void PhysicalDecide::CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -4194,6 +4212,8 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		spec.need_envelope = link.need_envelope;
 		spec.need_closing = link.need_closing;
 		spec.label = link.label;
+		spec.inlining = link.inlining;
+		spec.inline_outer = link.inline_outer;
 		if (link.frame != DConstants::INVALID_INDEX) {
 			EvaluateFrameLink(context, gstate, num_rows, chunk_expr_cache, link, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
@@ -4246,6 +4266,18 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		}
 		ListRowMembers(ec, num_rows, link.label, spec.members);
 		gstate.evaluated_value_links.push_back(std::move(spec));
+	}
+	if (DecideProfileScope::Enabled() && !gstate.evaluated_value_links.empty()) {
+		idx_t groups = 0, members = 0, terms = 0;
+		for (auto &spec : gstate.evaluated_value_links) {
+			groups += spec.members.GroupCount();
+			members += spec.members.constants.size();
+			terms += spec.members.variables.size();
+		}
+		DecideProfileScope::Counter("anr.helpers", static_cast<double>(gstate.evaluated_value_links.size()));
+		DecideProfileScope::Counter("anr.helper_instances", static_cast<double>(groups));
+		DecideProfileScope::Counter("anr.members", static_cast<double>(members));
+		DecideProfileScope::Counter("anr.member_terms", static_cast<double>(terms));
 	}
 }
 
@@ -4511,7 +4543,18 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		             /*quadratic_inner=*/false, num_rows, evaluated.bilinear_filters[term_idx].avg_group_ids,
 		             evaluated.bilinear_filters[term_idx].avg_num_groups);
 	}
-    return solver_input;
+
+	// The helpers written where they are read own no column (stage 06, D89): decided here, on the assembled rows and
+	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision
+	// or an instance, so the column space is laid out again, and every row read against the old one is read anew.
+	phase.Next("assembly.inline_helpers");
+	if (InlineReducerValueLinks(solver_input)) {
+		out_var_indexer = VarIndexer::Build(solver_input);
+		for (auto &ec : solver_input.constraints) {
+			ec.emitted_rows = EmittedRows();
+		}
+	}
+	return solver_input;
 }
 
 //===--------------------------------------------------------------------===//

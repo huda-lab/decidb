@@ -414,7 +414,19 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`FoldSingletonRows` marks it written) before the rigid box is captured, so a bound a
   clause folds into its box stands, and the static domain check skips it: a helper holds a
   reducer's value, negative wherever its terms are. A refusal in formulation names a helper
-  by its reducer.
+  by its reducer. The spec carries the plan's `inlining` and `inline_outer` too: the end of
+  assembly runs stage 06's `InlineReducerValueLinks` on the final rows and objective
+  (`assembly.inline_helpers`, D89), and where it inlines a helper the column space is laid out
+  again and every clause's emitted rows, built against the old one for the implied bounds, are
+  dropped to be built anew. The floors and implied bounds keep only what holds of a decision or
+  an instance, so they stand. Everything above -- the members, the absent instances, the skipped
+  rows -- is computed for an inlined helper as for any.
+- **Counters** (`DECIDB_PROFILE`): `anr.frames`, `anr.frame_windows` and
+  `anr.frame_positions` (one per point anchor, each value a range's windows list) once the
+  frames are built; `anr.helpers`, `anr.helper_instances` (groups), `anr.members` and
+  `anr.member_terms` once the helpers' members are listed; `anr.inlined_helpers` from stage 06
+  -- beside the model's own `model.variables`, `model.linear_rows` and `model.linear_nonzeros`.
+  `benchmark/decide/anr_scaling.py` reads them (`../../performance/benchmarking/anr_scaling.md`).
 
 ---
 

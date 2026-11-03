@@ -644,14 +644,19 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
   decision** with one instance per `by` group, defined once (a row for `SUM`/`AVG` on the side the clause pushes it, an
   extremum link for `MIN`/`MAX`), and the clause is one row per class.
   Example 1 costs N rows of two entries plus one definition row,
-  not N rows of N entries. Clauses holding the same reducer over the same rows share one helper and one definition,
+  not N rows of N entries. Where writing a helper's members into the rows that read it adds no nonzero -- an instance
+  of `m` terms read `k` times costs `m·k` written in, `m + 1 + k` defined -- the helper is written in and has no
+  column (D89): example 5's depot sums, two shipments read by two rows, and a range frame's window read by its anchor
+  alone. So is a nested reducer written into the one around it, and a `MIN`/`MAX` group of one member is that member,
+  an equality (deck p. 112). Clauses holding the same reducer over the same rows share one helper and one definition,
   which belongs to none of them: a `DIAGNOSE` that drops one leaves the definition the others read. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
   product or square of decisions inside such a reducer is defined per row first, so `sum(power(x, 2)) + gcap * s <= 30`
   answers on Gurobi and is refused on HiGHS, which has no quadratic constraints (§3.1). A `BOOL` factor on a reducer
   (`b * sum(x)`) leaves the product `b * helper`, which is linearized as any `BOOL` product (§4).
 
 `EXPLAIN` names a helper by its reducer; `DIAGNOSE` names the clause and never a definition row. Tests:
-`test/decide/tests/test_scope_value_rewrite.py`.
+`test/decide/tests/test_scope_value_rewrite.py`, `test/decide/tests/test_anr_inlining.py` (a helper written in or
+kept, model sizes pinned) and `test/common/test_decidb_helper_inlining.cpp`.
 
 ### 6.5 Deck examples 1–8
 

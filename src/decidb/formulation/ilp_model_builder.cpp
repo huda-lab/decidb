@@ -70,10 +70,15 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     // Row block: num_rows * num_row_vars
     idx.keyed_block_start = input.num_rows * row_var_count;
 
-    // Keyed block: assign base offsets per keyed variable
-    idx_t keyed_offset = 0;
+	// Keyed block: assign base offsets per keyed variable. An inlined helper owns no column, but keeps the mapping
+	// that names the instance a row reads.
+	idx_t keyed_offset = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
-        if (idx.var_scope[v] != DecideVarScope::KEYED) {
+		if (idx.var_scope[v] == DecideVarScope::INLINED) {
+			idx.var_keyed_mapping_idx[v] = input.variable_scopes[v].keyed_scope_idx;
+			continue;
+		}
+		if (idx.var_scope[v] != DecideVarScope::KEYED) {
             continue;
         }
         idx_t scope_idx = input.variable_scopes[v].keyed_scope_idx;
@@ -224,13 +229,56 @@ static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarInd
     return true;
 }
 
-//! Calls `add(column, coefficient)` for each decision term of one row a clause emits: each term's nonzero coefficient on
-//! the rows [begin, end) of `rows` (row k itself when `rows` is null). A term beside the reducers counts once:
-//! execution kept its coefficient on one row (CountOnce).
+//! Calls `add(column, coefficient)` for the columns decision `var` stands for at data row `row`, times `coefficient`,
+//! and returns the constant it carries there: its own column (a frame read resolving to its base's at the row it
+//! selects), or for a helper stage 06 inlined (SolverInput::inlined_helpers, D89) the terms of the instance `row`
+//! reads, each scaled by `coefficient`, whose constants, scaled, it returns. A clause skipped the rows reading an
+//! absent instance (MarkAbsentDecisionReads), so none reaches here from one; the objective reads one as no value
+//! (`absent_reads_nothing`), as it reads the spare column of an absent class (D84).
 template <class ADD>
-static void ForEachClauseRowTerm(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
-                                 idx_t begin, idx_t end, ADD &&add) {
-    for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+static double ForEachTermColumn(const SolverInput &input, const VarIndexer &indexer, idx_t var, idx_t row,
+                                double coefficient, bool absent_reads_nothing, ADD &&add) {
+	if (indexer.var_scope[var] != DecideVarScope::INLINED) {
+		add(static_cast<int>(indexer.Get(var, row)), coefficient);
+		return 0.0;
+	}
+	if (coefficient == 0.0) {
+		return 0.0;
+	}
+	if (var >= input.inlined_helper_of.size() || input.inlined_helper_of[var] == DConstants::INVALID_INDEX) {
+		throw InternalException("DECIDE: a row reads a helper decision written into another helper's members");
+	}
+	auto &helper = input.inlined_helpers[input.inlined_helper_of[var]];
+	const idx_t instance = indexer.InstanceOf(var, row);
+	const idx_t group =
+	    instance < helper.group_of_instance.size() ? helper.group_of_instance[instance] : DConstants::INVALID_INDEX;
+	if (group == DConstants::INVALID_INDEX) {
+		if (absent_reads_nothing) {
+			return 0.0;
+		}
+		throw InternalException("DECIDE: a row reads %s where it is absent", helper.label);
+	}
+	auto &members = helper.members;
+	double constant = 0.0;
+	for (idx_t m = members.group_begin[group]; m < members.group_begin[group + 1]; m++) {
+		constant += coefficient * members.constants[m];
+		for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+			add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
+			    coefficient * members.coefficients[t]);
+		}
+	}
+	return constant;
+}
+
+//! Calls `add(column, coefficient)` for each decision term of one row a clause emits: each term's nonzero coefficient
+//! on the rows [begin, end) of `rows` (row k itself when `rows` is null), an inlined helper's members in its place. A
+//! term beside the reducers counts once: execution kept its coefficient on one row (CountOnce). Returns the constant
+//! the row's terms carry: the inlined helpers' (ForEachTermColumn).
+template <class ADD>
+static double ForEachClauseRowTerm(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
+                                   const vector<idx_t> *rows, idx_t begin, idx_t end, ADD &&add) {
+	double constant = 0.0;
+	for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
         idx_t decide_var_idx = ec.variable_indices[term_idx];
         if (decide_var_idx == DConstants::INVALID_INDEX) {
             continue;
@@ -240,14 +288,16 @@ static void ForEachClauseRowTerm(const EvaluatedConstraint &ec, const VarIndexer
             idx_t row = rows ? (*rows)[k] : k;
             double coeff = col.Get(row);
             if (coeff != 0.0) {
-                add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
-            }
+				constant += ForEachTermColumn(input, indexer, decide_var_idx, row, coeff, false, add);
+			}
         }
     }
+	return constant;
 }
 
-const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer, const string &written) {
-    auto &out = ec.emitted_rows;
+const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
+                                     const string &written) {
+	auto &out = ec.emitted_rows;
     if (!out.offsets.empty()) {
         return out;
     }
@@ -279,16 +329,17 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarInd
     auto sum = [&](int column, double coeff) { accum.Add(column, coeff); };
     out.offsets.reserve(num_emitted + 1);
     out.offsets.push_back(0);
-    for (idx_t e = 0; e < num_emitted; e++) {
+	out.constants.assign(num_emitted, 0.0);
+	for (idx_t e = 0; e < num_emitted; e++) {
         idx_t begin = rows ? ec.group_offsets[e] : (ec.lhs_is_aggregate ? 0 : e);
         idx_t end = rows ? ec.group_offsets[e + 1] : (ec.lhs_is_aggregate ? num_rows : e + 1);
         bool excluded = !ec.lhs_is_aggregate && !ec.row_group_ids.empty() &&
                         ec.row_group_ids[e] == DConstants::INVALID_INDEX;
         if (!excluded && own_columns) {
-            ForEachClauseRowTerm(ec, indexer, rows, begin, end, copy);
-        } else if (!excluded) {
-            ForEachClauseRowTerm(ec, indexer, rows, begin, end, sum);
-            accum.Flush(out.columns, out.values);
+			out.constants[e] = ForEachClauseRowTerm(ec, input, indexer, rows, begin, end, copy);
+		} else if (!excluded) {
+			out.constants[e] = ForEachClauseRowTerm(ec, input, indexer, rows, begin, end, sum);
+			accum.Flush(out.columns, out.values);
         }
         out.offsets.push_back(out.columns.size());
     }
@@ -586,12 +637,16 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
                 continue;
             }
-            for (idx_t row = 0; row < num_rows; row++) {
+			// Accumulated: a keyed decision maps many rows onto one column. An inlined helper is its members, whose
+			// constants are the objective's, as its definition would have carried them.
+			auto add_objective = [&](int column, double coefficient) {
+				AddCoefficient(model.obj_coeffs[column], coefficient, input.objective_written);
+			};
+			for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
-                idx_t var_idx = indexer.Get(decide_var_idx, row);
-                // Use += because keyed vars: multiple rows map to same solver var
-                AddCoefficient(model.obj_coeffs[var_idx], col.Get(row), input.objective_written);
-            }
+				model.obj_constant +=
+				    ForEachTermColumn(input, indexer, decide_var_idx, row, col.Get(row), true, add_objective);
+			}
         }
     }
 
@@ -978,8 +1033,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         // The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
         // from the clause, and they are freed with this iteration.
-        ClauseEmittedRows(eval_const, indexer, written);
-        auto emitted = std::move(eval_const.emitted_rows);
+		ClauseEmittedRows(eval_const, input, indexer, written);
+		auto emitted = std::move(eval_const.emitted_rows);
         auto copy_emitted_row = [&](idx_t e, ModelConstraint &constr) {
             auto begin = NumericCast<int64_t>(emitted.offsets[e]);
             auto end = NumericCast<int64_t>(emitted.offsets[e + 1]);
@@ -999,8 +1054,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // every kept row (RewriteRhsAggregates). No per-row check is needed here.
                 D_ASSERT(RhsIsConstantWithinGroups(eval_const));
                 double rhs = eval_const.rhs_values.Get(0);
-                double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written);
-                rhs -= lhs_offset;
+				// The fixed terms, and the constants of the inlined helpers the row reads.
+				double lhs_offset =
+				    SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written) + emitted.constants[0];
+				rhs -= lhs_offset;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, lhs_offset);
                 // F2 site 1: aggregate, ungrouped.
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
@@ -1035,9 +1092,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // value per group it is what lets each group see its own bound.
                     // Row 0 would be wrong twice over: it may belong to another group,
                     // and it may be excluded by WHEN.
-                    double group_lhs_offset =
-                        SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written);
-                    double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
+					double group_lhs_offset =
+					    SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written) +
+					    emitted.constants[g];
+					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality,
                                          group_lhs_offset);
                     // F2 site 2: grouped aggregate (`by` and/or `when`).
@@ -1065,9 +1123,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // in `x - col <= K`) must move to RHS, not be dropped. The
                 // symbolic normalizer only canonicalizes aggregate constraints;
                 // per-row LHS arrives here with constant/data terms still attached.
-                double rhs_adjustment = SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written);
+				double rhs_adjustment =
+				    SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written) + emitted.constants[row];
 
-                double rhs = eval_const.rhs_values[row] - rhs_adjustment;
+				double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, rhs_adjustment);
                 // F2 site 3: per-row. The group label is stamped here for the same reason
                 // the aggregate sites stamp it: a diagnosis over a grouped clause has to
@@ -1489,7 +1548,10 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
         // owns. Keyed variables collapse multiple rows onto one column;
         // the repeated writes are idempotent (same var/label, instance pinned to
         // the class id via Get's mapping).
-        for (idx_t row = 0; row < indexer.num_rows; row++) {
+		if (indexer.var_scope[var] == DecideVarScope::INLINED) {
+			continue; // no column of its own
+		}
+		for (idx_t row = 0; row < indexer.num_rows; row++) {
             idx_t col = indexer.Get(var, row);
             if (col >= provenance.size()) {
                 continue; // defensive: never index past the flat array

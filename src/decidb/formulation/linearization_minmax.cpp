@@ -438,7 +438,25 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
         return link;
     };
 
-    // The envelope, on both arms. It is one row per member with no constant to dominate,
+	// A family of one member is that member (deck p. 112): one equality pins `result` from both sides, with no
+	// indicator and no Big-M -- so a side no box bounds needs none. It takes the kind of the side the site needs,
+	// where that side is mechanism a diagnosis never loosens; a composed clause's closing rows are its user's clause,
+	// loosened one way, which an equality would not be.
+	const auto one_kind = spec.need_closing ? spec.closing_kind : spec.envelope_kind;
+	const bool kinds_agree = !(spec.need_envelope && spec.need_closing && spec.envelope_kind != spec.closing_kind);
+	if (members.count == 1 && kinds_agree && !IsRelaxableForElastic(one_kind)) {
+		auto &member = fill_member(0);
+		auto rc = member.LeftHandSide(result_col);
+		rc.sense = '=';
+		rc.rhs = member.constant;
+		rc.kind = one_kind;
+		rc.source_clause_id = spec.source_clause_id;
+		rc.removal_group_id = spec.removal_group_id;
+		input.global_constraints.push_back(std::move(rc));
+		return;
+	}
+
+	// The envelope, on both arms. It is one row per member with no constant to dominate,
     // and on the native arm it is implied by the general constraint rather than
     // contradicted by it — so whether it is emitted is a question about the SITE (does
     // the surrounding model already supply this side?), never about the backend.

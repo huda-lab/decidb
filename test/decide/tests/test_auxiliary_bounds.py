@@ -115,21 +115,22 @@ def _helper_columns(dump: str, decisions: int) -> list[tuple[float, float]]:
 @pytest.mark.per_clause
 @pytest.mark.correctness
 @pytest.mark.parametrize("objective, boxes", [
-    # Each group's extremum stays in its own rows' range -- 'a' reaches 5*4 = 20, 'b' 2*4 = 8 --
-    # and their sum in twice the helper's box, which covers both instances.
-    pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 8.0), (0.0, 40.0)],
+    # Each group's extremum stays in its own rows' range -- 'a' reaches 5*4 = 20, 'b' 2*4 = 8;
+    # their sum, read by the objective alone, is written into it (D89) and has no column.
+    pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 8.0)],
                  id="sum-over-group-extrema"),
     # The outer extremum over the groups' stays in the per-row range too.
     pytest.param("MAXIMIZE max(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 8.0), (0.0, 20.0)],
                  id="extremum-over-group-extrema"),
-    # Group 'a' reaches 3*4 + 5*4 = 32 and 'b' 2*4 = 8, and their minimum lives in [0, 32].
-    pytest.param("MAXIMIZE min(per g: sum(x * c) by (g))", [(0.0, 32.0), (0.0, 8.0), (0.0, 32.0)],
-                 id="extremum-over-group-sums"),
+    # Group 'a' reaches 3*4 + 5*4 = 32 and 'b' 2*4 = 8. The group sums are written into the
+    # minimum's members (D89), whose box covers them both: [0, 32].
+    pytest.param("MAXIMIZE min(per g: sum(x * c) by (g))", [(0.0, 32.0)], id="extremum-over-group-sums"),
 ])
 def test_a_nested_objectives_helpers_are_boxed(decidb_cli, tmp_path, objective, boxes):
     """A nested objective is a helper per group for the inner reducer and one for the outer
     (D81), each instance boxed by its own group's reach (DeriveReducerValueBounds), so the
-    outer one's box is read off the inner ones'."""
+    outer one's box is read off the inner ones' -- or off their members, where an inner sum
+    is written into the outer reducer's members and an outer sum into the objective (D89)."""
     dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
@@ -281,9 +282,11 @@ def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
     ],
 )
 def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_path, decide, box, big_m):
-    """The extremum column is boxed by the family and the closing row's Big-M is the family's span, neither reaching 0."""
+    """The extremum column is boxed by the family and the closing row's Big-M is the family's span, neither reaching 0.
+    Two rows: a family of one member is that member, an equality with no Big-M (deck p. 112)."""
     dump = _lowering(decidb_cli).dump_model(
-        f"SELECT x FROM (SELECT 1 AS id) t DECIDE x(INT) SUCH THAT {decide} MINIMIZE SUM(x)", tmp_path / "family.dump"
+        f"SELECT x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT {decide} MINIMIZE SUM(x)",
+        tmp_path / "family.dump",
     )
     assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [box], dump
     binary = int(re.search(r"^col (\d+): .* bin=1", dump, re.M)[1])

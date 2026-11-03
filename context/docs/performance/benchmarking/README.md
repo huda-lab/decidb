@@ -11,6 +11,7 @@ Databases and results are gitignored (`benchmark/decide/.gitignore`), so keep th
 | Direct-solve benchmark | How much faster is direct solve than the forced solver on the same query, as the data grows? | `direct_solve/run.py`, `direct_solve/queries/*.sql` | [direct_solve.md](direct_solve.md) |
 | DIAGNOSE examples | What does a SQL user read, plain and under DIAGNOSE, for each example query on each backend? | `diagnose_examples/run.py`, `diagnose_examples/queries/*.sql` | [../../diagnostics/README.md](../../diagnostics/README.md) § Capturing examples |
 | Archived direct-solve profilers | The measurements each direct-solve rule's `done.md` cites | `direct_solve/archive/` | [archive_profilers.md](archive_profilers.md) |
+| ANR scaling | Does DeciDB's own time (optimizer and model construction) grow linearly with the input on nested reducers, variants, point frames and ranges? | `anr_scaling.py` | [anr_scaling.md](anr_scaling.md) |
 | Oracle-checked scale tests | Does DECIDE still match an independent solver on a few hundred to a few thousand rows? | `test/decide/tests/test_large_scale.py` | [scale_tests.md](scale_tests.md) |
 
 ## Which one to use
@@ -29,6 +30,7 @@ make decide-bench-setup && make decide-bench                    # TPC-H suite: d
 python3 benchmark/decide/profile_pipeline.py                     # pipeline profiler (constants at the top of the file)
 python3 benchmark/decide/direct_solve/run.py                     # direct solve against Gurobi and HiGHS
 python3 benchmark/decide/diagnose_examples/run.py               # DIAGNOSE output for the example corpus
+python3 benchmark/decide/anr_scaling.py                          # ANR workloads at 10^3 .. 10^5 rows (--max, --only)
 python3 benchmark/decide/direct_solve/archive/<profiler>.py -h   # one archived profiler; see archive_profilers.md
 ```
 

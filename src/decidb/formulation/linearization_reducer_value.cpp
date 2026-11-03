@@ -13,11 +13,14 @@
 // alone.
 //
 //===----------------------------------------------------------------------===//
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -114,7 +117,296 @@ AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, 
 	return reach;
 }
 
+//! The reads of each instance of a helper the plan lets stage 06 inline: by the rows and the objective, or by its
+//! outer link's members (InlineReducerValueLinks).
+struct HelperReads {
+	vector<idx_t> count;
+
+	void Read(const ReducerValueLinkSpec &link, idx_t instance) {
+		if (instance >= count.size()) {
+			throw InternalException("DECIDE: %s is read at an instance it does not have", link.label);
+		}
+		count[instance]++;
+	}
+};
+
+//! Whether writing `link`'s members where they are read adds no nonzero to the model (D89): an instance of `m` terms
+//! read `k` times costs `m * k` inlined, against `m + 1` for its definition and `k` for its reads. One reader always
+//! qualifies; so does a sum of three read twice (West's, deck p. 115). An instance with no member is absent, and no
+//! reader reads it (InlineReducerValueLinks counts none there).
+bool InliningAddsNoNonzero(const ReducerValueLinkSpec &link, const HelperReads &reads,
+                           const vector<idx_t> &group_of_instance) {
+	idx_t inlined = 0, defined = 0;
+	for (idx_t instance = 0; instance < group_of_instance.size(); instance++) {
+		const idx_t group = group_of_instance[instance];
+		if (group == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		const idx_t k = reads.count[instance];
+		auto span = MembersOf(link.members, group);
+		const idx_t m = link.members.member_begin[span.last] - link.members.member_begin[span.first];
+		inlined += m * k;
+		defined += m + 1 + k;
+	}
+	return inlined <= defined;
+}
+
+//! Whether every group of `link` has one member: a MIN or MAX that is then its members.
+bool EveryGroupSingleton(const ReducerValueLinkSpec &link) {
+	for (idx_t g = 0; g < link.members.GroupCount(); g++) {
+		auto span = MembersOf(link.members, g);
+		if (span.last - span.first > 1) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Whether `ec` is a linear row of a plain clause, the only row the plan lets read a helper it inlines into its
+//! readers (the linear form's census): no hard MIN/MAX, `<>`, Big-M ABS pair, product or square.
+bool IsPlainLinearRow(const EvaluatedConstraint &ec) {
+	return ec.minmax_agg_type.empty() && ec.ne_clause_idx == DConstants::INVALID_INDEX &&
+	       ec.abs_aux_idx == DConstants::INVALID_INDEX && ec.bilinear_terms.empty() && !ec.has_quadratic;
+}
+
 } // namespace
+
+bool InlineReducerValueLinks(SolverInput &input) {
+	auto &links = input.reducer_value_links;
+	vector<idx_t> link_of(input.num_decide_vars, DConstants::INVALID_INDEX);
+	bool any = false;
+	for (idx_t i = 0; i < links.size(); i++) {
+		if (links[i].inlining != DecideHelperInlining::NONE && links[i].value_var < link_of.size()) {
+			link_of[links[i].value_var] = i;
+			any = true;
+		}
+	}
+	if (!any) {
+		return false;
+	}
+	auto candidate = [&](idx_t var) {
+		return var < link_of.size() ? link_of[var] : DConstants::INVALID_INDEX;
+	};
+	// A helper's instances: its scope's classes, or one. A helper inlined below keeps the scope that names them.
+	auto mapping_of = [&](idx_t var) -> const KeyedMapping * {
+		auto &scope = input.variable_scopes[var];
+		if (scope.keyed_scope_idx != DConstants::INVALID_INDEX &&
+		    (scope.scope == DecideVarScope::KEYED || scope.scope == DecideVarScope::INLINED)) {
+			return &input.keyed_mappings[scope.keyed_scope_idx];
+		}
+		if (scope.scope != DecideVarScope::GLOBAL && scope.scope != DecideVarScope::INLINED) {
+			throw InternalException("DECIDE: a helper decision is neither keyed nor query-wide");
+		}
+		return nullptr;
+	};
+	auto instance_of = [&](idx_t var, idx_t row) {
+		auto mapping = mapping_of(var);
+		return mapping ? mapping->row_to_class[row] : idx_t(0);
+	};
+	vector<HelperReads> reads(links.size());
+	vector<vector<idx_t>> group_of_instance(links.size());
+	for (idx_t i = 0; i < links.size(); i++) {
+		if (links[i].inlining == DecideHelperInlining::NONE) {
+			continue;
+		}
+		auto mapping = mapping_of(links[i].value_var);
+		const idx_t instances = mapping ? mapping->num_classes : 1;
+		reads[i].count.assign(instances, 0);
+		group_of_instance[i].assign(instances, DConstants::INVALID_INDEX);
+		for (idx_t g = 0; g < links[i].members.GroupCount(); g++) {
+			group_of_instance[i][instance_of(links[i].value_var, links[i].members.group_rows[g])] = g;
+		}
+	}
+	// Where the plan said a helper is read is where it is read: a read anywhere else is the census missing a reader,
+	// which would read a column inlining takes away.
+	auto read_by_readers = [&](idx_t link) {
+		if (links[link].inlining != DecideHelperInlining::INTO_READERS) {
+			throw InternalException("DECIDE: %s is read by a row or the objective, which its plan does not list",
+			                        links[link].label);
+		}
+	};
+
+	// The rows, as SolverModel::Build emits them: a row of its own per kept row of a per-row clause, one per group of
+	// an aggregate, where a group's rows reading one instance sum into one row. A row whose instance is absent was
+	// skipped.
+	for (auto &ec : input.constraints) {
+		const bool grouped = !ec.row_group_ids.empty();
+		for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+			const idx_t var = ec.variable_indices[t];
+			const idx_t link = candidate(var);
+			if (link == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			read_by_readers(link);
+			if (!IsPlainLinearRow(ec)) {
+				throw InternalException("DECIDE: %s is read by a row its plan does not list as a reader",
+				                        links[link].label);
+			}
+			auto &column = ec.row_coefficients[t];
+			std::unordered_set<uint64_t> seen;
+			for (idx_t row = 0; row < input.num_rows; row++) {
+				const idx_t group = grouped ? ec.row_group_ids[row] : 0;
+				if (group == DConstants::INVALID_INDEX || column.Get(row) == 0.0) {
+					continue;
+				}
+				const idx_t instance = instance_of(var, row);
+				if (group_of_instance[link][instance] == DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE: a row reads %s where it is absent", links[link].label);
+				}
+				const idx_t emitted = ec.lhs_is_aggregate ? group : row;
+				if (seen.insert((static_cast<uint64_t>(emitted) << 32) ^ static_cast<uint64_t>(instance)).second) {
+					reads[link].Read(links[link], instance);
+				}
+			}
+		}
+	}
+
+	// The objective is one reader of each instance it reads, however many of its terms do. An absent instance reads
+	// as no value, its term dropped (D84): no read.
+	{
+		vector<std::unordered_set<idx_t>> read_by_objective(links.size());
+		for (idx_t t = 0; t < input.objective_variable_indices.size(); t++) {
+			const idx_t var = input.objective_variable_indices[t];
+			const idx_t link = candidate(var);
+			if (link == DConstants::INVALID_INDEX || t >= input.objective_coefficients.size()) {
+				continue;
+			}
+			read_by_readers(link);
+			auto &column = input.objective_coefficients[t];
+			for (idx_t row = 0; row < input.num_rows && row < column.Size(); row++) {
+				const idx_t instance = instance_of(var, row);
+				if (column.Get(row) != 0.0 && group_of_instance[link][instance] != DConstants::INVALID_INDEX) {
+					read_by_objective[link].insert(instance);
+				}
+			}
+		}
+		for (idx_t link = 0; link < links.size(); link++) {
+			for (auto instance : read_by_objective[link]) {
+				reads[link].Read(links[link], instance);
+			}
+		}
+	}
+
+	// Another link's members. An outer SUM or AVG states each group in one row, so the terms of a group reading one
+	// instance are one read; an outer MIN or MAX states each member in a row of its own, so each member reading it is
+	// one.
+	for (idx_t k = 0; k < links.size(); k++) {
+		auto &members = links[k].members;
+		const bool row_per_member = IsExtremum(links[k]);
+		// (helper, instance) pairs already read, within the group or the member.
+		std::unordered_set<uint64_t> seen;
+		for (idx_t g = 0; g < members.GroupCount(); g++) {
+			seen.clear();
+			auto span = MembersOf(members, g);
+			for (idx_t m = span.first; m < span.last; m++) {
+				if (row_per_member) {
+					seen.clear();
+				}
+				for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+					const idx_t link = candidate(members.variables[t]);
+					if (link == DConstants::INVALID_INDEX) {
+						continue;
+					}
+					if (links[link].inlining != DecideHelperInlining::INTO_OUTER || links[link].inline_outer != k) {
+						throw InternalException("DECIDE: %s is read by %s's members, which its plan does not list",
+						                        links[link].label, links[k].label);
+					}
+					const idx_t instance = instance_of(members.variables[t], members.rows[t]);
+					if (seen.insert((static_cast<uint64_t>(link) << 32) ^ static_cast<uint64_t>(instance)).second) {
+						reads[link].Read(links[link], instance);
+					}
+				}
+			}
+		}
+	}
+
+	// Inline, innermost first: a link folded into its outer one has had its own inner links folded into it already,
+	// so what it hands on is decisions and kept helpers alone.
+	vector<bool> folded(links.size(), false);
+	bool inlined_any = false;
+	for (idx_t i = 0; i < links.size(); i++) {
+		auto &link = links[i];
+		if (link.inlining == DecideHelperInlining::NONE) {
+			continue;
+		}
+		if (IsExtremum(link) && !EveryGroupSingleton(link)) {
+			continue;
+		}
+		auto &count = reads[i].count;
+		const bool into_outer = link.inlining == DecideHelperInlining::INTO_OUTER;
+		if (into_outer) {
+			if (link.inline_outer <= i || link.inline_outer >= links.size()) {
+				throw InternalException("DECIDE: %s's outer link is not listed after it", link.label);
+			}
+			// On its closing side an outer MIN or MAX may be stated natively, over columns: a member that is an
+			// expression then costs a column and a row of its own, which pays only where it replaces the one column
+			// and definition of an instance read once.
+			auto &outer = links[link.inline_outer];
+			if (IsExtremum(outer) && outer.need_envelope && outer.need_closing) {
+				throw InternalException("DECIDE: %s's plan writes it into %s, pinned on both sides", link.label,
+				                        outer.label);
+			}
+			if (IsExtremum(outer) && outer.need_closing &&
+			    std::any_of(count.begin(), count.end(), [](idx_t k) { return k > 1; })) {
+				continue;
+			}
+		}
+		if (!InliningAddsNoNonzero(link, reads[i], group_of_instance[i])) {
+			continue;
+		}
+		input.variable_scopes[link.value_var].scope = DecideVarScope::INLINED;
+		inlined_any = true;
+		if (!into_outer) {
+			link.inlined = true;
+			continue;
+		}
+		// Written into the outer link's members, scaled by the coefficient that read it.
+		auto &outer = links[link.inline_outer].members;
+		ReducerValueMembers expanded;
+		for (idx_t g = 0; g < outer.GroupCount(); g++) {
+			expanded.AddGroup(outer.group_rows[g]);
+			auto span = MembersOf(outer, g);
+			for (idx_t m = span.first; m < span.last; m++) {
+				expanded.AddMember(outer.constants[m]);
+				for (idx_t t = outer.member_begin[m]; t < outer.member_begin[m + 1]; t++) {
+					if (outer.variables[t] != link.value_var) {
+						expanded.AddTerm(outer.variables[t], outer.rows[t], outer.coefficients[t]);
+						continue;
+					}
+					const double c = outer.coefficients[t];
+					const idx_t group = group_of_instance[i][instance_of(link.value_var, outer.rows[t])];
+					if (group == DConstants::INVALID_INDEX) {
+						throw InternalException("DECIDE: %s's member reads %s where it is absent",
+						                        links[link.inline_outer].label, link.label);
+					}
+					auto inner = MembersOf(link.members, group);
+					for (idx_t n = inner.first; n < inner.last; n++) {
+						expanded.constants.back() += c * link.members.constants[n];
+						for (idx_t u = link.members.member_begin[n]; u < link.members.member_begin[n + 1]; u++) {
+							expanded.AddTerm(link.members.variables[u], link.members.rows[u],
+							                 c * link.members.coefficients[u]);
+						}
+					}
+				}
+			}
+		}
+		outer = std::move(expanded);
+		folded[i] = true;
+	}
+	idx_t kept = 0, inlined = 0;
+	for (idx_t i = 0; i < links.size(); i++) {
+		inlined += folded[i] || links[i].inlined;
+		if (!folded[i]) {
+			if (kept != i) {
+				links[kept] = std::move(links[i]);
+			}
+			kept++;
+		}
+	}
+	links.resize(kept);
+	DecideProfileScope::Counter("anr.inlined_helpers", static_cast<double>(inlined));
+	return inlined_any;
+}
 
 void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 	constexpr double INF = std::numeric_limits<double>::infinity();
@@ -126,7 +418,8 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 		// small group is not boxed as wide as the largest. An instance no group reaches keeps the open ends, and
 		// reads the decision's box.
 		const idx_t value_var = link.value_var;
-		const idx_t num_instances = indexer.NumInstances(value_var);
+		// An inlined helper has no column, but its instances still bound what its readers read.
+		const idx_t num_instances = indexer.NamedInstances(value_var);
 		vector<AuxRange> reach(num_instances);
 		vector<bool> reached(num_instances, false);
 		AuxRange box;
@@ -302,11 +595,28 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 		// `value >= members` (the envelope), at least its floor under `value <= members` (the closing side).
 		const double sum_lo = link.need_closing ? value_lo : -INF;
 		const double sum_hi = link.need_envelope ? value_hi : INF;
+		// Only a helper's column takes a bound here, so a member reading none -- every member of a reducer over
+		// decisions alone -- is passed over unread.
+		auto reads_helper = [&](idx_t first, idx_t last) {
+			for (idx_t t = members.member_begin[first]; t < members.member_begin[last]; t++) {
+				const idx_t v = members.variables[t];
+				if (v < is_helper.size() && is_helper[v]) {
+					return true;
+				}
+			}
+			return false;
+		};
 		for (idx_t group = 0; group < members.GroupCount(); group++) {
 			auto span = MembersOf(members, group);
+			if (!reads_helper(span.first, span.last)) {
+				continue;
+			}
 			vector<MemberTerm> group_terms;
 			double group_constant = 0.0;
 			for (idx_t m = span.first; m < span.last; m++) {
+				if (extremum && !reads_helper(m, m + 1)) {
+					continue;
+				}
 				vector<MemberTerm> member;
 				for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
 					const double c = members.coefficients[t];
@@ -334,8 +644,11 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 	}
 	// A helper's box is one for every instance it defines: tightened only when each of
 	// them was bounded, by the loosest. Its other columns -- the rows its path drops, the
-	// windows that read nothing -- are read by no row.
+	// windows that read nothing -- are read by no row. An inlined helper has no column.
 	for (auto &link : input.reducer_value_links) {
+		if (link.inlined) {
+			continue;
+		}
 		const idx_t var = link.value_var;
 		auto &members = link.members;
 		double loosest_lo = INF, loosest_hi = -INF;
@@ -376,7 +689,24 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy) {
 	SparseCoeffAccumulator member_terms;
+	// One scratch row for every group of every SUM or AVG helper: dense over the decisions' columns while they fit, so
+	// a helper of a million windows allocates it once.
+	SparseCoeffAccumulator sum_terms;
+	input.inlined_helper_of.assign(input.num_decide_vars, DConstants::INVALID_INDEX);
 	for (auto &link : input.reducer_value_links) {
+		if (link.inlined) {
+			// Its readers read its members (SolverModel::Build), each instance its group's.
+			SolverInput::InlinedHelper helper;
+			helper.group_of_instance.assign(indexer.NamedInstances(link.value_var), DConstants::INVALID_INDEX);
+			for (idx_t g = 0; g < link.members.GroupCount(); g++) {
+				helper.group_of_instance[indexer.InstanceOf(link.value_var, link.members.group_rows[g])] = g;
+			}
+			helper.members = std::move(link.members);
+			helper.label = link.label;
+			input.inlined_helper_of[link.value_var] = input.inlined_helpers.size();
+			input.inlined_helpers.push_back(std::move(helper));
+			continue;
+		}
 		const bool is_max = link.agg_name == "max";
 		const idx_t value_var = link.value_var;
 		auto &members = link.members;
@@ -406,7 +736,6 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				// the value against (`value >= sum` when they push it down, `value <= sum` when up), the equality only
 				// when both sides are needed. The members' columns are accumulated first: a keyed decision may stand
 				// in several members of the group, and a row states each column once.
-				SparseCoeffAccumulator sum_terms;
 				sum_terms.BeginForDecisions(indexer, 0, link.label);
 				double constants = 0.0;
 				for (idx_t m = span.first; m < span.last; m++) {

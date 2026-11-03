@@ -116,21 +116,31 @@ def test_an_expanded_diagnosis_names_the_groups_a_frame_leaves(decidb_cli):
 
 @pytest.mark.diagnose
 @pytest.mark.parametrize(
-    "objective_sql, named",
+    "clause_sql, objective_sql, named",
     [
-        pytest.param(f"MAXIMIZE sum(at(previous: x) {TL})", set(), id="a-dropped-member"),
+        pytest.param("", f"MAXIMIZE sum(at(previous: x) {TL})", set(), id="a-dropped-member"),
+        pytest.param("", f"MAXIMIZE sum(sum(from previous to next: x) {TL})", set(), id="an-inlined-range-helper"),
         pytest.param(
-            f"MAXIMIZE sum(sum(from previous to next: x) {TL})",
-            {f"sum(from previous to next: x) {TL}"},
-            id="a-range-helper",
+            f"AND x <= sum(at(previous: x) {TL}) + 1",
+            "MAXIMIZE sum(x)",
+            {f"sum(at(previous: x) {TL})"},
+            id="a-helper-every-row-reads",
+        ),
+        pytest.param(
+            f"AND x <= sum(sum(from previous to next: x) {TL}) + 1",
+            "MAXIMIZE sum(x)",
+            {f"sum(sum(from previous to next: x) {TL})"},
+            id="a-range-inside-it",
         ),
     ],
 )
-def test_the_unbounded_remedy_names_decisions_and_reducers(decidb_cli, objective_sql, named):
-    """An objective that rises without end through a frame: the remedy bounds `x` where a
-    member reads it, and a range's helper by the range as written -- never by an internal
-    name."""
-    sql = f"""SELECT id, x {table('t', EDGE, EDGE_ROWS)} DECIDE x(INT) SUCH THAT x >= 0 {objective_sql}"""
+def test_the_unbounded_remedy_names_decisions_and_reducers(decidb_cli, clause_sql, objective_sql, named):
+    """A model that rises without end through a frame: the remedy bounds `x` where a member
+    reads it, or the reducer as written -- never a helper by an internal name. A range the
+    objective alone reads is written into it (D89) and has no column to name; a helper
+    every row reads keeps its column, the range inside it written into its members."""
+    sql = f"""SELECT id, x {table('t', EDGE, EDGE_ROWS)} DECIDE x(INT) SUCH THAT x >= 0 {clause_sql}
+        {objective_sql}"""
     findings = _findings(run_diagnose(decidb_cli, sql), sql)
     assert {row["state"] for row in findings} == {"unbounded"}, findings
     assert {row["clause"] for row in findings} == {"x"} | named, findings

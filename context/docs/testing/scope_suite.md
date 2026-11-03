@@ -258,6 +258,16 @@ one group at a time. No test asserts an answer its docstring derives.
   duplicate joined rows; the defects found composing them: two frames on one payload held
   one value, a nested reducer over no row read as 0, an exact `abs` whose `else` or repeated
   column was lost.
+- **`test_anr_inlining.py`** — helpers written where they are read (D89): a range's
+  windows into their anchors' rows, with and without `else`, an AVG, an `else` constant, a
+  window every row reads kept, windows shared by a few rows written in, the objective; group
+  sums into the objective's MAX, a range into the reducer around it, F1's inner sums into its
+  regions; a MIN/MAX of one member written in, and one closing on no bound; what keeps a
+  column (`<>`, a bound on the helper alone, a MAX closing natively on a sum two members read,
+  a MAX of several members); DIAGNOSE through an inlined helper, and the achievable objective
+  counting its constants. Model sizes pinned, answers judged by `_anr_oracle`, both solvers
+  where the formulation differs. The pass on hand-built inputs is
+  `test/common/test_decidb_helper_inlining.cpp`'s.
 - **`test_anr_diagnostics.py`** — DIAGNOSE and EXPLAIN over variants, nests and frames:
   F17's variant repaired, a definition never offered for repair, the groups a frame leaves
   named, the unbounded remedy naming `x` and a range as written, F1 with its limits

@@ -317,8 +317,8 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
         // the row's data rows, so a decision that stands in several rows of a group, or one counted once beside the
         // reducers, is bounded by what the row says about its instance. The row's bound is the clause's less its fixed
         // terms, as the builder states it.
-        auto &emitted = ClauseEmittedRows(ec, indexer, written);
-        bool uniform_rhs = ec.rhs_values.IsUniform();
+		auto &emitted = ClauseEmittedRows(ec, input, indexer, written);
+		bool uniform_rhs = ec.rhs_values.IsUniform();
         auto bound_row = [&](idx_t e, const vector<idx_t> *rows, idx_t begin, idx_t end) {
             if (begin == end) {
                 return; // an empty group, or no data rows

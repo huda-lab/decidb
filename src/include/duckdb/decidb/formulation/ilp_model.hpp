@@ -79,6 +79,8 @@ struct VarIndexer {
 			auto &read = frame_reads[var_idx - first_frame_read];
 			return Get(read.base, read.rows[row]);
 		}
+		case DecideVarScope::INLINED:
+			throw InternalException("DECIDE: a column was asked of an inlined helper decision");
 		default: {
             auto &mapping = keyed_mappings[var_keyed_mapping_idx[var_idx]];
             idx_t class_id = mapping.row_to_class[row];
@@ -99,6 +101,8 @@ struct VarIndexer {
             return scalar_var_index[var_idx];
 		case DecideVarScope::FRAME_READ:
 			throw InternalException("DECIDE: a frame read has no instance of its own");
+		case DecideVarScope::INLINED:
+			throw InternalException("DECIDE: a column was asked of an inlined helper decision");
 		default:
             return keyed_var_base[var_idx] + inst;
         }
@@ -115,8 +119,9 @@ struct VarIndexer {
 	}
 
 	//! The instance of a variable that data row `row` reads: the row itself, its class, or the single query-wide
-    //! instance. Up to the block offset the inverse of Get(): `InstanceColumn(v, InstanceOf(v, row)) == Get(v, row)`.
-    inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
+	//! instance. Up to the block offset the inverse of Get(): `InstanceColumn(v, InstanceOf(v, row)) == Get(v, row)`.
+	//! An inlined helper keeps the instances of the scope it had, which name the group a row reads.
+	inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return row;
@@ -124,6 +129,10 @@ struct VarIndexer {
             return 0;
 		case DecideVarScope::FRAME_READ:
 			throw InternalException("DECIDE: a frame read has no instance of its own");
+		case DecideVarScope::INLINED:
+			return var_keyed_mapping_idx[var_idx] == DConstants::INVALID_INDEX
+			           ? 0
+			           : keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
 		default:
             return keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
         }
@@ -157,7 +166,7 @@ struct VarIndexer {
     }
 
 	//! Get the number of instances (copies) for a given decide variable; none for a frame
-	//! read, whose columns are its base's.
+	//! read, whose columns are its base's, nor for an inlined helper, which has none.
 	inline idx_t NumInstances(idx_t var_idx) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
@@ -165,6 +174,7 @@ struct VarIndexer {
         case DecideVarScope::GLOBAL:
             return 1;
 		case DecideVarScope::FRAME_READ:
+		case DecideVarScope::INLINED:
 			return 0;
 		default: {
             return keyed_mappings[var_keyed_mapping_idx[var_idx]].num_classes;
@@ -172,7 +182,18 @@ struct VarIndexer {
         }
     }
 
-    //! Which decide variable a flat column instantiates — the inverse of `Get()` and
+	//! The instances a decision names, with a column each or none: NumInstances, or for an inlined helper those of the
+	//! scope it had, which name the groups its readers read.
+	inline idx_t NamedInstances(idx_t var_idx) const {
+		if (var_scope[var_idx] != DecideVarScope::INLINED) {
+			return NumInstances(var_idx);
+		}
+		return var_keyed_mapping_idx[var_idx] == DConstants::INVALID_INDEX
+		           ? 1
+		           : keyed_mappings[var_keyed_mapping_idx[var_idx]].num_classes;
+	}
+
+	//! Which decide variable a flat column instantiates — the inverse of `Get()` and
     //! `InstanceColumn()`. `DConstants::INVALID_INDEX` for a global-block column, which
     //! no decide variable owns, and for a column past the end.
     //!
@@ -550,8 +571,11 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec);
 //! The decision terms of every row `ec` emits (EmittedRows), kept on `ec`: each solver column's coefficient summed over
 //! the row's data rows (ClauseRows for a grouped aggregate). Built on the first call, so implied-bound propagation, the
 //! aggregate `<>` expansion and the model builder read one matrix; the builder, the last reader, takes it. Its rows
-//! are final by the first call, as ClauseRows' are. `written` names the clause when a sum grows past a DOUBLE.
-const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer, const string &written);
+//! are final by the first call, as ClauseRows' are. An inlined helper reads its members there (D89), from `input`.
+//! `written` names the clause when a sum grows past a DOUBLE. Built against one column space: laid out again
+//! (InlineReducerValueLinks), it is built anew.
+const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
+                                     const string &written);
 
 //! Adds `value` into `target`, a number the model merges from several: like coefficients on one solver column, a
 //! square's products, the fixed terms moved to the bound side. The one place such a sum grows. Every value it adds was
