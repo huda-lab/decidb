@@ -66,6 +66,8 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D84 | A frame that selects nothing, a NULL read at its selected row and a NULL a reached fallback gives are no value (deck p. 50, D67, D68): unreduced, it skips the instance; a reducer or a range skips it; an objective term holding it is dropped |
 | D85 | Under the tightest-bound collapse (S3) an anchor whose frame selects nothing bounds nothing; a group with no such anchor present has no row |
 | D86 | `else NULL` written, or a fallback that is NULL before the query runs, is no fallback |
+| D87 | Inside a reducer over decisions, a frame that selects nothing drops its member, decisions and all, by the reducer's NULL test of the frame (D84) — no helper decision; a reducer left with no member is NULL (D68): its comparison skips that instance, a reducer around it drops the member reading it (a nested reducer emptied by its `when` too), an objective term holding it is dropped |
+| D88 | A row a rewrite adds to define an auxiliary — an `abs` envelope, an L0 indicator's links — is no instance of its clause and stays where the clause's instance is skipped; under `abs` inside another reducer over decisions, a reducer a frame may leave with no member is refused |
 
 ## Spelling calls
 

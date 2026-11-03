@@ -527,27 +527,44 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached -- so
   `per t.product: x <= at(previous: t.v) over (t.period within t.product)` is one instance per period with a previous
   one, and `at(first: ...)` one per product.
+- **Inside a reducer over decisions** (D87) a frame that selects nothing drops its member, decisions and all: the
+  reducer's NULL test of the frame keeps the member out (D84), so `sum(at(previous: x) over (t.period within
+  t.product)) by (t.product)` reads each product's periods but its first, and an AVG divides by the members left. A
+  reducer left with no member is NULL (D68): its comparison skips that instance, a reducer around it drops the member
+  reading it -- as it does a nested reducer whose `when` keeps no row --, and an objective term holding it is dropped.
+  A frame over decisions in a `MIN`/`MAX` of several terms (`max(at(first: x) over (...)) + sum(x) <= 20`) is read at
+  its selected row too. A row a rewrite adds for a construct in a member -- an `abs`'s envelope, an L0 indicator's
+  links -- defines an auxiliary and is no instance of its clause: it stays where the clause's instance is skipped
+  (D88), so `sum(abs(x - 3)) + at(previous: x) over (t.period) <= 4` keeps `abs(x1 - 3)` in the sum the other
+  periods read.
 - **The objective** is produced once (D72): a root frame that reads more than one position, timeline or fallback
   over the kept rows is an error saying so.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
   inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
-  over decisions is linear).
+  over decisions is linear). Not supported yet (D88): under `abs` inside another reducer over decisions, a reducer a
+  frame may leave with no member -- the `abs` auxiliary of that member would stand undefined in its reducer: *"DECIDE:
+  max(at(previous: x) over (t.period within t.product)) by (t.product) under abs inside sum(abs(x - max(...) by
+  (t.product))) may read no member, as at(previous: x) over (t.period within t.product) may select no position, which
+  is not supported yet; give it an else, or make its timeline cyclic"*.
 
 **Status.** Points and ranges are formulated, over data or decisions, in constraints and the objective, inside a
-reducer over decisions too: a point reads a decision at the selected row's own column, with no helper decision; a
-range over decisions is its helper per window ([roadmap.md](roadmap.md)). Not supported yet ([errors.md
-§2](errors.md#2-not-supported-yet)): a frame that may read nothing inside a reducer over decisions -- the message says
-why, and how to cure it (give it an `else`, make its timeline cyclic, drop `all`); a frame inside a reducer of a bound,
-or in the bound of a clause over groups that would take its group's tightest value (D85) -- a `first` or `last` frame,
-or a range from `first` to `last`, whose timeline lies within each group reads one value per group, and is read; a
-frame over decisions inside or beside a `MIN`/`MAX` of several terms; an `else` that reads a decision while the payload
-reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from first to
-last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
+reducer over decisions too, under `abs`, `norm` and a `MIN`/`MAX` of several terms: a point reads a decision at the
+selected row's own column, with no helper decision; a range over decisions is its helper per window
+([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a reducer a frame may
+leave with no member under `abs` inside another reducer (D88); a frame inside a reducer of a bound, or in the bound of
+a clause over groups that would take its group's tightest value (D85) -- a `first` or `last` frame, or a range from
+`first` to `last`, whose timeline lies within each group reads one value per group, and is read; a frame over
+decisions beside a `MIN`/`MAX` in the objective, as any decision there is; an `else` that reads a decision while the
+payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
+first to last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
 
 Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
 `test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint` and `TestRange`: every frame fixture of
 `_anr_cases`, every pair of ends under both steps, each policy, open and cyclic, judged by the oracle; the deck's
-examples 1, 2, 4, 5 and 6 and the DeQL comparison; shapes and errors), `test/common/test_decidb_frame_predicates.cpp`
+examples 1, 2, 4, 5 and 6 and the DeQL comparison; shapes and errors), `test/decide/tests/test_anr_composition.py`
+(members dropped, under `abs` and `norm`, the objective, composed `MIN`/`MAX`, both solvers),
+`test/decide/tests/test_anr_diagnostics.py` (DIAGNOSE and EXPLAIN over variants, nests and frames),
+`test/common/test_decidb_frame_predicates.cpp`
 (the absence predicates against every position they summarize), `test/common/test_decidb_plan_serialization.cpp` (a
 placed point and range round-trip).
 

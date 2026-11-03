@@ -245,6 +245,24 @@ one group at a time. No test asserts an answer its docstring derives.
   query), the absence predicates `test_decidb_frame_predicates.cpp`'s (every end, step,
   policy and shape against every position on timelines of up to 10), and the round trips
   `test_decidb_plan_serialization.cpp`'s.
+- **`test_anr_composition.py`** — frames composed with reducers, `abs`, `norm` and
+  `MIN`/`MAX` (guide §5.6, D87, D88), on both solvers where the shape has two formulations,
+  judged by `_anr_oracle`: a member a frame drops from a reducer over decisions (deck
+  example 3; every reducer and push direction, `<>`, its own `when` and `per`, two frames in
+  one member, a range that reads nothing, a range over data), the model it builds (no
+  helper), an absent nested reducer dropping the member reading it; a frame under `abs` and
+  `norm` inside a reducer, the rows defining an auxiliary kept where an instance is skipped,
+  an L0 norm counting the members left, a square beside a member frame, and the refusal of
+  an absent reducer under `abs` (D88); the objective's members, a reducer with none dropped;
+  frames in a composed `MIN`/`MAX`, under `per` with a `by` reducer, with variants, over
+  duplicate joined rows; the defects found composing them: two frames on one payload held
+  one value, a nested reducer over no row read as 0, an exact `abs` whose `else` or repeated
+  column was lost.
+- **`test_anr_diagnostics.py`** — DIAGNOSE and EXPLAIN over variants, nests and frames:
+  F17's variant repaired, a definition never offered for repair, the groups a frame leaves
+  named, the unbounded remedy naming `x` and a range as written, F1 with its limits
+  lowered, one clause dropped with its helpers alone, EXPLAIN's account of an `abs` and a
+  range, an objective with no member feasible.
 - **`test_anr_nested.py`** — reducers nested to any depth (guide §5.5, D79-D81): the
   nesting fixtures of `_anr_cases` on both solvers, judged by `_anr_oracle`, an empty group
   inside a nest skipped (D68); F1's model, a helper per path group with one-sided

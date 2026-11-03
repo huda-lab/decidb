@@ -283,8 +283,9 @@ stage 08 evaluates -- a frame over data, in a coefficient, a bound, a filter -- 
 the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type) or, for a
 range, its `REDUCED` column (the frame's reducer over the window's values), and a
 reducer's NULL test of a frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's
-`READ` and `FALLBACK` columns holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is refused
-here (`RefuseComposedFrameRead`): the composed formulation reads each term at its own row. A range over decisions reaches no term: it is a
+`READ` and `FALLBACK` columns holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
+like any other (`ComposedMinMaxTerm::inner_terms`), its `frame_read` set: stage 08 hands stage 06 the variable each term
+reads (`ComposedMinMaxTermData::variables`), a frame read among them. A range over decisions reaches no term: it is a
 helper by now (§2, `RewriteFrameRanges`), whose link also reads the range's `else` as terms, each coefficient a
 FALLBACK column (`ReducerValueLink::fallback_terms`). What a signature reads of a reached `else` is recorded per frame
 (`frame_fallback_columns`).

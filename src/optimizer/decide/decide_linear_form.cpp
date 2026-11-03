@@ -113,12 +113,10 @@ public:
 		for (auto &spec : op.composed_minmax_constraints) {
 			for (auto &term : spec.terms) {
 				ExtractLinearTerms(*term.inner_expr, term.inner_terms);
-				RefuseComposedFrameRead(term);
 			}
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
 			ExtractLinearTerms(*term.inner_expr, term.inner_terms);
-			RefuseComposedFrameRead(term);
 		}
 		// The reducers the value rewrite lifted into helper decisions, the same way; a range frame's helper also reads
 		// its `else`, at the window's anchor.
@@ -404,17 +402,6 @@ private:
 		}
 	}
 
-	//! The composed MIN/MAX formulation reads its terms' decisions at their own rows (stage
-	//! 06), so a frame over decisions inside one has no reading there yet.
-	void RefuseComposedFrameRead(const LogicalDecide::ComposedMinMaxTerm &term) const {
-		for (auto &inner : term.inner_terms) {
-			if (inner.frame_read != DConstants::INVALID_INDEX) {
-				throw BinderException("DECIDE: %s inside %s beside another term is not supported yet",
-				                      op.frames[inner.frame_read].text, StringUtil::Upper(term.agg_name));
-			}
-		}
-	}
-
 	//! Replaces each frame in `expr` by the column it reads: a frame over data by its VALUE (its payload at the
 	//! selected row, or its `else` at the row itself, NULL where neither stands), and a frame over decisions under a
 	//! reducer's NULL test (DecideCanonicalizer::SkipNullData) by its DEFINED column. Every other frame over decisions
@@ -566,7 +553,7 @@ private:
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {
 			return false;
 		}
-		return !a.filter || a.filter->Equals(*b.filter);
+		return !a.filter || DecideExpressionsEqual(*a.filter, *b.filter);
 	}
 
 	//! A NULL term of the objective is dropped (B1): its coefficient reads 0. This is

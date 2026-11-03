@@ -74,8 +74,8 @@ refuse it, and `NumInstances` is 0. `ResolveRead` turns it into its base at the 
 instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
 wholesale (after the floors, the implied bounds and a diagnosis's widening, `SyncFrameReadBoxes` in stage 08), and
 `BaseVariable` maps it to its base for a table of the plan's decisions (a name, an `__abs_aux_` test). The composed
-MIN/MAX formulation reads each term at its own row, so a frame read reaching it is an internal error (stage 05 refuses
-the query).
+MIN/MAX formulation reads each term's variable through the indexer at each row (`ComposedMinMaxTermData::variables`),
+so a frame read lands on the selected row's column there too, and its range is its base's box.
 
 ---
 
@@ -1000,6 +1000,15 @@ every row's column free. A slack continuous column is a measured cost at the roo
 why this is worth doing rather than a tidiness. A column is left free only where
 nothing at all is derivable — which is exactly the query the native arm exists to
 answer.
+
+**The argument is read whole.** `k` is C1's bound with its constant terms moved across
+(`DecideRowEffectiveBound`), in phase 1's interval and in the row `t = inner` alike: a
+frame's `else` read as data (`abs(x - at(previous else 50: x) over (...))`) is a term of
+no decision, and read off the bound alone it was left out -- `|x1 - 50|` read as `|x1|`.
+The argument's columns are summed per column before the row is written: a frame read
+that selects the anchor itself (`abs(x - at(last: x) over (...))` at the last period)
+lands on the column its other term reads, and a solver refuses a row naming a column
+twice.
 
 Phase 1 also **narrows the auxiliary's column box** to `max(|lo|, |hi|)`, on both arms. The
 formulation pins `aux = |inner|`, so that is a valid upper bound — and the only one anything

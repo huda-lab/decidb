@@ -278,8 +278,11 @@ frame's decision terms read `gstate.ReadVariable`: a frame read numbered once pe
 Where a frame has nothing to read, its column holds NULL, which is no value (D84) as any NULL a clause reads: the
 instance is skipped (`SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. A
 comparison whose frame outside its reducers may select no position marks those rows too (`FramesPresent`, by the
-clause's id), so the rows a rewrite made of the clause -- an ABS's envelope, a `<>`'s indicator rows -- skip them as
-well. A keyed decision read through a frame is absent where the selected row is in no class (`MarkAbsentDecisionReads`
+clause's id), so the rows a rewrite made of the comparison -- a `<>`'s indicator rows -- skip them as well. A row a
+rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`: an ABS's envelope, an L0 indicator's links) is no
+instance of the clause and is not skipped there (D88): an auxiliary inside a reducer is a member the clause's other
+instances read, and a definition holds wherever its own values stand, NULL-skipped where it reads a frame with no
+value. A keyed decision read through a frame is absent where the selected row is in no class (`MarkAbsentDecisionReads`
 reads the selected row). A frame field of a signature (D82) splits by the frame's timeline, the anchor's peer when it
 reads relative to the anchor, and what a reached `else` reads, its data and its decisions' instances.
 
@@ -397,8 +400,11 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   evaluated `class_set`, over the rows its `when` keeps); the model keeps the table and an
   expanded diagnosis reports the group once per class (`FanOutByClass`).
 - **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
-  reducer is read on the rows its path keeps and its own `when` keeps among them, grouped
-  by its path key over those rows (`LookupOrBuildPerGroupIds`, a NULL
+  reducer is read on the rows its path keeps and its own `when` keeps among them, less a
+  row at which one of its terms reads a keyed decision with no instance there -- a nested
+  reducer's helper whose group holds no member, which is NULL (D68) and a reducer skips
+  (D67, D87) -- grouped by its path key over those rows (`ValueLinkMembers`, read by
+  `BuildKeyedMappings` for the helper's classes too; `LookupOrBuildPerGroupIds`, a NULL
   written key in no group, only the groups that hold a member); its coefficients come from
   `EvaluateTermColumns`, one scan for every term; its `per` de-duplicates within each
   group, a dropped row leaves the group, and AVG divides by the members left. The result

@@ -253,13 +253,15 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
         double lo = 0.0;
         double hi = 0.0;
         bool seen_row = false;
-        for (idx_t r = 0; r < num_rows; r++) {
-            // The link's bound carries the constant part of the expression the user
-            // wrote inside ABS. An infinity there is a data problem, not a bounding
-            // one, and it defeats the native path too — |inf| is still inf — so it is
-            // refused whichever path follows.
-            double link_rhs = c1.rhs_values.Get(r);
-            if (!std::isfinite(link_rhs)) {
+		const string written = DecideWrittenClause(input, c1.source_clause_id);
+		for (idx_t r = 0; r < num_rows; r++) {
+			// The link's bound carries the constant part of the expression the user
+			// wrote inside ABS -- with C1's constant terms moved across, where a frame's
+			// `else` read as data stands. An infinity there is a data problem, not a
+			// bounding one, and it defeats the native path too — |inf| is still inf — so
+			// it is refused whichever path follows.
+			double link_rhs = DecideRowEffectiveBound(c1, r, written);
+			if (!std::isfinite(link_rhs)) {
                 throw InvalidInputException(
                     "The expression inside ABS() evaluates to Infinity at row %llu, "
                     "so DECIDE cannot bound it. Check that column for an overflow, "
@@ -447,7 +449,9 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
         // C1 and C2 stay. They are exact (`aux >= inner`, `aux >= -inner`), implied by
         // `aux = |t|`, and they carry the clause provenance the elastic engine reads.
         // Dropping them would be a separate optimization that costs diagnosis.
-        for (idx_t r = 0; r < num_rows; r++) {
+		const string written = DecideWrittenClause(input, c1.source_clause_id);
+		SparseCoeffAccumulator argument;
+		for (idx_t r = 0; r < num_rows; r++) {
             if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
                 continue; // row excluded by `when` or its group: no ABS to express here
             }
@@ -467,8 +471,10 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             double vars_hi = 0.0;
             DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx,
                                  &instances);
-            double k = c1.rhs_values.Get(r);
-            // Each end on its own. A row open on one side still contributes its closed
+			// The bound with C1's constant terms moved across: a frame's `else` read as data
+			// (`abs(x - at(previous else t.w: y) over (...))`) is a term of no decision.
+			double k = DecideRowEffectiveBound(c1, r, written);
+			// Each end on its own. A row open on one side still contributes its closed
             // side, and a row whose contributors are all bounded gets a real box even
             // when some other row's are not — which the one interval could not express, being
             // one number for the whole link. Free only where nothing at all is derivable,
@@ -476,55 +482,46 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             // that earns a free column. The bracket carries the constant, as `k` here.
             AuxRange inner_range;
             inner_range.CoverRowSided(k - vars_hi, k - vars_lo, DConstants::INVALID_INDEX);
-            // `ABS(x)` is the common shape, and there `t = x`: one column and one
-            // equality row per data row to restate a column that already exists. C1
-            // spells the argument as `inner = k - sum c_t x_t`, so a renaming is one
-            // non-auxiliary term with coefficient -1 and a zero bound. Anything else —
-            // `ABS(x - target)`, `ABS(2 * x)` — is a genuine expression, and a general
-            // constraint relates columns, so it still earns one.
-            idx_t sole_var = DConstants::INVALID_INDEX;
-            double sole_coef = 0.0;
-            idx_t term_count = 0;
-            for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
+			// The argument's columns, each once: two terms may land on one column -- a frame
+			// read selecting the row itself (`abs(x - at(last: x) over (...))` at the last
+			// period) -- and a row states a column once, or the solver refuses it.
+			argument.BeginSparse(c1.variable_indices.size(), written);
+			for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
                 idx_t v = c1.variable_indices[t];
                 if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
                     continue;
                 }
                 double coef = c1.row_coefficients[t].Get(r);
-                if (coef == 0.0) {
-                    continue;
-                }
-                term_count++;
-                sole_var = v;
-                sole_coef = coef;
-            }
-            bool renaming = (term_count == 1 && sole_coef == -1.0 && k == 0.0);
+				if (coef != 0.0) {
+					argument.Add(static_cast<int>(indexer.Get(v, r)), coef);
+				}
+			}
+			vector<int> columns;
+			vector<double> coefficients;
+			argument.Flush(columns, coefficients);
+			// `ABS(x)` is the common shape, and there `t = x`: one column and one
+			// equality row per data row to restate a column that already exists. C1
+			// spells the argument as `inner = k - sum c_t x_t`, so a renaming is one
+			// non-auxiliary column with coefficient -1 and a zero bound. Anything else —
+			// `ABS(x - target)`, `ABS(2 * x)` — is a genuine expression, and a general
+			// constraint relates columns, so it still earns one.
+			bool renaming = columns.size() == 1 && coefficients[0] == -1.0 && k == 0.0;
 
-            idx_t t_idx = DConstants::INVALID_INDEX;
+			idx_t t_idx = DConstants::INVALID_INDEX;
             if (renaming) {
-                t_idx = indexer.Get(sole_var, r);
-            } else {
+				t_idx = static_cast<idx_t>(columns[0]);
+			} else {
                 t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
 
-                SolverInput::RawConstraint link_row;
+				// `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
+				SolverInput::RawConstraint link_row;
                 link_row.indices.push_back(static_cast<int>(t_idx));
                 link_row.coefficients.push_back(1.0);
-                for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
-                    idx_t v = c1.variable_indices[t];
-                    if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
-                        continue;
-                    }
-                    double coef = c1.row_coefficients[t].Get(r);
-                    if (coef == 0.0) {
-                        continue;
-                    }
-                    // `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
-                    link_row.indices.push_back(static_cast<int>(indexer.Get(v, r)));
-                    link_row.coefficients.push_back(coef);
-                }
-                link_row.sense = '=';
-                link_row.rhs = c1.rhs_values.Get(r);
-                link_row.kind = ConstraintKind::STRUCTURAL;
+				link_row.indices.insert(link_row.indices.end(), columns.begin(), columns.end());
+				link_row.coefficients.insert(link_row.coefficients.end(), coefficients.begin(), coefficients.end());
+				link_row.sense = '=';
+				link_row.rhs = k;
+				link_row.kind = ConstraintKind::STRUCTURAL;
                 link_row.source_clause_id = c1.source_clause_id;
                 link_row.repair_group_id = c1.repair_group_id;
                 link_row.removal_group_id = c1.removal_group_id;

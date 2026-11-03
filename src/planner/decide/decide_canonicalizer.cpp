@@ -231,7 +231,7 @@ static bool NullOnlyFromColumns(const Expression &expr) {
 
 static void AddNullTest(const Expression &value, vector<unique_ptr<Expression>> &out) {
 	for (auto &seen : out) {
-		if (seen->Equals(value)) {
+		if (DecideExpressionsEqual(*seen, value)) {
 			return;
 		}
 	}
@@ -2033,9 +2033,39 @@ bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
 	return true;
 }
 
+idx_t DecideCanonicalizer::FirstAbsenceFrame(const BoundAggregateExpression &reducer,
+                                             const vector<DecideFrameSpec> &frames) const {
+	idx_t found = DConstants::INVALID_INDEX;
+	std::function<void(const Expression &)> visit = [&](const Expression &expr) {
+		idx_t frame;
+		if (found != DConstants::INVALID_INDEX) {
+			return;
+		}
+		if (TryGetDecideFrame(expr, frame)) {
+			if (frame < frames.size() && frames[frame].MaySelectNothing()) {
+				found = frame;
+			}
+			return;
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			// A nested reducer left with no member drops the member reading it, in turn.
+			auto &nested = expr.Cast<BoundAggregateExpression>();
+			if (ReferencesDecideVar(nested)) {
+				found = FirstAbsenceFrame(nested, frames);
+			}
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr, visit);
+	};
+	for (auto &child : reducer.children) {
+		visit(*child);
+	}
+	return found;
+}
+
 void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideReducerPath &path,
                                         const BoundAggregateExpression *reducer, idx_t source_clause_id,
-                                        const FramePerKey *per, DecideFramePlacement &placement) const {
+                                        const FramePerKey *per, DecideFramePlacement &placement, bool under_abs) const {
 	idx_t frame_idx;
 	if (TryGetDecideFrame(expr, frame_idx)) {
 		if (frame_idx >= placement.frames.size()) {
@@ -2056,13 +2086,6 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		}
 		frame.source_clause_id = source_clause_id;
 		frame.reduced = reducer != nullptr;
-		// A position missing inside a reducer over decisions drops the member, decisions and all, and may leave the
-		// reducer with none: not formulated yet.
-		if (reducer && ReferencesDecideVar(*reducer) && frame.MaySelectNothing()) {
-			throw BinderException("DECIDE: %s may select no position inside %s, a reducer over decisions, which is "
-			                      "not supported yet; %s",
-			                      frame.text, QuoteAsWritten(*reducer), DecideFrameAbsenceRemedy(frame));
-		}
 		if (!per) {
 			return;
 		}
@@ -2091,10 +2114,29 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		for (auto &child : inner.children) {
 			PlaceFramesIn(*child, below, &inner, source_clause_id, has_per ? &own : nullptr, placement);
 		}
+		// Under `abs` inside another reducer, a reducer left with no member leaves the ABS auxiliary of that member
+		// undefined, which its reducer still reads: the member would have to be dropped by the absence of a decision,
+		// which no NULL test of the data states (D88).
+		if (under_abs && ReferencesDecideVar(inner)) {
+			const auto absence = FirstAbsenceFrame(inner, placement.frames);
+			if (absence != DConstants::INVALID_INDEX) {
+				auto &frame = placement.frames[absence];
+				throw BinderException("DECIDE: %s under abs inside %s may read no member, as %s may select no "
+				                      "position, which is not supported yet; %s",
+				                      QuoteAsWritten(inner), QuoteAsWritten(*reducer), frame.text,
+				                      DecideFrameAbsenceRemedy(frame));
+			}
+		}
 		return;
 	}
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](const Expression &child) { PlaceFramesIn(child, path, reducer, source_clause_id, per, placement); });
+	// What stands under an `abs` inside a reducer over decisions is the argument of an auxiliary the reducer's
+	// member reads.
+	under_abs = under_abs || (reducer && ReferencesDecideVar(*reducer) &&
+	                          expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	                          StringUtil::CIEquals(expr.Cast<BoundFunctionExpression>().function.name, "abs"));
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		PlaceFramesIn(child, path, reducer, source_clause_id, per, placement, under_abs);
+	});
 }
 
 void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,

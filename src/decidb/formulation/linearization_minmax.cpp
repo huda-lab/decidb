@@ -724,18 +724,18 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
 //! the pinning row is `z - expr op bound`, so the expression's coefficients enter
 //! with the opposite sign and its constant part lands on the bound.
 static void AddComposedRowTerms(const VarIndexer &indexer, SparseCoeffAccumulator &row_terms, MinMaxLinkRow &link,
-                                const vector<DecideTerm> &inner_terms, const vector<vector<double>> &per_term_coefs,
-                                idx_t row, const string &written) {
-    for (idx_t it = 0; it < inner_terms.size(); it++) {
-        double coeff = per_term_coefs[it][row];
-        idx_t v = inner_terms[it].variable_index;
-        if (v == DConstants::INVALID_INDEX) {
+                                const vector<idx_t> &variables, const vector<vector<double>> &per_term_coefs, idx_t row,
+                                const string &written) {
+	for (idx_t it = 0; it < variables.size(); it++) {
+		double coeff = per_term_coefs[it][row];
+		idx_t v = variables[it];
+		if (v == DConstants::INVALID_INDEX) {
             link.AddConstant(coeff, written);
         } else {
             row_terms.Add((int)indexer.Get(v, row), -coeff);
         }
-    }
-    row_terms.Flush(link.indices, link.coefficients);
+	}
+	row_terms.Flush(link.indices, link.coefficients);
 }
 
 //! The family a composed MIN/MAX term reduces over: one entry per row the term's
@@ -744,22 +744,21 @@ static void AddComposedRowTerms(const VarIndexer &indexer, SparseCoeffAccumulato
 //!
 //! A term admitting no rows yields the seeded [0,0], which pins its auxiliary at 0 —
 //! better than letting an auxiliary with no pinning rows float on the outer pressure.
-static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideTerm> &inner_terms,
-                                  const vector<vector<double>> &per_term_coefs,
-                                  const vector<bool> &filter_mask) {
-    AuxRange range;
+static AuxRange ComposedTermRange(const SolverInput &input, const vector<idx_t> &variables,
+                                  const vector<vector<double>> &per_term_coefs, const vector<bool> &filter_mask) {
+	AuxRange range;
     for (idx_t row = 0; row < input.num_rows; row++) {
         if (!filter_mask[row]) {
             continue;
         }
         double row_lo = 0.0, row_hi = 0.0;
-        for (idx_t it = 0; it < inner_terms.size(); it++) {
-            double c = per_term_coefs[it][row];
+		for (idx_t it = 0; it < variables.size(); it++) {
+			double c = per_term_coefs[it][row];
             if (std::abs(c) < 1e-15) {
                 continue;
             }
-            idx_t v = inner_terms[it].variable_index;
-            if (v == DConstants::INVALID_INDEX) {
+			idx_t v = variables[it];
+			if (v == DConstants::INVALID_INDEX) {
                 row_lo += c;
                 row_hi += c;
                 continue;
@@ -772,8 +771,8 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
             }
             row_lo += (c > 0.0) ? c * lb : c * ub;
             row_hi += (c > 0.0) ? c * ub : c * lb;
-        }
-        range.CoverRow(row_lo, row_hi);
+		}
+		range.CoverRow(row_lo, row_hi);
     }
     return range;
 }
@@ -805,31 +804,22 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
                                           NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
 
-	// Every formulation below reads a term's decision at the term's own row. A frame's
-	// payload term reads it at another (DecideTerm::frame_read), which stage 05 refuses
-	// here (RefuseComposedFrameRead).
-	for (auto &ta : terms) {
-		for (auto &term : *ta.inner_terms) {
-			if (term.frame_read != DConstants::INVALID_INDEX) {
-				throw InternalException("DECIDE: a frame read reached composed MIN/MAX");
-			}
-		}
-	}
-
+	// A term reads its variable through the indexer at each row, so a frame's payload term
+	// -- a read of its decision at the row the frame selects -- lands on that row's column,
+	// and its box is its base decision's (SolverInput::frame_reads).
 	// Every `z_k` first, so one clause's auxiliaries occupy a contiguous run of the
-    // global block whatever formulation each term then turns out to need. The range is
-    // computed once here and reused as the closing Big-M and as the box of any column a
-    // native arm pins — one walk, one answer, rather than each arm deriving its own.
-    const string written = DecideWrittenClause(input, source_clause_id);
+	// global block whatever formulation each term then turns out to need. The range is
+	// computed once here and reused as the closing Big-M and as the box of any column a
+	// native arm pins — one walk, one answer, rather than each arm deriving its own.
+	const string written = DecideWrittenClause(input, source_clause_id);
     vector<AuxRange> term_range(terms.size());
     for (idx_t i = 0; i < terms.size(); i++) {
         auto &ta = terms[i];
         if (!ta.is_minmax) {
             continue;
         }
-        term_range[i] =
-            ComposedTermRange(input, (*ta.inner_terms), ta.per_term_coefs, ta.filter_mask);
-        // The label names the z through the global label channel, so a diagnosis
+		term_range[i] = ComposedTermRange(input, ta.variables, ta.per_term_coefs, ta.filter_mask);
+		// The label names the z through the global label channel, so a diagnosis
         // renders `MAX(x)` rather than an internal column name.
         ta.z_idx = AddGlobalContinuousAux(input, indexer, term_range[i], 0.0, ta.label);
     }
@@ -847,13 +837,13 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
             }
         }
         SparseCoeffAccumulator row_terms;
-        row_terms.BeginForDecisions(indexer, ta.inner_terms->size(), written);
-        ExtremumMemberSource members;
+		row_terms.BeginForDecisions(indexer, ta.variables.size(), written);
+		ExtremumMemberSource members;
         members.count = rows.size();
-        members.fill_link = [&](idx_t k, MinMaxLinkRow &link) {
-            AddComposedRowTerms(indexer, row_terms, link, (*ta.inner_terms), ta.per_term_coefs, rows[k], written);
-        };
-        // The TERM's range, not the row's: looser than a per-row bracket, but it is
+		members.fill_link = [&](idx_t k, MinMaxLinkRow &link) {
+			AddComposedRowTerms(indexer, row_terms, link, ta.variables, ta.per_term_coefs, rows[k], written);
+		};
+		// The TERM's range, not the row's: looser than a per-row bracket, but it is
         // the one the auxiliary itself is boxed by and the one the Big-M comes from,
         // so a pinned column shares it rather than introducing a second answer.
         members.range = [&](idx_t) {
@@ -928,19 +918,19 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
             }
             avg_divisor = static_cast<double>(cnt);
         }
-        for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
-            auto &inner_t = (*ta.inner_terms)[it];
-            for (idx_t row = 0; row < num_rows; row++) {
+		for (idx_t it = 0; it < ta.variables.size(); it++) {
+			const idx_t variable = ta.variables[it];
+			for (idx_t row = 0; row < num_rows; row++) {
                 if (!ta.filter_mask[row]) continue;
                 double coef = ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
-                if (inner_t.variable_index == DConstants::INVALID_INDEX) {
-                    AddCoefficient(outer_fixed, coef, written);
-                } else {
-                    outer_terms.Add((int)indexer.Get(inner_t.variable_index, row), coef);
-                }
-            }
-        }
-    }
+				if (variable == DConstants::INVALID_INDEX) {
+					AddCoefficient(outer_fixed, coef, written);
+				} else {
+					outer_terms.Add((int)indexer.Get(variable, row), coef);
+				}
+			}
+		}
+	}
     outer_terms.Flush(outer.indices, outer.coefficients);
     double outer_rhs = rhs_val - outer_fixed;
 

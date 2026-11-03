@@ -178,11 +178,12 @@ struct Helpers {
 	idx_t Find(const BoundAggregateExpression &agg, const Expression *rows, idx_t group_key) const {
 		for (idx_t i = 0; i < reducers.size(); i++) {
 			auto &link = decide.reducer_value_links[links[i]];
-			if (link.group_key != group_key || !reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
+			if (link.group_key != group_key || !DecideExpressionsEqual(*reducers[i], agg) ||
+			    reducers[i]->GetAlias() != agg.GetAlias()) {
 				continue;
 			}
 			// A clause's rows carry copies of its `when`: the same condition.
-			const bool same_rows = rows ? link.when && link.when->Equals(*rows) : !link.when;
+			const bool same_rows = rows ? link.when && DecideExpressionsEqual(*link.when, *rows) : !link.when;
 			if (same_rows) {
 				return links[i];
 			}

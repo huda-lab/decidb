@@ -635,7 +635,8 @@ class TestPointShapes:
     def test_a_frame_that_cannot_miss_inside_a_reducer(self, decidb_cli, scope_solver, clause_sql, body, objective):
         """Inside a reducer a point frame is read in place too (a choice beyond D78): each
         member reads its selected row, with no helper. One that cannot miss -- `else`,
-        `first`, `last` -- is phase 4's; one that can is phase 6's (refused below)."""
+        `first`, `last` -- is phase 4's; one that can drops the member where it selects
+        nothing (test_anr_composition.py)."""
         sense = "MINIMIZE" if objective.sense == ObjSense.MINIMIZE else "MAXIMIZE"
         _judged(
             decidb_cli,
@@ -1079,41 +1080,9 @@ class TestPointErrors:
             MAXIMIZE_X,
         )
 
-    @pytest.mark.parametrize(
-        "clause_sql, message",
-        [
-            pytest.param(
-                "sum(at(previous: x) over (t.period)) <= 4",
-                "DECIDE: at(previous: x) over (t.period) may select no position inside "
-                "sum(at(previous: x) over (t.period)), a reducer over decisions, which is not supported yet; "
-                "give it an else, or make its timeline cyclic",
-                id="in-a-constraint",
-            ),
-            pytest.param(
-                "sum(x + at(previous: t.v) over (t.period)) <= 4",
-                "may select no position inside",
-                id="data-frame-in-a-decision-reducer",
-            ),
-            pytest.param(
-                "max(at(first: x) over (t.period)) + sum(x) <= 12",
-                "DECIDE: at(first: x) over (t.period) inside MAX beside another term is not supported yet",
-                id="composed-min-max",
-            ),
-        ],
-    )
-    def test_phase_6_shapes_are_refused(self, decidb_cli, clause_sql, message):
-        """A member a missing position drops from a reducer over decisions, and a frame in a
-        composed MIN/MAX: not supported yet."""
-        result = decidb_cli.execute_raw(_edge(clause_sql))
-        assert message in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a phase-6 refusal")
-
-    def test_a_missing_position_in_the_objective_reducer_is_refused(self, decidb_cli):
-        result = decidb_cli.execute_raw(_edge("x <= t.v", objective="MAXIMIZE sum(at(previous: x) over (t.period))"))
-        assert "may select no position inside sum(" in result.stderr, result.stderr
-
     def test_a_decision_frame_beside_max_in_the_objective_is_refused(self, decidb_cli):
-        """A composed MIN/MAX objective reads each term at its own row: not supported yet."""
+        """A decision beside a MIN or MAX in the objective is refused whatever it is, a
+        frame's read of one included."""
         result = decidb_cli.execute_raw(_edge("x <= t.v", objective="MINIMIZE max(x) - at(first: x) over (t.period)"))
         assert (
             "DECIDE: 'at(first: x) over (t.period)' beside MIN or MAX is not supported yet" in result.stderr
@@ -1587,42 +1556,6 @@ class TestRangeDeck:
 
 @pytest.mark.error
 class TestRangeErrors:
-    @pytest.mark.parametrize(
-        "clause_sql, message",
-        [
-            pytest.param(
-                "sum(sum(from previous to next: x) over (t.period)) <= 4",
-                "DECIDE: sum(from previous to next: x) over (t.period) may select no position inside",
-                id="never",
-            ),
-            pytest.param(
-                "sum(sum(from 2 next to 3 next: x) over (t.period)) <= 4",
-                "give it an else, or make its timeline cyclic",
-                id="every-position-missing",
-            ),
-            pytest.param(
-                "sum(sum(from next to previous else 0: x) over (t.period)) <= 4",
-                "its first end may come after its last, which requests no position",
-                id="reversed",
-            ),
-            pytest.param(
-                "sum(avg(from previous to next all: x) over (t.period)) <= 4",
-                "drop all, or make its timeline cyclic",
-                id="all",
-            ),
-        ],
-    )
-    def test_a_range_that_may_read_nothing_inside_a_reducer_over_decisions(self, decidb_cli, clause_sql, message):
-        """A member a range drops from a reducer over decisions is not supported yet. `from
-        previous to next` always reads the anchor's own position, so it is accepted; the
-        others are refused, each naming what makes it read nothing."""
-        result = decidb_cli.execute_raw(_edge(clause_sql))
-        if "never" in message or "previous to next:" in clause_sql:
-            assert result.returncode == 0 and not result.stderr.strip(), result.stderr
-            return
-        assert message in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a range inside a reducer over decisions")
-
     def test_count_over_decisions_is_refused(self, decidb_cli):
         result = decidb_cli.execute_raw(_edge("x <= count(from first to last: x) over (t.period)"))
         assert "COUNT over a DECIDE variable is degenerate" in result.stderr, result.stderr

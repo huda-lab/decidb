@@ -11,7 +11,7 @@ postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck
 and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
 `outer(per k: inner(e) by (k))` among them, and frame selectors, points and ranges (pp. 42–56).
 
-The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D86) and
+The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D88) and
 encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
 the sections below say how far the engine builds them.
 
@@ -44,10 +44,10 @@ order, no stepped range and no fill or complete-frame boundary policy.
 
 - **Today:** every spelling parses, binds and is formulated (`DecideFrameExpression`, `LogicalDecide::frames`, guide
   §5.6): a point is read in place, a range over data is a value of the row, and a range over decisions a helper
-  decision per window (D78).
-- **What is left:** their composition with variants and nesting (D82); a frame that may read nothing inside a reducer
-  over decisions, the member dropped (D84); a frame in a bound that takes its group's tightest value (D85) or inside a
-  reducer of a bound; a frame over decisions in a `MIN`/`MAX` of several terms.
+  decision per window (D78). They compose with variants (D82), nesting, `abs`, `norm` and a `MIN`/`MAX` of several
+  terms, and a frame that selects nothing inside a reducer over decisions drops its member (D87, D88).
+- **What is left:** a frame in a bound that takes its group's tightest value (D85) or inside a reducer of a bound; a
+  reducer a frame may leave with no member under `abs` inside another reducer (D88).
 
 ## Conditional generation with `if` (pp. 58–59)
 

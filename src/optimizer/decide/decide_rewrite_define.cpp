@@ -186,7 +186,7 @@ bool IsCheapLoneExtremum(ClientContext &context, BoundComparisonExpression &comp
 
 //! Copies of one reducer under one `when`: they share a helper.
 bool SameReducer(const BodySite &a, const BodySite &b) {
-	if (a.reducer->alias != b.reducer->alias || !a.reducer->Equals(*b.reducer)) {
+	if (a.reducer->alias != b.reducer->alias || !DecideExpressionsEqual(*a.reducer, *b.reducer)) {
 		return false;
 	}
 	auto a_when = a.scope.Condition();
@@ -194,7 +194,7 @@ bool SameReducer(const BodySite &a, const BodySite &b) {
 	if (!a_when || !b_when) {
 		return !a_when && !b_when;
 	}
-	return a_when->Equals(*b_when);
+	return DecideExpressionsEqual(*a_when, *b_when);
 }
 
 //! The clause's `when` and the reducer's own filter: the rows a helper is defined on.

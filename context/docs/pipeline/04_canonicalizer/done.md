@@ -558,13 +558,21 @@ decision term does, one over data right, and it decides no shape. `PlaceFrames` 
 `DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
 the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
 `within` (`timeline_key`, a key-table entry made when new); it notes its clause and whether
-it stands in a reducer. A frame that may read nothing inside a reducer over decisions
-(`DecideFrameSpec::MaySelectNothing`) is refused, not supported yet, the message ending on what makes it so and how to
-cure it (`DecideFrameAbsenceRemedy`). Under a `per K` whose key, with the path's, does not hold the
+it stands in a reducer. Under a `per K` whose key, with the path's, does not hold the
 frame's `within`, the frame records the D75 check execution runs (`partition_key`,
-`partition_subject`). `SkipNullData` tests a frame inside a reducer over decisions whole
-(`marker IS NOT NULL`), as it tests a column: the frame reads another row, or nothing, so no
-column of the row itself says whether it has a value (D84); stage 05 makes the test a column.
+`partition_subject`). Under `abs` inside another reducer over decisions, a reducer that a
+frame may leave with no member (`FirstAbsenceFrame`: one of its own frames that
+`MaySelectNothing`, or one of a reducer nested in it) is refused, not supported yet (D88):
+the `abs` auxiliary of that member would stand undefined in its reducer. The message ends on
+what makes the frame miss and how to cure it (`DecideFrameAbsenceRemedy`). `SkipNullData`
+tests a frame inside a reducer over decisions whole (`marker IS NOT NULL`), as it tests a
+column: the frame reads another row, or nothing, so no column of the row itself says whether
+it has a value (D84), and the member goes where it reads nothing (D87); stage 05 makes the
+test a column. A marker names its frame by its tag alone, which `Expression::Equals`
+ignores, so every DECIDE comparison of trees that may hold a frame -- the NULL tests
+`SkipNullData` collects, a filter like terms share, a helper's reducer and rows -- reads
+`DecideExpressionsEqual` (`decide_reducer_path.hpp`), which holds two markers the same only
+when they name one frame: `at(previous: x)` and `at(next: x)` are two values.
 
 ---
 

@@ -2341,12 +2341,8 @@ vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, 
 			}
 		} else if (scope.value_link != DConstants::INVALID_INDEX) {
 			auto &link = reducer_value_links[scope.value_link];
-			vector<bool> kept(num_rows, true);
-			if (link.when) {
-				kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
-			}
-			vector<bool> read =
-			    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
+			vector<bool> kept;
+			auto read = ValueLinkMembers(context, gstate, link, num_rows, chunk_expr_cache, keyed_mappings, kept);
 			std::function<bool(idx_t)> is_member = [&](idx_t row) {
 				return read[row];
 			};
@@ -2394,6 +2390,38 @@ vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, 
 		keyed_mappings.push_back(std::move(mapping));
 	}
 	return keyed_mappings;
+}
+
+vector<bool> PhysicalDecide::ValueLinkMembers(ClientContext &context, DecideGlobalSinkState &gstate,
+                                              const LogicalDecide::ReducerValueLink &link, idx_t num_rows,
+                                              ChunkExprCache &chunk_expr_cache, const vector<KeyedMapping> &mappings,
+                                              vector<bool> &kept) const {
+	kept.assign(num_rows, true);
+	if (link.when) {
+		kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
+	}
+	vector<bool> read =
+	    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
+	for (auto &term : link.inner_terms) {
+		const auto var = term.variable_index;
+		if (var >= variable_scopes.size() || !variable_scopes[var].IsKeyed()) {
+			continue;
+		}
+		const auto scope = variable_scopes[var].keyed_scope_idx;
+		if (scope >= mappings.size()) {
+			throw InternalException("DECIDE: %s reads a decision whose scope is numbered after its own", link.label);
+		}
+		auto &mapping = mappings[scope];
+		const auto *read_at =
+		    term.frame_read == DConstants::INVALID_INDEX ? nullptr : &gstate.frame_maps[term.frame_read];
+		for (idx_t row = 0; row < num_rows; row++) {
+			const auto at = read_at ? read_at->SelectedRow(row) : row;
+			if (read[row] && at != DConstants::INVALID_INDEX && mapping.IsAbsent(at)) {
+				read[row] = false;
+			}
+		}
+	}
+	return read;
 }
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
@@ -3539,8 +3567,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         }
 
 		// A comparison holds only where every frame it reads outside its reducers selects a position; elsewhere it
-		// reads no value (D84), as at a NULL. The rows a rewrite made of it (an ABS's envelope) carry its id.
-		auto present = FramesPresent(gstate, constraint->source_clause_id, num_rows);
+		// reads no value (D84), as at a NULL. A row a rewrite added defines an auxiliary (an ABS, an indicator), which
+		// carries its clause's id but is no instance of it: it serves every instance that reads the auxiliary -- one
+		// inside a reducer, a member the other instances read -- and holds wherever its own values stand, a frame it
+		// reads included.
+		auto present = constraint->kind == ConstraintKind::STRUCTURAL
+		                   ? vector<bool>()
+		                   : FramesPresent(gstate, constraint->source_clause_id, num_rows);
 		for (idx_t row = 0; row < present.size(); row++) {
 			if (scoped_kept[row] && !present[row]) {
 				null_rows[row] = true;
@@ -3966,7 +3999,9 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				ta.label = term.agg_name + "(" +
 				           RenderDecideSource(*term.inner_expr, source_fragments, keyed_scopes, &keys) + ")";
 			}
-			ta.inner_terms = &term.inner_terms;
+			for (auto &inner_t : term.inner_terms) {
+				ta.variables.push_back(gstate.ReadVariable(inner_t));
+			}
 			if (term.filter) {
                 ta.filter_mask = std::move(masks[mask_slot++]);
             } else {
@@ -4166,14 +4201,10 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		}
 		EvaluatedConstraint ec;
 
-		// The rows the clause keeps, then those the reducer's own `when` keeps: its
-		// members. Nothing is computed on any other row.
-		vector<bool> kept(num_rows, true);
-		if (link.when) {
-			kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
-		}
-		vector<bool> read =
-		    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
+		// The rows the clause keeps, then those the reducer's own `when` keeps that read a value: its members.
+		// Nothing is computed on any other row.
+		vector<bool> kept;
+		auto read = ValueLinkMembers(context, gstate, link, num_rows, chunk_expr_cache, keyed_mappings, kept);
 
 		// One group per `by` value among the kept rows that holds a member, numbered as the
 		// helper's scope numbers them (BuildKeyedMappings); a member row stands in its

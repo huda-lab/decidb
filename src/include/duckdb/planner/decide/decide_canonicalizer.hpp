@@ -252,7 +252,8 @@ public:
 	//! `by` keys then `within`; the comparison it is written in; and whether it is inside a reducer
 	//! (DecideFrameSpec::rows, timeline_key, source_clause_id, reduced). Records the partition check (D75) of each
 	//! frame a `per` key reads directly -- a clause's `per K:`, or a reducer's own `per` -- unless the key determines
-	//! its timeline already (DecideFrameSpec::partition_key). Called once, by the planner, after CanonicalizeTree.
+	//! its timeline already (DecideFrameSpec::partition_key). Refuses a reducer that may read no member under `abs`
+	//! inside another reducer over decisions (D88). Called once, by the planner, after CanonicalizeTree.
 	void PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const;
 	//! The same for the objective, after CanonicalizeObjective. Its root has one class (D72), whose fields the
 	//! objective's signature checks, so only a reducer's own `per` gets a partition check there.
@@ -515,9 +516,15 @@ private:
 	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
 	//! members -- `reducer` is the innermost reducer around `expr`, null at the root. `per`
 	//! is the key of the scoped expression `expr` is the body of; null for `per row`, which
-	//! no frame's timeline can span.
+	//! no frame's timeline can span. `under_abs` is whether `expr` stands under an `abs`
+	//! inside `reducer`.
 	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const BoundAggregateExpression *reducer,
-	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement) const;
+	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement,
+	                   bool under_abs = false) const;
+	//! The first frame that may leave `reducer`, a reducer over decisions, with no member: one in its argument
+	//! outside the reducers nested in it that may select nothing, else one that may leave a reducer nested in it with
+	//! none; INVALID_INDEX when no frame can.
+	idx_t FirstAbsenceFrame(const BoundAggregateExpression &reducer, const vector<DecideFrameSpec> &frames) const;
 	//! The key of a reducer's own `per` (or of the colon form), when it has one.
 	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
 	                   FramePerKey &out) const;
