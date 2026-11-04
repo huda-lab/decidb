@@ -970,6 +970,31 @@ COUNT_EMPTY = Case(
     {1: ()},
 )
 
+NULL_ELSE_COLUMNS = ("id", "p", "period", "v", "o")
+NULL_ELSE_DATA = ((1, "A", 1, 3, None), (2, "A", 2, 7, 5), (3, "B", 1, 4, None))
+#: An `else` that is NULL at its anchor is no `else` there (D86): rows 1 and 3, whose positions
+#: are all missing, read no value, so their comparisons have no instance; row 2 counts its two `else`s.
+COUNT_NULL_ELSE = Case(
+    "count_null_else",
+    "deck p. 50",
+    5,
+    NULL_ELSE_COLUMNS,
+    NULL_ELSE_DATA,
+    (Decision("x"),),
+    (
+        clause(le(X, 9)),
+        clause(
+            le(X, Range("count", next_(2), next_(3), Col("v"), Over("period", within=("p",)), fallback=Col("o")))
+        ),
+    ),
+    Objective(MAXIMIZE, reduce("sum", X)),
+    f"""SELECT id, x {table('t', NULL_ELSE_COLUMNS, NULL_ELSE_DATA)} DECIDE x(INT)
+        SUCH THAT x <= 9 AND x <= count(from 2 next to 3 next else t.o: t.v) over (t.period within t.p)
+        MAXIMIZE sum(x) ORDER BY id""",
+    20,
+    {1: ("x2 <= 2",)},
+)
+
 NULLS_COLUMNS = ("id", "v")
 NULLS_DATA = ((1, 5), (2, None), (3, 7))
 #: count(e) counts the non-NULL values (D67).
@@ -1204,6 +1229,7 @@ CASES = (
     CYCLIC_REPEATS,
     REVERSED,
     COUNT_EMPTY,
+    COUNT_NULL_ELSE,
     COUNT_NON_NULL,
     NULL_BOUND,
     PARTITION_SPANNED,

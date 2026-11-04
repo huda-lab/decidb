@@ -961,11 +961,13 @@ class AnrModel:
         missing = sum(1 for p in selected if p is None)
         if node.all and missing:
             return ABSENT  # nothing is read, so no value it would read can fail
-        if missing == len(selected) and (node.fallback is None or not missing):
+        # An `else` with no value at the anchor is no `else` there (D86).
+        fallback = self._form(node.fallback, t, kept) if missing and node.fallback is not None else ABSENT
+        if missing == len(selected) and fallback is ABSENT:
             return ABSENT  # no requested position exists, and no `else` stands in: `count` too (deck p. 50)
         values = [self._at_position(node, timeline, within, p, kept) for p in selected if p is not None]
-        if missing and node.fallback is not None:
-            values.extend([self._form(node.fallback, t, kept)] * missing)
+        if fallback is not ABSENT:
+            values.extend([fallback] * missing)
         return self._combine(node.kind, values)
 
     # -- reading DeciDB's answer and assignments ----------------------------------

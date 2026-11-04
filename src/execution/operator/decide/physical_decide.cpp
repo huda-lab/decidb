@@ -2392,6 +2392,14 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 		SkipDecideRangeNullReads(context, payload, fallback, gstate.frame_maps[link.frame], gstate.data, num_rows,
 		                         chunk_expr_cache);
 	}
+	// A range over data reads an `else` that is NULL at its anchor as no `else` there (D86, deck p. 50): a window
+	// left with nothing to read has no value, `count`'s too. A NULL its payload reads is a value its aggregate skips.
+	for (auto &column : prepared.frame_columns) {
+		if (column.kind == DecideFrameColumn::Kind::REDUCED && column.fallback) {
+			SkipDecideRangeNullReads(context, {}, {column.fallback.get()}, gstate.frame_maps[column.frame], gstate.data,
+			                         num_rows, chunk_expr_cache);
+		}
+	}
 	AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, gstate.data, num_rows, chunk_expr_cache);
 	for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
 		gstate.frame_column_refs.push_back(
