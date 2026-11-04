@@ -761,6 +761,9 @@ at least its floor less every other's top where it states `value <= members`; a 
 envelope keeps every member under its top, a MIN's over its floor. Repeated columns of one
 group are summed first (`CombineColumns`: `sum(t.w * max(x))` is `2m + m`), and one box
 covers every instance, so it tightens only when every instance was bounded, by the loosest.
+The box is a bound on the helper's columns, so an instance with none -- a one-member MIN/MAX
+group written into its readers -- neither tightens it nor is bounded by it: its readers bound
+its member directly.
 So a nested MIN/MAX whose closing side needs a Big-M finds one in a bound written only at the
 root (`per t.g: sum(max(x) by (t.g, t.h)) by (t.g) = 10`). Every derivation only tightens.
 The loop stops when no box moves; at the first box that crosses, which proves the model

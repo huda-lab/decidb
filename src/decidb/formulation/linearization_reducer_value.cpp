@@ -729,6 +729,10 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 			if (!reads_helper(span.first, span.last)) {
 				continue;
 			}
+			if (!link.inlined &&
+			    !indexer.HasColumn(link.value_var, indexer.InstanceOf(link.value_var, members.group_rows[group]))) {
+				continue; // written into its readers: the box below is not derived from it, so it does not bound it
+			}
 			vector<MemberTerm> group_terms;
 			double group_constant = 0.0;
 			for (idx_t m = span.first; m < span.last; m++) {
@@ -762,7 +766,8 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 	}
 	// A helper's box is one for every instance it defines: tightened only when each of
 	// them was bounded, by the loosest. Its other columns -- the rows its path drops, the
-	// windows that read nothing -- are read by no row. An inlined helper has no column.
+	// windows that read nothing -- are read by no row. An inlined helper has no column; its
+	// box holds through the rows it is written into, for every instance.
 	for (auto &link : input.reducer_value_links) {
 		if (link.inlined) {
 			continue;

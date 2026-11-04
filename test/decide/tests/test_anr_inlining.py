@@ -372,3 +372,20 @@ def test_the_achievable_objective_counts_an_inlined_helpers_constants(request, c
     # The repair's amount is read as displayed (1.33333), so the oracle's optimum is too.
     assert achieved == pytest.approx(expected.objective, abs=1e-3)
     assert achieved == pytest.approx(12.5, abs=1e-6)  # 7.5 of it the windows' constants
+
+
+@pytest.mark.correctness
+@BOTH_SOLVERS
+def test_a_written_in_group_keeps_its_own_bound(request, cli_fixture):
+    """`per t.g: max(t.w * max(max(x) by (t.k))) by (t.g) <= t.cap`: group a reads 2 * max(x0,
+    x1) <= 4, group b reads 1 * x2 <= 21. Group b's middle `max` has one member, so it is that
+    member, with no column (deck p. 112), and the helper's box -- 10.5, from group a's column
+    alone -- bounds no member of it: x2 reaches 21. Applying the box to every group had held
+    x2 to 10."""
+    sql = f"""
+        SELECT id, x {table('t', ('id', 'g', 'k', 'cap', 'w'), ((0, 'a', 'u', 4, 2), (1, 'a', 'v', 4, 2), (2, 'b', 'u', 21, 1)))}
+        DECIDE x(INT)
+        SUCH THAT x <= 100 AND per t.g: max(t.w * max(max(x) by (t.k))) by (t.g) <= t.cap
+        MAXIMIZE sum(x)
+        ORDER BY id"""
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [2, 2, 21]
