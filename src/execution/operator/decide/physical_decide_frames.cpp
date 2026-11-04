@@ -377,7 +377,8 @@ void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &fr
 	vector<idx_t> first_row(count, DConstants::INVALID_INDEX);
 	for (idx_t row = 0; row < num_rows; row++) {
 		auto group = ids[row];
-		if (group == DConstants::INVALID_INDEX) {
+		// An anchor in no timeline (a NULL `within` column, D5) lies in none, so it spans none.
+		if (group == DConstants::INVALID_INDEX || map.Untimed(row)) {
 			continue;
 		}
 		if (first_row[group] == DConstants::INVALID_INDEX) {

@@ -1007,18 +1007,18 @@ PARTITION_COLUMNS = ("id", "category", "product", "period", "v")
 PARTITION_DATA = ((1, "Food", "A", 1, 4), (2, "Food", "B", 1, 6))
 
 
-def _partition(name, per, per_sql, error, optimum) -> Case:
+def _partition(name, per, per_sql, error, optimum, data=PARTITION_DATA) -> Case:
     frame = At(FIRST, Col("v"), Over("period", within=("product",)))
     return Case(
         name,
         "D75",
         4,
         PARTITION_COLUMNS,
-        PARTITION_DATA,
+        data,
         (Decision("x"),),
         (clause(le(X, 10)), clause(ge(X, frame), per=per)),
         Objective(MINIMIZE, reduce("sum", X)),
-        f"""SELECT id, x {table('t', PARTITION_COLUMNS, PARTITION_DATA)} DECIDE x(INT)
+        f"""SELECT id, x {table('t', PARTITION_COLUMNS, data)} DECIDE x(INT)
                     SUCH THAT x <= 10 AND per {per_sql}: x >= at(first: t.v) over (t.period within t.product)
                     MINIMIZE sum(x) ORDER BY id""",
         optimum,
@@ -1031,6 +1031,15 @@ PARTITION_SPANNED = _partition("partition_spanned", ("category",), "t.category",
 PARTITION_HELD = _partition("partition_held", ("product",), "t.product", None, 10)
 #: `per ()` is one class, which spans both timelines too (deck p. 54: the empty key determines none).
 PARTITION_NONE = _partition("partition_none", (), "()", "frame_partition", None)
+#: Row 3 has no product, so it is in no timeline (D5): Food lies in A's alone, and row 3 reads no value.
+PARTITION_UNTIMED = _partition(
+    "partition_untimed",
+    ("category",),
+    "t.category",
+    None,
+    8,
+    data=((1, "Food", "A", 1, 4), (2, "Food", "A", 2, 6), (3, "Food", None, 1, 9)),
+)
 
 NESTED_EMPTY_COLUMNS = ("id", "g", "h", "c")
 NESTED_EMPTY_DATA = ((1, "a", "p", True), (2, "a", "q", False))
@@ -1200,6 +1209,7 @@ CASES = (
     PARTITION_SPANNED,
     PARTITION_HELD,
     PARTITION_NONE,
+    PARTITION_UNTIMED,
     NESTED_EMPTY,
     KEPT_NONE,
     NULL_PAYLOAD,

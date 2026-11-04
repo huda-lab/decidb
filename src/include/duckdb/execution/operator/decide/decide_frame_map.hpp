@@ -180,7 +180,7 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
                                    PerGroupCache &per_group_cache, ColumnDataCollection &data, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache);
 
-//! D75: each class of `frame.partition_key` among the anchors lies in one timeline.
+//! D75: each class of `frame.partition_key` among the anchors lies in one timeline; an anchor in none is no witness.
 void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
                                ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
