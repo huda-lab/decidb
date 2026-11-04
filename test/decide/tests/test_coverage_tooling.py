@@ -123,7 +123,7 @@ def test_pipeline_profiler_measures_memory_with_this_hosts_time(tmp_path, monkey
 @reports_memory
 def test_direct_runner_measures_memory_with_this_hosts_time(monkeypatch):
     monkeypatch.setattr(DIRECT, "BINARY", TRUE)
-    _, peak, status, _ = DIRECT.run("db", "direct", "SELECT 1", 30)
+    _, peak, status, _, _ = DIRECT.run("db", "direct", "SELECT 1", 30)
     assert status is None
     assert peak > 0
 

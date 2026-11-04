@@ -7,18 +7,22 @@ Each file in `queries/` is one DECIDE query over the TPC-H tables, with two head
 also returns the objective it reached.
 
 Modes. `direct` pins `decide_direct_solve='require'`, so a query the rule does not take fails instead of using the
-solver. `gurobi` and `highs` pin `'off'` and choose the backend with `DECIDB_FORCE_SOLVER`.
+solver. `direct_1t` does the same on one thread, so a speedup can be told apart from the core count. `gurobi` and
+`highs` pin `'off'`, choose the backend with `DECIDB_FORCE_SOLVER`, and report model-build and solve time.
 
 Each measured run is a fresh `decidb` process that only opens the stored database, under `/usr/bin/time`, so its
-wall time and peak memory are the query's own. Every mode runs `--repeats` times per cell; the table reports the
-median wall time with the min and max, and the largest peak memory. A run past `--timeout` is killed with its process
-group and reported as `timeout`; a failed run is reported as `error`. Neither is ever reported as a time.
+wall time and peak memory are the query's own. A size's database is read once first, so no mode pays for the first
+read from disk. Every mode runs `--repeats` times per cell, stopping early after a run past `--repeat-budget`; the
+table reports the median wall time with the min and max, and the largest peak memory. A run past `--timeout` is killed
+with its process group and reported as `timeout`; a failed run is reported as `error`. Neither is ever reported as a
+time.
 
 Agreement. At every size, every finished run's objective must match direct solve's within 1e-6 relative. A mismatch
 is printed loudly, written to the CSV, and stops the sweep with a non-zero exit, so no wrong answer is timed further.
+A size no solver finished reads `n/a`: there was nothing to agree with.
 
-Machine-heat rule: sizes run smallest first, and a solver runs a size only when its median at the previous size of
-that query was within `--solver-budget` seconds.
+Machine-heat rule: sizes run smallest first, a size's database is generated when the sweep reaches it, and a solver
+runs a size only when its median at the previous size of that query was within `--solver-budget` seconds.
 
 Beside the CSV, a JSON manifest records the commit, the binary, the solver versions, the machine and the arguments.
 
@@ -50,10 +54,12 @@ DB_DIR = HERE.parent / "databases" / "direct_solve"
 sys.path.insert(0, str(HERE.parent))
 import run_benchmarks as bench  # noqa: E402  (the parent folder's /usr/bin/time flag and parser)
 
-# TPC-H scale factors; partsupp holds one decision per row: 800, 9.6K, 100K and 1.6M rows. dbgen drops the fraction of a
-# scale factor above 1 (sf=1.25 generates sf=1), so the largest is a whole number.
-SCALE_FACTORS = (0.00125, 0.0125, 0.125, 2)
-MODES = ("direct", "gurobi", "highs")
+# TPC-H scale factors; partsupp holds one decision per row: 100K rows, doubling up to 409.6M. dbgen drops the fraction
+# of a scale factor above 1 (sf=1.25 generates sf=1), so the larger ones are whole numbers.
+SCALE_FACTORS = (0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512)
+SOLVERS = ("gurobi", "highs")
+MODES = ("direct", "direct_1t") + SOLVERS
+DEFAULT_MODES = ("direct", "direct_1t", "gurobi")
 TOLERANCE = 1e-6  # relative, on the objective
 
 
@@ -70,15 +76,31 @@ def prepare(db, sf):
     if db.exists():
         return
     db.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(BINARY), str(db), "-c", f"CALL dbgen(sf={sf}); CHECKPOINT;"], check=True, capture_output=True)
+    partial = db.with_name(db.name + ".partial")  # a killed generation must not pass for a stored database
+    partial.unlink(missing_ok=True)
+    subprocess.run(
+        [str(BINARY), str(partial), "-c", f"CALL dbgen(sf={sf}); CHECKPOINT;"], check=True, capture_output=True
+    )
+    partial.rename(db)
+
+
+def warm(db):
+    """Reads the database once, so no mode pays for the first read from disk."""
+    with db.open("rb") as handle:
+        while handle.read(1 << 24):
+            pass
 
 
 def run(db, mode, sql, timeout):
-    """One fresh process. Returns (wall seconds, peak MiB, status, stdout); status is None when the run finished."""
-    setting = "require" if mode == "direct" else "off"
-    env = {k: v for k, v in os.environ.items() if k != "DECIDB_FORCE_SOLVER"}
-    if mode != "direct":
+    """One fresh process. Returns (wall seconds, peak MiB, status, stdout, stderr); status is None when the run
+    finished."""
+    setting = "off" if mode in SOLVERS else "require"
+    threads = "SET threads=1; " if mode == "direct_1t" else ""
+    env = {k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_BENCH", "DECIDB_TIME_LIMIT")}
+    if mode in SOLVERS:
         env["DECIDB_FORCE_SOLVER"] = mode
+        env["DECIDB_BENCH"] = "1"
+        env["DECIDB_TIME_LIMIT"] = str(timeout * 2)  # `--timeout` decides, not DeciDB's default limit of 300 s
     command = [
         "/usr/bin/time",
         bench.get_time_flag(),
@@ -88,18 +110,24 @@ def run(db, mode, sql, timeout):
         "-noheader",
         "-csv",
         "-c",
-        f"SET decide_direct_solve='{setting}'; {sql}",
+        f"SET decide_direct_solve='{setting}'; {threads}{sql}",
     ]
     start = time.perf_counter()
     proc = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, start_new_session=True
+        command,
+        stdin=subprocess.DEVNULL,  # a terminal would make a slow solve stop and ask whether to continue
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)  # the whole group: `time` and the decidb it started
         proc.communicate()
-        return None, None, "timeout", ""
+        return None, None, "timeout", "", ""
     wall = time.perf_counter() - start
     peak_kb = bench.parse_time_output(stderr).get("peak_rss_kb")
     peak_mib = peak_kb / 1024 if peak_kb is not None else None
@@ -109,27 +137,41 @@ def run(db, mode, sql, timeout):
     if proc.returncode != 0 or "Error" in before_stats:
         detail = before_stats.strip().splitlines()[0][:160] if before_stats.strip() else "failed"
         print(f"  [{mode}] error: {detail}", file=sys.stderr)
-        return wall, peak_mib, "error", stdout
-    return wall, peak_mib, None, stdout
+        return wall, peak_mib, "error", stdout, stderr
+    return wall, peak_mib, None, stdout, stderr
 
 
-def measure(db, mode, sql, repeats, timeout):
-    """Runs one cell. Returns a dict with the median, min and max wall time, the max peak MiB, the decision count and
-    every run's objective, or {"status": ...} at the first failure."""
-    walls, peaks, objectives = [], [], []
+def bench_seconds(stderr, name):
+    """A `DECIDB_BENCH: <name>_ms=<value>` line, in seconds; None when the run printed none."""
+    found = re.search(rf"^DECIDB_BENCH: {name}_ms=([\d.]+)$", stderr, re.MULTILINE)
+    return float(found.group(1)) / 1000 if found else None
+
+
+def measure(db, mode, sql, repeats, timeout, repeat_budget):
+    """Runs one cell. Returns a dict with the runs made, the median, min and max wall time, the max peak MiB, the median
+    model-build and solve time on a solver, the decision count and every run's objective, or {"status": ...} at the
+    first failure. A run past `repeat_budget` seconds is the cell's last."""
+    walls, peaks, objectives, models, solves = [], [], [], [], []
     for _ in range(repeats):
-        wall, peak, status, stdout = run(db, mode, sql, timeout)
+        wall, peak, status, stdout, stderr = run(db, mode, sql, timeout)
         if status:
             return {"status": status}
         count, _, objective = stdout.strip().splitlines()[-1].split(",")
         walls.append(wall)
         peaks.append(peak)
         objectives.append(float(objective))
+        models.append(bench_seconds(stderr, "model_construction"))
+        solves.append(bench_seconds(stderr, "solver"))
+        if wall > repeat_budget:
+            break
     return {
+        "runs": len(walls),
         "median": statistics.median(walls),
         "min": min(walls),
         "max": max(walls),
         "peak": max(p for p in peaks if p is not None),
+        "model": statistics.median(models) if None not in models else None,
+        "solve": statistics.median(solves) if None not in solves else None,
         "decisions": int(count),
         "objectives": objectives,
     }
@@ -168,7 +210,6 @@ def manifest(args, stamp, output):
             r"#define HIGHS_VERSION_(MAJOR|MINOR|PATCH) (\d+)", (REPO / "third_party/highs/HConfig.h").read_text()
         )
     )
-    gurobi = command_output(["gurobi_cl", "--version"])
     duckdb = command_output([str(BINARY), "-noheader", "-csv", "-c", "SELECT version(), current_setting('threads');"])
     return {
         "command": "benchmark/decide/direct_solve/run.py",
@@ -180,10 +221,13 @@ def manifest(args, stamp, output):
         "working_tree_dirty": bool(
             command_output(["git", "status", "--porcelain", "--", "src", "third_party", str(HERE)], cwd=REPO)
         ),
+        "uncommitted_diff": command_output(["git", "diff", "HEAD", "--", "src", "third_party", str(HERE)], cwd=REPO),
+        "queries": {path.stem: path.read_text() for path in sorted(QUERIES.glob("*.sql"))},
         "binary": str(BINARY),
         "binary_built": datetime.fromtimestamp(BINARY.stat().st_mtime, timezone.utc).isoformat(),
         "decidb_version_and_threads": duckdb,
-        "gurobi": gurobi.splitlines()[0] if gurobi else None,
+        # the libraries the binary's dlopen search finds outside GUROBI_HOME; `gurobi_cl` needs a library path to run
+        "gurobi": sorted(path.name for path in Path.home().glob("gurobi*/linux64/lib/libgurobi*.so*")),
         "gurobi_home": os.environ.get("GUROBI_HOME"),
         "highs": f"{highs['MAJOR']}.{highs['MINOR']}.{highs['PATCH']}",
         "solver_threads": "solver default (DeciDB sets no thread count)",
@@ -200,13 +244,16 @@ def main():
     names = sorted(p.stem for p in QUERIES.glob("*.sql"))
     parser.add_argument("--sf", nargs="+", type=float, default=list(SCALE_FACTORS), help="TPC-H scale factors")
     parser.add_argument("--queries", nargs="+", choices=names, default=names)
-    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
+    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
     parser.add_argument("--repeats", type=int, default=3, help="runs of every mode per cell (median is reported)")
-    parser.add_argument("--timeout", type=int, default=600, help="seconds before a run is killed and reported")
+    parser.add_argument(
+        "--repeat-budget", type=float, default=1800.0, help="a run past this many seconds is its cell's last"
+    )
+    parser.add_argument("--timeout", type=int, default=21600, help="seconds before a run is killed and reported")
     parser.add_argument(
         "--solver-budget",
         type=float,
-        default=300.0,
+        default=7200.0,
         help="run a solver at a size only if its median at the previous (smaller) size took at most this long",
     )
     parser.add_argument("--db-dir", type=Path, default=DB_DIR)
@@ -218,10 +265,8 @@ def main():
 
     sizes = sorted(args.sf)
     dbs = {sf: args.db_dir / f"tpch_sf{sf}.db" for sf in sizes}
-    for sf in sizes:
-        prepare(dbs[sf], sf)
 
-    solvers = [m for m in args.modes if m != "direct"]
+    solvers = [m for m in args.modes if m in SOLVERS]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     RESULTS.mkdir(parents=True, exist_ok=True)
     output = RESULTS / f"direct_solve_{stamp}.csv"
@@ -229,7 +274,9 @@ def main():
 
     columns = ["query", "sf", "decisions", "objective", "agree"]
     for mode in args.modes:
-        columns += [f"{mode} median s", f"{mode} min s", f"{mode} max s", f"{mode} peak MiB"]
+        columns += [f"{mode} runs", f"{mode} median s", f"{mode} min s", f"{mode} max s", f"{mode} peak MiB"]
+        if mode in SOLVERS:
+            columns += [f"{mode} model s", f"{mode} solve s"]
     columns += [f"speedup vs {solver}" for solver in solvers]
     shown = ["query", "decisions", "objective"] + [f"{m} s (min-max)" for m in args.modes] + columns[-len(solvers) :]
     print("| " + " | ".join(shown) + " |")
@@ -244,22 +291,32 @@ def main():
         writer = csv.writer(handle)
         writer.writerow(columns)
         for sf in sizes:
+            try:
+                prepare(dbs[sf], sf)
+            except subprocess.CalledProcessError as error:
+                print(f"!!!!!! generating sf={sf} failed, sweep stops: {error.stderr[:400]} !!!!!!", file=sys.stderr)
+                failed = True
+                break
+            warm(dbs[sf])
             for name in args.queries:
                 body, decision, objective = load_query(name)
                 sql = f"SELECT COUNT(*), SUM({decision}), {objective} FROM ({body}) q;"
-                cells = {"direct": measure(dbs[sf], "direct", sql, args.repeats, args.timeout)}
-                for solver in solvers:
-                    previous = last.get((solver, name), 0.0)
-                    if not isinstance(previous, float) or previous > args.solver_budget:
-                        reason = previous if isinstance(previous, str) else "previous size too slow"
-                        cells[solver] = {"status": f"skipped ({reason})"}
-                        continue
-                    cells[solver] = measure(dbs[sf], solver, sql, args.repeats, args.timeout)
-                    last[(solver, name)] = status_of(cells[solver]) or cells[solver]["median"]
+                cells = {}
+                for mode in args.modes:
+                    if mode in SOLVERS:
+                        previous = last.get((mode, name), 0.0)
+                        if not isinstance(previous, float) or previous > args.solver_budget:
+                            reason = previous if isinstance(previous, str) else "previous size too slow"
+                            cells[mode] = {"status": f"skipped ({reason})"}
+                            continue
+                    cells[mode] = measure(dbs[sf], mode, sql, args.repeats, args.timeout, args.repeat_budget)
+                    if mode in SOLVERS:
+                        last[(mode, name)] = status_of(cells[mode]) or cells[mode]["median"]
 
                 direct = cells["direct"]
                 bad = [] if status_of(direct) else disagreements(cells)
-                agree = "-" if status_of(direct) else ("NO" if bad else "yes")
+                compared = any("objectives" in cells[solver] for solver in solvers)
+                agree = "-" if status_of(direct) else ("NO" if bad else ("yes" if compared else "n/a"))
                 row = [
                     name,
                     sf,
@@ -270,14 +327,18 @@ def main():
                 for mode in args.modes:
                     cell = cells[mode]
                     if status_of(cell):
-                        row += [status_of(cell), "-", "-", "-"]
+                        row += [status_of(cell), "-", "-", "-", "-"]
                     else:
                         row += [
+                            cell["runs"],
                             f"{cell['median']:.4f}",
                             f"{cell['min']:.4f}",
                             f"{cell['max']:.4f}",
                             f"{cell['peak']:.1f}",
                         ]
+                    if mode in SOLVERS:
+                        split = [cell.get("model"), cell.get("solve")]
+                        row += [f"{value:.4f}" if value is not None else "-" for value in split]
                 speeds = []
                 for solver in solvers:
                     finished = not status_of(direct) and not status_of(cells[solver])
