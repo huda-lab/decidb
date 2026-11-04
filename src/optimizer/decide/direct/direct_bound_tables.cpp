@@ -5,6 +5,8 @@
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -63,11 +65,53 @@ private:
 		return DirectAggregateOver(optimizer, std::move(read.plan), keys, std::move(aggregates));
 	}
 
+	//! Whether `expr` reads the placeholder column of a reducer recorded before this one.
+	bool ReadsRecordedReducer(const Expression &expr) const {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
+			for (auto &known : decide.bound_aggregates) {
+				if (known.column.table_index == table) {
+					return true;
+				}
+			}
+			return false;
+		}
+		bool reads = false;
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](const Expression &child) { reads = reads || ReadsRecordedReducer(child); });
+		return reads;
+	}
+
+	//! The fields of a body's signature (D70, D83), over the read: the key of each reducer recorded inside it, whose
+	//! placeholder column it reads, and each largest part of it that reads none and is no constant.
+	void AddSignatureFields(const Expression &expr, vector<ExprPtr> &fields) {
+		if (!ReadsRecordedReducer(expr)) {
+			if (!expr.IsFoldable()) {
+				fields.push_back(Over(expr));
+			}
+			return;
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
+			for (auto &known : decide.bound_aggregates) {
+				if (known.column.table_index != table) {
+					continue;
+				}
+				for (auto &element : DecideKeyElements(decide.keys, known.key)) {
+					fields.push_back(Over(element.Grouping()));
+				}
+			}
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr,
+		                                      [&](const Expression &child) { AddSignatureFields(child, fields); });
+	}
+
 	//! The reducer's function over the instances of its `per` key that its group has: the rows it reads, with a class
-	//! (no NULL in a NO_GROUP element), are grouped by key, class and the body's value -- a body of data is its own
-	//! signature, so each distinct value in a class is one instance (D70, D71) -- and the function runs over the
-	//! instances of each group. Only SUM, AVG, MIN and MAX take a `per`, so a group with no class gives NULL whether
-	//! its row is in the table or not.
+	//! (no NULL in a NO_GROUP element), are grouped by key, class and the body's signature fields -- a nested
+	//! reducer by its key, data by its value -- so each variant in a class is one instance, two groups whose reducers
+	//! hold one value included (D70, D71), and the function runs over the instances of each group. Only SUM, AVG, MIN
+	//! and MAX take a `per`, so a group with no class gives NULL whether its row is in the table or not.
 	unique_ptr<LogicalOperator> CountedByClass(const DecideBoundAggregate &record, const vector<ExprPtr> &keys) {
 		D_ASSERT(record.argument);
 		ExprPtr counted = record.reads ? Over(*record.reads) : nullptr;
@@ -86,7 +130,7 @@ private:
 			filter->children.push_back(std::move(rows));
 			rows = std::move(filter);
 		}
-		classes.push_back(Over(*record.argument));
+		AddSignatureFields(*record.argument, classes);
 		// Every row of an instance reads the same body.
 		vector<unique_ptr<Expression>> body;
 		body.push_back(Arbitrary(Over(*record.argument)));

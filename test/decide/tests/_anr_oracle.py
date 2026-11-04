@@ -874,6 +874,11 @@ class AnrModel:
         q = self._wrap(node.position.lift(anchor, len(peers)), len(peers), node.over.cyclic)
         if q is None:
             return ABSENT if node.fallback is None else self._form(node.fallback, t, kept)
+        return self._at_position(node, timeline, within, q, kept)
+
+    def _at_position(self, node, timeline, within, q, kept):
+        """The payload at position ``q``: its rows read one payload, read once (D73)."""
+        peers = timeline.peers[within]
         candidates: dict = {}
         for r in peers[q]:
             value = self._form(node.payload, r, kept)
@@ -883,8 +888,8 @@ class AnrModel:
         return next(iter(candidates.values()))
 
     def _range(self, node: Range, t, kept):
-        """The reducer over the values the range reads; a NULL among them is skipped, as a
-        reducer skips one (D67, D84)."""
+        """The reducer over the values the range reads, one per position it visits (D73); a
+        NULL among them is skipped, as a reducer skips one (D67, D84)."""
         self._require_pure(node)
         if node.kind not in ("sum", "avg", "min", "max", "count"):
             raise Unsupported(f"range reducer {node.kind!r}")
@@ -897,7 +902,7 @@ class AnrModel:
         missing = sum(1 for p in selected if p is None)
         if node.all and missing:
             return ABSENT  # nothing is read, so no value it would read can fail
-        values = [self._form(node.payload, r, kept) for p in selected if p is not None for r in peers[p]]
+        values = [self._at_position(node, timeline, within, p, kept) for p in selected if p is not None]
         if missing and node.fallback is not None:
             values.extend([self._form(node.fallback, t, kept)] * missing)
         return self._combine(node.kind, values)

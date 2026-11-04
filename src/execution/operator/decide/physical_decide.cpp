@@ -2312,8 +2312,9 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 void PhysicalDecide::CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                      ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                      const vector<KeyedMapping> &keyed_mappings) const {
-	CheckDecideFramePeers(context, frames, gstate.frame_maps, prepared, variable_scopes, keyed_mappings, keys,
-	                      gstate.data, num_rows, chunk_expr_cache);
+	CheckDecideFramePeers(context, frames, gstate.frame_maps,
+	                      DecideFramePayloads(frames, prepared, reducer_value_links), variable_scopes, keyed_mappings,
+	                      keys, gstate.data, num_rows, chunk_expr_cache);
 }
 
 vector<bool> PhysicalDecide::FramesPresent(const DecideGlobalSinkState &gstate, idx_t source_clause_id,
@@ -2420,6 +2421,18 @@ vector<bool> PhysicalDecide::ValueLinkMembers(ClientContext &context, DecideGlob
 	}
 	vector<bool> read =
 	    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
+	// Its own `per`: a row in no class of that key (a NULL written key) is no instance of it, so no member.
+	if (link.qualifier_scope_idx != DConstants::INVALID_INDEX) {
+		if (link.qualifier_scope_idx >= mappings.size()) {
+			throw InternalException("DECIDE: %s's per is numbered after its own scope", link.label);
+		}
+		auto &qualifier = mappings[link.qualifier_scope_idx];
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (read[row] && qualifier.IsAbsent(row)) {
+				read[row] = false;
+			}
+		}
+	}
 	for (auto &term : link.inner_terms) {
 		const auto var = term.variable_index;
 		if (var >= variable_scopes.size() || !variable_scopes[var].IsKeyed()) {

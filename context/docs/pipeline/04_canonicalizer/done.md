@@ -540,10 +540,13 @@ collation included, D69), a deterministic function of them and of constants
 (`CAST(cap AS DOUBLE)`), a decision whose own key's elements it all holds, a query-wide
 decision, a `by` key all of whose elements it holds. An expression with no field has no
 signature: one instance per class, as the key alone gives. A data-only qualified reducer
-needs no scope of its own: its side table groups on the body's value too (stage 05). A
+needs no scope of its own: its side table groups on the body's signature fields too, a
+nested reducer by its key and data by its value (stage 05). A
 qualified reducer nested in another is counted over the rows its path keeps
 (`DecideReducerPath`, `decide_reducer_path.hpp`: the clause's `when` and every enclosing
-reducer's own; `SignQualifiedReducers` signs the inner reducers first, along the path).
+reducer's own -- not the NULL tests `SkipNullData` adds to an enclosing reducer's filter,
+which drop that reducer's own members only; `SignQualifiedReducers` signs the inner
+reducers first, along the path).
 A frame selector is a field by its keys (`FRAME`, D82): its timeline, the anchor's position
 on it when it reads relative to the anchor, and its fallback where reached; a `first` or
 `last` frame whose `within` the key holds is no field.
@@ -557,8 +560,10 @@ decision term does, one over data right, and it decides no shape. `PlaceFrames` 
 `PlaceObjectiveFrames`, run right after canonicalization, place each frame on the
 `DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
 the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
-`within` (`timeline_key`, a key-table entry made when new); it notes its clause and whether
-it stands in a reducer. Under a `per K` whose key, with the path's, does not hold the
+`within` (`timeline_key`, a key-table entry made when new); it notes its clause, whether
+it stands in a reducer, and whether its payload reads a decision (`reads_decisions`: a frame
+over data is a column whose NULL the comparison reads as it reads any, D84). Under a `per K`
+whose key, with the path's, does not hold the
 frame's `within`, the frame records the D75 check execution runs (`partition_key`,
 `partition_subject`). Under `abs` inside another reducer over decisions, a reducer that a
 frame may leave with no member (`FirstAbsenceFrame`: one of its own frames that

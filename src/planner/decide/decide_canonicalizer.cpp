@@ -2086,6 +2086,7 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		}
 		frame.source_clause_id = source_clause_id;
 		frame.reduced = reducer != nullptr;
+		frame.reads_decisions = ReferencesDecideVar(expr);
 		if (!per) {
 			return;
 		}

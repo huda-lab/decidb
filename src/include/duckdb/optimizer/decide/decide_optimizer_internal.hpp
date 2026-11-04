@@ -133,9 +133,10 @@ void DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_env
 
 //! The helper decision holding `link`'s value, appended to the plan's (LogicalDecide::reducer_value_links), its floor
 //! free: whole-numbered when `whole`; one instance per class of `scope` -- a copy of which becomes the helper's own,
-//! naming the link -- or one for the query when `scope` is null; named by `link.label` in a plan and a diagnosis, and
-//! under `account` in EXPLAIN for the clause `source_clause_id`. Returns the link's index.
-idx_t AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link, const KeyedScopeInfo *scope,
+//! naming the link; a `by ()` key is one class, or none when no row holds a member, so a read of it skips its
+//! instance (D68) --; named by `link.label` in a plan and a diagnosis, and under `account` in EXPLAIN for the clause
+//! `source_clause_id`. Returns the link's index.
+idx_t AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link, const KeyedScopeInfo &scope,
                      bool whole, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind account);
 
 } // namespace decide_rewrite

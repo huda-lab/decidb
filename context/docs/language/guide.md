@@ -508,20 +508,23 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   missing position; `all` makes the whole range select nothing; otherwise a range keeps the positions that exist. A
   point frame that selects nothing, a NULL read at its selected row and a NULL fallback are no value (D84), and so is a
   range that reads nothing -- a reversed one (`from next to previous`), `all` meeting a missing position, or every
-  position missing with no `else`: its comparison skips that instance, a reducer drops that member, and an objective
-  term holding it is dropped.
-- **A range** reduces the values it reads as SQL's aggregate does: a NULL among them is skipped, `count` counts the
-  rest and reads 0 where there are none, and a cyclic range keeps every repeated visit (D76; on three positions, `from
-  4 previous to 4 next` reads nine). Over data it is one value per anchor of the reducer's own type (`max` of a DATE is a
-  DATE). Over decisions it is a helper decision per window (D78) -- the range several anchors share: one per timeline
-  when neither end depends on the anchor, one per position otherwise -- defined once, so `x <= sum(from first to
-  last: x) over (t.period)` over n rows is one definition of n terms. `count` over decisions is refused, as `count(x)`
-  is. One frame may read at most `decide_frame_limit` values over its ranges (default 10,000,000; `SET
-  decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over (t.period) reads more than 4 values over
-  its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting."*
-- **One row per position** (D73): the rows of a selected position must read one payload -- one value of data, one
-  linear form over decisions (`0 * x` reads no `x`) -- else *"DECIDE: at(previous: x) over (t.period within
-  t.product) finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row."*
+  position missing with no `else` -- and a frame at a row in no timeline, whatever its `else` (D75): its comparison
+  skips that instance, a reducer drops that member, and an objective term holding it is dropped. A frame over data is
+  a NULL there, which a function may consume as SQL does: `x <= coalesce(at(previous: t.d) over (t.period), 1)` reads
+  1 at the first period (deck p. 56).
+- **A range** reads one value per position it visits, as a point does (D73), and reduces them as SQL's aggregate does: a
+  NULL among them is skipped, `count` counts the rest and reads 0 where there are none, and a cyclic range keeps every
+  repeated visit (D76; on three positions, `from 4 previous to 4 next` reads nine). Over data it is one value per anchor
+  of the reducer's own type (`max` of a DATE is a DATE). Over decisions it is a helper decision per window (D78) -- the
+  range several anchors share: one per timeline when neither end depends on the anchor, one per position otherwise --
+  defined once, so `x <= sum(from first to last: x) over (t.period)` over n rows is one definition of n terms. `count`
+  over decisions is refused, as `count(x)` is. One frame may read at most `decide_frame_limit` values over its ranges
+  (default 10,000,000; `SET decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over (t.period) reads
+  more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting."*
+- **One row per position** (D73): the rows of a position a frame reads -- a point's selected one, each one a range
+  visits -- must read one payload -- one value of data, one linear form over decisions (`0 * x` reads no `x`) -- else
+  *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
+  must hold one row."*
 - **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an
   error naming the class and the timelines. A frame is a field of the clause's signature by its keys (D82): its
   timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached -- so

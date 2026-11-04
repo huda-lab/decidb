@@ -69,10 +69,25 @@ string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame) {
 	return "give it an else, or make its timeline cyclic";
 }
 
+//! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (SKIP_NULL_TAG,
+//! DecideCanonicalizer::SkipNullData) drop its own members only: a reducer inside reads its group whole.
+static void AddWrittenConditions(const Expression &filter, vector<const Expression *> &out) {
+	if (HasDecideTag(filter.GetAlias(), SKIP_NULL_TAG)) {
+		return;
+	}
+	if (filter.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		for (auto &child : filter.Cast<BoundConjunctionExpression>().children) {
+			AddWrittenConditions(*child, out);
+		}
+		return;
+	}
+	out.push_back(&filter);
+}
+
 DecideReducerPath DecideReducerPath::Below(const BoundAggregateExpression &reducer) const {
 	auto below = *this;
 	if (reducer.filter) {
-		below.conditions.push_back(reducer.filter.get());
+		AddWrittenConditions(*reducer.filter, below.conditions);
 	}
 	below.keys.push_back(DecideReducerGroupKey(reducer));
 	return below;

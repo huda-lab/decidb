@@ -52,9 +52,9 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D70 | Variant signatures replace the determination errors (deck pp. 34–40): a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands (owner, 2026-10-28) |
 | D71 | An inner `per` and the colon form follow D70 too: a tuple whose body varies is one value per variant, which `EXPLAIN ANALYZE` counts |
 | D72 | The objective is produced once (deck p. 62): a second variant is an error saying it would be produced more than once |
-| D73 | A frame's selected position holding rows that read different payloads is an error naming the position; rows reading one payload — one value of data, one linear form over decisions — select once |
+| D73 | A position a frame reads — a point's selected one, each one a range visits — holding rows that read different payloads is an error naming the position; rows reading one payload — one value of data, one linear form over decisions — are read once, a range's included (deck p. 110: one signature per position) |
 | D74 | A frame's order key orders peers as `ORDER BY` does, NULL where `default_null_order` puts it |
-| D75 | Under `per K`, each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines (deck pp. 53–55). A row whose `within` key is NULL is in no timeline (D5): its frame selects nothing, and no anchor selects it |
+| D75 | Under `per K`, each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines (deck pp. 53–55). A row whose `within` key is NULL is in no timeline (D5): its frame has no value there, whatever its `else`, and no anchor selects it |
 | D76 | A cyclic range keeps every repeated visit: on three positions, `from 4 previous to 4 next` reads nine |
 | D77 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
 | D78 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range over decisions is a helper decision per window, a timeline or a position on one |
@@ -63,7 +63,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D81 | The two-level objective (D2) keeps its spelling and loses its special path: it is a nested reducer |
 | D82 | A frame is a signature field by its keys (deck p. 99): its timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached; not by the value it reads |
 | D83 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |
-| D84 | A frame that selects nothing, a NULL read at its selected row and a NULL a reached fallback gives are no value (deck p. 50, D67, D68): unreduced, it skips the instance; a reducer or a range skips it; an objective term holding it is dropped |
+| D84 | A frame that selects nothing, a NULL read at its selected row and a NULL a reached fallback gives are no value (deck p. 50, D67, D68): unreduced, it skips the instance; a reducer or a range skips it; an objective term holding it is dropped. Over data it is a NULL value, which a scalar function may consume as SQL does (`coalesce`, deck p. 56): only a NULL reaching the comparison skips it |
 | D85 | Under the tightest-bound collapse (S3) an anchor whose frame selects nothing bounds nothing; a group with no such anchor present has no row |
 | D86 | `else NULL` written, or a fallback that is NULL before the query runs, is no fallback |
 | D87 | Inside a reducer over decisions, a frame that selects nothing drops its member, decisions and all, by the reducer's NULL test of the frame (D84) — no helper decision; a reducer left with no member is NULL (D68): its comparison skips that instance, a reducer around it drops the member reading it (a nested reducer emptied by its `when` too), an objective term holding it is dropped |

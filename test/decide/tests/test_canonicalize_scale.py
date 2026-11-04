@@ -743,8 +743,10 @@ def test_only_the_reducer_under_a_boolean_gets_a_helper_in_the_objective(decidb_
         MAXIMIZE b * SUM(x) + SUM(x)"""
     dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
     assert re.search(r"^num_vars: 6$", dump, re.M), dump  # x, b, the helper and the product
-    assert re.findall(r"^col [0-2]: .* obj=(\S+)$", dump, re.M) == ["1", "1", "1"], dump
-    assert re.findall(r"^col 5: .* obj=(\S+)$", dump, re.M) == ["1"], dump
+    objective = dict(re.findall(r"^col (\d+): .* obj=(\S+)$", dump, re.M))
+    assert [objective[col] for col in "012"] == ["1", "1", "1"], dump
+    # b, the helper and the product, in the order their scopes lay them out: the product alone is read.
+    assert sorted(objective[col] for col in "345") == ["0", "0", "1"], dump
 
 
 #: A BOOL is in {0, 1}, never negative, so it keeps the direction of the term it scales: the helper that holds the

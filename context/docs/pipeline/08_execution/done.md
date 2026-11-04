@@ -270,15 +270,21 @@ class that spans two timelines (D75).
 registered (`DecidePreparedModel::frame_columns`): a payload is evaluated on the first row of each selected peer only,
 an `else` on the anchors that reach it only, so an unused one never runs (a cast that would fail there does not), and
 the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
-the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds a selected peer of several
-rows to one payload (D73): one value over data, one linear form over decisions, a decision by its instance. A
+the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
+-- a point's selected peer, every position a range's window visits -- of several rows to one payload (D73): one value
+over data, one linear form over decisions (`DecideFramePayloads`: a point's columns, a range's reducer argument or its
+helper's member terms), a decision by its instance. A
 frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
 (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
 
-Where a frame has nothing to read, its column holds NULL, which is no value (D84) as any NULL a clause reads: the
-instance is skipped (`SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. A
-comparison whose frame outside its reducers may select no position marks those rows too (`FramesPresent`, by the
-clause's id), so the rows a rewrite made of the comparison -- a `<>`'s indicator rows -- skip them as well. A row a
+Where a frame has nothing to read, every column of it holds NULL, which is no value (D84) as any NULL a clause reads:
+the instance is skipped (`SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped.
+An anchor in no timeline is such an anchor whatever its `else` (`DecideFrameMap::Untimed`): it misses no position, so
+no `else` stands in, and it is absent (D75). A frame over data is that column alone, so a scalar function around it
+reads the NULL as SQL does -- `coalesce(at(previous: t.d) over (...), 1)` is 1 there -- and only a NULL that reaches
+the comparison skips it (deck p. 56). A comparison whose frame over decisions outside its reducers may select no
+position marks those rows too (`FramesPresent`, by the clause's id, `DecideFrameSpec::reads_decisions`), so the rows a
+rewrite made of the comparison -- a `<>`'s indicator rows, an ABS's -- skip them as well. A row a
 rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`: an ABS's envelope, an L0 indicator's links) is no
 instance of the clause and is not skipped there (D88): an auxiliary inside a reducer is a member the clause's other
 instances read, and a definition holds wherever its own values stand, NULL-skipped where it reads a frame with no
@@ -287,8 +293,9 @@ reads the selected row). A frame field of a signature (D82) splits by the frame'
 reads relative to the anchor, and what a reached `else` reads, its data and its decisions' instances.
 
 A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
-one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- every
-row of every `every`-th position from its first end to its last, a cyclic position as often as it is visited (D76) --
+one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- the
+first row of every `every`-th position from its first end to its last, whose other rows read the same payload (D73), a
+cyclic position as often as it is visited (D76) --
 and counts its missing positions, each of which reads the `else` once; a position off a timeline that does not wrap
 is counted, never visited, so the work is O(values). One frame may list at most `decide_frame_limit` values (checked
 before the work that lists them; an interrupt is polled per timeline and per position). An anchor whose window reads
@@ -401,6 +408,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   expanded diagnosis reports the group once per class (`FanOutByClass`).
 - **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
   reducer is read on the rows its path keeps and its own `when` keeps among them, less a
+  row in no class of its own `per` (a NULL written key, D5) and a
   row at which one of its terms reads a keyed decision with no instance there -- a nested
   reducer's helper whose group holds no member, which is NULL (D68) and a reducer skips
   (D67, D87) -- grouped by its path key over those rows (`ValueLinkMembers`, read by

@@ -64,7 +64,8 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 //!
 //! Read off `squared_terms`, the flattened inner expression stage 05 already built, so
 //! this needs no data — which is what lets the refusal land before a row is read.
-//! Constant terms carry INVALID_INDEX and are skipped. A bilinear objective counts too:
+//! Constant terms carry INVALID_INDEX and are skipped. A decision read through a frame
+//! (`x - at(previous: x)`) is the decision at another row: another column. A bilinear objective counts too:
 //! a product of two decisions is off-diagonal by construction. That keeps this
 //! prediction at least as demanding as what `SolverModel::ModelClass()` later reads off
 //! the built matrix, which is the direction the contract requires — over-reporting costs
@@ -73,15 +74,16 @@ bool HasCoupledQuadraticTerms(const DecideObjective &objective) {
 	if (objective.has_bilinear) {
 		return true;
 	}
-	vector<idx_t> seen;
+	vector<pair<idx_t, idx_t>> seen;
 	for (auto &term : objective.squared_terms) {
 		if (term.variable_index == DConstants::INVALID_INDEX) {
 			continue;
 		}
-		if (std::find(seen.begin(), seen.end(), term.variable_index) != seen.end()) {
+		const auto column = std::make_pair(term.variable_index, term.frame_read);
+		if (std::find(seen.begin(), seen.end(), column) != seen.end()) {
 			continue;
 		}
-		seen.push_back(term.variable_index);
+		seen.push_back(column);
 		if (seen.size() >= 2) {
 			return true;
 		}

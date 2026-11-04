@@ -146,6 +146,9 @@ struct DecideFrameSpec {
 	//! The comparison it is written in (LogicalDecide::constraint_sources); INVALID_INDEX exactly in the objective, as
 	//! placement holds every constraint's frame to an id.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	//! Whether its payload reads a decision. A frame over data is a column, NULL where it has no value, which the
+	//! comparison reads as it reads any NULL (D67): a `coalesce` around it gives a value there.
+	bool reads_decisions = false;
 	//! Inside a reducer's argument, where a position it misses drops the member; outside every reducer it skips the
 	//! comparison's instance, and drops the objective's term (D84).
 	bool reduced = false;
@@ -235,10 +238,11 @@ struct DecideFrameSpec {
 		const bool reaches_anchor = to == A::NEXT || to == A::LAST;
 		return !(from == A::PREVIOUS && from_k % every == 0 && reaches_anchor);
 	}
-	//! Whether it stands outside every reducer of the comparison of clause `clause_id` and may select nothing, so that
-	//! comparison has no instance at a row where it selects none (D84). False for a comparison with no id.
+	//! Whether it reads decisions outside every reducer of the comparison of clause `clause_id` and may select nothing,
+	//! so that comparison has no instance at a row where it selects none (D84): no column of that row says so once a
+	//! rewrite has moved the decision into an auxiliary's rows. False for a comparison with no id.
 	bool SkipsInstancesOf(idx_t clause_id) const {
-		return clause_id != DConstants::INVALID_INDEX && source_clause_id == clause_id && !reduced &&
+		return clause_id != DConstants::INVALID_INDEX && source_clause_id == clause_id && !reduced && reads_decisions &&
 		       MaySelectNothing();
 	}
 

@@ -33,6 +33,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -55,18 +56,14 @@ void decide_rewrite::DecideHelperSides(const string &agg_name, ExtremumPush push
 }
 
 idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link,
-                                     const KeyedScopeInfo *scope, bool whole, idx_t source_clause_id,
+                                     const KeyedScopeInfo &scope, bool whole, idx_t source_clause_id,
                                      LogicalDecide::RewriteAccount::Kind account) {
 	const idx_t link_idx = decide.reducer_value_links.size();
-	// A query-wide decision, or one instance per class of a scope of its own (KeyedScopeInfo::value_link), which
-	// execution builds from the link.
-	auto var_scope = DecideVarScopeInfo::Global();
-	if (scope) {
-		KeyedScopeInfo helper_scope = *scope;
-		helper_scope.value_link = link_idx;
-		decide.keyed_scopes.push_back(std::move(helper_scope));
-		var_scope = DecideVarScopeInfo::Keyed(decide.keyed_scopes.size() - 1);
-	}
+	// One instance per class of a scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
+	KeyedScopeInfo helper_scope = scope;
+	helper_scope.value_link = link_idx;
+	decide.keyed_scopes.push_back(std::move(helper_scope));
+	auto var_scope = DecideVarScopeInfo::Keyed(decide.keyed_scopes.size() - 1);
 	// Whole-numbered when the value is, so a strict bound on a row reading it still steps on the integer lattice.
 	// F6: a diagnosis, and a plan, name the helper by what it holds.
 	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
@@ -306,12 +303,11 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
 
-	// The helper decision: a query-wide decision when its path key is `by ()` throughout, else one instance per group
-	// of that key among the rows its path keeps.
+	// The helper decision: one instance per group of its path key among the rows its path keeps -- `by ()`
+	// throughout is one group, or none when no row holds a member.
 	KeyedScopeInfo scope;
 	scope.key = link.group_key;
-	const bool keyed = link.group_key != DConstants::INVALID_INDEX;
-	link_idx = AddValueHelper(decide, std::move(link), keyed ? &scope : nullptr, whole, source_clause_id, account_kind);
+	link_idx = AddValueHelper(decide, std::move(link), scope, whole, source_clause_id, account_kind);
 	helpers.reducers.push_back(agg.Copy());
 	helpers.links.push_back(link_idx);
 	ReplaceWithDecision(helpers.context, decide, decide.reducer_value_links[link_idx].value_var, *site.slot);
@@ -354,13 +350,29 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 	}
 	auto inlined = inner.Copy();
 	auto &reducer = inlined->Cast<BoundAggregateExpression>();
-	if (outer.filter && reducer.filter) {
+	auto add_condition = [&](unique_ptr<Expression> condition) {
+		if (!reducer.filter) {
+			reducer.filter = std::move(condition);
+			return;
+		}
 		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		both->children.push_back(outer.filter->Copy());
+		both->children.push_back(std::move(condition));
 		both->children.push_back(std::move(reducer.filter));
 		reducer.filter = std::move(both);
-	} else if (outer.filter) {
-		reducer.filter = outer.filter->Copy();
+	};
+	if (outer.filter) {
+		add_condition(outer.filter->Copy());
+	}
+	// A row in no G group -- a NULL in an element that groups NULL as no group -- is a member of no group, so the
+	// sum read whole skips it as the groups did (D5).
+	for (auto &part : by) {
+		if (part.null_mode != DecideKeyNullMode::NO_GROUP) {
+			continue;
+		}
+		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+		test->children.push_back(part.expression->Copy());
+		test->SetAlias(SKIP_NULL_TAG);
+		add_condition(std::move(test));
 	}
 	slot = BoundCastExpression::AddCastToType(context, std::move(inlined), outer.return_type);
 	return true;

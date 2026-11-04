@@ -50,19 +50,20 @@ struct DecideFrameMap {
 	//! Each peer's rows, ascending: peer p holds peer_rows[peer_begin[p], peer_begin[p + 1]).
 	vector<idx_t> peer_rows;
 	vector<idx_t> peer_begin;
-	//! Per row: an anchor where the frame reads nothing -- a point's missing position with no
-	//! `else`; a range that requests no position, meets `all`, or finds no value -- which
-	//! skips the instance or drops the member (D84).
+	//! Per row: an anchor where the frame reads nothing -- one in no timeline (D75); a point's
+	//! missing position with no `else`; a range that requests no position, meets `all`, or
+	//! finds no value -- which skips the instance or drops the member (D84).
 	vector<bool> absent;
 
 	//! A range's windows: the ranges its anchors read, one per timeline when neither end
 	//! depends on the anchor, else one per position (peer) -- and one per anchor where it
 	//! reaches an `else` that reads the anchor's own row. Window w is read by the anchors
 	//! `window` maps to it, its `else` at `window_anchor[w]`, and reads list
-	//! `window_list[w]`; windows of one position share their list. List l reads the rows
-	//! list_rows[list_begin[l], list_begin[l + 1]), each `list_visits` times (a cyclic range
-	//! may visit a position again, D76), in the order its positions are requested, and finds
-	//! `list_missing[l]` of its requested positions missing.
+	//! `window_list[w]`; windows of one position share their list. List l reads the first
+	//! row of each position it visits -- a position holds one payload (D73), as a point reads
+	//! it -- list_rows[list_begin[l], list_begin[l + 1]), each `list_visits` times (a cyclic
+	//! range may visit a position again, D76), in the order its positions are requested, and
+	//! finds `list_missing[l]` of its requested positions missing.
 	vector<idx_t> window;
 	vector<idx_t> window_anchor;
 	vector<idx_t> window_list;
@@ -81,10 +82,14 @@ struct DecideFrameMap {
 		auto p = selected_peer[row];
 		return p == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : peer_rows[peer_begin[p]];
 	}
+	//! Whether `row` is an anchor in no timeline (D75): it has no position to select from.
+	bool Untimed(idx_t row) const {
+		return anchors[row] && timeline[row] == DConstants::INVALID_INDEX;
+	}
 	//! Whether `row` is an anchor some requested position of which is missing: where its
-	//! `else` stands in.
+	//! `else` stands in. An anchor in no timeline misses none: it has no value at all.
 	bool Missing(idx_t row) const {
-		if (!anchors[row]) {
+		if (!anchors[row] || Untimed(row)) {
 			return false;
 		}
 		return range ? list_missing[window_list[window[row]]] > 0 : selected_peer[row] == DConstants::INVALID_INDEX;
@@ -191,18 +196,32 @@ void SkipDecideRangeNullReads(ClientContext &context, const vector<const Express
 //! on every row (DecideFrameColumn), each computed on the rows its kind names only: a
 //! payload on the first row of each selected peer, which CheckDecideFramePeers holds for the
 //! peer's other rows, or on the rows a range's windows read; an `else` on the anchors that
-//! reach it.
+//! reach it. An anchor where the frame reads nothing is NULL in every column (D84).
 void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
                               ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
-//! D73, once the keyed mappings are built: the rows of a selected peer read one payload. A
-//! frame over data holds one value of its payload; a frame over decisions one linear
-//! form of its payload (`prepared.frame_payload_terms`) -- one constant and one coefficient
-//! on each decision instance, the instances through the classes of `keyed_mappings` -- so
-//! `0 * x` reads no instance of `x`.
+//! What a frame reads at each row of a position it reads, as D73 compares the rows: the values of `values`, or, with
+//! `terms`, the linear form they make over decision instances -- term `i` the coefficient `values[terms[i].column]`
+//! on decision `terms[i].decision`.
+struct DecideFramePayload {
+	vector<const Expression *> values;
+	vector<DecideFramePayloadTerm> terms;
+};
+
+//! Each frame's payload: a point's VALUE and READ columns, with its payload terms
+//! (DecidePreparedModel::frame_payload_terms); a range over data its reducer's argument; a range over decisions its
+//! helper's member terms (`links`).
+vector<DecideFramePayload> DecideFramePayloads(const vector<DecideFrameSpec> &frames,
+                                               const DecidePreparedModel &prepared,
+                                               const vector<LogicalDecide::ReducerValueLink> &links);
+
+//! D73, once the keyed mappings are built: the rows of a position a frame reads -- a point's selected peer, each
+//! position a range's window visits -- read one payload. A frame over data holds one value of its payload; a frame
+//! over decisions one linear form of it (`payloads`) -- one constant and one coefficient on each decision instance,
+//! the instances through the classes of `keyed_mappings` -- so `0 * x` reads no instance of `x`.
 void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec> &frames,
-                           const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
+                           const vector<DecideFrameMap> &maps, const vector<DecideFramePayload> &payloads,
                            const vector<DecideVarScopeInfo> &variable_scopes,
                            const vector<KeyedMapping> &keyed_mappings, const vector<DecideKey> &keys,
                            ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);

@@ -240,7 +240,10 @@ one group at a time. No test asserts an answer its docstring derives.
   the deck's examples 2 and 6 under each policy; `TestRangeErrors` and `TestRangeReview`:
   the refusals with their remedies, `count` over decisions, `decide_frame_limit`,
   EXPLAIN's helper lines, DIAGNOSE, an infeasible model on both backends, fractional
-  helpers. The parse errors, answers and the echo are `test/decidb/test_frame_parser.test`'s
+  helpers; `TestAbsenceAndTies`: an anchor in no timeline with no value whatever its `else`
+  (D75), a tied position a range reads once or refuses (D73), a missing position a
+  `coalesce` reads as NULL (D84), a square over a frame refused on HiGHS by name. The parse
+  errors, answers and the echo are `test/decidb/test_frame_parser.test`'s
   (sqllogic; ordinary SQL windows, `AT TIME ZONE` and `WITHIN GROUP` unchanged; a FROM-first
   query), the absence predicates `test_decidb_frame_predicates.cpp`'s (every end, step,
   policy and shape against every position on timelines of up to 10), and the round trips
@@ -281,8 +284,12 @@ one group at a time. No test asserts an answer its docstring derives.
   reaching a nested closing link, two helper levels, a nest no value can meet
   (infeasible, not an internal error), negative bounds over negative terms, a weighted sum
   of one helper; group averages in the objective, an inlined average kept apart from
-  another; a square defined where a MAX reads it (Gurobi; HiGHS refuses by name); and the
-  refusals of D80 by name. Oracle, dump and pinned messages.
+  another; a square defined where a MAX reads it (Gurobi; HiGHS refuses by name); the
+  refusals of D80 by name; and the defects the review found, answers worked by hand: an
+  outer NULL dropping the outer member only, a group of no inner class with no value, a sum
+  of group sums skipping a row in no group, two groups of one value two variants on the
+  bound side, a reducer left with no member skipping its instance. Oracle, dump and pinned
+  messages.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built

@@ -1310,6 +1310,11 @@
         "id": 121,
         "name": "reducer",
         "type": "string"
+      },
+      {
+        "id": 122,
+        "name": "reads_decisions",
+        "type": "bool"
       }
     ],
     "pointer_type": "none"

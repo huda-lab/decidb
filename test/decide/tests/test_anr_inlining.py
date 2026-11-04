@@ -119,9 +119,9 @@ class TestRangeIntoRows:
         """One timeline, one window for every anchor (`from first to last`): six terms read by
         six rows would cost 36 nonzeros inlined against 13 defined, so the helper stays --
         one column and its definition beside the six rows."""
-        sql = _edge("x <= sum(from first to last: x) over (t.period) - t.w")
+        sql = _edge("x <= sum(from first to last: x) over (t.id) - t.w")
         assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 1, "num_rows": 6 + 1}
-        body = clause(le(X, Range("sum", FIRST, LAST, X, Over("period")) - Col("w")))
+        body = clause(le(X, Range("sum", FIRST, LAST, X, Over("id")) - Col("w")))
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
     def test_windows_shared_by_a_few_rows_are_inlined(self, decidb_cli, scope_solver, tmp_path):

@@ -606,10 +606,11 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
 1. allocates a **helper decision** `__value_<n>__` through `AddAuxiliaryDecision`. It is
    INTEGER when the reducer's value is whole by declared types, every constant inside
    counted (`DecideValueIsWholeNumbered`, shared with stage 02), so a strict bound on the
-   rewritten row still steps on the lattice; else DOUBLE. It is query-wide
-   (`DecideVarScopeInfo::Global()`) when its path key is `by ()` throughout, else keyed by
-   a scope of its own (`KeyedScopeInfo::value_link`), whose classes are the groups of that
-   key among the rows its path keeps, built by stage 08. Its label is the reducer's SQL, `by` included
+   rewritten row still steps on the lattice; else DOUBLE. It is keyed by a scope of its
+   own (`KeyedScopeInfo::value_link`), whose classes are the groups of its path key among
+   the rows its path keeps, built by stage 08: a path key `by ()` throughout is one class,
+   or none when no row holds a member, so a read of it skips its instance (D68). Its label
+   is the reducer's SQL, `by` included
    (`aux_var_expressions`, `ReducerValueLink::label`), so EXPLAIN and DIAGNOSE name it by
    what it holds;
 2. records a `LogicalDecide::ReducerValueLink`: the reducer kind, its body, its own `when`
@@ -684,7 +685,9 @@ helper once: `MINIMIZE max(per g: sum(x) by (g))` is a helper per `g` and one ov
 no reducer inside, every element of `K` in `G`, is read in place instead
 (`InlineSumOfGroupSums`): each `G` group is one member, so the sum of the members is
 `inner` over every group, `c` joined to `c'`, and a square inside it stays a quadratic
-objective (an AVG divides by its group's size, `avg_group_key`). A reducer no decision
+objective (an AVG divides by its group's size, `avg_group_key`). A row in no `G` group --
+a NULL in an element that groups NULL as no group -- is no member of any, so the sum read in
+place tests each such element `IS NOT NULL` (D5). A reducer no decision
 multiplies and none nests in stays in the objective. A factor declared per row is
 refused by the objective's scope check.
 

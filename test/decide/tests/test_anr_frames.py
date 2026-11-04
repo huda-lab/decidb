@@ -22,6 +22,7 @@ from ._anr_oracle import (
     FIRST,
     GLOBAL,
     LAST,
+    PER_ROW,
     Abs,
     AnrModel,
     At,
@@ -1261,12 +1262,13 @@ class TestRange:
         )
 
     @pytest.mark.parametrize(
-        "clause_sql, body, rows, counts",
+        "clause_sql, body, rows, key, counts",
         [
             pytest.param(
                 "x <= sum(from first to last: x) over (t.period within t.product) - 4",
                 le(X, _range("sum", FIRST, LAST, 1, {}, X) - 4),
                 EDGE_ROWS,
+                PER_ROW,
                 {"num_vars": 5 + 2, "num_rows": 5 + 2},
                 id="a-helper-per-timeline",
             ),
@@ -1274,6 +1276,7 @@ class TestRange:
                 "sum(from previous to next: x) over (t.period within t.product) <= 7",
                 le(_range("sum", previous(), next_(), 1, {}, X), 7),
                 EDGE_ROWS,
+                PER_ROW,
                 {"num_vars": 5 + 5, "num_rows": 5},
                 id="a-helper-per-position",
             ),
@@ -1281,19 +1284,30 @@ class TestRange:
                 "sum(from previous to next: x) over (t.period within t.product) <= 7",
                 le(_range("sum", previous(), next_(), 1, {}, X), 7),
                 ((1, "A", 1, 4, 2), (2, "A", 1, 6, 1), (3, "A", 2, 1, 3)),
-                {"num_vars": 3 + 2, "num_rows": 2},
+                ("product", "period"),
+                {"num_vars": 2 + 2, "num_rows": 2},
                 id="tied-rows-share-a-position",
             ),
         ],
     )
-    def test_a_helper_per_window(self, decidb_cli, tmp_path, scope_solver, clause_sql, body, rows, counts):
+    def test_a_helper_per_window(self, decidb_cli, tmp_path, scope_solver, clause_sql, body, rows, key, counts):
         """A range over decisions is a helper per window, defined once: one per timeline
         when neither end depends on the anchor -- n terms in one definition, not n of them
-        -- and one per position otherwise, the tied rows of a position sharing it. A bound
-        on the range alone is a bound on its helper's column, so it costs no row."""
-        sql = _edge(clause_sql, rows=rows)
+        -- and one per position otherwise, the tied rows of a position -- reading one
+        instance of `x` there (D73) -- sharing it. A bound on the range alone is a bound on
+        its helper's column, so it costs no row."""
+        decide = "x(INT)" if key == PER_ROW else f"per {', '.join('t.' + k for k in key)}: x(INT)"
+        sql = _edge(clause_sql, decide=decide, rows=rows)
         assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == counts
-        _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, rows), [Decision("x")], [CAP, clause(body)], MAXIMIZE_X)
+        _judged(
+            decidb_cli,
+            scope_solver,
+            sql,
+            table_rows(EDGE, rows),
+            [Decision("x", key)],
+            [CAP, clause(body)],
+            MAXIMIZE_X,
+        )
 
     @pytest.mark.parametrize(
         "clause_sql, body, objective",
@@ -1367,8 +1381,8 @@ class TestRange:
         "objective_sql, objective",
         [
             pytest.param(
-                "MAXIMIZE sum(x) - 2 * sum(from first to last: x) over (t.period)",
-                reduce("sum", X) - 2 * Range("sum", FIRST, LAST, X, Over("period")),
+                "MAXIMIZE sum(x) - 2 * sum(from first to last: x) over (t.id)",
+                reduce("sum", X) - 2 * Range("sum", FIRST, LAST, X, Over("id")),
                 id="beside-a-reducer",
             ),
             pytest.param(
@@ -1377,8 +1391,8 @@ class TestRange:
                 id="a-sum-of-ranges",
             ),
             pytest.param(
-                "MAXIMIZE sum(from first to last: t.w * x) over (t.period)",
-                Range("sum", FIRST, LAST, Col("w") * X, Over("period")),
+                "MAXIMIZE sum(from first to last: t.w * x) over (t.id)",
+                Range("sum", FIRST, LAST, Col("w") * X, Over("id")),
                 id="one-timeline",
             ),
         ],
@@ -1741,18 +1755,20 @@ class TestRangeReview:
             MAXIMIZE sum(x) ORDER BY t.id"""
         assert [int(row["x"]) for row in answer(decidb_cli, sql)] == [2, 3, 3]
 
-    def test_split_windows_count_against_the_limit(self, decidb_cli):
+    @pytest.mark.parametrize("limit, refused", [(14, True), (15, False)])
+    def test_split_windows_count_against_the_limit(self, decidb_cli, limit, refused):
         """An `else` that reads the anchor's row parts a position's window per anchor, and
-        each part reads the position's values again: each counts against the limit."""
+        each part reads the position's value again: five anchors on one position, each
+        reading it once and its `else` twice, read 15 values."""
         sql = (
-            "SET decide_frame_limit = 30; SELECT id, x FROM (SELECT i AS id, 1 AS p, i AS w FROM range(5) r(i)) t "
-            "DECIDE x(INT) SUCH THAT x <= 9 AND sum(from previous to next else t.w: x) over (t.p) <= 50 "
-            "MAXIMIZE sum(x)"
+            f"SET decide_frame_limit = {limit}; SELECT id, x FROM (SELECT i AS id, 1 AS p, i AS w FROM range(5) r(i)) t "
+            "DECIDE per t.p: x(INT) SUCH THAT x <= 9 AND sum(from previous to next else t.w: x) over (t.p) <= 50 "
+            "MAXIMIZE sum(per t.p: x)"
         )
         result = decidb_cli.execute_raw(sql)
-        assert (
-            "reads more than 30 values over its ranges, above decide_frame_limit (30)" in result.stderr
-        ), result.stderr
+        message = f"reads more than {limit} values over its ranges, above decide_frame_limit ({limit})"
+        assert (message in result.stderr) == refused, result.stderr
+        assert refused or result.returncode == 0, result.stderr
 
     @pytest.mark.parametrize("bound, optimum", [(4, None), (8, 20)])
     def test_a_reducer_beside_a_range_under_abs_keeps_its_own_helper(self, decidb_cli, scope_solver, bound, optimum):
@@ -1775,3 +1791,122 @@ class TestRangeReview:
             _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x")], clauses, MAXIMIZE_X)
             == optimum
         )
+
+
+class TestAbsenceAndTies:
+    """Found by the review of the port: an anchor in no timeline, a tied position a range
+    reads, a missing position under `coalesce`, and a square over a frame on HiGHS. Each
+    answer is worked by hand from the deck."""
+
+    COLUMNS = ("id", "g", "p", "d")
+
+    def _sql(self, rows, clause_sql, decide="x(REAL)", objective="MAXIMIZE sum(x)"):
+        return f"""SELECT id, x {table('t', self.COLUMNS, rows)} DECIDE {decide}
+            SUCH THAT x <= 9 AND {clause_sql} {objective} ORDER BY id"""
+
+    @pytest.mark.parametrize(
+        "rows, clause_sql, total",
+        [
+            pytest.param(
+                ((1, "A", 1, 5), (2, None, 1, 7)),
+                "x <= t.d AND sum(sum(from first to last: x) over (t.p within t.g)) <= 2",
+                9,
+                id="range-member",
+            ),
+            pytest.param(
+                ((1, "A", 1, 5), (2, None, 1, 1)),
+                "at(first else 2: x) over (t.p within t.g) <= t.d",
+                14,
+                id="point-else",
+            ),
+            pytest.param(
+                ((1, "A", 1, 5), (2, None, 1, 1)),
+                "x <= sum(from first to last else 100: t.d) over (t.p within t.g)",
+                14,
+                id="data-range-else",
+            ),
+            pytest.param(
+                ((1, "u", 1, 0), (2, "u", 2, 0), (3, None, 3, 0)),
+                "sum(sum(from previous to next else 1: x) over (t.p)) by (t.g) <= 4",
+                10,
+                id="range-else-by-group",
+            ),
+        ],
+    )
+    def test_an_anchor_in_no_timeline_has_no_value(self, decidb_cli, rows, clause_sql, total):
+        """The row whose `within` or `by` key is NULL is in no timeline (D75): its frame has
+        no value, whatever its `else` (D84), so its member is dropped and its instance
+        skipped. It had been read as present -- the range's whole constraint lost --, read
+        its `else`, or raised an internal error."""
+        result = decidb_cli.execute_raw(self._sql(rows, clause_sql))
+        assert_no_internal_leak(result, "an anchor in no timeline")
+        assert sum(row["x"] for row in answer(decidb_cli, self._sql(rows, clause_sql))) == pytest.approx(total)
+
+    @pytest.mark.parametrize(
+        "clause_sql, expected",
+        [
+            pytest.param("x <= sum(from previous to previous else 0: t.d) over (t.p)", [0, 0, 5], id="sum"),
+            pytest.param("x <= count(from first to last: t.d) over (t.p)", [2, 2, 2], id="count"),
+        ],
+    )
+    def test_a_range_reads_a_tied_position_once(self, decidb_cli, clause_sql, expected):
+        """Rows 1 and 2 share period 1, one position holding one payload (D73), which a range
+        reads once, as a point does: the previous period's demand is 5, not 10, and the
+        timeline has two positions."""
+        rows = ((1, "A", 1, 5), (2, "A", 1, 5), (3, "A", 2, 0))
+        assert [row["x"] for row in answer(decidb_cli, self._sql(rows, clause_sql))] == expected
+
+    def test_a_range_over_a_keyed_decision_reads_its_position_once(self, decidb_cli):
+        """A decision keyed by the period reads one instance per position, so the window of
+        both positions is x1 + x2 <= 10 whichever rows hold them: x1 + x2 is 10, where reading
+        period 1's two rows had made it 2 * x1 + x2."""
+        rows = ((1, "A", 1, 0), (2, "A", 1, 0), (3, "A", 2, 0))
+        sql = self._sql(
+            rows, "sum(from first to last: x) over (t.p) <= 10", "per t.p: x(REAL)", "MAXIMIZE sum(per t.p: x)"
+        )
+        x = [row["x"] for row in answer(decidb_cli, sql)]
+        assert x[0] == x[1] and x[0] + x[2] == pytest.approx(10), x
+
+    @pytest.mark.parametrize(
+        "payload, clause_sql",
+        [
+            pytest.param("data", "x <= sum(from previous to previous else 0: t.d) over (t.p)", id="data"),
+            pytest.param("decisions", "x <= sum(from previous to previous else 0: x) over (t.p) + 1", id="decisions"),
+        ],
+    )
+    def test_a_tied_position_a_range_reads_holds_one_payload(self, decidb_cli, payload, clause_sql):
+        """Two rows of period 1 reading different payloads -- demands 5 and 7, or two per-row
+        decisions -- leave the range no value to read there: the error names the position, as
+        a point's does (D73)."""
+        rows = ((1, "A", 1, 5), (2, "A", 1, 7), (3, "A", 2, 0))
+        result = decidb_cli.execute_raw(self._sql(rows, clause_sql))
+        assert "finds 2 rows at t.p = 1; a position must hold one row" in result.stderr, (payload, result.stderr)
+        assert_no_internal_leak(result, "a tied position")
+
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            pytest.param("coalesce(at(previous: t.d) over (t.p), 1)", [1, 1, 5], id="coalesce"),
+            pytest.param("ifnull(at(previous: t.d) over (t.p), 1)", [1, 1, 5], id="ifnull"),
+            pytest.param("at(previous: t.d) over (t.p) + 1", [9, 9, 6], id="unreduced"),
+        ],
+    )
+    def test_a_missing_position_is_null_where_sql_reads_it(self, decidb_cli, bound, expected):
+        """Period 1 has no previous position and period 2 reads a NULL demand: both are NULL,
+        the deck's `else NULL` (pp. 43, 50). A `coalesce` gives each a value; a NULL that
+        reaches the comparison skips the instance (D84). The missing position had skipped the
+        instance through the `coalesce`."""
+        rows = ((1, "A", 1, None), (2, "A", 2, 5), (3, "A", 3, 6))
+        assert [row["x"] for row in answer(decidb_cli, self._sql(rows, f"x <= {bound}"))] == expected
+
+    @pytest.mark.quadratic
+    def test_a_square_over_a_frame_reads_two_columns(self, decidb_cli_gurobi, decidb_cli_highs):
+        """`x - at(previous: x)` reads `x` at two rows, two columns: squared, it couples them,
+        which only Gurobi takes. HiGHS is refused by name, where the gate had counted one
+        decision and built a model HiGHS could not load."""
+        rows = ((1, "A", 1, 5), (2, "A", 2, 6), (3, "A", 3, 4))
+        sql = self._sql(rows, "x <= t.d", objective="MINIMIZE norm(x - at(previous: x) over (t.p), 2) - sum(x)")
+        assert decidb_cli_gurobi.execute_raw(sql).returncode == 0
+        result = decidb_cli_highs.execute_raw(sql)
+        assert "the objective squares an expression containing more than one decision variable" in result.stderr
+        assert_no_internal_leak(result, "a square over a frame on HiGHS")

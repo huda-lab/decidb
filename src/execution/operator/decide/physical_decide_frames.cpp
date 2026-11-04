@@ -65,6 +65,15 @@ static void CheckAbsenceForeseen(const DecideFrameSpec &frame, const DecideFrame
 	}
 }
 
+//! An anchor in no timeline (D75) selects nothing, whatever its `else`: the frame has no value there (D84).
+static void MarkUntimedAbsent(DecideFrameMap &map) {
+	for (idx_t row = 0; row < map.anchors.size(); row++) {
+		if (map.Untimed(row)) {
+			map.absent[row] = true;
+		}
+	}
+}
+
 //! The position `end` names on a timeline of `peers` positions for an anchor at `at` (language/guide.md §5.6):
 //! `first` 0, `last` the last, `k previous` and `k next` the anchor's less or plus k -- off the timeline, it may be,
 //! before a cyclic one wraps it. `k` is a 32-bit whole number (the grammar's Iconst) and positions count rows, so
@@ -148,12 +157,12 @@ static void ListRangeWindows(ClientContext &context, const DecideFrameSpec &fram
 			}
 		}
 		for (auto p : visited) {
+			// A position is read at its first row, as a point reads it; CheckDecideFramePeers holds its other rows to
+			// that row's payload (D73).
 			const idx_t peer = first_peer[t] + p;
-			charge(visits[p] * map.PeerSize(peer));
-			for (idx_t i = map.peer_begin[peer]; i < map.peer_begin[peer + 1]; i++) {
-				map.list_rows.push_back(map.peer_rows[i]);
-				map.list_visits.push_back(visits[p]);
-			}
+			charge(visits[p]);
+			map.list_rows.push_back(map.peer_rows[map.peer_begin[peer]]);
+			map.list_visits.push_back(visits[p]);
 			visits[p] = 0;
 		}
 		visited.clear();
@@ -295,6 +304,7 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 	map.peer_begin.push_back(map.peer_rows.size());
 	if (frame.range) {
 		ListRangeWindows(context, frame, first_peer, map);
+		MarkUntimedAbsent(map);
 		CheckAbsenceForeseen(frame, map);
 		return map;
 	}
@@ -337,6 +347,7 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 	for (idx_t row = 0; row < num_rows; row++) {
 		map.absent[row] = map.Missing(row) && !frame.fallback;
 	}
+	MarkUntimedAbsent(map);
 	CheckAbsenceForeseen(frame, map);
 	return map;
 }
@@ -560,15 +571,28 @@ void SkipDecideRangeNullReads(ClientContext &context, const vector<const Express
 	}
 }
 
-//! Whether some anchor selects `peer`, for each peer of `map`.
-static vector<bool> SelectedPeers(const DecideFrameMap &map) {
-	vector<bool> selected(map.peer_begin.size(), false);
-	for (auto peer : map.selected_peer) {
-		if (peer != DConstants::INVALID_INDEX) {
-			selected[peer] = true;
+//! Whether the frame reads `peer`, for each peer of `map`: a point where some anchor selects it, a range where some
+//! window that reads something visits it.
+static vector<bool> ReadPeers(const DecideFrameMap &map) {
+	vector<bool> read(map.peer_begin.size(), false);
+	if (!map.range) {
+		for (auto peer : map.selected_peer) {
+			if (peer != DConstants::INVALID_INDEX) {
+				read[peer] = true;
+			}
+		}
+		return read;
+	}
+	for (idx_t w = 0; w < map.WindowCount(); w++) {
+		if (map.WindowAbsent(w)) {
+			continue;
+		}
+		const auto list = map.window_list[w];
+		for (idx_t i = map.list_begin[list]; i < map.list_begin[list + 1]; i++) {
+			read[map.peer[map.list_rows[i]]] = true;
 		}
 	}
-	return selected;
+	return read;
 }
 
 void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
@@ -636,6 +660,13 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 				                                                                : num_rows);
 			}
 			VectorOperations::Copy(source, *out, gather, num_rows, 0, 0);
+			// An anchor where the frame reads nothing -- one in no timeline among them, whatever its `else` -- has no
+			// value in any of its columns.
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (map.Absent(row)) {
+					FlatVector::SetNull(*out, row, true);
+				}
+			}
 		}
 		types.push_back(column.type);
 		values_of.push_back(std::move(out));
@@ -701,25 +732,57 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 //! (INVALID_INDEX, 0); no zero.
 using DecidePayloadForm = map<pair<idx_t, idx_t>, double>;
 
+vector<DecideFramePayload> DecideFramePayloads(const vector<DecideFrameSpec> &frames,
+                                               const DecidePreparedModel &prepared,
+                                               const vector<LogicalDecide::ReducerValueLink> &links) {
+	vector<DecideFramePayload> payloads(frames.size());
+	for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
+		auto &column = prepared.frame_columns[j];
+		auto &payload = payloads[column.frame];
+		if (column.kind == DecideFrameColumn::Kind::REDUCED) {
+			payload.values.push_back(column.value->Cast<BoundAggregateExpression>().children[0].get());
+			continue;
+		}
+		if (column.kind != DecideFrameColumn::Kind::VALUE && column.kind != DecideFrameColumn::Kind::READ) {
+			continue;
+		}
+		// A point's payload term names its READ column by its index among the frame columns.
+		if (column.frame < prepared.frame_payload_terms.size()) {
+			for (auto &term : prepared.frame_payload_terms[column.frame]) {
+				if (term.column == j) {
+					payload.terms.push_back(DecideFramePayloadTerm {term.decision, payload.values.size(), term.sign});
+				}
+			}
+		}
+		payload.values.push_back(column.value.get());
+	}
+	for (auto &link : links) {
+		if (link.frame == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto &payload = payloads[link.frame];
+		for (auto &term : link.inner_terms) {
+			payload.terms.push_back(DecideFramePayloadTerm {term.variable_index, payload.values.size(), term.sign});
+			payload.values.push_back(term.coefficient.get());
+		}
+	}
+	return payloads;
+}
+
 void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec> &frames,
-                           const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
+                           const vector<DecideFrameMap> &maps, const vector<DecideFramePayload> &payloads,
                            const vector<DecideVarScopeInfo> &variable_scopes,
                            const vector<KeyedMapping> &keyed_mappings, const vector<DecideKey> &keys,
                            ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
-	static const vector<DecideFramePayloadTerm> NO_TERMS;
 	for (idx_t f = 0; f < maps.size(); f++) {
 		auto &map = maps[f];
-		if (map.range) {
-			continue; // a range reads every row of a position it selects
-		}
-		auto &terms = f < prepared.frame_payload_terms.size() ? prepared.frame_payload_terms[f] : NO_TERMS;
-		// The selected peers of several rows -- the only ones whose rows can disagree -- and
-		// their rows.
-		auto selected = SelectedPeers(map);
+		auto &terms = payloads[f].terms;
+		// The peers the frame reads of several rows -- the only ones whose rows can disagree -- and their rows.
+		auto read = ReadPeers(map);
 		vector<idx_t> tied;
 		vector<bool> tied_rows(num_rows, false);
 		for (idx_t peer = 0; peer + 1 < map.peer_begin.size(); peer++) {
-			if (selected[peer] && map.PeerSize(peer) > 1) {
+			if (read[peer] && map.PeerSize(peer) > 1) {
 				tied.push_back(peer);
 				for (idx_t i = map.peer_begin[peer]; i < map.peer_begin[peer + 1]; i++) {
 					tied_rows[map.peer_rows[i]] = true;
@@ -729,18 +792,11 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
 		if (tied.empty()) {
 			continue;
 		}
-		// What the frame reads on those rows: over data its payload (its VALUE column's), over
-		// decisions the coefficients of its payload's terms (its READ columns').
-		vector<idx_t> slot_of(prepared.frame_columns.size(), DConstants::INVALID_INDEX);
+		// What the frame reads on those rows: over data its payload, over decisions the coefficients of its payload's
+		// terms.
 		vector<Vector> values;
-		for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
-			auto &column = prepared.frame_columns[j];
-			const bool payload =
-			    column.kind == DecideFrameColumn::Kind::VALUE || column.kind == DecideFrameColumn::Kind::READ;
-			if (payload && column.frame == f) {
-				slot_of[j] = values.size();
-				values.push_back(EvaluateOnRows(context, *column.value, data, num_rows, tied_rows, chunk_expr_cache));
-			}
+		for (auto *value : payloads[f].values) {
+			values.push_back(EvaluateOnRows(context, *value, data, num_rows, tied_rows, chunk_expr_cache));
 		}
 		auto same_values = [&](idx_t a, idx_t b) {
 			for (auto &column : values) {
@@ -773,7 +829,7 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
 		auto form_at = [&](idx_t row) {
 			DecidePayloadForm form;
 			for (auto &term : terms) {
-				auto coefficient = values[slot_of[term.column]].GetValue(row).GetValue<double>();
+				auto coefficient = values[term.column].GetValue(row).GetValue<double>();
 				form[make_pair(term.decision, instance(term.decision, row))] += term.sign * coefficient;
 			}
 			for (auto it = form.begin(); it != form.end();) {

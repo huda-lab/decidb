@@ -16,10 +16,10 @@ class Optimizer;
 //!  - the reducer's function over the rows it reads (its FILTER), which are the clause's kept rows that pass its own
 //!    `when`. A row outside them reads its group's value, and nothing reads it. A group with no row it reads gives the
 //!    function's value over no rows, as SQL's does (NULL for SUM, 0 for COUNT);
-//!  - `sum(per K: body)` counts each class of K in the group once: a first aggregate per group and class takes the
-//!    class's body from the rows it reads (ARBITRARY: the key determines the body, which a scope check proves), and
-//!    the reducer's function runs over the classes of each group. A row whose written `per` column is NULL is in no
-//!    class.
+//!  - `sum(per K: body)` counts each instance of K in the group once: a first aggregate per group, class and the
+//!    body's signature fields (D70) takes the instance's body from the rows it reads (ARBITRARY: the fields determine
+//!    the body), and the reducer's function runs over the instances of each group. A row whose written `per` column
+//!    is NULL is in no class.
 //! The tables are added before the row checks, so the checks read the rows with their bounds, as the solver reads them.
 void DirectAddBoundTables(Optimizer &optimizer, DirectSourceReader &reader, LogicalDecide &decide);
 

@@ -428,8 +428,7 @@ F7_RANGE = Case(
     f"""SELECT id, x {table('t', F7_COLUMNS, F7_DATA)} DECIDE x(INT)
         SUCH THAT x <= 3 AND x >= sum(from previous to previous: x) over (t.period within t.product)
         MAXIMIZE sum(x) ORDER BY id""",
-    6,
-    {1: ("x1 + x2 - x3 <= 0",)},
+    error="ambiguous_peer",
 )
 
 F8_COLUMNS = ("id", "period", "cap")

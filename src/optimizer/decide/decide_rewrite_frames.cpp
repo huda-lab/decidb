@@ -147,7 +147,7 @@ public:
 		// Whole by the type payload and `else` share (DecideValueIsWholeNumbered reads a frame marker so): what the
 		// binder's strict-comparison check read too.
 		const bool whole = DecideValueIsWholeNumbered(marker, decide.decide_index);
-		const idx_t link_idx = AddValueHelper(decide, std::move(link), &scope, whole, source_clause_id, account);
+		const idx_t link_idx = AddValueHelper(decide, std::move(link), scope, whole, source_clause_id, account);
 		helper_of_frame[frame] = link_idx;
 		ReplaceWithDecision(context, decide, decide.reducer_value_links[link_idx].value_var, slot);
 	}

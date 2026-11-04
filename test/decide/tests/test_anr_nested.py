@@ -611,3 +611,142 @@ def test_a_square_a_helper_would_define_is_refused(decidb_cli):
     message = "'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers"
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "a square a helper would define")
+
+
+# ---------------------------------------------------------------------------
+# Defects the review of the port found, each answer worked by hand from the deck
+# ---------------------------------------------------------------------------
+
+
+def _review_query(columns, rows, decide, clause_sql, objective="MAXIMIZE SUM(x)"):
+    return f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE {decide}
+        SUCH THAT x <= 10 AND {clause_sql}
+        {objective}
+        ORDER BY id"""
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "columns, rows, decide, clause_sql, expected",
+    [
+        pytest.param(
+            ("id", "g", "w"),
+            ((1, "a", 1), (2, "a", None)),
+            "x(INT)",
+            "per (): sum(t.w * sum(x) by (t.g)) <= 5",
+            [0, 5],
+            id="null-data",
+        ),
+        pytest.param(
+            ("id", "g", "h"),
+            ((1, "a", "h1"), (2, "a", None)),
+            "x(INT), per t.h: y(INT)",
+            "y <= 10 AND per (): sum(y + max(x) by (t.g)) <= 5",
+            [5, 5],
+            id="absent-decision",
+        ),
+        pytest.param(
+            ("id", "g", "w", "c"),
+            ((1, "a", 1, True), (2, "a", None, True)),
+            "x(INT)",
+            "per (): sum(when t.c: t.w * sum(x) by (t.g)) <= 5",
+            [0, 5],
+            id="beside-a-when",
+        ),
+    ],
+)
+def test_an_outer_null_drops_the_outer_member_only(request, cli_fixture, columns, rows, decide, clause_sql, expected):
+    """Row 2's NULL `w`, or its decision `y` whose key is NULL, drops row 2's member of the
+    outer sum alone (D67): the reducer inside reads its group whole (deck p. 30), the rows
+    the outer `when` keeps, so the clause is x1 + x2 <= 5 -- max(x1, x2) <= 5 -- not x1
+    alone. The reducer's NULL tests had been carried into the path of every reducer inside
+    it."""
+    sql = _review_query(columns, rows, decide, clause_sql)
+    result = answer(request.getfixturevalue(cli_fixture), sql)
+    assert sum(row["x"] for row in result) == sum(expected), result
+    if "max" in clause_sql:
+        assert [row["x"] for row in result] == expected
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause_sql, objective, expected",
+    [
+        pytest.param("per (): min(sum(per t.k: x) by (t.g)) = 5", "MAXIMIZE SUM(x)", [10, 5], id="min-of-groups"),
+        pytest.param("per (): max(sum(per t.k: x) by (t.g)) >= 5", "MINIMIZE SUM(x)", [0, 5], id="max-of-groups"),
+        pytest.param("per (): avg(sum(per t.k: x) by (t.g)) = 5", "MINIMIZE SUM(x)", [0, 5], id="avg-of-groups"),
+        pytest.param("x + sum(per t.k: x) by (t.g) <= 5", "MAXIMIZE SUM(x)", [10, 2], id="one-level"),
+    ],
+)
+def test_a_group_of_no_class_has_no_value(request, cli_fixture, clause_sql, objective, expected):
+    """Row 1's NULL `k` puts it in no class of the inner `per t.k` (D5), so group a's sum has
+    no member and no value (D68): the reducer around it skips it, and a row reading it
+    skips its instance. Its helper had been left a group with no definition -- free -- or
+    read where it was absent (an internal error)."""
+    sql = _review_query(("id", "g", "k"), ((1, "a", None), (2, "b", "m")), "x(INT)", clause_sql, objective)
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == expected
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "columns, rows, objective",
+    [
+        pytest.param(
+            ("id", "g", "w"),
+            ((1, "a", 1), (2, None, 5), (3, "b", 2)),
+            "sum(per t.g: sum(t.w * x) by (t.g))",
+            id="null-per-key",
+        ),
+        pytest.param(
+            ("id", "g", "h", "w"),
+            ((1, "a", "u", 1), (2, "a", None, 5), (3, "b", "u", 2)),
+            "sum(per t.g: sum(t.w * x) by (t.g, t.h))",
+            id="null-by-key",
+        ),
+    ],
+)
+def test_a_sum_of_group_sums_skips_a_row_in_no_group(request, cli_fixture, columns, rows, objective):
+    """Row 2 is in no group of the inner `by` (D5), so it is no member of the objective's sum
+    of group sums: the best use of `SUM(x) <= 10` is row 3's weight 2. Read in place as one
+    sum (D81), the objective had counted row 2's weight 5."""
+    sql = _review_query(columns, rows, "x(INT)", "SUM(x) <= 10", f"MAXIMIZE {objective}")
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [0, 0, 10]
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_groups_holding_one_value_are_two_variants(request, cli_fixture):
+    """`sum(per (): max(t.v) by (t.g))` over data: groups a and b are two variants -- a
+    reducer's `by` key is a signature field (D70, deck p. 37) -- although their maxima are
+    both 4, so the bound is 8. The bound side had grouped the variants by value."""
+    sql = f"""
+        SELECT id, x {table('t', ('id', 'g', 'v'), ((1, 'a', 4), (2, 'b', 4)))}
+        DECIDE x(REAL)
+        SUCH THAT x <= sum(per (): max(t.v) by (t.g))
+        MAXIMIZE sum(x)
+        ORDER BY id"""
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [8, 8]
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause_sql",
+    [
+        pytest.param("per (): sum(max(when NOT t.c: x) by (t.g)) >= 5", id="nest"),
+        pytest.param("x + max(max(when NOT t.c: x) by (t.g)) >= 5", id="nest-in-a-row"),
+        pytest.param("x + sum(when NOT t.c: x) >= 5", id="one-level"),
+    ],
+)
+def test_a_reducer_left_with_no_member_skips_its_instance(request, cli_fixture, clause_sql):
+    """Every row has `c`, so the inner `when NOT t.c` keeps none: each group is empty, the
+    reducer over them has no member and no value, and every instance reading it is skipped
+    (D68, D87). A query-wide helper had no way to be absent: the nest was called
+    infeasible, and a row reading the helper raised an internal error."""
+    sql = _review_query(("id", "g", "c"), ((1, "a", True), (2, "b", True)), "x(INT)", clause_sql, "MINIMIZE SUM(x)")
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [0, 0]
