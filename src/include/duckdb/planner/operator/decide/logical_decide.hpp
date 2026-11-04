@@ -147,8 +147,8 @@ struct DecideFrameSpec {
 	vector<string> timeline_names;
 	string order_name;
 	//! D75: the key whose every class among `rows` lies in one timeline -- the path's `by` keys and the `per` key
-	//! of the scoped expression it stands in, an index into LogicalDecide::keys -- and the message's subject;
-	//! INVALID_INDEX when that key determines the timeline already.
+	//! of the scoped expression it stands in, an index into LogicalDecide::keys; INVALID_INDEX, one class, for
+	//! `per ()` along no `by` -- and the message's subject, empty when that key determines the timeline already.
 	idx_t partition_key = DConstants::INVALID_INDEX;
 	string partition_subject;
 

@@ -1676,7 +1676,8 @@ class TestRangeErrors:
         violating a bound optimal and reported a solve error; it is solved once more without
         presolve, and says infeasible as Gurobi does. (The fuzzer counted a reversed range,
         then 0 and now no value, deck p. 50, inside a reducer of the bound, which is not
-        supported yet.)"""
+        supported yet; and it wrote the first clause under `per ()`, whose one class spans
+        both timelines, D75.)"""
         cli = request.getfixturevalue(cli_fixture)
         rows = (
             (1, "b", 4, -1),
@@ -1689,7 +1690,7 @@ class TestRangeErrors:
         )
         sql = f"""SELECT t.id, x, y {table('t', ('id', 'g', 'period', 'w'), rows)}
             DECIDE x(INT), per t.g: y(INT)
-            SUCH THAT y <= 4 AND per (): x <= count(from first to first: t.w) over (t.period within t.g) - 1
+            SUCH THAT y <= 4 AND x <= count(from first to first: t.w) over (t.period within t.g) - 1
               AND t.w * at(3 next: x - y) over (t.period desc within t.g) + x
                   = count(from previous to last every 2: t.w) over (t.period within t.g)
             MINIMIZE sum(abs(x - at(next: x - y) over (t.period desc cyclic within t.g))) ORDER BY t.id"""

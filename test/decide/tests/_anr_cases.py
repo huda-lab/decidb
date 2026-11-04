@@ -1029,6 +1029,8 @@ def _partition(name, per, per_sql, error, optimum) -> Case:
 #: A category spans two product timelines: no timeline per class (D75).
 PARTITION_SPANNED = _partition("partition_spanned", ("category",), "t.category", "frame_partition", None)
 PARTITION_HELD = _partition("partition_held", ("product",), "t.product", None, 10)
+#: `per ()` is one class, which spans both timelines too (deck p. 54: the empty key determines none).
+PARTITION_NONE = _partition("partition_none", (), "()", "frame_partition", None)
 
 NESTED_EMPTY_COLUMNS = ("id", "g", "h", "c")
 NESTED_EMPTY_DATA = ((1, "a", "p", True), (2, "a", "q", False))
@@ -1197,6 +1199,7 @@ CASES = (
     NULL_BOUND,
     PARTITION_SPANNED,
     PARTITION_HELD,
+    PARTITION_NONE,
     NESTED_EMPTY,
     KEPT_NONE,
     NULL_PAYLOAD,

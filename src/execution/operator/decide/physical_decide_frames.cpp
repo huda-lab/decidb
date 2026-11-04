@@ -367,7 +367,7 @@ static vector<Value> TimelineValues(ClientContext &context, const DecideFrameSpe
 void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
                                ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
-	if (frame.partition_key == DConstants::INVALID_INDEX) {
+	if (frame.partition_subject.empty()) {
 		return;
 	}
 	vector<idx_t> ids;

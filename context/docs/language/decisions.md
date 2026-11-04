@@ -54,7 +54,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D72 | The objective is produced once (deck p. 62): a second variant is an error saying it would be produced more than once |
 | D73 | A position a frame reads — a point's selected one, each one a range visits — holding rows that read different payloads is an error naming the position; rows reading one payload — one value of data, one linear form over decisions — are read once, a range's included (deck p. 110: one signature per position) |
 | D74 | A frame's order key orders peers as `ORDER BY` does, NULL where `default_null_order` puts it |
-| D75 | Under `per K`, each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines (deck pp. 53–55). A row whose `within` key is NULL is in no timeline (D5): its frame has no value there, whatever its `else`, and no anchor selects it |
+| D75 | Under `per K`, `per ()` included (one class), each class lies in one timeline of every frame its body reads directly, else an error naming the class and the timelines (deck pp. 53–55). A row whose `within` key is NULL is in no timeline (D5): its frame has no value there, whatever its `else`, and no anchor selects it |
 | D76 | A cyclic range keeps every repeated visit: on three positions, `from 4 previous to 4 next` reads nine |
 | D77 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
 | D78 | A point frame is read in place, its decisions at the selected row's columns, inside a reducer operand too; a range over decisions is a helper decision per window, a timeline or a position on one |
