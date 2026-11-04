@@ -190,16 +190,12 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 	auto scale = scale_match.scale;
 	bool scale_divides = scale_match.divides;
 
-	// A frame's marker is a tuple term (language/guide.md §5.6), not a reducer.
-	idx_t frame;
-	if (TryGetDecideFrame(u, frame) && frame < decide.frames.size()) {
-		throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet", decide.frames[frame].text);
-	}
 	const BoundAggregateExpression *found = scaled_agg ? scaled_agg
 	                                        : u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
 	                                            ? &u.Cast<BoundAggregateExpression>()
 	                                            : nullptr;
 	auto name = found ? StringUtil::Lower(found->function.name) : string();
+	// The objective's path takes every other term, a frame's among them.
 	if (beside && name != "min" && name != "max") {
 		beside->emplace_back(sign, &e);
 		return;

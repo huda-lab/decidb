@@ -570,7 +570,11 @@ test a column. A marker names its frame by its tag alone, which `Expression::Equ
 ignores, so every DECIDE comparison of trees that may hold a frame -- the NULL tests
 `SkipNullData` collects, a filter like terms share, a helper's reducer and rows -- reads
 `DecideExpressionsEqual` (`decide_reducer_path.hpp`), which holds two markers the same only
-when they name one frame: `at(previous: x)` and `at(next: x)` are two values.
+when they name one frame: `at(previous: x)` and `at(next: x)` are two values. It tests a
+reducer over data alone inside one over decisions whole as well (`avg(t.v) by (t.h) IS NOT
+NULL`): it has no value where its path group has none, and the member goes; stage 05 makes it,
+and the test, a column (`RewriteRhsAggregates`). A nested reducer over decisions is not
+looked into: its absence is its helper's.
 
 ---
 

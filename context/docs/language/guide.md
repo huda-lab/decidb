@@ -458,7 +458,12 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   `per` (§5.3, §7.1); `AVG` divides by the values it receives. A group of the path key that the inner `when` keeps no
   row of has no value, and the reducer around it skips that member (D68).
 - **Over data alone** a nest is a value, computed innermost first on the bound side as any data reducer:
-  `x <= avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`.
+  `x <= avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`. So is a reducer over data alone inside one over decisions,
+  over its path: in `per t.g: sum(x - avg(t.v) by (t.h)) by (t.g) <= 0` each row reads the mean of its `(t.g, t.h)`
+  group among the rows the path keeps; where that group has no value (a NULL key, a `when` that keeps none of its
+  rows) the member is skipped, as any NULL a reducer reads. It is read as a coefficient, so what it reads must be
+  finite (*"DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.v / 0.0):'"*);
+  on a bound, infinity is a value.
 - **How it is solved.** Every reducer of a nest over decisions is a helper decision (§6.4) keyed by its path, one
   instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is
   pinned on the side its readers push it, through `SUM` and `AVG` levels; under a `MIN` or `MAX`, on both (D79). So
@@ -469,8 +474,11 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   objective reads it: a helper per row at least (or at most) its value, the way the clause pushes it, which needs a
   backend that states `MIN`/`MAX` natively when one reads it (Gurobi). Refused where a helper would have to hold it
   with no such definition (D80): a nest of sums in the objective that is not read in place (§4).
-- **Refused** (D80): `norm` inside a reducer; a reducer over data alone added inside one over decisions (as a factor,
-  the coefficient rule of §5 refuses it); a reducer times a decision inside a reducer.
+- **Refused** (D80): `norm` inside a reducer; a reducer times a decision inside a reducer; `abs` or a square over a
+  nested reducer (*"DECIDE: abs over a reducer inside another reducer is not supported yet"*, *"... squares or
+  multiplies decisions inside nested reducers ..."*). A reducer over data alone scaling a decision is a coefficient
+  the rule of §5 refuses with its remedy (*"An aggregate over table columns ... cannot multiply a decision
+  variable"*).
 
 Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, a grid of nests at depth 2 and 3, the bounds through a
 nest), `test_scope_objective.py` (the objective).
@@ -548,18 +556,20 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   timeline or fallback --
   over the kept rows is an error saying so.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
-  inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
-  over decisions is linear).
+  inside a frame's payload or fallback; a frame over decisions multiplied by a decision or squared (*"... multiplies a
+  decision read at another row by a decision, which is not supported yet"*). A frame over data is a coefficient read
+  at another row: `x * at(previous: t.v) over (...)`, `x / at(previous else 1: t.w) over (...)`, and a data factor on
+  a frame over decisions are linear.
 
 **Status.** Points and ranges are formulated, over data or decisions, in constraints and the objective, inside a
 reducer over decisions too, under `abs`, `norm` and a `MIN`/`MAX` of several terms: a point reads a decision at the
 selected row's own column, with no helper decision; a range over decisions is its helper per window
 ([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a frame inside a
-reducer of a bound, or in the bound of
+reducer over data, on a bound or inside a reducer over decisions (*"DECIDE: at(previous: t.v) over (...) inside
+sum(...), a reducer over data, is not supported yet"*), or in the bound of
 a clause over groups that would take its group's tightest value (D85) -- a `first` or `last` frame, or a range from
-`first` to `last`, whose timeline lies within each group reads one value per group, and is read; a frame over
-decisions beside a `MIN`/`MAX` in the objective, as any decision there is; an `else` that reads a decision while the
-payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
+`first` to `last`, whose timeline lies within each group reads one value per group, and is read; an `else` that reads
+a decision while the payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
 first to last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
 
 Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),

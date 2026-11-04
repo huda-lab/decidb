@@ -48,6 +48,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
@@ -77,6 +78,9 @@ public:
 		// The parser requires a SUCH THAT clause with at least one constraint.
 		D_ASSERT(decide.decide_constraints);
 		Walk(*decide.decide_constraints, DecideEnclosingScope());
+		if (decide.decide_objective) {
+			WalkObjective(decide.decide_objective);
+		}
 	}
 
 	//! Records the aggregates of the group bounds `Run` left to a rule, and puts their checks where they would have
@@ -120,7 +124,48 @@ private:
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			when = scope.Condition();
 			class_key = scope.PerKey();
-			RewriteBound(expr.Cast<BoundComparisonExpression>());
+			auto &comparison = expr.Cast<BoundComparisonExpression>();
+			read_as = DecideValueRole::BOUND;
+			RewriteBound(comparison);
+			read_as = DecideValueRole::COEFFICIENT;
+			ReplaceDataUnderDecisions(comparison.left, nullptr);
+		}
+	}
+
+	//! The objective, under its `when c:`: an objective is produced once, so it has no `per` key. Its condition holds
+	//! no reducer.
+	void WalkObjective(unique_ptr<Expression> &expr) {
+		when = EnterDecideScope(*expr, DecideEnclosingScope()).Condition();
+		class_key = DConstants::INVALID_INDEX;
+		read_as = DecideValueRole::COEFFICIENT;
+		ReplaceDataUnderDecisions(expr, nullptr);
+	}
+
+	//! A reducer over data alone inside one over decisions is a value of its path's group (language/guide.md §5.5), as
+	//! it is inside one on a bound: its column, read as a coefficient, which must be finite. `path` holds the reducers
+	//! over decisions around `expr`; null outside every one, where canonicalization left no reducer over data.
+	void ReplaceDataUnderDecisions(unique_ptr<Expression> &expr, const DecideReducerPath *path) {
+		idx_t frame;
+		if (TryGetDecideFrame(*expr, frame)) {
+			return;
+		}
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+			ExpressionIterator::EnumerateChildren(
+			    *expr, [&](unique_ptr<Expression> &child) { ReplaceDataUnderDecisions(child, path); });
+			return;
+		}
+		auto &reducer = expr->Cast<BoundAggregateExpression>();
+		if (reducer.children.empty() || !BoundExpressionReferencesDecide(*reducer.children[0], decide.decide_index)) {
+			if (path) {
+				expr = MakeReducerColumn(reducer, *path);
+			}
+			return;
+		}
+		auto below = path ? path->Below(reducer) : DecideReducerPath().Below(reducer);
+		ReplaceDataUnderDecisions(reducer.children[0], &below);
+		// Its filter tests its argument's data for NULL (DecideCanonicalizer::SkipNullData), a reducer among it.
+		if (reducer.filter) {
+			ReplaceDataUnderDecisions(reducer.filter, &below);
 		}
 	}
 
@@ -302,7 +347,7 @@ private:
 	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
 		auto frame = reducer.children.empty() ? string() : FrameText(*reducer.children[0]);
 		if (!frame.empty()) {
-			throw BinderException("DECIDE: %s inside %s on the bound side is not supported yet", frame,
+			throw BinderException("DECIDE: %s inside %s, a reducer over data, is not supported yet", frame,
 			                      Written(reducer));
 		}
 		unique_ptr<Expression> argument;
@@ -358,7 +403,8 @@ private:
 
 	//! The message a row raises for a NaN in what a reducer reads: its argument (or a norm's written body: `SIGN(NaN)`
 	//! is 0) on the rows it reads. A reducer reads its argument as the same SQL aggregate does: it skips a NULL. A NaN
-	//! is an error, except to COUNT, which counts it. Null when there is none to raise. `argument` is the argument with
+	//! is an error, except to COUNT, which counts it, and so is an infinity where the value is read as a coefficient
+	//! (`read_as`). Null when there is none to raise. `argument` is the argument with
 	//! the reducers inside it replaced by their columns, `reads` the rows it reads and `path` the reducers around it.
 	unique_ptr<Expression> ArgumentMessage(const BoundAggregateExpression &reducer, const Expression *argument,
 	                                       const ExprPtr &reads, const DecideReducerPath &path) {
@@ -376,7 +422,7 @@ private:
 		// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
 		auto body = DecideWrittenNormBody(reducer);
 		auto checked = body ? body : argument;
-		auto nan = NanMessage(*checked, Written(body ? *body : *reducer.children[0]));
+		auto nan = NanMessage(*checked, Written(body ? *body : *reducer.children[0]), read_as);
 		if (!nan) {
 			return nullptr;
 		}
@@ -509,13 +555,19 @@ private:
 		return calc.Out(DirectOnKeptRows(calc, rows, nan));
 	}
 
-	//! The message a row raises for a NaN `value`, and NULL elsewhere; null when `value` cannot be NaN.
-	ExprPtr NanMessage(const Expression &value, const string &written) const {
+	//! The message a row raises for a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite --
+	//! and NULL elsewhere; null when `value` cannot be either.
+	ExprPtr NanMessage(const Expression &value, const string &written,
+	                   DecideValueRole role = DecideValueRole::BOUND) const {
 		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
 			return nullptr;
 		}
-		return calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)),
-		               calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, written))),
+		auto number = calc.Cast(calc.Of(value), LogicalType::DOUBLE);
+		// A NULL is no value: neither test holds of it.
+		auto refused = role == DecideValueRole::BOUND
+		                   ? calc.Fn("isnan", number)
+		                   : calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", number), calc.Bool(false));
+		return calc.If(std::move(refused), calc.Constant(Value(DecideInvalidValueMessage(role, written))),
 		               calc.Constant(Value(LogicalType::VARCHAR)));
 	}
 
@@ -610,6 +662,9 @@ private:
 	//! none or `per ()`.
 	const Expression *when = nullptr;
 	idx_t class_key = DConstants::INVALID_INDEX;
+	//! What the reducers being rewritten are read as: a bound's value, or a coefficient's inside a reducer over
+	//! decisions.
+	DecideValueRole read_as = DecideValueRole::BOUND;
 	vector<ReducerColumn> reducer_columns;
 };
 

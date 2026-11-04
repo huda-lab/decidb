@@ -217,21 +217,16 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT at(previous else at(next: x) over (
 ----
 Binder Error: DECIDE: a frame selector inside at(...) is not supported
 
-# a frame term times a decision, by either side
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x * at(previous: T.demand) over (T.period) <= 3 MAXIMIZE sum(x);
-----
-Binder Error: DECIDE: '(x * at(previous: T.demand) over (T.period))' multiplies a decision by a value from another row, which is not supported yet
-
+# a frame over decisions times a decision, by either side
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(x * at(previous: x) over (T.period)) <= 3 MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: '(x * at(previous: x) over (T.period))' multiplies a decision by a value from another row, which is not supported yet
+Binder Error: DECIDE: '(x * at(previous: x) over (T.period))' multiplies a decision read at another row by a decision, which is not supported yet
 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT power(at(previous: x) over (T.period), 2) <= 3 MAXIMIZE sum(x);
 ----
-Binder Error: DECIDE: 'power(at(previous: x) over (T.period), 2)' multiplies a decision by a value from another row, which is not supported yet
+Binder Error: DECIDE: 'power(at(previous: x) over (T.period), 2)' multiplies a decision read at another row by a decision, which is not supported yet
 
 # ... while a data coefficient on a decision frame is a linear term
 query II
@@ -282,7 +277,7 @@ Binder Error: DECIDE: '(x * x)' squares or multiplies decisions inside at(...), 
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= at(previous: x) over (T.period) ^ 2 MAXIMIZE sum(x);
 ----
-multiplies a decision by a value from another row, which is not supported yet
+multiplies a decision read at another row by a decision, which is not supported yet
 
 # no reducer in an order key
 statement error

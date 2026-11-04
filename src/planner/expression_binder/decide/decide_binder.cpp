@@ -377,8 +377,9 @@ static void ValidateFrame(const DecideFrameExpression &frame, const case_insensi
 	}
 }
 
-//! A product, quotient or square that multiplies a frame term by a decision reads a
-//! decision at one row and a value at another (D80): refused, data factors aside.
+//! A product, quotient or square that multiplies a frame over decisions by a decision reads
+//! one decision at one row and another at another (D80): refused. A frame over data is a
+//! coefficient read at another row, as a column is one read at the row itself.
 static void ValidateFrameProduct(const FunctionExpression &func, const case_insensitive_map_t<idx_t> &variables) {
 	auto name = StringUtil::Lower(func.function_name);
 	bool product = func.is_operator && (name == "*" || name == "/");
@@ -387,7 +388,11 @@ static void ValidateFrameProduct(const FunctionExpression &func, const case_inse
 		return;
 	}
 	for (idx_t i = 0; i < func.children.size(); i++) {
-		if (!FindExpressionOfClass(*func.children[i], ExpressionClass::DECIDE_FRAME)) {
+		auto frame_over_decisions = FindNode(*func.children[i], [&](const ParsedExpression &node) {
+			return node.GetExpressionClass() == ExpressionClass::DECIDE_FRAME &&
+			       ExpressionContainsDecideVariable(node, variables);
+		});
+		if (!frame_over_decisions) {
 			continue;
 		}
 		bool times_decision = square && i == 0 && ExpressionContainsDecideVariable(*func.children[i], variables);
@@ -397,7 +402,7 @@ static void ValidateFrameProduct(const FunctionExpression &func, const case_inse
 		}
 		if (times_decision) {
 			throw BinderException(func,
-			                      "DECIDE: '%s' multiplies a decision by a value from another row, which is not "
+			                      "DECIDE: '%s' multiplies a decision read at another row by a decision, which is not "
 			                      "supported yet",
 			                      func.ToString());
 		}
@@ -432,11 +437,6 @@ struct ScopePlacement {
 	const case_insensitive_map_t<idx_t> &variables;
 	//! Inside a reducer's argument.
 	bool in_reducer = false;
-	//! Inside the argument of a reducer over decisions.
-	bool in_decision_reducer = false;
-	//! Under a `*` or `/` that holds a decision: a reducer over data alone there scales the
-	//! decision, a coefficient ValidateDecideNoNonLinearScalar refuses with its remedy.
-	bool scales_a_decision = false;
 	//! Inside a reducer whose `when`, `per` or `by` chooses the rows a reducer below reads
 	//! (its path, language/guide.md §5.5), or below one that does.
 	bool path_keeps_rows = false;
@@ -482,10 +482,7 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		throw BinderException(expr, "DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope "
 		                            "in front of the constraint or inside a reducer");
 	}
-	// Every reducer, `count` among them: one over data alone added inside a reducer over
-	// decisions is the refusal below, whatever its kind.
 	bool reducer = TakesReducerBy(func);
-	const bool reads_decision = ExpressionContainsDecideVariable(expr, placement.variables);
 	// What a reducer inside another may not stand under (D80), each rewritten before the
 	// value rewrite reads the path, so the inner reducer would lose the enclosing `when`
 	// and `by`: an ABS, a norm, and a product with a decision.
@@ -517,28 +514,14 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 			}
 		}
 	}
-	// A reducer nests in another to any depth (language/guide.md §5.5), with two exceptions
-	// (D80): a norm, and a reducer over data alone in the argument of one over decisions --
-	// unless it scales a decision there, a coefficient ValidateDecideNoNonLinearScalar
-	// refuses with its remedy.
+	// A reducer nests in another to any depth (language/guide.md §5.5), a norm aside (D80). One over data alone is a
+	// value of its path's group, which the bound-side rewrite computes (RewriteRhsAggregates).
 	if (reducer && placement.in_reducer && StringUtil::CIEquals(func.function_name, "norm")) {
 		throw BinderException(expr, "DECIDE: norm inside a reducer is not supported yet");
-	}
-	if (reducer && placement.in_decision_reducer && !reads_decision && !placement.scales_a_decision) {
-		throw BinderException(expr,
-		                      "DECIDE: %s(...) over data alone inside a reducer over decisions is not supported yet; "
-		                      "compute it in a subquery, or reduce it outside",
-		                      func.function_name == "count_star" ? string("count")
-		                                                         : StringUtil::Lower(func.function_name));
-	}
-	if (func.is_operator && (func.function_name == "*" || func.function_name == "/") && reads_decision) {
-		placement.scales_a_decision = true;
 	}
 	auto inner = placement;
 	if (reducer) {
 		inner.in_reducer = true;
-		inner.in_decision_reducer = reads_decision;
-		inner.scales_a_decision = false;
 		inner.path_keeps_rows = placement.path_keeps_rows || placement.under_by || scoped_argument;
 	}
 	inner.under_by = false;
@@ -1556,16 +1539,13 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 					return ValidateSumArgumentInternal(body, variables, has_decide_variable, error_msg,
 					                                   allow_quadratic);
 				}
-				error_msg = StringUtil::Format("Nested %s() inside DECIDE expression must reference a DECIDE variable",
-				                               StringUtil::Upper(func_name_lower));
-				return false;
+				// One over data alone is a value of its path's group (RewriteRhsAggregates).
+				return true;
 			}
 			if (!ExpressionContainsDecideVariable(expr, variables)) {
 				// Data-only named scalar function on table columns (e.g. mod(id, 97),
 				// floor(price)). It folds into a per-row coefficient during
-				// symbolization and contributes no DECIDE variable. Data-only
-				// aggregates (SUM/AVG/MIN/MAX of columns only) were already rejected
-				// above — they require a DECIDE variable — so they never reach here.
+				// symbolization and contributes no DECIDE variable.
 				return true;
 			}
 			error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);

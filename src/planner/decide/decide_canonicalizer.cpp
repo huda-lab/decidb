@@ -249,7 +249,8 @@ static void AddColumnsOf(const Expression &expr, vector<unique_ptr<Expression>> 
 //! The values to test so that `expr` is not NULL where a NULL makes it NULL: of each largest
 //! decision-free part that is not a constant, its columns when only they can make it NULL,
 //! else the part itself; looking through casts and functions with SQL's default NULL
-//! handling only. A nested reducer is its own reducer and is not looked into. A frame is
+//! handling only. A nested reducer over decisions is its own reducer and is not looked into;
+//! one over data alone is a decision-free part, NULL where its group has no value. A frame is
 //! tested whole, over data or decisions: it reads another row, or nothing (D84), so no
 //! column of the row itself says whether it has a value.
 static void CollectNullableData(const Expression &expr, idx_t decide_index, vector<unique_ptr<Expression>> &out) {
@@ -258,7 +259,8 @@ static void CollectNullableData(const Expression &expr, idx_t decide_index, vect
 		AddNullTest(expr, out);
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    BoundExpressionReferencesDecide(expr, decide_index)) {
 		return;
 	}
 	if (!BoundExpressionReferencesDecide(expr, decide_index)) {

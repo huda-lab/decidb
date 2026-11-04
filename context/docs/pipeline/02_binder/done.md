@@ -512,13 +512,12 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   would lose the enclosing `when` and `by`: *"DECIDE: norm inside a reducer is not supported
   yet"*, *"DECIDE: a reducer inside norm is not supported yet"*, *"DECIDE: abs over a reducer
   inside another reducer is not supported yet"* (only where an enclosing `when`, `per` or
-  `by` chooses the inner reducer's rows: `path_keeps_rows`), *"DECIDE: '...' multiplies a
-  reducer by a decision; only data can scale a reducer"*, and a reducer over data alone,
-  `count` included, added inside one over decisions: *"DECIDE: max(...) over data alone
-  inside a reducer over decisions is not supported yet; compute it in a subquery, or reduce
-  it outside"*. One over data alone under a `*` or `/` that holds a decision
-  (`sum(avg(cap) * x)`) is a coefficient, refused by `ValidateDecideNoNonLinearScalar` with
-  its remedy.
+  `by` chooses the inner reducer's rows: `path_keeps_rows`), and *"DECIDE: '...' multiplies a
+  reducer by a decision; only data can scale a reducer"*. A reducer over data alone added
+  inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
+  path's group that stage 05 computes (`RewriteRhsAggregates`); one under a `*` or `/` that
+  holds a decision (`sum(avg(cap) * x)`) is a coefficient, refused by
+  `ValidateDecideNoNonLinearScalar` with its remedy.
 
 | Written | Bound |
 |---|---|
@@ -578,8 +577,9 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 key and `within` key take data only (*"DECIDE: x is a decision; a frame's order key and within may only use data"*),
 no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame and square or
 multiply no decision (*"... squares or multiplies decisions inside at(...)"*); a `*`, `/` or power that multiplies a
-frame term by a decision is refused (`ValidateFrameProduct`: *"... multiplies a decision by a value from another row,
-which is not supported yet"*). A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
+frame over decisions by a decision is refused (`ValidateFrameProduct`: *"... multiplies a decision read at another row
+by a decision, which is not supported yet"*); a frame over data is a coefficient read at another row, as a column is
+one read at the row. A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
 divisor -- is refused too (`FindNonlinearDecisionUse`: *"... inside at(...) is not linear in the decisions, which is
 not supported yet; write it outside the frame"*): the rewrite rows of an `abs` would stand at the anchor while the
 frame reads another row. So is an `else` that reads a decision beside a payload that reads none, which no layer below

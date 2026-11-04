@@ -164,14 +164,19 @@ skipped, and only a NaN is checked (`COUNT` counts one). A reducer nested in a b
 reducer (`avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`, guide §5.5) is recorded first,
 grouped by its path key over the rows its path keeps (`DecideReducerPath`), NULL on a row
 in no group of it; the table built after it reads its column, so the reducer around it
-skips that member as a NULL. Such a bound is never a group bound a rule computes itself. The column carries the reducer as written
+skips that member as a NULL. Such a bound is never a group bound a rule computes itself. A reducer over data alone
+inside one over decisions, on a clause's left side or in the objective (`sum(x - avg(t.v) by (t.h)) by (t.g)`), is
+recorded the same way, over its path from the reducer around it (`ReplaceDataUnderDecisions`), its column replacing it
+in the argument and in the NULL test `SkipNullData` put in the filter. It is read there as a coefficient, so its
+argument's check refuses an infinity as well as a NaN (`read_as`, `DecideValueRole::COEFFICIENT`); a bound's refuses a
+NaN only. The column carries the reducer as written
 and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. A frame selector's value
 is a column stage 08 computes from the rows it selects, so no side table reads one: a frame in a row-wise bound stays
 in it, read as a column is; in a bound of a clause over groups it stays only where it has one value per group -- a
 `first` or `last` frame whose timeline key the group key holds -- and execution checks its NaN as it reads it. One
-that would need its group's tightest value (D85), or one inside a reducer of a bound, is refused, not supported yet
+that would need its group's tightest value (D85), or one inside a reducer over data, is refused, not supported yet
 (*"DECIDE: at(previous: t.cap) over (t.period within t.g) on the bound side of sum(x) by (t.g) is not supported
-yet"*). With several threads the
+yet"*, *"... inside sum(...), a reducer over data, is not supported yet"*). With several threads the
 source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
 so the model's row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread
@@ -760,13 +765,13 @@ term's own, so stage 08 reads only the rows the clause keeps; under a `per K:` t
 clause's one row names the key's classes (`scope.per` `NAMES_CLASSES`, `class_key`, D28).
 Stage 06 steps a strict outer bound onto the lattice. The canonicalizer has refused such a
 clause with a `by` or a bound that is not a constant (stage 04 §3.10); `AssertComposable`
-asserts it. In a constraint a decision beside a MIN or MAX is refused here, quoting it
+asserts it. In a constraint a term beside a MIN or MAX that is no reducer is refused here, quoting it
 (*"DECIDE: 's' beside MIN or MAX is not supported yet"*).
 
 In the objective it stays where it is. A constraint's terms share the one row its MIN/MAX
 auxiliaries stand in, so the composed path owns them all; an objective has no such row. So
 `WalkComposedLhs` lifts only the objective's MIN/MAX terms and hands back every other term
-(`sum(x)` and `s` in `MAXIMIZE max(x) + sum(x) + s`), and `RewriteComposedMinMaxObjectiveTop`
+(`sum(x)` and `s` in `MAXIMIZE max(x) + sum(x) + s`, a frame such as `at(first: x) over (t.id)`), and `RewriteComposedMinMaxObjectiveTop`
 keeps those, under the objective's `when`, as the objective; with none it installs a
 **constant placeholder**, which is why a decision-free objective is legal and returned
 unchanged by the canonicalizer. They take the objective's own path, which reads their `when`,

@@ -15,7 +15,7 @@ import itertools
 import pytest
 
 from ._anr_cases import CASES, F1_MAX, F1_SUM
-from ._anr_oracle import PER_ROW, AnrModel, Col, Decision, Objective, ScopeError, Var, clause, eq, ge, le, reduce
+from ._anr_oracle import PER_ROW, Abs, AnrModel, Col, Decision, Objective, ScopeError, Var, clause, eq, ge, le, reduce
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import answer, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
 from solver.types import ObjSense, SolverStatus, VarType
@@ -176,6 +176,140 @@ def test_grid_cell(decidb_cli, scope_solver, declaration, nest):
         return
     assert result.returncode == 0 and not result.stderr.strip(), result.stderr
     assert model.judge(answer(decidb_cli, sql), clauses, MAXIMIZE_X) == pytest.approx(expected.objective, abs=1e-4)
+
+
+def _data_cells():
+    """A reducer over data alone inside one over decisions, every kind and scope at both
+    levels, and `count`, which takes no scope of its own. Its own `by (t.h)` is under the
+    outer `by (t.g)`, so its path key is `(t.g, t.h)`, and the outer `when` keeps the rows
+    it reads."""
+    for outer, outer_scope, inner, inner_scope in itertools.product(KINDS, SCOPES, KINDS + ("count",), SCOPES):
+        if inner == "count" and inner_scope:
+            continue
+        data = _level(inner, inner_scope, "k", ("t.v", Col("v")), ("h",))
+        nest = _level(outer, outer_scope, "h", (f"x - {data[0]}", X - data[1]), ("g",))
+        yield pytest.param(nest, id=f"{outer}:{outer_scope}|{inner}:{inner_scope}".replace(" ", "_"))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("nest", list(_data_cells()))
+def test_a_data_reducer_inside_a_nest(decidb_cli, scope_solver, nest):
+    """A reducer over data alone inside one over decisions is a value of its path's group,
+    computed as a bound's is (language/guide.md §5.5): `per t.g: <nest> <= 0`, judged by
+    the oracle."""
+    nest_sql, nest_oracle = nest
+    sql = f"""
+        SELECT id, x {table('t', COLUMNS, ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND per t.g: {nest_sql} <= 0
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    clauses = [clause(le(X, Col("v"))), clause(le(nest_oracle, 0), per=("g",))]
+    model = AnrModel(table_rows(COLUMNS, ROWS), [Decision("x")])
+    expected = model.solve(scope_solver, clauses, MAXIMIZE_X)
+    result = decidb_cli.execute_raw(sql)
+    assert_no_internal_leak(result, f"data nest {nest_sql}")
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert model.judge(answer(decidb_cli, sql), clauses, MAXIMIZE_X) == pytest.approx(expected.objective, abs=1e-4)
+
+
+#: A NULL `h` puts row 1 in no group of it (D5); `q` keeps no row a `when t.v > 4` reads.
+NULL_COLUMNS = ("id", "g", "h", "v")
+NULL_ROWS = ((1, "a", None, 3), (2, "a", "q", 4), (3, "b", "p", 5), (4, "b", "q", None))
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause_sql, body",
+    [
+        pytest.param(
+            "sum(x - avg(t.v) by (t.h)) <= 10",
+            le(reduce("sum", X - reduce("avg", Col("v"), by=("h",))), 10),
+            id="no-group",
+        ),
+        pytest.param(
+            "sum(x - max(when t.v > 4: t.v) by (t.h)) <= 10",
+            le(
+                reduce("sum", X - reduce("max", Col("v"), when=lambda r: r["v"] is not None and r["v"] > 4, by=("h",))),
+                10,
+            ),
+            id="no-row-kept",
+        ),
+        pytest.param(
+            "per t.g: sum(x + max(t.v) by (t.h)) by (t.g) <= 12",
+            le(reduce("sum", X + reduce("max", Col("v"), by=("h",)), by=("g",)), 12),
+            id="per-path-group",
+        ),
+    ],
+)
+def test_a_data_reducer_with_no_value_drops_its_member(request, scope_solver, cli_fixture, clause_sql, body):
+    """A reducer over data alone has no value where its path group has none -- a NULL key
+    puts the row in no group, a `when` may keep no row of one -- and the reducer around it
+    skips that member, as it skips any NULL it reads (deck p. 50)."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, x {table('t', NULL_COLUMNS, NULL_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= 9 AND {clause_sql}
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    per = ("g",) if clause_sql.startswith("per") else PER_ROW
+    clauses = [clause(le(X, 9)), clause(body, per=per)]
+    _judged(cli, scope_solver, sql, table_rows(NULL_COLUMNS, NULL_ROWS), [Decision("x")], clauses)
+
+
+#: Row 3, which the condition drops, moves its group's mean from 3 to 12.
+MEAN_COLUMNS = ("id", "g", "c", "v")
+MEAN_ROWS = ((1, "a", True, 2), (2, "a", True, 4), (3, "a", False, 30), (4, "b", True, 5))
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective_sql, objective",
+    [
+        pytest.param(
+            "MINIMIZE sum(abs(x - avg(t.v) by (t.g)))",
+            Objective(ObjSense.MINIMIZE, reduce("sum", Abs(X - reduce("avg", Col("v"), by=("g",))))),
+            id="deviation-from-the-group-mean",
+        ),
+        pytest.param(
+            "MINIMIZE when t.c: sum(abs(x - avg(t.v) by (t.g)))",
+            Objective(ObjSense.MINIMIZE, reduce("sum", Abs(X - reduce("avg", Col("v"), by=("g",))), when=C)),
+            id="under-the-objectives-when",
+        ),
+    ],
+)
+def test_a_data_reducer_inside_the_objective(request, scope_solver, cli_fixture, objective_sql, objective):
+    """In the objective too, a reducer over data alone inside one over decisions is a value
+    of its path's group, the objective's `when` among what its path keeps: under `when t.c`
+    group a's mean is 3, not 12."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, x {table('t', MEAN_COLUMNS, MEAN_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= 9
+        {objective_sql}
+        ORDER BY id"""
+    _judged(cli, scope_solver, sql, table_rows(MEAN_COLUMNS, MEAN_ROWS), [Decision("x")], [clause(le(X, 9))], objective)
+
+
+@pytest.mark.error
+def test_a_data_reducer_read_as_a_coefficient_must_be_finite(decidb_cli):
+    """Inside a reducer over decisions a data reducer's value is a coefficient, so what it
+    reads must be finite, and the message names what it reads; on a bound, infinity is a
+    value (no bound)."""
+    rows = ((1, "a", 3), (2, "b", 4))
+    query = f"SELECT id, x {table('t', ('id', 'g', 'v'), rows)} DECIDE x(INT) SUCH THAT x <= 9 AND {{}} MAXIMIZE sum(x)"
+    result = decidb_cli.execute_raw(query.format("sum(x + max(t.v / 0.0) by (t.g)) <= 30"))
+    assert (
+        "DECIDE: t.v / 0.0 is NaN or infinite on some rows. Skip those rows with 'when isfinite(t.v / 0.0):'"
+        in result.stderr
+    ), result.stderr
+    assert_no_internal_leak(result, "an infinite data reducer")
+    bound = decidb_cli.execute_raw(query.format("sum(x) <= max(t.v / 0.0) by (t.g)"))
+    assert bound.returncode == 0 and not bound.stderr.strip(), bound.stderr
 
 
 #: A comparison by its SQL sense.
@@ -541,16 +675,6 @@ def test_an_inlined_group_average_stays_apart_from_another(
     "clause_sql, message",
     [
         pytest.param("sum(norm(x, 1)) <= 5", "DECIDE: norm inside a reducer is not supported yet", id="norm"),
-        pytest.param(
-            "sum(x + max(t.id) by (t.g)) <= 50",
-            "DECIDE: max(...) over data alone inside a reducer over decisions is not supported yet",
-            id="data",
-        ),
-        pytest.param(
-            "sum(x + count(*) by (t.g)) <= 50",
-            "DECIDE: count(...) over data alone inside a reducer over decisions is not supported yet",
-            id="data-count",
-        ),
         # Each is rewritten before the value rewrite reads the path rule, so the inner
         # reducer would lose the enclosing reducer's `when` and `by`: once answered wrongly.
         pytest.param(

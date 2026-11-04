@@ -203,23 +203,13 @@ class TestSyntax:
                 id="frame-in-a-fallback",
             ),
             pytest.param(
-                "x * at(previous: t.demand) over (t.period) <= 3",
-                "multiplies a decision by a value from another row, which is not supported yet",
-                id="decision-times-data-frame",
-            ),
-            pytest.param(
                 "sum(x * at(previous: x) over (t.period)) <= 3",
-                "multiplies a decision by a value from another row, which is not supported yet",
+                "multiplies a decision read at another row by a decision, which is not supported yet",
                 id="decision-times-decision-frame",
             ),
             pytest.param(
-                "x / at(previous: t.demand) over (t.period) <= 3",
-                "multiplies a decision by a value from another row, which is not supported yet",
-                id="decision-over-data-frame",
-            ),
-            pytest.param(
                 "power(at(previous: x) over (t.period), 2) <= 3",
-                "multiplies a decision by a value from another row, which is not supported yet",
+                "multiplies a decision read at another row by a decision, which is not supported yet",
                 id="square-of-a-frame",
             ),
             pytest.param(
@@ -273,8 +263,8 @@ class TestSyntax:
     )
     def test_a_refusal_names_the_construct(self, decidb_cli, clause, message):
         """D80: a frame in a condition or a key, a decision in a frame's keys, a reducer or a
-        frame in a payload, a frame term times a decision, and a payload that is not linear in
-        the decisions."""
+        frame in a payload, a frame over decisions times a decision, and a payload that is not
+        linear in the decisions."""
         result = decidb_cli.execute_raw(_query(clause))
         assert message in result.stderr, result.stderr
         assert_no_internal_leak(result, "a frame refusal")
@@ -581,13 +571,31 @@ class TestPointShapes:
                 le(X - At(previous(), X, Over("period", cyclic=True, within=("id", "product", "period", "v", "w"))), 0),
                 id="cyclic-onto-itself",
             ),
+            # A frame over data is a coefficient read at another row, as a column is one read at the row.
+            pytest.param(
+                "x * at(previous: t.v) over (t.period within t.product) <= 12",
+                le(X * At(previous(), Col("v"), TIMELINE), 12),
+                id="decision-times-data-frame",
+            ),
+            pytest.param(
+                "x / at(previous else 1: t.w) over (t.period within t.product) <= 2",
+                le(X, 2 * At(previous(), Col("w"), TIMELINE, fallback=Const(1))),
+                id="decision-over-data-frame",
+            ),
+            pytest.param(
+                "at(previous: t.v) over (t.period within t.product) * at(next: x) over (t.period within t.product) "
+                "<= 12",
+                le(At(previous(), Col("v"), TIMELINE) * At(next_(), X, TIMELINE), 12),
+                id="data-frame-times-decision-frame",
+            ),
         ],
     )
     def test_a_root_frame(self, decidb_cli, scope_solver, clause_sql, body):
         """A frame outside every reducer, judged by the oracle: a data factor on it, an
         affine payload read at the selected row, `<>`, data frames on the bound side, a
-        position no anchor has (every instance skipped, no error), and a cyclic timeline of
-        one row, where the frame reads the anchor's own column."""
+        position no anchor has (every instance skipped, no error), a cyclic timeline of one
+        row, where the frame reads the anchor's own column, and a frame over data scaling a
+        decision, a coefficient read at another row."""
         _judged(
             decidb_cli,
             scope_solver,
@@ -630,6 +638,12 @@ class TestPointShapes:
                 le(X, At(previous(), X, TIMELINE, fallback=Const(0)) + 0.5 * reduce("sum", X)),
                 MAXIMIZE_X,
                 id="beside-a-reducer",
+            ),
+            pytest.param(
+                "sum(x * at(previous else 1: t.v) over (t.period within t.product)) <= 30",
+                le(reduce("sum", X * At(previous(), Col("v"), TIMELINE, fallback=Const(1))), 30),
+                MAXIMIZE_X,
+                id="data-frame-coefficient",
             ),
         ],
     )
@@ -1021,7 +1035,8 @@ class TestPointErrors:
         """F19 reads a frame inside a reducer of its bound, F21 one in the bound of a clause
         over groups, which takes its group's tightest value: neither is supported yet."""
         result = decidb_cli.execute_raw(case.sql)
-        assert "on the bound side" in result.stderr and "is not supported yet" in result.stderr, result.stderr
+        phrase = {"F19": "a reducer over data, is not supported yet", "F21": "on the bound side of"}[case.name]
+        assert phrase in result.stderr and "is not supported yet" in result.stderr, result.stderr
         assert_no_internal_leak(result, case.name)
 
     @pytest.mark.parametrize(
@@ -1042,9 +1057,16 @@ class TestPointErrors:
             pytest.param(
                 "sum(x) <= sum(per t.product: at(previous: t.v) over (t.period within t.product))",
                 "DECIDE: at(previous: t.v) over (t.period within t.product) inside "
-                "sum(per t.product: at(previous: t.v) over (t.period within t.product)) on the bound side "
+                "sum(per t.product: at(previous: t.v) over (t.period within t.product)), a reducer over data, "
                 "is not supported yet",
                 id="inside-a-bound-reducer",
+            ),
+            pytest.param(
+                "sum(x + max(at(previous: t.v) over (t.period within t.product)) by (t.product)) <= 30",
+                "DECIDE: at(previous: t.v) over (t.period within t.product) inside "
+                "max(at(previous: t.v) over (t.period within t.product)) by (t.product), a reducer over data, "
+                "is not supported yet",
+                id="inside-a-data-reducer-in-a-decision-reducer",
             ),
         ],
     )
@@ -1084,14 +1106,34 @@ class TestPointErrors:
             MAXIMIZE_X,
         )
 
-    def test_a_decision_frame_beside_max_in_the_objective_is_refused(self, decidb_cli):
-        """A decision beside a MIN or MAX in the objective is refused whatever it is, a
-        frame's read of one included."""
-        result = decidb_cli.execute_raw(_edge("x <= t.v", objective="MINIMIZE max(x) - at(first: x) over (t.period)"))
-        assert (
-            "DECIDE: 'at(first: x) over (t.period)' beside MIN or MAX is not supported yet" in result.stderr
-        ), result.stderr
-        assert_no_internal_leak(result, "a frame beside MAX")
+    @pytest.mark.correctness
+    @pytest.mark.parametrize(
+        "objective_sql, objective",
+        [
+            pytest.param(
+                "MINIMIZE max(x) - at(first: x) over (t.id)",
+                Objective(ObjSense.MINIMIZE, reduce("max", X) - At(FIRST, X, Over("id"))),
+                id="decision-frame",
+            ),
+            pytest.param(
+                "MAXIMIZE min(x) + 2 * at(last: x) over (t.id)",
+                Objective(ObjSense.MAXIMIZE, reduce("min", X) + 2 * At(LAST, X, Over("id"))),
+                id="beside-min",
+            ),
+        ],
+    )
+    def test_a_frame_beside_a_min_or_max_in_the_objective(self, decidb_cli, scope_solver, objective_sql, objective):
+        """The objective's terms beside its MIN or MAX keep the objective's own path, a
+        frame's among them: one value where it reads one timeline."""
+        _judged(
+            decidb_cli,
+            scope_solver,
+            _edge("x <= t.v", objective=objective_sql),
+            table_rows(EDGE, EDGE_ROWS),
+            [Decision("x")],
+            [CAP, clause(le(X, Col("v")))],
+            objective,
+        )
 
     @pytest.mark.correctness
     def test_a_present_null_payload_is_no_value(self, decidb_cli, scope_solver):

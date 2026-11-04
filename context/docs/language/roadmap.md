@@ -46,7 +46,18 @@ order, no stepped range and no fill or complete-frame boundary policy.
   §5.6): a point is read in place, a range over data is a value of the row, and a range over decisions a helper
   decision per window (D78). They compose with variants (D82), nesting, `abs`, `norm` and a `MIN`/`MAX` of several
   terms, and a frame that selects nothing inside a reducer over decisions drops its member (D87, D88).
-- **What is left:** a frame in a bound that takes its group's tightest value (D85) or inside a reducer of a bound.
+- **What is left:** a frame in a bound that takes its group's tightest value (D85) or inside a reducer over data; a
+  reducer or a frame inside a frame's payload; a frame over decisions times a decision, or squared (D80).
+
+## Reducers nested in reducers (pp. 25, 28–32, 51)
+
+The deck composes any function over nested reducers (p. 51).
+
+- **Today:** `SUM`, `AVG`, `MIN` and `MAX` nest to any depth over decisions, each a helper decision keyed by its path
+  (guide §5.5); a reducer over data alone inside one is a value of its path's group.
+- **What is left** (D80): `abs` or a square over a nested reducer whose path keeps rows (`per t.g: sum(abs(max(x) by
+  (t.h))) by (t.g) <= 5`), which are rewritten before the value rewrite reads the path; `norm` inside a reducer and a
+  reducer inside `norm`; a reducer times a decision inside a reducer.
 
 ## Conditional generation with `if` (pp. 58–59)
 

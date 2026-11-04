@@ -226,12 +226,12 @@ one group at a time. No test asserts an answer its docstring derives.
   on both solvers, judged by `_anr_oracle`, and F2's model pinned at its six columns and
   one row per instance (D78). `TestPointDeck`: the deck's examples 1, 4 and 5 and the
   DeQL comparison as written. `TestPointShapes` and `TestPointErrors`: a data factor, an
-  affine payload, `<>`, data frames on the bound side, every position missing, a frame
+  affine payload, `<>`, data frames on the bound side, a data frame scaling a decision, every position missing, a frame
   that cannot miss inside a reducer, a `BETWEEN` half skipped, a NULL read through a frame
   dropping a member or skipping an instance (D84), a keyed decision with no class at the
   selected row, variants by position, timeline and fallback (D82), one payload per
   position (D73), the objective produced once (D72) and its term dropped where its frame
-  selects nothing, and the refusals not yet lifted. `TestRange`: every range fixture, every
+  selects nothing, a frame beside a MIN or MAX in the objective, and the refusals not yet lifted. `TestRange`: every range fixture, every
   pair of six ends under both steps, each policy, open and cyclic (432 cases), each reducer
   over data and over decisions in every push direction, a helper per window pinned in the
   model dump, composition with ABS, `<>`, a reducer around the range, a data factor and a
@@ -279,9 +279,9 @@ one group at a time. No test asserts an answer its docstring derives.
   range, an objective with no member feasible.
 - **`test_anr_nested.py`** — reducers nested to any depth (guide §5.5, D79-D81): the
   nesting fixtures of `_anr_cases` on both solvers, judged by `_anr_oracle`, an empty group
-  inside a nest skipped (D68); F1's model, a helper per path group with one-sided
-  definitions and its clause rows folded into boxes; a grid of nests at depth 2 and 3,
-  every level's kind and scope, cell by cell; constant bounds through a nest, a root bound
+  inside a nest skipped (D68); F1's model, the deck's (pp. 111-119); a grid of nests at depth 2 and 3,
+  every level's kind and scope, cell by cell; a grid of reducers over data inside one over decisions, each a value of
+  its path's group, with the member it has no value for dropped and its argument read as a coefficient; constant bounds through a nest, a root bound
   reaching a nested closing link, two helper levels, a nest no value can meet
   (infeasible, not an internal error), negative bounds over negative terms, a weighted sum
   of one helper; group averages in the objective, an inlined average kept apart from

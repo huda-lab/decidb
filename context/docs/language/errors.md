@@ -79,19 +79,17 @@ formulates; their open work is in the owning stage's `todo.md`.
 |---|---|
 | **D80** `norm` inside a reducer | `DECIDE: norm inside a reducer is not supported yet` |
 | **D80** A reducer inside `norm` | `DECIDE: a reducer inside norm is not supported yet` |
-| **D80** A reducer over data alone added inside one over decisions | `DECIDE: max(...) over data alone inside a reducer over decisions is not supported yet; compute it in a subquery, or reduce it outside` |
 | **D80** Inside a reducer, a reducer times a decision | `DECIDE: '(x - 1) * max(x) BY (t.g)' multiplies a reducer by a decision; only data can scale a reducer` |
 | **D80** Inside a reducer, `abs` over a reducer an enclosing `when`, `per` or `by` chooses the rows of | `DECIDE: abs over a reducer inside another reducer is not supported yet: abs(max(x) BY (t.g))` |
 | **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective not read in place | `DECIDE: 'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers, which is not supported yet` |
-| A frame inside a reducer of a bound | `DECIDE: at(previous: t.v) over (t.period within t.product) inside sum(per t.product: at(previous: t.v) over (t.period within t.product)) on the bound side is not supported yet` |
+| A frame inside a reducer over data, on a bound or inside a reducer over decisions | `DECIDE: at(previous: t.v) over (t.period within t.product) inside sum(per t.product: at(previous: t.v) over (t.period within t.product)), a reducer over data, is not supported yet` |
 | A frame in the bound of a clause over groups that takes its group's tightest value (D85): one that does not read one row per group | `DECIDE: at(previous: t.cap) over (t.period within t.g) on the bound side of sum(x) by (t.g) is not supported yet` |
-| A frame over decisions beside a `MIN`/`MAX` in the objective, as any decision there | `DECIDE: 'at(first: x) over (t.period)' beside MIN or MAX is not supported yet` |
 | A frame's payload not linear in the decisions (`abs`, a decision divisor) | `DECIDE: 'abs((x - 3))' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
 | A frame's `else` that reads a decision while its payload reads none | `DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the payload reads none, which is not supported yet` |
 | **D80** A frame in a `when`, `per`, `by`, `within` or an order key | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
 | **D80** A reducer or a frame inside a frame's payload or fallback | `DECIDE: a reducer inside at(...) is not supported; reduce outside the frame` · `DECIDE: a frame selector inside at(...) is not supported` |
 | **D80** A square or product of decisions in a frame's payload | `DECIDE: 'x * x' squares or multiplies decisions inside at(...), which is not supported yet` |
-| **D80** A frame term times a decision | `DECIDE: '(x * at(previous: x) over (t.period))' multiplies a decision by a value from another row, which is not supported yet` |
+| **D80** A frame over decisions times a decision, or squared | `DECIDE: '(x * at(previous: x) over (t.period))' multiplies a decision read at another row by a decision, which is not supported yet` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: power(x, 2) <> 9` |
 | `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates.` |
