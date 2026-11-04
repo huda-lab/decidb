@@ -49,6 +49,13 @@ struct VarIndexer {
     //! For keyed vars: index into keyed_mappings source
     vector<idx_t> var_keyed_mapping_idx;
 
+	//! For a keyed var some instance of which has no column -- its scope's absent class, which no row reads, or a
+	//! MIN/MAX group of one member written into its readers as that member (SolverInput::written_in) --: each
+	//! instance's offset in the var's block, INVALID_INDEX for one with none, and each offset's instance. Empty for a
+	//! var every instance of which has a column.
+	vector<vector<idx_t>> instance_slot;
+	vector<vector<idx_t>> slot_instance;
+
     //! For scalar vars: the single flat column index in the scalar block
     vector<idx_t> scalar_var_index;
 
@@ -81,13 +88,30 @@ struct VarIndexer {
 		}
 		case DecideVarScope::INLINED:
 			throw InternalException("DECIDE: a column was asked of an inlined helper decision");
-		default: {
-            auto &mapping = keyed_mappings[var_keyed_mapping_idx[var_idx]];
-            idx_t class_id = mapping.row_to_class[row];
-            return keyed_var_base[var_idx] + class_id;
-        }
+		default:
+			return InstanceColumn(var_idx, keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row]);
         }
     }
+
+	//! Get(), or INVALID_INDEX where the instance `row` reads has no column -- a row in no class, an instance written
+	//! into its readers --, read through a frame at the row it selects.
+	inline idx_t ColumnOrNone(idx_t var_idx, idx_t row) const {
+		ResolveRead(var_idx, row);
+		if (var_scope[var_idx] == DecideVarScope::INLINED ||
+		    (var_scope[var_idx] == DecideVarScope::KEYED &&
+		     !HasColumn(var_idx, keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row]))) {
+			return DConstants::INVALID_INDEX;
+		}
+		return Get(var_idx, row);
+	}
+	//! Whether instance `inst` of `var_idx` has a column (instance_slot).
+	inline bool HasColumn(idx_t var_idx, idx_t inst) const {
+		if (var_scope[var_idx] == DecideVarScope::INLINED || var_scope[var_idx] == DecideVarScope::FRAME_READ) {
+			return false;
+		}
+		return var_idx >= instance_slot.size() || instance_slot[var_idx].empty() ||
+		       instance_slot[var_idx][inst] != DConstants::INVALID_INDEX;
+	}
 
     //! Flat column for the inst-th instance of a variable, where
     //! inst < NumInstances(var_idx). Unlike Get(), which resolves through a result
@@ -103,8 +127,18 @@ struct VarIndexer {
 			throw InternalException("DECIDE: a frame read has no instance of its own");
 		case DecideVarScope::INLINED:
 			throw InternalException("DECIDE: a column was asked of an inlined helper decision");
-		default:
-            return keyed_var_base[var_idx] + inst;
+		default: {
+			if (var_idx < instance_slot.size() && !instance_slot[var_idx].empty()) {
+				const idx_t slot = instance_slot[var_idx][inst];
+				if (slot == DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE: a column was asked of instance %llu of decision %llu, which has "
+					                        "none: it has no value, or is written into its readers",
+					                        inst, var_idx);
+				}
+				return keyed_var_base[var_idx] + slot;
+			}
+			return keyed_var_base[var_idx] + inst;
+		}
         }
     }
 
@@ -160,8 +194,11 @@ struct VarIndexer {
             return col / num_row_vars;
         case DecideVarScope::GLOBAL:
             return 0;
-        default:
-            return col - keyed_var_base[var_idx];
+		default: {
+			const idx_t slot = col - keyed_var_base[var_idx];
+			return var_idx < slot_instance.size() && !slot_instance[var_idx].empty() ? slot_instance[var_idx][slot]
+			                                                                          : slot;
+		}
         }
     }
 

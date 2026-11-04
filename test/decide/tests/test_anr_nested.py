@@ -69,20 +69,19 @@ def test_the_engine_answers_each_fixture(request, scope_solver, cli_fixture, cas
 @pytest.mark.parametrize(
     "case, counts",
     [
-        pytest.param(F1_SUM, {"num_vars": 8, "num_rows": 2}, id="F1_sum"),
-        pytest.param(F1_MAX, {"num_vars": 12, "num_rows": 7}, id="F1_max"),
+        pytest.param(F1_SUM, {"num_vars": 6, "num_rows": 3}, id="F1_sum"),
+        pytest.param(F1_MAX, {"num_vars": 8, "num_rows": 7}, id="F1_max"),
     ],
 )
 def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, case, counts):
-    """F1 (deck pp. 111-119): six shipments; the inner reducer a helper per (rid, cid)
-    group among the rows `when t.p` keeps -- three, and a spare column for the row it
-    drops, which no row reads -- and the outer one a helper per region, two. The three
-    clause rows (d1 reads East and West, d2 West) each bound one outer helper, so they fold
-    into its box, which keeps its column. For F1_sum each inner sum is written into its
-    region's definition where that adds no nonzero (D89): the six shipments, the two
-    regions and their two `value >= sum` rows. For F1_max the inner MAX keeps its columns
-    -- two of its groups have two members -- the lone c2 defined by an equality (deck p.
-    112), the others by an envelope row per member: twelve columns, five rows and two."""
+    """F1 is the deck's model (pp. 111-119). Each region's sum is written into the three
+    clause rows that read it -- East once, West twice -- as each costs no more nonzeros there
+    than defined (D89), the bound a row on it rather than its box. For F1_sum the inner sums
+    are written into the regions in turn: the six shipments and three rows (p. 119). For
+    F1_max the inner MAX of c1 and of c4, two members each, keep their columns and an
+    envelope row per member; c2's one member is the MAX (p. 112), and the group `when t.p`
+    leaves empty, c3, has no value and no column: eight columns, four envelope rows and the
+    three clause rows (p. 115)."""
     dump = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(case.sql, tmp_path / "f1.dump")
     assert dump_counts(dump) == counts
     # A MAX pushed down needs only its envelope: no indicator, no Big-M (D79).

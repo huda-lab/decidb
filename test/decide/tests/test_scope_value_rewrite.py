@@ -492,10 +492,10 @@ SHIP_AT_MOST_10 = Scoped((X,), "<=", (_const(10),))
 TRANSIT_OF_SHIP = lambda r: {"ship": r["transitDays"]}  # noqa: E731
 
 
-def _helper_dump(cli, sql, tmp_path):
-    """The model dump and the three helper columns' boxes, which follow the five shipments."""
+def _helper_dump(cli, sql, tmp_path, helpers=len(DEPOTS)):
+    """The model dump and the boxes of the `helpers` helper columns, which follow the five shipments."""
     dump = cli.dump_model(sql, tmp_path / "model.dump")
-    return dump, dump_bounds(dump)[len(SHIPMENTS) : len(SHIPMENTS) + len(DEPOTS)]
+    return dump, dump_bounds(dump)[len(SHIPMENTS) : len(SHIPMENTS) + helpers]
 
 
 @pytest.mark.correctness
@@ -503,10 +503,10 @@ def _helper_dump(cli, sql, tmp_path):
 def test_a_max_helper_instance_is_boxed_and_closed_by_its_own_group(
     decidb_cli_highs, decidb_cli_gurobi, scope_solver, tmp_path
 ):
-    """`ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1` with `ship <= 10`: the helper's three instances
-    reach 30 (D1's 3 * 10), 20 and 10. Each instance's column is boxed by its own group's reach, and each closing row
-    carries that reach as its Big-M, not the cover of all three (30) that a box per decision gave every group. D3's
-    group has one member, which it is: an equality, no closing row (deck p. 112)."""
+    """`ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1` with `ship <= 10`: the helper's instances reach
+    30 (D1's 3 * 10) and 20. Each instance's column is boxed by its own group's reach, and each closing row carries
+    that reach as its Big-M, not the cover of both (30) that a box per decision gave every group. D3's group has one
+    member, which is its maximum (deck p. 112): written into the rows that read it, it has no column, no row."""
     sql = _ship_query("ship <= 10 AND ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1")
     model = ScopedModel(joined(), SHIP)
     clauses = [
@@ -515,12 +515,12 @@ def test_a_max_helper_instance_is_boxed_and_closed_by_its_own_group(
         Scoped((X,), "<=", (Reduce("max", TRANSIT_OF_SHIP, by=("depotID",), factor=lambda r: 0.5), _const(1))),
     ]
     for cli in (decidb_cli_highs, decidb_cli_gurobi):
-        dump, helper = _helper_dump(cli, sql, tmp_path)
-        assert helper == [(0.0, 30.0), (0.0, 20.0), (0.0, 10.0)]
-        # One closing row per member, `value - weight * ship <= M`: D1's two and D2's two; D3's `value = weight * ship`.
+        dump, helper = _helper_dump(cli, sql, tmp_path, helpers=2)
+        assert helper == [(0.0, 30.0), (0.0, 20.0)]
+        # One closing row per member, `value - weight * ship <= M`: D1's two and D2's two.
         closing = re.findall(r"^row \d+: sense=< rhs=(\S+) nnz=3 ", dump, re.M)
         assert [float(m) for m in closing] == [30, 30, 20, 20]
-        assert len(re.findall(r"^row \d+: sense== rhs=0 nnz=2 ", dump, re.M)) == 1, dump
+        assert not re.findall(r"^row \d+: sense== rhs=0 nnz=2 ", dump, re.M), dump
         assert _judged(cli, scope_solver, sql, model, clauses) == [10, 10, 10, 10, 2]
 
 

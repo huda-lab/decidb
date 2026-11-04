@@ -86,7 +86,25 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
         idx.var_keyed_mapping_idx[v] = scope_idx;
         idx.keyed_var_base[v] = idx.keyed_block_start + keyed_offset;
         idx.keyed_block_var.push_back(v);
-        keyed_offset += idx.keyed_mappings[scope_idx].num_classes;
+		// An instance no row reads -- the absent class -- or one written into its readers has no column.
+		auto &mapping = idx.keyed_mappings[scope_idx];
+		auto *written_in = v < input.written_in.size() && !input.written_in[v].empty() ? &input.written_in[v] : nullptr;
+		if (mapping.absent_class == DConstants::INVALID_INDEX && !written_in) {
+			keyed_offset += mapping.num_classes;
+			continue;
+		}
+		idx.instance_slot.resize(num_decide_vars);
+		idx.slot_instance.resize(num_decide_vars);
+		auto &slots = idx.instance_slot[v];
+		slots.assign(mapping.num_classes, DConstants::INVALID_INDEX);
+		for (idx_t inst = 0; inst < mapping.num_classes; inst++) {
+			if (inst == mapping.absent_class || (written_in && (*written_in)[inst])) {
+				continue;
+			}
+			slots[inst] = idx.slot_instance[v].size();
+			idx.slot_instance[v].push_back(inst);
+		}
+		keyed_offset += idx.slot_instance[v].size();
     }
 
     // Scalar block: exactly one column per query-wide variable, independent of num_rows
@@ -231,28 +249,36 @@ static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarInd
 
 //! Calls `add(column, coefficient)` for the columns decision `var` stands for at data row `row`, times `coefficient`,
 //! and returns the constant it carries there: its own column (a frame read resolving to its base's at the row it
-//! selects), or for a helper stage 06 inlined (SolverInput::inlined_helpers, D89) the terms of the instance `row`
-//! reads, each scaled by `coefficient`, whose constants, scaled, it returns. A clause skipped the rows reading an
-//! absent instance (MarkAbsentDecisionReads), so none reaches here from one; the objective reads one as no value
-//! (`absent_reads_nothing`), as it reads the spare column of an absent class (D84).
+//! selects), or for an instance stage 06 wrote into its readers (SolverInput::inlined_helpers, D89) -- a helper
+//! inlined whole, or a MIN or MAX group of one member -- the terms of its members, each scaled by `coefficient`, read
+//! the same way in turn, whose constants, scaled, it returns. A clause skipped the rows reading an absent instance
+//! (MarkAbsentDecisionReads), and the objective dropped its terms there, so none reaches here with a coefficient; the
+//! objective reads one as no value (`absent_reads_nothing`, D84).
 template <class ADD>
 static double ForEachTermColumn(const SolverInput &input, const VarIndexer &indexer, idx_t var, idx_t row,
                                 double coefficient, bool absent_reads_nothing, ADD &&add) {
-	if (indexer.var_scope[var] != DecideVarScope::INLINED) {
-		add(static_cast<int>(indexer.Get(var, row)), coefficient);
-		return 0.0;
-	}
 	if (coefficient == 0.0) {
 		return 0.0;
 	}
-	if (var >= input.inlined_helper_of.size() || input.inlined_helper_of[var] == DConstants::INVALID_INDEX) {
+	const idx_t helper_idx =
+	    var < input.inlined_helper_of.size() ? input.inlined_helper_of[var] : DConstants::INVALID_INDEX;
+	const bool inlined = indexer.var_scope[var] == DecideVarScope::INLINED;
+	if (!inlined && helper_idx == DConstants::INVALID_INDEX) {
+		add(static_cast<int>(indexer.Get(var, row)), coefficient);
+		return 0.0;
+	}
+	if (helper_idx == DConstants::INVALID_INDEX) {
 		throw InternalException("DECIDE: a row reads a helper decision written into another helper's members");
 	}
-	auto &helper = input.inlined_helpers[input.inlined_helper_of[var]];
+	auto &helper = input.inlined_helpers[helper_idx];
 	const idx_t instance = indexer.InstanceOf(var, row);
 	const idx_t group =
 	    instance < helper.group_of_instance.size() ? helper.group_of_instance[instance] : DConstants::INVALID_INDEX;
 	if (group == DConstants::INVALID_INDEX) {
+		if (!inlined && indexer.HasColumn(var, instance)) {
+			add(static_cast<int>(indexer.Get(var, row)), coefficient);
+			return 0.0;
+		}
 		if (absent_reads_nothing) {
 			return 0.0;
 		}
@@ -263,8 +289,8 @@ static double ForEachTermColumn(const SolverInput &input, const VarIndexer &inde
 	for (idx_t m = members.group_begin[group]; m < members.group_begin[group + 1]; m++) {
 		constant += coefficient * members.constants[m];
 		for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
-			add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
-			    coefficient * members.coefficients[t]);
+			constant += ForEachTermColumn(input, indexer, members.variables[t], members.rows[t],
+			                              coefficient * members.coefficients[t], absent_reads_nothing, add);
 		}
 	}
 	return constant;
@@ -560,6 +586,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     for (idx_t var = 0; var < num_decide_vars; var++) {
         idx_t num_instances = indexer.NumInstances(var);
         for (idx_t inst = 0; inst < num_instances; inst++) {
+			if (!indexer.HasColumn(var, inst)) {
+				continue;
+			}
             idx_t var_idx = indexer.InstanceColumn(var, inst);
             // The instance's box: the decision's, with the floor raised by the refinement where the default floor of 0
             // still holds (a constant lower bound under a `when` replaces the default floor on the instances it keeps
@@ -570,18 +599,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                           input.variable_types[var] == LogicalType::FLOAT);
             model.is_binary[var_idx] = per_var_binary[var];
         }
-		// A row with no decision maps to the absent class: fixed at 0, so an objective term
-		// that reads it is dropped (KeyedMapping::absent_class).
-		if (indexer.var_scope[var] == DecideVarScope::KEYED) {
-			auto absent = indexer.keyed_mappings[indexer.var_keyed_mapping_idx[var]].absent_class;
-			if (absent != DConstants::INVALID_INDEX) {
-				idx_t var_idx = indexer.InstanceColumn(var, absent);
-				model.col_lower[var_idx] = 0.0;
-				model.col_upper[var_idx] = 0.0;
-			}
-		}
-		// So is an auxiliary's instance every row of which reads it with no value (SolverInput::absent_reads): no row
-		// reads it, so no bound folded into its box binds it (D88).
+		// An auxiliary's instance every row of which reads it with no value (SolverInput::absent_reads) is fixed at 0:
+		// no row reads it, so no bound folded into its box binds it (D88). A keyed decision's absent class has no
+		// column (VarIndexer::instance_slot).
 		if (num_instances > 0 && var < input.absent_reads.size() && !input.absent_reads[var].empty()) {
 			vector<bool> present(num_instances, false);
 			auto &absent = input.absent_reads[var];
@@ -591,7 +611,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				}
 			}
 			for (idx_t inst = 0; inst < num_instances; inst++) {
-				if (!present[inst]) {
+				if (!present[inst] && indexer.HasColumn(var, inst)) {
 					idx_t var_idx = indexer.InstanceColumn(var, inst);
 					model.col_lower[var_idx] = 0.0;
 					model.col_upper[var_idx] = 0.0;
@@ -1570,7 +1590,8 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
 			continue; // no column of its own
 		}
 		for (idx_t row = 0; row < indexer.num_rows; row++) {
-            idx_t col = indexer.Get(var, row);
+			// A row whose instance has no column (no class, or written into its readers) names none.
+			idx_t col = indexer.ColumnOrNone(var, row);
             if (col >= provenance.size()) {
                 continue; // defensive: never index past the flat array
             }
@@ -1582,7 +1603,7 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
             // for row-scoped vars it is the row; a scalar has exactly one instance.
             switch (indexer.var_scope[var]) {
             case DecideVarScope::KEYED:
-                slot.instance = col - indexer.keyed_var_base[var];
+				slot.instance = indexer.InstanceOfColumn(var, col);
                 break;
             case DecideVarScope::GLOBAL:
                 slot.instance = 0;

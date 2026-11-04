@@ -115,12 +115,13 @@ def _helper_columns(dump: str, decisions: int) -> list[tuple[float, float]]:
 @pytest.mark.per_clause
 @pytest.mark.correctness
 @pytest.mark.parametrize("objective, boxes", [
-    # Each group's extremum stays in its own rows' range -- 'a' reaches 5*4 = 20, 'b' 2*4 = 8;
-    # their sum, read by the objective alone, is written into it (D89) and has no column.
-    pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 8.0)],
+    # Group 'a''s extremum stays in its own rows' range, 5*4 = 20; 'b' has one member, which is its
+    # extremum (deck p. 112) and has no column; their sum, read by the objective alone, is written
+    # into it (D89) and has no column either.
+    pytest.param("MAXIMIZE sum(per g: max(x * c) by (g))", [(0.0, 20.0)],
                  id="sum-over-group-extrema"),
     # The outer extremum over the groups' stays in the per-row range too.
-    pytest.param("MAXIMIZE max(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 8.0), (0.0, 20.0)],
+    pytest.param("MAXIMIZE max(per g: max(x * c) by (g))", [(0.0, 20.0), (0.0, 20.0)],
                  id="extremum-over-group-extrema"),
     # Group 'a' reaches 3*4 + 5*4 = 32 and 'b' 2*4 = 8. The group sums are written into the
     # minimum's members (D89), whose box covers them both: [0, 32].

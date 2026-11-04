@@ -77,6 +77,11 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 			}
 			const idx_t bool_instance = indexer.InstanceUnder(link.bool_var_idx, link.aux_idx, instance);
 			const idx_t other_instance = indexer.InstanceUnder(link.other_var_idx, link.aux_idx, instance);
+			// A factor with no value there leaves the product none (D88): no corner reads it.
+			if (!indexer.HasColumn(link.aux_idx, instance) || !indexer.HasColumn(link.bool_var_idx, bool_instance) ||
+			    !indexer.HasColumn(link.other_var_idx, other_instance)) {
+				continue;
+			}
 			const int w = static_cast<int>(indexer.InstanceColumn(link.aux_idx, instance));
 			const int b = static_cast<int>(indexer.InstanceColumn(link.bool_var_idx, bool_instance));
 			const int x = static_cast<int>(indexer.InstanceColumn(link.other_var_idx, other_instance));

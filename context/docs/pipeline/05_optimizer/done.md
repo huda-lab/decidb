@@ -344,7 +344,9 @@ a plain clause (no `<>`, hard MIN/MAX, Big-M ABS pair, product or square, and no
 into its box, `admitted_lower`) or the linear objective (not a flat MIN/MAX's, whose terms stage 06 links column by
 column); or into one outer link (`inline_outer`), when that link's members are its only reader and, if a MIN or MAX,
 it is pinned on one side, so each member stands in one row. No clause may be folded into the helper's box
-(`user_singleton_row_bounds`, `singleton_row_constraints`): the bound would be lost with the column. A reader of any
+(`user_singleton_row_bounds`, `singleton_row_constraints`): the bound would be lost with the column. A bound on a SUM
+or AVG helper alone never folds (`DecideReadSingletonRow` reads none on one): it is a row reading the helper, into
+which the helper may be written (deck pp. 115, 119). A reader of any
 other kind -- a composed MIN/MAX term, a quadratic group, a McCormick link, a frame's payload or `else` -- keeps the
 column. Whether inlining pays is the data's, which stage 06 counts (`../06_model_formulation/done.md`, "Inlining a
 helper"). The links are listed innermost first (a range's, made first, then the reducers nested in it), which the

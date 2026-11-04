@@ -682,7 +682,7 @@ struct SolverInput {
 	struct InlinedHelper {
 		ReducerValueMembers members;
 		//! Per instance of the helper, its group in `members`; INVALID_INDEX for an instance with no member, which no
-		//! reader reads (it is absent).
+		//! reader reads (it is absent), and for one that keeps its column (`written_in` false).
 		vector<idx_t> group_of_instance;
 		string label;
 	};
@@ -852,6 +852,10 @@ struct SolverInput {
 	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
 	//! which reads none is a column fixed at 0, which no row reads, as an absent class is.
 	vector<vector<bool>> absent_reads;
+	//! Per keyed helper, the instances written into their readers as their one member (InlineReducerValueLinks: a MIN
+	//! or MAX group of one member is that member, deck p. 112), which own no column (VarIndexer::instance_slot);
+	//! empty for a helper none of which is.
+	vector<vector<bool>> written_in;
 
 	//! Per-variable scope (row / keyed / query-wide / frame read).
 	//! For a keyed variable, keyed_scope_idx indexes keyed_mappings.

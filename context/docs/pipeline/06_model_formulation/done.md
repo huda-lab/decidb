@@ -818,9 +818,14 @@ absent instance; the objective's read of one is no read. Then, innermost first:
   scope becomes `INLINED` (§1), and the builder writes its members where a row or the objective reads it (§4). It stays
   among the links through the bound fixed point, so a bound still flows through it to the helpers among its members.
 
-A MIN or MAX helper is linear, and so inlined, only where every group has one member, which is then its value: a
-window of one position (`max(from previous to previous else 0: x)`). One with a singleton group among others keeps
-its columns and defines that group by an equality (above). Execution lists every member and absence as for any
+A MIN or MAX helper is linear, and so inlined whole, only where every group has one member, which is then its value:
+a window of one position (`max(from previous to previous else 0: x)`). Where the plan lets it be written in, a group of
+one member among others is written in alone (`SolverInput::written_in`, deck p. 112): into the outer link's members,
+or through `inlined_helpers` into the rows reading it, the other groups keeping their columns and definitions. Such an
+instance, and a keyed decision's absent class, owns no column (`VarIndexer::instance_slot`; `HasColumn`,
+`ColumnOrNone`): the builder reads a written-in instance's member wherever it reads the instance, recursively
+(`ForEachTermColumn`), and every walk over instances skips one with none. The running example then has the deck's
+model, 8 columns and 7 rows (p. 115). Execution lists every member and absence as for any
 helper, so an inlined helper's absence skips the same rows; DIAGNOSE formulates its repair model from the same
 assembly, so it inlines the same helpers, and its findings name the rows as written. Tests: `test_anr_inlining.py`
 (model sizes and answers), `test/common/test_decidb_helper_inlining.cpp` (the pass on hand-built inputs).

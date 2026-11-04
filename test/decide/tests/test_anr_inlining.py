@@ -154,17 +154,16 @@ class TestRangeIntoRows:
 class TestIntoMembers:
     def test_the_deck_writes_the_sums_in(self, decidb_cli, tmp_path):
         """F1 with an inner SUM (deck p. 119): each (rid, cid) sum is written into its
-        region's members. The three clause rows each bound one region alone, so they fold
-        into its box (whole-numbered: East's 30 - 7.5 is 22, West's the tighter of 50 - 1.5
-        and 45 - 7.5, 37) and the regions keep their columns: the six shipments, the two
-        regions, and each region's `value >= sum` over its shipments -- ship1 + ship2, and
-        ship3 + ship5 + ship6 (ship4's `p` is false)."""
+        region's members, and each region into the clause rows that read it -- a bound on a
+        sum is a row reading it, and East's two terms read once and West's three read twice
+        cost no more there than defined (D89). The six shipments and the deck's three rows:
+        ship1 + ship2 <= 30 - 7.5, and ship3 + ship5 + ship6 <= 50 - 1.5 and <= 45 - 7.5
+        (ship4's `p` is false)."""
         dump = decidb_cli.dump_model(F1_SUM.sql, tmp_path / "f1.dump")
-        assert dump_counts(dump) == {"num_vars": 6 + 2, "num_rows": 2}
-        east = frozenset({(0, -1.0), (1, -1.0), (6, 1.0)})
-        west = frozenset({(2, -1.0), (4, -1.0), (5, -1.0), (7, 1.0)})
-        assert _rows(dump) == {(">", 0.0, east), (">", 0.0, west)}
-        assert dump_bounds(dump)[6:] == [(0.0, 22.0), (0.0, 37.0)]
+        assert dump_counts(dump) == {"num_vars": 6, "num_rows": 3}
+        east = frozenset({(0, 1.0), (1, 1.0)})
+        west = frozenset({(2, 1.0), (4, 1.0), (5, 1.0)})
+        assert _rows(dump) == {("<", 22.5, east), ("<", 48.5, west), ("<", 37.5, west)}
 
     @BOTH_SOLVERS
     def test_group_sums_into_the_objectives_maximum(self, request, cli_fixture, scope_solver, tmp_path):
@@ -243,17 +242,20 @@ class TestKept:
                 clause(ne(X, Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0)))),
                 id="not-equal",
             ),
-            # A bound on the helper alone is its column's box, which an inlined helper has not.
-            pytest.param(
-                f"sum(from previous to previous else 0: x) {TL} <= 5",
-                clause(le(Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0)), 5)),
-                id="a-bound-on-the-helper",
-            ),
         ],
     )
     def test_a_reader_that_needs_the_column(self, decidb_cli, scope_solver, tmp_path, clause_sql, body):
         sql = _edge(clause_sql)
         assert _model(decidb_cli, sql, tmp_path)["num_vars"] > 6
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_a_bound_on_a_sum_is_a_row_it_is_written_into(self, decidb_cli, scope_solver, tmp_path):
+        """A bound on a SUM helper alone is a row reading it, not its box (deck p. 115): each
+        window, read by one such row, is written into it, and the model has the six
+        decisions alone."""
+        body = clause(le(Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0)), 5))
+        sql = _edge(f"sum(from previous to previous else 0: x) {TL} <= 5")
+        assert _model(decidb_cli, sql, tmp_path)["num_vars"] == 6
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
     def test_a_maximum_closing_on_a_sum_two_members_read(self, decidb_cli_gurobi, scope_solver, tmp_path):

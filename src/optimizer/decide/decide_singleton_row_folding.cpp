@@ -236,6 +236,13 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b) || out.var_idx >= decide.decide_variables.size()) {
 		return false;
 	}
+	// A SUM or AVG helper stands for the sum of its members, which a row may read in their place (D89, deck pp. 115,
+	// 119): a bound on it is a row that reads it, not its box.
+	for (auto &link : decide.reducer_value_links) {
+		if (link.value_var == out.var_idx && (link.agg_name == "sum" || link.agg_name == "avg")) {
+			return false;
+		}
+	}
 	auto type_id = decide.decide_variables[out.var_idx]->return_type.id();
 	bool whole = type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT;
 	if (!whole && type_id != LogicalTypeId::DOUBLE) {

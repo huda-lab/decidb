@@ -1280,7 +1280,7 @@ class TestRange:
                 le(_range("sum", previous(), next_(), 1, {}, X), 7),
                 EDGE_ROWS,
                 PER_ROW,
-                {"num_vars": 5 + 5, "num_rows": 5},
+                {"num_vars": 5, "num_rows": 5},
                 id="a-helper-per-position",
             ),
             pytest.param(
@@ -1288,7 +1288,7 @@ class TestRange:
                 le(_range("sum", previous(), next_(), 1, {}, X), 7),
                 ((1, "A", 1, 4, 2), (2, "A", 1, 6, 1), (3, "A", 2, 1, 3)),
                 ("product", "period"),
-                {"num_vars": 2 + 2, "num_rows": 2},
+                {"num_vars": 2, "num_rows": 3},
                 id="tied-rows-share-a-position",
             ),
         ],
@@ -1297,8 +1297,9 @@ class TestRange:
         """A range over decisions is a helper per window, defined once: one per timeline
         when neither end depends on the anchor -- n terms in one definition, not n of them
         -- and one per position otherwise, the tied rows of a position -- reading one
-        instance of `x` there (D73) -- sharing it. A bound on the range alone is a bound on
-        its helper's column, so it costs no row."""
+        instance of `x` there (D73) -- sharing it. A bound on the range alone is a row
+        reading it (deck p. 115), into which a window read by one or two rows is written
+        (D89): the decisions alone, a row per anchor."""
         decide = "x(INT)" if key == PER_ROW else f"per {', '.join('t.' + k for k in key)}: x(INT)"
         sql = _edge(clause_sql, decide=decide, rows=rows)
         assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == counts

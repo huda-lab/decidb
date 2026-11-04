@@ -5971,7 +5971,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                    idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -5985,7 +5985,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                    idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -6001,7 +6001,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -6015,7 +6015,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -6030,7 +6030,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                idx_t solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {

@@ -320,6 +320,44 @@ bool InlineReducerValueLinks(SolverInput &input) {
 		}
 	}
 
+	// Writes link `i`'s instances that `written` holds into its outer link's members, each scaled by the coefficient
+	// that read it.
+	auto write_into_outer = [&](idx_t i, const vector<bool> &written) {
+		auto &link = links[i];
+		auto &outer = links[link.inline_outer].members;
+		ReducerValueMembers expanded;
+		for (idx_t g = 0; g < outer.GroupCount(); g++) {
+			expanded.AddGroup(outer.group_rows[g]);
+			auto span = MembersOf(outer, g);
+			for (idx_t m = span.first; m < span.last; m++) {
+				expanded.AddMember(outer.constants[m]);
+				for (idx_t t = outer.member_begin[m]; t < outer.member_begin[m + 1]; t++) {
+					const idx_t instance =
+					    outer.variables[t] == link.value_var ? instance_of(link.value_var, outer.rows[t]) : 0;
+					if (outer.variables[t] != link.value_var || !written[instance]) {
+						expanded.AddTerm(outer.variables[t], outer.rows[t], outer.coefficients[t]);
+						continue;
+					}
+					const double c = outer.coefficients[t];
+					const idx_t group = group_of_instance[i][instance];
+					if (group == DConstants::INVALID_INDEX) {
+						throw InternalException("DECIDE: %s's member reads %s where it is absent",
+						                        links[link.inline_outer].label, link.label);
+					}
+					auto inner = MembersOf(link.members, group);
+					for (idx_t n = inner.first; n < inner.last; n++) {
+						expanded.constants.back() += c * link.members.constants[n];
+						for (idx_t u = link.members.member_begin[n]; u < link.members.member_begin[n + 1]; u++) {
+							expanded.AddTerm(link.members.variables[u], link.members.rows[u],
+							                 c * link.members.coefficients[u]);
+						}
+					}
+				}
+			}
+		}
+		outer = std::move(expanded);
+	};
+
 	// Inline, innermost first: a link folded into its outer one has had its own inner links folded into it already,
 	// so what it hands on is decisions and kept helpers alone.
 	vector<bool> folded(links.size(), false);
@@ -329,10 +367,25 @@ bool InlineReducerValueLinks(SolverInput &input) {
 		if (link.inlining == DecideHelperInlining::NONE) {
 			continue;
 		}
-		if (IsExtremum(link) && !EveryGroupSingleton(link)) {
+		auto &count = reads[i].count;
+		// A MIN or MAX group of one member is that member (deck p. 112): written in, group by group, wherever the
+		// helper may be. A link whose every group is one is written in whole.
+		vector<bool> single(count.size(), false);
+		bool any_single = false;
+		if (IsExtremum(link)) {
+			for (idx_t instance = 0; instance < count.size(); instance++) {
+				const idx_t group = group_of_instance[i][instance];
+				if (group != DConstants::INVALID_INDEX) {
+					auto span = MembersOf(link.members, group);
+					single[instance] = span.last - span.first == 1;
+					any_single = any_single || single[instance];
+				}
+			}
+		}
+		const bool whole = !IsExtremum(link) || EveryGroupSingleton(link);
+		if (!whole && !any_single) {
 			continue;
 		}
-		auto &count = reads[i].count;
 		const bool into_outer = link.inlining == DecideHelperInlining::INTO_OUTER;
 		if (into_outer) {
 			if (link.inline_outer <= i || link.inline_outer >= links.size()) {
@@ -351,6 +404,17 @@ bool InlineReducerValueLinks(SolverInput &input) {
 				continue;
 			}
 		}
+		if (!whole) {
+			// Its groups of one member, written in alone: an instance of one term read `k` times costs `k` written in
+			// against `2 + k` defined. The others keep their columns and definitions.
+			input.written_in.resize(input.num_decide_vars);
+			input.written_in[link.value_var] = single;
+			inlined_any = true;
+			if (into_outer) {
+				write_into_outer(i, single);
+			}
+			continue;
+		}
 		if (!InliningAddsNoNonzero(link, reads[i], group_of_instance[i])) {
 			continue;
 		}
@@ -360,37 +424,7 @@ bool InlineReducerValueLinks(SolverInput &input) {
 			link.inlined = true;
 			continue;
 		}
-		// Written into the outer link's members, scaled by the coefficient that read it.
-		auto &outer = links[link.inline_outer].members;
-		ReducerValueMembers expanded;
-		for (idx_t g = 0; g < outer.GroupCount(); g++) {
-			expanded.AddGroup(outer.group_rows[g]);
-			auto span = MembersOf(outer, g);
-			for (idx_t m = span.first; m < span.last; m++) {
-				expanded.AddMember(outer.constants[m]);
-				for (idx_t t = outer.member_begin[m]; t < outer.member_begin[m + 1]; t++) {
-					if (outer.variables[t] != link.value_var) {
-						expanded.AddTerm(outer.variables[t], outer.rows[t], outer.coefficients[t]);
-						continue;
-					}
-					const double c = outer.coefficients[t];
-					const idx_t group = group_of_instance[i][instance_of(link.value_var, outer.rows[t])];
-					if (group == DConstants::INVALID_INDEX) {
-						throw InternalException("DECIDE: %s's member reads %s where it is absent",
-						                        links[link.inline_outer].label, link.label);
-					}
-					auto inner = MembersOf(link.members, group);
-					for (idx_t n = inner.first; n < inner.last; n++) {
-						expanded.constants.back() += c * link.members.constants[n];
-						for (idx_t u = link.members.member_begin[n]; u < link.members.member_begin[n + 1]; u++) {
-							expanded.AddTerm(link.members.variables[u], link.members.rows[u],
-							                 c * link.members.coefficients[u]);
-						}
-					}
-				}
-			}
-		}
-		outer = std::move(expanded);
+		write_into_outer(i, vector<bool>(count.size(), true));
 		folded[i] = true;
 	}
 	idx_t kept = 0, inlined = 0;
@@ -658,6 +692,9 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 			if (span.first == span.last) {
 				continue;
 			}
+			if (!indexer.HasColumn(var, indexer.InstanceOf(var, members.group_rows[group]))) {
+				continue; // written into its readers as its one member: no column to box
+			}
 			any = true;
 			const idx_t column = indexer.Get(var, members.group_rows[group]);
 			auto lo = column_lo.find(column);
@@ -694,18 +731,27 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 	SparseCoeffAccumulator sum_terms;
 	input.inlined_helper_of.assign(input.num_decide_vars, DConstants::INVALID_INDEX);
 	for (auto &link : input.reducer_value_links) {
-		if (link.inlined) {
-			// Its readers read its members (SolverModel::Build), each instance its group's.
+		// The instances written into their readers (InlineReducerValueLinks): every one of a helper inlined whole, or a
+		// MIN or MAX group of one member. Its readers read its members there (SolverModel::Build).
+		auto *written_in = link.value_var < input.written_in.size() && !input.written_in[link.value_var].empty()
+		                       ? &input.written_in[link.value_var]
+		                       : nullptr;
+		if (link.inlined || written_in) {
 			SolverInput::InlinedHelper helper;
 			helper.group_of_instance.assign(indexer.NamedInstances(link.value_var), DConstants::INVALID_INDEX);
 			for (idx_t g = 0; g < link.members.GroupCount(); g++) {
-				helper.group_of_instance[indexer.InstanceOf(link.value_var, link.members.group_rows[g])] = g;
+				const idx_t instance = indexer.InstanceOf(link.value_var, link.members.group_rows[g]);
+				if (link.inlined || (*written_in)[instance]) {
+					helper.group_of_instance[instance] = g;
+				}
 			}
-			helper.members = std::move(link.members);
+			helper.members = link.inlined ? std::move(link.members) : link.members;
 			helper.label = link.label;
 			input.inlined_helper_of[link.value_var] = input.inlined_helpers.size();
 			input.inlined_helpers.push_back(std::move(helper));
-			continue;
+			if (link.inlined) {
+				continue;
+			}
 		}
 		const bool is_max = link.agg_name == "max";
 		const idx_t value_var = link.value_var;
@@ -731,6 +777,9 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				continue;
 			}
 			const idx_t group_row = members.group_rows[group];
+			if (written_in && (*written_in)[indexer.InstanceOf(value_var, group_row)]) {
+				continue; // its readers read its one member
+			}
 			if (!IsExtremum(link)) {
 				// `value - sum of members' expressions` against `sum of their constants`: the side the clauses push
 				// the value against (`value >= sum` when they push it down, `value <= sum` when up), the equality only

@@ -381,7 +381,12 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
             double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
             bool every_instance_bounded = true;
             for (idx_t r = 0; r < num_rows && every_instance_bounded; r++) {
-                double instance_bound = column_bound[indexer.Get(v, r)];
+				// A row in no class reads no instance, and has none to bound.
+				const idx_t column = indexer.ColumnOrNone(v, r);
+				if (column == DConstants::INVALID_INDEX) {
+					continue;
+				}
+                double instance_bound = column_bound[column];
                 every_instance_bounded = !std::isnan(instance_bound);
                 bound = std::max(bound, instance_bound);
             }

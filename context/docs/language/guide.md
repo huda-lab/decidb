@@ -649,8 +649,10 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
   not N rows of N entries. Where writing a helper's members into the rows that read it adds no nonzero -- an instance
   of `m` terms read `k` times costs `m·k` written in, `m + 1 + k` defined -- the helper is written in and has no
   column (D89): example 5's depot sums, two shipments read by two rows, and a range frame's window read by its anchor
-  alone. So is a nested reducer written into the one around it, and a `MIN`/`MAX` group of one member is that member,
-  an equality (deck p. 112). Clauses holding the same reducer over the same rows share one helper and one definition,
+  alone. A bound on a `SUM` or `AVG` helper alone is such a row, not its box, so the running example's region sums are
+  written into its three clause rows (deck pp. 115, 119). So is a nested reducer written into the one around it; a
+  `MIN`/`MAX` group of one member is that member, written in group by group (deck p. 112); and a group with no member
+  has no column. Clauses holding the same reducer over the same rows share one helper and one definition,
   which belongs to none of them: a `DIAGNOSE` that drops one leaves the definition the others read. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
   product or square of decisions inside such a reducer is defined per row first, so `sum(power(x, 2)) + gcap * s <= 30`
   answers on Gurobi and is refused on HiGHS, which has no quadratic constraints (§3.1). A `BOOL` factor on a reducer

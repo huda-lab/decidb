@@ -78,9 +78,9 @@ The deck's evaluation strategy for nested ANR: build an annotated AST whose scop
 bottom-up into constraints. Runtime containers follow the node role: a reducer is a map from `by` key to operand; a
 scoped expression is a vector for `per row`, otherwise a set of distinct signatures. Frames are built the same way
 over partition and order. `MAX` inside `SUM` becomes helper variables (`x₁,₂ = max(x₁, x₂)`); `SUM` inside `SUM`
-flattens. DeciDB evaluates through DuckDB plans and window columns instead, and reaches the deck's model: a helper is
-written where it is read when that adds no nonzero, so a `SUM` inside a `SUM` flattens, and a `MAX` of one member is
-that member (D89).
+flattens. DeciDB evaluates through DuckDB plans and window columns instead, and builds the deck's model (pp. 115,
+119): a helper is written where it is read when that adds no nonzero, a bound on a `SUM` is a row it is written into, a
+`MAX` group of one member is that member, and an empty group has no column (D89).
 
 ## Beyond the deck (pp. 2, 76)
 
