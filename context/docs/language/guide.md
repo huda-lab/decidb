@@ -768,6 +768,24 @@ The phrase `would be produced more than once` is fixed; names and values come fr
 and the greatest value as `ORDER BY` places them (NULL last), so the message does not depend on row order. Over a join
 a column is named with its relation.
 
+### 7.4 What the data left of a clause
+
+An instance with no value is skipped (§7.2), which can leave a clause constraining nothing, or the objective 0, with
+no error. The query is still answered as written, and DeciDB says so (D90):
+
+- **A clause left with no instance** -- each it held has no value -- is one line on stderr: *"DECIDE warning: 'x <=
+  at(5 previous: x) over (t.period within t.product)' constrains nothing: each of its 6 instances has no value, so
+  each is skipped."* An instance is a kept row, or in the aggregate shape a group of the kept rows, whether or not a
+  reducer reads a row of it. A clause whose `when` keeps no row, or whose `per` key is NULL on every row, holds no
+  instance to skip, and says nothing.
+- **An objective that is 0 whatever the decisions** -- each term has no value or a zero factor on every row -- is
+  one line too: *"DECIDE warning: the objective is 0 whatever the decisions: each of its terms has no value or a zero
+  factor on every row, so any feasible answer is optimal."*
+- **EXPLAIN ANALYZE** counts, under a clause, the instances it skipped (`↳ 3 of 6 instances have no value and are
+  skipped`), and under the objective the line above (`↳ is 0 whatever the decisions ...`).
+
+As with the large-number warning (§3), a query answered by direct solve (§10) prints nothing.
+
 ## 8. `DIAGNOSE`
 
 `DIAGNOSE` prefixes a `SELECT` that carries a `DECIDE` clause. It runs the query and reports on the run instead of
@@ -841,7 +859,9 @@ when the model differs: `≡` for the canonical form, `↳` for what each rewrit
 (`abs(ship - 20) becomes an auxiliary variable`, `sum(ship) by (D.region) becomes a helper decision per group`) and
 the rows the solver receives. An auxiliary prints as the expression it stands for, never an internal name; a bound
 derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
-timing, and under a clause whose classes held more than one variant one `↳` line counting them (§7.1, D71).
+timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes (§7.1, D71),
+one counting the instances it skipped for having no value (§7.4), and one for each helper decision written where it
+is read, with no column (`↳ sum(t.w * x) by (t.product) is written where it is read, with no column`; §6.4, D89).
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed, with the `when c per K:` qualifier in front and
 the defaults `per row:` and `by ()` left out. Text DeciDB writes itself (a rewritten row, a suggested edit) uses

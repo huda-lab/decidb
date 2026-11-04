@@ -179,6 +179,19 @@ CASES = {
 }
 
 
+#: What the solver path warns of (the direct path prints nothing): a clause whose every instance a reducer over no
+#: row leaves with no value constrains nothing, and an objective that reads no row is 0. A clause whose own `when`
+#: keeps no row holds no instance to skip.
+WARNINGS = {
+    "reducer_reads_no_row": ["'sum(when val > 100: x) >= 1' constrains nothing"],
+    "hard_max_reads_no_row": ["'max(when val > 100: x * val) >= 5' constrains nothing"],
+    "composed_max_reads_no_row": ["'sum(x * val) + max(when val > 100: x * val) <= 5' constrains nothing"],
+    "budget_reads_no_row": ["'sum(when val > 100: w * x) <= 2' constrains nothing"],
+    "flat_max_objective_reads_no_row": ["the objective is 0 whatever the decisions"],
+    "objective_when_keeps_no_row": ["the objective is 0 whatever the decisions"],
+}
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_an_empty_group_skips_its_constraint(decidb_cli, scope_solver, name):
@@ -194,6 +207,6 @@ def test_an_empty_group_skips_its_constraint(decidb_cli, scope_solver, name):
     model = ScopedModel(table_rows(COLUMNS, ROWS), decisions)
     optimum = model.solve_scoped(scope_solver, clauses, objective)
     for mode in ("off", "require") if direct else ("off",):
-        rows, columns = run(decidb_cli, sql, mode)
+        rows, columns = run(decidb_cli, sql, mode, expect_warnings=WARNINGS.get(name, ()) if mode == "off" else ())
         result = aligned([dict(zip(columns, row)) for row in rows], model, "id")
         assert model.judge_scoped(result, clauses, objective) == pytest.approx(optimum), mode

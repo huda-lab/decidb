@@ -634,8 +634,10 @@ def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
         SUCH THAT SUM(x) >= 1
         MAXIMIZE SUM(x * val)
     """
+    # A direct-solve rule answers it silently; the solver path warns that the objective is 0 whatever x is.
+    warnings = [] if decidb_cli.leaves_direct_solve_on() else ["the objective is 0 whatever the decisions"]
     t0 = time.perf_counter()
-    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql, expect_warnings=warnings)
     decidb_time = time.perf_counter() - t0
 
     n = 3

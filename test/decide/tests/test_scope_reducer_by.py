@@ -238,7 +238,10 @@ def test_a_key_that_is_null_on_every_row_is_no_group(decidb_cli, scope_solver):
         ),
     ]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
-    result = aligned(answer(decidb_cli, sql), model, "id")
+    # A direct-solve rule answers it silently; the solver path warns that the bound's clause constrains nothing.
+    clause = "x <= max(when t.id > 1: t.v) by (t.g || t.h)"
+    warnings = [] if decidb_cli.leaves_direct_solve_on() else [f"'{clause}' constrains nothing"]
+    result = aligned(answer(decidb_cli, sql, warnings), model, "id")
     assert (
         model.judge_scoped(result, clauses, objective)
         == pytest.approx(model.solve_scoped(scope_solver, clauses, objective))

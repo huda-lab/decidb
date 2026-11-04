@@ -789,8 +789,9 @@ def test_scoped_plan_survives_a_serialization_round_trip(decidb_cli, tmp_path):
     copied = decidb_cli.with_verify_serializer()
     assert copied.dump_model(sql, tmp_path / "copied.dump") == decidb_cli.dump_model(sql, tmp_path / "plain.dump")
     assert copied.execute(sql) == decidb_cli.execute(sql)
-    # The reducer reads no row in any region, so its clause has no instance.
+    # The reducer reads no row in any region, so its clause has no instance, which stderr says.
     empty = sql.replace("S.status = 'active'", "S.status = 'lost'")
-    assert copied.dump_model(empty, tmp_path / "copied_empty.dump") == decidb_cli.dump_model(
-        empty, tmp_path / "plain_empty.dump"
+    warnings = ["'sum(when S.status = 'lost' per D: D.capacity * reserve) by (D.region) <= 900' constrains nothing"]
+    assert copied.dump_model(empty, tmp_path / "copied_empty.dump", expect_warnings=warnings) == decidb_cli.dump_model(
+        empty, tmp_path / "plain_empty.dump", expect_warnings=warnings
     )

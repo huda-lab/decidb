@@ -1062,7 +1062,7 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::EXTREMUM_NATIVE:
 		became = "an extremum column stated to the solver natively";
 		break;
-	case Kind::VARIANTS:
+	case Kind::RUN_TIME:
 		return account.subject;
 	}
 	return account.subject + " becomes " + became;

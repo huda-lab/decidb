@@ -1689,9 +1689,9 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	// What the optimizer made of the clauses: a column that stands for an expression
 	// prints it, and each rewrite's account follows its clause, the objective's its own.
 	auto names = DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
-	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints the variants under their clause.
+	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints them under their clause.
 	auto accounts = rewrite_accounts;
-	accounts.insert(accounts.end(), variant_accounts.begin(), variant_accounts.end());
+	accounts.insert(accounts.end(), run_time_accounts.begin(), run_time_accounts.end());
 	vector<string> objective_accounts;
 	for (auto &account : accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
@@ -1959,6 +1959,22 @@ public:
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
 	//! whose definition reads an instance with none there (D88, PhysicalDecide::BuildKeyedMappings); empty where none.
 	vector<vector<bool>> absent_reads;
+	//! Per clause (its source clause id), the instances its rows hold once grouped, and those left once each with no
+	//! value is skipped (deck pp. 50, 56): the most any of its rows holds, as a rewrite states the clause's instances
+	//! in each of its rows (PhysicalDecide::ReportSkippedInstances).
+	struct ClauseInstances {
+		idx_t grouped = 0;
+		idx_t kept = 0;
+	};
+	map<idx_t, ClauseInstances> clause_instances;
+	void CountInstances(idx_t source_clause_id, idx_t grouped, idx_t kept) {
+		if (source_clause_id == DConstants::INVALID_INDEX) {
+			return;
+		}
+		auto &counts = clause_instances[source_clause_id];
+		counts.grouped = MaxValue(counts.grouped, grouped);
+		counts.kept = MaxValue(counts.kept, kept);
+	}
 
 	//! The variable a term reads at each row: its own, or -- for a frame's payload term --
 	//! the read of it at the row the frame selects. A query-wide decision has one column,
@@ -2769,7 +2785,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
-    variant_accounts.clear();
+    run_time_accounts.clear();
 
     if (bench) {
         model_timer.Start();
@@ -2839,6 +2855,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
     phase.Next("execution.evaluate_composed");
     EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings, evaluated);
+    ReportSkippedInstances(gstate);
 
     // 4. Evaluate the value rewrite's helper decisions (their reducers' members)
     phase.Next("execution.evaluate_value_links");
@@ -2879,6 +2896,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // (infeasibility-repair) path run it a second time against a widened box.
     phase.Next("execution.formulate");
     FormulateModel(solver_input, FormulationBox::OfSolvedModel(solver_input), var_indexer, evaluated);
+    ReportAnEmptyObjective(solver_input);
 
     phase.Next("execution.solve_and_route");
     return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(),
@@ -3115,18 +3133,94 @@ void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char
 	for (auto &field : signature.fields) {
 		fields.push_back(field.text);
 	}
-	LogicalDecide::RewriteAccount account;
-	account.source_clause_id = signature.source_clause_id;
-	account.kind = LogicalDecide::RewriteAccount::Kind::VARIANTS;
-	account.subject = StringUtil::Format("%s: %llu %s from %llu %s, one per distinct (%s) within a class",
-	                                     signature.text, variants, unit, classes, classes == 1 ? "class" : "classes",
-	                                     StringUtil::Join(fields, ", "));
-	for (auto &recorded : variant_accounts) {
-		if (recorded.source_clause_id == account.source_clause_id && recorded.subject == account.subject) {
+	RecordRunTimeAccount(signature.source_clause_id,
+	                     StringUtil::Format("%s: %llu %s from %llu %s, one per distinct (%s) within a class",
+	                                        signature.text, variants, unit, classes, classes == 1 ? "class" : "classes",
+	                                        StringUtil::Join(fields, ", ")));
+}
+
+void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate) const {
+	for (auto &entry : gstate.clause_instances) {
+		auto &counts = entry.second;
+		if (counts.kept >= counts.grouped) {
+			continue;
+		}
+		const idx_t skipped = counts.grouped - counts.kept;
+		RecordRunTimeAccount(
+		    entry.first,
+		    counts.grouped == 1
+		        ? string("its one instance has no value and is skipped")
+		        : StringUtil::Format("%llu of %llu instances have no value and are skipped", skipped, counts.grouped));
+		if (counts.kept == 0) {
+			fprintf(stderr, "DECIDE warning: '%s' constrains nothing: %s no value, so %s skipped.\n",
+			        WrittenClause(entry.first).c_str(),
+			        counts.grouped == 1 ? "its one instance has"
+			                            : StringUtil::Format("each of its %llu instances has", counts.grouped).c_str(),
+			        counts.grouped == 1 ? "it is" : "each is");
+		}
+	}
+}
+
+void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
+	if (decide_sense == DecideSense::FEASIBILITY) {
+		return;
+	}
+	auto reads = [&](const CoefficientColumn &column) {
+		for (idx_t row = 0; row < column.Size(); row++) {
+			if (column.Get(row) != 0.0) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
+	    std::any_of(input.quadratic_inner_coefficients.begin(), input.quadratic_inner_coefficients.end(), reads) ||
+	    std::any_of(input.bilinear_objective_terms.begin(), input.bilinear_objective_terms.end(),
+	                [&](const SolverInput::BilinearObjectiveTerm &term) { return reads(term.row_coefficients); }) ||
+	    std::any_of(input.global_obj_coeffs.begin(), input.global_obj_coeffs.end(),
+	                [](double coefficient) { return coefficient != 0.0; })) {
+		return;
+	}
+	fprintf(stderr, "DECIDE warning: the objective is 0 whatever the decisions: each of its terms has no value or a "
+	                "zero factor on every row, so any feasible answer is optimal.\n");
+	RecordRunTimeAccount(DConstants::INVALID_INDEX,
+	                     "is 0 whatever the decisions: each term has no value or a zero factor on every row");
+}
+
+void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
+	for (auto &link : reducer_value_links) {
+		string line;
+		if (input.variable_scopes[link.value_var].scope == DecideVarScope::INLINED) {
+			line = link.label + " is written where it is read, with no column";
+		} else if (link.value_var < input.written_in.size() &&
+		           std::find(input.written_in[link.value_var].begin(), input.written_in[link.value_var].end(), true) !=
+		               input.written_in[link.value_var].end()) {
+			line = link.label + ": each group of one member is written where it is read, with no column";
+		}
+		if (line.empty()) {
+			continue;
+		}
+		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
+		for (auto &account : rewrite_accounts) {
+			if (account.subject == link.label) {
+				RecordRunTimeAccount(account.source_clause_id, line);
+			}
+		}
+	}
+}
+
+//! One line EXPLAIN ANALYZE prints under clause `source_clause_id` (INVALID_INDEX: the objective), once.
+void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject) const {
+	for (auto &recorded : run_time_accounts) {
+		if (recorded.source_clause_id == source_clause_id && recorded.subject == subject) {
 			return; // a clause the rewrites made several rows of
 		}
 	}
-	variant_accounts.push_back(std::move(account));
+	LogicalDecide::RewriteAccount account;
+	account.source_clause_id = source_clause_id;
+	account.kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME;
+	account.subject = std::move(subject);
+	run_time_accounts.push_back(std::move(account));
 }
 
 //! An instance with no value -- a keyed decision's row in no class, a helper's group with no member, an auxiliary whose
@@ -3147,6 +3241,27 @@ static void MarkAbsentDecisionReads(const DecideTerm &term, const vector<DecideV
 			null_rows[row] = true;
 		}
 	}
+}
+
+//! The instances `row_group_ids` names: in the aggregate shape each group a row stands in, else each row in a group.
+//! Empty is every row in one group.
+static idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped) {
+	if (row_group_ids.empty()) {
+		return grouped ? MinValue<idx_t>(num_rows, 1) : num_rows;
+	}
+	if (!grouped) {
+		return NumericCast<idx_t>(std::count_if(row_group_ids.begin(), row_group_ids.end(),
+		                                        [](idx_t group) { return group != DConstants::INVALID_INDEX; }));
+	}
+	vector<bool> seen(num_groups, false);
+	idx_t count = 0;
+	for (auto group : row_group_ids) {
+		if (group != DConstants::INVALID_INDEX && !seen[group]) {
+			seen[group] = true;
+			count++;
+		}
+	}
+	return count;
 }
 
 //! A NULL that reaches a comparison unreduced makes that instance NULL, and a NULL instance
@@ -3420,6 +3535,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// convention `row_group_ids` uses, which is all a clause with no `by` key has. Diagnosis
 		// prep: built under DIAGNOSE only, its one reader.
 		vector<idx_t> kept_row_group_ids;
+		// The instances the clause holds before any with no value is skipped: in the aggregate shape each group of its
+		// kept rows, whether or not a reducer reads a row of it -- one that reads none has no value (deck p. 56).
+		idx_t grouped_instances = DConstants::INVALID_INDEX;
 
 		{
 			// The clause's rows are the kept rows (language/guide.md §6.1):
@@ -3440,7 +3558,21 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					    emitted, &scoped_kept, eval_const.row_group_ids, eval_const.num_groups,
 					    diagnose ? &kept : nullptr, diagnose ? &kept_row_group_ids : nullptr);
 					eval_const.group_names = GroupNames(per_group_cache, constraint->group_key, groups);
-				} else if (has_when || has_local_filters) {
+					auto &entry = CachedKeyGroups(per_group_cache, keys, constraint->group_key, chunk_expr_cache,
+					                              context, gstate.data, num_rows, &scoped_kept);
+					vector<bool> held(entry.unfiltered_num_groups, false);
+					grouped_instances = 0;
+					for (idx_t row = 0; row < num_rows; row++) {
+						const idx_t group = entry.unfiltered_row_group_ids[row];
+						if (scoped_kept[row] && group != DConstants::INVALID_INDEX && !held[group]) {
+							held[group] = true;
+							grouped_instances++;
+						}
+					}
+				} else {
+					grouped_instances = std::find(scoped_kept.begin(), scoped_kept.end(), true) != scoped_kept.end();
+				}
+				if (constraint->group_key == DConstants::INVALID_INDEX && (has_when || has_local_filters)) {
 					eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 					for (idx_t row = 0; row < num_rows; row++) {
 						eval_const.row_group_ids[row] = emitted(row) ? 0 : DConstants::INVALID_INDEX;
@@ -3460,6 +3592,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					if (!any_class) {
 						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 						eval_const.num_groups = 0;
+						grouped_instances = 0;
 					}
 				}
 				// The classes each group's rows stand for -- the aggregate row of a group,
@@ -3565,6 +3698,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
                                    quadratic_filters[group_idx]);
         }
+		const bool grouped = constraint->lhs_is_aggregate || constraint->was_minmax_easy;
+		if (grouped_instances == DConstants::INVALID_INDEX) {
+			grouped_instances = CountInstances(eval_const.row_group_ids, eval_const.num_groups, num_rows, grouped);
+		}
 		// A MIN/MAX reads the rows of its group as members, so a row the de-duplication
 		// drops leaves the group: left in with zero coefficients, it would be a member
 		// pinned at 0. (A SUM or AVG row is unchanged by a zero member.)
@@ -3584,7 +3721,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
 			}
 		}
-		if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+		if (grouped) {
 			vector<const TermFilterState *> filters;
 			for (auto *each : {&term_filters, &bilinear_filters, &quadratic_filters}) {
 				for (auto &filter : *each) {
@@ -3953,8 +4090,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				mark_absent(term, quadratic_filters[group_idx]);
 			}
 		}
-		SkipNullInstances(null_rows, constraint->lhs_is_aggregate || constraint->was_minmax_easy, num_rows,
-		                  eval_const.row_group_ids, eval_const.num_groups);
+		SkipNullInstances(null_rows, grouped, num_rows, eval_const.row_group_ids, eval_const.num_groups);
+		if (c < num_constraints) {
+			gstate.CountInstances(eval_const.source_clause_id, grouped_instances,
+			                      CountInstances(eval_const.row_group_ids, eval_const.num_groups, num_rows, grouped));
+		}
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
 		    .push_back(std::move(eval_const));
 	}
@@ -4436,13 +4576,16 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), reads_no_row);
 		clause.repair_group_id =
 		    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
+		vector<bool> kept_rows(num_rows, true);
+		if (spec.scope.when && (diagnose || clause.skipped)) {
+			kept_rows = KeptRows(*spec.scope.when, chunk_expr_cache, context, gstate.data, num_rows);
+		}
+		// Its one instance, where its `when` keeps a row.
+		const idx_t instances = std::find(kept_rows.begin(), kept_rows.end(), true) != kept_rows.end() ? 1 : 0;
+		gstate.CountInstances(spec.source_clause_id, instances, clause.skipped ? 0 : instances);
 		// The classes its one row stands for (D28), under DIAGNOSE: its `per` key's values
 		// among the rows its `when` keeps, or those rows with no `per`.
 		if (diagnose) {
-			vector<bool> kept_rows(num_rows, true);
-			if (spec.scope.when) {
-				kept_rows = KeptRows(*spec.scope.when, chunk_expr_cache, context, gstate.data, num_rows);
-			}
 			clause.class_set = CollectGroupClasses(spec.scope, keys, per_group_cache, chunk_expr_cache, context,
 			                                       gstate.data, num_rows, kept_rows, {}, 1, gstate.class_sets)[0];
 		}
@@ -4925,6 +5068,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		            solver_input.objective_variable_indices.end());
 	}
 	if (InlineReducerValueLinks(solver_input, held)) {
+		ReportInlinedHelpers(solver_input);
 		out_var_indexer = VarIndexer::Build(solver_input);
 		for (auto &ec : solver_input.constraints) {
 			ec.emitted_rows = EmittedRows();

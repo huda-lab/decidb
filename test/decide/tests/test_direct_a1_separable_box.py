@@ -338,7 +338,10 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
         _check_assignment(case_, rows, columns, oracle, mode)
 
     large = writes_large_number(sql, bounded=[name for name, _ in case_.decisions])
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, large_numbers=large)
+    # An objective whose every coefficient is 0 is 0 whatever the decisions, which the solver path warns of.
+    zero = all(c == 0 for row in case_.rows for pair in case_.objective.coefficients(row).values() for c in pair)
+    warnings = ["the objective is 0 whatever the decisions"] if zero else ()
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, large_numbers=large, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------

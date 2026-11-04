@@ -1542,7 +1542,10 @@ def test_r1_data_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solver
         _check_data_budget_assignment(case_, rows, columns, oracle, mode)
 
     sql = _data_sql(case_)
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+    # A limit NULL on every row skips every instance: the budget constrains nothing, which the solver path warns of.
+    rows = list(case_.rows)
+    emptied = any(all(limit(row, rows) is None for row in rows) for _, limit in case_.clauses)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, warnings=["constrains nothing"] if emptied else ())
 
 
 # ---------------------------------------------------------------------------

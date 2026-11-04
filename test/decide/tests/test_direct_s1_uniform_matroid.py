@@ -784,7 +784,12 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
             coeff_fn=lambda row: {"x": float(coefficient(rows_data[by_id[row[0]]]))},
         )
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, large_numbers=writes_large_number(sql))
+    # An objective whose every coefficient is 0 is 0 whatever the decisions, which the solver path warns of.
+    zero = case.get("objective", "score") != "none" and all(float(coefficient(r)) == 0.0 for r in rows_data)
+    warnings = ["the objective is 0 whatever the decisions"] if zero else ()
+    agree_with_oracle(
+        decidb_cli, sql, oracle, check_assignment, large_numbers=writes_large_number(sql), warnings=warnings
+    )
 
 
 @pytest.mark.var_boolean

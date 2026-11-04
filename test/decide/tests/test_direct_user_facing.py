@@ -23,8 +23,8 @@ def _source_query(scores, capacity, sense="MAXIMIZE"):
     """
 
 
-def _run(cli, sql, mode="require"):
-    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
+def _run(cli, sql, mode="require", expect_warnings=()):
+    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}", expect_warnings=expect_warnings)
 
 
 def _raw(cli, sql, mode="require", expect_large_numbers=False):
@@ -405,27 +405,31 @@ def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
 @pytest.mark.correctness
 @pytest.mark.parametrize("cap_type", ["INTEGER", "DOUBLE"])
 def test_s1_null_source_bound_is_no_bound_on_both_paths(decidb_cli, cap_type):
-    """A NULL bound skips its instance (B1): S1 applies and answers like the solver."""
+    """A NULL bound skips its instance (B1): S1 applies and answers like the solver, which
+    alone warns that the clause constrains nothing."""
     sql = f"""
         SELECT x FROM (
             FROM (VALUES (1,NULL::{cap_type},9.0)) t(id,cap,score)
             DECIDE x(BOOL) SUCH THAT SUM(x)<=cap MAXIMIZE SUM(score*x)
         ) q
     """
-    assert _run(decidb_cli, sql, mode="require") == _run(decidb_cli, sql, mode="off")
+    solver = _run(decidb_cli, sql, mode="off", expect_warnings=["'SUM(x) <= cap' constrains nothing"])
+    assert _run(decidb_cli, sql, mode="require") == solver
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", ["TRY_CAST(c AS INTEGER)", "b"], ids=["computed", "column"])
 def test_s1_null_per_row_bound_is_no_bound_on_both_paths(decidb_cli, bound):
-    """A per-row bound that is NULL skips its instance (B1): S1 applies and answers like the solver."""
+    """A per-row bound that is NULL skips its instance (B1): S1 applies and answers like the
+    solver, which alone warns that the clause constrains nothing."""
     sql = f"""
         SELECT id, x FROM (
             FROM (VALUES (0, 'bad', NULL::BOOLEAN, 5.0)) t(id, c, b, p)
             DECIDE x(BOOL) SUCH THAT x <= {bound} AND SUM(x) <= 1 MAXIMIZE SUM(p*x)
         ) q
     """
-    assert _run(decidb_cli, sql, mode="require") == _run(decidb_cli, sql, mode="off")
+    solver = _run(decidb_cli, sql, mode="off", expect_warnings=[f"'x <= {bound}' constrains nothing"])
+    assert _run(decidb_cli, sql, mode="require") == solver
 
 
 @pytest.mark.correctness

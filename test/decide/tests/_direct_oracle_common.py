@@ -31,14 +31,18 @@ def _allow_direct_path(monkeypatch):
     monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
-def run(cli, sql, mode, expect_large_numbers=False):
+def run(cli, sql, mode, expect_large_numbers=False, expect_warnings=()):
     """Runs `sql` with `decide_direct_solve` set to `mode`; returns `(rows, columns)`.
 
-    `expect_large_numbers` declares the large-number warning, as `DeciDBCli.execute` takes it. Only a query the solver
-    answers builds a model, so `off` warns when the model holds a number of 1e6 or more, `require` never does, and
-    `auto` does when the rule declines the query.
+    `expect_large_numbers` declares the large-number warning, and `expect_warnings` the DECIDE warnings, as
+    `DeciDBCli.execute` takes them. Only the solver path prints either, so `off` prints what the solver warns of,
+    `require` never does, and `auto` does when the rule declines the query.
     """
-    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}", expect_large_numbers=expect_large_numbers)
+    return cli.execute(
+        f"SET decide_direct_solve='{mode}'; {sql}",
+        expect_large_numbers=expect_large_numbers,
+        expect_warnings=expect_warnings,
+    )
 
 
 def outcome(cli, sql, mode, expect_large_numbers=False):
@@ -71,7 +75,7 @@ def sql_literal(value, sql_type):
     return f"CAST({value!r} AS {sql_type})"
 
 
-def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), large_numbers=False):
+def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), large_numbers=False, warnings=()):
     """Checks that DeciDB, on each of `modes`, gives the answer the oracle's result says it should.
 
     `oracle` is the solved oracle model. When it is infeasible or unbounded, every mode must raise that error. Otherwise
@@ -79,6 +83,8 @@ def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require
     callback owns what a valid assignment is for the rule (row layout, boxes, constraints, objective value).
     `large_numbers` says the query's model holds a number of 1e6
     or more: the solver path (`off`) warns, and the direct path (`require`) builds no model and prints nothing.
+    `warnings` are the DECIDE warnings the solver path prints (a clause that constrains nothing, an objective that is
+    0); the direct path prints none.
     """
     if oracle.status in (SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED):
         pattern = r"(?i)infeasible" if oracle.status == SolverStatus.INFEASIBLE else r"(?i)unbounded"
@@ -88,7 +94,7 @@ def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require
         return
     assert oracle.status == SolverStatus.OPTIMAL, oracle.status
     for mode in modes:
-        rows, columns = run(cli, sql, mode, large_numbers and mode == "off")
+        rows, columns = run(cli, sql, mode, large_numbers and mode == "off", warnings if mode == "off" else ())
         try:
             check_assignment(rows, columns, mode)
         except AssertionError as error:

@@ -1737,9 +1737,11 @@ def test_abs_under_an_extremum_objective(request, cli_fixture, extra_env, object
 )
 def test_abs_under_a_vanishing_extremum_objective(request, cli_fixture, extra_env, objective):
     """A MIN or MAX over ABS under a factor of exactly zero contributes nothing: the cheap
-    envelope stands whichever way the sense pushes, and no member box is demanded."""
+    envelope stands whichever way the sense pushes, and no member box is demanded. The
+    objective is then 0 whatever the decisions, which stderr says."""
     cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
-    judge_rows(answer(cli, _signed_objective(objective)), _SIGNED_DOMAINS, lambda a: True, lambda a: 0.0, True)
+    rows = answer(cli, _signed_objective(objective), ["the objective is 0 whatever the decisions"])
+    judge_rows(rows, _SIGNED_DOMAINS, lambda a: True, lambda a: 0.0, True)
 
 
 @_HARD_SOLVERS

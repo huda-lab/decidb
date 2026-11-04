@@ -544,6 +544,25 @@ class AnrModel:
             if value is not ABSENT
         ]
 
+    def emptied(self, scoped: Scope) -> bool:
+        """Whether ``[when c] [per K]: lhs sense rhs`` holds instances and none with a value, so it constrains
+        nothing: DeciDB warns of it."""
+        kept = self._root_kept(scoped.when)
+        rows = [t for class_rows in self._split(kept, scoped.per) for t in class_rows]
+        return bool(rows) and all(self._form(scoped.body.difference, t, kept) is ABSENT for t in rows)
+
+    def warnings(self, clauses: Sequence[Scope], objective: Objective | None) -> int:
+        """How many DECIDE warnings the query prints: one per clause that constrains nothing, one for an objective
+        that is 0."""
+        return sum(self.emptied(scoped) for scoped in clauses) + self.objective_is_zero(objective)
+
+    def objective_is_zero(self, objective: Objective | None) -> bool:
+        """Whether the objective is 0 whatever the decisions: every term has no value or a zero factor. DeciDB
+        warns of it."""
+        if objective is None:
+            return False
+        return all(atom == CONSTANT or coefficient == 0 for atom, coefficient in self.objective_form(objective).items())
+
     def objective_form(self, objective: Objective | None) -> dict:
         """The objective's one value (D72): one class, which must hold one signature. A
         term with no value is dropped (D67, D68), and is one value of the signature."""

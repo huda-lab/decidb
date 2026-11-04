@@ -34,7 +34,7 @@ def _judged(cli, solver, sql, rows, decisions, clauses, objective=MAXIMIZE_X):
     model = AnrModel(rows, decisions)
     expected = model.solve(solver, clauses, objective)
     assert expected.status == SolverStatus.OPTIMAL, expected.status
-    reached = model.judge(answer(cli, sql), clauses, objective)
+    reached = model.judge(answer(cli, sql, model.warnings(clauses, objective)), clauses, objective)
     assert reached == pytest.approx(expected.objective, abs=1e-6)
     return reached
 
@@ -869,10 +869,12 @@ def test_groups_holding_one_value_are_two_variants(request, cli_fixture):
 def test_a_reducer_left_with_no_member_skips_its_instance(request, cli_fixture, clause_sql):
     """Every row has `c`, so the inner `when NOT t.c` keeps none: each group is empty, the
     reducer over them has no member and no value, and every instance reading it is skipped
-    (D68, D87). A query-wide helper had no way to be absent: the nest was called
-    infeasible, and a row reading the helper raised an internal error."""
+    (D68, D87), so the clause constrains nothing, which stderr says. A query-wide helper had
+    no way to be absent: the nest was called infeasible, and a row reading the helper raised
+    an internal error."""
     sql = _review_query(("id", "g", "c"), ((1, "a", True), (2, "b", True)), "x(INT)", clause_sql, "MINIMIZE SUM(x)")
-    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [0, 0]
+    warnings = [f"'{clause_sql}' constrains nothing"]
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql, warnings)] == [0, 0]
 
 
 @BOTH_SOLVERS

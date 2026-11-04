@@ -334,9 +334,10 @@ class TestPoint:
         if case.status == SolverStatus.INFEASIBLE:
             assert "is infeasible" in result.stderr, result.stderr
             return
-        assert result.returncode == 0 and not result.stderr.strip(), result.stderr
         model = case.model()
-        reached = model.judge(answer(decidb_cli, case.sql), case.clauses, case.objective)
+        warnings = model.warnings(case.clauses, case.objective)
+        assert result.returncode == 0 and not decidb_cli.settle_warnings(result.stderr, warnings).strip(), result.stderr
+        reached = model.judge(answer(decidb_cli, case.sql, warnings), case.clauses, case.objective)
         expected = case.optimum
         if expected is None:
             expected = model.solve(scope_solver, case.clauses, case.objective).objective
@@ -367,8 +368,9 @@ def _judged(cli, solver, sql, rows, decisions, clauses, objective):
     expected = model.solve(solver, clauses, objective)
     assert expected.status == SolverStatus.OPTIMAL, expected.status
     result = cli.execute_raw(sql)
-    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
-    reached = model.judge(answer(cli, sql), clauses, objective)
+    warnings = model.warnings(clauses, objective)
+    assert result.returncode == 0 and not cli.settle_warnings(result.stderr, warnings).strip(), result.stderr
+    reached = model.judge(answer(cli, sql, warnings), clauses, objective)
     assert reached == pytest.approx(expected.objective, abs=1e-6)
     return reached
 
@@ -1215,9 +1217,10 @@ class TestRange:
         if case.error:
             assert ScopeError.PHRASES[case.error] in result.stderr, result.stderr
             return
-        assert result.returncode == 0 and not result.stderr.strip(), result.stderr
         model = case.model()
-        reached = model.judge(answer(decidb_cli, case.sql), case.clauses, case.objective)
+        warnings = model.warnings(case.clauses, case.objective)
+        assert result.returncode == 0 and not decidb_cli.settle_warnings(result.stderr, warnings).strip(), result.stderr
+        reached = model.judge(answer(decidb_cli, case.sql, warnings), case.clauses, case.objective)
         expected = case.optimum
         if expected is None:
             expected = model.solve(scope_solver, case.clauses, case.objective).objective

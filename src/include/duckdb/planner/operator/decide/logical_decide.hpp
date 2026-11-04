@@ -603,9 +603,10 @@ public:
 			BODY_AT_MOST,                 //!< the same, at most its value
 			BODY_EQUAL,                   //!< the same, equal to its value
 			EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
-			//! What the data made of a scoped expression's classes (D70, D71): more instances than classes. Recorded
-			//! by execution, so only EXPLAIN ANALYZE prints it, and `subject` is the whole line.
-			VARIANTS,
+			//! What the data made of a clause: a scoped expression's classes holding more than one variant (D70, D71),
+			//! instances skipped for having no value (deck pp. 50, 56). Recorded by execution, so only EXPLAIN ANALYZE
+			//! prints it, and `subject` is the whole line.
+			RUN_TIME,
 		};
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
         Kind kind = Kind::ABS_AUXILIARY;

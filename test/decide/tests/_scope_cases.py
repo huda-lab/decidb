@@ -80,8 +80,9 @@ def table_rows(columns, rows) -> list[dict]:
     return [dict(zip(columns, row)) for row in rows]
 
 
-def answer(cli, sql: str) -> list[dict]:
-    rows, columns = cli.execute(sql)
+def answer(cli, sql: str, warnings=()) -> list[dict]:
+    """The rows DeciDB answers, as dicts; ``warnings`` declares the DECIDE warnings it prints (texts, or how many)."""
+    rows, columns = cli.execute(sql, expect_warnings=warnings)
     return [dict(zip(columns, row)) for row in rows]
 
 

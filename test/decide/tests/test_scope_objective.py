@@ -328,13 +328,14 @@ _NO_ROW_ROWS = ((1, "a", 5, 1, True), (2, "a", 4, 5, False), (3, "b", 3, 2, True
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "objective_sql, objective",
+    "objective_sql, objective, warnings",
     [
         pytest.param(
             "MAXIMIZE when t.id > 99: max(per t.g: sum(t.w * x) by (t.g))",
             ScopedObjective(
                 ObjSense.MAXIMIZE, (Nested("max", ("g",), "sum", lambda r: {"x": r["w"]}),), when=lambda r: r["id"] > 99
             ),
+            ["the objective is 0 whatever the decisions"],
             id="two-level-when-keeps-no-row",
         ),
         pytest.param(
@@ -346,12 +347,14 @@ _NO_ROW_ROWS = ((1, "a", 5, 1, True), (2, "a", 4, 5, False), (3, "b", 3, 2, True
                     Reduce("sum", lambda r: {"x": -1}, when=lambda r: r["id"] > 99),
                 ),
             ),
+            [],
             id="reducer-reads-no-row",
         ),
     ],
 )
-def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver, objective_sql, objective):
-    """A reducer over no rows is NULL, and a NULL objective term is dropped: the other terms still count."""
+def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver, objective_sql, objective, warnings):
+    """A reducer over no rows is NULL, and a NULL objective term is dropped: the other terms still count. An objective
+    with none left is 0 whatever the decisions, which stderr says."""
     sql = f"""
         SELECT id, x {table('t', _NO_ROW_COLUMNS, _NO_ROW_ROWS)}
         DECIDE x(INT)
@@ -363,7 +366,7 @@ def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver
         Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
         Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (lambda r: {CONSTANT: 5},), per=()),
     ]
-    result = aligned(answer(decidb_cli, sql), model, "id")
+    result = aligned(answer(decidb_cli, sql, warnings), model, "id")
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, objective)
     )

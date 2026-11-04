@@ -35,6 +35,16 @@ _STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 _LARGE_NUMBER_WARNING = "very large number detected in model - numerical precision may make the solution unstable"
 
 
+#: The prefix of a line DECIDE prints on stderr about a query it still answers: a clause left with no instance, an
+#: objective that is 0 whatever the decisions (language/guide.md §7.4). Only the solver path prints one.
+DECIDE_WARNING_PREFIX = "DECIDE warning: "
+
+
+class DecideWarningMismatch(Exception):
+    """A DECIDE warning the test did not declare, or a declared one not printed once per query run. Not a
+    ``DeciDBCliError`` or an ``AssertionError``, for the reason ``LargeNumberWarningMismatch`` is not."""
+
+
 class LargeNumberWarningMismatch(Exception):
     """The large-number warning was printed when the test did not declare it, or not printed (exactly once per query
     run) when it did. Deliberately not a ``DeciDBCliError`` or an ``AssertionError``: a test that expects a query to
@@ -425,8 +435,46 @@ class DeciDBCli:
             return None
         return {**os.environ, **overlay}
 
+    def warnings(self, stderr: str) -> tuple[list[str], str]:
+        """The DECIDE warnings ``stderr`` holds, each once and without its prefix, and the rest of ``stderr``. Under
+        ``verify_serializer`` the harness runs a query twice, and each run prints its warnings."""
+        lines = stderr.splitlines(keepends=True)
+        printed = [
+            line.strip()[len(DECIDE_WARNING_PREFIX) :] for line in lines if line.startswith(DECIDE_WARNING_PREFIX)
+        ]
+        runs = 2 if self.verify_serializer else 1
+        once = printed[: len(printed) // runs]
+        if once * runs != printed:
+            raise DecideWarningMismatch(f"the {runs} runs of the query printed other warnings: {printed}")
+        return once, "".join(line for line in lines if not line.startswith(DECIDE_WARNING_PREFIX))
+
+    def settle_warnings(self, stderr: str, expected=()) -> str:
+        """``stderr`` without its DECIDE warnings, after checking each is one the test declared -- a text it holds --
+        and each declared one is printed once; ``expected`` may instead be how many, for a test whose oracle counts
+        them. The warning is part of the output, as the large-number one is."""
+        warnings, rest = self.warnings(stderr)
+        if isinstance(expected, int):
+            if len(warnings) != expected:
+                raise DecideWarningMismatch(
+                    f"expected {expected} DECIDE warning(s), printed {warnings}\nstderr: {stderr[:500]}"
+                )
+            return rest
+        undeclared = [warning for warning in warnings if not any(text in warning for text in expected)]
+        missing = [text for text in expected if sum(text in warning for warning in warnings) != 1]
+        if undeclared or missing:
+            raise DecideWarningMismatch(
+                f"undeclared DECIDE warnings {undeclared}, declared ones not printed once {missing}\n"
+                f"stderr: {stderr[:500]}"
+            )
+        return rest
+
     def execute(
-        self, sql: str, *, timeout: float = 120, expect_large_numbers: bool | dict[str, bool] = False
+        self,
+        sql: str,
+        *,
+        timeout: float = 120,
+        expect_large_numbers: bool | dict[str, bool] = False,
+        expect_warnings=(),
     ) -> tuple[list[tuple], list[str]]:
         """Run a SQL query and return ``(rows, column_names)``.
 
@@ -438,13 +486,18 @@ class DeciDBCli:
         DeciDBCliError
             If the CLI writes anything to stderr (error messages), including the large-number warning
             when the test did not declare it with ``expect_large_numbers``; a declared one must be printed.
+        DecideWarningMismatch
+            If a DECIDE warning is printed the test did not declare in ``expect_warnings`` (a text each holds), or a
+            declared one is not printed.
         """
         env = self._subprocess_env(status_markers=True)
         proc = _run_in_session(self._argv(), sql, env, json_mode=True, timeout=timeout) or _run(
             self._argv("-json", "-c", sql), sql, timeout=timeout, env=env
         )
 
-        stderr = self._settle_large_number_warning(proc.stderr, expect_large_numbers).strip()
+        stderr = self.settle_warnings(
+            self._settle_large_number_warning(proc.stderr, expect_large_numbers), expect_warnings
+        ).strip()
         # Filter known solver warnings (not errors), and lift out any DECIDB_STATUS
         # marker so the terminal is available structurally instead of by grepping the
         # user-facing message.
@@ -477,7 +530,13 @@ class DeciDBCli:
         return rows, cols
 
     def dump_model(
-        self, sql: str, path, *, timeout: float = 120, expect_large_numbers: bool | dict[str, bool] = False
+        self,
+        sql: str,
+        path,
+        *,
+        timeout: float = 120,
+        expect_large_numbers: bool | dict[str, bool] = False,
+        expect_warnings=(),
     ) -> str:
         """Run a query with ``DECIDB_DUMP_MODEL`` on and return the dumped model text.
 
@@ -498,8 +557,9 @@ class DeciDBCli:
         proc = _run(cli._argv("-c", sql), sql, timeout=timeout, env=env)
         errors = [
             line
-            for line in self._settle_large_number_warning(
-                proc.stderr, expect_large_numbers, direct_solve=False
+            for line in self.settle_warnings(
+                self._settle_large_number_warning(proc.stderr, expect_large_numbers, direct_solve=False),
+                expect_warnings,
             ).splitlines()
             if line and not line.startswith("Warning:")
         ]

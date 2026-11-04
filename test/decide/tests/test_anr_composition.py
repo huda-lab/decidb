@@ -72,8 +72,9 @@ def _judged(cli, solver, sql, rows, decisions, clauses, objective):
     assert expected.status == SolverStatus.OPTIMAL, expected.status
     result = cli.execute_raw(sql)
     assert_no_internal_leak(result, sql)
-    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
-    reached = model.judge(answer(cli, sql), clauses, objective)
+    warnings = model.warnings(clauses, objective)
+    assert result.returncode == 0 and not cli.settle_warnings(result.stderr, warnings).strip(), result.stderr
+    reached = model.judge(answer(cli, sql, warnings), clauses, objective)
     assert reached == pytest.approx(expected.objective, abs=1e-6)
     return reached
 

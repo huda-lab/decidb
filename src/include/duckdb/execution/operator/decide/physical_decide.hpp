@@ -152,11 +152,11 @@ public:
     vector<LogicalDecide::ReducerValueLink> reducer_value_links;
     //! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
     vector<LogicalDecide::RewriteAccount> rewrite_accounts;
-    //! What the data made of a scoped expression whose classes held more than one variant (Kind::VARIANTS, D70, D71):
-    //! written by Finalize, read by ParamsToString, which the profiler calls again once the result is read -- so
-    //! EXPLAIN ANALYZE prints it, and a plain EXPLAIN, which runs nothing, does not. Run-time facts of the one
-    //! execution, hence mutable.
-    mutable vector<LogicalDecide::RewriteAccount> variant_accounts;
+    //! What the data made of each clause (Kind::RUN_TIME): the variants of its classes (D70, D71), the instances it
+    //! skipped for having no value (deck pp. 50, 56). Written by Finalize, read by ParamsToString, which the profiler
+    //! calls again once the result is read -- so EXPLAIN ANALYZE prints it, and a plain EXPLAIN, which runs nothing,
+    //! does not. Run-time facts of the one execution, hence mutable.
+    mutable vector<LogicalDecide::RewriteAccount> run_time_accounts;
 
     // --- Singleton-row variable bounds (decided by DecideOptimizer::FoldSingletonRows) ---
     //
@@ -334,9 +334,19 @@ private:
     //! produced once (D72), so a field of its signature with a second value over its kept rows is an error.
     void RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                         ChunkExprCache &chunk_expr_cache, const vector<KeyedMapping> &keyed_mappings) const;
-    //! Records an EXPLAIN ANALYZE line (variant_accounts) for a scoped expression that generated `variants`
+    //! Records an EXPLAIN ANALYZE line (run_time_accounts) for a scoped expression that generated `variants`
     //! instances -- `unit`: constraints, or a reducer's values -- from `classes` classes.
     void RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants, idx_t classes) const;
+    void RecordRunTimeAccount(idx_t source_clause_id, string subject) const;
+    //! What the data left of each clause (deck pp. 50, 56): the instances it skipped for having no value, an EXPLAIN
+    //! ANALYZE line under it, and a clause left with none, which constrains nothing, a warning on stderr.
+    void ReportSkippedInstances(const DecideGlobalSinkState &gstate) const;
+    //! An objective that is 0 whatever the decisions -- every term with no value or a zero factor on every row -- is
+    //! a warning on stderr and an EXPLAIN ANALYZE line: any feasible answer is optimal.
+    void ReportAnEmptyObjective(const SolverInput &input) const;
+    //! What stage 06 made of each helper the plan names (D89): written where it is read, with no column, or its groups
+    //! of one member written in -- an EXPLAIN ANALYZE line under each clause whose plan line names the helper.
+    void ReportInlinedHelpers(const SolverInput &input) const;
 
     //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
     //! result to gstate.evaluated_constraints.

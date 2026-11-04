@@ -31,7 +31,7 @@ def _judged(cli, solver, sql, rows, decisions, clauses, objective=MAXIMIZE_X):
     model = AnrModel(rows, decisions)
     expected = model.solve(solver, clauses, objective)
     assert expected.status == SolverStatus.OPTIMAL, expected.status
-    reached = model.judge(answer(cli, sql), clauses, objective)
+    reached = model.judge(answer(cli, sql, model.warnings(clauses, objective)), clauses, objective)
     assert reached == pytest.approx(expected.objective, abs=1e-6)
     return reached
 

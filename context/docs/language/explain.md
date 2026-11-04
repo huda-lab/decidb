@@ -109,6 +109,11 @@ sort to the end.
 - **ANALYZE** needs no instrumentation: DuckDB times each operator's `Sink` (materialization), `Finalize` (model
   build and solve) and `Source` (readback). Row counts are actual. On small inputs per-operator times can round to
   `(0.00s)`; use `Total Time`.
+- **Run-time accounts.** Execution records what the data made of each clause (`RewriteAccount::Kind::RUN_TIME`,
+  `PhysicalDecide::run_time_accounts`): the variants of its classes (`RecordVariants`, D71), the instances it skipped
+  for having no value (`ReportSkippedInstances`, D90), a helper written where it is read (`ReportInlinedHelpers`,
+  D89) and an objective that is 0 (`ReportAnEmptyObjective`). `ParamsToString` prints them after the plan's accounts,
+  so EXPLAIN ANALYZE shows them and a plain EXPLAIN, which runs nothing, does not.
 - **JSON** uses the same `GetName()`/`ParamsToString()`, not `Serialize` (which exists for prepared statements).
   DuckDB splits a multi-line value into an array, one entry per line, markers included.
 - **Cardinality.** DECIDE does not override `EstimateCardinality`; it emits every input row, so the child's estimate

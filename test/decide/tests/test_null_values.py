@@ -22,8 +22,8 @@ KEPT = [(i, c, p) for i, c, p in ROWS if c is not None]
 TOLERANCE = 1e-6
 
 
-def _answer(cli, select, decide):
-    rows, columns = cli.execute(f"SELECT id, {select} FROM ({SOURCE} {decide}) q ORDER BY id")
+def _answer(cli, select, decide, warnings=()):
+    rows, columns = cli.execute(f"SELECT id, {select} FROM ({SOURCE} {decide}) q ORDER BY id", expect_warnings=warnings)
     assert [row[0] for row in rows] == [row[0] for row in ROWS]
     return {row[0]: dict(zip(columns[1:], row[1:])) for row in rows}
 
@@ -94,11 +94,13 @@ def test_a_null_coefficient_in_a_square_skips_its_instance(decidb_cli_gurobi, or
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_a_null_factor_on_a_squared_sum_skips_the_clause(decidb_cli_gurobi, oracle_solver):
-    """The clause's one instance is NULL, so only the boxes hold. A quadratic row needs Gurobi."""
+    """The clause's one instance is NULL, so only the boxes hold, and the clause constrains
+    nothing, which stderr says. A quadratic row needs Gurobi."""
     answer = _answer(
         decidb_cli_gurobi,
         "x",
         "DECIDE x(REAL) SUCH THAT x <= 5 AND (SELECT NULL::DOUBLE) * SUM(POWER(x, 2)) <= 4 MAXIMIZE SUM(p*x)",
+        ["'(SELECT NULL::DOUBLE) * SUM(POWER(x, 2)) <= 4' constrains nothing"],
     )
 
     def build(oracle):
@@ -158,11 +160,13 @@ def test_a_null_factor_on_an_objective_term_drops_the_term(decidb_cli, oracle_so
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_a_null_factor_on_a_composed_extremum_skips_the_clause(decidb_cli, oracle_solver):
-    """`NULL * MAX(x) + MIN(x) <= 3` is NULL, so only the boxes hold."""
+    """`NULL * MAX(x) + MIN(x) <= 3` is NULL, so only the boxes hold, and the clause constrains
+    nothing, which stderr says."""
     answer = _answer(
         decidb_cli,
         "x",
         "DECIDE x(INT) SUCH THAT x <= 5 AND (SELECT NULL::DOUBLE) * MAX(x) + MIN(x) <= 3 MAXIMIZE SUM(p*x)",
+        ["'(SELECT NULL::DOUBLE) * MAX(x) + MIN(x) <= 3' constrains nothing"],
     )
 
     def build(oracle):
