@@ -920,3 +920,46 @@ def test_a_bound_reads_each_column_as_a_field(request, cli_fixture):
         MAXIMIZE sum(x)
         ORDER BY id"""
     assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [6, 6]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "columns, rows, clause_sql, expected",
+    [
+        pytest.param(
+            ("id", "depot", "customer", "dispatch", "transit", "demand"),
+            ((1, "d1", "c1", 1, 2, 4), (2, "d1", "c1", 2, 1, 4)),
+            "x <= sum(per t.customer: max(t.demand) by (t.customer)) by (t.depot, t.dispatch + t.transit)",
+            [4, 4],
+            id="deck-p24-arrival-day",
+        ),
+        pytest.param(
+            ("id", "k", "g", "v"),
+            ((1, "u", "a", 4), (2, "u", "A", 4)),
+            "x <= sum(per t.k: max(t.v) by (t.k)) by (upper(t.g))",
+            [4, 4],
+            id="function-of-one-column",
+        ),
+        pytest.param(
+            ("id", "k", "w", "v"),
+            ((1, "u", 1, 5), (2, "u", 3, 5), (3, "v", 2, 7), (4, "w", 5, 9)),
+            "per (): sum(x - sum(per t.k: max(t.v) by (t.k))) by (t.w % 2) <= 20",
+            [0, 0, 27, 62],
+            id="inside-a-decision-reducer",
+        ),
+    ],
+)
+def test_a_nested_reducer_is_one_field_its_key(decidb_cli, columns, rows, clause_sql, expected):
+    """A reducer nested in a data reducer with a `per` is a signature field by its key alone
+    (deck p. 81), however that key is computed: customer c1 is one class of the group (d1, day
+    3), and k = u one class of the odd `t.w % 2` group (rows w = 1, 3, 5), so each counts once.
+    The nested value's NULL test, `(t.dispatch + t.transit) IS NULL`, had added the columns it
+    reads as fields, so a class counted once per column value: x <= 8 on the deck's p. 24
+    shape, and 5 + 5 + 9 for the odd group instead of 5 + 9 (x1 + x2 + x4 <= 77, not 62)."""
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= 100 AND {clause_sql}
+        MAXIMIZE sum(t.id * x)
+        ORDER BY id"""
+    assert [row["x"] for row in answer(decidb_cli, sql)] == expected

@@ -83,8 +83,14 @@ private:
 	}
 
 	//! The fields of a body's signature (D70, D83), over the read: the key of each reducer recorded inside it, whose
-	//! placeholder column it reads, and each column its data reads -- data that reads no column, whole.
+	//! placeholder column it reads, and each column its data reads -- data that reads no column, whole. A nested
+	//! reducer's value (its placeholder, NULL on a row in none of its groups) is its key alone (deck p. 81), so the
+	//! columns of its NULL test are no fields of their own.
 	void AddSignatureFields(const Expression &expr, vector<ExprPtr> &fields) {
+		if (HasDecideTag(expr.GetAlias(), BOUND_REDUCER_TAG)) {
+			AddRecordedKeys(expr, fields);
+			return;
+		}
 		if (!ReadsRecordedReducer(expr)) {
 			if (expr.IsFoldable()) {
 				return;
@@ -105,6 +111,16 @@ private:
 			return;
 		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			AddRecordedKeys(expr, fields);
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr,
+		                                      [&](const Expression &child) { AddSignatureFields(child, fields); });
+	}
+
+	//! The key elements of each recorded reducer whose placeholder column `expr` reads.
+	void AddRecordedKeys(const Expression &expr, vector<ExprPtr> &fields) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
 			for (auto &known : decide.bound_aggregates) {
 				if (known.column.table_index != table) {
@@ -116,8 +132,7 @@ private:
 			}
 			return;
 		}
-		ExpressionIterator::EnumerateChildren(expr,
-		                                      [&](const Expression &child) { AddSignatureFields(child, fields); });
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AddRecordedKeys(child, fields); });
 	}
 
 	//! The reducer's function over the instances of its `per` key that its group has: the rows it reads, with a class
