@@ -780,3 +780,18 @@ def test_an_objective_average_counts_the_members_with_a_value(decidb_cli):
         MAXIMIZE avg(abs(x - max(when t.c: x) by (t.g))) - 0.3 * sum(x)
         ORDER BY id"""
     assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(5)
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_bound_reads_each_column_as_a_field(request, cli_fixture):
+    """`sum(per (): t.a + t.b)` over data reads the fields `t.a` and `t.b` (D83, deck pp. 81,
+    110): (1, 2) and (2, 1) are two instances, 3 + 3, although their sums agree. The bound
+    side had grouped the instances by the sum."""
+    sql = f"""
+        SELECT id, x {table('t', ('id', 'g', 'a', 'b'), ((1, 'a', 1, 2), (2, 'a', 2, 1)))}
+        DECIDE x(REAL)
+        SUCH THAT x <= sum(per (): t.a + t.b)
+        MAXIMIZE sum(x)
+        ORDER BY id"""
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [6, 6]

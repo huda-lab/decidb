@@ -239,9 +239,9 @@ public:
 	//! The variant signature of every scoped expression of the canonical SUCH THAT tree with a field
 	//! (language/guide.md §7.1; D70): each `per K:` clause, its wrapper tagged with it (SIGNATURE_TAG_PREFIX), and
 	//! each relation-qualified reducer over decisions, given a scope of its own (KeyedScopeInfo::signature). Its
-	//! fields are the tuple terms and decisions outside reducers and the reducers' `by` keys, read on the canonical
-	//! tree so the data terms of one additive context are one field (D83); a field the key holds by construction is
-	//! none. Called once, by the planner, right after CanonicalizeTree.
+	//! fields are the columns its tuple terms read (D83), its frames (D82) and decisions outside reducers, and the
+	//! reducers' `by` keys; a field the key holds by construction is none. Called once, by the planner, right after
+	//! CanonicalizeTree.
 	void BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const;
 
 	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
@@ -490,11 +490,9 @@ private:
 	//! term, or alone under a factor whose sign is not known before the query runs.
 	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
 
-	//! The signature fields `expr` reads (D70, D83), appended to `fields` unless there or held by `key` already: a
-	//! decision by instance, a reducer's `by` key, and data by value -- the data terms of one additive context summed
-	//! into one field.
-	void CollectSignatureFields(const Expression &expr, idx_t key, Clause clause,
-	                            vector<DecideSignatureField> &fields) const;
+	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
+	//! decision by instance, a reducer's `by` key, a frame by the value it reads, and data by each column it reads.
+	void CollectSignatureFields(const Expression &expr, idx_t key, vector<DecideSignatureField> &fields) const;
 	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
 	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;
 	//! Gives every relation-qualified reducer over decisions in `expr` whose body has a field its signature and a

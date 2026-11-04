@@ -510,8 +510,9 @@ def _f10(name, bound, bound_sql, phase, optimum, rendered) -> Case:
     )
 
 
-#: ``a + b`` is one field with one value, 3: the clause is determined and runs today.
-F10_SUM = _f10("F10_sum", Col("a") + Col("b"), "t.a + t.b", 0, 6, ("x[a] <= 3",))
+#: ``a + b`` is the fields ``(a, b)`` (deck pp. 81, 110): (1, 2) and (2, 1) are two
+#: instances, although both bounds are 3.
+F10_SUM = _f10("F10_sum", Col("a") + Col("b"), "t.a + t.b", 1, 6, ("x[a] <= 3", "x[a] <= 3"))
 #: ``a`` takes two values in the class: two instances.
 F10_SPLIT = _f10("F10_split", Col("a"), "t.a", 1, 2, ("x[a] <= 1", "x[a] <= 2"))
 
@@ -534,11 +535,12 @@ def _f20(name, bound, bound_sql) -> Case:
         Objective(MAXIMIZE, reduce("sum", X)),
         sql,
         10,
-        {1: ("x[a] - y1 - y2 <= 3",)},
+        {1: ("x[a] - y1 - y2 <= 3", "x[a] - y1 - y2 <= 3")},
     )
 
 
-#: Written associativity does not change the fields: both spellings are one instance.
+#: Written associativity does not change the fields: both spellings read the columns
+#: ``(a, b)``, two instances, beside the reducer's ``by``.
 F20_SPLIT_TERMS = _f20("F20_split_terms", Col("a") + reduce("sum", Y) + Col("b"), "t.a + sum(y) + t.b")
 F20_JOINED_TERMS = _f20("F20_joined_terms", Col("a") + Col("b") + reduce("sum", Y), "t.a + t.b + sum(y)")
 
@@ -815,8 +817,8 @@ F18_CAP_KEPT = _f18(
 
 F19_COLUMNS = ("product", "period", "demand")
 F19_DATA = (("A", 1, 5), ("A", 2, 5), ("A", 3, 5), ("A", 4, 5))
-#: The order key is a field of the inner ``per product`` class: three present members,
-#: although their values are equal (D82). Comparing frames by value would give 5.
+#: A frame is a field of the inner ``per product`` class by the value it reads (D82, deck
+#: p. 37): the three present anchors read 5 alike, one member, so the bound is 5.
 F19 = Case(
     "F19",
     "D82",
@@ -837,8 +839,8 @@ F19 = Case(
     f"""SELECT period, x {table('t', F19_COLUMNS, F19_DATA)} DECIDE x(INT)
         SUCH THAT per (): sum(x) <= sum(per t.product: at(previous: t.demand) over (t.period within t.product))
         MAXIMIZE sum(x) ORDER BY period""",
-    15,
-    {0: ("x1 + x2 + x3 + x4 <= 15",)},
+    5,
+    {0: ("x1 + x2 + x3 + x4 <= 5",)},
 )
 
 F21_COLUMNS = ("g", "period", "cap")
@@ -951,20 +953,21 @@ REVERSED = Case(
     3,
     {1: ()},
 )
-#: COUNT over a frame that selects nothing is 0, as SQL counts an empty set.
+#: COUNT over a range none of whose requested positions exists has no value, as every
+#: reducer over one has (deck p. 50): the comparison has no instance, and x keeps its cap.
 COUNT_EMPTY = Case(
     "count_empty",
-    "deck pp. 28-32",
+    "deck p. 50",
     5,
     PERIODS_COLUMNS,
     PERIODS_DATA,
     (Decision("x"),),
-    (clause(le(X, Range("count", next_(5), next_(6), Col("v"), PERIOD))),),
+    (clause(le(X, 9)), clause(le(X, Range("count", next_(5), next_(6), Col("v"), PERIOD)))),
     Objective(MAXIMIZE, reduce("sum", X)),
     f"""SELECT id, x {table('t', PERIODS_COLUMNS, PERIODS_DATA)} DECIDE x(INT)
-        SUCH THAT x <= count(from 5 next to 6 next: t.v) over (t.period) MAXIMIZE sum(x) ORDER BY id""",
-    0,
-    {0: ("x1 <= 0", "x2 <= 0", "x3 <= 0")},
+        SUCH THAT x <= 9 AND x <= count(from 5 next to 6 next: t.v) over (t.period) MAXIMIZE sum(x) ORDER BY id""",
+    27,
+    {1: ()},
 )
 
 NULLS_COLUMNS = ("id", "v")

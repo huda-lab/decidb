@@ -13,11 +13,10 @@ algorithmic shortcut:
   into classes of ``K``, and produces one value per distinct *signature* in each class,
   read at the signature's first kept row (§3.1, §3.2). ``per row`` keeps every tuple
   occurrence.
-- **A signature** is the tuple of the body's fields: the net value of its reducer-free,
-  frame-free additive terms, one field per additive context (D83: the canonical tree, so
-  ``a + sum(y) + b`` and ``a + b + sum(y)`` have the same fields); for each reducer, its
-  factor and its ``by`` value; for each frame, its ``within`` key, the anchor's order key
-  when the selector is relative (D82), and the fallback where the anchor reaches it.
+- **A signature** is the tuple of the body's fields: each column its data terms read, by
+  value (D83, deck pp. 81, 110: ``a + b`` is the field ``(a, b)``); for each reducer, its
+  factor and its ``by`` value; for each frame, the value it reads at the anchor (D82, deck
+  p. 37) -- a range over decisions, a helper decision per window, by its window.
 - **A reducer** reads the kept rows of the enclosing scope that share the current row's
   ``by`` value -- all of them, not only the current class -- evaluates its operand there,
   and combines the operand's values with multiplicity kept (§3.1, §3.3).
@@ -28,7 +27,8 @@ algorithmic shortcut:
 - **No value** (``ABSENT``) is one thing wherever it comes from: a NULL data value (D67), a
   row a NULL key puts in no class, group or timeline (D5), a reducer left with no member
   (D68), a frame that selects nothing. It skips a comparison's instance, drops a reducer's
-  member and drops an objective term; ``count`` over no member is 0.
+  member and drops an objective term; ``count`` over no member is 0, and over a range with
+  no requested position that exists it has no value (deck p. 50).
 
 Values are symbolic: a linear form over decision instances (``Column``), extremum helpers
 (``Extremum``) and absolute values (``Absolute``), with a constant under ``CONSTANT``.
@@ -457,6 +457,40 @@ def _key_of(row: Row, key) -> tuple | None:
     return key_value(row, key)
 
 
+def _columns_of(expr) -> list[Col]:
+    """The columns a data term reads, each once, in reading order (D83); a function of the
+    row is a column of its own."""
+    if isinstance(expr, Col):
+        return [expr]
+    if isinstance(expr, Add):
+        parts = expr.terms
+    elif isinstance(expr, Mul):
+        parts = (expr.left, expr.right)
+    elif isinstance(expr, Abs):
+        parts = (expr.operand,)
+    else:
+        return []
+    columns: list[Col] = []
+    for part in parts:
+        columns.extend(column for column in _columns_of(part) if all(column.source != c.source for c in columns))
+    return columns
+
+
+def _reads_decisions(expr) -> bool:
+    """Whether ``expr`` reads a decision anywhere."""
+    if isinstance(expr, (Var, Terms)):
+        return True
+    if isinstance(expr, Add):
+        return any(_reads_decisions(term) for term in expr.terms)
+    if isinstance(expr, Mul):
+        return _reads_decisions(expr.left) or _reads_decisions(expr.right)
+    if isinstance(expr, Abs):
+        return _reads_decisions(expr.operand)
+    if isinstance(expr, (Agg, At, Range)):
+        return True
+    return False
+
+
 class AnrModel:
     """The rows and decisions of one query, and the instances its clauses generate."""
 
@@ -608,16 +642,17 @@ class AnrModel:
             other.append(expr)
 
     def _fields(self, expr, t, kept) -> tuple:
-        """The fields of one additive context: each other term's fields, then the net
-        value of the data terms as one field (D83)."""
+        """The fields of one additive context: each other term's fields, then each column
+        its data terms read, by value (D83)."""
         data, other = [], []
         self._collect(expr, 1.0, data, other)
         fields = [self._term_fields(node, t, kept) for node in other]
-        if data:
-            total: dict = {}
-            for scale, node in data:
-                _add_into(total, self._form(node, t, kept), scale)
-            fields.append(("terms", _freeze(total)))
+        columns: dict = {}
+        for _, node in data:
+            for column in _columns_of(node):
+                key = column.source if isinstance(column.source, str) else id(column.source)
+                columns.setdefault(key, column.at(self.rows[t]))
+        fields.extend(("column", key, value) for key, value in sorted(columns.items(), key=lambda item: str(item[0])))
         return tuple(fields)
 
     def _term_fields(self, node, t, kept) -> tuple:
@@ -641,11 +676,16 @@ class AnrModel:
         raise TypeError(f"unexpected node {node!r}")
 
     def _frame_fields(self, node, t, kept) -> tuple:
+        """By the value it reads at the anchor (D82). A range over decisions is a helper
+        decision per window (D78), a field by its instance: its window -- its timeline, the
+        anchor's position when it reads relative to the anchor, and the fallback where the
+        anchor reaches it."""
+        if isinstance(node, At) or not _reads_decisions(node.payload):
+            return (("value", _freeze(self._form(node, t, kept))),)
         timeline = self._timeline(node.over, kept)
         within, _ = timeline.position[t]
         fields = [("within", within)]
-        relative = node.position.relative if isinstance(node, At) else node.start.relative or node.end.relative
-        if relative:
+        if node.start.relative or node.end.relative:
             fields.append(("order", timeline.order[t]))
         if node.fallback is not None and self._missing(node, t, kept):
             fields.append(("fallback", _freeze(self._form(node.fallback, t, kept))))
@@ -902,6 +942,8 @@ class AnrModel:
         missing = sum(1 for p in selected if p is None)
         if node.all and missing:
             return ABSENT  # nothing is read, so no value it would read can fail
+        if missing == len(selected) and (node.fallback is None or not missing):
+            return ABSENT  # no requested position exists, and no `else` stands in: `count` too (deck p. 50)
         values = [self._at_position(node, timeline, within, p, kept) for p in selected if p is not None]
         if missing and node.fallback is not None:
             values.extend([self._form(node.fallback, t, kept)] * missing)

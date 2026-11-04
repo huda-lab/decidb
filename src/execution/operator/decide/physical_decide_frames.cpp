@@ -154,12 +154,13 @@ static void ListRangeWindows(ClientContext &context, const DecideFrameSpec &fram
 		map.list_begin.push_back(map.list_rows.size());
 		return map.list_missing.size() - 1;
 	};
-	// What a list reads nothing from: no position (a reversed range), `all` meeting a missing one, or no value at all;
-	// `count` of no value is 0.
+	// What a list reads nothing from: no position (a reversed range), `all` meeting a missing one, or no requested
+	// position that exists and no `else` -- `count` too (deck p. 50). A position whose value is NULL exists: `count`
+	// reads 0 there.
 	auto reads_nothing = [&](idx_t list) {
 		const idx_t missing = map.list_missing[list];
 		const bool rows = map.list_begin[list + 1] > map.list_begin[list];
-		return (frame.all && missing > 0) || (frame.reducer != "count" && !rows && (missing == 0 || !frame.fallback));
+		return (frame.all && missing > 0) || (!rows && (missing == 0 || !frame.fallback));
 	};
 	auto add_window = [&](idx_t anchor, idx_t list) {
 		map.window_anchor.push_back(anchor);

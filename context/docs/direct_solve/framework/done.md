@@ -149,8 +149,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   it back by the key with a SINGLE join on IS NOT DISTINCT FROM, so a NULL key is a group. This is how DuckDB
   decorrelates a scalar subquery (FlattenDependentJoins). A keyed or colon reducer counts each class of its key once:
   an aggregate per group, class and the body's signature fields takes each instance's body (`ARBITRARY` over rows that
-  agree: a nested reducer is a field by its key and data by its value, so two groups whose reducers hold one value are
-  two instances, D70, D71), and the reducer runs over the
+  agree: a nested reducer is a field by its key and data by each column it reads, so two groups whose reducers hold
+  one value are two instances, D70, D71, D83), and the reducer runs over the
   instances of each group. On a row whose written `by` column is NULL the column is NULL,
   so the instance is skipped (D5), and a row whose inner `per` column is NULL is in no class. A `per K:` in front of the
   clause groups no reducer (D6). A table may read the tables added before it. The binder rejects `DISTINCT` and drops

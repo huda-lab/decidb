@@ -508,28 +508,30 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   missing position; `all` makes the whole range select nothing; otherwise a range keeps the positions that exist. A
   point frame that selects nothing, a NULL read at its selected row and a NULL fallback are no value (D84), and so is a
   range that reads nothing -- a reversed one (`from next to previous`), `all` meeting a missing position, or every
-  position missing with no `else` -- and a frame at a row in no timeline, whatever its `else` (D75): its comparison
-  skips that instance, a reducer drops that member, and an objective term holding it is dropped. A frame over data is
-  a NULL there, which a function may consume as SQL does: `x <= coalesce(at(previous: t.d) over (t.period), 1)` reads
-  1 at the first period (deck p. 56).
+  position missing with no `else`, `count` too (deck p. 50) -- and a frame at a row in no timeline, whatever its `else`
+  (D75): its comparison skips that instance, a reducer drops that member, and an objective term holding it is dropped. A
+  frame over data is a NULL there, which a function may consume as SQL does: `x <= coalesce(at(previous: t.d) over
+  (t.period), 1)` reads 1 at the first period (deck p. 56).
 - **A range** reads one value per position it visits, as a point does (D73), and reduces them as SQL's aggregate does: a
-  NULL among them is skipped, `count` counts the rest and reads 0 where there are none, and a cyclic range keeps every
-  repeated visit (D76; on three positions, `from 4 previous to 4 next` reads nine). Over data it is one value per anchor
-  of the reducer's own type (`max` of a DATE is a DATE). Over decisions it is a helper decision per window (D78) -- the
-  range several anchors share: one per timeline when neither end depends on the anchor, one per position otherwise --
-  defined once, so `x <= sum(from first to last: x) over (t.period)` over n rows is one definition of n terms. `count`
-  over decisions is refused, as `count(x)` is. One frame may read at most `decide_frame_limit` values over its ranges
-  (default 10,000,000; `SET decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over (t.period) reads
-  more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the setting."*
+  NULL among them is skipped, `count` counts the rest and reads 0 where every value is NULL, and a cyclic range keeps
+  every repeated visit (D76; on three positions, `from 4 previous to 4 next` reads nine). Over data it is one value per
+  anchor of the reducer's own type (`max` of a DATE is a DATE). Over decisions it is a helper decision per window (D78)
+  -- the range several anchors share: one per timeline when neither end depends on the anchor, one per position
+  otherwise -- defined once, so `x <= sum(from first to last: x) over (t.period)` over n rows is one definition of n
+  terms. `count` over decisions is refused, as `count(x)` is. One frame may read at most `decide_frame_limit` values
+  over its ranges (default 10,000,000; `SET decide_frame_limit = n`), else *"DECIDE: sum(from first to last: t.v) over
+  (t.period) reads more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the
+  setting."*
 - **One row per position** (D73): the rows of a position a frame reads -- a point's selected one, each one a range
   visits -- must read one payload -- one value of data, one linear form over decisions (`0 * x` reads no `x`) -- else
   *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
   must hold one row."*
 - **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an
-  error naming the class and the timelines. A frame is a field of the clause's signature by its keys (D82): its
-  timeline, the anchor's position there when it reads relative to the anchor, and its fallback where reached -- so
-  `per t.product: x <= at(previous: t.v) over (t.period within t.product)` is one instance per period with a previous
-  one, and `at(first: ...)` one per product.
+  error naming the class and the timelines. A frame is a field of the clause's signature by the value it reads
+  (D82, deck p. 37), as any tuple term is: over data that value, over decisions the instances its payload reads at
+  the selected row, and its fallback where reached; a range over decisions by its window. So `per t.product: x <=
+  at(previous: t.v) over (t.period within t.product)` is one instance per distinct previous demand of a product, and
+  `sum(per t.product: at(previous: y) over (...))` reads a product's one `y` once, however many anchors read it.
 - **Inside a reducer over decisions** (D87) a frame that selects nothing drops its member, decisions and all: the
   reducer's NULL test of the frame keeps the member out (D84), so `sum(at(previous: x) over (t.period within
   t.product)) by (t.product)` reads each product's periods but its first, and an AVG divides by the members left. A
@@ -542,7 +544,8 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
   (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
   has no member.
-- **The objective** is produced once (D72): a root frame that reads more than one position, timeline or fallback
+- **The objective** is produced once (D72): a root frame that reads more than one value -- at more than one position,
+  timeline or fallback --
   over the kept rows is an error saying so.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
   inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
@@ -683,10 +686,10 @@ Tests: `test/decide/tests/test_scope_deck_examples.py`.
 A `per` key splits the kept rows into classes, and each class is generated once per **variant** (D70, deck pp.
 34–40): once per distinct combination of what the body reads once per class — its **signature**:
 
-- every **tuple term**, by value: a column or expression outside reducers, including the bound and any factor on a
-  reducer. The data terms of one additive context, read through `+`, `-` and constant factors, are one value (D83):
-  `per g: x <= a + b` over rows with `(a, b)` = `(1, 2)` and `(2, 1)` is one variant, and so are `x - a <= b` and
-  `x <= a + sum(y) + b`. A term under a row-varying factor, or inside `abs`, is a value of its own;
+- every **column** the data outside reducers reads, by value, the bound and any factor on a reducer included (D83, deck
+  pp. 81, 110): `per g: x <= a + b` over rows with `(a, b)` = `(1, 2)` and `(2, 1)` is two variants, although both
+  bounds are 3, and so are `x - a <= b` and `x <= a + sum(y) + b`. A literal or a query-wide value is no field;
+- every **frame**, by the value it reads (D82, §5.6);
 - every **decision** outside reducers, by instance: a per-row decision splits the class into its rows, a keyed one into
   its classes, and a `per ()` decision splits nothing;
 - every reducer's **`by` key**, by value: each group a class reads is a variant.

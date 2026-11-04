@@ -530,26 +530,24 @@ scoped expression reads once per class (D70, [`../../language/guide.md`](../../l
 reducer over decisions (given a keyed scope of its own on the same key, its tag retargeted
 to it, `KeyedScopeInfo::signature`), and the objective. `CollectSignatureFields` walks the
 expression: a reducer is its `by` key (`BY_KEY`) and its body a scoped expression of its
-own; a decision is a field by instance (`DECISION`); a maximal decision- and reducer-free
-subtree is data by value (`VALUE`), and the data terms of one additive context, read
-through `+`, `-` and constant factors (`Decompose`), are one field (D83), rebuilt by
-`BuildAdditive`, so written associativity never changes the count. Literals and query-wide
-values are no field. Neither is anything the key holds by construction
+own; a decision is a field by instance (`DECISION`); data is a field per column it reads, by
+value (`VALUE`, D83), and data that reads no column a field whole, so written associativity
+never changes the count. Literals and query-wide values are no field. Neither is anything the key holds by construction
 (`KeyHoldsField`): one of its elements as rows group on it (`DecideKeyElement::Grouping()`,
 collation included, D69), a deterministic function of them and of constants
 (`CAST(cap AS DOUBLE)`), a decision whose own key's elements it all holds, a query-wide
 decision, a `by` key all of whose elements it holds. An expression with no field has no
 signature: one instance per class, as the key alone gives. A data-only qualified reducer
 needs no scope of its own: its side table groups on the body's signature fields too, a
-nested reducer by its key and data by its value (stage 05). A
+nested reducer by its key and data by each column it reads (stage 05). A
 qualified reducer nested in another is counted over the rows its path keeps
 (`DecideReducerPath`, `decide_reducer_path.hpp`: the clause's `when` and every enclosing
 reducer's own -- not the NULL tests `SkipNullData` adds to an enclosing reducer's filter,
 which drop that reducer's own members only; `SignQualifiedReducers` signs the inner
 reducers first, along the path).
-A frame selector is a field by its keys (`FRAME`, D82): its timeline, the anchor's position
-on it when it reads relative to the anchor, and its fallback where reached; a `first` or
-`last` frame whose `within` the key holds is no field.
+A frame selector is a field by the value it reads (`FRAME`, D82), which stage 08 reads off
+its columns; a `first` or `last` frame whose `within` the key holds reads one value per class
+and is no field.
 
 ### Frame selectors
 

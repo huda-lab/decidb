@@ -295,8 +295,15 @@ resolves both in the order the definitions read each other -- a helper's members
 definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader reads that one
 mark: a comparison skips the instance (`MarkAbsentDecisionReads`), a helper drops the member (`ValueLinkMembers`),
 the objective drops the term. A row a rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no
-instance of the clause: it is skipped where its own reads have no value, and the auxiliary with it. A frame field of a signature (D82) splits by the frame's timeline, the anchor's peer when it
-reads relative to the anchor, and what a reached `else` reads, its data and its decisions' instances.
+instance of the clause: it is skipped where its own reads have no value, and the auxiliary with it.
+
+A frame field of a signature (D82) splits by the value the frame reads at each anchor (`FrameFieldValues`): its
+columns there -- a point's VALUE, READ and FALLBACK, a range over data's REDUCED, referenced once per query
+(`DecideGlobalSinkState::frame_column_refs`) so the chunk expression cache, keyed by node, never meets a freed one --
+and the instances they read, the payload's at the selected row and the fallback's at the anchor; a range over
+decisions splits by its window, its helper's instance. An anchor where the frame reads no value is no variant
+(`BuildSignatureIds` filters it), so the objective's check (D72) counts only anchors that read one, and names what
+differs among them: a position, a timeline or a fallback.
 
 A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
 one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- the

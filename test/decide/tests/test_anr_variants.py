@@ -66,13 +66,13 @@ def test_the_engine_answers_each_fixture(decidb_cli, scope_solver, case):
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "case, rows", [pytest.param(F10_SUM, 1, id="F10_sum"), pytest.param(F10_SPLIT, 2, id="F10_split")]
+    "case, rows", [pytest.param(F10_SUM, 2, id="F10_sum"), pytest.param(F10_SPLIT, 2, id="F10_split")]
 )
 def test_a_class_is_one_instance_per_variant(decidb_cli, case, rows):
-    """D83: `a + b` is one field, so F10's class is one instance when the sum agrees (3, 3)
-    and two when `a` alone differs (1, 2) -- as many as the oracle generates, and as many as
-    EXPLAIN ANALYZE counts (a bound on one decision folds into its box, so the model has no
-    row to count)."""
+    """D83: `a + b` reads the fields `a` and `b` (deck pp. 81, 110), so F10's class is two
+    instances whether the sums agree (3, 3) or `a` alone differs (1, 2) -- as many as the
+    oracle generates, and as many as EXPLAIN ANALYZE counts (a bound on one decision folds
+    into its box, so the model has no row to count)."""
     assert len(case.model().instances(case.clauses[0])) == rows
     text = _profile(decidb_cli, case.sql).replace(" ", "")
     assert ("pert.g:2constraintsfrom1class" in text) == (rows == 2), text
@@ -80,7 +80,7 @@ def test_a_class_is_one_instance_per_variant(decidb_cli, case, rows):
 
 @pytest.mark.correctness
 def test_associativity_does_not_change_the_rows(decidb_cli, tmp_path):
-    """D83: `t.a + sum(y) + t.b` and `t.a + t.b + sum(y)` read the one field `t.a + t.b`."""
+    """D83: `t.a + sum(y) + t.b` and `t.a + t.b + sum(y)` read the same fields, `t.a` and `t.b`."""
     split = dump_counts(decidb_cli.dump_model(F20_SPLIT_TERMS.sql, tmp_path / "split.dump"))
     joined = dump_counts(decidb_cli.dump_model(F20_JOINED_TERMS.sql, tmp_path / "joined.dump"))
     assert split == joined
@@ -194,8 +194,9 @@ def test_explain_analyze_counts_the_variants(decidb_cli):
 
 @pytest.mark.correctness
 def test_explain_analyze_is_silent_without_variants(decidb_cli):
-    """F10_sum's class has one variant: nothing to say."""
-    assert "withinaclass" not in _profile(decidb_cli, F10_SUM.sql).replace(" ", "")
+    """A class whose rows read one value of `b` has one variant: nothing to say."""
+    sql = _query("per t.g: x(INT)", "per t.g: x <= t.b", ((1, "a", "p", 3, 0), (2, "a", "q", 3, 0)))
+    assert "withinaclass" not in _profile(decidb_cli, sql).replace(" ", "")
 
 
 @pytest.mark.diagnose

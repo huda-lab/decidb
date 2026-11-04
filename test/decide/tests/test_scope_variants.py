@@ -280,20 +280,18 @@ def test_an_objective_value_and_by_key(decidb_cli):
 
 
 @pytest.mark.error
-def test_objective_messages_quote_the_sql_only(decidb_cli):
-    """A subquery and a cast in the value are quoted as written."""
+@pytest.mark.parametrize(
+    "factor",
+    [pytest.param("D.capacity + (SELECT 1)", id="a-subquery"), pytest.param("CAST(D.capacity AS DOUBLE)", id="a-cast")],
+)
+def test_objective_messages_quote_the_sql_only(decidb_cli, factor):
+    """A value's field is each column it reads (D83), named as written whatever wraps it: a
+    query-wide subquery is no field, and a cast reads its column."""
     decide = "ship(INT), per (): s(INT)"
     _stops(
         decidb_cli,
-        _query("s <= 1", decide=decide, objective="MAXIMIZE sum(ship) - (D.capacity + (SELECT 1)) * s"),
-        "DECIDE objective: 'D.capacity + (SELECT 1)' takes more than one value over the kept rows (21, 41), "
-        + PRODUCED_TWICE,
-    )
-    _stops(
-        decidb_cli,
-        _query("s <= 1", decide=decide, objective="MAXIMIZE sum(ship) - CAST(D.capacity AS DOUBLE) * s"),
-        "DECIDE objective: 'CAST(D.capacity AS DOUBLE)' takes more than one value over the kept rows (20.0, "
-        "40.0), " + PRODUCED_TWICE,
+        _query("s <= 1", decide=decide, objective=f"MAXIMIZE sum(ship) - ({factor}) * s"),
+        "DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), " + PRODUCED_TWICE,
     )
 
 

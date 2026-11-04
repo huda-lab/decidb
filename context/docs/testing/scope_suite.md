@@ -242,7 +242,8 @@ one group at a time. No test asserts an answer its docstring derives.
   EXPLAIN's helper lines, DIAGNOSE, an infeasible model on both backends, fractional
   helpers; `TestAbsenceAndTies`: an anchor in no timeline with no value whatever its `else`
   (D75), a tied position a range reads once or refuses (D73), a missing position a
-  `coalesce` reads as NULL (D84), a square over a frame refused on HiGHS by name. The parse
+  `coalesce` reads as NULL (D84), a square over a frame refused on HiGHS by name;
+  `TestFieldsByValue`: two anchors reading one instance one member (D82). The parse
   errors, answers and the echo are `test/decidb/test_frame_parser.test`'s
   (sqllogic; ordinary SQL windows, `AT TIME ZONE` and `WITHIN GROUP` unchanged; a FROM-first
   query), and the round trips `test_decidb_plan_serialization.cpp`'s.
@@ -290,7 +291,7 @@ one group at a time. No test asserts an answer its docstring derives.
   of group sums skipping a row in no group, two groups of one value two variants on the
   bound side, a reducer left with no member skipping its instance; a Boolean product with a
   factor of no value having none, and an objective average counting only the members with a
-  value (D88). Oracle, dump and pinned messages.
+  value (D88); a bound reading each column as a field (D83). Oracle, dump and pinned messages.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built

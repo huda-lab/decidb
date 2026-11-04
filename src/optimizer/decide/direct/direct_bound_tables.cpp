@@ -83,10 +83,23 @@ private:
 	}
 
 	//! The fields of a body's signature (D70, D83), over the read: the key of each reducer recorded inside it, whose
-	//! placeholder column it reads, and each largest part of it that reads none and is no constant.
+	//! placeholder column it reads, and each column its data reads -- data that reads no column, whole.
 	void AddSignatureFields(const Expression &expr, vector<ExprPtr> &fields) {
 		if (!ReadsRecordedReducer(expr)) {
-			if (!expr.IsFoldable()) {
+			if (expr.IsFoldable()) {
+				return;
+			}
+			bool leaves = false;
+			std::function<void(const Expression &)> read_leaves = [&](const Expression &part) {
+				if (part.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+					leaves = true;
+					fields.push_back(Over(part));
+					return;
+				}
+				ExpressionIterator::EnumerateChildren(part, read_leaves);
+			};
+			read_leaves(expr);
+			if (!leaves) {
 				fields.push_back(Over(expr));
 			}
 			return;
@@ -109,9 +122,9 @@ private:
 
 	//! The reducer's function over the instances of its `per` key that its group has: the rows it reads, with a class
 	//! (no NULL in a NO_GROUP element), are grouped by key, class and the body's signature fields -- a nested
-	//! reducer by its key, data by its value -- so each variant in a class is one instance, two groups whose reducers
-	//! hold one value included (D70, D71), and the function runs over the instances of each group. Only SUM, AVG, MIN
-	//! and MAX take a `per`, so a group with no class gives NULL whether its row is in the table or not.
+	//! reducer by its key, data by each column it reads -- so each variant in a class is one instance, two groups whose
+	//! reducers hold one value included (D70, D71, D83), and the function runs over the instances of each group. Only
+	//! SUM, AVG, MIN and MAX take a `per`, so a group with no class gives NULL whether its row is in the table or not.
 	unique_ptr<LogicalOperator> CountedByClass(const DecideBoundAggregate &record, const vector<ExprPtr> &keys) {
 		D_ASSERT(record.argument);
 		ExprPtr counted = record.reads ? Over(*record.reads) : nullptr;

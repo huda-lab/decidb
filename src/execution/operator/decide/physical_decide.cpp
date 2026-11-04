@@ -794,18 +794,76 @@ static vector<GroupName> GroupNames(const PerGroupCache &cache, idx_t key, const
 	return names;
 }
 
-//! What a signature's FRAME field reads (D82): the frames, their maps over the input, and
-//! the columns and decisions their fallbacks read.
+//! What a signature's FRAME field reads (D82): the frames, their maps over the input, the columns
+//! they appended to it and a reference to each (DecideGlobalSinkState::frame_column_refs).
 struct SignatureFrames {
 	const vector<DecideFrameSpec> &frames;
 	const vector<DecideFrameMap> &maps;
 	const DecidePreparedModel &prepared;
+	const vector<unique_ptr<Expression>> &column_refs;
 };
+
+//! What frame `f` reads at each row, which a FRAME field compares (D82, deck p. 37): its columns there -- over data its
+//! value, over decisions the coefficients of its payload at the selected row and of its fallback where that stands in
+//! -- into `columns`, and the instances those read, one class per row into `instances` (`num_rows` on a row reading
+//! none): the payload's decisions at the selected row, the fallback's at the anchor; for a range over decisions, its
+//! window, which is its helper's instance.
+static void FrameFieldValues(idx_t f, const SignatureFrames &frames, const vector<DecideVarScopeInfo> &variable_scopes,
+                             const vector<KeyedMapping> &keyed_mappings, idx_t num_rows,
+                             vector<const Expression *> &columns, vector<vector<idx_t>> &instances) {
+	auto &frame = frames.frames[f];
+	auto &map = frames.maps[f];
+	auto &prepared = frames.prepared;
+	bool over_data = false;
+	for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
+		auto kind = prepared.frame_columns[j].kind;
+		if (prepared.frame_columns[j].frame != f || kind == DecideFrameColumn::Kind::DEFINED) {
+			continue;
+		}
+		over_data = over_data || kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
+		columns.push_back(frames.column_refs[j].get());
+	}
+	if (frame.range && !over_data) {
+		instances.push_back(map.window);
+		return;
+	}
+	vector<idx_t> seen;
+	// The instance of `decision` each row reads: at the row its frame selects, or at the anchor where its fallback
+	// stands in.
+	auto add_instances = [&](idx_t decision, bool payload) {
+		auto scope = decision < variable_scopes.size() ? variable_scopes[decision] : DecideVarScopeInfo::Row();
+		if (scope.IsGlobal() || std::find(seen.begin(), seen.end(), decision) != seen.end()) {
+			return;
+		}
+		seen.push_back(decision);
+		vector<idx_t> instance(num_rows, num_rows);
+		for (idx_t row = 0; row < num_rows; row++) {
+			auto at = payload ? map.SelectedRow(row) : (map.Missing(row) ? row : DConstants::INVALID_INDEX);
+			if (at != DConstants::INVALID_INDEX) {
+				instance[row] = scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[at] : at;
+			}
+		}
+		instances.push_back(std::move(instance));
+	};
+	if (f < prepared.frame_payload_terms.size()) {
+		for (auto &term : prepared.frame_payload_terms[f]) {
+			if (term.decision != DConstants::INVALID_INDEX) {
+				add_instances(term.decision, true);
+			}
+		}
+	}
+	seen.clear();
+	if (f < prepared.frame_fallback_decisions.size()) {
+		for (auto decision : prepared.frame_fallback_decisions[f]) {
+			add_instances(decision, false);
+		}
+	}
+}
 
 //! Each row `rows` keeps (null: every row) numbered by its variant (language/guide.md §7.1, D70): the class of
 //! `signature`'s key -- a row whose written key column is NULL is in none -- split by the value of each of its fields,
-//! NULL a value, a decision by its instance, a frame by its keys (D82). INVALID_INDEX on every other row, where no
-//! field is computed.
+//! NULL a value, a decision by its instance, a frame by the value it reads (D82). INVALID_INDEX on every other row,
+//! where no field is computed.
 static void BuildSignatureIds(const DecideSignature &signature, const vector<DecideKey> &keys,
                               const vector<DecideVarScopeInfo> &variable_scopes,
                               const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
@@ -822,6 +880,7 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 	}
 	vector<const vector<idx_t> *> classes;
 	vector<unique_ptr<vector<idx_t>>> frame_classes;
+	vector<const DecideFrameMap *> absent_frames;
 	bool per_row = false;
 	for (auto &field : signature.fields) {
 		switch (field.kind) {
@@ -829,46 +888,19 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 			add(*field.value, false);
 			break;
 		case DecideSignatureFieldKind::FRAME: {
-			// Its timeline -- its anchor's position there, when it reads relative to the
-			// anchor --, and what its fallback reads where the anchor reaches it: its terms'
-			// FALLBACK coefficients, and its decisions' instances (D82;
-			// DecidePreparedModel::frame_fallback_columns).
-			auto &frame = frames.frames[field.frame];
-			auto &map = frames.maps[field.frame];
-			classes.push_back(frame.Relative() ? &map.peer : &map.timeline);
-			if (!frame.fallback) {
-				break;
+			// The value it reads at the anchor (FrameFieldValues). An anchor where it reads none -- a NULL in one of
+			// its columns, or no position -- has no instance, so it is no variant either (D84).
+			vector<const Expression *> columns;
+			vector<vector<idx_t>> instances;
+			FrameFieldValues(field.frame, frames, variable_scopes, keyed_mappings, num_rows, columns, instances);
+			for (auto *column : columns) {
+				exprs.push_back(column);
+				null_no_group.push_back(true);
 			}
-			auto &columns = frames.prepared.frame_columns;
-			vector<unique_ptr<Expression>> reached_columns;
-			vector<const Expression *> reached;
-			for (auto j : frames.prepared.frame_fallback_columns[field.frame]) {
-				reached_columns.push_back(
-				    make_uniq<BoundReferenceExpression>(columns[j].type, frames.prepared.frame_column_base + j));
-				reached.push_back(reached_columns.back().get());
-			}
-			if (!reached.empty()) {
-				frame_classes.push_back(make_uniq<vector<idx_t>>());
-				idx_t reached_count;
-				GroupRows reached_rows;
-				BuildGroupIds(
-				    reached, context, data, num_rows, [&](idx_t row) { return map.Missing(row); },
-				    *frame_classes.back(), reached_count, reached_rows, rows);
+			absent_frames.push_back(&frames.maps[field.frame]);
+			for (auto &instance : instances) {
+				frame_classes.push_back(make_uniq<vector<idx_t>>(std::move(instance)));
 				classes.push_back(frame_classes.back().get());
-			}
-			for (auto decision : frames.prepared.frame_fallback_decisions[field.frame]) {
-				auto scope = decision < variable_scopes.size() ? variable_scopes[decision] : DecideVarScopeInfo::Row();
-				if (scope.IsGlobal()) {
-					continue;
-				}
-				frame_classes.push_back(make_uniq<vector<idx_t>>(num_rows, num_rows));
-				auto &instance = *frame_classes.back();
-				for (idx_t row = 0; row < num_rows; row++) {
-					if (map.Missing(row)) {
-						instance[row] = scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[row] : row;
-					}
-				}
-				classes.push_back(&instance);
 			}
 			break;
 		}
@@ -889,8 +921,18 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 		}
 	}
 	GroupRows group_rows;
-	BuildGroupIds(exprs, context, data, num_rows, std::function<bool(idx_t)> {}, ids, count, group_rows, rows,
-	              null_no_group);
+	std::function<bool(idx_t)> has_value;
+	if (!absent_frames.empty()) {
+		has_value = [&](idx_t row) {
+			for (auto *map : absent_frames) {
+				if (map->Absent(row)) {
+					return false;
+				}
+			}
+			return true;
+		};
+	}
+	BuildGroupIds(exprs, context, data, num_rows, has_value, ids, count, group_rows, rows, null_no_group);
 	if (per_row) {
 		// A per-row decision: every kept row is an instance of its own.
 		count = 0;
@@ -1911,6 +1953,9 @@ public:
 	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
 	//! a decision and a frame once, the variable after the plan's decisions.
 	vector<std::pair<idx_t, idx_t>> frame_reads;
+	//! A reference to each column the frames appended to the input (DecidePreparedModel::frame_columns), held for the
+	//! query so the chunk expression cache, keyed by node, never meets a freed one.
+	vector<unique_ptr<Expression>> frame_column_refs;
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
 	//! whose definition reads an instance with none there (D88, PhysicalDecide::BuildKeyedMappings); empty where none.
 	vector<vector<bool>> absent_reads;
@@ -2333,6 +2378,10 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 		                         chunk_expr_cache);
 	}
 	AppendDecideFrameColumns(context, frames, gstate.frame_maps, prepared, gstate.data, num_rows, chunk_expr_cache);
+	for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
+		gstate.frame_column_refs.push_back(
+		    make_uniq<BoundReferenceExpression>(prepared.frame_columns[j].type, prepared.frame_column_base + j));
+	}
 	if (DecideProfileScope::Enabled()) {
 		// The positions the frames request: one per anchor of a point, and each value a range's window lists, once per
 		// window however many anchors share it.
@@ -2525,8 +2574,9 @@ KeyedMapping PhysicalDecide::BuildScopeMapping(ClientContext &context, DecideGlo
 		}
 		const vector<bool> *read = signature.rows ? &kept : nullptr;
 		BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings,
-		                  SignatureFrames {frames, gstate.frame_maps, prepared}, chunk_expr_cache, context, gstate.data,
-		                  num_rows, read, mapping.row_to_class, mapping.num_classes);
+		                  SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs},
+		                  chunk_expr_cache, context, gstate.data, num_rows, read, mapping.row_to_class,
+		                  mapping.num_classes);
 		// How many classes of the key those values come from, for EXPLAIN ANALYZE (D71).
 		vector<idx_t> class_ids;
 		idx_t num_classes = 0;
@@ -2882,6 +2932,75 @@ vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_c
 //! What makes the rows of `ids` (a signature's numbering over the kept rows `rows`, null for every row) more than one
 //! variant, as a message says it: the first field that takes two values or instances over them, with its least and
 //! greatest value as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in.
+//! Why the kept rows `ids` numbers read more than one value of the frame `field` names (FrameFieldValues), or empty
+//! when they read one: more than one position of one timeline, more than one timeline, more than one fallback, or
+//! else the values a column of it takes. `varies` gives the least and greatest value of an expression over them.
+static string DescribeFrameDifference(const DecideSignatureField &field, const vector<DecideKey> &keys,
+                                      const vector<DecideVarScopeInfo> &variable_scopes,
+                                      const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
+                                      const vector<idx_t> &ids,
+                                      const std::function<bool(const Expression &, string &)> &varies) {
+	vector<const Expression *> columns;
+	vector<vector<idx_t>> instances;
+	FrameFieldValues(field.frame, frames, variable_scopes, keyed_mappings, ids.size(), columns, instances);
+	string read_values;
+	bool read_more = false;
+	for (auto *column : columns) {
+		read_more = read_more || varies(*column, read_values);
+	}
+	for (auto &instance : instances) {
+		idx_t first = DConstants::INVALID_INDEX;
+		for (idx_t row = 0; row < ids.size() && !read_more; row++) {
+			if (ids[row] == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			read_more = first != DConstants::INVALID_INDEX && instance[row] != first;
+			first = instance[row];
+		}
+	}
+	if (!read_more) {
+		return string();
+	}
+	auto &frame = frames.frames[field.frame];
+	auto &map = frames.maps[field.frame];
+	idx_t first = DConstants::INVALID_INDEX;
+	bool timelines = false;
+	bool positions = false;
+	std::unordered_map<idx_t, idx_t> peer_of_timeline;
+	for (idx_t row = 0; row < ids.size(); row++) {
+		if (ids[row] == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto seen = peer_of_timeline.emplace(map.timeline[row], map.peer[row]).first;
+		positions = positions || seen->second != map.peer[row];
+		if (first == DConstants::INVALID_INDEX) {
+			first = row;
+			continue;
+		}
+		timelines = timelines || map.timeline[row] != map.timeline[first];
+	}
+	string values;
+	if (frame.Relative() && positions) {
+		varies(*frame.order, values);
+		return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s)", field.text,
+		                          frame.order_name, values);
+	}
+	if (timelines) {
+		for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
+			if (varies(*element.expression, values)) {
+				return StringUtil::Format("'%s' reads more than one timeline over the kept rows (%s = %s)", field.text,
+				                          element.name, values);
+			}
+		}
+		return StringUtil::Format("'%s' reads more than one timeline over the kept rows", field.text);
+	}
+	if (frame.fallback) {
+		return StringUtil::Format("'%s' falls back to more than one value over the kept rows", field.text);
+	}
+	return StringUtil::Format("'%s' reads more than one value over the kept rows%s", field.text,
+	                          read_values.empty() ? string() : " (" + read_values + ")");
+}
+
 static string DescribeVariantDifference(const DecideSignature &signature, const vector<DecideKey> &keys,
                                         const vector<DecideVarScopeInfo> &variable_scopes,
                                         const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
@@ -2949,43 +3068,9 @@ static string DescribeVariantDifference(const DecideSignature &signature, const 
 			break;
 		}
 		case DecideSignatureFieldKind::FRAME: {
-			auto &frame = frames.frames[field.frame];
-			auto &map = frames.maps[field.frame];
-			// What tells the kept rows apart: the anchor's position on one timeline, when the frame reads relative
-			// to it, else its timeline, else the value its fallback reads.
-			idx_t first = DConstants::INVALID_INDEX;
-			bool timelines = false;
-			bool positions = false;
-			std::unordered_map<idx_t, idx_t> peer_of_timeline;
-			for (idx_t row = 0; row < ids.size(); row++) {
-				if (ids[row] == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				auto seen = peer_of_timeline.emplace(map.timeline[row], map.peer[row]).first;
-				positions = positions || seen->second != map.peer[row];
-				if (first == DConstants::INVALID_INDEX) {
-					first = row;
-					continue;
-				}
-				timelines = timelines || map.timeline[row] != map.timeline[first];
-			}
-			if (frame.Relative() && positions) {
-				varies(*frame.order, values);
-				return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s)", field.text,
-				                          frame.order_name, values);
-			}
-			if (timelines) {
-				auto &elements = DecideKeyElements(keys, frame.timeline_key);
-				for (auto &element : elements) {
-					if (varies(*element.expression, values)) {
-						return StringUtil::Format("'%s' reads more than one timeline over the kept rows (%s = %s)",
-						                          field.text, element.name, values);
-					}
-				}
-				return StringUtil::Format("'%s' reads more than one timeline over the kept rows", field.text);
-			}
-			if (frame.fallback) {
-				return StringUtil::Format("'%s' falls back to more than one value over the kept rows", field.text);
+			auto why = DescribeFrameDifference(field, keys, variable_scopes, keyed_mappings, frames, ids, varies);
+			if (!why.empty()) {
+				return why;
 			}
 			break;
 		}
@@ -3009,7 +3094,7 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 	}
 	vector<idx_t> ids;
 	idx_t count = 0;
-	SignatureFrames signature_frames {frames, gstate.frame_maps, prepared};
+	SignatureFrames signature_frames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs};
 	BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, signature_frames, chunk_expr_cache, context,
 	                  gstate.data, num_rows, signature.rows ? &rows : nullptr, ids, count);
 	if (count > 1) {
@@ -3403,8 +3488,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				idx_t num_variants = num_classes;
 				if (signature) {
 					BuildSignatureIds(*signature, keys, variable_scopes, keyed_mappings,
-					                  SignatureFrames {frames, gstate.frame_maps, prepared}, chunk_expr_cache, context,
-					                  gstate.data, num_rows, &scoped_kept, variant_ids, num_variants);
+					                  SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs},
+					                  chunk_expr_cache, context, gstate.data, num_rows, &scoped_kept, variant_ids,
+					                  num_variants);
 				}
 				const auto &instance_ids = signature ? variant_ids : class_ids;
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);

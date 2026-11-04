@@ -967,7 +967,7 @@ class TestPointErrors:
             pytest.param(
                 "MAXIMIZE at(previous: x) over (t.period within t.product)",
                 "DECIDE objective: 'at(previous: x) over (t.period within t.product)' reads more than one "
-                "position over the kept rows (t.period = 1, 3), so the objective would be produced more than "
+                "position over the kept rows (t.period = 2, 3), so the objective would be produced more than "
                 "once",
                 id="relative",
             ),
@@ -981,6 +981,9 @@ class TestPointErrors:
         ],
     )
     def test_the_objective_is_produced_once(self, decidb_cli, objective, message):
+        """D72: a root frame reading more than one value is two objectives. The first periods,
+        which have no previous one, read none and are no variant (D84): the anchors that read
+        differ at periods 2 and 3."""
         result = decidb_cli.execute_raw(_edge("x <= t.v", objective=objective))
         assert message in result.stderr, result.stderr
 
@@ -1442,15 +1445,16 @@ class TestRange:
         )
 
     def test_under_per_a_range_is_one_variant_per_position(self, decidb_cli, tmp_path, scope_solver):
-        """D82: a relative range under `per t.product` is a field by the anchor's position, so
-        over x keyed per product the clause is one row per position -- five -- while one
-        from `first` to `last` reads one value per timeline -- two."""
+        """D82: a range over data under `per t.product` is a field by the value it reads, so
+        over x keyed per product the clause is one row per distinct window sum of a product --
+        A's 10, 11 and 7 and B's 10 twice: four -- while one from `first` to `last` reads one
+        value per timeline -- two."""
         decisions = [Decision("x", ("product",))]
         for clause_sql, body, rows in [
             (
                 "per t.product: x <= sum(from previous to next: t.v) over (t.period within t.product)",
                 le(X, _range("sum", previous(), next_(), 1, {}, Col("v"))),
-                5,
+                4,
             ),
             (
                 "per t.product: x <= max(from first to last: t.v) over (t.period within t.product)",
@@ -1621,11 +1625,12 @@ class TestRangeErrors:
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
     def test_an_infeasible_model_is_infeasible_on_both_backends(self, request, cli_fixture):
-        """Found by the range fuzzer: a reversed range counts nothing, 0, fixing every x at 0,
-        which leaves `3 * y = 1` over a whole y. HiGHS's MIP presolve called a point violating
-        a bound optimal and reported a solve error; it is solved once more without presolve,
-        and says infeasible as Gurobi does. (The fuzzer counted a range inside a reducer of the
-        bound, which is not supported yet; the row-wise count reads the same 0.)"""
+        """Found by the range fuzzer: a range of one position counts 1, less one 0, fixing every
+        x at 0, which leaves `3 * y = 1` over a whole y. HiGHS's MIP presolve called a point
+        violating a bound optimal and reported a solve error; it is solved once more without
+        presolve, and says infeasible as Gurobi does. (The fuzzer counted a reversed range,
+        then 0 and now no value, deck p. 50, inside a reducer of the bound, which is not
+        supported yet.)"""
         cli = request.getfixturevalue(cli_fixture)
         rows = (
             (1, "b", 4, -1),
@@ -1638,7 +1643,7 @@ class TestRangeErrors:
         )
         sql = f"""SELECT t.id, x, y {table('t', ('id', 'g', 'period', 'w'), rows)}
             DECIDE x(INT), per t.g: y(INT)
-            SUCH THAT y <= 4 AND per (): x <= count(from next to first: t.w) over (t.period within t.g)
+            SUCH THAT y <= 4 AND per (): x <= count(from first to first: t.w) over (t.period within t.g) - 1
               AND t.w * at(3 next: x - y) over (t.period desc within t.g) + x
                   = count(from previous to last every 2: t.w) over (t.period within t.g)
             MINIMIZE sum(abs(x - at(next: x - y) over (t.period desc cyclic within t.g))) ORDER BY t.id"""
@@ -1910,3 +1915,21 @@ class TestAbsenceAndTies:
         result = decidb_cli_highs.execute_raw(sql)
         assert "the objective squares an expression containing more than one decision variable" in result.stderr
         assert_no_internal_leak(result, "a square over a frame on HiGHS")
+
+
+@pytest.mark.correctness
+class TestFieldsByValue:
+    """A frame is a signature field by the value it reads (D82, deck p. 37), as any tuple
+    term is."""
+
+    def test_two_anchors_reading_one_instance_are_one_member(self, decidb_cli):
+        """Product A's periods 2 and 3 both read its one `y` through `previous`: one member,
+        so the sum is y_A + y_B <= 10 and the optimum 10. Compared by the anchor's position
+        they were two, 2 * y_A + y_B <= 10, and the optimum 9."""
+        sql = f"""SELECT tid, y {table('t', ('tid', 'product', 'period'),
+                                       ((1, 'A', 1), (2, 'A', 2), (3, 'A', 3), (4, 'B', 1), (5, 'B', 2)))}
+            DECIDE per t.product: y(INT)
+            SUCH THAT y <= 9 AND sum(per t.product: at(previous: y) over (t.period within t.product)) <= 10
+            MAXIMIZE sum(per t.product: y) ORDER BY tid"""
+        y = [row["y"] for row in answer(decidb_cli, sql)]
+        assert y[0] + y[3] == 10, y

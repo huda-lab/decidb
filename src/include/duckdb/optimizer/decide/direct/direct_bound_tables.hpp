@@ -17,9 +17,9 @@ class Optimizer;
 //!    `when`. A row outside them reads its group's value, and nothing reads it. A group with no row it reads gives the
 //!    function's value over no rows, as SQL's does (NULL for SUM, 0 for COUNT);
 //!  - `sum(per K: body)` counts each instance of K in the group once: a first aggregate per group, class and the
-//!    body's signature fields (D70) takes the instance's body from the rows it reads (ARBITRARY: the fields determine
-//!    the body), and the reducer's function runs over the instances of each group. A row whose written `per` column
-//!    is NULL is in no class.
+//!    body's signature fields (D70, D83: a nested reducer by its key, data by each column it reads) takes the
+//!    instance's body from the rows it reads (ARBITRARY: the fields determine the body), and the reducer's function
+//!    runs over the instances of each group. A row whose written `per` column is NULL is in no class.
 //! The tables are added before the row checks, so the checks read the rows with their bounds, as the solver reads them.
 void DirectAddBoundTables(Optimizer &optimizer, DirectSourceReader &reader, LogicalDecide &decide);
 

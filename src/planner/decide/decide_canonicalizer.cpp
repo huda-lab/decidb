@@ -1782,7 +1782,7 @@ bool DecideCanonicalizer::KeyHoldsField(idx_t key, const DecideSignatureField &f
 	return false;
 }
 
-void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t key, Clause clause,
+void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t key,
                                                  vector<DecideSignatureField> &fields) const {
 	auto add = [&](DecideSignatureField field) {
 		if (KeyHoldsField(key, field)) {
@@ -1797,9 +1797,10 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 	};
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame) && frames && frame < frames->size()) {
-		// A frame is compared by its keys, not by the value it reads (D82): its timeline, the anchor's place on it
-		// when its position is relative to the anchor's, and its fallback where the anchor reaches it. `first` and
-		// `last` read one value per timeline, so a key that holds the timeline's splits nothing further.
+		// A frame is compared by the value it reads at the anchor (D82, deck p. 37): over data that value, over
+		// decisions the instances and coefficients of its payload at the selected row, and its fallback where the
+		// anchor reaches it. `first` and `last` read one value per timeline, so a key that holds the timeline's
+		// splits nothing further.
 		auto &spec = (*frames)[frame];
 		if (!spec.Relative()) {
 			bool covered = true;
@@ -1841,8 +1842,26 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 		return;
 	}
 	if (!ReferencesDecideVar(expr) && !ContainsReducer(expr) && !ContainsDecideFrame(expr)) {
-		// A literal or a query-wide value has one value everywhere.
-		if (!expr.IsFoldable() && !IsQueryWideConstant(expr)) {
+		// Data is compared leaf by leaf (deck pp. 81, 110): each column it reads is a field, so two rows whose terms
+		// happen to sum alike are two variants. A literal or a query-wide value has one value everywhere, and data that
+		// reads no column (`random()`) is a field whole.
+		if (expr.IsFoldable() || IsQueryWideConstant(expr)) {
+			return;
+		}
+		bool leaves = false;
+		std::function<void(const Expression &)> read_leaves = [&](const Expression &part) {
+			if (part.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+				leaves = true;
+				DecideSignatureField field;
+				field.value = part.Copy();
+				field.text = Quote(part);
+				add(std::move(field));
+				return;
+			}
+			ExpressionIterator::EnumerateChildren(part, read_leaves);
+		};
+		read_leaves(expr);
+		if (!leaves) {
 			DecideSignatureField field;
 			field.value = expr.Copy();
 			field.text = Quote(expr);
@@ -1850,35 +1869,8 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 		}
 		return;
 	}
-	vector<Atom> atoms;
-	Decompose(expr, 1, atoms, clause);
-	if (atoms.size() == 1 && atoms[0].expr == &expr && !atoms[0].scale) {
-		// Not an additive context: each child is one of its own.
-		ExpressionIterator::EnumerateChildren(
-		    expr, [&](const Expression &child) { CollectSignatureFields(child, key, clause, fields); });
-		return;
-	}
-	// An additive context: its data terms, read through `+`, `-` and constant factors, are one field (D83), so written
-	// associativity never changes the count.
-	vector<Atom> data;
-	for (auto &atom : atoms) {
-		if (!ReferencesDecideVar(*atom.expr) && !ContainsReducer(*atom.expr) && !ContainsDecideFrame(*atom.expr)) {
-			if (!atom.expr->IsFoldable() && !IsQueryWideConstant(*atom.expr)) {
-				data.push_back(std::move(atom));
-			}
-			continue;
-		}
-		CollectSignatureFields(*atom.expr, key, clause, fields);
-		if (atom.scale) {
-			CollectSignatureFields(*atom.scale, key, clause, fields);
-		}
-	}
-	if (!data.empty()) {
-		DecideSignatureField field;
-		field.value = BuildAdditive(data, false);
-		field.text = Quote(*field.value);
-		add(std::move(field));
-	}
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { CollectSignatureFields(child, key, fields); });
 }
 
 //! Appends a signature to `out` and returns its index.
@@ -1918,7 +1910,7 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	// of its body (D70, D71), over the rows its `when` keeps.
 	auto key = out.keyed_scopes[scope_idx].key;
 	vector<DecideSignatureField> fields;
-	CollectSignatureFields(*reducer.children[0], key, clause, fields);
+	CollectSignatureFields(*reducer.children[0], key, fields);
 	if (fields.empty()) {
 		return; // the key's classes are its instances already
 	}
@@ -1967,8 +1959,8 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expr
 	if (!scope.per_wrapper) {
 		return;
 	}
-	// `per K: C` is one instance per class of K and distinct value of C's fields (D70): its tuple terms and decisions
-	// outside reducers and its reducers' `by` keys, read on the canonical clause (D83). A `per` wrapper holds one
+	// `per K: C` is one instance per class of K and distinct value of C's fields (D70): the columns its tuple terms
+	// read and its decisions outside reducers, and its reducers' `by` keys (D83). A `per` wrapper holds one
 	// clause (C0), under at most one `when`.
 	const Expression *rows = when;
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
@@ -1978,7 +1970,7 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expr
 		if (below.when_wrapper) {
 			rows = below.Condition();
 		}
-		CollectSignatureFields(leaf, key, Clause::CONSTRAINT, fields);
+		CollectSignatureFields(leaf, key, fields);
 		if (source_clause_id == DConstants::INVALID_INDEX) {
 			TryParseSourceClauseTag(leaf.GetAlias(), source_clause_id);
 		}
@@ -2011,7 +2003,7 @@ void DecideCanonicalizer::BuildObjectiveSignatures(Expression &objective, Decide
 	// Produced once (`per ()`, D72): a field with a second value over the kept rows would be a second objective, which
 	// execution refuses.
 	vector<DecideSignatureField> fields;
-	CollectSignatureFields(*body, DConstants::INVALID_INDEX, Clause::OBJECTIVE, fields);
+	CollectSignatureFields(*body, DConstants::INVALID_INDEX, fields);
 	if (!fields.empty()) {
 		out.objective = AddSignature(out, when, DConstants::INVALID_INDEX, std::move(fields), "the objective",
 		                             DConstants::INVALID_INDEX);

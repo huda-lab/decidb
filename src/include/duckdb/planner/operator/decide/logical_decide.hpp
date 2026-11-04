@@ -178,14 +178,13 @@ struct DecideScopeCheck {
 //! (language/guide.md §7.1; D70, D83).
 struct DecideSignatureField {
 	DecideSignatureFieldKind kind = DecideSignatureFieldKind::VALUE;
-	//! VALUE: the data expression, a maximal subtree with neither a decision nor a reducer -- the data terms of one
-	//! additive context summed into one (D83).
+	//! VALUE: a column the body's data reads (D83), or data that reads no column, whole.
 	unique_ptr<Expression> value;
 	//! DECISION: the decision (index into decide_variables), per row or keyed.
 	idx_t decision = DConstants::INVALID_INDEX;
 	//! BY_KEY: the reducer's `by` key (index into LogicalDecide::keys).
 	idx_t key = DConstants::INVALID_INDEX;
-	//! FRAME: the frame (index into LogicalDecide::frames).
+	//! FRAME: the frame (index into LogicalDecide::frames), compared by the value it reads (D82).
 	idx_t frame = DConstants::INVALID_INDEX;
 	//! The field as a message names it: `P.lim`, `ship`, `by (P.region)`, a frame as written.
 	string text;

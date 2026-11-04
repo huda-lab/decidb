@@ -123,13 +123,14 @@ def test_a_keyed_decision_has_one_value_per_collated_key(decidb_cli, scope_solve
 @pytest.mark.diagnose
 @pytest.mark.parametrize("order", [(0, 1), (1, 0)], ids=["a-first", "A-first"])
 def test_a_variant_is_named_by_its_class_s_least_spelling(decidb_cli, order):
-    """'a' (cap 1) and 'A' (cap 3) are one class with two variants of `t.cap - 2`; the one that cannot hold is named by
-    the class's least spelling, 'A', and its own value, whichever row comes first (D69, D70)."""
+    """'a' (cap 1) and 'A' (cap 3) are one class with two variants of `t.cap`, the column `t.cap - 2` reads (D83); the
+    one that cannot hold is named by the class's least spelling, 'A', and its own value, whichever row comes first
+    (D69, D70)."""
     rows = ((1, "a", 1, 5.0), (2, "A", 3, 4.0))
     rows = tuple(rows[i] for i in order)
     sql = f"SELECT id, y {_source(rows)} DECIDE per t.g: y(INT) SUCH THAT per t.g: y <= t.cap - 2 MAXIMIZE SUM(y)"
     found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
-    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["A, -1"], found
+    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["A, 1"], found
 
 
 KEYED_COLUMNS = ("id", "k", "g", "cap", "p")
