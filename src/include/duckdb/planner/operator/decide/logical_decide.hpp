@@ -568,12 +568,6 @@ public:
 		idx_t frame = DConstants::INVALID_INDEX;
 		//! The frame's `else` flattened, each coefficient its FALLBACK column (stage 05).
 		vector<DecideTerm> fallback_terms;
-		//! Where its readers can take its members in place of its column (D89): linear rows of plain clauses and the
-		//! linear objective, or the members of the one outer link `inline_outer` (into reducer_value_links), with no
-		//! clause folded into its box -- decided by the linear form (stage 05), once. Stage 06 inlines it where that
-		//! adds no nonzero (InlineReducerValueLinks).
-		DecideHelperInlining inlining = DecideHelperInlining::NONE;
-		idx_t inline_outer = DConstants::INVALID_INDEX;
 	};
 	//! Innermost first: a link reads only helpers of links before it -- a range's, made first, and the reducers
 	//! nested in it -- which stage 06's inlining relies on.

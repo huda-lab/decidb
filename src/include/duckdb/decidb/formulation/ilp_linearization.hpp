@@ -249,16 +249,18 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 void LinearizeAbsMaximize(SolverInput &input);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 0, at the end of assembly, once the
-//! rows and the objective are final: inline each helper where the plan allows (`inlining`) and doing so adds no
-//! nonzero to the model (D89), counted on the data -- an instance of `m` terms read `k` times costs `m * k` written
-//! in, against `m + 1` for its definition and `k` for its reads. One the plan has read by an outer helper's members --
-//! a nested reducer -- is written into them, each term reading an instance becoming that instance's terms; one read
-//! by rows and the objective is marked `inlined`, for the model builder to write its members where they read it.
-//! Either way its variable becomes DecideVarScope::INLINED, with no column. A MIN or MAX helper is linear, and so
-//! inlined, only when every instance has one member; an outer MIN or MAX that may close natively takes only instances
-//! read once. A read where the plan lists none is an internal error. Returns whether any helper was inlined: the
-//! column space must then be laid out again.
-bool InlineReducerValueLinks(SolverInput &input);
+//! rows and the objective are final: inline each helper whose every reader can read its members in place of its
+//! column -- linear rows of plain clauses and the linear objective, or the members of one outer helper -- where doing
+//! so adds no nonzero to the model (D89), counted on the data: an instance of `m` terms read `k` times costs `m * k`
+//! written in, against `m + 1` for its definition and `k` for its reads. `held` lists the decisions read where only a
+//! column can stand and SolverInput does not show it: a composed MIN/MAX term, a bound folded into its column's box,
+//! a flat MIN/MAX objective's terms. One read by an outer helper's members -- a nested reducer -- is written into
+//! them, each term reading an instance becoming that instance's terms; one read by rows and the objective is marked
+//! `inlined`, for the model builder to write its members where they read it. Either way its variable becomes
+//! DecideVarScope::INLINED, with no column. A MIN or MAX group of one member is that member, written in group by
+//! group (SolverInput::written_in); an outer MIN or MAX that may close natively takes only instances read once.
+//! Returns whether any helper was inlined: the column space must then be laid out again.
+bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper instance by the reach of its own group's members -- the sum of their brackets

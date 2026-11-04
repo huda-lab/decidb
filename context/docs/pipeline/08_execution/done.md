@@ -434,9 +434,10 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`FoldSingletonRows` marks it written) before the rigid box is captured, so a bound a
   clause folds into its box stands, and the static domain check skips it: a helper holds a
   reducer's value, negative wherever its terms are. A refusal in formulation names a helper
-  by its reducer. The spec carries the plan's `inlining` and `inline_outer` too: the end of
-  assembly runs stage 06's `InlineReducerValueLinks` on the final rows and objective
-  (`assembly.inline_helpers`, D89), and where it inlines a helper the column space is laid out
+  by its reducer. The end of assembly runs stage 06's `InlineReducerValueLinks` on the final
+  rows and objective (`assembly.inline_helpers`, D89), passing the decisions read where only a
+  column stands and `SolverInput` does not show it -- a composed MIN/MAX term's, a folded
+  bound's, a flat MIN/MAX objective's -- and where it inlines a helper the column space is laid out
   again and every clause's emitted rows, built against the old one for the implied bounds, are
   dropped to be built anew. The floors and implied bounds keep only what holds of a decision or
   an instance, so they stand. Everything above -- the members, the absent instances, the skipped

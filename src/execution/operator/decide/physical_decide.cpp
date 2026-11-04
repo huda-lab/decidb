@@ -4571,8 +4571,6 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		spec.need_envelope = link.need_envelope;
 		spec.need_closing = link.need_closing;
 		spec.label = link.label;
-		spec.inlining = link.inlining;
-		spec.inline_outer = link.inline_outer;
 		if (link.frame != DConstants::INVALID_INDEX) {
 			EvaluateFrameLink(context, gstate, num_rows, chunk_expr_cache, link, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
@@ -4908,7 +4906,25 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision
 	// or an instance, so the column space is laid out again, and every row read against the old one is read anew.
 	phase.Next("assembly.inline_helpers");
-	if (InlineReducerValueLinks(solver_input)) {
+	// What reads a decision's column outside the rows and the objective assembled here: a composed MIN/MAX term, a
+	// bound folded into its column's box, and every term of a flat MIN/MAX objective, which its auxiliary pins.
+	vector<idx_t> held;
+	for (auto &clause : evaluated.composed_constraints) {
+		for (auto &term : clause.terms) {
+			held.insert(held.end(), term.variables.begin(), term.variables.end());
+		}
+	}
+	for (auto &term : evaluated.composed_objective_terms) {
+		held.insert(held.end(), term.variables.begin(), term.variables.end());
+	}
+	for (auto &bound : gstate.user_singleton_row_bounds) {
+		held.push_back(bound.decide_var_idx);
+	}
+	if (flat_objective_agg != ObjectiveAggregateType::NONE) {
+		held.insert(held.end(), solver_input.objective_variable_indices.begin(),
+		            solver_input.objective_variable_indices.end());
+	}
+	if (InlineReducerValueLinks(solver_input, held)) {
 		out_var_indexer = VarIndexer::Build(solver_input);
 		for (auto &ec : solver_input.constraints) {
 			ec.emitted_rows = EmittedRows();

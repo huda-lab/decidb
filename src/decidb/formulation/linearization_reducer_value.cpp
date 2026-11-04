@@ -117,7 +117,7 @@ AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, 
 	return reach;
 }
 
-//! The reads of each instance of a helper the plan lets stage 06 inline: by the rows and the objective, or by its
+//! The reads of each instance of a helper every reader lets stage 06 inline: by the rows and the objective, or by its
 //! outer link's members (InlineReducerValueLinks).
 struct HelperReads {
 	vector<idx_t> count;
@@ -162,24 +162,131 @@ bool EveryGroupSingleton(const ReducerValueLinkSpec &link) {
 	return true;
 }
 
-//! Whether `ec` is a linear row of a plain clause, the only row the plan lets read a helper it inlines into its
-//! readers (the linear form's census): no hard MIN/MAX, `<>`, Big-M ABS pair, product or square.
+//! Whether `ec` is a linear row of a plain clause, the only row that can read a helper's members in place of its
+//! column: no hard MIN/MAX, `<>`, Big-M ABS pair, product or square, and no bound stage 08 may fold into its decision's
+//! box, which would be lost with the column.
 bool IsPlainLinearRow(const EvaluatedConstraint &ec) {
 	return ec.minmax_agg_type.empty() && ec.ne_clause_idx == DConstants::INVALID_INDEX &&
-	       ec.abs_aux_idx == DConstants::INVALID_INDEX && ec.bilinear_terms.empty() && !ec.has_quadratic;
+	       ec.abs_aux_idx == DConstants::INVALID_INDEX && ec.bilinear_terms.empty() && !ec.has_quadratic &&
+	       ec.admitted_lower.Empty();
+}
+
+//! Where a helper is read (D89): whether a reader holds its column, whether rows or the objective read it, and the one
+//! other link whose members read it, if any.
+struct HelperPlace {
+	bool held = false;
+	bool read_by_readers = false;
+	idx_t outer = DConstants::INVALID_INDEX;
+
+	//! Its members can be written where it is read: no reader holds its column, and it is read by rows and the
+	//! objective or by one outer link's members, not both.
+	bool Inlinable() const {
+		return !held && !(read_by_readers && outer != DConstants::INVALID_INDEX);
+	}
+};
+
+//! Where each helper of `link_of` is read, over every reader stage 06 holds and the decisions `held` the caller reads
+//! elsewhere. A linear row of a plain clause and the linear objective can read a helper's members, and so can the
+//! members of one other link, pinned on one side if a MIN or MAX; every other reader -- a product, a square, a frame
+//! read, a bilinear or ABS link, a row of a hard MIN/MAX, `<>` or ABS -- reads its column.
+vector<HelperPlace> PlaceHelpers(const SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &link_of) {
+	auto &links = input.reducer_value_links;
+	vector<HelperPlace> place(links.size());
+	auto link = [&](idx_t var) {
+		return var < link_of.size() ? link_of[var] : DConstants::INVALID_INDEX;
+	};
+	auto read = [&](idx_t var, bool takes_members) {
+		const idx_t i = link(var);
+		if (i == DConstants::INVALID_INDEX) {
+			return;
+		}
+		if (takes_members) {
+			place[i].read_by_readers = true;
+		} else {
+			place[i].held = true;
+		}
+	};
+	for (auto var : held) {
+		read(var, false);
+	}
+	// A frame reads its base's column at the row it selects.
+	for (auto &frame_read : input.frame_reads) {
+		read(frame_read.base, false);
+	}
+	for (auto &spec : input.bilinear_links) {
+		read(spec.bool_var_idx, false);
+		read(spec.other_var_idx, false);
+	}
+	for (auto &ec : input.constraints) {
+		const bool plain = IsPlainLinearRow(ec);
+		for (auto var : ec.variable_indices) {
+			read(var, plain);
+		}
+		for (auto &term : ec.bilinear_terms) {
+			read(term.var_a, false);
+			read(term.var_b, false);
+		}
+		for (auto &group : ec.quadratic_groups) {
+			for (auto var : group.variable_indices) {
+				read(var, false);
+			}
+		}
+	}
+	for (auto var : input.objective_variable_indices) {
+		read(var, true);
+	}
+	for (auto var : input.quadratic_inner_variable_indices) {
+		read(var, false);
+	}
+	for (auto &term : input.bilinear_objective_terms) {
+		read(term.var_a, false);
+		read(term.var_b, false);
+	}
+	for (idx_t k = 0; k < links.size(); k++) {
+		for (auto var : links[k].members.variables) {
+			const idx_t i = link(var);
+			if (i == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			if (place[i].outer != DConstants::INVALID_INDEX && place[i].outer != k) {
+				place[i].held = true;
+			}
+			place[i].outer = k;
+		}
+	}
+	// An outer MIN or MAX pinned on both sides states each member in two rows.
+	for (auto &p : place) {
+		if (p.outer == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto &holder = links[p.outer];
+		if (IsExtremum(holder) && holder.need_envelope && holder.need_closing) {
+			p.held = true;
+		}
+	}
+	return place;
 }
 
 } // namespace
 
-bool InlineReducerValueLinks(SolverInput &input) {
+bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held) {
 	auto &links = input.reducer_value_links;
 	vector<idx_t> link_of(input.num_decide_vars, DConstants::INVALID_INDEX);
+	for (idx_t i = 0; i < links.size(); i++) {
+		if (links[i].value_var < link_of.size()) {
+			link_of[links[i].value_var] = i;
+		}
+	}
+	auto place = PlaceHelpers(input, held, link_of);
 	bool any = false;
 	for (idx_t i = 0; i < links.size(); i++) {
-		if (links[i].inlining != DecideHelperInlining::NONE && links[i].value_var < link_of.size()) {
-			link_of[links[i].value_var] = i;
-			any = true;
+		if (!place[i].Inlinable()) {
+			if (links[i].value_var < link_of.size()) {
+				link_of[links[i].value_var] = DConstants::INVALID_INDEX;
+			}
+			continue;
 		}
+		any = true;
 	}
 	if (!any) {
 		return false;
@@ -206,7 +313,7 @@ bool InlineReducerValueLinks(SolverInput &input) {
 	vector<HelperReads> reads(links.size());
 	vector<vector<idx_t>> group_of_instance(links.size());
 	for (idx_t i = 0; i < links.size(); i++) {
-		if (links[i].inlining == DecideHelperInlining::NONE) {
+		if (!place[i].Inlinable()) {
 			continue;
 		}
 		auto mapping = mapping_of(links[i].value_var);
@@ -217,15 +324,6 @@ bool InlineReducerValueLinks(SolverInput &input) {
 			group_of_instance[i][instance_of(links[i].value_var, links[i].members.group_rows[g])] = g;
 		}
 	}
-	// Where the plan said a helper is read is where it is read: a read anywhere else is the census missing a reader,
-	// which would read a column inlining takes away.
-	auto read_by_readers = [&](idx_t link) {
-		if (links[link].inlining != DecideHelperInlining::INTO_READERS) {
-			throw InternalException("DECIDE: %s is read by a row or the objective, which its plan does not list",
-			                        links[link].label);
-		}
-	};
-
 	// The rows, as SolverModel::Build emits them: a row of its own per kept row of a per-row clause, one per group of
 	// an aggregate, where a group's rows reading one instance sum into one row. A row whose instance is absent was
 	// skipped.
@@ -236,11 +334,6 @@ bool InlineReducerValueLinks(SolverInput &input) {
 			const idx_t link = candidate(var);
 			if (link == DConstants::INVALID_INDEX) {
 				continue;
-			}
-			read_by_readers(link);
-			if (!IsPlainLinearRow(ec)) {
-				throw InternalException("DECIDE: %s is read by a row its plan does not list as a reader",
-				                        links[link].label);
 			}
 			auto &column = ec.row_coefficients[t];
 			std::unordered_set<uint64_t> seen;
@@ -271,7 +364,6 @@ bool InlineReducerValueLinks(SolverInput &input) {
 			if (link == DConstants::INVALID_INDEX || t >= input.objective_coefficients.size()) {
 				continue;
 			}
-			read_by_readers(link);
 			auto &column = input.objective_coefficients[t];
 			for (idx_t row = 0; row < input.num_rows && row < column.Size(); row++) {
 				const idx_t instance = instance_of(var, row);
@@ -307,10 +399,6 @@ bool InlineReducerValueLinks(SolverInput &input) {
 					if (link == DConstants::INVALID_INDEX) {
 						continue;
 					}
-					if (links[link].inlining != DecideHelperInlining::INTO_OUTER || links[link].inline_outer != k) {
-						throw InternalException("DECIDE: %s is read by %s's members, which its plan does not list",
-						                        links[link].label, links[k].label);
-					}
 					const idx_t instance = instance_of(members.variables[t], members.rows[t]);
 					if (seen.insert((static_cast<uint64_t>(link) << 32) ^ static_cast<uint64_t>(instance)).second) {
 						reads[link].Read(links[link], instance);
@@ -324,7 +412,7 @@ bool InlineReducerValueLinks(SolverInput &input) {
 	// that read it.
 	auto write_into_outer = [&](idx_t i, const vector<bool> &written) {
 		auto &link = links[i];
-		auto &outer = links[link.inline_outer].members;
+		auto &outer = links[place[i].outer].members;
 		ReducerValueMembers expanded;
 		for (idx_t g = 0; g < outer.GroupCount(); g++) {
 			expanded.AddGroup(outer.group_rows[g]);
@@ -342,7 +430,7 @@ bool InlineReducerValueLinks(SolverInput &input) {
 					const idx_t group = group_of_instance[i][instance];
 					if (group == DConstants::INVALID_INDEX) {
 						throw InternalException("DECIDE: %s's member reads %s where it is absent",
-						                        links[link.inline_outer].label, link.label);
+						                        links[place[i].outer].label, link.label);
 					}
 					auto inner = MembersOf(link.members, group);
 					for (idx_t n = inner.first; n < inner.last; n++) {
@@ -364,7 +452,7 @@ bool InlineReducerValueLinks(SolverInput &input) {
 	bool inlined_any = false;
 	for (idx_t i = 0; i < links.size(); i++) {
 		auto &link = links[i];
-		if (link.inlining == DecideHelperInlining::NONE) {
+		if (!place[i].Inlinable()) {
 			continue;
 		}
 		auto &count = reads[i].count;
@@ -386,19 +474,15 @@ bool InlineReducerValueLinks(SolverInput &input) {
 		if (!whole && !any_single) {
 			continue;
 		}
-		const bool into_outer = link.inlining == DecideHelperInlining::INTO_OUTER;
+		const bool into_outer = place[i].outer != DConstants::INVALID_INDEX;
 		if (into_outer) {
-			if (link.inline_outer <= i || link.inline_outer >= links.size()) {
+			if (place[i].outer <= i) {
 				throw InternalException("DECIDE: %s's outer link is not listed after it", link.label);
 			}
 			// On its closing side an outer MIN or MAX may be stated natively, over columns: a member that is an
 			// expression then costs a column and a row of its own, which pays only where it replaces the one column
 			// and definition of an instance read once.
-			auto &outer = links[link.inline_outer];
-			if (IsExtremum(outer) && outer.need_envelope && outer.need_closing) {
-				throw InternalException("DECIDE: %s's plan writes it into %s, pinned on both sides", link.label,
-				                        outer.label);
-			}
+			auto &outer = links[place[i].outer];
 			if (IsExtremum(outer) && outer.need_closing &&
 			    std::any_of(count.begin(), count.end(), [](idx_t k) { return k > 1; })) {
 				continue;

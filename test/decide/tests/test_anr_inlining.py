@@ -231,23 +231,56 @@ class TestSingleton:
 # ---------------------------------------------------------------------------
 
 
+_WINDOW_SQL = f"sum(from previous to previous else 0: x) {TL}"
+_WINDOW = Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0))
+
+
 @pytest.mark.correctness
 class TestKept:
     @pytest.mark.parametrize(
-        "clause_sql, body",
+        "clause_sql, body, objective_sql, objective",
         [
             # `<>` states each instance in two rows of its disjunction.
             pytest.param(
-                f"x <> sum(from previous to previous else 0: x) {TL}",
-                clause(ne(X, Range("sum", previous(), previous(), X, TIMELINE, fallback=Const(0)))),
+                f"x <> {_WINDOW_SQL}",
+                clause(ne(X, _WINDOW)),
+                "MAXIMIZE sum(x)",
+                MAXIMIZE_X,
                 id="not-equal",
+            ),
+            # A composed MIN/MAX term pins its auxiliary to each member's column.
+            pytest.param(
+                f"sum(x) + max({_WINDOW_SQL}) <= 30",
+                clause(le(reduce("sum", X) + reduce("max", _WINDOW), 30)),
+                "MAXIMIZE sum(x)",
+                MAXIMIZE_X,
+                id="composed-clause",
+            ),
+            pytest.param(
+                "x >= 0",
+                clause(ge(X, 0)),
+                f"MAXIMIZE sum(x) - max({_WINDOW_SQL})",
+                Objective(ObjSense.MAXIMIZE, reduce("sum", X) - reduce("max", _WINDOW)),
+                id="composed-objective",
+            ),
+            # So does a MIN/MAX objective, flat.
+            pytest.param(
+                "sum(x) >= 20",
+                clause(ge(reduce("sum", X), 20)),
+                f"MINIMIZE max({_WINDOW_SQL})",
+                Objective(ObjSense.MINIMIZE, reduce("max", _WINDOW)),
+                id="flat-objective",
             ),
         ],
     )
-    def test_a_reader_that_needs_the_column(self, decidb_cli, scope_solver, tmp_path, clause_sql, body):
-        sql = _edge(clause_sql)
+    def test_a_reader_that_needs_the_column(
+        self, decidb_cli, scope_solver, tmp_path, clause_sql, body, objective_sql, objective
+    ):
+        """Each window is read once, which would write it in, but its reader states it as a
+        column: the helper keeps its column per window, beside the six decisions."""
+        sql = _edge(clause_sql, objective=objective_sql)
         assert _model(decidb_cli, sql, tmp_path)["num_vars"] > 6
-        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], objective)
 
     def test_a_bound_on_a_sum_is_a_row_it_is_written_into(self, decidb_cli, scope_solver, tmp_path):
         """A bound on a SUM helper alone is a row reading it, not its box (deck p. 115): each

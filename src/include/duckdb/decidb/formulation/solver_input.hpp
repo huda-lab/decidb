@@ -494,10 +494,6 @@ struct ReducerValueLinkSpec {
     //! The reducer as written, for the rows and columns a diagnosis names.
     string label;
 	ReducerValueMembers members;
-	//! Where the plan lets stage 06 write it in (LogicalDecide::ReducerValueLink::inlining, inline_outer: an index into
-	//! reducer_value_links as execution lists them).
-	DecideHelperInlining inlining = DecideHelperInlining::NONE;
-	idx_t inline_outer = DConstants::INVALID_INDEX;
 	//! Set by InlineReducerValueLinks for one written into its rows and the objective (D89): they read an instance's
 	//! members in place of its column. Its bounds are still derived (a bound flows through it to the helpers among
 	//! its members); no definition is emitted, and its members move to SolverInput::inlined_helpers.

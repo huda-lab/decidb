@@ -282,7 +282,7 @@ recorded in `rhs_mechanism_offset` as those are (§7), so a diagnosis quotes the
 join its constant (`obj_constant`), as a kept helper's definition carried them into it. A clause skipped the rows
 reading an absent instance (stage 08), so one reaching the builder is an internal error; the objective reads one as
 no value, as it reads the spare column of an absent class (D84). A row over one decision that may fold into its box
-never reads an inlined helper: the census keeps such a helper's column (`admitted_lower`, stage 05).
+never reads an inlined helper: such a row holds the helper's column (`admitted_lower`, `PlaceHelpers`).
 
 ### Quadratic and bilinear constraints
 
@@ -799,14 +799,17 @@ stage 08) inlines a helper where the sum over its instances adds no nonzero (D89
 and rows. `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row per input row,
 the windows written into their anchors' rows, where a helper per window doubled both.
 
-Where it may write a helper in is the plan's (`ReducerValueLinkSpec::inlining`, `inline_outer`: the linear form's
-census, `../05_optimizer/done.md`) -- into its readers, linear rows of plain clauses and the linear objective, or into
-one outer link's members -- with no clause folded into the helper's box. What it counts is the data, each instance's
-reads as the builder states them: a per-row clause's kept rows, an aggregate's groups (a group's rows reading one
-instance sum into one row), the objective once, an outer SUM's groups and an outer MIN/MAX's members (each stated in a
-row of its own). A read where the plan lists none -- a row or the objective reading a helper the plan writes into a
-link, another link's members reading one, a row that is not plain -- is an internal error, as is a clause's read of an
-absent instance; the objective's read of one is no read. Then, innermost first:
+Where it may write a helper in is decided in the same pass, from every reader the model has (`PlaceHelpers`): into
+its readers, when every one is a linear row of a plain clause (no `<>`, hard MIN/MAX, Big-M ABS pair, product or
+square, and no bound over one decision that may fold into its box, `admitted_lower`) or the linear objective; or into
+one outer link, when that link's members are its only reader and, if a MIN or MAX, it is pinned on one side, so each
+member stands in one row. Any other reader holds the column: a product or square in a row or the objective, a
+McCormick link, a frame read at another row, and the readers assembly passes in because `SolverInput` does not show
+them (`held`): a composed MIN/MAX term, a bound folded into the helper's box, and a flat MIN/MAX objective, whose terms
+its auxiliary pins column by column. What it counts is the data, each instance's reads as the builder states them: a
+per-row clause's kept rows, an aggregate's groups (a group's rows reading one instance sum into one row), the
+objective once, an outer SUM's groups and an outer MIN/MAX's members (each stated in a row of its own). A clause's
+read of an absent instance is an internal error; the objective's read of one is no read. Then, innermost first:
 
 - **Into another helper** (deck pp. 116–119, a group sum under a MAX). A helper read only by another link's members is
   written into them: each member term reading an instance becomes that instance's terms, times the term's
@@ -819,7 +822,7 @@ absent instance; the objective's read of one is no read. Then, innermost first:
   among the links through the bound fixed point, so a bound still flows through it to the helpers among its members.
 
 A MIN or MAX helper is linear, and so inlined whole, only where every group has one member, which is then its value:
-a window of one position (`max(from previous to previous else 0: x)`). Where the plan lets it be written in, a group of
+a window of one position (`max(from previous to previous else 0: x)`). Where its readers let it be written in, a group of
 one member among others is written in alone (`SolverInput::written_in`, deck p. 112): into the outer link's members,
 or through `inlined_helpers` into the rows reading it, the other groups keeping their columns and definitions. Such an
 instance, and a keyed decision's absent class, owns no column (`VarIndexer::instance_slot`; `HasColumn`,

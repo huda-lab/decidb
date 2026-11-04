@@ -44,14 +44,6 @@ enum class DecideExpression : uint8_t {
 //! The values are serialized, so a stored plan reads under any rename.
 enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ = 3, INLINED = 4 };
 
-//! Where stage 06 may write a helper decision's members in place of its column (D89), as the
-//! linear form found its readers (LogicalDecide::ReducerValueLink::inlining):
-//!   NONE          — a reader needs the column: keep it
-//!   INTO_READERS  — read only by linear rows of plain clauses and the linear objective
-//!   INTO_OUTER    — read only by the members of one other, outer helper (`inline_outer`)
-//! Whether it pays is the data's, which stage 06 counts.
-enum class DecideHelperInlining : uint8_t { NONE, INTO_READERS, INTO_OUTER };
-
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its keyed scope index.
