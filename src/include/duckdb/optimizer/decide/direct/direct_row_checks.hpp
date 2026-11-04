@@ -18,9 +18,7 @@ class Optimizer;
 //! once the verdict holds. This is DuckDB's plan of an uncorrelated scalar subquery, the verdict a one-row CTE. A check
 //! that is not a row check is not in `checks`; with none, the reader stays ungated.
 //!
-//! A value check takes the least message a row raises. A determination check (the solver's `RunScopeChecks`) groups
-//! the rows it looks at by its key, finds the classes that show more than one value (or hold more than one row of a
-//! decision), names the least of them by key value, and quotes its least and greatest value, NULL after every value.
+//! A value check takes the least message a row raises.
 void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const vector<DirectRowCheck> &checks);
 
 //! The solver path's checks: the source of `decide`, a node in `root`, becomes one gated read of it
@@ -33,7 +31,7 @@ void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const v
 
 //! The scope checks of a DECIDE node that the plan can make, moved out of the node (LogicalDecide::scope_checks), for
 //! the solver path to install under it with DirectInstallRowChecks, so one implementation makes them on both paths.
-//! What remains in the node is for the operator: the determination of a keyed decision.
+//! Every scope check is one the plan can make, so none remains in the node.
 vector<DirectRowCheck> DirectTakeRowChecks(ClientContext &context, LogicalDecide &decide);
 
 } // namespace duckdb

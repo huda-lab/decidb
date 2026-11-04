@@ -16,6 +16,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverCapabilities`, `SolverConstructSupport`, `SolverModelClass` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
 | `parser/decide/decide_removed_spellings.hpp` | 01 | `RefuseRemovedDecideSpellings` |
+| `parser/expression/decide_frame_expression.hpp` | 01 | `DecideFrameExpression` — a parsed frame selector, a point or a range (guide §5.6) |
 | `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts`, the integrality gate and `DecideValueIsWholeNumbered` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
@@ -34,6 +35,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |
 | `optimizer/decide/decide_optimizer_internal.hpp` | 05 | Helpers shared by the `decide_rewrite_*.cpp` passes; internal to `src/optimizer/decide/` |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
+| `execution/operator/decide/decide_frame_map.hpp` | 08 | `DecideFrameMap` — a frame's timelines, the row each anchor selects, a range's windows |
 | `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
 | `decidb/formulation/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
 | `decidb/formulation/ilp_linearization.hpp` | 06 | `LowerDecideConstructs` and the Big-M derivations: a tagged constraint becomes solver rows |
@@ -54,6 +56,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 |---|---|---|
 | `parser/decide/decide_parsed_markers.cpp` | 01 | The parsed-marker predicates, shared by the removed-spelling refusal and the binder |
 | `parser/decide/decide_removed_spellings.cpp` | 01 | Refuses the removed DECIDE spellings, naming the new spelling from the user's own text; called by the transformer and, for a stored parse tree, by `BindDeclarations` |
+| `parser/expression/decide_frame_expression.cpp` | 01 | A frame selector's parsed form: equality, copy, its text and serialization |
 | `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, the colon form, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective and its scope |
@@ -76,18 +79,21 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | MIN/MAX, plain and composed |
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
 | `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison becomes a helper decision per `by` group |
+| `optimizer/decide/decide_rewrite_frames.cpp` | 05 | `RewriteFrameRanges`: a range frame over decisions becomes a helper decision per window, before any rewrite copies it |
 | `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
 | `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
 | `optimizer/decide/decide_solver_gate.cpp` | 05 | `ChooseDecideSolver`, `DeriveDecideModelClass`, `RequireDecideSolverSupport` |
 | `execution/column_binding_resolver.cpp` | 03 | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | Extraction, materialization, evaluation, emission, readback |
+| `execution/operator/decide/physical_decide_frames.cpp` | 08 | The frame maps: each frame's timelines and the values it reads |
 | `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build` |
 | `decidb/formulation/ilp_linearization.cpp` | 06 | `LowerDecideConstructs`, global-auxiliary allocation |
 | `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |
 | `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: constraints, links, objectives, composed |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
+| `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: where each is written in (`PlaceHelpers`, `InlineReducerValueLinks`, D89), their boxes and definitions |
 | `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |
 | `decidb/solver/probe_models.cpp` | 07 | Probe models for the diagnostic re-solve and ray-extraction paths |

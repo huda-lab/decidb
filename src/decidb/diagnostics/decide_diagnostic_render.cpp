@@ -585,7 +585,7 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 
 //! Printable key of the group `name` names, empty for none: the per-key-column representative values joined with ", "
 //! (composite key → `EU, 2024`). A column the user wrote renders its value, "NULL" for a NULL; a value of a column a
-//! relation element stands for (`per D`) is an SQL literal, as a determination message writes it (`'EU'`, `NULL`),
+//! relation element stands for (`per D`) is an SQL literal, as a data check's message writes it (`'EU'`, `NULL`),
 //! because there NULL is a value a string `'NULL'` must be told from.
 static string FormatPerGroupKey(const SolverModel &model, const GroupName &name) {
 	string s;

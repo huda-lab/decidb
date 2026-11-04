@@ -1927,7 +1927,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		AddRelationColumns(*binding, key);
 	}
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
-	// classes and the same check that the key determines the body.
+	// classes and the same variant signature (D70).
 	auto scope_idx = FindOrCreateScope(FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys),
 	                                   *ctx.keyed_scopes);
 

@@ -1685,10 +1685,10 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 		}
 		// `per K:` over a clause in the aggregate shape adds no row to the model: its rows
 		// are one per `by` group of the kept rows, and every per-K constraint in a group
-		// differs only in its bound, which the group's tightest bound covers once K
-		// determines it (a scope check). The wrapper stays all the same: it names the
-		// classes each group's row stands for, which a diagnosis reports one by one
-		// (language/guide.md §8.1, D28); the linear form reads it as the clause's class key.
+		// differs only in its bound, which the group's tightest bound covers. The wrapper
+		// stays all the same: it names the classes each group's row stands for, which a
+		// diagnosis reports one by one (language/guide.md §8.1, D28); the linear form reads it
+		// as the clause's class key.
 		return std::move(result);
 	}
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {

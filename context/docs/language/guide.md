@@ -439,7 +439,7 @@ Tests: `test/decide/tests/test_scope_reducer_inner.py`.
 ### 5.5 Reducers inside reducers — the path rule
 
 ```sql
--- each depot's largest shipment, summed over the depots (deck example 9)
+-- each depot's largest shipment, summed over the depots
 sum(per D.depotID: max(ship) by (D.depotID)) <= 50
 -- the running example (deck pp. 111-119): per depot, the regional sum of each customer's
 -- largest shipment, plus 10% of the mode's demand
@@ -495,7 +495,7 @@ F ::= first | last | [k] previous | [k] next
 
 -- inventory carries over from the previous period of the same product
 inventory = at(previous else 0: inventory) over (t.period within t.product) + produce - t.demand
--- deliveries over the current and the next two periods
+-- deliveries from the contract's first day through two days ahead
 sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
 ```
 
@@ -575,7 +575,8 @@ first to last: x) over (t.period)' has type DOUBLE and can take fractional value
 Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
 `test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint` and `TestRange`: every frame fixture of
 `_anr_cases`, every pair of ends under both steps, each policy, open and cyclic, judged by the oracle; the deck's
-examples 1, 2, 4, 5 and 6 and the DeQL comparison; shapes and errors), `test/decide/tests/test_anr_composition.py`
+examples 1, 4 and 5 as written, 2 and 6 with their bound adapted to the test's data, and the DeQL comparison with its
+declarations adapted; shapes and errors), `test/decide/tests/test_anr_composition.py`
 (members dropped, under `abs` and `norm`, the objective, composed `MIN`/`MAX`, both solvers),
 `test/decide/tests/test_anr_diagnostics.py` (DIAGNOSE and EXPLAIN over variants, nests and frames),
 `test/common/test_decidb_plan_serialization.cpp` (a placed point and range round-trip).

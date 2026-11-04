@@ -306,7 +306,7 @@ def test_a_keyed_objective_is_refused(decidb_cli):
 
 @pytest.mark.correctness
 def test_a_nested_reducer_in_a_constraint(decidb_cli, scope_solver):
-    """Deck example 9 in a constraint, refused before ANR phase 2: each depot's largest shipment,
+    """A nest in a constraint, refused before ANR phase 2: each depot's largest shipment,
     once per depot, sums to at most 50."""
     sql = _query("MAXIMIZE SUM(ship)", "ship <= S.demand AND sum(per D.depotID: max(ship) by (D.depotID)) <= 50")
     ship = anr.Var("ship")

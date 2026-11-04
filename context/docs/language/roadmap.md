@@ -9,7 +9,8 @@ todo of the area that owns it.
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
 postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–9 (pp. 17–25), NULL keys
 and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
-`outer(per k: inner(e) by (k))` among them, and frame selectors, points and ranges (pp. 42–56).
+`outer(per k: inner(e) by (k))` among them, and frame selectors, points and ranges (pp. 42–56), each with the limits
+listed below (D80).
 
 The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D89) and
 encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));

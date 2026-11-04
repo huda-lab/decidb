@@ -34,7 +34,8 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A range frame over more than one expression, or a reducer other than `sum`, `avg`, `min`, `max`, `count` | parse / bind | `sum(from first to last: e) reduces one expression, found 2` · `DECIDE: a range frame reduces with sum, avg, min, max or count, found ...` |
 | A frame's `else` that is not a number | bind | `DECIDE: in at(previous else 'a': x) over (t.period), else 'a' is not a number` |
 | A decision in a frame's order key or `within` | bind | `DECIDE: x is a decision; a frame's order key and within may only use data` |
-| A frame selector outside a DECIDE clause's constraints and objective | bind | `DECIDE: a frame selector is not supported here: it reads the rows of the DECIDE query whose constraints or objective it stands in, and only those` |
+| A frame selector in a DECIDE clause that an outer query binds (a correlated DECIDE subquery whose frame reads an outer column) | bind | `DECIDE: a frame selector is not supported here: it reads the rows of the DECIDE query whose constraints or objective it stands in, and only those` |
+| A frame selector outside a DECIDE clause (a `SELECT` list, a `WHERE`): the parser reads it in a clause only | parse | `Parser Error: syntax error at or near "over"` |
 | An unqualified `FULL OUTER JOIN USING` column in a key | bind | `DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key` |
 | A reducer or `norm` with no argument | bind | `SUM needs one argument, found 'sum()'` · `NORM needs an expression and an order, as in norm(e, 1), found 'norm()'` |
 | A colon form naming a relation not in `FROM` | bind | `Relation 'X' is not in the FROM clause, so a reducer cannot be qualified by it.` |

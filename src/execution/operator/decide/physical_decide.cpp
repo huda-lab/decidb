@@ -1134,11 +1134,10 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 
 // Which rows a reducer with its own key (`sum(per D: ...)`, `sum(D: ...)`) actually
 // contributes. The join repeats each D tuple once per matching row; §3.2.2 asks for one
-// term per tuple identity, and the key's check on the data (DecideScopeCheckKind::
-// DETERMINES) guarantees that every row sharing an identity carries the same value — so
-// keeping the first row of each identity and
-// dropping the rest yields exactly one contribution per identity, whichever row is
-// kept. De-duplication runs inside the `per` partition, after `when` selection and
+// term per tuple identity, and the reducer's variant signature (D70) splits an identity
+// whose rows read different values into one instance per variant -- so keeping the first
+// row of each identity's variant and dropping the rest yields exactly one contribution
+// per instance, whichever row is kept. De-duplication runs inside the `per` partition, after `when` selection and
 // `per` partitioning, which is the construction order the paper pins.
 //! `eligible`, when given, is the rows the reducer reads (its own `when` included): the
 //! first row of each class among THEM is kept, so a class whose first joined row the

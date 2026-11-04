@@ -200,7 +200,7 @@ one group at a time. No test asserts an answer its docstring derives.
   reducer counts once; tuple terms that are not one value are errors; the two-level
   form, also under a `when`, and the forms it once refused (a `when` inside either
   reducer, another `by` key, an outer AVG, a third level) answering as nested reducers
-  (D81); deck example 9 in a constraint; a keyed objective refused; an objective `when`
+  (D81); each depot's largest shipment summed in a constraint; a keyed objective refused; an objective `when`
   that keeps no row and an objective reducer with no row. Oracle, dump and pinned messages.
 - **`test_scope_variants.py`** — variant signatures (D70-D72). A class whose rows differ in
   a tuple term (a bound, a factor), a decision outside reducers, a `by` key, or an inner
@@ -237,7 +237,8 @@ one group at a time. No test asserts an answer its docstring derives.
   model dump, composition with ABS, `<>`, a reducer around the range, a data factor and a
   point frame, the objective, a keyed payload and a decision `else`, variants under `per`,
   laziness, NULL skipped (D84) and `count`, SQL types of a range over data; `TestRangeDeck`:
-  the deck's examples 2 and 6 under each policy; `TestRangeErrors` and `TestRangeReview`:
+  the deck's examples 2 and 6, their bound adapted to the test's data, under each policy; `TestRangeErrors` and
+  `TestRangeReview`:
   the refusals with their remedies, `count` over decisions, `decide_frame_limit`,
   EXPLAIN's helper lines, DIAGNOSE, an infeasible model on both backends, fractional
   helpers; `TestAbsenceAndTies`: an anchor in no timeline with no value whatever its `else`
