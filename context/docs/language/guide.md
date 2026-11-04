@@ -674,9 +674,9 @@ of calling a solver; a query it cannot prove takes the solver path unchanged. No
 - **Fill one budget by value per unit**: per-row `REAL` decisions with their own bounds and one budget
   `sum(w * x) <= B` (or `>=`, `=`, `BETWEEN`), with a linear objective.
 
-A count limit or budget with a `by` key or a `per K:` takes the solver path. When several assignments are optimal you
-may get a different one than the solver; the objective is the same. `EXPLAIN` shows `Direct solve` rows naming the
-rule.
+A count limit or budget may also have a `by` key or a `per K:` (`per K: sum(x) by (K) <= k` gives each group its own
+limit). When several assignments are optimal you may get a different one than the solver; the objective is the same.
+`EXPLAIN` shows `Direct solve` rows naming the rule.
 
 | setting | effect |
 |---|---|

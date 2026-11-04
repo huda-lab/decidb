@@ -42,11 +42,11 @@ plans measured 50 to 98 and 15 to 16 times faster. The other 16 classes in the c
 | [A6](rules/a6_rank_one_least_squares/) | Rank-one bounded least squares | Exact | Not started |
 | [N1](rules/n1_euclidean_ball/) | Euclidean-ball projection and support function | Exact | Not started |
 | [N2](rules/n2_ellipsoid_support/) | Ellipsoid support function | Exact | Not started |
-| [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default; per `by` group is open |
+| [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default, including per `by` group |
 | [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | Not started |
 | [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | Not started |
 | [S4](rules/s4_bottleneck_knapsack/) | Cardinality-constrained bottleneck knapsack | Exact | Not started |
-| [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default; per `by` group is open |
+| [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default, including per `by` group |
 | [R2](rules/r2_discrete_resource_allocation/) | Discrete separable convex resource allocation | Exact | Not started |
 | [R3](rules/r3_quadratic_knapsack/) | Continuous quadratic knapsack | Prototype | Not started |
 | [R4](rules/r4_max_min_fairness/) | Weighted max-min fair allocation | Exact | Not started |
