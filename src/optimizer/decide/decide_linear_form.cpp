@@ -1115,6 +1115,7 @@ private:
 			if (HasDecideTag(comp.alias, STRUCTURAL_CONSTRAINT_TAG)) {
 				constraint->kind = ConstraintKind::STRUCTURAL;
 			}
+			TryParseDecideIndexTag(comp.alias, DEFINES_TAG_PREFIX, constraint->defined_var);
 			if (ExtractDecideTagPayload(comp.alias, ABS_UB_POS_TAG_PREFIX, payload)) {
 				constraint->abs_aux_idx = std::stoull(payload);
 				constraint->abs_is_pos_bound = true;

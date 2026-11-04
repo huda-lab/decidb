@@ -245,9 +245,7 @@ one group at a time. No test asserts an answer its docstring derives.
   `coalesce` reads as NULL (D84), a square over a frame refused on HiGHS by name. The parse
   errors, answers and the echo are `test/decidb/test_frame_parser.test`'s
   (sqllogic; ordinary SQL windows, `AT TIME ZONE` and `WITHIN GROUP` unchanged; a FROM-first
-  query), the absence predicates `test_decidb_frame_predicates.cpp`'s (every end, step,
-  policy and shape against every position on timelines of up to 10), and the round trips
-  `test_decidb_plan_serialization.cpp`'s.
+  query), and the round trips `test_decidb_plan_serialization.cpp`'s.
 - **`test_anr_composition.py`** — frames composed with reducers, `abs`, `norm` and
   `MIN`/`MAX` (guide §5.6, D87, D88), on both solvers where the shape has two formulations,
   judged by `_anr_oracle`: a member a frame drops from a reducer over decisions (deck
@@ -255,8 +253,10 @@ one group at a time. No test asserts an answer its docstring derives.
   one member, a range that reads nothing, a range over data), the model it builds (no
   helper), an absent nested reducer dropping the member reading it; a frame under `abs` and
   `norm` inside a reducer, the rows defining an auxiliary kept where an instance is skipped,
-  an L0 norm counting the members left, a square beside a member frame, and the refusal of
-  an absent reducer under `abs` (D88); the objective's members, a reducer with none dropped;
+  an L0 norm counting the members left, a square beside a member frame, and a reducer under
+  `abs` that a frame or its own `when` leaves with no member dropping the member reading it,
+  and a NULL or a missing position under `abs` skipping the instance (D88); the objective's
+  members, a reducer with none dropped;
   frames in a composed `MIN`/`MAX`, under `per` with a `by` reducer, with variants, over
   duplicate joined rows; the defects found composing them: two frames on one payload held
   one value, a nested reducer over no row read as 0, an exact `abs` whose `else` or repeated
@@ -288,8 +288,9 @@ one group at a time. No test asserts an answer its docstring derives.
   refusals of D80 by name; and the defects the review found, answers worked by hand: an
   outer NULL dropping the outer member only, a group of no inner class with no value, a sum
   of group sums skipping a row in no group, two groups of one value two variants on the
-  bound side, a reducer left with no member skipping its instance. Oracle, dump and pinned
-  messages.
+  bound side, a reducer left with no member skipping its instance; a Boolean product with a
+  factor of no value having none, and an objective average counting only the members with a
+  value (D88). Oracle, dump and pinned messages.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built

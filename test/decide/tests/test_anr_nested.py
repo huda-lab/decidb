@@ -750,3 +750,33 @@ def test_a_reducer_left_with_no_member_skips_its_instance(request, cli_fixture, 
     infeasible, and a row reading the helper raised an internal error."""
     sql = _review_query(("id", "g", "c"), ((1, "a", True), (2, "b", True)), "x(INT)", clause_sql, "MINIMIZE SUM(x)")
     assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [0, 0]
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_product_with_a_factor_of_no_value_has_none(request, cli_fixture):
+    """Group b keeps no row for `sum(when t.c: x)`, so it has no value, and nor has the
+    product `b * sum(...)` on row 2 (D88): row 2's comparison is skipped and x2 keeps its cap
+    of 9. Row 1 reads x1 + b1 * x1 <= 5, best at b1 = 0, x1 = 5. The product had read the
+    empty group as 0, holding x2 to 5."""
+    sql = f"""
+        SELECT id, x, b {table('t', ('id', 'g', 'c'), ((1, 'a', True), (2, 'b', False)))}
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x <= 9 AND x + b * sum(when t.c: x) by (t.g) <= 5
+        MAXIMIZE sum(x) + sum(b)
+        ORDER BY id"""
+    assert [row["x"] for row in answer(request.getfixturevalue(cli_fixture), sql)] == [5, 9]
+
+
+@pytest.mark.correctness
+def test_an_objective_average_counts_the_members_with_a_value(decidb_cli):
+    """Rows 3 and 4 read group b's empty `max(when t.c: x)`, so their `abs` has no value and
+    the objective's average drops them (D67, D88): it is |x1 - x2| / 2, which pays 2.5 for
+    x1 = 5 against 1.5 of the penalty. Over all four rows it would be 1.25, and every x 0."""
+    sql = f"""
+        SELECT id, x {table('t', ('id', 'g', 'c'), ((1, 'a', True), (2, 'a', True), (3, 'b', False), (4, 'b', False)))}
+        DECIDE x(REAL)
+        SUCH THAT x <= 5
+        MAXIMIZE avg(abs(x - max(when t.c: x) by (t.g))) - 0.3 * sum(x)
+        ORDER BY id"""
+    assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(5)

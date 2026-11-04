@@ -40,8 +40,9 @@ bool TryParseNormMarker(const string &alias, string &payload);
 void CopyClauseProvenanceTags(const string &from_alias, Expression &to);
 
 //! Stamp an expression as formulation-generated (a row this layer emitted rather
-//! than one the user wrote), attributed to `source_alias`.
-void MarkFormulationConstraint(Expression &expr, const string &source_alias);
+//! than one the user wrote), attributed to `source_alias`; a row defining auxiliary `defined` says so
+//! (DEFINES_TAG_PREFIX).
+void MarkFormulationConstraint(Expression &expr, const string &source_alias, idx_t defined = DConstants::INVALID_INDEX);
 
 //! Walk down to the nearest source alias on `expr`, falling back to `inherited`.
 string DescendSourceAlias(const Expression &expr, const string &inherited);

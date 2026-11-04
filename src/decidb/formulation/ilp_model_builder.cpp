@@ -580,6 +580,24 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 				model.col_upper[var_idx] = 0.0;
 			}
 		}
+		// So is an auxiliary's instance every row of which reads it with no value (SolverInput::absent_reads): no row
+		// reads it, so no bound folded into its box binds it (D88).
+		if (num_instances > 0 && var < input.absent_reads.size() && !input.absent_reads[var].empty()) {
+			vector<bool> present(num_instances, false);
+			auto &absent = input.absent_reads[var];
+			for (idx_t row = 0; row < absent.size(); row++) {
+				if (!absent[row]) {
+					present[indexer.InstanceOf(var, row)] = true;
+				}
+			}
+			for (idx_t inst = 0; inst < num_instances; inst++) {
+				if (!present[inst]) {
+					idx_t var_idx = indexer.InstanceColumn(var, inst);
+					model.col_lower[var_idx] = 0.0;
+					model.col_upper[var_idx] = 0.0;
+				}
+			}
+		}
 	}
 
     // Append global auxiliary variables after row+keyed blocks.

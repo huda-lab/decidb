@@ -1738,8 +1738,49 @@ public:
                 is_helper[link.value_var] = true;
             }
         }
+		// An auxiliary whose definition may read no value -- a data value (NULL), a frame, a keyed decision (a row in
+		// no class), or another such auxiliary -- has none on those rows, where no bound on it binds (D88): the data
+		// says whether one row is left that the bound contradicts, so the solve reports it.
+		std::function<bool(idx_t, idx_t)> may_lack_value = [&](idx_t var, idx_t depth) {
+			if (depth > num_decide_vars) {
+				return true;
+			}
+			auto reads_none = [&](const DecideTerm &term) {
+				if (term.coefficient && !term.coefficient->IsFoldable()) {
+					return true;
+				}
+				auto read = term.variable_index;
+				if (read == DConstants::INVALID_INDEX || read == var) {
+					return false;
+				}
+				return term.frame_read != DConstants::INVALID_INDEX ||
+				       (read < op.variable_scopes.size() && op.variable_scopes[read].IsKeyed()) ||
+				       may_lack_value(read, depth + 1);
+			};
+			for (const auto &constraint : op.prepared.constraints) {
+				if (constraint->defined_var != var) {
+					continue;
+				}
+				if (constraint->rhs_expr && !constraint->rhs_expr->IsFoldable()) {
+					return true;
+				}
+				for (auto &term : constraint->lhs_terms) {
+					if (reads_none(term)) {
+						return true;
+					}
+				}
+				for (auto &group : constraint->quadratic_groups) {
+					for (auto &term : group.inner_terms) {
+						if (reads_none(term)) {
+							return true;
+						}
+					}
+				}
+			}
+			return false;
+		};
         for (idx_t var = 0; var < num_decide_vars; var++) {
-            if (is_helper[var]) {
+            if (is_helper[var] || may_lack_value(var, 0)) {
                 continue;
             }
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
@@ -1870,6 +1911,9 @@ public:
 	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
 	//! a decision and a frame once, the variable after the plan's decisions.
 	vector<std::pair<idx_t, idx_t>> frame_reads;
+	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
+	//! whose definition reads an instance with none there (D88, PhysicalDecide::BuildKeyedMappings); empty where none.
+	vector<vector<bool>> absent_reads;
 
 	//! The variable a term reads at each row: its own, or -- for a frame's payload term --
 	//! the read of it at the row the frame selects. A query-wide decision has one column,
@@ -2317,96 +2361,317 @@ void PhysicalDecide::CheckFramePeers(ClientContext &context, DecideGlobalSinkSta
 	                      keys, gstate.data, num_rows, chunk_expr_cache);
 }
 
-vector<bool> PhysicalDecide::FramesPresent(const DecideGlobalSinkState &gstate, idx_t source_clause_id,
-                                           idx_t num_rows) const {
-	vector<bool> present;
-	for (idx_t f = 0; f < frames.size(); f++) {
-		if (!frames[f].SkipsInstancesOf(source_clause_id)) {
-			continue;
+//! The rows among `read` (every row when null) where one of `exprs` is NULL.
+static vector<bool> NullRows(const vector<const Expression *> &exprs, ChunkExprCache &chunk_expr_cache,
+                             ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                             const vector<bool> *read) {
+	vector<bool> nulls(num_rows, false);
+	if (exprs.empty()) {
+		return nulls;
+	}
+	ExpressionExecutor executor(context);
+	vector<LogicalType> types;
+	for (auto *expr : exprs) {
+		auto &lowered = CachedTransformToChunkExpression(chunk_expr_cache, *expr, context);
+		executor.AddExpression(lowered);
+		types.push_back(lowered.return_type);
+	}
+	ColumnDataScanState scan;
+	data.InitializeScan(scan);
+	DataChunk chunk;
+	chunk.Initialize(context, data.Types());
+	DataChunk results;
+	results.Initialize(context, types);
+	idx_t offset = 0;
+	while (data.Scan(scan, chunk)) {
+		results.Reset();
+		ExecuteOnReadRows(executor, chunk, offset, read, results);
+		for (idx_t col = 0; col < results.ColumnCount(); col++) {
+			UnifiedVectorFormat format;
+			results.data[col].ToUnifiedFormat(chunk.size(), format);
+			for (idx_t i = 0; i < chunk.size(); i++) {
+				if ((!read || (*read)[offset + i]) && !format.validity.RowIsValid(format.sel->get_index(i))) {
+					nulls[offset + i] = true;
+				}
+			}
 		}
-		if (present.empty()) {
-			present.assign(num_rows, true);
-		}
-		auto &map = gstate.frame_maps[f];
-		for (idx_t row = 0; row < num_rows; row++) {
-			present[row] = present[row] && !map.Absent(row);
+		offset += chunk.size();
+	}
+	return nulls;
+}
+
+//! The rows where `definition` -- a row defining an auxiliary -- reads a NULL unreduced, among the rows its `when`
+//! keeps: the auxiliary has no value there (D67, D88). A reducer's member is its reducer's to drop.
+static vector<bool> DefinitionNulls(const DecideConstraint &definition, ChunkExprCache &chunk_expr_cache,
+                                    ClientContext &context, ColumnDataCollection &data, idx_t num_rows) {
+	vector<const Expression *> values;
+	if (definition.rhs_expr) {
+		values.push_back(definition.rhs_expr.get());
+	}
+	for (auto &term : definition.lhs_terms) {
+		if (!term.filter && term.coefficient) {
+			values.push_back(term.coefficient.get());
 		}
 	}
-	return present;
+	for (auto &group : definition.quadratic_groups) {
+		for (auto &term : group.inner_terms) {
+			if (!group.filter && term.coefficient) {
+				values.push_back(term.coefficient.get());
+			}
+		}
+	}
+	vector<bool> kept;
+	if (definition.scope.when) {
+		kept = KeptRows(*definition.scope.when, chunk_expr_cache, context, data, num_rows);
+	}
+	return NullRows(values, chunk_expr_cache, context, data, num_rows, definition.scope.when ? &kept : nullptr);
+}
+
+//! Whether the instance of decision `var` that `row` reads has no value (D84, D87, D88): a keyed decision's row in no
+//! class of its scope -- a helper's group with no member among them --, or an auxiliary whose definition reads an
+//! instance with none there (DecideGlobalSinkState::absent_reads).
+static bool DecisionAbsent(const vector<DecideVarScopeInfo> &scopes, const vector<KeyedMapping> &mappings,
+                           const vector<vector<bool>> &absent_reads, idx_t var, idx_t row) {
+	if (var < absent_reads.size() && !absent_reads[var].empty() && absent_reads[var][row]) {
+		return true;
+	}
+	if (var >= scopes.size() || !scopes[var].IsKeyed()) {
+		return false;
+	}
+	auto &mapping = mappings[scopes[var].keyed_scope_idx];
+	if (mapping.row_to_class.empty()) {
+		throw InternalException("DECIDE: a decision's absence is read before its scope is built");
+	}
+	return mapping.IsAbsent(row);
+}
+
+//! Whether `term` reads, at `row`, an instance with no value: a frame's payload term reads its decision at the row the
+//! frame selects, and nothing where the frame has no value (D84); a term of no decision reads none.
+static bool TermReadsAbsent(const DecideTerm &term, const vector<DecideVarScopeInfo> &scopes,
+                            const vector<KeyedMapping> &mappings, const vector<vector<bool>> &absent_reads,
+                            const vector<DecideFrameMap> &frame_maps, idx_t row) {
+	if (term.variable_index == DConstants::INVALID_INDEX) {
+		return false;
+	}
+	if (term.frame_read == DConstants::INVALID_INDEX) {
+		return DecisionAbsent(scopes, mappings, absent_reads, term.variable_index, row);
+	}
+	auto &map = frame_maps[term.frame_read];
+	if (map.Absent(row)) {
+		return true;
+	}
+	// A missing position whose `else` stands in reads the else, not this term.
+	const auto at = map.SelectedRow(row);
+	return at != DConstants::INVALID_INDEX && DecisionAbsent(scopes, mappings, absent_reads, term.variable_index, at);
+}
+
+//! Whether `term` may read an instance with no value on some row (TermReadsAbsent), so that only such a term is read
+//! row by row.
+static bool MayReadAbsent(const DecideTerm &term, const vector<DecideVarScopeInfo> &scopes,
+                          const vector<KeyedMapping> &mappings, const vector<vector<bool>> &absent_reads) {
+	const auto var = term.variable_index;
+	if (var == DConstants::INVALID_INDEX) {
+		return false;
+	}
+	if (term.frame_read != DConstants::INVALID_INDEX || (var < absent_reads.size() && !absent_reads[var].empty())) {
+		return true;
+	}
+	return var < scopes.size() && scopes[var].IsKeyed() &&
+	       mappings[scopes[var].keyed_scope_idx].absent_class != DConstants::INVALID_INDEX;
+}
+
+KeyedMapping PhysicalDecide::BuildScopeMapping(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                               ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                               const vector<KeyedMapping> &keyed_mappings, idx_t scope_idx) const {
+	auto &scope = keyed_scopes[scope_idx];
+	KeyedMapping mapping;
+	// A declaration's scope: the classes of its key over every row. A helper decision's
+	// scope: the groups of its link's `by` key among the rows the link's clause keeps
+	// that hold a member, numbered as its definition numbers them; the key is never
+	// evaluated on a row the clause drops. A group with no member has no helper: its
+	// reducer is NULL there, so a read of it skips its instance.
+	if (scope.value_link != DConstants::INVALID_INDEX &&
+	    reducer_value_links[scope.value_link].frame != DConstants::INVALID_INDEX) {
+		// A range frame's helper (DecideOptimizer::RewriteFrameRanges): one class per window of its frame, read by
+		// the window's anchors; an anchor whose window reads nothing is in none.
+		auto &map = gstate.frame_maps[reducer_value_links[scope.value_link].frame];
+		mapping.num_classes = map.WindowCount();
+		mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (map.anchors[row] && !map.Absent(row)) {
+				mapping.row_to_class[row] = map.window[row];
+			}
+		}
+	} else if (scope.value_link != DConstants::INVALID_INDEX) {
+		auto &link = reducer_value_links[scope.value_link];
+		vector<bool> kept;
+		auto read = ValueLinkMembers(context, gstate, link, num_rows, chunk_expr_cache, keyed_mappings, kept);
+		std::function<bool(idx_t)> is_member = [&](idx_t row) {
+			return read[row];
+		};
+		std::function<bool(idx_t)> every_kept_row;
+		vector<idx_t> member_ids;
+		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
+		                         num_rows, is_member, &kept, member_ids, mapping.num_classes, &every_kept_row,
+		                         &mapping.row_to_class);
+	} else if (scope.signature != DConstants::INVALID_INDEX) {
+		// A relation-qualified reducer's scope: the classes of its key among the rows it reads, each split by its
+		// body's signature (D70, D71), so one value per instance -- not per class -- reaches the reducer. The
+		// decisions' scopes come first, so their classes are built by now.
+		auto &signature = signatures[scope.signature];
+		vector<bool> kept;
+		if (signature.rows) {
+			kept = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
+		}
+		const vector<bool> *read = signature.rows ? &kept : nullptr;
+		BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings,
+		                  SignatureFrames {frames, gstate.frame_maps, prepared}, chunk_expr_cache, context, gstate.data,
+		                  num_rows, read, mapping.row_to_class, mapping.num_classes);
+		// How many classes of the key those values come from, for EXPLAIN ANALYZE (D71).
+		vector<idx_t> class_ids;
+		idx_t num_classes = 0;
+		LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
+		                         std::function<bool(idx_t)> {}, read, class_ids, num_classes);
+		if (mapping.num_classes > num_classes) {
+			RecordVariants(signature, "values", mapping.num_classes, num_classes);
+		}
+	} else {
+		LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
+		                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_class, mapping.num_classes);
+	}
+	// A row in no class (a NULL written key, a dropped row) has no decision: it maps to
+	// one spare class, so that every row has an id (KeyedMapping::absent_class).
+	for (auto &id : mapping.row_to_class) {
+		if (id == DConstants::INVALID_INDEX) {
+			mapping.absent_class = mapping.num_classes;
+			id = mapping.absent_class;
+		}
+	}
+	if (mapping.absent_class != DConstants::INVALID_INDEX) {
+		mapping.num_classes++;
+	}
+	return mapping;
 }
 
 vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate,
-                                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache,
-                                                          PerGroupCache &per_group_cache) const {
-	vector<KeyedMapping> keyed_mappings;
-	for (auto &scope : keyed_scopes) {
-		KeyedMapping mapping;
-		// A declaration's scope: the classes of its key over every row. A helper decision's
-		// scope: the groups of its link's `by` key among the rows the link's clause keeps
-		// that hold a member, numbered as its definition numbers them; the key is never
-		// evaluated on a row the clause drops. A group with no member has no helper: its
-		// reducer is NULL there, so a read of it skips its instance.
-		if (scope.value_link != DConstants::INVALID_INDEX &&
-		    reducer_value_links[scope.value_link].frame != DConstants::INVALID_INDEX) {
-			// A range frame's helper (DecideOptimizer::RewriteFrameRanges): one class per window of its frame, read by
-			// the window's anchors; an anchor whose window reads nothing is in none.
-			auto &map = gstate.frame_maps[reducer_value_links[scope.value_link].frame];
-			mapping.num_classes = map.WindowCount();
-			mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
+                                                        idx_t num_rows, ChunkExprCache &chunk_expr_cache,
+                                                        PerGroupCache &per_group_cache) const {
+	// Every scope's mapping, and every auxiliary's absence, is resolved in the order the definitions read each other,
+	// whatever order the rewrites numbered them in: a helper's members may read an auxiliary (`sum(abs(x - m))`) whose
+	// definition reads another helper (`m`) made after it.
+	enum : uint8_t { UNRESOLVED, RESOLVING, RESOLVED };
+	vector<KeyedMapping> keyed_mappings(keyed_scopes.size());
+	vector<uint8_t> scope_state(keyed_scopes.size(), UNRESOLVED);
+	vector<uint8_t> var_state(decide_variables.size(), UNRESOLVED);
+	gstate.absent_reads.assign(decide_variables.size(), vector<bool>());
+	// What defines each auxiliary standing for a value: its definition rows (DecideConstraint::defined_var) and the
+	// factors of a product (LogicalDecide::BilinearLink).
+	vector<vector<const DecideConstraint *>> definitions(decide_variables.size());
+	for (auto &constraint : gstate.constraints) {
+		if (constraint->defined_var < definitions.size()) {
+			definitions[constraint->defined_var].push_back(constraint.get());
+		}
+	}
+	vector<vector<idx_t>> factors(decide_variables.size());
+	for (auto &link : bilinear_links) {
+		if (link.aux_idx < factors.size()) {
+			factors[link.aux_idx] = {link.bool_var_idx, link.other_var_idx};
+		}
+	}
+
+	std::function<void(idx_t)> resolve_scope;
+	// `var`'s absence, once what it reads is resolved: its scope's classes, and for an auxiliary the rows where its
+	// definition reads an instance with no value -- it stands for that definition's value, which has none there.
+	std::function<void(idx_t)> resolve_var = [&](idx_t var) {
+		if (var >= decide_variables.size() || var_state[var] == RESOLVED) {
+			return;
+		}
+		if (var_state[var] == RESOLVING) {
+			throw InternalException("DECIDE: an auxiliary's definition reads the auxiliary itself");
+		}
+		var_state[var] = RESOLVING;
+		if (var < variable_scopes.size() && variable_scopes[var].IsKeyed()) {
+			resolve_scope(variable_scopes[var].keyed_scope_idx);
+		}
+		vector<bool> absent;
+		auto mark = [&](const DecideTerm &term) {
+			if (term.variable_index == var || term.variable_index == DConstants::INVALID_INDEX || term.filter) {
+				return; // the auxiliary itself; a reducer's member, which its reducer drops instead
+			}
+			resolve_var(term.variable_index);
+			if (!MayReadAbsent(term, variable_scopes, keyed_mappings, gstate.absent_reads)) {
+				return;
+			}
 			for (idx_t row = 0; row < num_rows; row++) {
-				if (map.anchors[row] && !map.Absent(row)) {
-					mapping.row_to_class[row] = map.window[row];
+				if (TermReadsAbsent(term, variable_scopes, keyed_mappings, gstate.absent_reads, gstate.frame_maps,
+				                    row)) {
+					absent.resize(num_rows, false);
+					absent[row] = true;
 				}
 			}
-		} else if (scope.value_link != DConstants::INVALID_INDEX) {
+		};
+		for (auto *definition : definitions[var]) {
+			auto nulls = DefinitionNulls(*definition, chunk_expr_cache, context, gstate.data, num_rows);
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (nulls[row]) {
+					absent.resize(num_rows, false);
+					absent[row] = true;
+				}
+			}
+			for (auto &term : definition->lhs_terms) {
+				mark(term);
+			}
+			for (auto &group : definition->quadratic_groups) {
+				for (auto &term : group.inner_terms) {
+					if (!group.filter) {
+						mark(term);
+					}
+				}
+			}
+			for (auto &product : definition->bilinear_terms) {
+				if (!product.filter) {
+					mark(DecideTerm(product.var_a, nullptr));
+					mark(DecideTerm(product.var_b, nullptr));
+				}
+			}
+		}
+		for (auto factor : factors[var]) {
+			mark(DecideTerm(factor, nullptr));
+		}
+		gstate.absent_reads[var] = std::move(absent);
+		var_state[var] = RESOLVED;
+	};
+
+	resolve_scope = [&](idx_t scope_idx) {
+		if (scope_state[scope_idx] == RESOLVED) {
+			return;
+		}
+		if (scope_state[scope_idx] == RESOLVING) {
+			throw InternalException("DECIDE: a helper decision's members read the helper itself");
+		}
+		scope_state[scope_idx] = RESOLVING;
+		// A helper's members read what its link reads.
+		auto &scope = keyed_scopes[scope_idx];
+		if (scope.value_link != DConstants::INVALID_INDEX) {
 			auto &link = reducer_value_links[scope.value_link];
-			vector<bool> kept;
-			auto read = ValueLinkMembers(context, gstate, link, num_rows, chunk_expr_cache, keyed_mappings, kept);
-			std::function<bool(idx_t)> is_member = [&](idx_t row) {
-				return read[row];
-			};
-			std::function<bool(idx_t)> every_kept_row;
-			vector<idx_t> member_ids;
-			LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
-			                         num_rows, is_member, &kept, member_ids, mapping.num_classes, &every_kept_row,
-			                         &mapping.row_to_class);
-		} else if (scope.signature != DConstants::INVALID_INDEX) {
-			// A relation-qualified reducer's scope: the classes of its key among the rows it reads, each split by its
-			// body's signature (D70, D71), so one value per instance -- not per class -- reaches the reducer. The
-			// decisions' scopes come first, so their classes are built by now.
-			auto &signature = signatures[scope.signature];
-			vector<bool> kept;
-			if (signature.rows) {
-				kept = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
+			if (link.qualifier_scope_idx != DConstants::INVALID_INDEX) {
+				resolve_scope(link.qualifier_scope_idx);
 			}
-			const vector<bool> *read = signature.rows ? &kept : nullptr;
-			BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings,
-			                  SignatureFrames {frames, gstate.frame_maps, prepared}, chunk_expr_cache, context,
-			                  gstate.data, num_rows, read, mapping.row_to_class, mapping.num_classes);
-			// How many classes of the key those values come from, for EXPLAIN ANALYZE (D71).
-			vector<idx_t> class_ids;
-			idx_t num_classes = 0;
-			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data,
-			                         num_rows, std::function<bool(idx_t)> {}, read, class_ids, num_classes);
-			if (mapping.num_classes > num_classes) {
-				RecordVariants(signature, "values", mapping.num_classes, num_classes);
-			}
-		} else {
-			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
-			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_class, mapping.num_classes);
-		}
-		// A row in no class (a NULL written key, a dropped row) has no decision: it maps to
-		// one spare class, so that every row has an id (KeyedMapping::absent_class).
-		for (auto &id : mapping.row_to_class) {
-			if (id == DConstants::INVALID_INDEX) {
-				mapping.absent_class = mapping.num_classes;
-				id = mapping.absent_class;
+			for (auto &term : link.inner_terms) {
+				resolve_var(term.variable_index);
 			}
 		}
-		if (mapping.absent_class != DConstants::INVALID_INDEX) {
-			mapping.num_classes++;
-		}
-		keyed_mappings.push_back(std::move(mapping));
+		auto mapping =
+		    BuildScopeMapping(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings, scope_idx);
+		keyed_mappings[scope_idx] = std::move(mapping);
+		scope_state[scope_idx] = RESOLVED;
+	};
+
+	for (idx_t scope_idx = 0; scope_idx < keyed_scopes.size(); scope_idx++) {
+		resolve_scope(scope_idx);
+	}
+	for (idx_t var = 0; var < decide_variables.size(); var++) {
+		resolve_var(var);
 	}
 	return keyed_mappings;
 }
@@ -2423,9 +2688,6 @@ vector<bool> PhysicalDecide::ValueLinkMembers(ClientContext &context, DecideGlob
 	    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
 	// Its own `per`: a row in no class of that key (a NULL written key) is no instance of it, so no member.
 	if (link.qualifier_scope_idx != DConstants::INVALID_INDEX) {
-		if (link.qualifier_scope_idx >= mappings.size()) {
-			throw InternalException("DECIDE: %s's per is numbered after its own scope", link.label);
-		}
 		auto &qualifier = mappings[link.qualifier_scope_idx];
 		for (idx_t row = 0; row < num_rows; row++) {
 			if (read[row] && qualifier.IsAbsent(row)) {
@@ -2433,21 +2695,14 @@ vector<bool> PhysicalDecide::ValueLinkMembers(ClientContext &context, DecideGlob
 			}
 		}
 	}
+	// A member reading an instance with no value is NULL, which a reducer skips (language/guide.md §7.2).
 	for (auto &term : link.inner_terms) {
-		const auto var = term.variable_index;
-		if (var >= variable_scopes.size() || !variable_scopes[var].IsKeyed()) {
+		if (!MayReadAbsent(term, variable_scopes, mappings, gstate.absent_reads)) {
 			continue;
 		}
-		const auto scope = variable_scopes[var].keyed_scope_idx;
-		if (scope >= mappings.size()) {
-			throw InternalException("DECIDE: %s reads a decision whose scope is numbered after its own", link.label);
-		}
-		auto &mapping = mappings[scope];
-		const auto *read_at =
-		    term.frame_read == DConstants::INVALID_INDEX ? nullptr : &gstate.frame_maps[term.frame_read];
 		for (idx_t row = 0; row < num_rows; row++) {
-			const auto at = read_at ? read_at->SelectedRow(row) : row;
-			if (read[row] && at != DConstants::INVALID_INDEX && mapping.IsAbsent(at)) {
+			if (read[row] &&
+			    TermReadsAbsent(term, variable_scopes, mappings, gstate.absent_reads, gstate.frame_maps, row)) {
 				read[row] = false;
 			}
 		}
@@ -2789,26 +3044,21 @@ void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char
 	variant_accounts.push_back(std::move(account));
 }
 
-//! A row in no class of a keyed decision's key has no decision there
-//! (KeyedMapping::absent_class), which reads like a NULL: a term that reads it on that row
-//! marks the row in `null_rows`, so its instance is skipped. A reducer over the decision never
-//! reads the row (DecideCanonicalizer::SkipNullData), and a row outside the clause's `when`
-//! is no instance. A frame's payload term reads the decision at the row the frame selects
-//! (`read_at`), so that is the row whose class counts; where it selects none, nothing is read.
-static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, const vector<KeyedMapping> &mappings,
-                                    idx_t var, const vector<bool> &scoped_kept, const TermFilterState &filter,
-                                    vector<bool> &null_rows, const DecideFrameMap *read_at = nullptr) {
-	if (var >= scopes.size() || !scopes[var].IsKeyed()) {
-		return;
-	}
-	auto &mapping = mappings[scopes[var].keyed_scope_idx];
-	if (mapping.absent_class == DConstants::INVALID_INDEX) {
+//! An instance with no value -- a keyed decision's row in no class, a helper's group with no member, an auxiliary whose
+//! definition reads one (DecisionAbsent) -- reads like a NULL: a term that reads it on a row marks the row in
+//! `null_rows`, so its instance is skipped. A reducer over a keyed decision never reads the row
+//! (DecideCanonicalizer::SkipNullData), and a row outside the clause's `when` is no instance. A frame's payload term
+//! reads its decision at the row the frame selects (TermReadsAbsent).
+static void MarkAbsentDecisionReads(const DecideTerm &term, const vector<DecideVarScopeInfo> &scopes,
+                                    const vector<KeyedMapping> &mappings, const vector<vector<bool>> &absent_reads,
+                                    const vector<DecideFrameMap> &frame_maps, const vector<bool> &scoped_kept,
+                                    const TermFilterState &filter, vector<bool> &null_rows) {
+	if (!MayReadAbsent(term, scopes, mappings, absent_reads)) {
 		return;
 	}
 	for (idx_t row = 0; row < null_rows.size(); row++) {
-		auto read = read_at ? read_at->SelectedRow(row) : row;
-		if (scoped_kept[row] && (!filter.has_filter || filter.mask[row]) && read != DConstants::INVALID_INDEX &&
-		    mapping.IsAbsent(read)) {
+		if (scoped_kept[row] && (!filter.has_filter || filter.mask[row]) &&
+		    TermReadsAbsent(term, scopes, mappings, absent_reads, frame_maps, row)) {
 			null_rows[row] = true;
 		}
 	}
@@ -3597,37 +3847,24 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
-		// A comparison holds only where every frame it reads outside its reducers selects a position; elsewhere it
-		// reads no value (D84), as at a NULL. A row a rewrite added defines an auxiliary (an ABS, an indicator), which
-		// carries its clause's id but is no instance of it: it serves every instance that reads the auxiliary -- one
-		// inside a reducer, a member the other instances read -- and holds wherever its own values stand, a frame it
-		// reads included.
-		auto present = constraint->kind == ConstraintKind::STRUCTURAL
-		                   ? vector<bool>()
-		                   : FramesPresent(gstate, constraint->source_clause_id, num_rows);
-		for (idx_t row = 0; row < present.size(); row++) {
-			if (scoped_kept[row] && !present[row]) {
-				null_rows[row] = true;
-			}
-		}
-		auto read_at = [&](const DecideTerm &term) {
-			return term.frame_read == DConstants::INVALID_INDEX ? nullptr : &gstate.frame_maps[term.frame_read];
+		// An instance with no value reads like a NULL: the comparison's instance is skipped where a term reads one --
+		// a frame with nothing to read, or an auxiliary standing for a value that has none there (D84, D88). A row a
+		// rewrite added to define an auxiliary is skipped where its own reads have none, and the auxiliary with it.
+		auto mark_absent = [&](const DecideTerm &term, const TermFilterState &filter) {
+			MarkAbsentDecisionReads(term, variable_scopes, keyed_mappings, gstate.absent_reads, gstate.frame_maps,
+			                        scoped_kept, filter, null_rows);
 		};
 		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-			auto &term = constraint->lhs_terms[term_idx];
-			MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
-			                        term_filters[term_idx], null_rows, read_at(term));
+			mark_absent(constraint->lhs_terms[term_idx], term_filters[term_idx]);
 		}
 		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
 			for (auto var : {constraint->bilinear_terms[term_idx].var_a, constraint->bilinear_terms[term_idx].var_b}) {
-				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, var, scoped_kept, bilinear_filters[term_idx],
-				                        null_rows);
+				mark_absent(DecideTerm(var, nullptr), bilinear_filters[term_idx]);
 			}
 		}
 		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
 			for (auto &term : constraint->quadratic_groups[group_idx].inner_terms) {
-				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
-				                        quadratic_filters[group_idx], null_rows, read_at(term));
+				mark_absent(term, quadratic_filters[group_idx]);
 			}
 		}
 		SkipNullInstances(null_rows, constraint->lhs_is_aggregate || constraint->was_minmax_easy, num_rows,
@@ -3730,6 +3967,29 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			for (auto &b : buckets) {
 				for (auto &state : *b.out_term_filters) {
 					fold_objective_when(state);
+				}
+			}
+			// A term reading an instance with no value is NULL on that row, and a NULL objective term is dropped (D67,
+			// D88).
+			for (auto &b : buckets) {
+				for (idx_t term_idx = 0; term_idx < b.src_terms->size(); term_idx++) {
+					auto &term = (*b.src_terms)[term_idx];
+					if (!MayReadAbsent(term, variable_scopes, keyed_mappings, gstate.absent_reads)) {
+						continue;
+					}
+					auto &state = (*b.out_term_filters)[term_idx];
+					for (idx_t row = 0; row < num_rows; row++) {
+						if ((state.has_filter && !state.mask[row]) ||
+						    !TermReadsAbsent(term, variable_scopes, keyed_mappings, gstate.absent_reads,
+						                     gstate.frame_maps, row)) {
+							continue;
+						}
+						if (!state.has_filter) {
+							state.mask.assign(num_rows, true);
+							state.has_filter = true;
+						}
+						state.mask[row] = false;
+					}
 				}
 			}
 
@@ -4328,6 +4588,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.num_rows = num_rows;
     solver_input.num_decide_vars = num_decide_vars;
     solver_input.keyed_mappings = std::move(keyed_mappings);
+	solver_input.absent_reads = gstate.absent_reads;
     solver_input.variable_scopes = variable_scopes;
 	// The decisions frames read at another row (SolverInput::frame_reads), after the plan's
 	// own: each its base read, at each row, at the row its frame selects -- or the row

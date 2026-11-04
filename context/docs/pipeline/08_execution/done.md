@@ -282,14 +282,20 @@ the instance is skipped (`SkipNullInstances`), a reducer's member is out of its 
 An anchor in no timeline is such an anchor whatever its `else` (`DecideFrameMap::Untimed`): it misses no position, so
 no `else` stands in, and it is absent (D75). A frame over data is that column alone, so a scalar function around it
 reads the NULL as SQL does -- `coalesce(at(previous: t.d) over (...), 1)` is 1 there -- and only a NULL that reaches
-the comparison skips it (deck p. 56). A comparison whose frame over decisions outside its reducers may select no
-position marks those rows too (`FramesPresent`, by the clause's id, `DecideFrameSpec::reads_decisions`), so the rows a
-rewrite made of the comparison -- a `<>`'s indicator rows, an ABS's -- skip them as well. A row a
-rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`: an ABS's envelope, an L0 indicator's links) is no
-instance of the clause and is not skipped there (D88): an auxiliary inside a reducer is a member the clause's other
-instances read, and a definition holds wherever its own values stand, NULL-skipped where it reads a frame with no
-value. A keyed decision read through a frame is absent where the selected row is in no class (`MarkAbsentDecisionReads`
-reads the selected row). A frame field of a signature (D82) splits by the frame's timeline, the anchor's peer when it
+the comparison skips it (deck p. 56). A frame over decisions is its payload's terms, each read at the selected row
+(`TermReadsAbsent`): where the frame has no value, or the decision has none at the selected row, the term reads an
+instance with no value, as below.
+
+**No value is one mark per decision instance** (D84, D87, D88): `DecisionAbsent` answers whether the instance a row
+reads of a decision has a value. A keyed decision has none on a row in no class of its scope (its mapping's absent
+class), and so has a helper's group with no member. An auxiliary -- an ABS's, a body helper, an L0 indicator, a
+product -- has none where the rows defining it (`DecideConstraint::defined_var`, the `DEFINES_TAG_PREFIX` stage 05
+reads; a product's factors) read an instance with none (`DecideGlobalSinkState::absent_reads`). `BuildKeyedMappings`
+resolves both in the order the definitions read each other -- a helper's members may read an auxiliary whose
+definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader reads that one
+mark: a comparison skips the instance (`MarkAbsentDecisionReads`), a helper drops the member (`ValueLinkMembers`),
+the objective drops the term. A row a rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no
+instance of the clause: it is skipped where its own reads have no value, and the auxiliary with it. A frame field of a signature (D82) splits by the frame's timeline, the anchor's peer when it
 reads relative to the anchor, and what a reached `else` reads, its data and its decisions' instances.
 
 A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
@@ -299,9 +305,8 @@ cyclic position as often as it is visited (D76) --
 and counts its missing positions, each of which reads the `else` once; a position off a timeline that does not wrap
 is counted, never visited, so the work is O(values). One frame may list at most `decide_frame_limit` values (checked
 before the work that lists them; an interrupt is polled per timeline and per position). An anchor whose window reads
-nothing -- a reversed range, `all` meeting a missing position, no value at all -- is absent (`DecideFrameMap::absent`),
-and a frame the plan says cannot be absent (`DecideFrameSpec::MaySelectNothing`) that is, but for an anchor in no
-timeline, is an internal error. A range over data's `REDUCED` column runs the frame's own bound aggregate through its
+nothing -- a reversed range, `all` meeting a missing position, no value at all -- is absent (`DecideFrameMap::absent`).
+A range over data's `REDUCED` column runs the frame's own bound aggregate through its
 state functions over each window's values (`ReduceRangeValues`), so SQL's types and NULL handling hold: a NULL value
 is skipped, `count` counts the rest. A range over decisions is its helper decision's instances, one per window
 (`BuildKeyedMappings` reads the windows; an absent anchor is in no class), and its members are listed per window

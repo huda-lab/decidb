@@ -134,6 +134,9 @@ struct DecideConstraint {
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;        // index into LogicalDecide::ne_clause_sources
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;          // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
+	//! The auxiliary this row defines (DEFINES_TAG_PREFIX): it has no value on a row where the decisions the row reads
+	//! beside it have none (D88). INVALID_INDEX for every other row.
+	idx_t defined_var = DConstants::INVALID_INDEX;
 	//! The clause's `when` and `per`.
 	DecideClauseScope scope;
 	//! Aggregate shape: the `by` key its decision reducers share, which groups its rows (index into

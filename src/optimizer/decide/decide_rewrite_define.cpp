@@ -359,7 +359,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		auto row = make_uniq<BoundComparisonExpression>(
 		    relation, BoundCastExpression::AddCastToType(context, MakeDecisionRef(decide, helper), body->return_type),
 		    body->Copy());
-		MarkFormulationConstraint(*row, string());
+		MarkFormulationConstraint(*row, string(), helper);
 		auto alias = row->GetAlias();
 		AddDecideTag(alias, BODY_DEFINITION_TAG);
 		row->SetAlias(std::move(alias));

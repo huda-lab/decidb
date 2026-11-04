@@ -539,22 +539,20 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   its selected row too. A row a rewrite adds for a construct in a member -- an `abs`'s envelope, an L0 indicator's
   links -- defines an auxiliary and is no instance of its clause: it stays where the clause's instance is skipped
   (D88), so `sum(abs(x - 3)) + at(previous: x) over (t.period) <= 4` keeps `abs(x1 - 3)` in the sum the other
-  periods read.
+  periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
+  (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
+  has no member.
 - **The objective** is produced once (D72): a root frame that reads more than one position, timeline or fallback
   over the kept rows is an error saying so.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
   inside a frame's payload or fallback; a frame term multiplied or divided by a decision (a data factor on a frame
-  over decisions is linear). Not supported yet (D88): under `abs` inside another reducer over decisions, a reducer a
-  frame may leave with no member -- the `abs` auxiliary of that member would stand undefined in its reducer: *"DECIDE:
-  max(at(previous: x) over (t.period within t.product)) by (t.product) under abs inside sum(abs(x - max(...) by
-  (t.product))) may read no member, as at(previous: x) over (t.period within t.product) may select no position, which
-  is not supported yet; give it an else, or make its timeline cyclic"*.
+  over decisions is linear).
 
 **Status.** Points and ranges are formulated, over data or decisions, in constraints and the objective, inside a
 reducer over decisions too, under `abs`, `norm` and a `MIN`/`MAX` of several terms: a point reads a decision at the
 selected row's own column, with no helper decision; a range over decisions is its helper per window
-([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a reducer a frame may
-leave with no member under `abs` inside another reducer (D88); a frame inside a reducer of a bound, or in the bound of
+([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a frame inside a
+reducer of a bound, or in the bound of
 a clause over groups that would take its group's tightest value (D85) -- a `first` or `last` frame, or a range from
 `first` to `last`, whose timeline lies within each group reads one value per group, and is read; a frame over
 decisions beside a `MIN`/`MAX` in the objective, as any decision there is; an `else` that reads a decision while the
@@ -567,9 +565,7 @@ Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ord
 examples 1, 2, 4, 5 and 6 and the DeQL comparison; shapes and errors), `test/decide/tests/test_anr_composition.py`
 (members dropped, under `abs` and `norm`, the objective, composed `MIN`/`MAX`, both solvers),
 `test/decide/tests/test_anr_diagnostics.py` (DIAGNOSE and EXPLAIN over variants, nests and frames),
-`test/common/test_decidb_frame_predicates.cpp`
-(the absence predicates against every position they summarize), `test/common/test_decidb_plan_serialization.cpp` (a
-placed point and range round-trip).
+`test/common/test_decidb_plan_serialization.cpp` (a placed point and range round-trip).
 
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
@@ -735,6 +731,7 @@ so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `tes
 | NULL `when` condition | row dropped |
 | NULL in a reducer's summand | the row is skipped, as in SQL; AVG divides by the rows kept (§3) |
 | NULL bound, unreduced coefficient or factor on an aggregate | the instance is skipped (§3) |
+| NULL, or a value that has none, inside `abs`, a square or a Boolean product (`abs(x - t.d)`) | the expression has no value there either (D88): unreduced, the instance is skipped; in a reducer, the member is dropped |
 | NULL in an objective term | the term is dropped (§3) |
 | NULL or NaN written in the query beside a decision; NaN in data; an infinite coefficient | error (§3) |
 | a `when` keeps no row | no constraint (D68) |

@@ -49,22 +49,6 @@ static Vector EvaluateOnRows(ClientContext &context, const Expression &expr, Col
 	return values;
 }
 
-//! Every layer above reads DecideFrameSpec::MaySelectNothing to know whether a frame can skip an instance, drop a
-//! member or leave the objective's term without a value; a frame that reads nothing where it says it cannot would be
-//! read as present there. What only the data decides is no absence the plan foresees, and is read as a NULL is (D84):
-//! a NULL read (SkipNullReads), an anchor in no timeline (D75).
-static void CheckAbsenceForeseen(const DecideFrameSpec &frame, const DecideFrameMap &map) {
-	if (frame.MaySelectNothing()) {
-		return;
-	}
-	for (idx_t row = 0; row < map.absent.size(); row++) {
-		if (map.absent[row] && map.timeline[row] != DConstants::INVALID_INDEX) {
-			throw InternalException("DECIDE: %s reads nothing at an anchor although it was planned never to",
-			                        frame.text);
-		}
-	}
-}
-
 //! An anchor in no timeline (D75) selects nothing, whatever its `else`: the frame has no value there (D84).
 static void MarkUntimedAbsent(DecideFrameMap &map) {
 	for (idx_t row = 0; row < map.anchors.size(); row++) {
@@ -305,7 +289,6 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 	if (frame.range) {
 		ListRangeWindows(context, frame, first_peer, map);
 		MarkUntimedAbsent(map);
-		CheckAbsenceForeseen(frame, map);
 		return map;
 	}
 
@@ -348,7 +331,6 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 		map.absent[row] = map.Missing(row) && !frame.fallback;
 	}
 	MarkUntimedAbsent(map);
-	CheckAbsenceForeseen(frame, map);
 	return map;
 }
 

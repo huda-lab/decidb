@@ -364,8 +364,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
 			// AUXILIARY, which both arms have, rather than by y, which only the lowering
 			// arm allocates.
-			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
-			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
+			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(pair.aux_idx) + "__" + MakeDefinesTag(pair.aux_idx);
+			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(pair.aux_idx) + "__" + MakeDefinesTag(pair.aux_idx);
 			// The linearizer finds these by substring, so the clause id rides alongside
 			// rather than replacing the marker.
 			CopyClauseProvenanceTags(pair.source_alias, *c1);
@@ -373,8 +373,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 
 			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
 		} else {
-			MarkFormulationConstraint(*c1, pair.source_alias);
-			MarkFormulationConstraint(*c2, pair.source_alias);
+			MarkFormulationConstraint(*c1, pair.source_alias, pair.aux_idx);
+			MarkFormulationConstraint(*c2, pair.source_alias, pair.aux_idx);
 		}
 
 		AppendConstraint(decide,

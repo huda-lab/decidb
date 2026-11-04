@@ -404,6 +404,15 @@ static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
+//! On a row that defines an auxiliary decision standing for a value its readers read -- an ABS's envelope, a body
+//! helper's definition, an L0 indicator's links -- the auxiliary's index (DecideConstraint::defined_var). The
+//! auxiliary has no value where what its definition reads has none (D88).
+static constexpr const char *DEFINES_TAG_PREFIX = "__defines_";
+
+inline string MakeDefinesTag(idx_t var_idx) {
+	return string(DEFINES_TAG_PREFIX) + to_string(var_idx) + "__";
+}
+
 //! Tag marking a row a rewrite added for the objective (an ABS envelope, a product's
 //! corner rows, an L0 link), which no clause owns: the rewrites start the objective's
 //! walk with it as the source alias, and EXPLAIN prints such rows under the objective.

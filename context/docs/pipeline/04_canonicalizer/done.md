@@ -560,16 +560,11 @@ decision term does, one over data right, and it decides no shape. `PlaceFrames` 
 `PlaceObjectiveFrames`, run right after canonicalization, place each frame on the
 `DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
 the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
-`within` (`timeline_key`, a key-table entry made when new); it notes its clause, whether
-it stands in a reducer, and whether its payload reads a decision (`reads_decisions`: a frame
-over data is a column whose NULL the comparison reads as it reads any, D84). Under a `per K`
+`within` (`timeline_key`, a key-table entry made when new). Under a `per K`
 whose key, with the path's, does not hold the
 frame's `within`, the frame records the D75 check execution runs (`partition_key`,
-`partition_subject`). Under `abs` inside another reducer over decisions, a reducer that a
-frame may leave with no member (`FirstAbsenceFrame`: one of its own frames that
-`MaySelectNothing`, or one of a reducer nested in it) is refused, not supported yet (D88):
-the `abs` auxiliary of that member would stand undefined in its reducer. The message ends on
-what makes the frame miss and how to cure it (`DecideFrameAbsenceRemedy`). `SkipNullData`
+`partition_subject`). Whether a frame has a value at an anchor is the data's to say: stage 08
+reads it per instance (D84, D88). `SkipNullData`
 tests a frame inside a reducer over decisions whole (`marker IS NOT NULL`), as it tests a
 column: the frame reads another row, or nothing, so no column of the row itself says whether
 it has a value (D84), and the member goes where it reads nothing (D87); stage 05 makes the

@@ -46,8 +46,7 @@ order, no stepped range and no fill or complete-frame boundary policy.
   §5.6): a point is read in place, a range over data is a value of the row, and a range over decisions a helper
   decision per window (D78). They compose with variants (D82), nesting, `abs`, `norm` and a `MIN`/`MAX` of several
   terms, and a frame that selects nothing inside a reducer over decisions drops its member (D87, D88).
-- **What is left:** a frame in a bound that takes its group's tightest value (D85) or inside a reducer of a bound; a
-  reducer a frame may leave with no member under `abs` inside another reducer (D88).
+- **What is left:** a frame in a bound that takes its group's tightest value (D85) or inside a reducer of a bound.
 
 ## Conditional generation with `if` (pp. 58–59)
 

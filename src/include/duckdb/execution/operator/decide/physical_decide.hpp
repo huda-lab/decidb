@@ -308,22 +308,23 @@ private:
 	void CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
 	                     ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
 	                     const vector<KeyedMapping> &keyed_mappings) const;
-	//! The rows at which every frame the comparison `source_clause_id` reads outside its
-	//! reducers selects a position (DecideFrameSpec::SkipsInstancesOf); empty when none may
-	//! miss one. A row where one does not is no instance (language/guide.md §5.6).
-	vector<bool> FramesPresent(const DecideGlobalSinkState &gstate, idx_t source_clause_id, idx_t num_rows) const;
-
 	//! PHASE 1.5: one row→class mapping per key scope -- a keyed decision's key columns,
-    //! or a helper decision's `by` key over the rows its clause keeps
-    //! (KeyedScopeInfo::value_link).
+	//! or a helper decision's `by` key over the rows its clause keeps
+	//! (KeyedScopeInfo::value_link) -- and each auxiliary's absence (gstate.absent_reads), resolved in the order
+	//! the definitions read each other.
     vector<KeyedMapping> BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                               ChunkExprCache &chunk_expr_cache,
                                               PerGroupCache &per_group_cache) const;
+	//! The mapping of key scope `scope_idx`, once every scope and auxiliary its link reads is resolved in
+	//! `keyed_mappings` and gstate.absent_reads (BuildKeyedMappings).
+	KeyedMapping BuildScopeMapping(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+	                               ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+	                               const vector<KeyedMapping> &keyed_mappings, idx_t scope_idx) const;
 	//! The member rows of `link`, a reducer's helper: the rows its clause keeps (into `kept`), then those its own
-	//! filter keeps, less each row at which one of its terms reads a keyed decision with no instance there
-	//! (KeyedMapping::absent_class) -- a nested reducer's helper whose group holds no member. That member reads NULL,
-	//! which a reducer skips (language/guide.md §7.2). `mappings` holds the scopes built so far: every helper the link
-	//! reads, which the value rewrite made before it.
+	//! filter keeps, less each row in no class of its own `per` and each row at which one of its terms reads an
+	//! instance with no value -- a nested reducer's helper whose group holds no member, an auxiliary standing for a
+	//! value with none. That member reads NULL, which a reducer skips (language/guide.md §7.2). Every scope and
+	//! auxiliary the link reads is resolved by then.
 	vector<bool> ValueLinkMembers(ClientContext &context, DecideGlobalSinkState &gstate,
 	                              const LogicalDecide::ReducerValueLink &link, idx_t num_rows,
 	                              ChunkExprCache &chunk_expr_cache, const vector<KeyedMapping> &mappings,

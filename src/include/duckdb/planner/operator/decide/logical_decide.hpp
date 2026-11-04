@@ -143,15 +143,6 @@ struct DecideFrameSpec {
 	//! timeline.
 	unique_ptr<Expression> rows;
 	idx_t timeline_key = DConstants::INVALID_INDEX;
-	//! The comparison it is written in (LogicalDecide::constraint_sources); INVALID_INDEX exactly in the objective, as
-	//! placement holds every constraint's frame to an id.
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	//! Whether its payload reads a decision. A frame over data is a column, NULL where it has no value, which the
-	//! comparison reads as it reads any NULL (D67): a `coalesce` around it gives a value there.
-	bool reads_decisions = false;
-	//! Inside a reducer's argument, where a position it misses drops the member; outside every reducer it skips the
-	//! comparison's instance, and drops the objective's term (D84).
-	bool reduced = false;
 	//! How a message names each element its timelines are split by (`T.productID`) and its order key (`T.period`).
 	vector<string> timeline_names;
 	string order_name;
@@ -166,86 +157,6 @@ struct DecideFrameSpec {
 		return from == DecideFrameAnchor::PREVIOUS || from == DecideFrameAnchor::NEXT ||
 		       (range && (to == DecideFrameAnchor::PREVIOUS || to == DecideFrameAnchor::NEXT));
 	}
-	//! Whether some requested position may lie off its timeline, at some anchor of some timeline that does not wrap.
-	//! `first` and `last` always exist, as the anchor is on its own timeline, and so does every position between them:
-	//! a position is missed only past a relative end -- a point's `k previous` or `k next`; a range starting
-	//! `k previous` (unless it ends `j previous`, j > k, and so requests nothing), one ending `k next` after a start at
-	//! or before it, or past `last` by a step of at most k.
-	bool MayMissAPosition() const {
-		using A = DecideFrameAnchor;
-		if (cyclic) {
-			return false;
-		}
-		if (!range) {
-			return from == A::PREVIOUS || from == A::NEXT;
-		}
-		switch (from) {
-		case A::PREVIOUS:
-			return !(to == A::PREVIOUS && to_k > from_k);
-		case A::NEXT:
-			return to == A::NEXT && to_k >= from_k;
-		case A::FIRST:
-			return to == A::NEXT;
-		case A::LAST:
-			return to == A::NEXT && every <= to_k;
-		}
-		return true;
-	}
-	//! Whether some anchor may read nothing there (language/guide.md §5.6, D84). A point: its position may be missing,
-	//! with no `else` to stand in. A range: it may request no position (MayBeEmpty), `all` may meet a missing one, or,
-	//! with no `else`, every position it requests may be missing; `count` reads 0 rather than nothing, but under `all`.
-	bool MaySelectNothing() const {
-		if (!range) {
-			return MayMissAPosition() && !fallback;
-		}
-		if (all && MayMissAPosition()) {
-			return true;
-		}
-		if (reducer == "count") {
-			return false;
-		}
-		return MayBeEmpty() || (!fallback && MayMissAPosition() && MayMissEveryPosition());
-	}
-	//! A range whose first end may come after its last for some anchor of some timeline: it requests nothing there,
-	//! cyclic or not. `from previous to next` never does; `from next to previous` always does, and `from first to
-	//! 2 previous` at the first two positions.
-	bool MayBeEmpty() const {
-		using A = DecideFrameAnchor;
-		switch (from) {
-		case A::FIRST:
-			return to == A::PREVIOUS;
-		case A::LAST:
-			return to != A::LAST;
-		case A::PREVIOUS:
-			return to == A::FIRST || (to == A::PREVIOUS && to_k > from_k);
-		case A::NEXT:
-			return to != A::NEXT || to_k < from_k;
-		}
-		return true;
-	}
-	//! A range none of whose requested positions need exist, at some anchor of some timeline that does not wrap. One
-	//! does when the range starts at an end of the timeline (`first`, `last`), its first position; when it ends at
-	//! `last` and either steps by 1 or starts on the timeline (`k next`), so every position it requests lies on it;
-	//! and when it starts `k previous`, steps onto the anchor (`k` a multiple of `every`) and ends at or after it.
-	bool MayMissEveryPosition() const {
-		using A = DecideFrameAnchor;
-		if (from == A::FIRST || from == A::LAST) {
-			return false;
-		}
-		if (to == A::LAST && (every == 1 || from != A::PREVIOUS)) {
-			return false;
-		}
-		const bool reaches_anchor = to == A::NEXT || to == A::LAST;
-		return !(from == A::PREVIOUS && from_k % every == 0 && reaches_anchor);
-	}
-	//! Whether it reads decisions outside every reducer of the comparison of clause `clause_id` and may select nothing,
-	//! so that comparison has no instance at a row where it selects none (D84): no column of that row says so once a
-	//! rewrite has moved the decision into an auxiliary's rows. False for a comparison with no id.
-	bool SkipsInstancesOf(idx_t clause_id) const {
-		return clause_id != DConstants::INVALID_INDEX && source_clause_id == clause_id && !reduced && reads_decisions &&
-		       MaySelectNothing();
-	}
-
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static DecideFrameSpec Deserialize(Deserializer &deserializer);

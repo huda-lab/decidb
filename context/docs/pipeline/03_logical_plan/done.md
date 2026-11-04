@@ -153,12 +153,10 @@ into `keys`) or a `frame` (an index into `frames`, D82), with its text. `frames`
 `DecideFrameSpec` per frame selector (`../../language/guide.md` §5.6, property 223),
 indexed by the `__frame_<i>__` tag on the aggregate it binds to: its anchors and their
 `k`, `every`, `all`, its fallback and order key, `desc`, `cyclic`, and its `within` key as
-an index into `keys`, and a range's reducer (id 121) with the predicates every layer reads its absence by
-(`MaySelectNothing`, exact per pair of ends: `MayMissAPosition`, `MayBeEmpty`, `MayMissEveryPosition`); then where
-the canonicalizer placed it (stage 04, ids 113-120):
-`rows`, the rows its timelines read (its path's, null for every row), `timeline_key`,
-`source_clause_id` (INVALID_INDEX exactly in the objective), `reduced`, the names its
-messages use, and `partition_key` with `partition_subject`, its D75 check. `scope_checks`
+an index into `keys`, and a range's reducer (id 121); then where the canonicalizer placed it (stage 04, ids
+113-120): `rows`, the rows its timelines read (its path's, null for every row), `timeline_key`, the names its
+messages use, and `partition_key` with `partition_subject`, its D75 check. Whether it has a value at an anchor is the
+data's to say (stage 08). `scope_checks`
 holds only the `VALUE_IS_VALID` checks the bound-side rewrite appends (stage 05).
 `PlanSubqueries` runs on the key elements, the frames' order keys and fallbacks as on
 the trees, and `EnumerateExpressions` visits the key table, the frames, the signatures

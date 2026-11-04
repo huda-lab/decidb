@@ -476,7 +476,11 @@ emitted once per instance of it (`ScopeRowPerInstance`: under `per K:` for a sco
 `K`, `per ()` for a query-wide one). `per g: x IN (1, 2)` over a keyed `x` and three rows in
 two classes is four indicators, not six; a data domain stays per row. They are
 structural (`MarkFormulationConstraint`): a repair never loosens one on its own, and a
-DROP removes them with their clause, whose `removal_group_id` they carry.
+DROP removes them with their clause, whose `removal_group_id` they carry. A row that defines
+an auxiliary standing for a value -- an ABS's envelope, a body helper's definition, an L0
+indicator's links -- also names it (`DEFINES_TAG_PREFIX`, read into
+`DecideConstraint::defined_var`), so stage 08 gives the auxiliary no value where the row reads
+an instance with none (D88).
 
 ### Bilinear — `RewriteBilinear`
 
@@ -877,9 +881,9 @@ into one `DecideBoundBox` per decision (`singleton_row_boxes` on `LogicalDecide`
 tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
 
 A comparison that holds a frame selector is no bound on one decision: it reads another row, or nothing, which no
-interval over the row says. And a clause whose frame outside its reducers may select no position holds only where the
-frame selects, as under a `when`: no comparison of it, the rows a rewrite made of it included (an ABS's envelope
-carries its clause's id), folds into a box (`DecideFrameSpec::SkipsInstancesOf`).
+interval over the row says. A comparison a rewrite left holding an auxiliary alone (`abs(x - at(previous: x) over
+(...)) <= K` as `a <= K`) does fold: where the frame has no value the auxiliary's definition is skipped, so the box
+binds nothing there (D88).
 
 **One classifier reads every bound on one decision** (`DecideReadSingletonRow`,
 `decide_singleton_row_folding.hpp`). This pass, the linear form (a data bound, stage 06)

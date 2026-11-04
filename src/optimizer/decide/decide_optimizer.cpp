@@ -182,9 +182,12 @@ void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expressi
 	to.SetAlias(std::move(alias));
 }
 
-void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &source_alias) {
+void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &source_alias, idx_t defined) {
 	auto alias = expr.GetAlias();
 	AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
+	if (defined != DConstants::INVALID_INDEX) {
+		AddDecideTag(alias, MakeDefinesTag(defined));
+	}
 	expr.SetAlias(std::move(alias));
 	CopyClauseProvenanceTags(source_alias, expr);
 }

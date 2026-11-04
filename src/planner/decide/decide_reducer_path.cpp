@@ -58,17 +58,6 @@ bool DecideExpressionsEqual(const Expression &a, const Expression &b) {
 	return a_frames == b_frames;
 }
 
-string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame) {
-	// A `count` that requests no position reads 0, so only `all` makes one read nothing.
-	if (frame.range && frame.reducer != "count" && frame.MayBeEmpty()) {
-		return "its first end may come after its last, which requests no position";
-	}
-	if (frame.all) {
-		return "drop all, or make its timeline cyclic";
-	}
-	return "give it an else, or make its timeline cyclic";
-}
-
 //! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (SKIP_NULL_TAG,
 //! DecideCanonicalizer::SkipNullData) drop its own members only: a reducer inside reads its group whole.
 static void AddWrittenConditions(const Expression &filter, vector<const Expression *> &out) {

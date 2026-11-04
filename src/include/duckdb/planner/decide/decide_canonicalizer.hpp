@@ -514,17 +514,10 @@ private:
 	                       DecideFramePlacement &placement) const;
 	//! The frames of `expr` along `path`: one outside every reducer of its comparison
 	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
-	//! members -- `reducer` is the innermost reducer around `expr`, null at the root. `per`
-	//! is the key of the scoped expression `expr` is the body of; null for `per row`, which
-	//! no frame's timeline can span. `under_abs` is whether `expr` stands under an `abs`
-	//! inside `reducer`.
-	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const BoundAggregateExpression *reducer,
-	                   idx_t source_clause_id, const FramePerKey *per, DecideFramePlacement &placement,
-	                   bool under_abs = false) const;
-	//! The first frame that may leave `reducer`, a reducer over decisions, with no member: one in its argument
-	//! outside the reducers nested in it that may select nothing, else one that may leave a reducer nested in it with
-	//! none; INVALID_INDEX when no frame can.
-	idx_t FirstAbsenceFrame(const BoundAggregateExpression &reducer, const vector<DecideFrameSpec> &frames) const;
+	//! members. `per` is the key of the scoped expression `expr` is the body of; null for
+	//! `per row`, which no frame's timeline can span.
+	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const FramePerKey *per,
+	                   DecideFramePlacement &placement) const;
 	//! The key of a reducer's own `per` (or of the colon form), when it has one.
 	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
 	                   FramePerKey &out) const;

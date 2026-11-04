@@ -456,8 +456,7 @@ class TestUnderAbs:
 
     def test_a_reducer_under_abs_whose_frame_cannot_miss_is_read(self, decidb_cli, scope_solver):
         """With an `else`, the reducer under `abs` reads a member at every period, so it is
-        present in every product and the sum reads it at each row (D88 refuses only one a
-        frame may leave with no member)."""
+        present in every product and the sum reads it at each row."""
         inner = reduce("max", At(previous(), X, TIMELINE, fallback=Const(0)), by=("product",))
         body = ge(reduce("sum", Abs(X - inner)), 20)
         sql = _edge(f"sum(abs(x - max(at(previous else 0: x) {TL}) by (t.product))) >= 20", "MINIMIZE sum(x)")
@@ -465,29 +464,66 @@ class TestUnderAbs:
             decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x")], [CAP, clause(body)], MINIMIZE_X
         )
 
-    @pytest.mark.error
     @pytest.mark.parametrize(
-        "inner",
+        "inner_sql, inner",
         [
-            pytest.param(f"max(at(previous: x) {TL}) by (t.product)", id="a-frame-in-the-reducer"),
+            pytest.param(
+                f"max(at(previous: x) {TL}) by (t.product)",
+                reduce("max", At(previous(), X, TIMELINE), by=("product",)),
+                id="a-frame-in-the-reducer",
+            ),
             pytest.param(
                 f"sum(per t.period: max(at(previous: x) {TL}) by (t.product, t.period)) by (t.product)",
+                reduce(
+                    "sum",
+                    reduce("max", At(previous(), X, TIMELINE), by=("product", "period")),
+                    per=("period",),
+                    by=("product",),
+                ),
                 id="a-frame-nested-deeper",
             ),
         ],
     )
-    def test_an_absent_reducer_under_abs_in_a_reducer_is_refused(self, decidb_cli, inner):
-        """An ABS auxiliary's member is dropped where a NULL its argument reads stands; a
-        reducer under it left with no member is the absence of a decision, which no NULL
-        test of the data states, so the auxiliary would stand undefined in its reducer
-        (D88)."""
-        outer = f"sum(abs(x - {inner}))"
-        result = decidb_cli.execute_raw(_edge(f"{outer} <= 30"))
-        assert (
-            f"DECIDE: {inner} under abs inside {outer} may read no member, as at(previous: x) {TL} may select "
-            "no position, which is not supported yet; give it an else, or make its timeline cyclic"
-        ) in result.stderr, result.stderr
-        assert_no_internal_leak(result, outer)
+    def test_an_absent_reducer_under_abs_drops_its_member(self, decidb_cli, scope_solver, inner_sql, inner):
+        """C's only period has no previous one, so the reducer under `abs` has no member for
+        C and no value there: the `abs` auxiliary standing for C's member has none either,
+        and the sum around it drops that member (D87, D88), as the oracle reads it."""
+        body = le(reduce("sum", Abs(X - inner)), 30)
+        sql = _edge(f"sum(abs(x - {inner_sql})) <= 30")
+        _judged(
+            decidb_cli, scope_solver, sql, table_rows(EDGE, EDGE_ROWS), [Decision("x")], [CAP, clause(body)], MAXIMIZE_X
+        )
+
+    @pytest.mark.parametrize(
+        "read, first_demand",
+        [
+            pytest.param("t.d", "NULL", id="a-null-column"),
+            pytest.param("at(previous: t.d) over (t.p)", "5", id="a-missing-position"),
+        ],
+    )
+    def test_a_null_under_abs_skips_the_instance(self, decidb_cli, read, first_demand):
+        """Row 1 reads no value under `abs` -- a NULL demand, or a previous period it does not
+        have -- so `abs(x - ...)` has none, and the comparison reading it skips that instance
+        (D67, D88): x1 keeps its cap of 9, and x2 is held to 5. The auxiliary had been left
+        free, so row 1 read `x1 <= 5`."""
+        sql = f"""SELECT id, x FROM (VALUES (1, 1, {first_demand}), (2, 2, 5)) t(id, p, d) DECIDE x(REAL)
+            SUCH THAT x <= 9 AND abs(x - {read}) + x <= 5 MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [9, 5]
+
+    @pytest.mark.parametrize("bound, expected", [(8, None), (2, 2.0)])
+    def test_a_reducer_emptied_by_its_when_under_abs(self, decidb_cli, bound, expected):
+        """Group b keeps no row for `max(when t.c: x)`, so it has no value, and nor has the
+        `abs` of rows 3 and 4: the sum reads rows 1 and 2 alone, |x1 - m| + |x2 - m| with m
+        their maximum. It cannot reach 8 with every x at most 5, and reaches 2 at x2 = 2. The
+        auxiliaries of rows 3 and 4 had been left free, so any bound held with every x 0."""
+        sql = f"""SELECT id, x FROM (VALUES (1, 'a', TRUE), (2, 'a', TRUE), (3, 'b', FALSE), (4, 'b', FALSE))
+            t(id, g, c) DECIDE x(REAL) SUCH THAT x <= 5 AND sum(abs(x - max(when t.c: x) by (t.g))) >= {bound}
+            MINIMIZE sum(x) ORDER BY id"""
+        result = decidb_cli.execute_raw(sql)
+        if expected is None:
+            assert "is infeasible" in result.stderr, result.stderr
+            return
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(expected)
 
     def test_a_square_beside_the_frame_goes_with_its_member(self, decidb_cli_gurobi):
         """`sum(power(x, 2) + at(previous: t.v))`: the frame's NULL test drops the whole

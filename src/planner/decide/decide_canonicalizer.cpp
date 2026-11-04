@@ -2033,39 +2033,8 @@ bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
 	return true;
 }
 
-idx_t DecideCanonicalizer::FirstAbsenceFrame(const BoundAggregateExpression &reducer,
-                                             const vector<DecideFrameSpec> &frames) const {
-	idx_t found = DConstants::INVALID_INDEX;
-	std::function<void(const Expression &)> visit = [&](const Expression &expr) {
-		idx_t frame;
-		if (found != DConstants::INVALID_INDEX) {
-			return;
-		}
-		if (TryGetDecideFrame(expr, frame)) {
-			if (frame < frames.size() && frames[frame].MaySelectNothing()) {
-				found = frame;
-			}
-			return;
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			// A nested reducer left with no member drops the member reading it, in turn.
-			auto &nested = expr.Cast<BoundAggregateExpression>();
-			if (ReferencesDecideVar(nested)) {
-				found = FirstAbsenceFrame(nested, frames);
-			}
-			return;
-		}
-		ExpressionIterator::EnumerateChildren(expr, visit);
-	};
-	for (auto &child : reducer.children) {
-		visit(*child);
-	}
-	return found;
-}
-
-void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideReducerPath &path,
-                                        const BoundAggregateExpression *reducer, idx_t source_clause_id,
-                                        const FramePerKey *per, DecideFramePlacement &placement, bool under_abs) const {
+void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const FramePerKey *per,
+                                        DecideFramePlacement &placement) const {
 	idx_t frame_idx;
 	if (TryGetDecideFrame(expr, frame_idx)) {
 		if (frame_idx >= placement.frames.size()) {
@@ -2084,9 +2053,6 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		for (auto &element : DecideKeyElements(placement.keys, frame.timeline_key)) {
 			frame.timeline_names.push_back(element.name);
 		}
-		frame.source_clause_id = source_clause_id;
-		frame.reduced = reducer != nullptr;
-		frame.reads_decisions = ReferencesDecideVar(expr);
 		if (!per) {
 			return;
 		}
@@ -2113,31 +2079,12 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		FramePerKey own;
 		bool has_per = ReducerPerKey(inner, placement.keyed_scopes, own);
 		for (auto &child : inner.children) {
-			PlaceFramesIn(*child, below, &inner, source_clause_id, has_per ? &own : nullptr, placement);
-		}
-		// Under `abs` inside another reducer, a reducer left with no member leaves the ABS auxiliary of that member
-		// undefined, which its reducer still reads: the member would have to be dropped by the absence of a decision,
-		// which no NULL test of the data states (D88).
-		if (under_abs && ReferencesDecideVar(inner)) {
-			const auto absence = FirstAbsenceFrame(inner, placement.frames);
-			if (absence != DConstants::INVALID_INDEX) {
-				auto &frame = placement.frames[absence];
-				throw BinderException("DECIDE: %s under abs inside %s may read no member, as %s may select no "
-				                      "position, which is not supported yet; %s",
-				                      QuoteAsWritten(inner), QuoteAsWritten(*reducer), frame.text,
-				                      DecideFrameAbsenceRemedy(frame));
-			}
+			PlaceFramesIn(*child, below, has_per ? &own : nullptr, placement);
 		}
 		return;
 	}
-	// What stands under an `abs` inside a reducer over decisions is the argument of an auxiliary the reducer's
-	// member reads.
-	under_abs = under_abs || (reducer && ReferencesDecideVar(*reducer) &&
-	                          expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
-	                          StringUtil::CIEquals(expr.Cast<BoundFunctionExpression>().function.name, "abs"));
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		PlaceFramesIn(child, path, reducer, source_clause_id, per, placement, under_abs);
-	});
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { PlaceFramesIn(child, path, per, placement); });
 }
 
 void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
@@ -2152,12 +2099,6 @@ void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclos
 		}
 		return;
 	}
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	TryParseSourceClauseTag(expr.GetAlias(), source_clause_id);
-	// A frame reached at no id would read as the objective's (DecideFrameSpec).
-	if (source_clause_id == DConstants::INVALID_INDEX && ContainsDecideFrame(expr)) {
-		throw InternalException("DECIDE: a constraint holding a frame selector has no clause id: %s", expr.ToString());
-	}
 	DecideReducerPath path;
 	if (enclosing.Condition()) {
 		path.conditions.push_back(enclosing.Condition());
@@ -2169,7 +2110,7 @@ void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclos
 		per.text = message_names ? RenderDecidePerKey(*enclosing.per_wrapper, message_names->fragments)
 		                         : DecideKeyText(keys, per.key);
 	}
-	PlaceFramesIn(expr, path, nullptr, source_clause_id, enclosing.per_wrapper ? &per : nullptr, placement);
+	PlaceFramesIn(expr, path, enclosing.per_wrapper ? &per : nullptr, placement);
 }
 
 void DecideCanonicalizer::PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const {
@@ -2188,7 +2129,7 @@ void DecideCanonicalizer::PlaceObjectiveFrames(const Expression &objective, Deci
 			body = conj.children[0].get();
 		}
 	}
-	PlaceFramesIn(*body, path, nullptr, DConstants::INVALID_INDEX, nullptr, placement);
+	PlaceFramesIn(*body, path, nullptr, placement);
 }
 
 } // namespace duckdb

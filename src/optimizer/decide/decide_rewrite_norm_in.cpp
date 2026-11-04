@@ -116,9 +116,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		// An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
 		// links one row per instance.
 		auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
-		auto z = MakeDecisionRef(decide,
-		                         AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
-		                                              "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)"));
+		const idx_t z_idx = AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
+		                                         "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)");
+		auto z = MakeDecisionRef(decide, z_idx);
 		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
 		                  RenderForPlan(aggregate, decide));
 		auto make_mz = [&]() {
@@ -131,7 +131,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
-			MarkFormulationConstraint(*link, clause_alias);
+			MarkFormulationConstraint(*link, clause_alias, z_idx);
 			links.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(link), scope.Condition()), z_scope));
 		};
 		add_link(make_mz(), aggregate.children[0]->Copy());

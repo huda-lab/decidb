@@ -61,8 +61,5 @@ bool ContainsDecideFrame(const Expression &expr);
 //! alias, which Equals ignores, so `at(previous: x)` and `at(next: x)` are otherwise one expression. Every DECIDE
 //! comparison of trees that may hold a frame reads this one.
 bool DecideExpressionsEqual(const Expression &a, const Expression &b);
-//! What a message about `frame` reading nothing at some anchor (DecideFrameSpec::MaySelectNothing) ends on, in lower
-//! case: the remedy, or for a range that may request no position, the cause, which no `else` cures.
-string DecideFrameAbsenceRemedy(const DecideFrameSpec &frame);
 
 } // namespace duckdb

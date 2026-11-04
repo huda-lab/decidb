@@ -458,14 +458,11 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(112, "text", text);
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(113, "rows", rows);
 	serializer.WritePropertyWithDefault<idx_t>(114, "timeline_key", timeline_key, DConstants::INVALID_INDEX);
-	serializer.WritePropertyWithDefault<idx_t>(115, "source_clause_id", source_clause_id, DConstants::INVALID_INDEX);
-	serializer.WritePropertyWithDefault<bool>(116, "reduced", reduced);
 	serializer.WritePropertyWithDefault<vector<string>>(117, "timeline_names", timeline_names);
 	serializer.WritePropertyWithDefault<string>(118, "order_name", order_name);
 	serializer.WritePropertyWithDefault<idx_t>(119, "partition_key", partition_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<string>(120, "partition_subject", partition_subject);
 	serializer.WritePropertyWithDefault<string>(121, "reducer", reducer);
-	serializer.WritePropertyWithDefault<bool>(122, "reads_decisions", reads_decisions);
 }
 
 DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
@@ -485,14 +482,11 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<string>(112, "text", result.text);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(113, "rows", result.rows);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(114, "timeline_key", result.timeline_key, DConstants::INVALID_INDEX);
-	deserializer.ReadPropertyWithExplicitDefault<idx_t>(115, "source_clause_id", result.source_clause_id, DConstants::INVALID_INDEX);
-	deserializer.ReadPropertyWithDefault<bool>(116, "reduced", result.reduced);
 	deserializer.ReadPropertyWithDefault<vector<string>>(117, "timeline_names", result.timeline_names);
 	deserializer.ReadPropertyWithDefault<string>(118, "order_name", result.order_name);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(119, "partition_key", result.partition_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<string>(120, "partition_subject", result.partition_subject);
 	deserializer.ReadPropertyWithDefault<string>(121, "reducer", result.reducer);
-	deserializer.ReadPropertyWithDefault<bool>(122, "reads_decisions", result.reads_decisions);
 	return result;
 }
 

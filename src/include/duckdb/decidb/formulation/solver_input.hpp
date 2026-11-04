@@ -848,6 +848,10 @@ struct SolverInput {
     //! Keyed mappings: one per KeyedScopeInfo (a `per K:` decision's key, a reducer's
     //! `per K:` or colon-form qualifier, a helper decision's `by` key)
     vector<KeyedMapping> keyed_mappings;
+	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
+	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
+	//! which reads none is a column fixed at 0, which no row reads, as an absent class is.
+	vector<vector<bool>> absent_reads;
 
 	//! Per-variable scope (row / keyed / query-wide / frame read).
 	//! For a keyed variable, keyed_scope_idx indexes keyed_mappings.

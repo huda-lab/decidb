@@ -368,9 +368,8 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 	Connection con(db);
 	SetUp(con);
 
-	// The canonicalizer places each frame (DecideFrameSpec::rows, timeline_key, source_clause_id, reduced, the names
-	// its messages use, its D75 partition key) and builds its signature field; execution reads all of it, so none may
-	// be lost on the wire. The first frame stands under a `when` and a `per` its `within` does not hold; the second
+	// The canonicalizer places each frame (DecideFrameSpec::rows, timeline_key, the names its messages use, its D75
+	// partition key) and builds its signature field; execution reads all of it, so none may be lost on the wire. The first frame stands under a `when` and a `per` its `within` does not hold; the second
 	// inside a reducer with a `by` key, over decisions.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
 	                            "SUCH THAT x <= 9 AND when site.cap > 10 per region.r_name: "
@@ -382,14 +381,11 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 	REQUIRE(before->frames.size() == 2);
 	auto &point = before->frames[0];
 	REQUIRE(point.rows != nullptr);
-	REQUIRE(point.source_clause_id != DConstants::INVALID_INDEX);
-	REQUIRE_FALSE(point.reduced);
 	REQUIRE(point.timeline_names == duckdb::vector<string> {"site.s_key"});
 	REQUIRE(point.order_name == "site.cap");
 	REQUIRE(point.partition_key != DConstants::INVALID_INDEX);
 	REQUIRE_FALSE(point.partition_subject.empty());
 	auto &reduced = before->frames[1];
-	REQUIRE(reduced.reduced);
 	REQUIRE(reduced.timeline_key != DConstants::INVALID_INDEX);
 	bool frame_field = false;
 	for (auto &signature : before->signatures) {
@@ -415,8 +411,6 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 		REQUIRE(a.text == b.text);
 		REQUIRE((a.rows != nullptr) == (b.rows != nullptr));
 		REQUIRE(a.timeline_key == b.timeline_key);
-		REQUIRE(a.source_clause_id == b.source_clause_id);
-		REQUIRE(a.reduced == b.reduced);
 		REQUIRE(a.timeline_names == b.timeline_names);
 		REQUIRE(a.order_name == b.order_name);
 		REQUIRE(a.partition_key == b.partition_key);
@@ -438,7 +432,7 @@ TEST_CASE("A placed range frame survives a serialization round trip", "[decidb]"
 	SetUp(con);
 
 	// A range carries its reducer, both ends with their k, its step and its policy beside a point's fields; execution
-	// reads each (DecideFrameSpec::MaySelectNothing among them).
+	// reads each.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
 	                            "SUCH THAT x <= 9 AND sum(from 2 previous to 3 next every 2 all: x) "
 	                            "over (site.cap within region) <= 9 "
@@ -469,7 +463,6 @@ TEST_CASE("A placed range frame survives a serialization round trip", "[decidb]"
 		REQUIRE(a.all == b.all);
 		REQUIRE((a.fallback != nullptr) == (b.fallback != nullptr));
 		REQUIRE(a.text == b.text);
-		REQUIRE(a.MaySelectNothing() == b.MaySelectNothing());
 	}
 }
 
