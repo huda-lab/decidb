@@ -37,19 +37,8 @@ constexpr const char *RULE_NAME = "A1_SEPARABLE_BOX";
 struct Term {
 	enum class Kind : uint8_t { CONSTANT, SQUARE };
 	Kind kind = Kind::CONSTANT;
-	//! SQUARE: the decision the inner expression is linear in.
-	idx_t decision = 0;
-	int sign = 1;
-	//! CONSTANT: the value, and what a message names for it (DirectNamesOf).
-	unique_ptr<Expression> value;
-	DirectNumberNames value_names;
-	//! SQUARE: `square_scale * (inner)^2`, where the inner expression is linear in one decision.
-	double square_scale = 1.0;
-	vector<DirectSignedValue> inner_linear;
-	vector<DirectSignedValue> inner_constant;
-	//! What a message names for the sums of the two (DirectNamesOf).
-	DirectNumberNames inner_linear_names;
-	DirectNumberNames inner_constant_names;
+	DirectConstantTerm constant;
+	DirectSquareTerm square;
 };
 
 struct Part {
@@ -118,10 +107,10 @@ bool IsConstantProblem(const Condition &condition) {
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::SQUARE) {
-				if (!constant_values(term.inner_linear) || !constant_values(term.inner_constant)) {
+				if (!constant_values(term.square.inner_linear) || !constant_values(term.square.inner_constant)) {
 					return false;
 				}
-			} else if (!constant(*term.value)) {
+			} else if (!constant(*term.constant.value)) {
 				return false;
 			}
 		}
@@ -244,53 +233,17 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 				continue;
 			}
 			Term built;
-			built.sign = term.sign;
 			if (term.kind == DecideTermKind::CONSTANT) {
 				built.kind = Term::Kind::CONSTANT;
-				if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
+				if (!DirectReadConstantTerm(ir, term, objective.written, built.constant)) {
 					return false;
 				}
-				built.value = term.coefficient->Copy();
-				vector<DirectSignedValue> value;
-				value.push_back({term.sign, term.coefficient->Copy()});
-				built.value_names = DirectNamesOf(ir, value, objective.written);
 			} else {
 				built.kind = Term::Kind::SQUARE;
-				built.square_scale = term.square_scale;
-				if (!std::isfinite(term.square_scale) || term.square_scale == 0.0) {
-					return false;
-				}
-				if (condition.has_square) {
+				if (condition.has_square || !DirectReadSquareTerm(ir, term, objective.written, built.square)) {
 					return false;
 				}
 				condition.has_square = true;
-				bool has_decision = false;
-				for (auto &inner : term.inner) {
-					if (inner.kind == DecideTermKind::LINEAR) {
-						if (inner.var_a >= decision_count || (has_decision && built.decision != inner.var_a)) {
-							return false;
-						}
-						built.decision = inner.var_a;
-						has_decision = true;
-					} else if (inner.kind != DecideTermKind::CONSTANT) {
-						return false;
-					}
-				}
-				if (!has_decision) {
-					return false;
-				}
-				for (auto &inner : term.inner) {
-					if (!inner.coefficient || !DirectProveValue(ir, *inner.coefficient)) {
-						return false;
-					}
-					DirectSignedValue value;
-					value.sign = inner.sign;
-					value.expr = inner.coefficient->Copy();
-					(inner.kind == DecideTermKind::LINEAR ? built.inner_linear : built.inner_constant)
-					    .push_back(std::move(value));
-				}
-				built.inner_linear_names = DirectNamesOf(ir, built.inner_linear, objective.written);
-				built.inner_constant_names = DirectNamesOf(ir, built.inner_constant, objective.written);
 			}
 			prepared.terms.push_back(std::move(built));
 		}
@@ -597,25 +550,27 @@ private:
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::CONSTANT) {
-				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, part.linear.scaled,
-				                                        part.linear.scale, part.linear.divides));
+				auto &constant = term.constant;
+				auto value = calc.Wrap(DirectScaledTerm(optimizer, constant.value->Copy(), constant.sign,
+				                                        part.linear.scaled, part.linear.scale, part.linear.divides));
 				vector<DirectSignedValue> read;
-				read.push_back({term.sign, term.value->Copy()});
-				if (auto check = ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names, read,
+				read.push_back({constant.sign, constant.value->Copy()});
+				if (auto check = ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), constant.value_names, read,
 				                             part.linear.scaled, part.linear.scale, part.linear.divides)) {
 					constant_checks.push_back(std::move(check));
 				}
 			} else {
+				auto &read = term.square;
 				Raw::SquareColumns square;
-				square.decision = term.decision;
-				square.scale = term.sign * term.square_scale;
-				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_linear)))));
-				if (auto check = ValidNumber(p1, square.linear, term.inner_linear_names, term.inner_linear)) {
+				square.decision = read.decision;
+				square.scale = read.sign * read.scale;
+				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(read.inner_linear)))));
+				if (auto check = ValidNumber(p1, square.linear, read.inner_linear_names, read.inner_linear)) {
 					checks.push_back(std::move(check));
 				}
-				if (!term.inner_constant.empty()) {
-					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_constant)))));
-					if (auto check = ValidNumber(p1, square.constant, term.inner_constant_names, term.inner_constant)) {
+				if (!read.inner_constant.empty()) {
+					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(read.inner_constant)))));
+					if (auto check = ValidNumber(p1, square.constant, read.inner_constant_names, read.inner_constant)) {
 						checks.push_back(std::move(check));
 					}
 				} else {

@@ -159,6 +159,37 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
                           DirectLinearPart &out);
 
+//===--------------------------------------------------------------------===//
+// Terms of a part that are not linear
+//===--------------------------------------------------------------------===//
+
+//! A per-row constant of a part, and what a message names for it (DirectNamesOf).
+struct DirectConstantTerm {
+	int sign = 1;
+	unique_ptr<Expression> value;
+	DirectNumberNames value_names;
+};
+
+//! `sign * scale * (inner)^2`, where the inner expression is linear in one decision.
+struct DirectSquareTerm {
+	idx_t decision = 0;
+	int sign = 1;
+	double scale = 1.0;
+	vector<DirectSignedValue> inner_linear;
+	vector<DirectSignedValue> inner_constant;
+	//! What a message names for the sums of the two (DirectNamesOf).
+	DirectNumberNames inner_linear_names;
+	DirectNumberNames inner_constant_names;
+};
+
+//! Reads a CONSTANT term of a part. False when its value is not a numeric value of the source row.
+bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+                            DirectConstantTerm &out);
+
+//! Reads a SQUARE term of a part. False when its scale is zero or not finite, its inner expression is not linear in one
+//! decision, or a value in it is not a numeric value of the source row.
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectSquareTerm &out);
+
 //! The rows an objective part reads: those the objective's `when` and the part's own both keep, over the source, or
 //! null for every row. A row they drop (a false or NULL `when`) has no coefficient in the part, which a rule reads as
 //! 0. False when a `when` is not a predicate of the source that cannot raise.

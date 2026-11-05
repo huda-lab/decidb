@@ -225,6 +225,55 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 	return true;
 }
 
+bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+                            DirectConstantTerm &out) {
+	if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
+		return false;
+	}
+	out.sign = term.sign;
+	out.value = term.coefficient->Copy();
+	vector<DirectSignedValue> value;
+	value.push_back({term.sign, term.coefficient->Copy()});
+	out.value_names = DirectNamesOf(ir, value, clause);
+	return true;
+}
+
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+                          DirectSquareTerm &out) {
+	if (!std::isfinite(term.square_scale) || term.square_scale == 0.0) {
+		return false;
+	}
+	out.sign = term.sign;
+	out.scale = term.square_scale;
+	bool has_decision = false;
+	for (auto &inner : term.inner) {
+		if (inner.kind == DecideTermKind::LINEAR) {
+			if (inner.var_a >= ir.decisions.size() || (has_decision && out.decision != inner.var_a)) {
+				return false;
+			}
+			out.decision = inner.var_a;
+			has_decision = true;
+		} else if (inner.kind != DecideTermKind::CONSTANT) {
+			return false;
+		}
+	}
+	if (!has_decision) {
+		return false;
+	}
+	for (auto &inner : term.inner) {
+		if (!inner.coefficient || !DirectProveValue(ir, *inner.coefficient)) {
+			return false;
+		}
+		DirectSignedValue value;
+		value.sign = inner.sign;
+		value.expr = inner.coefficient->Copy();
+		(inner.kind == DecideTermKind::LINEAR ? out.inner_linear : out.inner_constant).push_back(std::move(value));
+	}
+	out.inner_linear_names = DirectNamesOf(ir, out.inner_linear, clause);
+	out.inner_constant_names = DirectNamesOf(ir, out.inner_constant, clause);
+	return true;
+}
+
 bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept) {
 	for (auto when : {ir.objective.scope.when.get(), part.filter.get()}) {
 		if (!when) {
