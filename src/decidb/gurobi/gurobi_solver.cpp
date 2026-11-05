@@ -176,18 +176,6 @@ void GurobiSession::Load(const SolverModel &ilp) {
     if (ilp.nonconvex_quadratic) {
         api.setintparam(guard.env, "NonConvex", 2);
     }
-    // A quadratic constraint switches Gurobi from its fast QP solver to the barrier
-    // over a second-order-cone reformulation of BOTH the objective and the constraint.
-    // At scale the barrier reaches the optimum early but then oscillates in the dual
-    // for many extra iterations, often stopping at "sub-optimal termination". Raising
-    // NumericFocus makes the barrier careful enough to converge to a true optimum —
-    // empirically several times faster than the default's stalled solve, and it removes
-    // the sub-optimal stop. Gated on quadratic constraints so the fast pure-QP-objective
-    // path (no such reformulation) is left untouched. Gurobi-only: HiGHS rejects
-    // quadratic constraints upstream, so nothing reaches this code on that backend.
-    if (!ilp.quadratic_constraints.empty()) {
-        api.setintparam(guard.env, "NumericFocus", 2);
-    }
     error = api.startenv(guard.env);
 	if (error) {
 		throw InternalException("Failed to start Gurobi environment (%s). "
@@ -589,6 +577,11 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             }
             break;
         }
+        case GRB_NUMERIC:
+            // No solution, and GRBgeterrormsg is empty after this stop. The words are those of Gurobi's log.
+            result.status = SolverStatus::OTHER;
+            result.status_text = "numerical trouble";
+            break;
         default:
             result.status = SolverStatus::OTHER;
             break;

@@ -53,7 +53,8 @@ names the state and points at the prefix; a diagnosed failure raises nothing at 
 returns its findings as rows. `OTHER`, a solve the backend could not finish, has no state to name: the text names the
 backend and quotes its own reason (`status_text`), never a status number: "DECIDE optimization failed: HiGHS could not
 solve this model (Solve error)." HiGHS fills `status_text` from `modelStatusToString`; Gurobi, which names a status only
-by its number, fills it only when its optimize call fails, from `GRBgeterrormsg`. A model HiGHS refuses to load
+by its number, fills it when its optimize call fails, from `GRBgeterrormsg`, and on `GRB_NUMERIC`, where that message is
+empty, with the words of its log: "numerical trouble". A model HiGHS refuses to load
 (`passModel` or `passHessian` returns `kError`) is `OTHER` with no reason text. Gurobi's environment failures stay
 internal errors and quote Gurobi's message, not its error code. See
 [`../../diagnostics/`](../../diagnostics/).

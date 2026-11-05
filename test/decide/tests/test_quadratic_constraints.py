@@ -898,6 +898,34 @@ class TestQuadraticConstraintInteractions:
             comparison_status="optimal",
         )
 
+    def test_many_group_limits_on_squares_solve(self, decidb_cli_gurobi, oracle_solver):
+        """One limit on squares per group, 100 groups: an ordinary solve on Gurobi.
+
+        Fails if ``NumericFocus=2`` comes back on quadratic constraints: Gurobi then stops with numerical trouble on
+        this model. Not ``@_expect_gurobi``, which would accept that error as a pass.
+        """
+        rows, groups = 2000, 100
+        result_rows, _ = decidb_cli_gurobi.execute(f"""
+            SELECT SUM(c * x) FROM (
+                SELECT c, x FROM (
+                    SELECT ((i * 7919) % 1000) / 10.0 - 20 AS c, i % {groups} AS k FROM range({rows}) t(i))
+                DECIDE x(REAL)
+                SUCH THAT per k: SUM(POWER(x, 2)) by (k) <= 25
+                MAXIMIZE SUM(c * x))
+        """)
+        oracle_solver.create_model("qcp_many_groups")
+        for i in range(rows):
+            oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0)
+        for k in range(groups):
+            members = [f"x_{i}" for i in range(k, rows, groups)]
+            oracle_solver.add_quadratic_constraint(
+                linear={}, quadratic={(x, x): 1.0 for x in members}, sense="<=", rhs=25.0, name=f"per_{k}",
+            )
+        oracle_solver.set_objective(
+            {f"x_{i}": ((i * 7919) % 1000) / 10.0 - 20 for i in range(rows)}, ObjSense.MAXIMIZE,
+        )
+        _assert_oracle_obj(oracle_solver, float(result_rows[0][0]))
+
     @_expect_gurobi
     def test_when_per_quadratic_constraint(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker

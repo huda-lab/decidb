@@ -118,7 +118,7 @@ Measured ceilings (largest size completing under 60 s):
 | Q7 | 127.5K / 255K | 3.3s / 7.1s | full `orders` |
 | Q11 | 68K / 136K | — | full `partsupp` |
 | Q3 | 60K / 120K | 13.3s / 26.4s | L0 MILP; 250K exceeds 60s |
-| Q5 | 50K / 100K | 3.7s / 9.2s | QCQP barrier; 125K exceeds 60s |
+| Q5 | 50K / 100K | 1.7s / 33s (2026-11-05; 100K is solve time) | QCQP barrier |
 | Q9 | 7.5K / 15K | 0.2s / 0.3s | limit not yet re-tiered; 120K solves in 2.8s |
 
 A full run (3 iterations, 2 sizes) takes about 17 minutes at these settings, mostly Q10, Q6 and Q4. While iterating
