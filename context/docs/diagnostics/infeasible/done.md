@@ -315,7 +315,12 @@ query-wide value shared across every row the clause emits; `PER_ROW_DATA` = genu
 per-group **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`: linear and quadratic
 builder sites read `EvaluatedConstraint::rhs_is_shared_scalar`. Physical evaluation sets it
 directly for constants and otherwise consumes the canonical RHS's `QUERY_WIDE_BOUND_TAG`;
-foldable composite expressions receive that tag at canonicalization. Other bounds are stamped
+foldable composite expressions receive that tag at canonicalization. A constant is shared unless
+it is what canonicalization left of a written bound that reads data: `x <= cap * o` becomes
+`x - cap * o <= 0`, and `ConstraintSourceInfo::source_rhs_reads_data`, recorded on the tree as
+written, keeps it `PER_ROW_DATA`, in the data tier and per row in `expanded`, as `x <= cap` is. The
+test is the written right side, the bound an edit offsets: `x - cap * o <= 0` has a literal bound
+there, and so does `cap * o >= x`, whose edit reads `cap * o >= x - d`. Other bounds are stamped
 `PER_ROW_DATA`; an folded bound's clause rows carry its literal, so `SHARED_SCALAR`.
 
 **Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups

@@ -422,6 +422,7 @@ void ConstraintSourceInfo::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(110, "canonical_differs", canonical_differs, false);
 	serializer.WritePropertyWithDefault<idx_t>(111, "between_partner", between_partner, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<bool>(112, "between_upper", between_upper, false);
+	serializer.WritePropertyWithDefault<bool>(113, "source_rhs_reads_data", source_rhs_reads_data, false);
 }
 
 ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserializer) {
@@ -439,6 +440,7 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithExplicitDefault<bool>(110, "canonical_differs", result.canonical_differs, false);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(111, "between_partner", result.between_partner, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(112, "between_upper", result.between_upper, false);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(113, "source_rhs_reads_data", result.source_rhs_reads_data, false);
 	return result;
 }
 

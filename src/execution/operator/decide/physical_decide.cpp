@@ -2629,9 +2629,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
             double rhs_constant = const_expr.value.GetValue<double>();
             eval_const.rhs_values.AssignScalar(num_rows, rhs_constant);
-            // A constant RHS is one editable scalar shared across every row this
-            // clause emits, so the elastic engine collapses them to one shared slack.
-            eval_const.rhs_is_shared_scalar = true;
+			// A constant RHS is one editable scalar shared across every row this
+			// clause emits, so the elastic engine collapses them to one shared slack.
+			// A constant canonicalization left of a written bound that reads data
+			// (`x <= cap * o` is `x - cap * o <= 0`) repairs as that bound does.
+			eval_const.rhs_is_shared_scalar = constraint->source_clause_id >= constraint_sources.size() ||
+			                                  !constraint_sources[constraint->source_clause_id].source_rhs_reads_data;
 		} else {
 			// A bound of data, read per row. The optimizer's bound-side window rewrite made each reducer on it a
 			// column, and the bound of a clause in the aggregate shape its group's tightest value, already checked by

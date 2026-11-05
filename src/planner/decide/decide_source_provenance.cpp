@@ -15,6 +15,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/bind_context.hpp"
@@ -573,6 +574,21 @@ static bool ReferencesDecideVariable(const Expression &expr, idx_t decide_index)
 	return found;
 }
 
+//! Whether a side of a clause reads a row's data, on the bound tree before flattening: a column that is no decision, or
+//! a correlated subquery. Decisions, constants and an uncorrelated subquery's one value read none.
+static bool ReadsRowData(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		return expr.Cast<BoundColumnRefExpression>().binding.table_index != decide_index;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+		return expr.Cast<BoundSubqueryExpression>().IsCorrelated();
+	}
+	bool reads = false;
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { reads = reads || ReadsRowData(child, decide_index); });
+	return reads;
+}
+
 //! Link the two halves of `input BETWEEN lo AND hi` into the clause the user wrote: each points at the other, and both
 //! carry the whole clause as their written sides. The sides come from the text the parser kept (`input`, `lo AND hi`);
 //! without it, from the halves' own rendered sides.
@@ -640,6 +656,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
 			                       info.source_lhs = info.written_lhs;
 			                       info.source_rhs = info.written_rhs;
+			                       info.source_rhs_reads_data = ReadsRowData(*cmp.right, decide_index);
 		                       }
 		                       // What an edit quotes stays DeciDB's own rendering; what a message quotes as the clause
 		                       // is the text the user wrote, cut from the query (a clause with no cut keeps the

@@ -85,6 +85,9 @@ struct ConstraintSourceInfo {
 	//! Empty when the source and canonical forms agree, which is the common case.
 	string source_lhs;
 	string source_rhs;
+	//! Whether `source_rhs` reads data. What canonicalization leaves of such a bound can be a literal
+	//! (`ship - capacity * open <= 0`), and the repair tier follows the bound the user wrote, not that literal.
+	bool source_rhs_reads_data = false;
 
 	//! The clause exactly as WRITTEN, recorded unconditionally for plan display.
 	//!
