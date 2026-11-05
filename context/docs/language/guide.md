@@ -673,6 +673,9 @@ of calling a solver; a query it cannot prove takes the solver path unchanged. No
   linking rows; a linear objective or one square (`sum(power(x - target, 2))`).
 - **Fill one budget by value per unit**: per-row `REAL` decisions with their own bounds and one budget
   `sum(w * x) <= B` (or `>=`, `=`, `BETWEEN`), with a linear objective.
+- **Stay inside one sum of squares**: per-row `REAL` decisions with no bound but `x >= 0` or `x >= -1e30`, and one limit
+  `sum(power(x, 2)) <= B` (a constant or a column), with a linear objective or one square. Answered with no solver, so
+  no Gurobi license is needed.
 
 A count limit or budget may also have a `by` key or a `per K:` (`per K: sum(x) by (K) <= k` gives each group its own
 limit). When several assignments are optimal you may get a different one than the solver; the objective is the same.

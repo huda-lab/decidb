@@ -3,7 +3,7 @@
 `benchmark/decide/direct_solve/run.py` times direct solve against the forced solver, Gurobi and HiGHS, on the same
 DECIDE query as the data grows. Direct solve is the optimizer rewrite that answers some DECIDE problems with relational
 operators instead of a solver ([`../../direct_solve/README.md`](../../direct_solve/README.md)). The numbers feed the
-paper's direct-solve section. There is a query for each direct-solve rule that works today: A1, and S1 and R1 in two
+paper's direct-solve section. There is a query for each direct-solve rule that works today: A1, and S1, R1 and N1 in two
 forms each, many small groups and one bound over every row.
 
 ## Running
@@ -16,7 +16,7 @@ python3 benchmark/decide/direct_solve/run.py --sf 0.125 0.25 --queries r1  # a s
 | Option | Default | Meaning |
 |---|---|---|
 | `--sf` | `0.125` doubling to `512` | TPC-H scale factors, run smallest first |
-| `--queries` | every file in `queries/` | `s1`, `s1_global`, `a1`, `r1`, `r1_global` |
+| `--queries` | every file in `queries/` | `s1`, `s1_global`, `a1`, `r1`, `r1_global`, `n1`, `n1_groups` |
 | `--modes` | `direct direct_1t gurobi` | must include `direct`, the baseline for every speedup and objective; `highs` is also available |
 | `--repeats` | 3 | runs of every mode per cell |
 | `--repeat-budget` | 1800 | a run past this many seconds is its cell's last, so the `runs` column can read less than `--repeats` |
@@ -60,6 +60,8 @@ or subqueries. The time then measures the optimization and not other operators.
 | `a1.sql` | A1, separable box | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty`, `MINIMIZE SUM(POWER(ship - 5000, 2))` | ship each offer as close to 5,000 units as its stock allows |
 | `r1.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty AND SUM(ship) by (ps_partkey) <= 5000`, `MAXIMIZE SUM(ps_supplycost * ship)` | each part ships at most 5,000 units across its suppliers, at the highest total cost |
 | `r1_global.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND 1 AND SUM(ship * ps_supplycost) <= 0.1 * SUM(ps_supplycost)`, `MAXIMIZE SUM(ps_availqty * ship)` | take a fraction of each offer, spending at most a tenth of the total cost, to secure the most stock |
+| `n1.sql` | N1, Euclidean ball | `ship(REAL)`, `SUM(POWER(ship, 2)) <= 1000000`, `MAXIMIZE SUM(ps_supplycost * ship)` | ship along each offer's cost, with one limit on the sum of squared amounts over every offer |
+| `n1_groups.sql` | N1, Euclidean ball | `ship(REAL)`, `SUM(POWER(ship, 2)) by (ps_suppkey) <= 1000000`, `MAXIMIZE SUM(ps_supplycost * ship)` | the same, with a limit for each supplier over its 80 offers |
 
 A1 minimizes a square so that each row has an optimum inside its range and the solver faces a QP, not a problem
 whose answer sits at a bound.
@@ -122,7 +124,8 @@ The script also prints the table as Markdown while it runs.
 - TPC-H group sizes are fixed across scale factors: 80 offers per supplier and 4 suppliers per part. Only the number
   of groups grows, never their size.
 - Each query runs at one parameter setting: K = 2 per supplier and a tenth of all rows for S1, a target of 5,000 for A1,
-  and a cap of 5,000 per part and a tenth of the total cost for R1.
+  a cap of 5,000 per part and a tenth of the total cost for R1, and a limit of 1,000,000 for N1.
+- HiGHS has no quadratic constraints, so its N1 cells read `error`.
 - HiGHS (1.15.1, as 1.11) cannot solve A1 beyond 800 decisions. Its QP solver stops with "Large nullspace" once more than 4,000
   variables end strictly inside their bounds, and about half of A1's do (`../../pipeline/07_solver/done.md`, HiGHS
   backend). The cell reads `error` at 9,600 and the larger sizes are skipped. This is a limit of HiGHS's QP method,

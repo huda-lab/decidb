@@ -11,7 +11,9 @@ N2 is the weighted version of N1.
 
 Each decision contributes a different amount to the shared sum-of-squares bound:
 
-SUM(weight \* POWER(x, 2)) \<= B
+SUM(POWER(SQRT(weight) \* x, 2)) \<= B
+
+The factor stands inside the square. DECIDE refuses a data weight outside one (SUM(weight \* POWER(x, 2)), "unsupported product factor"), so that spelling never reaches a rule.
 
 For example:
 
@@ -24,7 +26,7 @@ For example:
 SELECT id, x
 FROM directions
 DECIDE x(REAL)
-SUCH THAT SUM(weight * POWER(x, 2)) <= 5
+SUCH THAT SUM(POWER(SQRT(weight) * x, 2)) <= 5
 MAXIMIZE SUM(coefficient*x);
 ```
 
@@ -62,7 +64,7 @@ After normalization:
 
 > • all decisions are REAL;
 >
-> • there is exactly one constraint of the form SUM(weight\*x²) \<= B;
+> • there is exactly one constraint of the form SUM(POWER(SQRT(weight) \* x, 2)) \<= B;
 >
 > • every weight is strictly positive;
 >
@@ -145,7 +147,7 @@ Substituting the result into the original constraint gives exactly B, unless the
 
 > • Every decision is REAL and belongs to exactly one component.
 >
-> • The component has exactly one explicit SUM(weight\*POWER(x, 2)) \<= B constraint.
+> • The component has exactly one explicit SUM(POWER(SQRT(weight) \* x, 2)) \<= B constraint.
 >
 > • Every effective weight is finite and strictly positive.
 >

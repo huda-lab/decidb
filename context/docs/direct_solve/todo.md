@@ -13,7 +13,6 @@ checklist and the standard tests). Remove its row here when its `todo.md` exists
 | A5 | [Monotone optimization](rules/a5_monotone/definition.md) |
 | A6 | [Rank-one bounded least squares](rules/a6_rank_one_least_squares/definition.md) |
 | D1 | [Block-diagonal decomposition](rules/d1_block_decomposition/definition.md) |
-| N1 | [Euclidean-ball projection and support function](rules/n1_euclidean_ball/definition.md) |
 | N2 | [Ellipsoid support function](rules/n2_ellipsoid_support/definition.md) |
 | O1 | [Monge assignment](rules/o1_monge_assignment/definition.md) |
 | O2 | [Monge transportation problem](rules/o2_monge_transportation/definition.md) |
