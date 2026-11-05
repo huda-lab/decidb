@@ -23,6 +23,12 @@
 
 namespace duckdb {
 
+//! Starts a scan of the operator's materialized input, counted: the evaluation reads it once (deck §3, the one-pass
+//! algorithm), which the profile counter `execution.input_scans` reports.
+void InitializeDecideScan(const ColumnDataCollection &data, ColumnDataScanState &scan);
+//! The scans of the input this thread's Finalize has made (InitializeDecideScan).
+idx_t &DecideInputScans();
+
 //! `expr` lowered for ExpressionExecutor over the input's chunks, cached by node.
 const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache, const Expression &expr,
                                                    ClientContext &context);

@@ -33,7 +33,7 @@ static Vector EvaluateOnRows(ClientContext &context, const Expression &expr, Col
 	ExpressionExecutor executor(context);
 	executor.AddExpression(lowered);
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	DataChunk result;
@@ -233,7 +233,7 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 		ExpressionExecutor executor(context);
 		executor.AddExpression(order);
 		ColumnDataScanState scan;
-		data.InitializeScan(scan);
+		InitializeDecideScan(data, scan);
 		DataChunk chunk;
 		chunk.Initialize(context, data.Types());
 		DataChunk result;
@@ -701,7 +701,7 @@ void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data,
 	ColumnDataAppendState append;
 	widened.InitializeAppend(append);
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	DataChunk wide;

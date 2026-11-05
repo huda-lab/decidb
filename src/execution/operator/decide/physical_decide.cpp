@@ -137,6 +137,16 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 	return std::move(holder.expressions[0]);
 }
 
+idx_t &DecideInputScans() {
+	static thread_local idx_t scans = 0;
+	return scans;
+}
+
+void InitializeDecideScan(const ColumnDataCollection &data, ColumnDataScanState &scan) {
+	DecideInputScans()++;
+	data.InitializeScan(scan);
+}
+
 //! ChunkExprCache is declared in physical_decide.hpp (Finalize's private phase methods
 //! need it in their signatures). Keyed on input Expression pointer identity — addresses
 //! are stable for the duration of one Finalize. The cache owns lifetime; callers that
@@ -396,7 +406,7 @@ public:
 			executor.AddExpression(*expr);
 			types.push_back(expr->return_type);
 		}
-		data.InitializeScan(scan);
+		InitializeDecideScan(data, scan);
 		chunk.Initialize(context, data.Types());
 	}
 
@@ -512,7 +522,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 	vector<data_ptr_t> row_address(num_rows, nullptr);
 
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	DataChunk key_results;
@@ -601,7 +611,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			}
 		}
 		Vector label_keys(LogicalType::BLOB);
-		data.InitializeScan(scan);
+		InitializeDecideScan(data, scan);
 		row_offset = 0;
 		while (data.Scan(scan, chunk)) {
 			key_results.Reset();
@@ -1091,7 +1101,7 @@ static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_
 	ExpressionExecutor executor(context);
 	executor.AddExpression(expr);
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	DataChunk result;
@@ -1437,7 +1447,7 @@ static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &con
                                            ColumnDataCollection &data, idx_t num_rows) {
 	vector<vector<bool>> masks(conditions.size(), read ? *read : vector<bool>(num_rows, true));
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	idx_t row_offset = 0;
@@ -1654,7 +1664,7 @@ EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<Term
 	}
 	if (!bl_route.empty()) {
 		ColumnDataScanState bl_scan;
-		data.InitializeScan(bl_scan);
+		InitializeDecideScan(data, bl_scan);
         DataChunk bl_chunk;
         bl_chunk.Initialize(context, data.Types());
         DataChunk bl_results;
@@ -2569,7 +2579,7 @@ static vector<bool> NullRows(const vector<const Expression *> &exprs, ChunkExprC
 		types.push_back(lowered.return_type);
 	}
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	DataChunk results;
@@ -2932,6 +2942,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Evaluate coefficients and build the model (solver provides verbose output)
 
+    DecideInputScans() = 0;
+
     // Per-Finalize cache of TransformToChunkExpression results. Outlives every
     // ExpressionExecutor created below, so it's safe for executors to retain
     // references into cached entries.
@@ -2994,6 +3006,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
+    DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
     phase.Next("execution.assemble_input");
     ResolveGroupNames(per_group_cache, gstate);
     VarIndexer var_indexer;
@@ -3057,7 +3070,7 @@ vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_c
 	vector<Value> values;
 	values.reserve(data.Count());
 	ColumnDataScanState scan;
-	data.InitializeScan(scan);
+	InitializeDecideScan(data, scan);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	DataChunk result;
@@ -3536,7 +3549,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
         // Scan data and evaluate LHS coefficients
         ColumnDataScanState scan_state;
-        gstate.data.InitializeScan(scan_state);
+        InitializeDecideScan(gstate.data, scan_state);
 
         DataChunk chunk;
         chunk.Initialize(context, gstate.data.Types());
@@ -3987,7 +4000,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				eval_const.admitted_upper.Reserve(num_rows);
 			}
 			ColumnDataScanState scan_state;
-			gstate.data.InitializeScan(scan_state);
+			InitializeDecideScan(gstate.data, scan_state);
 			DataChunk scan_chunk;
 			scan_chunk.Initialize(context, data_types);
 			DataChunk row_result;
@@ -4143,7 +4156,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                     ExpressionExecutor scale_executor(context);
                     scale_executor.AddExpression(transformed);
                     ColumnDataScanState scale_scan;
-                    gstate.data.InitializeScan(scale_scan);
+                    InitializeDecideScan(gstate.data, scale_scan);
                     DataChunk scale_chunk;
                     scale_chunk.Initialize(context, gstate.data.Types());
                     bool got_scale = false;
@@ -4203,7 +4216,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 				if (!qg.inner_terms.empty()) {
 					ColumnDataScanState qscan;
-					gstate.data.InitializeScan(qscan);
+					InitializeDecideScan(gstate.data, qscan);
                     DataChunk qchunk;
                     qchunk.Initialize(context, gstate.data.Types());
                     DataChunk q_results;
@@ -4417,7 +4430,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
             }
 
             ColumnDataScanState obj_scan_state;
-            gstate.data.InitializeScan(obj_scan_state);
+            InitializeDecideScan(gstate.data, obj_scan_state);
             DataChunk obj_chunk;
             obj_chunk.Initialize(context, gstate.data.Types());
             DataChunk obj_results;
@@ -4571,7 +4584,7 @@ static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &da
 	DataChunk results;
 	results.Initialize(context, types);
 	ColumnDataScanState scan_state;
-	data.InitializeScan(scan_state);
+	InitializeDecideScan(data, scan_state);
 	DataChunk chunk;
 	chunk.Initialize(context, data.Types());
 	idx_t row_base = 0;
@@ -4625,7 +4638,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
         ExpressionExecutor exec(context);
         exec.AddExpression(transformed);
         ColumnDataScanState scan;
-        gstate.data.InitializeScan(scan);
+        InitializeDecideScan(gstate.data, scan);
         DataChunk chunk;
         chunk.Initialize(context, gstate.data.Types());
         double v = 1.0;
