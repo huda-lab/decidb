@@ -545,8 +545,8 @@ qualified reducer nested in another is counted over the rows its path keeps
 reducer's own -- not the NULL tests `SkipNullData` adds to an enclosing reducer's filter,
 which drop that reducer's own members only; `SignQualifiedReducers` signs the inner
 reducers first, along the path).
-A frame selector is a field by the value it reads (`FRAME`, D82), which stage 08 reads off
-its columns; a `first` or `last` frame whose `within` the key holds reads one value per class
+A frame selector is a field by its keys (`FRAME`, D82, deck p. 99), which stage 08 reads
+off its map; a `first` or `last` frame whose `within` the key holds reads one value per class
 and is no field.
 
 ### Frame selectors

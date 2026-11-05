@@ -15,8 +15,9 @@ algorithmic shortcut:
   occurrence.
 - **A signature** is the tuple of the body's fields: each column its data terms read, by
   value (D83, deck pp. 81, 110: ``a + b`` is the field ``(a, b)``); for each reducer, its
-  factor and its ``by`` value; for each frame, the value it reads at the anchor (D82, deck
-  p. 37) -- a range over decisions, a helper decision per window, by its window.
+  factor and its ``by`` value; for each frame, its keys (D82, deck p. 99): its timeline,
+  the anchor's position there when it reads relative to the anchor, and its fallback
+  where the anchor reaches it.
 - **A reducer** reads the kept rows of the enclosing scope that share the current row's
   ``by`` value -- all of them, not only the current class -- evaluates its operand there,
   and combines the operand's values with multiplicity kept (§3.1, §3.3).
@@ -476,21 +477,6 @@ def _columns_of(expr) -> list[Col]:
     return columns
 
 
-def _reads_decisions(expr) -> bool:
-    """Whether ``expr`` reads a decision anywhere."""
-    if isinstance(expr, (Var, Terms)):
-        return True
-    if isinstance(expr, Add):
-        return any(_reads_decisions(term) for term in expr.terms)
-    if isinstance(expr, Mul):
-        return _reads_decisions(expr.left) or _reads_decisions(expr.right)
-    if isinstance(expr, Abs):
-        return _reads_decisions(expr.operand)
-    if isinstance(expr, (Agg, At, Range)):
-        return True
-    return False
-
-
 class AnrModel:
     """The rows and decisions of one query, and the instances its clauses generate."""
 
@@ -677,7 +663,7 @@ class AnrModel:
     def _term_fields(self, node, t, kept) -> tuple:
         """A term that is not data: a decision by its instance, whatever its coefficient
         (D83); a linear form by its every coefficient; a reducer by its ``by`` value; a
-        frame by its keys (D82); and a product or an ``abs`` by the fields of each
+        frame by its keys (D82, deck p. 99); and a product or an ``abs`` by the fields of each
         context it holds."""
         if isinstance(node, Var):
             return ("decision", frozenset(self._form(node, t, kept)))
@@ -695,16 +681,14 @@ class AnrModel:
         raise TypeError(f"unexpected node {node!r}")
 
     def _frame_fields(self, node, t, kept) -> tuple:
-        """By the value it reads at the anchor (D82). A range over decisions is a helper
-        decision per window (D78), a field by its instance: its window -- its timeline, the
-        anchor's position when it reads relative to the anchor, and the fallback where the
-        anchor reaches it."""
-        if isinstance(node, At) or not _reads_decisions(node.payload):
-            return (("value", _freeze(self._form(node, t, kept))),)
+        """By its keys, as the annotated tree holds a frame (D82, deck p. 99): its timeline, the
+        anchor's position there when it reads relative to the anchor, and the fallback where
+        the anchor reaches it -- not the value it reads."""
         timeline = self._timeline(node.over, kept)
         within, _ = timeline.position[t]
         fields = [("within", within)]
-        if node.start.relative or node.end.relative:
+        relative = node.position.relative if isinstance(node, At) else node.start.relative or node.end.relative
+        if relative:
             fields.append(("order", timeline.order[t]))
         if node.fallback is not None and self._missing(node, t, kept):
             fields.append(("fallback", _freeze(self._form(node.fallback, t, kept))))

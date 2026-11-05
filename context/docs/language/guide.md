@@ -536,11 +536,11 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
   must hold one row."*
 - **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an
-  error naming the class and the timelines. A frame is a field of the clause's signature by the value it reads
-  (D82, deck p. 37), as any tuple term is: over data that value, over decisions the instances its payload reads at
-  the selected row, and its fallback where reached; a range over decisions by its window. So `per t.product: x <=
-  at(previous: t.v) over (t.period within t.product)` is one instance per distinct previous demand of a product, and
-  `sum(per t.product: at(previous: y) over (...))` reads a product's one `y` once, however many anchors read it.
+  error naming the class and the timelines. A frame is a field of the clause's signature by its keys (D82, deck p.
+  99), as a reducer is by its `by` key: its timeline, the anchor's position there when it reads relative to the
+  anchor, and its fallback where the anchor reaches it -- not the value it reads. So `per t.product: x <=
+  at(previous: t.v) over (t.period within t.product)` is one instance per period of a product but its first, and
+  `sum(per t.product: at(previous: y) over (...))` reads a product's one `y` once per period it is read from.
 - **Inside a reducer over decisions** (D87) a frame that selects nothing drops its member, decisions and all: the
   reducer's NULL test of the frame keeps the member out (D84), so `sum(at(previous: x) over (t.period within
   t.product)) by (t.product)` reads each product's periods but its first, and an AVG divides by the members left. A
@@ -704,7 +704,8 @@ A `per` key splits the kept rows into classes, and each class is generated once 
 - every **column** the data outside reducers reads, by value, the bound and any factor on a reducer included (D83, deck
   pp. 81, 110): `per g: x <= a + b` over rows with `(a, b)` = `(1, 2)` and `(2, 1)` is two variants, although both
   bounds are 3, and so are `x - a <= b` and `x <= a + sum(y) + b`. A literal or a query-wide value is no field;
-- every **frame**, by the value it reads (D82, §5.6);
+- every **frame**, by its keys: its timeline, and the anchor's position there when it reads relative to it (D82,
+  §5.6);
 - every **decision** outside reducers, by instance: a per-row decision splits the class into its rows, a keyed one into
   its classes, and a `per ()` decision splits nothing;
 - every reducer's **`by` key**, by value: each group a class reads is a variant.

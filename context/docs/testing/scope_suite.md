@@ -244,7 +244,7 @@ one group at a time. No test asserts an answer its docstring derives.
   helpers; `TestAbsenceAndTies`: an anchor in no timeline with no value whatever its `else`
   (D75), a tied position a range reads once or refuses (D73), a missing position a
   `coalesce` reads as NULL (D84), a square over a frame refused on HiGHS by name;
-  `TestFieldsByValue`: two anchors reading one instance one member (D82). The parse
+  `TestFieldsByKeys`: two anchors reading one instance from two positions two members (D82). The parse
   errors, answers and the echo are `test/decidb/test_frame_parser.test`'s
   (sqllogic; ordinary SQL windows, `AT TIME ZONE` and `WITHIN GROUP` unchanged; a FROM-first
   query), and the round trips `test_decidb_plan_serialization.cpp`'s.

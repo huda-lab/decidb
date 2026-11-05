@@ -1799,10 +1799,9 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 	};
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame) && frames && frame < frames->size()) {
-		// A frame is compared by the value it reads at the anchor (D82, deck p. 37): over data that value, over
-		// decisions the instances and coefficients of its payload at the selected row, and its fallback where the
-		// anchor reaches it. `first` and `last` read one value per timeline, so a key that holds the timeline's
-		// splits nothing further.
+		// A frame is compared by its keys, as the annotated tree holds it (D82, deck p. 99): its timeline, the anchor's
+		// place on it when its position is relative to the anchor's, and its fallback where the anchor reaches it.
+		// `first` and `last` read one value per timeline, so a key that holds the timeline's splits nothing further.
 		auto &spec = (*frames)[frame];
 		if (!spec.Relative()) {
 			bool covered = true;

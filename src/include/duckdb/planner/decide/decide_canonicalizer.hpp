@@ -491,7 +491,7 @@ private:
 	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
 
 	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
-	//! decision by instance, a reducer's `by` key, a frame by the value it reads, and data by each column it reads.
+	//! decision by instance, a reducer's `by` key, a frame by its keys, and data by each column it reads.
 	void CollectSignatureFields(const Expression &expr, idx_t key, vector<DecideSignatureField> &fields) const;
 	//! Whether the key `key` holds `field` by construction: one class shows one value of it.
 	bool KeyHoldsField(idx_t key, const DecideSignatureField &field) const;

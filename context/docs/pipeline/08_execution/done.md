@@ -298,13 +298,12 @@ mark: a comparison skips the instance (`MarkAbsentDecisionReads`), a helper drop
 the objective drops the term. A row a rewrite added to define an auxiliary (`ConstraintKind::STRUCTURAL`) is no
 instance of the clause: it is skipped where its own reads have no value, and the auxiliary with it.
 
-A frame field of a signature (D82) splits by the value the frame reads at each anchor (`FrameFieldValues`): its
-columns there -- a point's VALUE, READ and FALLBACK, a range over data's REDUCED, referenced once per query
-(`DecideGlobalSinkState::frame_column_refs`) so the chunk expression cache, keyed by node, never meets a freed one --
-and the instances they read, the payload's at the selected row and the fallback's at the anchor; a range over
-decisions splits by its window, its helper's instance. An anchor where the frame reads no value is no variant
-(`BuildSignatureIds` filters it), so the objective's check (D72) counts only anchors that read one, and names what
-differs among them: a position, a timeline or a fallback.
+A frame field of a signature (D82, deck p. 99) splits by the frame's keys (`FrameFieldClasses`): the anchor's peer on
+its timeline when it reads relative to the anchor, else its timeline, and where the anchor reaches the `else` what the
+`else` reads -- its FALLBACK columns, referenced once per query (`DecideGlobalSinkState::frame_column_refs`) so the
+chunk expression cache, keyed by node, never meets a freed one, and its decisions' instances at the anchor. An anchor
+where the frame reads no value is no variant (`BuildSignatureIds` filters it), so the objective's check (D72) counts
+only anchors that read one, and names what differs among them: a position, a timeline or a fallback.
 
 A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
 one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- the

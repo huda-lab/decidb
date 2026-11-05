@@ -836,8 +836,9 @@ F18_CAP_KEPT = _f18(
 
 F19_COLUMNS = ("product", "period", "demand")
 F19_DATA = (("A", 1, 5), ("A", 2, 5), ("A", 3, 5), ("A", 4, 5))
-#: A frame is a field of the inner ``per product`` class by the value it reads (D82, deck
-#: p. 37): the three present anchors read 5 alike, one member, so the bound is 5.
+#: A frame is a field of the inner ``per product`` class by its keys (D82, deck p. 99): the
+#: three anchors with a previous period are three positions, three members of 5 although
+#: they read 5 alike, so the bound is 15.
 F19 = Case(
     "F19",
     "D82",
@@ -858,8 +859,8 @@ F19 = Case(
     f"""SELECT period, x {table('t', F19_COLUMNS, F19_DATA)} DECIDE x(INT)
         SUCH THAT per (): sum(x) <= sum(per t.product: at(previous: t.demand) over (t.period within t.product))
         MAXIMIZE sum(x) ORDER BY period""",
-    5,
-    {0: ("x1 + x2 + x3 + x4 <= 5",)},
+    15,
+    {0: ("x1 + x2 + x3 + x4 <= 15",)},
 )
 
 F21_COLUMNS = ("g", "period", "cap")

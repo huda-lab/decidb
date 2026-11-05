@@ -288,7 +288,7 @@ class TestSyntax:
         """A subquery that starts with FROM or VALUES keeps OVER, WITHIN and a named window
         as SQL's, and a decision may be called `at`."""
         rows, _ = decidb_cli.execute(
-            f"SELECT id, at {T} DECIDE at(REAL) SUCH THAT at <= (FROM (SELECT t.demand AS \"within\" {T}) u "
+            f'SELECT id, at {T} DECIDE at(REAL) SUCH THAT at <= (FROM (SELECT t.demand AS "within" {T}) u '
             "WINDOW w AS (ORDER BY u.within) QUALIFY row_number() OVER w = 1) MAXIMIZE sum(at)"
         )
         assert sorted(rows) == [(1, 5.0), (2, 5.0), (3, 5.0)]
@@ -856,6 +856,29 @@ class TestPointShapes:
         assert len(model.instances(body)) == 4
         assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 4
         _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, rows), decisions, [CAP, body], MAXIMIZE_X)
+
+    def test_a_reached_decision_else_under_per_is_a_field(self, decidb_cli, scope_solver):
+        """D82: an `else` over a decision splits the class by the instance it reads where the
+        anchor reaches it. Product A's one period holds two rows with no previous one, each
+        reading its own `x` (at most 4 and 2): y_A <= x1 and y_A <= x2, so y_A is 2 -- not
+        the first row's 4 -- and the optimum 9."""
+        rows = ((1, "A", 1, 4, 0), (2, "A", 1, 2, 0), (3, "B", 1, 7, 0))
+        sql = _edge(
+            "x <= t.v AND per t.product: y <= at(previous else x: x) over (t.period within t.product)",
+            decide="x(INT), per t.product: y(INT)",
+            objective="MAXIMIZE sum(per t.product: y)",
+            rows=rows,
+            select="x, y",
+        )
+        decisions = [Decision("x"), Decision("y", ("product",))]
+        clauses = [
+            CAP,
+            clause(le(X, Col("v"))),
+            clause(le(Y, At(previous(), X, TIMELINE, fallback=X)), per=("product",)),
+        ]
+        objective = Objective(ObjSense.MAXIMIZE, reduce("sum", Y, per=("product",)))
+        assert len(AnrModel(table_rows(EDGE, rows), decisions).instances(clauses[2])) == 3
+        assert _judged(decidb_cli, scope_solver, sql, table_rows(EDGE, rows), decisions, clauses, objective) == 9
 
     @pytest.mark.parametrize(
         "clause_sql, expected",
@@ -1491,16 +1514,16 @@ class TestRange:
         )
 
     def test_under_per_a_range_is_one_variant_per_position(self, decidb_cli, tmp_path, scope_solver):
-        """D82: a range over data under `per t.product` is a field by the value it reads, so
-        over x keyed per product the clause is one row per distinct window sum of a product --
-        A's 10, 11 and 7 and B's 10 twice: four -- while one from `first` to `last` reads one
-        value per timeline -- two."""
+        """D82: a range under `per t.product` is a field by its keys (deck p. 99), so over x
+        keyed per product the clause is one row per position of a product -- A's three and B's
+        two, although B's window sums agree: five -- while one from `first` to `last` reads one
+        timeline -- two."""
         decisions = [Decision("x", ("product",))]
         for clause_sql, body, rows in [
             (
                 "per t.product: x <= sum(from previous to next: t.v) over (t.period within t.product)",
                 le(X, _range("sum", previous(), next_(), 1, {}, Col("v"))),
-                4,
+                5,
             ),
             (
                 "per t.product: x <= max(from first to last: t.v) over (t.period within t.product)",
@@ -1965,18 +1988,18 @@ class TestAbsenceAndTies:
 
 
 @pytest.mark.correctness
-class TestFieldsByValue:
-    """A frame is a signature field by the value it reads (D82, deck p. 37), as any tuple
-    term is."""
+class TestFieldsByKeys:
+    """A frame is a signature field by its keys, as the deck's annotated tree holds it (D82,
+    deck p. 99): its timeline and the anchor's position there, not the value it reads."""
 
-    def test_two_anchors_reading_one_instance_are_one_member(self, decidb_cli):
-        """Product A's periods 2 and 3 both read its one `y` through `previous`: one member,
-        so the sum is y_A + y_B <= 10 and the optimum 10. Compared by the anchor's position
-        they were two, 2 * y_A + y_B <= 10, and the optimum 9."""
+    def test_two_anchors_reading_one_instance_are_two_members(self, decidb_cli):
+        """Product A's periods 2 and 3 both read its one `y` through `previous`, from two
+        positions: two members, so the sum is 2 * y_A + y_B <= 10 and the optimum 9. Compared
+        by the value they read they would be one, y_A + y_B <= 10, and the optimum 10."""
         sql = f"""SELECT tid, y {table('t', ('tid', 'product', 'period'),
                                        ((1, 'A', 1), (2, 'A', 2), (3, 'A', 3), (4, 'B', 1), (5, 'B', 2)))}
             DECIDE per t.product: y(INT)
             SUCH THAT y <= 9 AND sum(per t.product: at(previous: y) over (t.period within t.product)) <= 10
             MAXIMIZE sum(per t.product: y) ORDER BY tid"""
         y = [row["y"] for row in answer(decidb_cli, sql)]
-        assert y[0] + y[3] == 10, y
+        assert y[0] + y[3] == 9, y

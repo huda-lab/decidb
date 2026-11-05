@@ -184,7 +184,7 @@ struct DecideSignatureField {
 	idx_t decision = DConstants::INVALID_INDEX;
 	//! BY_KEY: the reducer's `by` key (index into LogicalDecide::keys).
 	idx_t key = DConstants::INVALID_INDEX;
-	//! FRAME: the frame (index into LogicalDecide::frames), compared by the value it reads (D82).
+	//! FRAME: the frame (index into LogicalDecide::frames), compared by its keys (D82).
 	idx_t frame = DConstants::INVALID_INDEX;
 	//! The field as a message names it: `P.lim`, `ship`, `by (P.region)`, a frame as written.
 	string text;
