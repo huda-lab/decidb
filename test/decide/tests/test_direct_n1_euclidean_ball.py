@@ -623,8 +623,8 @@ def _two_rows(first, second, decide):
     )
 
 
-def _direct_values(cli, sql):
-    return [row[0] for row in run(cli, sql, "require")[0]]
+def _direct_values(cli, sql, large_numbers=False):
+    return [row[0] for row in run(cli, sql, "require", expect_large_numbers=large_numbers)[0]]
 
 
 def _solver_values(cli, sql, large_numbers=False):
@@ -688,9 +688,66 @@ def test_n1_a_zero_answer_has_no_sign(decidb_cli, sign):
 
 @pytest.mark.correctness
 def test_n1_scores_whose_squares_vanish_stay_at_zero(decidb_cli):
-    # h underflows to 0 from nonzero scores: the formula's case h = 0 is x = 0, the point the solver also returns.
+    # h underflows to 0 from nonzero scores: the formula's case h = 0 is x = 0, the point the solver also returns. Both
+    # paths warn.
     sql = _two_rows("3e-200", "4e-200", _MAX_25)
-    assert _direct_values(decidb_cli, sql) == _solver_values(decidb_cli, sql) == [0.0, 0.0]
+    assert _direct_values(decidb_cli, sql, large_numbers=True) == [0.0, 0.0]
+    assert _solver_values(decidb_cli, sql, large_numbers=True) == [0.0, 0.0]
+
+
+# The warning a direct plan prints: h below the normal range of a DOUBLE, on a row that reads it. Scores 3 and 4 times the
+# scale make h 25 * scale^2, so 1e-153 stays in the normal range and 1e-155 does not.
+_TINY_LIMIT = "SUM(POWER(x, 2)) <= 1e-320 MINIMIZE SUM(POWER(x - s, 2))"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("scale,warns", [("1e-153", False), ("1e-155", True), ("1e-162", True), ("1e-200", True)])
+def test_n1_warns_when_h_leaves_the_normal_range(decidb_cli, scale, warns):
+    _direct_values(decidb_cli, _two_rows(f"3 * {scale}", f"4 * {scale}", _MAX_25), large_numbers=warns)
+
+
+@pytest.mark.correctness
+def test_n1_scores_of_zero_read_no_h_and_are_silent(decidb_cli):
+    assert _direct_values(decidb_cli, _two_rows("0", "0", _MAX_25)) == [0.0, 0.0]
+
+
+@pytest.mark.correctness
+def test_n1_a_target_inside_the_ball_reads_no_scale_and_is_silent(decidb_cli):
+    sql = _two_rows("3e-162", "4e-162", "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - s, 2))")
+    assert _direct_values(decidb_cli, sql) == [3e-162, 4e-162]
+
+
+@pytest.mark.correctness
+def test_n1_a_target_outside_a_tiny_ball_reads_the_scale_and_warns(decidb_cli):
+    _direct_values(decidb_cli, _two_rows("3e-160", "4e-160", _TINY_LIMIT), large_numbers=True)
+
+
+@pytest.mark.correctness
+def test_n1_a_row_outside_every_ball_reads_no_h_and_is_silent(decidb_cli):
+    # h reads 0 and is greater than the limit, but no ball holds the row, so its answer is its own target.
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, 1e-170::DOUBLE, false)) t(id, s, f) DECIDE x(REAL) "
+        "SUCH THAT when f: SUM(POWER(x, 2)) <= -1 MINIMIZE SUM(POWER(x - s, 2))) q"
+    )
+    assert _direct_values(decidb_cli, sql) == [1e-170]
+
+
+@pytest.mark.correctness
+def test_n1_warns_once_however_many_rows_read_h(decidb_cli):
+    sql = (
+        "SELECT count(*) FROM (FROM (SELECT i, 1e-170::DOUBLE AS s FROM range(200000) t(i)) "
+        f"DECIDE x(REAL) SUCH THAT {_MAX_25}) q"
+    )
+    assert run(decidb_cli, sql, "require", expect_large_numbers=True)[0] == [(200000,)]
+
+
+@pytest.mark.correctness
+def test_n1_warns_again_on_each_query(decidb_exe_path):
+    # One process and session, so the second query finds the first's state: QueryBegin must clear it.
+    sql = _two_rows("3e-162", "4e-162", _MAX_25)
+    script = f"SET decide_direct_solve='require'; {sql}; {sql}; PREPARE p AS {sql}; EXECUTE p; EXECUTE p;"
+    done = subprocess.run([decidb_exe_path, "-noheader", "-list", "-c", script], capture_output=True, text=True)
+    assert done.stderr.count("very large or very small number detected") == 4, done.stderr
 
 
 @pytest.mark.correctness

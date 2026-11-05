@@ -15,6 +15,13 @@
         "struct": "GetVariableFun"
     },
     {
+        "name": "decide_warn_numbers",
+        "parameters": "",
+        "description": "Prints DECIDE's number-range warning once per query and returns true",
+        "example": "decide_warn_numbers()",
+        "type": "scalar_function"
+    },
+    {
         "name": "error",
         "parameters": "message",
         "description": "Throws the given error message",

@@ -1,4 +1,4 @@
-"""One warning when the model handed to a solver holds a very large number.
+"""One warning when the model handed to a solver holds a number out of range.
 
 A coefficient of 1e6 or more (1 / the integrality tolerance DeciDB sets on the solver: an integer slip times the coefficient
 reaches 1), or a right-hand side or bound of about 4.5e9 or more (the feasibility tolerance / the machine epsilon: the
@@ -6,11 +6,14 @@ rounding of the number in a double reaches the tolerance), can lose precision in
 constraint, quadratic, indicator and objective coefficients, including the constants DeciDB derives, such as a Big-M.
 DeciDB says so once on stderr, solves the model as it is, and returns the answer the solver gives:
 
-    very large number detected in model - numerical precision may make the solution unstable
+    very large or very small number detected - numerical precision may make the solution unstable
 
 The check reads the finished solver-neutral model, the one DECIDB_DUMP_MODEL dumps, so it knows nothing of where a
-number came from. A query answered by a direct-solve rule builds no model and prints nothing. An open bound
-(DECIDE_SOLVER_INFINITY, the default of a variable with no written bound) is not a number.
+number came from. A nonzero objective coefficient of 1e-6 or less warns too (the optimality tolerance: moving its decision
+by 1 improves the objective by no more than that, so the solver may stop and report optimal). A query answered by a
+direct-solve rule builds no model, so these thresholds do not apply to it; N1 warns where its own arithmetic loses
+precision (`test_direct_n1_euclidean_ball.py`). An open bound (DECIDE_SOLVER_INFINITY, the default of a variable with no
+written bound) is not a number.
 
 `DeciDBCli.execute(..., expect_large_numbers=...)` is how a test declares the warning: an undeclared line fails the
 test, and so does a declared one that is not printed exactly once per query run. Every case below runs on both
@@ -20,6 +23,9 @@ Covers (one test per branch of the check):
   - test_a_number_in_a_linear_position_warns_from_its_threshold: a constraint and an objective coefficient (999999,
     1000000, 2000000); a right-hand side (both signs), lower bound and upper bound (4503599627, 4503599627.370496,
     5000000000)
+  - test_a_small_objective_coefficient_warns_from_its_threshold: 1e-6 of either sign warns; just over it and 0 do not
+  - test_a_small_quadratic_objective_coefficient_warns: the Q matrix of the objective
+  - test_a_small_constraint_coefficient_is_silent: the scan for a small number reads the objective only
   - test_a_large_quadratic_objective_coefficient_warns: the Q matrix of the objective
   - test_a_large_quadratic_constraint_number_warns: a quadratic row's Q, linear part and right-hand side (Gurobi)
   - test_a_large_indicator_number_warns: a native `<>` row's coefficients and right-hand side (Gurobi)
@@ -130,6 +136,31 @@ def test_a_number_in_a_linear_position_warns_from_its_threshold(
 
     assert result.status == SolverStatus.OPTIMAL
     assert arguments["objective"] * sum(xs) == pytest.approx(result.objective_value, rel=1e-6, abs=1e-6)
+
+
+_SMALL_OBJECTIVE_CASES = [("0.000001", True), ("-0.000001", True), ("0.0000011", False), ("0", False)]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", _BACKENDS)
+@pytest.mark.parametrize("n,warns", _SMALL_OBJECTIVE_CASES, ids=[n for n, _ in _SMALL_OBJECTIVE_CASES])
+def test_a_small_objective_coefficient_warns_from_its_threshold(request, n, warns, cli_fixture):
+    sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM({n} * x)"
+    _values(_cli(request, cli_fixture), sql, expect_large_numbers=warns)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", _BACKENDS)
+def test_a_small_quadratic_objective_coefficient_warns(request, cli_fixture):
+    sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x >= 1 MINIMIZE SUM(0.0000001 * POWER(x, 2))"
+    _values(_cli(request, cli_fixture), sql, expect_large_numbers=True)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", _BACKENDS)
+def test_a_small_constraint_coefficient_is_silent(request, cli_fixture):
+    sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x <= 100 AND SUM(0.0000001 * x) <= 1 MAXIMIZE SUM(x)"
+    assert _values(_cli(request, cli_fixture), sql, expect_large_numbers=False) == pytest.approx([100.0, 100.0])
 
 
 @pytest.mark.correctness
@@ -347,7 +378,7 @@ def test_diagnose_prints_once_for_a_number_only_the_repair_model_holds(request, 
 
 @pytest.mark.parametrize("cli_fixture", _BACKENDS)
 def test_a_direct_solved_query_prints_nothing(request, decidb_cli, cli_fixture):
-    """The A1 rule answers `x <= 5000000000` with no solver and no model, so there is no number to name. The same
+    """The A1 rule answers `x <= 5000000000` with no solver and no model, so no solver tolerance applies. The same
     query on the solver path (`off`, which a forced backend takes anyway) holds the bound and warns."""
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5000000000 MAXIMIZE SUM(x)"
     direct, _ = decidb_cli.execute(f"SET decide_direct_solve='require'; {sql}", expect_large_numbers=False)

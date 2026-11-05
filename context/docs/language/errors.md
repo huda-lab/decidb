@@ -54,7 +54,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi |
 | A square or product under a `MIN`/`MAX` on HiGHS | plan | `DECIDE: 'max(power(x, 2))' takes the maximum of a squared or multiplied expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace power(x, 2) with an expression linear in the decision variables.` |
 
-DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the large-number
+DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the number-range
 warning (`../pipeline/07_solver/done.md`), and the solver's verdict on them stands. An infinite bound is no bound. A
 coefficient that is NaN or infinite where DeciDB reads it raises one of the two messages above: the first when a column
 holds it, quoting that column's value even inside a merged or scaled coefficient (`2 * b` names `b`), TOO_LARGE naming

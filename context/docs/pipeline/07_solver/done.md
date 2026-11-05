@@ -314,26 +314,38 @@ order:
 3. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
-4. `options.large_number_warning->Check(model)`: stderr gets *very large number detected in
-   model - numerical precision may make the solution unstable* when the model holds a
-   number past the point where the solver's tolerance can show in the user's numbers.
-   The model, the settings and the answer are unchanged. Numerical precision is the
-   solver's limit: DeciDB does not rescale or analyse clauses to get around it, it tells
-   the user. Both thresholds derive from the tolerances DeciDB sets on every backend
-   (`decide_numeric_policy.hpp`): integrality and feasibility, 1e-6 each (Gurobi
-   `IntFeasTol` / `FeasibilityTol`, HiGHS `mip_feasibility_tolerance` /
-   `primal_feasibility_tolerance`), so the solver and the warning read one value.
+4. `options.number_range_warning->Check(model)`: stderr gets *very large or very small
+   number detected - numerical precision may make the solution unstable* when the model
+   holds a number past the point where the solver's tolerance can show in the user's
+   numbers. The model, the settings and the answer are unchanged. Numerical precision is
+   the solver's limit: DeciDB does not rescale or analyse clauses to get around it, it
+   tells the user. The thresholds derive from tolerances DeciDB defines
+   (`decide_numeric_policy.hpp`): integrality and feasibility, 1e-6 each on every backend
+   (Gurobi `IntFeasTol` / `FeasibilityTol`, HiGHS `mip_feasibility_tolerance` /
+   `primal_feasibility_tolerance`), and optimality, 1e-6 (Gurobi `OptimalityTol`, its
+   default). HiGHS keeps its tighter default for optimality, so the warning comes no later
+   than HiGHS's own limit.
    - A coefficient (constraint, quadratic, indicator, objective) warns from
      `DECIDE_LARGE_COEFFICIENT` = 1 / integrality tolerance = 1e6: an integer column
      accepted that far from a whole number moves the row by 1.
    - A right-hand side or a bound that is not open warns from `DECIDE_LARGE_TOTAL` =
      feasibility tolerance / machine epsilon ≈ 4.5e9: a double holds the number only to
      within the feasibility tolerance. A budget below that is held exactly enough.
+   - A nonzero objective coefficient, linear or quadratic, warns at
+     `DECIDE_SMALL_OBJECTIVE_COEFFICIENT` = optimality tolerance = 1e-6 or less: moving its
+     decision by 1 improves the objective by no more than that, so the solver may stop and
+     report optimal. `MAXIMIZE SUM(0.000001 * x)` with `x <= 1` returns 0 on Gurobi with
+     status optimal, and plain `gurobipy` returns the same. A small constraint coefficient
+     does not warn. `AVG` over a million rows or more holds such a coefficient and warns,
+     though the answers measured there are right. A scan of the finished model cannot tell
+     these apart.
 
    The check reads the finished model, so it sees the query's literals, the data and
-   DeciDB's own constants (a Big-M) alike. One `LargeNumberWarning` lives per query and
+   DeciDB's own constants (a Big-M) alike. One `NumberRangeWarning` lives per query and
    prints at most once; the operator also passes it the DIAGNOSE repair model. A
-   direct-solved query builds no model and prints nothing.
+   direct-solved query builds no model, so these thresholds do not apply; a rule prints the
+   same line through `DirectWarnIf` and `decide_warn_numbers()` where its own arithmetic
+   loses precision, once per query (a `ClientContextState`, cleared in `QueryBegin`).
 5. Record `model_constraint_rows` before anything moves the model.
 6. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
    say so. That is a coefficient-free row against a bound it cannot meet

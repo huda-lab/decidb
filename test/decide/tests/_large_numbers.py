@@ -1,9 +1,9 @@
-"""The oracle for DeciDB's large-number warning on a query whose model is written in literals.
+"""The oracle for DeciDB's number-range warning on a query whose model is written in literals.
 
-DeciDB warns about a coefficient of 1e6 or more (1 / the integrality tolerance) and about a right-hand side or a bound of
-about 4.5e9 or more (the feasibility tolerance / the machine epsilon). `writes_large_number` reads the SQL text for a
-literal past the threshold of the position it stands in, independently of the model, so a test declares the warning
-(`expect_large_numbers`) from what the query says.
+DeciDB warns about a coefficient of 1e6 or more (1 / the integrality tolerance), about a right-hand side or a bound of
+about 4.5e9 or more (the feasibility tolerance / the machine epsilon), and about a nonzero objective coefficient of 1e-6 or
+less (the optimality tolerance). `writes_large_number` reads the SQL text for a literal past the threshold of the position
+it stands in, independently of the model, so a test declares the warning (`expect_large_numbers`) from what the query says.
 
 A position is read from the syntax alone: a literal beside `*` is a coefficient, and any other literal is a right-hand side
 or a bound. A literal in a `VALUES` list is data whose role the SQL text does not give; the caller says which (`data`).
@@ -19,6 +19,9 @@ LARGE_COEFFICIENT = 1e6
 
 #: ... and about a right-hand side or bound of this magnitude or more (DECIDE_LARGE_TOTAL).
 LARGE_TOTAL = 1e-6 / 2.220446049250313e-16
+
+#: ... and about a nonzero coefficient in the objective of this magnitude or less (DECIDE_SMALL_OBJECTIVE_COEFFICIENT).
+SMALL_OBJECTIVE_COEFFICIENT = 1e-6
 
 #: A bound written at this magnitude or more reads as no bound (DECIDE_EFFECTIVE_INFINITY), and no bound is no number.
 OPEN = 1e20
@@ -65,6 +68,7 @@ def writes_large_number(sql, bounded=(), data="total"):
             sql,
         )
     values = _values_spans(sql)
+    objective = re.search(r"\b(?:MAXIMIZE|MINIMIZE)\b", sql, re.IGNORECASE)
     for match in _NUMBER.finditer(sql):
         before = sql[: match.start()].rstrip()
         after = sql[match.end() :].lstrip()
@@ -76,5 +80,8 @@ def writes_large_number(sql, bounded=(), data="total"):
             role = "total"
         threshold = LARGE_COEFFICIENT if role == "coefficient" else LARGE_TOTAL
         if float(match.group()) >= threshold:
+            return True
+        in_objective = objective is not None and match.start() > objective.start()
+        if role == "coefficient" and in_objective and 0 < float(match.group()) <= SMALL_OBJECTIVE_COEFFICIENT:
             return True
     return False

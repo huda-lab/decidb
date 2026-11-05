@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 #include <cmath>
+#include <limits>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
@@ -306,7 +307,7 @@ struct Stage {
 //!   P3    the row's target (or direction) in the domain, whether it is in a ball, and the ball's limit
 //!   P4    the row's squared length in the ball, and every other check a row can raise
 //!   W2    h, the sum of the squared lengths of the row's group
-//!   P5    the answer, and the column that keeps the checks live
+//!   P5    the answer, the warning, and the column that keeps the checks live
 //!
 //! The solver reads every row before it returns, so a bad value on the last row raises even under an outer LIMIT 1. W2
 //! holds every row before it releases one, and each check on a row stands below it. The one check above it is h past a
@@ -382,6 +383,7 @@ public:
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, lengths.valid)));
 		checks.push_back(TooLarge(total));
+		checks.push_back(LosesPrecision(lengths, total));
 		p5.Add(DirectAllHold(calc, std::move(checks)));
 
 		DirectSubstitute substitute;
@@ -704,6 +706,20 @@ private:
 	//! The radius over the length is sqrt(B / h). It is computed as sqrt(B) / sqrt(h), which stays in range where B / h
 	//! does not. A row outside every ball keeps its target, and with no square its direction is 0 (P4 raised
 	//! otherwise).
+	//! h below the normal range of a DOUBLE has lost precision, so a row that reads it through the scale, or finds it 0
+	//! with a value of its own, warns. A row with a square inside the ball returns its own value and reads no scale.
+	unique_ptr<Expression> LosesPrecision(const Lengths &lengths, const ExprPtr &total) const {
+		auto value = Double(lengths.value);
+		auto has_value = Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, calc.Num(0.0)));
+		auto subnormal =
+		    calc.Cmp(ExpressionType::COMPARE_LESSTHAN, total, calc.Num(std::numeric_limits<double>::min()));
+		auto unstable = And(Boolean(lengths.in_ball), And(has_value, subnormal));
+		if (condition.has_square) {
+			unstable = And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total, Double(lengths.limit)));
+		}
+		return DirectWarnIf(calc, calc.Out(unstable));
+	}
+
 	unique_ptr<Expression> Answer(const Lengths &lengths, const ExprPtr &total) const {
 		auto value = Double(lengths.value);
 		auto in_ball = Boolean(lengths.in_ball);

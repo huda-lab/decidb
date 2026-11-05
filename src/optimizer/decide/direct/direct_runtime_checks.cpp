@@ -30,6 +30,11 @@ unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<E
 	return calc.Out(calc.If(calc.Wrap(std::move(bad)), calc.Wrap(std::move(error)), calc.Bool(true)));
 }
 
+unique_ptr<Expression> DirectWarnIf(const ExpressionBuilder &calc, unique_ptr<Expression> unstable) {
+	return calc.Out(
+	    calc.If(calc.Wrap(std::move(unstable)), calc.Fn("decide_warn_numbers", vector<ExprPtr> {}), calc.Bool(true)));
+}
+
 unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<unique_ptr<Expression>> checks) {
 	auto chain = calc.Bool(true);
 	for (idx_t i = checks.size(); i > 0; i--) {

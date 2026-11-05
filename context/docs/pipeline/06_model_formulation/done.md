@@ -537,7 +537,7 @@ stays [0, 0], which the sites that pin an empty auxiliary to 0 rely on.
 
 A tight M does not make a large coefficient safe. Past about `c * bound / K ≈ 5e5` on
 HiGHS, an integer decision inside the integrality tolerance times `c` meets the row on
-its own, whatever M is; that is precision in the user's numbers, and the large-number
+its own, whatever M is; that is precision in the user's numbers, and the number-range
 warning (`../07_solver/done.md` §3) names it.
 
 **There is no fixed Big-M.** When a contributing variable has no finite bound, no

@@ -30,21 +30,33 @@ namespace duckdb {
 //! The builder writes it, and every backend reads it as infinite.
 constexpr double DECIDE_SOLVER_INFINITY = 1e30;
 
-//! The tolerances DeciDB sets on every backend, so the solver and the large-number warning read one value. How far a
+//! The tolerances DeciDB sets on every backend, so the solver and the number-range warning read one value. How far a
 //! value of an integer column may sit from a whole number and still count as integral (Gurobi `IntFeasTol`, HiGHS
 //! `mip_feasibility_tolerance`), and how far a row may be violated and still count as satisfied (Gurobi
 //! `FeasibilityTol`, HiGHS `primal_feasibility_tolerance`).
 constexpr double DECIDE_INTEGRALITY_TOLERANCE = 1e-6;
 constexpr double DECIDE_FEASIBILITY_TOLERANCE = 1e-6;
 
+//! How small an objective's rate of improvement may be and still count as optimal (Gurobi `OptimalityTol`). HiGHS keeps
+//! its tighter default, so a warning read from this value comes no later than HiGHS's own limit.
+constexpr double DECIDE_OPTIMALITY_TOLERANCE = 1e-6;
+
 //! A coefficient of this magnitude or more: an integer column accepted this far from a whole number moves the row by
 //! the tolerance times the coefficient, which reaches 1 (1e6). The model is left as it is; DECIDE only says so (see
-//! LargeNumberWarning).
+//! NumberRangeWarning).
 constexpr double DECIDE_LARGE_COEFFICIENT = 1.0 / DECIDE_INTEGRALITY_TOLERANCE;
 
 //! A right-hand side or bound of this magnitude or more: a double holds a number only to its magnitude times the
 //! machine epsilon, and at this size that rounding reaches the feasibility tolerance (about 4.5e9).
 constexpr double DECIDE_LARGE_TOTAL = DECIDE_FEASIBILITY_TOLERANCE / std::numeric_limits<double>::epsilon();
+
+//! A nonzero objective coefficient of this magnitude or less: moving its decision by 1 improves the objective by no
+//! more than the optimality tolerance, so the solver may leave the decision where it is and report optimal.
+constexpr double DECIDE_SMALL_OBJECTIVE_COEFFICIENT = DECIDE_OPTIMALITY_TOLERANCE;
+
+//! The one line the solver path and a direct plan print, once per query, when a number may make the answer unstable.
+constexpr const char *DECIDE_NUMBER_RANGE_WARNING =
+    "very large or very small number detected - numerical precision may make the solution unstable";
 
 //! A finite bound at or beyond this magnitude is read as infinite (the variable is unbounded in that direction). It is
 //! the solver sentinel with a margin, so a bound that arithmetic pushed near the sentinel is still recognised.

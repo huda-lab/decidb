@@ -34,9 +34,9 @@ def _allow_direct_path(monkeypatch):
 def run(cli, sql, mode, expect_large_numbers=False):
     """Runs `sql` with `decide_direct_solve` set to `mode`; returns `(rows, columns)`.
 
-    `expect_large_numbers` declares the large-number warning, as `DeciDBCli.execute` takes it. Only a query the solver
-    answers builds a model, so `off` warns when the model holds a number of 1e6 or more, `require` never does, and
-    `auto` does when the rule declines the query.
+    `expect_large_numbers` declares the number-range warning, as `DeciDBCli.execute` takes it. Only a query the solver
+    answers builds a model, so `off` warns when the model holds a number out of range, and `auto` does when the rule
+    declines the query. `require` warns only where a rule's own arithmetic loses precision.
     """
     return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}", expect_large_numbers=expect_large_numbers)
 

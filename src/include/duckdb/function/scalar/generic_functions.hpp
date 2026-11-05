@@ -33,6 +33,15 @@ struct GetVariableFun {
 	static ScalarFunction GetFunction();
 };
 
+struct DecideWarnNumbersFun {
+	static constexpr const char *Name = "decide_warn_numbers";
+	static constexpr const char *Parameters = "";
+	static constexpr const char *Description = "Prints DECIDE's number-range warning once per query and returns true";
+	static constexpr const char *Example = "decide_warn_numbers()";
+
+	static ScalarFunction GetFunction();
+};
+
 struct ErrorFun {
 	static constexpr const char *Name = "error";
 	static constexpr const char *Parameters = "message";

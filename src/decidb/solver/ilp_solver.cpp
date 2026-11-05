@@ -144,8 +144,16 @@ bool AnyLargeCoefficient(const vector<double> &values) {
 	return std::any_of(values.begin(), values.end(), IsLargeCoefficient);
 }
 
-bool ModelHoldsLargeNumber(const SolverModel &model) {
-	if (AnyLargeCoefficient(model.obj_coeffs) || AnyLargeCoefficient(model.q_vals)) {
+bool IsSmallObjectiveCoefficient(double value) {
+	return value != 0.0 && std::fabs(value) <= DECIDE_SMALL_OBJECTIVE_COEFFICIENT;
+}
+
+bool AnyObjectiveNumberOutOfRange(const vector<double> &values) {
+	return AnyLargeCoefficient(values) || std::any_of(values.begin(), values.end(), IsSmallObjectiveCoefficient);
+}
+
+bool ModelHoldsNumberOutOfRange(const SolverModel &model) {
+	if (AnyObjectiveNumberOutOfRange(model.obj_coeffs) || AnyObjectiveNumberOutOfRange(model.q_vals)) {
 		return true;
 	}
 	if (std::any_of(model.col_lower.begin(), model.col_lower.end(), IsLargeLowerBound) ||
@@ -284,12 +292,12 @@ void DumpSolverModel(const SolverModel &model) {
 
 } // namespace
 
-void LargeNumberWarning::Check(const SolverModel &model) {
-	if (said || !ModelHoldsLargeNumber(model)) {
+void NumberRangeWarning::Check(const SolverModel &model) {
+	if (said || !ModelHoldsNumberOutOfRange(model)) {
 		return;
 	}
 	said = true;
-	fprintf(stderr, "very large number detected in model - numerical precision may make the solution unstable\n");
+	fprintf(stderr, "%s\n", DECIDE_NUMBER_RANGE_WARNING);
 }
 
 string ForcedSolverName() {
@@ -495,8 +503,8 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
 	// models built later) never pollute the dump.
 	DumpSolverModel(model);
-	if (options.large_number_warning) {
-		options.large_number_warning->Check(model);
+	if (options.number_range_warning) {
+		options.number_range_warning->Check(model);
 	}
 	// Rows as actually handed to the backend, for the benchmark's model-size metric. Read
 	// off the built model because the pre-expansion inputs are not a row count at all: one

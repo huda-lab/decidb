@@ -377,7 +377,7 @@ def _cost_pair_oracle(oracle):
         pytest.param(
             "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(1e-12 * POWER(x - 1, 2))",
             lambda o: _row_pair_oracle(o, 0.0, 10.0, -2e-12, 1e-12),
-            False,
+            True,
             id="small-objective",
         ),
         pytest.param(

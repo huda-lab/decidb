@@ -1,8 +1,7 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-05: `test/decide/run_direct_matrix.sh` at `96aa6186f0`, each of its four suites 6,169 passed;
-C++ `build/release/test/unittest "[decidb]"` (3,795 assertions in 81 cases) at `01bbac6ddf`, which adds only C++ cases;
-`make decide-test` (6,169 passed) on top of `8a65124cbc`.
+Verified on 2026-11-05, on top of `ee8a3a8ec4`: `test/decide/run_direct_matrix.sh`, each of its four suites 6,191 passed;
+C++ `build/release/test/unittest "[decidb]"` (3,795 assertions in 81 cases).
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -70,7 +69,9 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 ## Where it differs from the solver
 
-- **No large-number warning.** A direct plan builds no model, so a number of 1e6 or more prints nothing, where `off` warns.
+- **Its own warning.** A direct plan builds no model, so a number of 1e6 or more, or an objective coefficient of 1e-6 or
+  less, prints nothing, where `off` warns. N1 prints the same line when `h` is below the normal range of a DOUBLE (about
+  scores of 1e-154 and below) on a row that reads it, and a row whose answer is its own target reads no scale and is silent.
 - **More exact row by row.** The formula gives 3 and 4 where Gurobi's barrier stops at 3.0005 and 3.9996, and 0 where it
   stops at 0.001. The objectives agree to within 1e-6 of each other, as the benchmark's agreement check requires.
 - **The true answer at any scale.** Multiplying every score by one positive number does not move the maximum, so with a
@@ -79,7 +80,8 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 - **Tiny scores.** Gurobi reports optimal with answers that are not: scores 3 and 4 times 1e-6 give 2.69 and 4.20, times
   1e-10 give 1.49 and 1.49, and from 1e-11 down give 0, all with no warning. N1 gives 3 and 4 down to about 1e-154. Below
   that the sum of squares is subnormal and loses precision: at 1e-162 N1 answers 3.018 and 4.024 against a limit of 25,
-  which overshoots the ball by 1.2%. Below about 1e-162 `h` reaches 0, and the answer is 0.
+  which overshoots the ball by 1.2%. Below about 1e-162 `h` reaches 0, and the answer is 0. N1 warns on both and does not
+  work around them: its method is correct, and the loss is the DOUBLE's. `off` warns from an objective coefficient of 1e-6.
 - **Huge scores.** Gurobi gives 3 and 4 with a warning at 1e12 to 1e25, stops with numerical trouble at 1e30 to 1e50, and
   returns 0 with a warning at 1e100 to 1e153 and above. N1 gives 3 and 4 up to about 1e153. Past about 1e154 the sum of
   squares is past a DOUBLE and N1 raises `DECIDE: MAXIMIZE sum(s * x) computes a number too large for a DOUBLE. Scale its
@@ -103,12 +105,13 @@ One read of the source, and one pipeline breaker for a limit that is a constant:
 7. `P4`: the row's squared length, masked to NULL outside a ball, and the checks: the target and its square past a DOUBLE,
    infeasible, unbounded.
 8. `W2`: `SUM(squared length) OVER (PARTITION BY key)`, `h`. It holds every row before it releases one.
-9. `P5`: the source columns, the answer, and the validation column that keeps the checks live.
+9. `P5`: the source columns, the answer, and the validation column that keeps the checks and the warning live.
 
 Each check on a row stands below the last breaker, so a bad last row raises under `LIMIT 1`. The one check above it is `h`
 past a DOUBLE with every square in range: only this plan computes that number, the solver has no such error, and a parent
 that reads no row of that group sees no error. A row outside every ball reads NULL in the windows' input, so the windows
-need not partition on membership; the answer reads what they return only for a row in a ball.
+need not partition on membership; the answer reads what they return only for a row in a ball. The warning stands above the
+last breaker too, so under `LIMIT` it reads only the rows the parent reads.
 
 A stored column the parent reads and the rule does not use comes from a second read of the table, joined on the row id
 (`direct_late_materialization.cpp`), so `W2` does not hold it.
@@ -121,7 +124,7 @@ checks can stand below the last breaker, where one window would have to read its
 
 | Check | What it covers |
 |---|---|
-| `test_direct_n1_euclidean_ball.py` (139 tests) | The answers. 95 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. Without Gurobi, in a subprocess with an invalid license. |
+| `test_direct_n1_euclidean_ball.py` (149 tests) | The answers. 95 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. Without Gurobi, in a subprocess with an invalid license. |
 | `test_direct_rule_conformance.py` | The checks every rule owes, with N1's fixture: schema and rows, all-rows read for 5 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, a forced backend (Gurobi, since HiGHS has no quadratic limit), `DIAGNOSE`, 7 near misses that must decline under `require` and answer under `auto` as under `off`, and 4 forms that apply |
 | `test_direct_user_facing.py` | Every infeasible, unbounded, NaN and infinity error compared in full with the solver's, on 9 shapes; the too-large text |
 | `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |

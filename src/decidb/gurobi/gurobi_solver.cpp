@@ -166,9 +166,10 @@ void GurobiSession::Load(const SolverModel &ilp) {
 	// value (`mip_rel_gap` in HighsSession::Load). A solve that cannot close the gap in time stops at the time limit
 	// and reports it.
 	api.setdblparam(guard.env, "MIPGap", mip_gap);
-	// The tolerances DeciDB defines (decide_numeric_policy.hpp), which the large-number warning reads too.
+	// The tolerances DeciDB defines (decide_numeric_policy.hpp), which the number-range warning reads too.
 	api.setdblparam(guard.env, "IntFeasTol", DECIDE_INTEGRALITY_TOLERANCE);
 	api.setdblparam(guard.env, "FeasibilityTol", DECIDE_FEASIBILITY_TOLERANCE);
+	api.setdblparam(guard.env, "OptimalityTol", DECIDE_OPTIMALITY_TOLERANCE);
 	// Note: the TimeLimit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback() (on the live model's env), so a warm Continue() can raise it
     // without a reload.

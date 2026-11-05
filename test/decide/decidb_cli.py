@@ -31,8 +31,8 @@ from tests._output_helpers import assert_no_internal_leak
 #: freely for voice and has silently broken a suite before.
 _STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 
-#: The stderr line DeciDB prints once per query when the model handed to a solver holds a number of 1e6 or more.
-_LARGE_NUMBER_WARNING = "very large number detected in model - numerical precision may make the solution unstable"
+#: The stderr line DeciDB prints once per query when a number may make the answer unstable (DECIDE_NUMBER_RANGE_WARNING).
+_LARGE_NUMBER_WARNING = "very large or very small number detected - numerical precision may make the solution unstable"
 
 
 class LargeNumberWarningMismatch(Exception):

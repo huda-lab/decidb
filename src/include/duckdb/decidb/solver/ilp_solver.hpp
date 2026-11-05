@@ -19,15 +19,16 @@
 
 namespace duckdb {
 
-//! Says once per query that the model handed to a solver holds a large number. It reads finished numbers only: a
-//! constraint, quadratic, indicator or objective coefficient of |v| >= DECIDE_LARGE_COEFFICIENT, and a right-hand side
-//! or a bound that is not open of |v| >= DECIDE_LARGE_TOTAL (an open bound, DECIDE_SOLVER_INFINITY or any bound
-//! DecideIsOpenAbove/Below reads as infinite, is no number). The model and the answer are untouched.
+//! Says once per query that the model handed to a solver holds a number out of range. It reads finished numbers only: a
+//! constraint, quadratic, indicator or objective coefficient of |v| >= DECIDE_LARGE_COEFFICIENT, a nonzero objective
+//! coefficient of |v| <= DECIDE_SMALL_OBJECTIVE_COEFFICIENT, and a right-hand side or a bound that is not open of
+//! |v| >= DECIDE_LARGE_TOTAL (an open bound, DECIDE_SOLVER_INFINITY or any bound DecideIsOpenAbove/Below reads as
+//! infinite, is no number). The model and the answer are untouched.
 //!
 //! One instance lives for one query. Every solver-neutral model of the query is passed to Check: the solved model and,
-//! under DIAGNOSE, the repair model. The first model that holds a large number prints the line; later calls are silent.
-struct LargeNumberWarning {
-	//! Prints the warning to stderr if `model` holds a large number and none was said yet for this query.
+//! under DIAGNOSE, the repair model. The first model that holds such a number prints the line; later calls are silent.
+struct NumberRangeWarning {
+	//! Prints the warning to stderr if `model` holds such a number and none was said yet for this query.
 	void Check(const SolverModel &model);
 
 private:
@@ -54,7 +55,7 @@ struct SolveModelOptions {
 	std::function<bool()> interrupt_poll;
 	//! The query's large-number warning, checked on the model once it is built. Null = no check (diagnostic
 	//! follow-up solves, which hold no model of the query's own).
-	LargeNumberWarning *large_number_warning = nullptr;
+	NumberRangeWarning *number_range_warning = nullptr;
 };
 
 //! The backend the test override DECIDB_FORCE_SOLVER pins; empty when it is unset or empty. Every reader of the

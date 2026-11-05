@@ -31,6 +31,9 @@ unique_ptr<Expression> DirectRaiseUnless(const ExpressionBuilder &calc, unique_p
 unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<Expression> bad,
                                      unique_ptr<Expression> error);
 
+//! A check that prints the number-range warning when `unstable` is true, once per query, and is always true.
+unique_ptr<Expression> DirectWarnIf(const ExpressionBuilder &calc, unique_ptr<Expression> unstable);
+
 //! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
 
