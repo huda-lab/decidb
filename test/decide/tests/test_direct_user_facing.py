@@ -384,6 +384,45 @@ def test_r1_infeasible_and_unbounded_errors_are_the_solvers_error_word_for_word(
     assert direct == solver
 
 
+_N1_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE, 9.0::DOUBLE, 'a'), (2, {s}::DOUBLE, {y}::DOUBLE, {l}::DOUBLE, {k})"
+_N1_MAX = "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "s,y,l,k,decide,message",
+    [
+        ("4.0", "2.0", "-1.0", "'a'", _N1_MAX, "infeasible"),
+        ("4.0", "2.0", "9.0", "'a'", "SUM(POWER(x, 2)) <= -1", "infeasible"),
+        ("4.0", "2.0", "9.0", "NULL", "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)", "unbounded"),
+        ("'NaN'", "2.0", "9.0", "'a'", _N1_MAX, "s is NaN or infinite on some rows"),
+        ("'Infinity'", "2.0", "9.0", "'a'", _N1_MAX, "s is NaN or infinite on some rows"),
+        ("4.0", "'NaN'", "9.0", "'a'", "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - y, 2))", "y is NaN or infinite"),
+        ("4.0", "'NaN'", "9.0", "'a'", "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x + y)", "y is NaN or infinite"),
+        ("4.0", "2.0", "'NaN'", "'a'", _N1_MAX, "the bound l is NaN on some rows"),
+        ("4.0", "2.0", "'NaN'", "'a'", "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)", "l is NaN on some rows"),
+    ],
+)
+def test_n1_errors_are_the_solvers_word_for_word(decidb_cli, s, y, l, k, decide, message):
+    rows = _N1_ROWS.format(s=s, y=y, l=l, k=k)
+    sql = f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, s, y, l, k) DECIDE x(REAL) SUCH THAT {decide}) q"
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert message in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
+@pytest.mark.correctness
+def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(decidb_cli):
+    # The solver has no such number: it computes no sum of squares. The text is the one every rule raises for a number
+    # computed past a DOUBLE, naming the objective as the user wrote it.
+    sql = """
+        SELECT id, x FROM (FROM (VALUES (1, 3e200::DOUBLE), (2, 4e200::DOUBLE)) t(id, s)
+        DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) q
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "DECIDE: MAXIMIZE sum(s * x) computes a number too large for a DOUBLE. Scale its data down." in direct
+
+
 def _s1_source_bound_error(decidb_cli, cap_type, cap):
     sql = f"""
         SELECT x FROM (

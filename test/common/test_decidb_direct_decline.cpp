@@ -834,6 +834,199 @@ TEST_CASE("R1 declines each shape that is not exactly its class", "[decidb]") {
 }
 
 //===--------------------------------------------------------------------===//
+// N1
+//===--------------------------------------------------------------------===//
+
+const char *N1_LIMIT = "SUM(POWER(x, 2)) <= 25";
+const char *N1_OBJECTIVE = "MAXIMIZE SUM(w*x)";
+
+Shape N1(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = N1_OBJECTIVE,
+         const string &declaration = "x(REAL)") {
+	return {branch, declaration, constraints, objective, std::move(edit)};
+}
+
+//! A second square, which the front end refuses to build from SQL: `x^2` on the IR's first decision.
+void AddSquare(duckdb::vector<DecideSplitTerm> &terms) {
+	DecideSplitTerm inner;
+	inner.kind = DecideTermKind::LINEAR;
+	inner.var_a = 0;
+	inner.coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
+	DecideSplitTerm square;
+	square.kind = DecideTermKind::SQUARE;
+	square.square_scale = 1.0;
+	square.inner.push_back(std::move(inner));
+	terms.push_back(std::move(square));
+}
+
+//! A shape whose limit is the plain one and whose objective is the one the case is about.
+Shape N1Objective(const string &branch, const string &objective, Edit edit = nullptr) {
+	return N1(branch, N1_LIMIT, std::move(edit), objective);
+}
+
+duckdb::vector<Shape> N1AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	// Every spelling of the limit reads as one square.
+	shapes.push_back(N1("the plain form", N1_LIMIT));
+	shapes.push_back(N1("a product of the decision with itself", "SUM(x * x) <= 25"));
+	shapes.push_back(N1("a power written with stars", "SUM(x ** 2) <= 25"));
+	shapes.push_back(N1("a norm", "norm(x, 2) <= 25"));
+	shapes.push_back(N1("a factor on the square", "SUM(2 * POWER(x, 2)) <= 50"));
+	shapes.push_back(N1("a slope in the square", "SUM(POWER(2 * x, 2)) <= 100"));
+	// The box.
+	shapes.push_back(N1("the default box written out", "x >= 0 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a free domain", "x >= -1e30 AND SUM(POWER(x, 2)) <= 25"));
+	// The limit.
+	shapes.push_back(N1("a negative limit", "SUM(POWER(x, 2)) <= -1"));
+	shapes.push_back(N1("a column limit", "SUM(POWER(x, 2)) <= cap"));
+	shapes.push_back(N1("a column limit per a column", "SUM(POWER(x, 2)) by (name) <= cap"));
+	// Scope.
+	shapes.push_back(N1("a key", "SUM(POWER(x, 2)) by (name) <= 25"));
+	shapes.push_back(N1("a class", "per flag: SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a class and a key", "per flag: SUM(POWER(x, 2)) by (flag) <= 25"));
+	shapes.push_back(N1("a WHEN on the clause", "when flag: SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a WHEN inside the sum", "SUM(when flag: POWER(x, 2)) <= 25"));
+	// The objective.
+	shapes.push_back(N1Objective("no objective", ""));
+	shapes.push_back(N1Objective("a minimum", "MINIMIZE SUM(w*x)"));
+	shapes.push_back(N1Objective("a constant term", "MAXIMIZE SUM(w*x + 5)"));
+	shapes.push_back(N1Objective("several parts", "MAXIMIZE SUM(w*x) - SUM(f*x)"));
+	shapes.push_back(N1Objective("a square", "MINIMIZE SUM(POWER(x - w, 2))"));
+	shapes.push_back(N1Objective("a square with a slope", "MINIMIZE SUM(POWER(2 * x - w, 2))"));
+	shapes.push_back(N1Objective("a negated square, maximized", "MAXIMIZE -SUM(POWER(x - w, 2))"));
+	shapes.push_back(N1Objective("a square and a linear term", "MINIMIZE SUM(POWER(x - w, 2) + f*x)"));
+	shapes.push_back(
+	    N1Objective("a square of a slope alone, and a linear part", "MINIMIZE SUM(POWER(x, 2)) + SUM(w*x)"));
+	shapes.push_back(N1Objective("a square under a WHEN, with no linear term elsewhere",
+	                             "MINIMIZE SUM(when flag: POWER(x - w, 2))"));
+	shapes.push_back(N1Objective("a square under a WHEN, with its linear term in its part",
+	                             "MINIMIZE SUM(when flag: POWER(x - w, 2) + f*x)"));
+	return shapes;
+}
+
+duckdb::vector<Shape> N1DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// CheckCondition: the decision.
+	shapes.push_back(N1("no decision", N1_LIMIT, [](DirectIR &ir) { ir.decisions.clear(); }));
+	shapes.push_back(
+	    N1("two decisions", "SUM(POWER(x, 2)) <= 25 AND y <= 1", nullptr, N1_OBJECTIVE, "x(REAL), y(REAL)"));
+	shapes.push_back(N1("an INT decision", N1_LIMIT, nullptr, N1_OBJECTIVE, "x(INT)"));
+	shapes.push_back(N1("a BOOL decision", N1_LIMIT, nullptr, N1_OBJECTIVE, "x(BOOL)"));
+	shapes.push_back(
+	    N1("a query-wide decision", N1_LIMIT, [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
+	shapes.push_back(N1("a keyed scope", N1_LIMIT, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	// ProveLimitClause: the one aggregate clause.
+	shapes.push_back(N1("no aggregate clause", "x >= 0"));
+	shapes.push_back(N1("a per-row square", "POWER(x, 2) <= 9"));
+	shapes.push_back(N1("a per-row clause that is not one row's bound", "x IN (1, 2) AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("two limit clauses", "SUM(POWER(x, 2)) <= 25 AND SUM(POWER(x, 2)) <= 9"));
+	shapes.push_back(N1("a limit from below as well", "SUM(POWER(x, 2)) >= 1 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a BETWEEN limit", "SUM(POWER(x, 2)) BETWEEN 1 AND 25"));
+	shapes.push_back(N1("an equal limit", "SUM(POWER(x, 2)) = 25"));
+	shapes.push_back(N1("a limit from below", "SUM(POWER(x, 2)) >= 25"));
+	shapes.push_back(N1("a strict limit", N1_LIMIT,
+	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_LESSTHAN; }));
+	shapes.push_back(N1("a scaled sum", "2 * SUM(POWER(x, 2)) <= 50"));
+	shapes.push_back(N1("a negated sum", "-SUM(POWER(x, 2)) >= -25"));
+	shapes.push_back(N1("an average", "AVG(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a WHEN that reads more than the source", "when txid_current() >= 0: SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(
+	    N1("a linear limit", N1_LIMIT, [](DirectIR &ir) { LeftPart(ir).terms[0].kind = DecideTermKind::LINEAR; }));
+	shapes.push_back(N1("a square and a linear term in the limit", "SUM(POWER(x, 2) + w * x) <= 25"));
+	shapes.push_back(N1("a square and a constant term in the limit", "SUM(POWER(x, 2) + 1) <= 25"));
+	shapes.push_back(N1("a ball off center by a constant", "SUM(POWER(x - 1, 2)) <= 25"));
+	shapes.push_back(N1("a ball off center by a column", "SUM(POWER(x - w, 2)) <= 25"));
+	shapes.push_back(N1("a row-valued slope in the limit", "SUM(POWER(w * x, 2)) <= 25"));
+	shapes.push_back(N1("a square of slope zero in the limit", N1_LIMIT, [](DirectIR &ir) {
+		LeftPart(ir).terms[0].inner[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	}));
+	shapes.push_back(N1("a square past a DOUBLE", "SUM(POWER(1e200 * x, 2)) <= 25"));
+	shapes.push_back(N1("a negative square", "SUM(-POWER(x, 2)) <= 25"));
+	// ProveLimitValue.
+	shapes.push_back(N1("a limit of 1e20", "SUM(POWER(x, 2)) <= 1e20"));
+	shapes.push_back(N1("a limit of minus 1e20", "SUM(POWER(x, 2)) <= -1e20"));
+	shapes.push_back(N1("an infinite limit", "SUM(POWER(x, 2)) <= 'inf'::DOUBLE"));
+	shapes.push_back(N1("a radius past a DOUBLE", "SUM(1e-300 * POWER(x, 2)) <= 1e19"));
+	shapes.push_back(N1("a limit fixed only within the query", "SUM(POWER(x, 2)) <= txid_current()"));
+	shapes.push_back(N1("a limit left as an aggregate of the rows", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)"));
+	shapes.push_back(N1("a limit left as an aggregate of the group", "SUM(POWER(x, 2)) by (name) <= SUM(w) by (name)"));
+	// ProveBox.
+	shapes.push_back(N1("an upper bound", "x <= 2 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("an upper bound that would not bind", "x <= 50 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a large upper bound", "x <= 1e19 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a column upper bound", "x <= cap AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a lower bound below zero", "x >= -2 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a lower bound above zero", "x >= 1 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a large lower bound", "x >= -1e19 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(N1("a bound under a WHEN", "when flag: x >= 0 AND SUM(POWER(x, 2)) <= 25"));
+	shapes.push_back(
+	    N1("a bound that DirectReadBounds cannot read", "x <= 2 AND SUM(POWER(x, 2)) <= 25",
+	       [](DirectIR &ir) { ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE); }));
+	// ProveObjective: the part.
+	shapes.push_back(N1Objective("an average objective", "MAXIMIZE AVG(w*x)"));
+	shapes.push_back(N1Objective("an objective with a by key", "MAXIMIZE SUM(w*x) by (flag)"));
+	shapes.push_back(N1Objective("a nested objective part", N1_OBJECTIVE,
+	                             [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
+	shapes.push_back(N1Objective("a qualified objective part", N1_OBJECTIVE,
+	                             [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
+	shapes.push_back(
+	    N1Objective("an objective coefficient fixed only within the query", "MAXIMIZE SUM(txid_current()*x)"));
+	shapes.push_back(N1Objective("an objective divided by zero", "MAXIMIZE SUM(w*x) / 0"));
+	shapes.push_back(N1Objective("an objective WHEN that reads more than the source",
+	                             "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
+	// ProveObjective: the terms.
+	shapes.push_back(
+	    N1Objective("an objective constant fixed only within the query", "MAXIMIZE SUM(w*x + txid_current())"));
+	shapes.push_back(N1Objective("a term that is neither linear, constant nor a square", N1_OBJECTIVE,
+	                             [](DirectIR &ir) { ir.objective.parts[0].terms[0].kind = DecideTermKind::PRODUCT; }));
+	shapes.push_back(N1Objective("two squares in one part", "MINIMIZE SUM(POWER(x - w, 2))",
+	                             [](DirectIR &ir) { AddSquare(ir.objective.parts[0].terms); }));
+	shapes.push_back(N1Objective("two squares in two parts", "MINIMIZE SUM(POWER(x, 2)) + SUM(w*x)",
+	                             [](DirectIR &ir) { AddSquare(ir.objective.parts[1].terms); }));
+	shapes.push_back(N1Objective("a row-valued slope in the objective", "MINIMIZE SUM(POWER(w * x - 1, 2))"));
+	shapes.push_back(
+	    N1Objective("a square of slope zero in the objective", "MINIMIZE SUM(POWER(x, 2))", [](DirectIR &ir) {
+		    ir.objective.parts[0].terms[0].inner[0].coefficient =
+		        make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	    }));
+	shapes.push_back(N1Objective("a square past a DOUBLE", "MINIMIZE SUM(POWER(1e200 * x, 2))"));
+	shapes.push_back(
+	    N1Objective("a square past a DOUBLE with its part's factor", "MINIMIZE 1e308 * SUM(1e10 * POWER(x - w, 2))"));
+	shapes.push_back(N1Objective("a maximized convex square", "MAXIMIZE SUM(POWER(x - w, 2))"));
+	shapes.push_back(N1Objective("a minimized concave square", "MINIMIZE SUM(-POWER(x - w, 2))"));
+	shapes.push_back(N1Objective("a minimized negated part", "MINIMIZE -SUM(POWER(x - w, 2))"));
+	// ProveObjective: K is one constant on every row with a linear term.
+	shapes.push_back(N1Objective("a square under a part WHEN with a linear term elsewhere",
+	                             "MINIMIZE SUM(when flag: POWER(x, 2)) + SUM(f*x)"));
+	shapes.push_back(N1Objective("a square under a NULL guard with a linear term elsewhere",
+	                             "MINIMIZE SUM(POWER(x - w, 2)) + SUM(f*x)"));
+	return shapes;
+}
+
+TEST_CASE("N1 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectApplies(MakeN1EuclideanBallRule, con, N1AppliesShapes());
+}
+
+TEST_CASE("N1 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeN1EuclideanBallRule, con, N1DeclineShapes());
+}
+
+// The rules partition the problems they apply to: no two rules apply to one IR.
+TEST_CASE("N1 and every other rule never apply to the same query", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeS1UniformMatroidRule, con, N1AppliesShapes());
+	ExpectDeclines(MakeA1SeparableBoxRule, con, N1AppliesShapes());
+	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, N1AppliesShapes());
+	ExpectDeclines(MakeN1EuclideanBallRule, con, S1AppliesShapes());
+	ExpectDeclines(MakeN1EuclideanBallRule, con, A1AppliesShapes());
+	ExpectDeclines(MakeN1EuclideanBallRule, con, R1AppliesShapes());
+}
+
+//===--------------------------------------------------------------------===//
 // The rule driver's check that the front end read the whole IR
 //===--------------------------------------------------------------------===//
 

@@ -17,4 +17,8 @@ unique_ptr<DirectSolveRule> MakeA1SeparableBoxRule();
 //! a linear objective (R1, the continuous knapsack).
 unique_ptr<DirectSolveRule> MakeR1ContinuousKnapsackRule();
 
+//! The fourth direct-solve rule: one row-scoped REAL decision in a box [0, inf) or (-inf, inf) under one
+//! `SUM(POWER(x, 2)) <= B`, with a linear objective or one square (N1, the Euclidean ball).
+unique_ptr<DirectSolveRule> MakeN1EuclideanBallRule();
+
 } // namespace duckdb

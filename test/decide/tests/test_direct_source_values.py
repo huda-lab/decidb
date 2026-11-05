@@ -114,8 +114,41 @@ SLOTS = {
 }
 CASES = [pytest.param(slot, value, id=f"{slot}-{value}") for slot, spec in SLOTS.items() for value in spec[4]]
 
+_BALL = "SUM(POWER(x, 2)) <= 4"
 
-def _same(first, second):
+# N1: the places it reads a value of a row a `when` drops, and the limit of a group. HiGHS refuses a quadratic limit, so
+# these compare the direct path with Gurobi alone.
+N1_SLOTS = {
+    "n1_limit_tightest_of_group": _slot("cap", "x(REAL)", "SUM(POWER(x, 2)) by (g) <= cap", _PICK, ("inf", "null")),
+    "n1_limit_per_key_is_null": _slot(
+        "cap", "x(REAL)", "SUM(POWER(x, 2)) by (g) <= cap", _PULL, ("-inf", "inf", "null"), key_is_null=True
+    ),
+    "n1_limit_clause_when_excludes_row": _slot(
+        "cap", "x(REAL)", "when f: SUM(POWER(x, 2)) <= cap", _PULL, ("-inf", "inf", "null"), when_holds=False
+    ),
+    "n1_limit_local_when_excludes_row": _slot(
+        "cap", "x(REAL)", "SUM(when f: POWER(x, 2)) <= cap", _PULL, ("-inf", "inf", "null"), when_holds=False
+    ),
+    "n1_score_part_when_excludes_row": _slot(
+        "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: t * x)", ("-inf", "inf", "null"), when_holds=False
+    ),
+    "n1_score_objective_when_excludes_row": _slot(
+        "t", "x(REAL)", _BALL, "MAXIMIZE when f: SUM(t * x)", ("-inf", "inf", "null"), when_holds=False
+    ),
+    "n1_target_part_when_excludes_row": _slot(
+        "t", "x(REAL)", _BALL, "MINIMIZE SUM(when f: POWER(x - t, 2))", ("-inf", "inf", "null"), when_holds=False
+    ),
+    "n1_constant_part_when_excludes_row": _slot(
+        "t", "x(REAL)", _BALL, "MAXIMIZE SUM(when f: (id + 1) * x + t)", ("-inf", "inf", "null"), when_holds=False
+    ),
+}
+N1_CASES = [pytest.param(slot, value, id=f"{slot}-{value}") for slot, spec in N1_SLOTS.items() for value in spec[4]]
+
+# Gurobi stops a quadratic limit at its barrier tolerance, where an exact 0 comes back as 0.001.
+_N1_SOLVER_TOLERANCE = 2e-3
+
+
+def _same(first, second, abs_tol=1e-6):
     """Equal outcomes: the same error class, or the same rows (to the solver's numerical tolerance)."""
     if first[0] != second[0]:
         return False
@@ -124,7 +157,7 @@ def _same(first, second):
     if len(first[1]) != len(second[1]):
         return False
     return all(
-        len(a) == len(b) and all(x == y or math.isclose(x, y, abs_tol=1e-6) for x, y in zip(a, b))
+        len(a) == len(b) and all(x == y or math.isclose(x, y, abs_tol=abs_tol) for x, y in zip(a, b))
         for a, b in zip(first[1], second[1])
     )
 
@@ -142,6 +175,19 @@ def test_both_paths_read_a_bad_source_value_the_same_way(decidb_cli, decidb_cli_
     solver_highs = outcome(decidb_cli_highs, sql, "off")
     assert _same(direct, solver), f"direct {direct} but solver {solver}"
     assert _same(solver, solver_highs), f"solver {solver} but forced HiGHS {solver_highs}"
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("slot,value", N1_CASES)
+def test_n1_reads_a_bad_source_value_as_the_solver_does(decidb_cli, slot, value):
+    column, decl, constraints, objective, _, source = N1_SLOTS[slot]
+    sql = (
+        f"SELECT id, x FROM {_source(column, value, **source)} "
+        f"DECIDE {decl} SUCH THAT {constraints} {objective} ORDER BY id"
+    )
+    direct = outcome(decidb_cli, sql, "require")
+    solver = outcome(decidb_cli, sql, "off")
+    assert _same(direct, solver, _N1_SOLVER_TOLERANCE), f"direct {direct} but solver {solver}"
 
 
 # Nothing is computed on a row a `when` drops: an expression that raises (a logarithm of 0, an overflow) raises on a
@@ -162,6 +208,10 @@ RAISING_CASES = {
     "r1_clause_bound": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: x <= ln(w) AND SUM(x) <= 4 MAXIMIZE SUM(v*x)",
     "r1_weight": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: SUM(ln(w) * x) <= 3 MAXIMIZE SUM(v*x)",
     "r1_limit": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: SUM(x) <= big * 3 MAXIMIZE SUM(v*x)",
+    "n1_limit": "x(REAL) SUCH THAT when f: SUM(POWER(x, 2)) <= big * 3 MINIMIZE SUM(POWER(x - v, 2))",
+    "n1_score": "x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 4 MAXIMIZE SUM(when f: ln(w) * x)",
+    "n1_target": "x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 4 MINIMIZE SUM(when f: POWER(x - ln(w), 2))",
+    "n1_constant": "x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 4 MAXIMIZE SUM(when f: v * x + ln(w))",
 }
 
 

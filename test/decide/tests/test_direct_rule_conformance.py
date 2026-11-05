@@ -206,10 +206,16 @@ def test_off_and_a_forced_backend_keep_the_solver_path(decidb_cli, decidb_cli_hi
     off = _raw(decidb_cli, f"EXPLAIN {fixture.applies}", mode="off").stdout
     assert _has_decide_operator(off) and "Direct solve" not in off
 
-    forced = _raw(decidb_cli_highs, f"EXPLAIN {fixture.applies}", mode="auto").stdout
-    assert _has_decide_operator(forced) and "Direct solve" not in forced
-    rows, _ = _run(decidb_cli_highs, fixture.applies, mode="auto")
-    assert rows == _run(decidb_cli, fixture.applies, mode="off")[0]
+    forced = _raw(decidb_cli_highs, f"EXPLAIN {fixture.applies}", mode="auto")
+    assert "Direct solve" not in forced.stdout
+    if fixture.forced_backend_refusal:
+        # The refusal is the solver path's own: the rule would have answered this query.
+        assert fixture.forced_backend_refusal in forced.stderr
+        assert fixture.forced_backend_refusal in _raw(decidb_cli_highs, fixture.applies, mode="auto").stderr
+    else:
+        assert _has_decide_operator(forced.stdout)
+        rows, _ = _run(decidb_cli_highs, fixture.applies, mode="auto")
+        assert rows == _run(decidb_cli, fixture.applies, mode="off")[0]
     assert "conflicts with DECIDB_FORCE_SOLVER" in _raw(decidb_cli_highs, fixture.applies).stderr
 
 

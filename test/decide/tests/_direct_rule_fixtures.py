@@ -37,6 +37,8 @@ class RuleFixture:
     late_errors: tuple
     #: The source column the late-error subqueries expose.
     late_column: str
+    #: The text a forced backend raises on `applies` when it cannot solve that problem at all; empty when it can.
+    forced_backend_refusal: str = ""
 
 
 S1 = RuleFixture(
@@ -254,7 +256,116 @@ R1 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, A1, R1)
+def _n1_late_error(decision_sql, s_sql="1.0", k_sql="'a'", l_sql="9.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {s_sql} AS s, {k_sql} AS k, {l_sql} AS l FROM range(5000) t(i)) t
+        DECIDE {decision_sql}
+        """
+
+
+N1 = RuleFixture(
+    rule="N1_EUCLIDEAN_BALL",
+    condition="min/max SUM(c*x), SUM(x^2) <= B",
+    # Scores 3 and 4 under a limit of 25: x = 3, 4. The solver stops at its barrier tolerance (3.0005, 3.9996), so the
+    # query rounds its output to two places, which makes its rows equal on both paths.
+    applies="""
+        SELECT id, s, ROUND(x, 2) AS x FROM (
+            FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE), (3, -1.0::DOUBLE)) t(id, s)
+            DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25
+            MAXIMIZE SUM(s * x)
+        ) q ORDER BY id
+    """,
+    empty_applies="""
+        SELECT id, s, x FROM (
+            FROM (SELECT * FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, s) WHERE false) t
+            DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25
+            MAXIMIZE SUM(s * x)
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_n1_life(id INTEGER, s DOUBLE);
+        INSERT INTO direct_n1_life VALUES (1,3),(2,4);
+    """,
+    table_applies="""
+        SELECT id,x FROM (
+            FROM direct_n1_life DECIDE x(REAL)
+            SUCH THAT SUM(POWER(x,2))<=25 MAXIMIZE SUM(s*x)
+        ) q
+    """,
+    table_change="ALTER TABLE direct_n1_life ADD COLUMN extra INTEGER;",
+    # Each is the plain form with one condition changed: an INT decision, a limit whose coefficient reads the row, a ball
+    # off center, a box the projection onto the ball does not hold for, a limit from below, and a limit left as an
+    # aggregate of the rows.
+    near_misses=(
+        ("x(INT)", "SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(w*x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(x - w, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= 50 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(POWER(x, 2))"),
+        ("x(REAL)", "x >= 1 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(x, 2)) >= 1 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(x*x) <= 0.5 * SUM(cap)", "MAXIMIZE SUM(p*x)"),
+    ),
+    # Forms that look like near misses and apply: a limit read from the data, a box written out, a free domain, and a `by`
+    # key with a square.
+    near_miss_applies=(
+        ("x(REAL)", "SUM(POWER(x, 2)) <= lim", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x >= 0 AND SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x >= -1e30 AND SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(POWER(x, 2)) by (id) <= 25", "MINIMIZE SUM(POWER(x - w, 2))"),
+    ),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 5.0::DOUBLE, 6.0::DOUBLE), "
+    "(2, 10.0::DOUBLE, 3.0::DOUBLE, 3.0::DOUBLE, 6.0::DOUBLE)) t(id,p,w,cap,lim)",
+    near_miss_column="id",
+    late_errors=(
+        # Errors N1 raises, on the last of 5,000 rows: a group with a negative limit, an improving row outside every ball,
+        # a NaN score, a NaN limit and a score too large to square.
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= l MAXIMIZE SUM(s*x)",
+                k_sql="CASE WHEN i=4999 THEN 'b' ELSE 'a' END",
+                l_sql="CASE WHEN i=4999 THEN -1.0 ELSE 9.0 END",
+            ),
+            "infeasible",
+        ),
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= 9 MAXIMIZE SUM(s*x)",
+                k_sql="CASE WHEN i=4999 THEN NULL ELSE 'a' END",
+            ),
+            "unbounded",
+        ),
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(x,2)) <= 9 MAXIMIZE SUM(s*x)",
+                s_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "s is NaN or infinite on some rows",
+        ),
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= l MAXIMIZE SUM(s*x)",
+                l_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 9.0 END",
+            ),
+            "NaN on some rows",
+        ),
+        # A score past a DOUBLE when squared, in a group of its own: nothing but this row reads its sum.
+        (
+            _n1_late_error(
+                "x(REAL) SUCH THAT SUM(POWER(x,2)) by (k) <= 9 MAXIMIZE SUM(s*x)",
+                s_sql="CASE WHEN i=4999 THEN 1e200 ELSE 1.0 END",
+                k_sql="i::VARCHAR",
+            ),
+            "too large for a DOUBLE",
+        ),
+    ),
+    late_column="i",
+    # HiGHS has no quadratic constraints, so a forced HiGHS backend reaches the solver path and stops there.
+    forced_backend_refusal="which needs Gurobi",
+)
+
+
+RULE_FIXTURES = (S1, A1, R1, N1)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source

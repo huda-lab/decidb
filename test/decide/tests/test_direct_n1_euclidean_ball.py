@@ -1,0 +1,766 @@
+"""N1 (Euclidean ball), checked three ways: the independent oracle, the solver path, the direct path.
+
+Every case is one DECIDE query with one `REAL` decision on each row, in the box [0, inf) or (-inf, inf), under one
+`SUM(q * x^2) <= B` per group, with a linear objective or one convex square. The oracle builds its own model from the raw
+rows, from the groups, limits and per-row coefficients each case states in Python (never from DeciDB's reading of the
+SQL), through `add_quadratic_constraint`. DeciDB then runs the query with `decide_direct_solve='off'` (the solver) and
+`'require'` (direct solve; a query the rule does not apply to fails instead of quietly using the solver). The case passes
+when all three agree:
+
+- the oracle finds the problem feasible: both DeciDB runs return an assignment inside the box and every ball, that reaches
+  the oracle's objective (rows may differ on ties);
+- the oracle finds it infeasible or unbounded: both DeciDB runs raise that error.
+
+The tolerances are measured on these cases, not shared with another suite, and one step tighter than each fails or sits
+at the edge: Gurobi stays inside a ball to under 1e-8 of its limit and inside the box to under 1e-5, and its objective
+is within 1e-6 of the oracle's (with 25 cases failing at 1e-7). Its answers are less exact row by row (3.0005 where the
+exact answer is 3), and that moves the objective only to second order, so no row-by-row comparison is made. The direct
+path computes the formula, so it stays inside a ball to rounding.
+
+What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in
+`test_direct_rule_conformance.py`.
+
+Note: `oracle_solver` caches each result under the test node id plus a hash of the test function's source. The case
+tables live outside that source, so editing a case does not invalidate the cache; a stale value fails loudly with an
+objective mismatch. After changing a case or the model builder, remove its entries from `results/oracle_cache.json`.
+"""
+
+import math
+import os
+import re
+import subprocess
+from dataclasses import dataclass
+
+import pytest
+
+from solver.types import ObjSense, VarType
+
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
+from ._direct_oracle_common import agree_with_oracle, outcome, run, sql_literal, values_clause
+
+
+BIG = 1e30  # the oracle reads a bound this large as none
+
+_BALL_TOLERANCE = 1e-7
+_DIRECT_BALL_TOLERANCE = 1e-14
+_BOX_TOLERANCE = 1e-5
+_OBJECTIVE_TOLERANCE = 5e-6
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+
+COLUMNS = (
+    ("id", "INTEGER"),
+    ("s", "DOUBLE"),  # a per-row score, with positive, negative and zero values
+    ("y", "DOUBLE"),  # a per-row target
+    ("k", "VARCHAR"),  # a group key
+    ("f", "BOOLEAN"),  # `when` membership
+    ("l", "DOUBLE"),  # a limit read from the data
+)
+NAMES = [name for name, _ in COLUMNS]
+
+
+def _row(id, s=0.0, y=0.0, k="a", f=True, l=25.0):
+    return dict(id=id, s=s, y=y, k=k, f=f, l=l)
+
+
+MIXED = (
+    _row(1, 3.0, 1.0, "a", True, 25.0),
+    _row(2, 4.0, -2.0, "a", False, 36.0),
+    _row(3, -1.0, 6.0, "b", True, 9.0),
+    _row(4, 0.0, 0.0, "b", False, 16.0),
+    _row(5, 5.0, 0.5, "c", True, 4.0),
+)
+# No row gains from moving up in [0, inf).
+NONPOSITIVE = (_row(1, -3.0, -1.0, "a"), _row(2, -1.0, -2.0, "b"), _row(3, 0.0, 0.0, "b"))
+ALL_ZERO = (_row(1), _row(2, k="b"), _row(3, k="b"))
+# Every group's targets, in [0, inf) and in a free domain, stay inside a limit of 25.
+NEAR = (_row(1, y=1.0, k="a"), _row(2, y=-2.0, k="a"), _row(3, y=3.0, k="b"), _row(4, y=0.0, k="b"))
+# A NULL key on an improving row, and on one that does not gain.
+NULL_KEY_IMPROVING = (_row(1, 3.0, 1.0, "a"), _row(2, 4.0, 2.0, None))
+NULL_KEY_STILL = (_row(1, 3.0, 1.0, "a"), _row(2, -4.0, -2.0, None), _row(3, 0.0, 0.0, None))
+NULL_KEY_ONLY = (_row(1, 3.0, 1.0, None), _row(2, -4.0, 2.0, None))
+NULL_KEY_ONLY_STILL = (_row(1, -3.0, -1.0, None), _row(2, 0.0, 2.0, None))
+# A NULL coefficient skips its instance: the row's coefficient is 0.
+NULL_SCORE = (_row(1, 3.0, 1.0), _row(2, None, 2.0), _row(3, 4.0, 3.0))
+NULL_TARGET = (_row(1, 1.0, 1.0), _row(2, 2.0, None), _row(3, 3.0, 6.0))
+# Limits that differ inside a group, with NULLs: the tightest value applies, and a group with none has no ball.
+NULL_LIMITS = (
+    _row(1, 3.0, 3.0, "a", True, 25.0),
+    _row(2, 4.0, 4.0, "a", True, None),
+    _row(3, -1.0, 1.0, "b", True, None),
+    _row(4, 0.0, 2.0, "b", True, None),
+    _row(5, 2.0, 5.0, "c", True, 9.0),
+    _row(6, 1.0, 5.0, "c", False, 4.0),
+)
+NEGATIVE_IN_ONE_GROUP = (_row(1, 3.0, 1.0, "a", l=25.0), _row(2, 4.0, 2.0, "b", l=-1.0))
+# A `when` drops the rows that would be unbounded on their own.
+WHEN_STILL = (_row(1, 3.0, 1.0, "a", True), _row(2, 4.0, 3.0, "a", True), _row(3, -1.0, 2.0, "b", False))
+WHEN_IMPROVING = (_row(1, 3.0, 1.0, "a", True), _row(2, 4.0, 3.0, "a", False))
+WHEN_NULL = (_row(1, 3.0, 1.0, "a", True), _row(2, -1.0, 3.0, "a", None))
+ONE_ROW = (_row(1, 2.0, 7.0),)
+
+
+def _values(rows):
+    return values_clause(rows, NAMES, dict(COLUMNS), sql_literal)
+
+
+# ---------------------------------------------------------------------------
+# Balls: which rows share a limit, and what the limit is
+# ---------------------------------------------------------------------------
+
+
+def everyone(row):
+    return ()
+
+
+def by_k(row):
+    return None if row["k"] is None else (row["k"],)
+
+
+def where_f(group):
+    return lambda row: group(row) if row["f"] else None
+
+
+def constant(value):
+    return lambda members, rows: value
+
+
+def tightest_of_group(members, rows):
+    """The smallest limit of the group's rows; a NULL is no limit."""
+    limits = [row["l"] for row in members if row["l"] is not None]
+    return min(limits) if limits else None
+
+
+def tightest_of_all(members, rows):
+    limits = [row["l"] for row in rows if row["l"] is not None]
+    return min(limits) if limits else None
+
+
+def any_key(rows):
+    return any(row["k"] is not None for row in rows)
+
+
+@dataclass(frozen=True)
+class Ball:
+    sql: str
+    #: The factor of the sum of squares: `SUM(q * x^2)`.
+    q: float = 1.0
+    #: row -> the key of the group whose sum holds it, or None when no sum holds it.
+    group: object = everyone
+    #: (rows of the group, all rows) -> the group's limit, or None for no limit.
+    limit: object = constant(25.0)
+    #: rows -> whether the clause has an instance at all.
+    instance: object = lambda rows: True
+
+
+BALLS = {
+    "b25": Ball("SUM(POWER(x, 2)) <= 25"),
+    "b4": Ball("SUM(POWER(x, 2)) <= 4", limit=constant(4.0)),
+    "b100": Ball("SUM(POWER(x, 2)) <= 100", limit=constant(100.0)),
+    "b0": Ball("SUM(POWER(x, 2)) <= 0", limit=constant(0.0)),
+    "negative": Ball("SUM(POWER(x, 2)) <= -1", limit=constant(-1.0)),
+    # The spellings of one limit: each rule read the same way.
+    "times": Ball("SUM(x * x) <= 25"),
+    "stars": Ball("SUM(x ** 2) <= 25"),
+    "norm": Ball("norm(x, 2) <= 25"),
+    "scaled_square": Ball("SUM(2 * POWER(x, 2)) <= 50", q=2.0, limit=constant(50.0)),
+    "inner_slope": Ball("SUM(POWER(2 * x, 2)) <= 100", q=4.0, limit=constant(100.0)),
+    "inner_negative_slope": Ball("SUM(POWER(-2 * x, 2)) <= 100", q=4.0, limit=constant(100.0)),
+    "literal_on_right": Ball("25 >= SUM(POWER(x, 2))"),
+    # Groups.
+    "by": Ball("SUM(POWER(x, 2)) by (k) <= 9", group=by_k, limit=constant(9.0)),
+    "per": Ball("per k: SUM(POWER(x, 2)) <= 9", limit=constant(9.0), instance=any_key),
+    "per_by": Ball("per k: SUM(POWER(x, 2)) by (k) <= 9", group=by_k, limit=constant(9.0)),
+    # A `when` on the clause, and inside the sum.
+    "when": Ball("when f: SUM(POWER(x, 2)) <= 9", group=where_f(everyone), limit=constant(9.0)),
+    "sum_when": Ball("SUM(when f: POWER(x, 2)) <= 9", group=where_f(everyone), limit=constant(9.0)),
+    "when_by": Ball("when f: SUM(POWER(x, 2)) by (k) <= 9", group=where_f(by_k), limit=constant(9.0)),
+    # Limits read from the data.
+    "column": Ball("SUM(POWER(x, 2)) <= l", limit=tightest_of_all),
+    "column_scaled": Ball("SUM(4 * POWER(x, 2)) <= l", q=4.0, limit=tightest_of_all),
+    "column_by": Ball("SUM(POWER(x, 2)) by (k) <= l", group=by_k, limit=tightest_of_group),
+    "column_when": Ball("when f: SUM(POWER(x, 2)) <= l", group=where_f(everyone), limit=tightest_of_group),
+    "column_sum_when": Ball("SUM(when f: POWER(x, 2)) <= l", group=where_f(everyone), limit=tightest_of_all),
+    "column_expression": Ball("SUM(POWER(x, 2)) <= 25.0 + 0 * id"),
+    # An aggregate over a sum with its own `when` is computed before the rule and read as a column.
+    "aggregate_sum_when": Ball(
+        "SUM(when f: POWER(x, 2)) <= 0.25 * SUM(l)",
+        group=where_f(everyone),
+        limit=lambda members, rows: 0.25 * sum(row["l"] for row in rows),
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Objectives: the per-row `K*x^2 + b*x`, before the sense is applied
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Objective:
+    sql: str
+    maximize: bool = False
+    #: row -> (K, b), or None for no objective.
+    coefficients: object = None
+
+
+def _when(row, values):
+    return values if row["f"] else (0.0, 0.0)
+
+
+OBJECTIVES = {
+    "none": Objective(""),
+    "max": Objective("MAXIMIZE SUM(s * x)", True, lambda r: (0.0, r["s"])),
+    "min": Objective("MINIMIZE SUM(s * x)", False, lambda r: (0.0, r["s"])),
+    "constant": Objective("MAXIMIZE SUM(s * x + 5)", True, lambda r: (0.0, r["s"])),
+    "constant_column": Objective("MAXIMIZE SUM(s * x + l)", True, lambda r: (0.0, r["s"])),
+    "factors": Objective("MAXIMIZE 2 * SUM(s * x) / 4", True, lambda r: (0.0, 0.5 * r["s"])),
+    "parts": Objective("MAXIMIZE SUM(s * x) - SUM(y * x)", True, lambda r: (0.0, r["s"] - r["y"])),
+    "null_score": Objective("MAXIMIZE SUM(s * x)", True, lambda r: (0.0, r["s"] or 0.0)),
+    "part_when": Objective("MAXIMIZE SUM(when f: s * x)", True, lambda r: _when(r, (0.0, r["s"]))),
+    "objective_when": Objective("MAXIMIZE when f: SUM(s * x)", True, lambda r: _when(r, (0.0, r["s"]))),
+    "parts_when": Objective(
+        "MAXIMIZE SUM(when f: s * x) + SUM(when NOT f: y * x)",
+        True,
+        lambda r: (0.0, r["s"] if r["f"] else r["y"]),
+    ),
+    "square": Objective("MINIMIZE SUM(POWER(x - y, 2))", False, lambda r: (1.0, -2.0 * r["y"])),
+    "negated_square": Objective("MAXIMIZE -SUM(POWER(x - y, 2))", True, lambda r: (-1.0, 2.0 * r["y"])),
+    "negated_term": Objective("MAXIMIZE SUM(-POWER(x - y, 2))", True, lambda r: (-1.0, 2.0 * r["y"])),
+    "square_times": Objective("MINIMIZE SUM(x * x - 2 * y * x)", False, lambda r: (1.0, -2.0 * r["y"])),
+    "square_slope": Objective("MINIMIZE SUM(POWER(2 * x - y, 2))", False, lambda r: (4.0, -4.0 * r["y"])),
+    "square_factor": Objective("MINIMIZE 3 * SUM(POWER(x - y, 2))", False, lambda r: (3.0, -6.0 * r["y"])),
+    "square_divided": Objective("MINIMIZE SUM(POWER(x - y, 2)) / 2", False, lambda r: (0.5, -r["y"])),
+    "square_scaled_term": Objective("MINIMIZE SUM(5 * POWER(x - y, 2))", False, lambda r: (5.0, -10.0 * r["y"])),
+    "square_constant": Objective("MINIMIZE SUM(POWER(x - y, 2) + 5)", False, lambda r: (1.0, -2.0 * r["y"])),
+    "square_linear": Objective("MINIMIZE SUM(POWER(x - y, 2) + s * x)", False, lambda r: (1.0, r["s"] - 2.0 * r["y"])),
+    "square_other_part": Objective("MINIMIZE SUM(POWER(x, 2)) + SUM(s * x)", False, lambda r: (1.0, r["s"])),
+    "square_when": Objective("MINIMIZE SUM(when f: POWER(x - y, 2))", False, lambda r: _when(r, (1.0, -2.0 * r["y"]))),
+    "square_objective_when": Objective(
+        "MINIMIZE when f: SUM(POWER(x - y, 2) + s * x)",
+        False,
+        lambda r: _when(r, (1.0, r["s"] - 2.0 * r["y"])),
+    ),
+    # A NULL target skips its term, so the row has no square at all.
+    "null_target": Objective(
+        "MINIMIZE SUM(POWER(x - y, 2))", False, lambda r: (0.0, 0.0) if r["y"] is None else (1.0, -2.0 * r["y"])
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Cases
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Case:
+    rows: tuple
+    ball: str
+    objective: str
+    free: bool = False
+    #: The box as written: `x >= 0`, which is the default.
+    spelled_box: bool = False
+
+
+N1_CASES = {}
+
+
+def add(name, rows, ball, objective, **kwargs):
+    assert name not in N1_CASES, name
+    N1_CASES[name] = Case(rows, ball, objective, **kwargs)
+
+
+# A linear objective. Each case differs from the first in what decides the branch it reaches.
+add("mixed_scores", MIXED, "b25", "max")
+add("mixed_scores_free", MIXED, "b25", "max", free=True)
+add("mixed_scores_box_written", MIXED, "b25", "max", spelled_box=True)
+add("minimize_is_the_negated_direction", MIXED, "b25", "min")
+add("minimize_free", MIXED, "b25", "min", free=True)
+add("no_row_gains_stays_at_zero", NONPOSITIVE, "b25", "max")
+add("no_row_gains_free_moves", NONPOSITIVE, "b25", "max", free=True)
+add("all_scores_zero", ALL_ZERO, "b25", "max")
+add("all_scores_zero_free", ALL_ZERO, "b25", "max", free=True)
+add("limit_zero", MIXED, "b0", "max")
+add("limit_zero_square", MIXED, "b0", "square")
+add("limit_negative", MIXED, "negative", "max")
+add("limit_negative_square", MIXED, "negative", "square")
+add("limit_negative_no_objective", MIXED, "negative", "none")
+add("one_row", ONE_ROW, "b25", "max")
+add("no_objective", MIXED, "b25", "none")
+add("no_objective_free", MIXED, "b25", "none", free=True)
+add("constant_term", MIXED, "b25", "constant")
+add("constant_column_term", MIXED, "b25", "constant_column")
+add("constant_factors", MIXED, "b25", "factors")
+add("several_parts", MIXED, "b25", "parts")
+add("several_parts_free", MIXED, "b25", "parts", free=True)
+add("part_when", WHEN_STILL, "b25", "part_when")
+add("objective_when", WHEN_STILL, "b25", "objective_when")
+add("parts_when", MIXED, "b25", "parts_when")
+add("null_when_on_a_part", WHEN_NULL, "b25", "part_when")
+add("null_score_skips_its_term", NULL_SCORE, "b25", "null_score")
+
+# A square. Inside and outside the ball, with negative targets, in both domains.
+add("projection_inside", NEAR, "b25", "square")
+add("projection_inside_free", NEAR, "b25", "square", free=True)
+add("projection_outside", MIXED, "b4", "square")
+add("projection_outside_free", MIXED, "b4", "square", free=True)
+add("projection_negative_targets_stay_at_zero", NONPOSITIVE, "b4", "square")
+add("projection_negative_targets_free", NONPOSITIVE, "b4", "square", free=True)
+add("negated_square_maximized", MIXED, "b4", "negated_square")
+add("negated_term_maximized", MIXED, "b4", "negated_term")
+add("square_written_as_a_product", MIXED, "b4", "square_times")
+add("square_with_a_slope", MIXED, "b4", "square_slope")
+add("square_with_a_slope_free", MIXED, "b4", "square_slope", free=True)
+add("square_with_a_factor", MIXED, "b4", "square_factor")
+add("square_divided", MIXED, "b4", "square_divided")
+add("square_scaled_term", MIXED, "b4", "square_scaled_term")
+add("square_constant", MIXED, "b4", "square_constant")
+add("square_plus_linear", MIXED, "b4", "square_linear")
+add("square_plus_linear_free", MIXED, "b4", "square_linear", free=True)
+add("square_plus_linear_in_another_part", MIXED, "b4", "square_other_part")
+add("square_under_part_when", MIXED, "b4", "square_when")
+add("square_under_objective_when", MIXED, "b4", "square_objective_when")
+add("null_target_has_no_square", NULL_TARGET, "b4", "null_target")
+add("null_target_free", NULL_TARGET, "b4", "null_target", free=True)
+
+# The spellings of the limit.
+add("spelled_times", MIXED, "times", "max")
+add("spelled_stars", MIXED, "stars", "max")
+add("spelled_norm", MIXED, "norm", "max")
+add("spelled_scaled_square", MIXED, "scaled_square", "max")
+add("spelled_inner_slope", MIXED, "inner_slope", "max")
+add("spelled_inner_negative_slope", MIXED, "inner_negative_slope", "max")
+add("spelled_literal_on_right", MIXED, "literal_on_right", "max")
+
+# Groups.
+add("by_key", MIXED, "by", "max")
+add("by_key_free", MIXED, "by", "max", free=True)
+add("by_key_square", MIXED, "by", "square")
+add("per_key", MIXED, "per", "max")
+add("per_key_square", MIXED, "per", "square")
+add("per_key_by_key", MIXED, "per_by", "max")
+add("per_key_by_key_square", MIXED, "per_by", "square")
+add("no_objective_by_key", MIXED, "by", "none")
+
+# NULL keys: a row outside every ball, improving or not.
+add("null_key_improving_row_is_unbounded", NULL_KEY_IMPROVING, "by", "max")
+add("null_key_still_row_stays_at_zero", NULL_KEY_STILL, "by", "max")
+add("null_key_square_keeps_its_target", NULL_KEY_IMPROVING, "by", "square")
+add("null_key_square_free", NULL_KEY_STILL, "by", "square", free=True)
+add("null_key_no_objective", NULL_KEY_STILL, "by", "none")
+add("per_key_null_key_is_still_in_the_sum", NULL_KEY_IMPROVING, "per", "max")
+add("per_key_by_key_null_key_is_outside", NULL_KEY_IMPROVING, "per_by", "max")
+add("per_key_no_key_has_no_instance", NULL_KEY_ONLY, "per", "max")
+add("per_key_no_key_still_rows", NULL_KEY_ONLY_STILL, "per", "max")
+add("per_key_no_key_negative_limit_is_no_instance", NULL_KEY_ONLY_STILL, "per", "square")
+
+# A `when` drops rows from the ball.
+add("clause_when_still_row", WHEN_STILL, "when", "max")
+add("clause_when_improving_row_is_unbounded", WHEN_IMPROVING, "when", "max")
+add("clause_when_square_keeps_the_target", MIXED, "when", "square")
+add("clause_when_null_keeps_no_row", WHEN_NULL, "when", "max")
+add("sum_when_still_row", WHEN_STILL, "sum_when", "max")
+add("sum_when_improving_row_is_unbounded", WHEN_IMPROVING, "sum_when", "max")
+add("sum_when_square", MIXED, "sum_when", "square")
+add("when_and_by", MIXED, "when_by", "square")
+
+# Limits read from the data.
+add("column_limit_tightest_value", MIXED, "column", "max")
+add("column_limit_square", MIXED, "column", "square")
+add("column_limit_scaled", MIXED, "column_scaled", "max")
+add("column_limit_per_group", MIXED, "column_by", "max")
+add("column_limit_per_group_free", MIXED, "column_by", "max", free=True)
+add("column_limit_per_group_square", MIXED, "column_by", "square")
+add("column_limit_null_in_a_group_is_no_limit", NULL_LIMITS, "column_by", "square")
+add("column_limit_null_group_improving_is_unbounded", NULL_LIMITS, "column_by", "max", free=True)
+add("column_limit_negative_in_one_group", NEGATIVE_IN_ONE_GROUP, "column_by", "max")
+add("column_limit_under_clause_when", MIXED, "column_when", "square")
+add("column_limit_under_sum_when", MIXED, "column_sum_when", "square")
+add("limit_expression_over_a_column", MIXED, "column_expression", "max")
+add("limit_aggregate_under_sum_when", MIXED, "aggregate_sum_when", "square")
+
+
+def _sql_body(case_):
+    ball = BALLS[case_.ball]
+    clauses = [ball.sql]
+    if case_.free:
+        clauses.insert(0, "x >= -1e30")
+    if case_.spelled_box:
+        clauses.insert(0, "x >= 0")
+    return f"DECIDE x(REAL) SUCH THAT {' AND '.join(clauses)} {OBJECTIVES[case_.objective].sql}"
+
+
+def _source(case_):
+    return f"(VALUES {_values(case_.rows)}) t({', '.join(NAMES)})"
+
+
+def _sql(case_, wrap="plain"):
+    body = _sql_body(case_)
+    if wrap == "plain":
+        return f"SELECT id, x FROM (FROM {_source(case_)} {body}) q ORDER BY id"
+    if wrap == "joined_source":
+        ids = ", ".join(f"({row['id']})" for row in case_.rows)
+        return (
+            f"SELECT id, x FROM (FROM {_source(case_)} JOIN (VALUES {ids}) j(jid) ON t.id = j.jid {body}) q ORDER BY id"
+        )
+    if wrap == "cte":
+        return f"WITH c AS (SELECT * FROM {_source(case_)}) SELECT id, x FROM (FROM c {body}) q ORDER BY id"
+    assert wrap == "aggregate_above", wrap
+    return f"SELECT id, x FROM (SELECT id, x FROM (FROM {_source(case_)} {body}) q) p ORDER BY id"
+
+
+def _groups(case_):
+    """The groups of the ball that exist: {key: (rows, limit)}. A group with no limit is not a ball."""
+    ball = BALLS[case_.ball]
+    if not ball.instance(case_.rows):
+        return {}
+    members = {}
+    for row in case_.rows:
+        key = ball.group(row)
+        if key is not None:
+            members.setdefault(key, []).append(row)
+    groups = {key: (rows, ball.limit(rows, case_.rows)) for key, rows in members.items()}
+    return {key: group for key, group in groups.items() if group[1] is not None}
+
+
+def _solve_with_oracle(oracle_solver, case_):
+    oracle_solver.create_model("direct_n1_euclidean_ball")
+    names = {}
+    for row in case_.rows:
+        names[row["id"]] = f"x_{row['id']}"
+        oracle_solver.add_variable(names[row["id"]], VarType.CONTINUOUS, -BIG if case_.free else 0.0, BIG)
+    q = BALLS[case_.ball].q
+    for index, (rows, limit) in enumerate(_groups(case_).values()):
+        quadratic = {(names[row["id"]], names[row["id"]]): q for row in rows}
+        oracle_solver.add_quadratic_constraint(
+            linear={}, quadratic=quadratic, sense="<=", rhs=limit, name=f"ball_{index}"
+        )
+    objective = OBJECTIVES[case_.objective]
+    sense = ObjSense.MAXIMIZE if objective.maximize else ObjSense.MINIMIZE
+    if objective.coefficients is None:
+        oracle_solver.set_objective({}, sense)
+    else:
+        coefficients = [(names[row["id"]], objective.coefficients(row)) for row in case_.rows]
+        quadratic = {(name, name): k for name, (k, _) in coefficients if k != 0.0}
+        linear = {name: b for name, (_, b) in coefficients}
+        oracle_solver.set_quadratic_objective(linear=linear, quadratic=quadratic, sense=sense)
+    return oracle_solver.solve()
+
+
+def _check_assignment(case_, rows, columns, oracle, mode):
+    assert columns == ["id", "x"], mode
+    assert [row[0] for row in rows] == [row["id"] for row in case_.rows], mode
+    values = {row[0]: row[1] for row in rows}
+    for source in case_.rows:
+        value = values[source["id"]]
+        assert isinstance(value, float), (mode, source["id"], value)
+        assert case_.free or value >= -_BOX_TOLERANCE, (mode, source["id"], value)
+    q = BALLS[case_.ball].q
+    tolerance = _DIRECT_BALL_TOLERANCE if mode == "require" else _BALL_TOLERANCE
+    for key, (members, limit) in _groups(case_).items():
+        length = sum(q * values[row["id"]] ** 2 for row in members)
+        assert length <= limit + tolerance * max(1.0, abs(limit)), (mode, key, length, limit)
+    objective = OBJECTIVES[case_.objective]
+    if objective.coefficients is None:
+        return
+    total = 0.0
+    for source in case_.rows:
+        k, b = objective.coefficients(source)
+        value = values[source["id"]]
+        total += k * value * value + b * value
+    expected = oracle.objective_value
+    assert abs(total - expected) <= _OBJECTIVE_TOLERANCE * max(1.0, abs(expected)), (mode, total, expected)
+
+
+def _agree(decidb_cli, oracle_solver, case_, wrap="plain"):
+    """Runs the case on the oracle and on both DeciDB paths, and checks they agree."""
+    sql = _sql(case_, wrap)
+    oracle = _solve_with_oracle(oracle_solver, case_)
+
+    def check_assignment(rows, columns, mode):
+        _check_assignment(case_, rows, columns, oracle, mode)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.quadratic
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(N1_CASES))
+def test_n1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, N1_CASES[name])
+
+
+# The same problem inside a parent query: the rule reads through a join and a CTE in its source, and its columns pass
+# through a projection above it.
+CONTEXT_CASES = [
+    ("mixed_scores", "joined_source"),
+    ("by_key_square", "joined_source"),
+    ("column_limit_per_group", "cte"),
+    ("projection_outside", "aggregate_above"),
+]
+
+
+@pytest.mark.quadratic
+@pytest.mark.correctness
+@pytest.mark.parametrize("base,wrap", CONTEXT_CASES)
+def test_n1_agrees_inside_a_parent_query(decidb_cli, oracle_solver, base, wrap):
+    _agree(decidb_cli, oracle_solver, N1_CASES[base], wrap=wrap)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("limit", ["-1", "25", "l"])
+@pytest.mark.parametrize("objective", ["MAXIMIZE SUM(s*x)", "MINIMIZE SUM(POWER(x - s, 2))", ""])
+def test_n1_empty_source_returns_no_rows_whatever_the_limit_says(decidb_cli, limit, objective):
+    # The checks run on rows, and there are none: a negative limit has no instance to make infeasible.
+    sql = (
+        "SELECT id, x FROM (SELECT 1 AS id, 1.0::DOUBLE AS s, 1.0::DOUBLE AS l WHERE false) "
+        f"DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= {limit} {objective}"
+    )
+    for mode in ("off", "require"):
+        assert run(decidb_cli, sql, mode)[0] == []
+
+
+# ---------------------------------------------------------------------------
+# Errors: both paths fail, in the same class. `test_direct_user_facing.py` compares the text word for word.
+# ---------------------------------------------------------------------------
+
+_LINEAR = "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)"
+_SQUARE = "SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(POWER(x - y, 2))"
+
+ERROR_CASES = {
+    "score_nan": ("invalid_value", "'NaN'", "2.0", "25.0", "'a'", _LINEAR),
+    "score_infinite": ("invalid_value", "'Infinity'", "2.0", "25.0", "'a'", _LINEAR),
+    "score_minus_infinite": ("invalid_value", "'-Infinity'", "2.0", "25.0", "'a'", _LINEAR),
+    "target_nan": ("invalid_value", "1.0", "'NaN'", "25.0", "'a'", _SQUARE),
+    "target_infinite": ("invalid_value", "1.0", "'Infinity'", "25.0", "'a'", _SQUARE),
+    "constant_term_nan": (
+        "invalid_value",
+        "1.0",
+        "'NaN'",
+        "25.0",
+        "'a'",
+        "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x + y)",
+    ),
+    # A limit of one value is checked by the driver's row check; one that differs between rows is left as its group's
+    # tightest value, with a check of its own (`limit_invalid`).
+    "limit_nan_one_row": ("null_bound", "1.0", "2.0", "'NaN'", "'a'", "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"),
+    "limit_nan_tightest": (
+        "null_bound",
+        "1.0",
+        "2.0",
+        "CASE WHEN i = 1 THEN 'NaN' ELSE '4.0' END",
+        "'a'",
+        "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)",
+    ),
+    "limit_minus_infinite": (
+        "infeasible",
+        "1.0",
+        "2.0",
+        "'-Infinity'",
+        "'a'",
+        "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)",
+    ),
+    "negative_limit": ("infeasible", "1.0", "2.0", "25.0", "'a'", "SUM(POWER(x, 2)) <= -1 MAXIMIZE SUM(s * x)"),
+    "null_key_improving": (
+        "unbounded",
+        "1.0",
+        "2.0",
+        "25.0",
+        "NULL",
+        "SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)",
+    ),
+    "null_limit_improving": ("unbounded", "1.0", "2.0", "NULL", "'a'", "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"),
+    # In a free domain a row outside every ball moves whichever sign its score has. The oracle's Gurobi stops on this
+    # model with a numerical status rather than a verdict, so it is not an oracle case.
+    "null_key_free_domain": (
+        "unbounded",
+        "-1.0",
+        "2.0",
+        "25.0",
+        "NULL",
+        "x >= -1e30 AND SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)",
+    ),
+}
+
+
+def _error_sql(score, target, limit, key, decide):
+    def typed(value):
+        return f"CAST({value} AS DOUBLE)" if value != "NULL" else "CAST(NULL AS DOUBLE)"
+
+    source = (
+        f"SELECT i AS id, {typed(score)} AS s, {typed(target)} AS y, {typed(limit)} AS l, {key}::VARCHAR AS k "
+        "FROM range(3) t(i)"
+    )
+    return f"SELECT id, x FROM ({source}) DECIDE x(REAL) SUCH THAT {decide}"
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("name", sorted(ERROR_CASES))
+def test_n1_both_paths_raise_the_same_error(decidb_cli, name):
+    expected, *arguments = ERROR_CASES[name]
+    sql = _error_sql(*arguments)
+    direct = outcome(decidb_cli, sql, "require")
+    solver = outcome(decidb_cli, sql, "off")
+    assert direct[0] == "error", direct
+    assert direct == solver, (direct, solver)
+    assert expected in direct[1], direct
+
+
+# ---------------------------------------------------------------------------
+# The numeric boundary: the direct path against the solver alone, since the oracle is the solver's own engine.
+# ---------------------------------------------------------------------------
+
+
+def _two_rows(first, second, decide):
+    return (
+        f"SELECT x FROM (FROM (VALUES (1, {first}::DOUBLE), (2, {second}::DOUBLE)) t(id, s) "
+        f"DECIDE x(REAL) SUCH THAT {decide}) q ORDER BY id"
+    )
+
+
+def _direct_values(cli, sql):
+    return [row[0] for row in run(cli, sql, "require")[0]]
+
+
+def _solver_values(cli, sql, large_numbers=False):
+    """The solver's x values from its printed table. Past some sizes it also warns that it could not prove the answer is
+    the best, which `execute` raises as an error."""
+    raw = cli.execute_raw(f"SET decide_direct_solve='off'; {sql}", expect_large_numbers=large_numbers)
+    return [float(number) for number in re.findall(r"-?\d+\.\d+(?:e[-+]?\d+)?", raw.stdout)]
+
+
+_MAX_25 = "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("scale", ["1e153", "1e100", "1e-100", "1e-150"])
+def test_n1_formula_stays_in_range_where_the_squares_do(decidb_cli, scale):
+    # The sum of squares stays inside the DOUBLE range, so scores this size give the answer of scores 3 and 4. Gurobi
+    # returns x = 0 on each (done.md § Differences from the solver), so this is not a comparison with the solver.
+    sql = _two_rows(f"3 * {scale}", f"4 * {scale}", _MAX_25)
+    assert _direct_values(decidb_cli, sql) == pytest.approx([3.0, 4.0], rel=1e-12)
+
+
+@pytest.mark.correctness
+def test_n1_scores_past_the_range_of_their_squares_raise_rather_than_answer_zero(decidb_cli):
+    # h is past a DOUBLE from finite inputs: the direct path raises, where Gurobi returns x = 0 with a warning.
+    sql = _two_rows("3e154", "4e154", _MAX_25)
+    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert "MAXIMIZE sum(s * x) computes a number too large for a DOUBLE" in direct
+    assert _solver_values(decidb_cli, sql, large_numbers=True) == [0.0, 0.0]
+
+
+@pytest.mark.correctness
+def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range(decidb_cli):
+    # Each square is 1.44e308; only h is past a DOUBLE, a check above the window.
+    sql = _two_rows("1.2e154", "1.2e154", _MAX_25)
+    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert "MAXIMIZE sum(s * x) computes a number too large for a DOUBLE" in direct
+
+
+@pytest.mark.correctness
+def test_n1_a_target_past_a_double_raises_on_a_row_outside_every_ball(decidb_cli):
+    # Nothing squares the target of a row no ball holds, so only the check of the target itself reads it.
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, 1e10::DOUBLE, NULL::VARCHAR)) t(id, s, k) DECIDE x(REAL) "
+        "SUCH THAT SUM(POWER(x, 2)) by (k) <= 9 MINIMIZE SUM(1e-300 * POWER(x, 2) - s * x)) q"
+    )
+    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert "computes a number too large for a DOUBLE" in direct
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("sign", ["", "-"], ids=["plus", "minus"])
+def test_n1_a_zero_answer_has_no_sign(decidb_cli, sign):
+    # A free domain keeps the direction as it is, and -0 is what `MINIMIZE` makes of a score of 0. DeciDB's solver path
+    # returns 0, and the difference would show in the printed row.
+    sql = (
+        f"SELECT x FROM (FROM (VALUES (1, 0.0::DOUBLE), (2, {sign}1.0::DOUBLE)) t(id, s) DECIDE x(REAL) "
+        "SUCH THAT x >= -1e30 AND SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(s * x)) q ORDER BY id"
+    )
+    assert math.copysign(1.0, _direct_values(decidb_cli, sql)[0]) == 1.0
+
+
+@pytest.mark.correctness
+def test_n1_scores_whose_squares_vanish_stay_at_zero(decidb_cli):
+    # h underflows to 0 from nonzero scores: the formula's case h = 0 is x = 0, the point the solver also returns.
+    sql = _two_rows("3e-200", "4e-200", _MAX_25)
+    assert _direct_values(decidb_cli, sql) == _solver_values(decidb_cli, sql) == [0.0, 0.0]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("limit", ["1e6", "1e18", "1e19"])
+def test_n1_large_limit_answers_as_the_solver_does(decidb_cli, limit):
+    sql = _two_rows("3", "4", f"SUM(POWER(x, 2)) <= {limit} MAXIMIZE SUM(s * x)")
+    direct = _direct_values(decidb_cli, sql)
+    assert direct == pytest.approx(_solver_values(decidb_cli, sql, float(limit) >= 4.5e9), rel=1e-3)
+    assert sum(value**2 for value in direct) == pytest.approx(float(limit), rel=1e-12)
+
+
+@pytest.mark.correctness
+def test_n1_scale_stays_in_range_where_the_limit_over_h_does_not(decidb_cli):
+    # B / h is 1e319 here: the scale is computed as sqrt(B) / sqrt(h), which is 3e159.
+    sql = _two_rows("6e-151", "8e-151", "SUM(POWER(x, 2)) <= 1e19 MAXIMIZE SUM(s * x)")
+    assert sum(value**2 for value in _direct_values(decidb_cli, sql)) == pytest.approx(1e19, rel=1e-12)
+
+
+@pytest.mark.correctness
+def test_n1_data_limit_past_the_solvers_infinity_is_a_number_to_both_paths(decidb_cli):
+    # A limit read from the data is not folded into an "effective infinity" on either path.
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, 3.0::DOUBLE, 1e25::DOUBLE), (2, 4.0::DOUBLE, 1e25::DOUBLE)) t(id, s, l) "
+        "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
+    )
+    assert _direct_values(decidb_cli, sql) == pytest.approx(_solver_values(decidb_cli, sql, True), rel=1e-3)
+
+
+_INFINITE_LIMIT = (
+    "SELECT x FROM (FROM (VALUES (1, 3.0::DOUBLE, 'Infinity'::DOUBLE), (2, 4.0::DOUBLE, 'Infinity'::DOUBLE)) "
+    "t(id, s, l) DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l {objective}) q ORDER BY id"
+)
+
+
+@pytest.mark.correctness
+def test_n1_infinite_limit_on_a_square_keeps_the_target(decidb_cli):
+    sql = _INFINITE_LIMIT.format(objective="MINIMIZE SUM(POWER(x - s, 2))")
+    assert _direct_values(decidb_cli, sql) == [3.0, 4.0]
+    assert _solver_values(decidb_cli, sql) == pytest.approx([3.0, 4.0], abs=1e-3)
+
+
+@pytest.mark.error
+def test_n1_infinite_limit_with_an_improving_row_is_unbounded(decidb_cli):
+    # The solver stops on this model with numerical trouble, a limitation of its own; the problem is unbounded.
+    sql = _INFINITE_LIMIT.format(objective="MAXIMIZE SUM(s * x)")
+    assert outcome(decidb_cli, sql, "require") == ("error", "unbounded")
+
+
+# ---------------------------------------------------------------------------
+# With no Gurobi
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+def test_n1_answers_on_a_machine_with_no_gurobi(decidb_exe_path, tmp_path):
+    # The refusal of a quadratic limit is raised when the solver plan is built, after a rule applied and replaced it. The
+    # solver's refusal is what `off` still raises, which shows Gurobi really is unavailable to this process.
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
+    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+    query = (
+        "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, s) "
+        "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
+    )
+
+    def cli(sql):
+        return subprocess.run(
+            [decidb_exe_path, "-noheader", "-list", "-c", sql], env=env, capture_output=True, text=True
+        )
+
+    answered = cli(query)
+    assert answered.stdout.split() == ["1|3.0", "2|4.0"], answered.stderr
+    refused = cli(f"SET decide_direct_solve='off'; {query}")
+    assert "which needs Gurobi" in refused.stderr, refused.stderr
