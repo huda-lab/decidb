@@ -62,7 +62,7 @@ struct Condition final : DirectApplicabilityCondition {
 };
 
 //! The sum of `values` as a constant, where a NULL guard keeps its row (a skipped row reads 0, as coefficient 0). False
-//! when one is not a finite constant or the sum is not finite.
+//! when one is not a finite constant.
 bool FoldSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total) {
 	total = 0.0;
 	for (auto &value : values) {
@@ -72,7 +72,7 @@ bool FoldSum(ClientContext &context, const vector<DirectSignedValue> &values, do
 		}
 		total += value.sign * constant;
 	}
-	return std::isfinite(total);
+	return true;
 }
 
 //! `sign * scale * w^2` of a square, where its inner slope `w` folds to a constant; false otherwise.

@@ -936,6 +936,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a ball off center by a constant", "SUM(POWER(x - 1, 2)) <= 25"));
 	shapes.push_back(N1("a ball off center by a column", "SUM(POWER(x - w, 2)) <= 25"));
 	shapes.push_back(N1("a row-valued slope in the limit", "SUM(POWER(w * x, 2)) <= 25"));
+	shapes.push_back(N1("a slope in the limit fixed only within the query", "SUM(POWER(txid_current() * x, 2)) <= 25"));
 	shapes.push_back(N1("a square of slope zero in the limit", N1_LIMIT, [](DirectIR &ir) {
 		LeftPart(ir).terms[0].inner[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 	}));
@@ -983,6 +984,8 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1Objective("two squares in two parts", "MINIMIZE SUM(POWER(x, 2)) + SUM(w*x)",
 	                             [](DirectIR &ir) { AddSquare(ir.objective.parts[1].terms); }));
 	shapes.push_back(N1Objective("a row-valued slope in the objective", "MINIMIZE SUM(POWER(w * x - 1, 2))"));
+	shapes.push_back(N1Objective("a slope in the objective fixed only within the query",
+	                             "MINIMIZE SUM(POWER(txid_current() * x, 2))"));
 	shapes.push_back(
 	    N1Objective("a square of slope zero in the objective", "MINIMIZE SUM(POWER(x, 2))", [](DirectIR &ir) {
 		    ir.objective.parts[0].terms[0].inner[0].coefficient =
