@@ -12,7 +12,7 @@ and when/during which task it was discovered.
 Location: `src/planner/decide/decide_source_provenance.cpp` (`RenderDecideSource`), `TagDecideSourceFragments`,
 `decide_source_info.hpp` (`DecideSourceText`). A message that names a value renders a bound tree, so it shows
 what the engine built, not what the user wrote, and the renderer carries a growing list of tags that exist only for
-it (`NULL_GUARD`, `L0_AUTO_BOUND`, `SKIP_NULL`, `COLON_FORM`, the text in `BOUND_REDUCER_TAG`'s alias).
+it (`NULL_GUARD`, `L0_AUTO_BOUND`, `SKIP_NULL`, `COLON_FORM`, the text in `WRITTEN_VALUE_TAG`'s alias).
 `TagDecideSourceFragments` stores `ParsedExpression::ToString()`, itself a reprint. `DecideSourceText` already holds
 spans keyed by query location (Clang's SourceManager pattern) for six roles. The fix with no case list: record one
 span per expression of the DECIDE clause at bind time, carry it on `query_location` (kept by `Copy` and

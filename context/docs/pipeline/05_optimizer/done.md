@@ -161,7 +161,7 @@ the same DuckDB aggregate over another read of the source, grouped by the reduce
 (under the key's collation, D69) over the rows the clause's `when` keeps, and joined back to
 every read by the key. It reads its argument as that SQL aggregate does: a NULL is
 skipped, and only a NaN is checked (`COUNT` counts one). The column carries the reducer as written
-and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. With several threads the
+and `WRITTEN_VALUE_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. With several threads the
 source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
 so the model's row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread

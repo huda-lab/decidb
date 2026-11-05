@@ -454,6 +454,36 @@ def test_explain_objective_when_postfix(decidb_cli):
 
 
 # ===================================================================
+# A group's bound read from data
+# ===================================================================
+
+_GROUP_BOUND_ROWS = "(VALUES (1, 'a', 3), (2, 'a', 3), (3, 'b', 4)) t(id, k, cap)"
+_GROUP_BOUND_SQL = "SELECT id, x FROM {} DECIDE x(INT) SUCH THAT x <= 5 AND {} MAXIMIZE SUM(x)"
+
+
+@pytest.mark.explain
+@pytest.mark.parametrize(
+    "rows, clause",
+    [
+        # A written column key: the bound's column sits inside a NULL guard for the key.
+        pytest.param(_GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap", id="guarded_column"),
+        pytest.param(_GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap + 1", id="guarded_expression"),
+        # A relation key compares NULL as a value: the bound is the column itself, with no guard.
+        pytest.param(
+            "(VALUES (1, 'a'), (2, 'b')) t(id, k) JOIN (VALUES ('a', 3), ('b', 4)) D(k, cap) USING (k)",
+            "per D: SUM(x) by (D) <= D.cap + 1",
+            id="unguarded_column",
+        ),
+    ],
+)
+@pytest.mark.parametrize("explain", [_explain, _explain_json], ids=["box", "json"])
+def test_explain_group_bound_from_data_reads_as_written(decidb_cli, explain, rows, clause):
+    """The bound prints as written, so the rewrite adds no line, as with a literal bound."""
+    out = explain(decidb_cli, _GROUP_BOUND_SQL.format(rows, clause))
+    assert "\u21b3" not in out, out
+
+
+# ===================================================================
 # EXPLAIN (FORMAT JSON) on TPC-H
 # ===================================================================
 

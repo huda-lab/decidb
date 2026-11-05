@@ -418,10 +418,10 @@ static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
 //! `SUBQUERY` placeholder as if it were user SQL.
 static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery__";
 
-//! Provenance stamped on the column that stands for a reducer on a bound (the bound-side window rewrite): its alias
-//! is the reducer as written, so a render still prints `sum(cap) by (g)`, and the tag says that text names a
-//! computed value, not a column of the source.
-static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
+//! Provenance stamped on what stands for a reducer or a whole bound after the bound-side rewrite (a column, or the
+//! guard over one): its alias is that text as written, so a render still prints `sum(cap) by (g)`, and the tag says the
+//! text names a computed value, not a column of the source.
+static constexpr const char *WRITTEN_VALUE_TAG = "__written_value__";
 
 //! On the `IS NOT NULL` test a reducer's own `when` gains for a value its body reads
 //! (DecideCanonicalizer::SkipNullData): the query never wrote it, so no render prints it.

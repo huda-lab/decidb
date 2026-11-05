@@ -2,14 +2,6 @@
 
 ## Open
 
-- **BUG-43 — `EXPLAIN` prints internal text for a group bound read from data.** A `per k:` reducer clause whose bound is
-  a column gets a `↳` line with the rewritten bound as an expression tree, including a positional reference:
-  `↳ per k: sum(x) by (k) <= CASE  WHEN ((k IS NULL)) THEN (NULL) ELSE #3 END`. `language/guide.md` § 9 says an auxiliary
-  prints as the expression it stands for, never an internal name, and a bound derived from data prints as `M`. The same
-  clause with a literal bound prints no such line. It appears in the box and JSON forms of `EXPLAIN`, and on both of the paper's
-  Figure 1 reducer clauses, so the paper cannot quote that output as it stands.
-  Repro: `EXPLAIN (FORMAT JSON) SELECT id, x DECIDE x(INT) FROM t SUCH THAT x <= 5 AND per k: SUM(x) by (k) <= cap
-  MAXIMIZE SUM(x)` over `t(id INT, k VARCHAR, cap INT)`. Found 2026-11-02.
 - **BUG-44 — A missing comma between declarations is reported as a missing `SUCH THAT`.** `DECIDE x(INT) y(INT) FROM t
   SUCH THAT ...` fails with `Parser Error: DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one
   constraint`, though the query has that clause, and the caret points at the declaration rather than the second

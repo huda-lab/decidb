@@ -339,7 +339,7 @@ private:
 
 	string ReducerName(const Expression &reducer) const {
 		auto alias = Written(reducer);
-		AddDecideTag(alias, BOUND_REDUCER_TAG);
+		AddDecideTag(alias, WRITTEN_VALUE_TAG);
 		return alias;
 	}
 
@@ -395,7 +395,9 @@ private:
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);
-		comparison.right->SetAlias(group.text);
+		auto written = group.text;
+		AddDecideTag(written, WRITTEN_VALUE_TAG);
+		comparison.right->SetAlias(std::move(written));
 		return messages;
 	}
 

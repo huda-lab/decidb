@@ -373,8 +373,8 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
 		return ctx.fragments[fragment_id];
 	}
-	if (HasDecideTag(expr.GetAlias(), BOUND_REDUCER_TAG)) {
-		return StripDecideTags(expr.GetAlias()); // a bound's reducer, as written: SQL, not an identifier
+	if (HasDecideTag(expr.GetAlias(), WRITTEN_VALUE_TAG)) {
+		return StripDecideTags(expr.GetAlias()); // a value as written: SQL, not an identifier
 	}
 	if (HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
 		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
