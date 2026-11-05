@@ -658,10 +658,10 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   parentheses are needed. It may not mention a decision, a reducer or a window function.
 - NULL counts as false.
 - **Filtering comes first**: classes form from kept rows only, and every reducer in the body reads kept rows only.
-- **Nothing is computed on a dropped row**: a NULL there is no error, and an expression that would fail there
-  (`ln(0)`, a bad cast) is never evaluated — in the clause, its keys, bounds, checks, or rows a rewrite adds. The
+- **Nothing fails on a dropped row**: a NULL there is no error, and an expression that would fail there
+  (`ln(0)`, a bad cast) raises no error — in the clause, its keys, bounds, checks, or rows a rewrite adds. The
   parts of an `and`/`or` are read left to right, each only on rows the earlier parts leave undecided, so
-  `when s <> '' and CAST(s AS INT) > 3:` casts no empty text.
+  `when s <> '' and CAST(s AS INT) > 3:` raises nothing on an empty text.
 - Dropped rows keep their decisions; the clause just does not constrain them.
 - **A `when` that keeps no row yields no constraint** (D68). An input with no rows at all gives an empty result.
 

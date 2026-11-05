@@ -10,10 +10,10 @@
 // its scoped expression, the payload `e` at the row its position F selects on that row's
 // timeline; a range `agg(from F1 to F2 [every d] [else v | all]: e)` reads it at every row
 // of every position from F1 to F2 (language/guide.md §5.6). Execution builds one
-// DecideFrameMap per frame before any clause is evaluated, then appends the values the
-// frames read to the input as columns (DecidePreparedModel::frame_columns), so every
-// evaluator downstream reads them as data and none learns what a frame is; a range over
-// decisions is a helper decision instead, defined per window from the map. Defined in
+// DecideFrameMap per frame before any clause is evaluated, then adds the values the
+// frames read as columns beside the one pass's (DecidePreparedModel::frame_columns), so
+// every evaluator downstream reads them as data and none learns what a frame is; a range
+// over decisions is a helper decision instead, defined per window from the map. Defined in
 // physical_decide_frames.cpp.
 //
 //===----------------------------------------------------------------------===//
@@ -180,40 +180,39 @@ struct DecideFrameMap {
 	}
 };
 
-//! `frame`'s timelines over `data`: its anchors grouped by its timeline key (its path's `by` keys, then `within`; a
-//! row whose written `within` column is NULL is in no timeline, D75), each ordered by its order key -- descending when
-//! written, NULL where the connection's `default_null_order` puts it (D74) -- into peers, and each anchor's selected
-//! peer or window. A range listing more values than `decide_frame_limit` is refused as it is listed, and an interrupt
-//! is polled per timeline and per window.
+//! `frame`'s timelines over the input's rows: its anchors grouped by its timeline key (its path's `by` keys, then
+//! `within`; a row whose written `within` column is NULL is in no timeline, D75), each ordered by its order key --
+//! descending when written, NULL where the connection's `default_null_order` puts it (D74) -- into peers, and each
+//! anchor's selected peer or window. A range listing more values than `decide_frame_limit` is refused as it is listed,
+//! and an interrupt is polled per timeline and per window.
 DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec &frame, const vector<DecideKey> &keys,
-                                   PerGroupCache &per_group_cache, ColumnDataCollection &data, idx_t num_rows,
+                                   PerGroupCache &per_group_cache, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache);
 
 //! D75: each class of `frame.partition_key` among the anchors lies in one timeline; an anchor in none is no witness.
 void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
-                               ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
+                               idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
 //! A range over decisions skips the values it reads as NULL, as SQL's aggregate skips them (D84): `payload` are the
 //! coefficients of its payload's terms, read at the rows its windows read, `fallback` those of its `else`, read at the
 //! anchors that reach it; a NULL among a row's makes that row no member (DecideFrameMap::SkipNullReads).
 void SkipDecideRangeNullReads(ClientContext &context, const vector<const Expression *> &payload,
                               const vector<const Expression *> &fallback, DecideFrameMap &map,
-                              ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
+                              idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
-//! Appends to `data`, after its own columns, the value of each of `prepared.frame_columns`
+//! Adds to the one pass's columns (DecideRowStore::AppendColumn) the value of each of `prepared.frame_columns`
 //! on every row (DecideFrameColumn), each computed on the rows its kind names only: a
 //! payload on the first row of each selected peer, which CheckDecideFramePeers holds for the
 //! peer's other rows, or on the rows a range's windows read; an `else` on the anchors that
 //! reach it. An anchor where the frame reads nothing is NULL in every column (D84).
 void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
-                              ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
+                              idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
-//! `data` with the columns `values_of` (one value per row each) after its own; in one pass, the pass's store with them
+//! The one pass's store with the columns `values_of` (one value per row each) after its own
 //! (DecideRowStore::AppendColumn).
-void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
-                         const vector<unique_ptr<Vector>> &values_of);
+void AppendDecideColumns(ChunkExprCache &chunk_expr_cache, const vector<unique_ptr<Vector>> &values_of);
 
 //! What a frame reads at each row of a position it reads, as D73 compares the rows (deck p. 110): each column `values`
 //! read, by value, and the instance of each decision of `terms` -- term `i` the coefficient `values[terms[i].column]`
@@ -238,6 +237,6 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
                            const vector<DecideFrameMap> &maps, const vector<DecideFramePayload> &payloads,
                            const vector<DecideVarScopeInfo> &variable_scopes,
                            const vector<KeyedMapping> &keyed_mappings, const vector<DecideKey> &keys,
-                           ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
+                           idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
 } // namespace duckdb

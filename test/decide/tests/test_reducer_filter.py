@@ -1778,7 +1778,7 @@ def test_when_with_data_column_moved_inside(
 #
 # `min(when p: x + 2) >= 3` is `x + 2 >= 3` on every member row -- the rows `p`
 # keeps -- and says nothing about the others. A row the reducer's own `when`
-# drops is never sent to the model and its body is never evaluated, whatever the
+# drops is never sent to the model and its body is never read, whatever the
 # body holds: a constant, a data column, a `by` key or a `per` in front. Judged
 # by the scope oracle on both solvers.
 

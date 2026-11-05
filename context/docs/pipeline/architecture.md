@@ -92,10 +92,12 @@ depends on the entire dataset, so the operator must consume all of its input
 before producing a row:
 
 1. **Sink** — buffer every tuple into a `ColumnDataCollection`.
-2. **Finalize** — build entity mappings, run the scope checks, evaluate every
-   coefficient against that buffer — over each clause's kept rows (`when`), its
-   classes (`per`) and its reducers' groups (`by`) — build the solver-neutral model,
-   solve.
+2. **Finalize** — read the buffer once, the deck's one-pass algorithm: every
+   expression a node of the plan reads on a row is registered, and one scan evaluates
+   them all (`DecideRowStore`, [`08_execution/done.md`](08_execution/done.md) §1a). Then
+   build entity mappings, run the scope checks, evaluate every coefficient from that
+   pass — over each clause's kept rows (`when`), its classes (`per`) and its reducers'
+   groups (`by`) — build the solver-neutral model, solve.
 3. **Source** — re-scan the buffer and append solution values.
 
 Read consistency follows: the optimization runs on the snapshot the query saw, and

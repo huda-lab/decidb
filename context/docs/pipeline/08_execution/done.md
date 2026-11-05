@@ -50,7 +50,8 @@ separate objective-side copy.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
-| 2a | `Finalize` → `BuildFrames` | The frame selectors' timelines and selections, their D75 checks, and the values they read appended to the input as columns (§4b) |
+| 2a | `Finalize` → `RegisterEvaluation`, `DecideRowStore::Build` | The one pass: every expression a later step reads on a row, evaluated in one scan of the input (§1a) |
+| 2b | `Finalize` → `BuildFrames` | The frame selectors' timelines and selections, their D75 checks, and the values they read as columns beside the pass's (§4b) |
 | 3 | `Finalize` → `BuildKeyedMappings` | Build the row → class maps of the key scopes |
 | 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | The objective is produced once (§4a); a second variant stops the query. A frame's selected position holds one signature of its payload (D73) |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
@@ -64,6 +65,44 @@ plan time (stage 05).
 
 Read consistency follows from step 2: the optimization runs on the snapshot the
 query saw. Concurrent modifications cannot affect a running solve.
+
+---
+
+## 1a. The one pass (deck §3, pp. 77-119; D91)
+
+The deck evaluates a query over its annotated tree in two passes: a top-down construction reads the joined rows once
+and fills each node's container with what the node reads on a row, and a bottom-up evaluation computes each node from
+its children's containers. Stage 08 reads its collected rows the same way, once (`decide_row_store.hpp`):
+
+| Deck | Stage 08 |
+|---|---|
+| The annotated tree: each node with what it reads per row (pp. 81, 99) | `PhysicalDecide::RegisterEvaluation`, a visitor over the operator's tables: every key's columns, each clause's and the objective's `when` part by part, terms (coefficient, filter, the inputs a message reads), right-hand sides, admitted ends, the composed clauses, the helpers' value links, the frames (rows, order, payload and its leaves, fallback), the frame columns, the signatures' fields and the scope checks |
+| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideRowStore::Build`: one scan, one `ExpressionExecutor` over every registration, each chunk evaluated into a value column per distinct expression (equal expressions share one, by `Expression::Equals`); a constant is evaluated once, and a loop reads it as a constant vector |
+| A node's container (p. 110) | the columns of its expressions in the store; a key's container, its hash table of groups (`BuildGroupIds`), and a frame's timelines and peers (`BuildDecideFrameMap`), built from those columns |
+| Bottom-up evaluation (pp. 93-97, 106-108) | every later phase, unchanged, reading the store window by window (`DecideRowWindows`) instead of scanning the input |
+
+Two departures from the deck, both forced by SQL:
+
+- **A row's error is kept until a read reaches the row.** The deck reads a node on its rows only; which rows a node
+  reads (its `when`, a frame's presence) is computed in the same pass, so the pass evaluates every registration on
+  every row. A chunk that raises is evaluated again row by row, and each failing row keeps its error (`ErrorData`)
+  and reads NULL; a read raises the first error among the rows it reads, so `when t.w > 0: x <= ln(t.w)` raises
+  nothing where `w` is 0 (`language/guide.md` §6.3), and a clause that reads the row raises the error the row gives.
+  This is a compiler's poison value: the failure travels with the value and is raised only where the value is used.
+  An interrupt, an out-of-memory error and a fatal error stop the pass where they arise.
+- **A key's container is built just after the pass, not during it.** A key's groups are over the rows its clause
+  keeps, which the pass computes at the same time, so `BuildGroupIds` groups the key's columns once the pass is
+  done. It reads them from the store, not from the input.
+
+A frame's columns (§4b) are values no scan can compute: the frame's timelines must be known first. They are kept
+beside the store's (`DecideRowStore::AppendColumn`), and an expression reading one is evaluated when it is first read,
+over the frame columns and the input columns the pass kept for it. The pass keeps an input column for every
+registered expression that reads a frame column too.
+
+A read the plan did not register is an internal error, as is a frame expression reading an input column the pass did
+not keep: the input is scanned once by construction, which the profile counter `execution.input_scans`
+(`DECIDB_PROFILE`) reports and `test_one_pass.py` pins. The unbounded diagnosis's column groupings (§7b) explain the
+solved model after the evaluation, and read the named input columns in a pass of their own.
 
 ---
 
@@ -257,7 +296,8 @@ The result is an `EntityMapping { num_entities, row_to_entity, absent_entity }` 
 
 ## 4b. PHASE 1.4 — frame selectors
 
-Before anything else reads the input, `BuildFrames` (`physical_decide_frames.cpp`, `decide_frame_map.hpp`) builds a
+After the one pass (§1a), before any clause is evaluated, `BuildFrames` (`physical_decide_frames.cpp`,
+`decide_frame_map.hpp`) builds a
 `DecideFrameMap` per frame selector (`../../language/guide.md` §5.6): its anchors are the rows its scoped expression
 reads (`DecideFrameSpec::rows`), grouped into timelines by its timeline key through the one key cache, so a row whose
 written `within` column is NULL is in no timeline (D75). Each anchor's order key becomes a DuckDB sort key -- the
@@ -266,9 +306,9 @@ peers, rows of one order-key value. A position counts peers: `first`, `last`, `k
 cyclic, missing past either end. Under a `per` that does not hold the timeline, `CheckDecideFramePartition` stops a
 class that spans two timelines (D75).
 
-`AppendDecideFrameColumns` then appends to the materialized input, after its own columns, each column stage 05
-registered (`DecidePreparedModel::frame_columns`): a payload is evaluated on the first row of each selected peer only,
-an `else` on the anchors that reach it only, so an unused one never runs (a cast that would fail there does not), and
+`AppendDecideFrameColumns` then adds to the pass's columns, after the input's, each column stage 05 registered
+(`DecidePreparedModel::frame_columns`): a payload is read on the first row of each selected peer only,
+an `else` on the anchors that reach it only, so an unused one raises nothing (a cast that would fail there does not), and
 the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
 the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
 -- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing to read
@@ -491,8 +531,8 @@ enumeration is maintained by hand — see
 
 ### Per-term coefficients
 
-Each term's coefficient expression is transformed, executed chunk by chunk against
-`gstate.data`, and cast to `double` via `DefaultCastAs(LogicalType::DOUBLE)` —
+Each term's coefficient expression is transformed, read window by window from the one
+pass (§1a), and cast to `double` via `DefaultCastAs(LogicalType::DOUBLE)` —
 **one conversion, on the result of the complete typed expression**, which is what
 keeps a data cast's SQL semantics intact. Values accumulate into
 `row_coefficients[term_idx]` indexed by global row.
@@ -995,6 +1035,7 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | Concern | Location |
 |---|---|
 | Everything above | `src/execution/operator/decide/physical_decide.cpp` |
+| The one pass: the store and the windows its loops read | `src/execution/operator/decide/decide_row_store.cpp`, `src/include/duckdb/execution/operator/decide/decide_row_store.hpp` |
 | Operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
 | `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
 | The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |

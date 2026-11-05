@@ -105,17 +105,38 @@ DecideRowStore::Slot &DecideRowStore::AddSlot(const Expression &lowered, bool co
 	const idx_t index = slots.size();
 	auto owned = copy ? lowered.Copy() : nullptr;
 	auto &held = owned ? *owned : lowered;
-	slots.push_back(make_uniq<Slot>(Slot {&held, Vector(held.return_type, MaxValue<idx_t>(num_rows, 1)), {}, nullptr}));
-	slots.back()->owned = std::move(owned);
+	// One value per row, then a NULL a window points its unread rows at (DecideRowWindows::Execute); a constant's one
+	// value, then the NULL.
+	const bool constant = held.IsFoldable();
+	const idx_t values = constant ? 1 : num_rows;
+	slots.push_back(make_uniq<Slot>(Slot {&held, Vector(held.return_type, values + 1), {}, nullptr}));
+	auto &slot = *slots.back();
+	FlatVector::SetNull(slot.values, values, true);
+	slot.owned = std::move(owned);
+	slot.constant = constant;
+	if (constant) {
+		try {
+			slot.values.SetValue(0, ExpressionExecutor::EvaluateScalar(context, held));
+		} catch (std::exception &ex) {
+			slot.constant_error = ErrorData(ex);
+			if (StopsTheQuery(slot.constant_error)) {
+				throw;
+			}
+			FlatVector::SetNull(slot.values, 0, true);
+		}
+	}
 	slot_at.emplace(&held, index);
 	slot_hash.emplace(held.Hash(), index);
-	return *slots.back();
+	return slot;
 }
 
-bool DecideRowStore::Kept(const Expression &lowered) const {
-	bool kept = true;
-	ForEachColumnRead(lowered, [&](idx_t column) { kept = kept && (column >= input_columns || columns[column]); });
-	return kept;
+void DecideRowStore::RequireKept(const Expression &lowered) const {
+	ForEachColumnRead(lowered, [&](idx_t column) {
+		if (column >= types.size() || (column < input_columns && !columns[column])) {
+			throw InternalException("DECIDE: %s reads column %llu, which the one pass did not keep", lowered.ToString(),
+			                        column);
+		}
+	});
 }
 
 void DecideRowStore::KeepColumnsOf(const Expression &lowered) {
@@ -148,9 +169,16 @@ void DecideRowStore::Build() {
 			columns[column] = make_uniq<Vector>(types[column], MaxValue<idx_t>(num_rows, 1));
 		}
 	}
+	// The pass evaluates every expression that varies by row; a constant is evaluated already.
+	vector<Slot *> varying;
+	for (auto &slot : slots) {
+		if (!slot->constant) {
+			varying.push_back(slot.get());
+		}
+	}
 	auto remake = [&]() {
 		auto executor = make_uniq<ExpressionExecutor>(context);
-		for (auto &slot : slots) {
+		for (auto *slot : varying) {
 			executor->AddExpression(*slot->lowered);
 		}
 		return executor;
@@ -167,8 +195,8 @@ void DecideRowStore::Build() {
 				VectorOperations::Copy(chunk.data[column], *columns[column], chunk.size(), 0, offset);
 			}
 		}
-		for (idx_t i = 0; i < slots.size(); i++) {
-			EvaluateWindow(context, executor, i, remake, *slots[i], chunk, offset);
+		for (idx_t i = 0; i < varying.size(); i++) {
+			EvaluateWindow(context, executor, i, remake, *varying[i], chunk, offset);
 		}
 		offset += chunk.size();
 	}
@@ -183,20 +211,7 @@ void DecideRowStore::AppendColumn(const Vector &values) {
 }
 
 void DecideRowStore::Fill(Slot &slot) {
-	ForEachColumnRead(*slot.lowered, [&](idx_t column) {
-		if (column >= types.size()) {
-			throw InternalException("DECIDE: %s reads column %llu before it is computed", slot.lowered->ToString(),
-			                        column);
-		}
-	});
-	// An input column the pass did not keep is read again from the input.
-	const bool scan_input = !Kept(*slot.lowered);
-	ColumnDataScanState scan;
-	DataChunk input;
-	if (scan_input) {
-		InitializeDecideScan(data, scan);
-		input.Initialize(context, data.Types());
-	}
+	RequireKept(*slot.lowered);
 	auto remake = [&]() {
 		return make_uniq<ExpressionExecutor>(context, *slot.lowered);
 	};
@@ -204,17 +219,9 @@ void DecideRowStore::Fill(Slot &slot) {
 	DataChunk chunk;
 	chunk.InitializeEmpty(types);
 	for (idx_t offset = 0; offset < num_rows; offset += chunk.size()) {
-		idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, num_rows - offset);
-		if (scan_input) {
-			if (!data.Scan(scan, input)) {
-				throw InternalException("DECIDE: the input ends before row %llu", offset);
-			}
-			count = input.size();
-		}
+		const idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, num_rows - offset);
 		for (idx_t column = 0; column < types.size(); column++) {
-			if (column < input_columns && scan_input) {
-				chunk.data[column].Reference(input.data[column]);
-			} else if (columns[column]) {
+			if (columns[column]) {
 				chunk.data[column].Slice(*columns[column], offset, offset + count);
 			} else {
 				chunk.data[column].Reference(Value(types[column]));
@@ -229,50 +236,23 @@ const DecideRowStore::Slot &DecideRowStore::Values(const Expression &lowered) {
 	if (auto *slot = Find(lowered)) {
 		return *slot;
 	}
-	if (!built) {
-		throw InternalException("DECIDE: %s is read before the pass", lowered.ToString());
-	}
-	if (!ReadsColumnFrom(lowered, input_columns)) {
-		late_reads++;
+	if (!built || !ReadsColumnFrom(lowered, input_columns)) {
+		throw InternalException("DECIDE: %s is read, but no node of the one pass registered it", lowered.ToString());
 	}
 	auto &slot = AddSlot(lowered, true);
 	Fill(slot);
 	return slot;
 }
 
-void DecideRowStore::KeepLate(const vector<const Expression *> &lowered) {
-	vector<idx_t> missing;
-	for (auto *expr : lowered) {
+void DecideRowStore::SliceColumns(const ExpressionExecutor &executor, idx_t offset, idx_t count, DataChunk &out) {
+	for (auto *expr : executor.expressions) {
 		ForEachColumnRead(*expr, [&](idx_t column) {
-			if (column < input_columns && !columns[column] &&
-			    std::find(missing.begin(), missing.end(), column) == missing.end()) {
-				missing.push_back(column);
+			if (column < input_columns && !columns[column]) {
+				throw InternalException("DECIDE: %s reads column %llu, which the one pass did not keep",
+				                        expr->ToString(), column);
 			}
 		});
 	}
-	if (missing.empty()) {
-		return;
-	}
-	late_reads++;
-	for (auto column : missing) {
-		keep[column] = true;
-		columns[column] = make_uniq<Vector>(types[column], MaxValue<idx_t>(num_rows, 1));
-	}
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
-	idx_t offset = 0;
-	while (data.Scan(scan, chunk)) {
-		for (auto column : missing) {
-			VectorOperations::Copy(chunk.data[column], *columns[column], chunk.size(), 0, offset);
-		}
-		offset += chunk.size();
-	}
-}
-
-void DecideRowStore::SliceColumns(const ExpressionExecutor &executor, idx_t offset, idx_t count, DataChunk &out) {
-	KeepLate(executor.expressions);
 	for (idx_t column = 0; column < types.size(); column++) {
 		if (columns[column]) {
 			out.data[column].Slice(*columns[column], offset, offset + count);
@@ -284,79 +264,50 @@ void DecideRowStore::SliceColumns(const ExpressionExecutor &executor, idx_t offs
 }
 
 Value DecideRowStore::ValueAt(const Expression &lowered, idx_t row) {
-	if (auto *slot = Find(lowered)) {
-		auto error = slot->errors.find(row);
-		if (error != slot->errors.end()) {
-			error->second.Throw();
+	auto &slot = Values(lowered);
+	if (slot.constant) {
+		if (slot.constant_error.HasError()) {
+			slot.constant_error.Throw();
 		}
-		return slot->values.GetValue(row);
+		return slot.values.GetValue(0);
 	}
-	// A read of one row: the input's row, when the pass kept no column it reads, is looked up, not scanned.
-	ColumnDataScanState seek;
-	DataChunk input;
-	idx_t input_row = 0;
-	if (!Kept(lowered)) {
-		data.InitializeScan(seek);
-		input.Initialize(context, data.Types());
-		if (!data.Seek(row, seek, input)) {
-			throw InternalException("DECIDE: row %llu is past the end of the input", row);
-		}
-		input_row = row - seek.current_row_index;
+	auto error = slot.errors.find(row);
+	if (error != slot.errors.end()) {
+		error->second.Throw();
 	}
-	DataChunk one;
-	one.InitializeEmpty(types);
-	for (idx_t column = 0; column < types.size(); column++) {
-		if (columns[column]) {
-			one.data[column].Slice(*columns[column], row, row + 1);
-		} else if (column < input_columns && input.ColumnCount() > 0) {
-			one.data[column].Slice(input.data[column], input_row, input_row + 1);
-		} else {
-			one.data[column].Reference(Value(types[column]));
-		}
-	}
-	one.SetCardinality(1);
-	ExpressionExecutor executor(context, lowered);
-	Vector value(lowered.return_type);
-	executor.ExecuteExpression(one, value);
-	return value.GetValue(0);
+	return slot.values.GetValue(row);
 }
 
-DecideRowWindows::DecideRowWindows(ChunkExprCache &cache, ClientContext &context, ColumnDataCollection &data)
-    : store(cache.store), context(context), data(data) {
+static DecideRowStore &PassOf(ChunkExprCache &cache) {
+	if (!cache.store) {
+		throw InternalException("DECIDE: the evaluation reads its rows before the one pass");
+	}
+	return *cache.store;
+}
+
+DecideRowWindows::DecideRowWindows(ChunkExprCache &cache) : store(PassOf(cache)) {
 }
 
 bool DecideRowWindows::Next() {
-	if (!started) {
-		started = true;
-		if (!store) {
-			InitializeDecideScan(data, scan);
-			chunk.Initialize(context, data.Types());
-		}
-	} else {
+	if (started) {
 		offset += count;
 	}
-	if (!store) {
-		if (!data.Scan(scan, chunk)) {
-			count = 0;
-			return false;
-		}
-		count = chunk.size();
-		return true;
-	}
-	const idx_t num_rows = data.Count();
+	started = true;
+	const idx_t num_rows = store.RowCount();
 	count = offset < num_rows ? MinValue<idx_t>(STANDARD_VECTOR_SIZE, num_rows - offset) : 0;
 	return count > 0;
 }
 
 void DecideRowWindows::Execute(ExpressionExecutor &executor, idx_t mask_offset,
                                const vector<const vector<bool> *> &reads, DataChunk &results) {
-	if (!store) {
-		ExecuteOnReadRows(executor, chunk, mask_offset, reads, results);
-		return;
-	}
 	results.SetCardinality(count);
 	for (idx_t e = 0; e < executor.expressions.size(); e++) {
-		auto &slot = store->Values(*executor.expressions[e]);
+		auto *expr = executor.expressions[e];
+		auto found = resolved.find(expr);
+		if (found == resolved.end()) {
+			found = resolved.emplace(expr, &store.Values(*expr)).first;
+		}
+		auto &slot = *found->second;
 		auto *rows = reads[e];
 		auto read = [&](idx_t i) {
 			return !rows || (*rows)[mask_offset + i];
@@ -368,14 +319,27 @@ void DecideRowWindows::Execute(ExpressionExecutor &executor, idx_t mask_offset,
 				error->second.Throw();
 			}
 		}
-		Vector window(slot.values.GetType());
-		VectorOperations::Copy(slot.values, window, offset + count, offset, 0);
-		for (idx_t i = 0; rows && i < count; i++) {
-			if (!read(i)) {
-				FlatVector::SetNull(window, i, true);
-			}
+		// The window reads the slot in place: its rows -- a constant's one value -- or, where some are not read,
+		// those it reads and the NULL after the values on the others.
+		const idx_t first = slot.constant ? 0 : offset;
+		const idx_t null = slot.constant ? 1 : store.RowCount();
+		idx_t unread = 0;
+		SelectionVector window(count);
+		for (idx_t i = 0; i < count; i++) {
+			const bool row_read = read(i);
+			unread += !row_read;
+			window.set_index(i, row_read ? first + (slot.constant ? 0 : i) : null);
 		}
-		results.data[e].Reference(window);
+		if (slot.constant && slot.constant_error.HasError() && unread < count) {
+			slot.constant_error.Throw();
+		}
+		if (unread == 0 && slot.constant) {
+			results.data[e].Reference(slot.values.GetValue(0));
+		} else if (unread == 0) {
+			results.data[e].Slice(slot.values, offset, offset + count);
+		} else {
+			results.data[e].Slice(slot.values, window, count);
+		}
 	}
 }
 
@@ -384,38 +348,16 @@ void DecideRowWindows::Execute(ExpressionExecutor &executor, const vector<bool> 
 }
 
 Value DecideRowWindows::ValueAt(const Expression &lowered, idx_t i) {
-	if (store) {
-		return store->ValueAt(lowered, offset + i);
-	}
-	SelectionVector at_row(1);
-	at_row.set_index(0, i);
-	DataChunk row;
-	row.InitializeEmpty(chunk.GetTypes());
-	row.Slice(chunk, at_row, 1);
-	ExpressionExecutor executor(context, lowered);
-	Vector value(lowered.return_type);
-	executor.ExecuteExpression(row, value);
-	return value.GetValue(0);
+	return store.ValueAt(lowered, offset + i);
 }
 
 DataChunk &DecideRowWindows::Input(const ExpressionExecutor &executor) {
-	if (!store) {
-		return chunk;
-	}
-	if (columns.ColumnCount() != store->Types().size()) {
+	if (columns.ColumnCount() != store.Types().size()) {
 		columns.Destroy();
-		columns.InitializeEmpty(store->Types());
+		columns.InitializeEmpty(store.Types());
 	}
-	store->SliceColumns(executor, offset, count, columns);
+	store.SliceColumns(executor, offset, count, columns);
 	return columns;
-}
-
-idx_t DecideColumnCount(const ChunkExprCache &cache, const ColumnDataCollection &data) {
-	return cache.store ? cache.store->ColumnCount() : data.ColumnCount();
-}
-
-const vector<LogicalType> &DecideColumnTypes(const ChunkExprCache &cache, const ColumnDataCollection &data) {
-	return cache.store ? cache.store->Types() : data.Types();
 }
 
 } // namespace duckdb

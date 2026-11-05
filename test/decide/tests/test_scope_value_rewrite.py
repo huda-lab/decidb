@@ -897,7 +897,7 @@ def test_abs_around_a_sum_helper_boxes_each_row_by_its_groups_reach(decidb_cli_h
 @pytest.mark.correctness
 def test_the_helper_key_is_read_on_the_kept_rows_only(decidb_cli, scope_solver):
     """`when t.i > 0:` drops the row whose key would not cast: the helper's instances are
-    the groups among the kept rows, and the key is never evaluated on any other row."""
+    the groups among the kept rows, and the key is never read on any other row."""
     rows = ((0, 9), (1, 10), (2, 20), (3, 30))
     columns = ("i", "cap")
     sql = f"""

@@ -27,13 +27,13 @@ namespace duckdb {
 
 //! `expr` on the rows `rows` marks, one slot per row and one more after them: NULL on the
 //! rows not read, the extra slot for the caller to fill.
-static Vector EvaluateOnRows(ClientContext &context, const Expression &expr, ColumnDataCollection &data, idx_t num_rows,
+static Vector EvaluateOnRows(ClientContext &context, const Expression &expr, idx_t num_rows,
                              const vector<bool> &rows, ChunkExprCache &chunk_expr_cache) {
 	auto &lowered = CachedTransformToChunkExpression(chunk_expr_cache, expr, context);
 	Vector values(lowered.return_type, num_rows + 1);
 	ExpressionExecutor executor(context);
 	executor.AddExpression(lowered);
-	DecideRowWindows windows(chunk_expr_cache, context, data);
+	DecideRowWindows windows(chunk_expr_cache);
 	DataChunk result;
 	result.Initialize(context, {lowered.return_type});
 	while (windows.Next()) {
@@ -206,15 +206,15 @@ static void ListRangeWindows(ClientContext &context, const DecideFrameSpec &fram
 }
 
 DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec &frame, const vector<DecideKey> &keys,
-                                   PerGroupCache &per_group_cache, ColumnDataCollection &data, idx_t num_rows,
+                                   PerGroupCache &per_group_cache, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache) {
 	DecideFrameMap map;
 	map.range = frame.range;
 	map.fallback = frame.fallback != nullptr;
 	map.anchors =
-	    frame.rows ? KeptRows(*frame.rows, chunk_expr_cache, context, data, num_rows) : vector<bool>(num_rows, true);
+	    frame.rows ? KeptRows(*frame.rows, chunk_expr_cache, context, num_rows) : vector<bool>(num_rows, true);
 	idx_t timelines = 0;
-	LookupOrBuildPerGroupIds(per_group_cache, keys, frame.timeline_key, chunk_expr_cache, context, data, num_rows,
+	LookupOrBuildPerGroupIds(per_group_cache, keys, frame.timeline_key, chunk_expr_cache, context, num_rows,
 	                         std::function<bool(idx_t)>(), &map.anchors, map.timeline, timelines);
 
 	// Each anchor's order key as a sort key: bytes that compare as ORDER BY orders the
@@ -228,7 +228,7 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 		auto &order = CachedTransformToChunkExpression(chunk_expr_cache, *frame.order, context);
 		ExpressionExecutor executor(context);
 		executor.AddExpression(order);
-		DecideRowWindows windows(chunk_expr_cache, context, data);
+		DecideRowWindows windows(chunk_expr_cache);
 		DataChunk result;
 		result.Initialize(context, {order.return_type});
 		while (windows.Next()) {
@@ -328,13 +328,13 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 
 //! The values of `frame`'s timeline key at `row`, as a message names them, and the names.
 static vector<Value> TimelineValues(ClientContext &context, const DecideFrameSpec &frame, const vector<DecideKey> &keys,
-                                    ColumnDataCollection &data, idx_t num_rows, idx_t row,
+                                    idx_t num_rows, idx_t row,
                                     ChunkExprCache &chunk_expr_cache) {
 	vector<bool> at(num_rows, false);
 	at[row] = true;
 	vector<Value> values;
 	for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
-		values.push_back(ReadRowValues(*element.expression, chunk_expr_cache, context, data, &at)[row]);
+		values.push_back(ReadRowValues(*element.expression, chunk_expr_cache, context, &at)[row]);
 	}
 	return values;
 }
@@ -342,28 +342,28 @@ static vector<Value> TimelineValues(ClientContext &context, const DecideFrameSpe
 //! D73: `frame` selects `peer`, whose rows read different payloads.
 [[noreturn]] static void ThrowAmbiguousPeer(ClientContext &context, const DecideFrameSpec &frame,
                                             const DecideFrameMap &map, idx_t peer, const vector<DecideKey> &keys,
-                                            ColumnDataCollection &data, idx_t num_rows,
+                                            idx_t num_rows,
                                             ChunkExprCache &chunk_expr_cache) {
 	const auto row = map.peer_rows[map.peer_begin[peer]];
 	vector<bool> at(num_rows, false);
 	at[row] = true;
 	auto names = frame.timeline_names;
-	auto values = TimelineValues(context, frame, keys, data, num_rows, row, chunk_expr_cache);
+	auto values = TimelineValues(context, frame, keys, num_rows, row, chunk_expr_cache);
 	names.push_back(frame.order_name);
-	values.push_back(ReadRowValues(*frame.order, chunk_expr_cache, context, data, &at)[row]);
+	values.push_back(ReadRowValues(*frame.order, chunk_expr_cache, context, &at)[row]);
 	throw InvalidInputException("DECIDE: %s finds %llu rows at %s; a position must hold one row.", frame.text,
 	                            map.PeerSize(peer), DescribeKeyValues(names, values));
 }
 
 void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
-                               ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
+                               idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
 	if (frame.partition_subject.empty()) {
 		return;
 	}
 	vector<idx_t> ids;
 	idx_t count = 0;
-	LookupOrBuildPerGroupIds(per_group_cache, keys, frame.partition_key, chunk_expr_cache, context, data, num_rows,
+	LookupOrBuildPerGroupIds(per_group_cache, keys, frame.partition_key, chunk_expr_cache, context, num_rows,
 	                         std::function<bool(idx_t)>(), &map.anchors, ids, count);
 	vector<idx_t> first_row(count, DConstants::INVALID_INDEX);
 	for (idx_t row = 0; row < num_rows; row++) {
@@ -387,10 +387,10 @@ void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &fr
 		vector<Value> class_values;
 		for (auto &element : DecideKeyElements(keys, frame.partition_key)) {
 			class_names.push_back(element.name);
-			class_values.push_back(ReadRowValues(*element.expression, chunk_expr_cache, context, data, &at)[first]);
+			class_values.push_back(ReadRowValues(*element.expression, chunk_expr_cache, context, &at)[first]);
 		}
-		auto left = TimelineValues(context, frame, keys, data, num_rows, first, chunk_expr_cache);
-		auto right = TimelineValues(context, frame, keys, data, num_rows, row, chunk_expr_cache);
+		auto left = TimelineValues(context, frame, keys, num_rows, first, chunk_expr_cache);
+		auto right = TimelineValues(context, frame, keys, num_rows, row, chunk_expr_cache);
 		vector<string> left_text, right_text;
 		for (idx_t i = 0; i < left.size(); i++) {
 			left_text.push_back(DecideSqlLiteral(left[i]));
@@ -445,7 +445,7 @@ struct FrameAggregateStates {
 //! them is skipped as SQL's aggregate skips it (D84; `count` counts the others, and of none is 0). Each value is
 //! computed on the rows that read it only. An anchor whose window reads nothing reads NULL.
 static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameColumn &column,
-                              const DecideFrameMap &map, ColumnDataCollection &data, idx_t num_rows,
+                              const DecideFrameMap &map, idx_t num_rows,
                               ChunkExprCache &chunk_expr_cache, Vector &out) {
 	auto &marker = column.value->Cast<BoundAggregateExpression>();
 	if (marker.children.size() != 1) {
@@ -461,11 +461,11 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 	}
 	// One source to reduce from: the payload's values at [0, n), the else's at [n, 2n).
 	Vector source(marker.children[0]->return_type, 2 * num_rows);
-	auto payload = EvaluateOnRows(context, *marker.children[0], data, num_rows, map.ReadRows(), chunk_expr_cache);
+	auto payload = EvaluateOnRows(context, *marker.children[0], num_rows, map.ReadRows(), chunk_expr_cache);
 	VectorOperations::Copy(payload, source, num_rows, 0, 0);
 	if (map.fallback) {
 		auto fallback =
-		    EvaluateOnRows(context, *column.fallback, data, num_rows, map.FallbackAnchors(), chunk_expr_cache);
+		    EvaluateOnRows(context, *column.fallback, num_rows, map.FallbackAnchors(), chunk_expr_cache);
 		VectorOperations::Copy(fallback, source, num_rows, 0, num_rows);
 	}
 
@@ -523,12 +523,12 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 
 void SkipDecideRangeNullReads(ClientContext &context, const vector<const Expression *> &payload,
                               const vector<const Expression *> &fallback, DecideFrameMap &map,
-                              ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
+                              idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
 	auto null_on = [&](const vector<const Expression *> &exprs, const vector<bool> &rows) {
 		vector<bool> nulls(num_rows, false);
 		bool any = false;
 		for (auto *expr : exprs) {
-			auto values = EvaluateOnRows(context, *expr, data, num_rows, rows, chunk_expr_cache);
+			auto values = EvaluateOnRows(context, *expr, num_rows, rows, chunk_expr_cache);
 			UnifiedVectorFormat format;
 			values.ToUnifiedFormat(num_rows, format);
 			for (idx_t row = 0; row < num_rows; row++) {
@@ -573,15 +573,15 @@ static vector<bool> ReadPeers(const DecideFrameMap &map) {
 
 void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
-                              ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
+                              idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
 	auto &columns = prepared.frame_columns;
 	if (columns.empty()) {
 		return;
 	}
 	// Stage 05 numbered these columns after the input's own, before any other was added.
-	if (DecideColumnCount(chunk_expr_cache, data) != prepared.frame_column_base) {
+	if (chunk_expr_cache.store->ColumnCount() != prepared.frame_column_base) {
 		throw InternalException("DECIDE: the frame columns follow %llu input columns, not %llu",
-		                        prepared.frame_column_base, DecideColumnCount(chunk_expr_cache, data));
+		                        prepared.frame_column_base, chunk_expr_cache.store->ColumnCount());
 	}
 	vector<unique_ptr<Vector>> values_of;
 	// DEFINED reads the frame's other columns, so it is computed after them. A reducer over data reading frames is
@@ -597,7 +597,7 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		if (column.kind == DecideFrameColumn::Kind::DEFINED) {
 			defined.push_back(j);
 		} else if (column.kind == DecideFrameColumn::Kind::REDUCED) {
-			ReduceRangeValues(context, frames[column.frame], column, map, data, num_rows, chunk_expr_cache, *out);
+			ReduceRangeValues(context, frames[column.frame], column, map, num_rows, chunk_expr_cache, *out);
 		} else {
 			// A payload is read at the first row of each selected peer, the row every anchor of
 			// the peer reads (D73 holds the others to it); an `else` at the anchors whose
@@ -621,14 +621,14 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 			// else's at [n + 1, 2n + 1).
 			Vector source(column.type, 2 * num_rows + 1);
 			if (payload) {
-				auto values = EvaluateOnRows(context, *payload, data, num_rows, selected_rows, chunk_expr_cache);
+				auto values = EvaluateOnRows(context, *payload, num_rows, selected_rows, chunk_expr_cache);
 				VectorOperations::Copy(values, source, num_rows, 0, 0);
 			}
 			const bool no_value = column.kind == DecideFrameColumn::Kind::VALUE ||
 			                      (column.kind == DecideFrameColumn::Kind::READ && !frames[column.frame].fallback);
 			source.SetValue(num_rows, no_value ? Value(column.type) : Value::INTEGER(0).DefaultCastAs(column.type));
 			if (fallback) {
-				auto values = EvaluateOnRows(context, *fallback, data, num_rows, missing_rows, chunk_expr_cache);
+				auto values = EvaluateOnRows(context, *fallback, num_rows, missing_rows, chunk_expr_cache);
 				VectorOperations::Copy(values, source, num_rows, 0, num_rows + 1);
 			}
 			SelectionVector gather(num_rows);
@@ -676,52 +676,14 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		}
 	}
 
-	AppendDecideColumns(context, data, chunk_expr_cache, values_of);
+	AppendDecideColumns(chunk_expr_cache, values_of);
 }
 
-void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
-                         const vector<unique_ptr<Vector>> &values_of) {
-	if (values_of.empty()) {
-		return;
-	}
-	if (chunk_expr_cache.store) {
-		// Computed bottom-up, the columns stay beside the pass's: the input is not read again.
-		for (auto &values : values_of) {
-			chunk_expr_cache.store->AppendColumn(*values);
-		}
-		return;
-	}
-	auto types = data.Types();
+void AppendDecideColumns(ChunkExprCache &chunk_expr_cache, const vector<unique_ptr<Vector>> &values_of) {
+	// Computed bottom-up, the columns stay beside the pass's: the input is not read again.
 	for (auto &values : values_of) {
-		types.push_back(values->GetType());
+		chunk_expr_cache.store->AppendColumn(*values);
 	}
-	// The input again, these columns after its own.
-	ColumnDataCollection widened(context, types);
-	ColumnDataAppendState append;
-	widened.InitializeAppend(append);
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
-	DataChunk wide;
-	wide.InitializeEmpty(types);
-	idx_t offset = 0;
-	while (data.Scan(scan, chunk)) {
-		const idx_t count = chunk.size();
-		for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
-			wide.data[col].Reference(chunk.data[col]);
-		}
-		for (idx_t j = 0; j < values_of.size(); j++) {
-			wide.data[chunk.ColumnCount() + j].Slice(*values_of[j], offset, offset + count);
-		}
-		wide.SetCardinality(count);
-		widened.Append(append, wide);
-		offset += count;
-	}
-	// Emptied, the collection takes the wider types, and the widened rows' segments move in.
-	data.Reset();
-	data.Types() = types;
-	data.Combine(widened);
 }
 
 //! The columns `expr` reads, each once, appended to `leaves` unless there: a position's signature reads each by value
@@ -784,7 +746,7 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
                            const vector<DecideFrameMap> &maps, const vector<DecideFramePayload> &payloads,
                            const vector<DecideVarScopeInfo> &variable_scopes,
                            const vector<KeyedMapping> &keyed_mappings, const vector<DecideKey> &keys,
-                           ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
+                           idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
 	for (idx_t f = 0; f < maps.size(); f++) {
 		auto &map = maps[f];
 		auto &terms = payloads[f].terms;
@@ -811,7 +773,7 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
 		}
 		vector<Vector> values;
 		for (auto *leaf : leaves) {
-			values.push_back(EvaluateOnRows(context, *leaf, data, num_rows, tied_rows, chunk_expr_cache));
+			values.push_back(EvaluateOnRows(context, *leaf, num_rows, tied_rows, chunk_expr_cache));
 		}
 		// A decision's instance at a row: the row for a per-row one, its class for a keyed one;
 		// a query-wide one has one instance everywhere.
@@ -840,7 +802,7 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
 			const auto first = map.peer_rows[map.peer_begin[peer]];
 			for (idx_t i = map.peer_begin[peer] + 1; i < map.peer_begin[peer + 1]; i++) {
 				if (!same_signature(first, map.peer_rows[i])) {
-					ThrowAmbiguousPeer(context, frames[f], map, peer, keys, data, num_rows, chunk_expr_cache);
+					ThrowAmbiguousPeer(context, frames[f], map, peer, keys, num_rows, chunk_expr_cache);
 				}
 			}
 		}

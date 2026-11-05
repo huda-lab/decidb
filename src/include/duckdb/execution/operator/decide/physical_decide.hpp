@@ -306,10 +306,9 @@ private:
 
 	//! PHASE 1.3: the annotated tree of the one pass (deck pp. 81, 99): every expression a later phase reads on a row,
 	//! registered for the pass to evaluate (DecideRowStore).
-	void RegisterEvaluation(ClientContext &context, DecideGlobalSinkState &gstate, ChunkExprCache &chunk_expr_cache,
-	                        DecideRowStore &store) const;
+	void RegisterEvaluation(ClientContext &context, ChunkExprCache &chunk_expr_cache, DecideRowStore &store) const;
 	//! PHASE 1.4: each frame selector's timelines and selections (gstate.frame_maps), then
-	//! the values the frames read appended to the input as columns
+	//! the values the frames read as columns beside the one pass's
 	//! (DecidePreparedModel::frame_columns), so every later phase reads them as data.
 	void BuildFrames(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
 	                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache) const;

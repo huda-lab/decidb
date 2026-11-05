@@ -9,8 +9,11 @@ todo of the area that owns it.
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
 postfix `by` with their defaults (p. 16), variant signatures (pp. 34–40), deck examples 1–9 (pp. 17–25), NULL keys
 and empty groups (pp. 30, 50, 56), reducers nested to any depth (pp. 25, 28–32), the two-level objective
-`outer(per k: inner(e) by (k))` among them, and frame selectors, points and ranges (pp. 42–56), each with the limits
-listed below (D80).
+`outer(per k: inner(e) by (k))` among them, frame selectors, points and ranges (pp. 42–56), each with the limits
+listed below (D80), and the one-pass algorithm (pp. 77–119, D91): execution registers what every node of the
+annotated tree reads on a row, reads its input once, and evaluates the nodes from that pass
+(`../pipeline/08_execution/done.md` §1a); `MAX` inside `SUM` becomes helpers and `SUM` inside `SUM` flattens, as the
+deck builds its model (pp. 115, 119; D89).
 
 The rulings for variant signatures, nesting and frame selectors are settled ([decisions.md](decisions.md) D70–D89) and
 encoded by the test oracle `test/decide/tests/_anr_oracle.py` ([../testing/scope_suite.md](../testing/scope_suite.md));
@@ -82,17 +85,6 @@ data; `if` guards with an unknown. Requires `R_θ ⊨ κ → b`. Example: enforc
 - An objective's omitted `per` is `per ()`; no other outer `per` is allowed. DeciDB already treats the objective as
   produced once.
 
-## The one-pass algorithm (pp. 79–119)
-
-The deck's evaluation strategy for nested ANR: build an annotated AST whose scoped expressions carry their signature
-(per key, direct tuple terms, direct `by` keys), fill it top-down in one pass over the joined rows, then evaluate
-bottom-up into constraints. Runtime containers follow the node role: a reducer is a map from `by` key to operand; a
-scoped expression is a vector for `per row`, otherwise a set of distinct signatures. Frames are built the same way
-over partition and order. `MAX` inside `SUM` becomes helper variables (`x₁,₂ = max(x₁, x₂)`); `SUM` inside `SUM`
-flattens. DeciDB evaluates through DuckDB plans and window columns instead, and builds the deck's model (pp. 115,
-119): a nest's `SUM` and `AVG` reducers are written where they are read, any other helper where that adds no nonzero,
-a bound on a `SUM` is a row it is written into, a `MAX` group of one member is that member, and an empty group has no
-column (D89).
 
 ## Beyond the deck (pp. 2, 76)
 
