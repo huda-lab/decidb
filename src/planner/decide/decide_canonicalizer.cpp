@@ -2022,7 +2022,7 @@ bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
 		return false;
 	}
 	out.key = keyed_scopes[scope_idx].key;
-	out.text = DecideKeyText(keys, out.key);
+	out.text = "per " + DecideKeyText(keys, out.key);
 	return true;
 }
 
@@ -2060,7 +2060,7 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 			return;
 		}
 		frame.partition_key = class_key;
-		frame.partition_subject = "per " + per->text + " does not determine the timeline " +
+		frame.partition_subject = per->text + " does not determine the timeline " +
 		                          StringUtil::Join(frame.timeline_names, ", ") + " of " + frame.text;
 		return;
 	}
@@ -2100,8 +2100,8 @@ void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclos
 	if (enclosing.per_wrapper) {
 		per.key = enclosing.PerKey();
 		// The key as written (`per D.depotID`), which the binder recorded as a fragment.
-		per.text = message_names ? RenderDecidePerKey(*enclosing.per_wrapper, message_names->fragments)
-		                         : DecideKeyText(keys, per.key);
+		per.text = "per " + (message_names ? RenderDecidePerKey(*enclosing.per_wrapper, message_names->fragments)
+		                                   : DecideKeyText(keys, per.key));
 	}
 	PlaceFramesIn(expr, path, enclosing.per_wrapper ? &per : nullptr, placement);
 }
@@ -2122,7 +2122,11 @@ void DecideCanonicalizer::PlaceObjectiveFrames(const Expression &objective, Deci
 			body = conj.children[0].get();
 		}
 	}
-	PlaceFramesIn(*body, path, nullptr, placement);
+	// The objective is produced once, `per ()` (deck p. 62), so its one class lies in one timeline of every frame at
+	// its root, as a `per ()` clause's does (D75).
+	FramePerKey per;
+	per.text = "the objective (per ())";
+	PlaceFramesIn(*body, path, &per, placement);
 }
 
 } // namespace duckdb

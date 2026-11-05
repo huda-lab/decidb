@@ -555,9 +555,10 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
   (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
   has no member.
-- **The objective** is produced once (D72): a root frame that reads more than one value -- at more than one position,
-  timeline or fallback --
-  over the kept rows is an error saying so.
+- **The objective** is produced once, `per ()` (D72, D75): a root frame whose kept rows span two timelines is the
+  `per ()` error above (*"DECIDE: the objective (per ()) does not determine the timeline t.product of at(first: x) over
+  (t.period within t.product). Its rows span t.product = 'A', 'B'."*), whatever the timelines read; one read from more
+  than one position or fallback of one timeline is an error saying the objective would be produced more than once.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
   inside a frame's payload or fallback; a frame over decisions multiplied by a decision or squared (*"... multiplies a
   decision read at another row by a decision, which is not supported yet"*). A frame over data is a coefficient read

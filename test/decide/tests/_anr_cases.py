@@ -1084,6 +1084,37 @@ PARTITION_UNTIMED = _partition(
     data=((1, "Food", "A", 1, 4), (2, "Food", "A", 2, 6), (3, "Food", None, 1, 9)),
 )
 
+OBJECTIVE_TIMELINE_COLUMNS = ("id", "p", "period", "v")
+OBJECTIVE_TIMELINE_DATA = ((1, "A", 1, 5), (2, "A", 2, 6), (3, "B", 1, 5), (4, "B", 2, 8))
+
+
+def _objective_timeline(name, when, when_sql, error, optimum) -> Case:
+    first = At(FIRST, Col("v") * Var("y"), Over("period", within=("p",)))
+    return Case(
+        name,
+        "D75",
+        4,
+        OBJECTIVE_TIMELINE_COLUMNS,
+        OBJECTIVE_TIMELINE_DATA,
+        (Decision("x"), Decision("y", GLOBAL)),
+        (clause(le(X, 3)), clause(le(Var("y"), 2))),
+        Objective(MAXIMIZE, reduce("sum", X) + first, when=when),
+        f"""SELECT id, x, y {table('t', OBJECTIVE_TIMELINE_COLUMNS, OBJECTIVE_TIMELINE_DATA)}
+            DECIDE x(INT), per (): y(INT) SUCH THAT x <= 3 AND y <= 2
+            MAXIMIZE {when_sql}sum(x) + at(first: t.v * y) over (t.period within t.p) ORDER BY id""",
+        optimum,
+        error=error,
+    )
+
+
+#: The objective is `per ()` (deck p. 62), one class over two timelines of a frame at its root: no timeline (D75),
+#: although both timelines' first periods read 5.
+OBJECTIVE_TIMELINES = _objective_timeline("objective_timelines", None, "", "frame_partition", None)
+#: A `when` that keeps one timeline leaves the objective one: x1 + x2 + 5 * y.
+OBJECTIVE_ONE_TIMELINE = _objective_timeline(
+    "objective_one_timeline", lambda r: r["p"] == "A", "when t.p = 'A': ", None, 16
+)
+
 NESTED_EMPTY_COLUMNS = ("id", "g", "h", "c")
 NESTED_EMPTY_DATA = ((1, "a", "p", True), (2, "a", "q", False))
 #: The inner reducer's own when empties h = 'q': that member has no value and is dropped,
@@ -1472,6 +1503,8 @@ CASES = (
     PARTITION_HELD,
     PARTITION_NONE,
     PARTITION_UNTIMED,
+    OBJECTIVE_TIMELINES,
+    OBJECTIVE_ONE_TIMELINE,
     NESTED_EMPTY,
     KEPT_NONE,
     NULL_PAYLOAD,

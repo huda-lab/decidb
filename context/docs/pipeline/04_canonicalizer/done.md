@@ -558,8 +558,8 @@ decision term does, one over data right, and it decides no shape. `PlaceFrames` 
 `PlaceObjectiveFrames`, run right after canonicalization, place each frame on the
 `DecideFrameSpec` the binder recorded: its timelines read the rows its path keeps (`rows`,
 the path rule, `../../language/guide.md` §5.5), split by its path's `by` keys and its
-`within` (`timeline_key`, a key-table entry made when new). Under a `per K`
-whose key, with the path's, does not hold the
+`within` (`timeline_key`, a key-table entry made when new). Under a `per K` -- the
+objective's root is `per ()` (deck p. 62) -- whose key, with the path's, does not hold the
 frame's `within`, the frame records the D75 check execution runs (`partition_key`,
 `partition_subject`). Whether a frame has a value at an anchor is the data's to say: stage 08
 reads it per instance (D84, D88). `SkipNullData`

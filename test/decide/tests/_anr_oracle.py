@@ -557,6 +557,8 @@ class AnrModel:
         kept = self._root_kept(objective.when)
         if not kept:
             return {}
+        # Produced once, `per ()` (deck p. 62): its one class lies in one timeline of every frame at its root (D75).
+        self._check_timelines(objective.body, kept, kept, GLOBAL)
         terms: list = []
         self._terms_of(objective.body, 1.0, terms)
         signatures = {}

@@ -288,7 +288,7 @@ class TestSyntax:
         """A subquery that starts with FROM or VALUES keeps OVER, WITHIN and a named window
         as SQL's, and a decision may be called `at`."""
         rows, _ = decidb_cli.execute(
-            f'SELECT id, at {T} DECIDE at(REAL) SUCH THAT at <= (FROM (SELECT t.demand AS "within" {T}) u '
+            f"SELECT id, at {T} DECIDE at(REAL) SUCH THAT at <= (FROM (SELECT t.demand AS \"within\" {T}) u "
             "WINDOW w AS (ORDER BY u.within) QUALIFY row_number() OVER w = 1) MAXIMIZE sum(at)"
         )
         assert sorted(rows) == [(1, 5.0), (2, 5.0), (3, 5.0)]
@@ -1000,7 +1000,7 @@ class TestPointErrors:
         "objective, message",
         [
             pytest.param(
-                "MAXIMIZE at(previous: x) over (t.period within t.product)",
+                "MAXIMIZE when t.product = 'A': at(previous: x) over (t.period within t.product)",
                 "DECIDE objective: 'at(previous: x) over (t.period within t.product)' reads more than one "
                 "position over the kept rows (t.period = 2, 3), so the objective would be produced more than "
                 "once",
@@ -1008,17 +1008,17 @@ class TestPointErrors:
             ),
             pytest.param(
                 "MAXIMIZE at(first: x) over (t.period within t.product)",
-                "DECIDE objective: 'at(first: x) over (t.period within t.product)' reads more than one "
-                "timeline over the kept rows (t.product = 'A', 'B'), so the objective would be produced more "
-                "than once",
+                "DECIDE: the objective (per ()) does not determine the timeline t.product of at(first: x) over "
+                "(t.period within t.product). Its rows span t.product = 'A', 'B'.",
                 id="two-timelines",
             ),
         ],
     )
     def test_the_objective_is_produced_once(self, decidb_cli, objective, message):
-        """D72: a root frame reading more than one value is two objectives. The first periods,
-        which have no previous one, read none and are no variant (D84): the anchors that read
-        differ at periods 2 and 3."""
+        """D72: a root frame read from more than one position is two objectives. The first
+        period, which has no previous one, reads none and is no variant (D84): the anchors that
+        read differ at periods 2 and 3. Over two products' rows, the objective's one class
+        spans two timelines first (D75)."""
         result = decidb_cli.execute_raw(_edge("x <= t.v", objective=objective))
         assert message in result.stderr, result.stderr
 
@@ -1482,7 +1482,10 @@ class TestRange:
 
     def test_a_relative_range_in_the_objective_is_produced_more_than_once(self, decidb_cli):
         result = decidb_cli.execute_raw(
-            _edge("x <= t.v", objective="MAXIMIZE sum(from previous to next: x) " "over (t.period within t.product)")
+            _edge(
+                "x <= t.v",
+                objective="MAXIMIZE when t.product = 'A': sum(from previous to next: x) over (t.period within t.product)",
+            )
         )
         assert ScopeError.PHRASES["objective_variants"] in result.stderr, result.stderr
 

@@ -506,6 +506,7 @@ private:
 	struct FramePerKey {
 		//! Into `keys`; INVALID_INDEX for `per ()`, one class.
 		idx_t key = DConstants::INVALID_INDEX;
+		//! The scope as a message names it: `per D.depotID`, `the objective (per ())`.
 		string text;
 	};
 	void PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
