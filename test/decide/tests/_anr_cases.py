@@ -983,9 +983,7 @@ COUNT_NULL_ELSE = Case(
     (Decision("x"),),
     (
         clause(le(X, 9)),
-        clause(
-            le(X, Range("count", next_(2), next_(3), Col("v"), Over("period", within=("p",)), fallback=Col("o")))
-        ),
+        clause(le(X, Range("count", next_(2), next_(3), Col("v"), Over("period", within=("p",)), fallback=Col("o")))),
     ),
     Objective(MAXIMIZE, reduce("sum", X)),
     f"""SELECT id, x {table('t', NULL_ELSE_COLUMNS, NULL_ELSE_DATA)} DECIDE x(INT)
