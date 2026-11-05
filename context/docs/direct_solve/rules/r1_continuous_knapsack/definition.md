@@ -179,12 +179,13 @@ accepts) is copied once when four reads of the copy cost less than four scans an
 limit (`done.md`), and otherwise rebuilt once per read with fresh table indexes, so each read is a parallel scan and no
 copy of the rows is kept. Any other source (a join, a subquery with an aggregate, a table function, a volatile
 expression) is materialized once (`LogicalMaterializedCTE`) and read through `LogicalCTERef`s. Both reads return the
-same rows, and no stage depends on their order. The row-id late materialization does not apply to R1: its answers join
-on group keys, not on a row id.
+same rows, and no stage depends on their order. Late materialization applies to a stored source: its row id is passed
+through the plan as a source column, and a column the parent reads and no stage does is fetched again by row id above
+the plan (`architecture/result_adapter.md`).
 
 **What a query skips**, decided from the proved condition and never from the data: with no scope, the group keys;
-with no limit read from the data, the MIN and MAX; with no objective, v (zero); when every box end is a finite
-constant and no per-row bound clause applies, the open-room columns and counts.
+with no limit read from the data, the MIN and MAX; with no objective, v (zero). The open-room columns and counts are
+always built.
 
 **Several cases, one plan.** Weights of each sign and zero, infinite rooms, the budget directions, ties, `by` and
 `when` change values inside stages 1, 2 and 4 (the high and low ends, the open-room counts, L and U, the group key);

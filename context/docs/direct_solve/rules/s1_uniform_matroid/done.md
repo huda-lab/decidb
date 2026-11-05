@@ -1,7 +1,6 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-11-05 on top of `5b14e8697b` with objective `when`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off
-make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each
+Verified on 2026-11-05 at `a9ae210a3c`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each
 5,962 passed; C++ `build/release/test/unittest "[decidb]"` 3,045 assertions in 78 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`; its scope projection and bound validation are the shared
