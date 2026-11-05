@@ -210,9 +210,9 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
                               ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
-//! What a frame reads at each row of a position it reads, as D73 compares the rows: the values of `values`, or, with
-//! `terms`, the linear form they make over decision instances -- term `i` the coefficient `values[terms[i].column]`
-//! on decision `terms[i].decision`.
+//! What a frame reads at each row of a position it reads, as D73 compares the rows (deck p. 110): each column `values`
+//! read, by value, and the instance of each decision of `terms` -- term `i` the coefficient `values[terms[i].column]`
+//! on decision `terms[i].decision` --, whatever its coefficient.
 struct DecideFramePayload {
 	vector<const Expression *> values;
 	vector<DecideFramePayloadTerm> terms;
@@ -226,9 +226,9 @@ vector<DecideFramePayload> DecideFramePayloads(const vector<DecideFrameSpec> &fr
                                                const vector<LogicalDecide::ReducerValueLink> &links);
 
 //! D73, once the keyed mappings are built: the rows of a position a frame reads -- a point's selected peer, each
-//! position a range's window visits -- read one payload. A frame over data holds one value of its payload; a frame
-//! over decisions one linear form of it (`payloads`) -- one constant and one coefficient on each decision instance,
-//! the instances through the classes of `keyed_mappings` -- so `0 * x` reads no instance of `x`.
+//! position a range's window visits -- hold one signature of its payload, as the deck's frame container holds one per
+//! position (p. 110): each column the payload reads, by value (`a + b` reads `a` and `b`), and each decision it reads,
+//! by instance through the classes of `keyed_mappings` (`0 * x` reads `x`).
 void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec> &frames,
                            const vector<DecideFrameMap> &maps, const vector<DecideFramePayload> &payloads,
                            const vector<DecideVarScopeInfo> &variable_scopes,

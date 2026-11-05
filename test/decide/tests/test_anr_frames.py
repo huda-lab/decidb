@@ -942,42 +942,38 @@ class TestPointShapes:
             pytest.param(
                 "x <= at(previous: t.w * x) over (t.period within t.product) + 3",
                 le(X, At(previous(), Col("w") * X, TIMELINE) + 3),
+                ((1, "A", 1, 4, 1), (2, "A", 1, 3, 1), (3, "A", 2, 6, 1)),
+                id="coefficient-on-two-rows",
+            ),
+            pytest.param(
+                "x <= at(previous: t.w * x) over (t.period within t.product) + 3",
+                le(X, At(previous(), Col("w") * X, TIMELINE) + 3),
                 ((1, "A", 1, 4, 0), (2, "A", 1, 5, 0), (3, "A", 2, 6, 1)),
                 id="zero-coefficient",
+            ),
+            pytest.param(
+                "x <= at(previous: s + t.v) over (t.period within t.product)",
+                le(X, At(previous(), S + Col("v"), TIMELINE)),
+                ((1, "A", 1, 4, 1), (2, "A", 1, 3, 1), (3, "A", 2, 6, 1)),
+                id="two-constants",
             ),
             pytest.param(
                 "x <= at(previous: s + t.v + t.w) over (t.period within t.product)",
                 le(X, At(previous(), S + Col("v") + Col("w"), TIMELINE)),
                 ((1, "A", 1, 4, 1), (2, "A", 1, 3, 2), (3, "A", 2, 6, 1)),
-                id="constants-alike",
+                id="sums-alike",
             ),
         ],
     )
-    def test_peers_with_one_linear_form_select_once(self, decidb_cli, scope_solver, clause_sql, body, rows):
-        """D73 compares payloads as the model reads them: `0 * x` at two rows reads no
-        decision, and `s + 4 + 1` is `s + 3 + 2`."""
-        sql = _edge(f"s <= 2 AND {clause_sql}", decide="x(INT), per (): s(INT)", rows=rows, select="x, s")
-        _judged(
-            decidb_cli,
-            scope_solver,
-            sql,
-            table_rows(EDGE, rows),
-            [Decision("x"), Decision("s", GLOBAL)],
-            [CAP, clause(le(S, 2)), clause(body)],
-            MAXIMIZE_X,
-        )
-
-    @pytest.mark.parametrize(
-        "clause_sql",
-        [
-            pytest.param(
-                "x <= at(previous: t.w * x) over (t.period within t.product) + 3", id="coefficient-on-two-rows"
-            ),
-            pytest.param("x <= at(previous: s + t.v) over (t.period within t.product)", id="two-constants"),
-        ],
-    )
-    def test_peers_with_two_linear_forms_are_ambiguous(self, decidb_cli, clause_sql):
-        rows = ((1, "A", 1, 4, 1), (2, "A", 1, 3, 1), (3, "A", 2, 6, 1))
+    def test_peers_with_two_signatures_are_ambiguous(self, decidb_cli, clause_sql, body, rows):
+        """D73: a position holds one signature of the payload, as the deck's frame container
+        holds one per position (p. 110) -- each column by value, each decision by instance --
+        so `0 * x` at two rows reads two instances of `x`, and `s + 4 + 1` and `s + 3 + 2` two
+        values of `(t.v, t.w)`, although the model would read one linear form there."""
+        model = AnrModel(table_rows(EDGE, rows), [Decision("x"), Decision("s", GLOBAL)])
+        with pytest.raises(ScopeError) as raised:
+            model.instances(clause(body))
+        assert raised.value.kind == "ambiguous_peer"
         result = decidb_cli.execute_raw(_edge(f"s <= 2 AND {clause_sql}", decide="x(INT), per (): s(INT)", rows=rows))
         assert (
             "finds 2 rows at t.product = 'A', t.period = 1; a position must hold one row." in result.stderr

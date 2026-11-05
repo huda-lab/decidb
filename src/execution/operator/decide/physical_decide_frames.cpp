@@ -9,8 +9,6 @@
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "duckdb/common/map.hpp"
-#include "duckdb/common/pair.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -19,6 +17,7 @@
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -712,10 +711,21 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 	data.Combine(widened);
 }
 
-//! A payload over decisions at one row as the model reads it: the coefficient on each
-//! decision instance, keyed (decision, instance), and the constant, keyed
-//! (INVALID_INDEX, 0); no zero.
-using DecidePayloadForm = map<pair<idx_t, idx_t>, double>;
+//! The columns `expr` reads, each once, appended to `leaves` unless there: a position's signature reads each by value
+//! (deck p. 110; D83). A constant reads none, and a clause refuses data that varies by row without a column.
+static void AppendPayloadLeaves(const Expression &expr, vector<const Expression *> &leaves) {
+	auto kind = expr.GetExpressionClass();
+	if (kind == ExpressionClass::BOUND_COLUMN_REF || kind == ExpressionClass::BOUND_REF) {
+		for (auto *leaf : leaves) {
+			if (leaf->Equals(expr)) {
+				return;
+			}
+		}
+		leaves.push_back(&expr);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AppendPayloadLeaves(child, leaves); });
+}
 
 vector<DecideFramePayload> DecideFramePayloads(const vector<DecideFrameSpec> &frames,
                                                const DecidePreparedModel &prepared,
@@ -777,63 +787,43 @@ void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec>
 		if (tied.empty()) {
 			continue;
 		}
-		// What the frame reads on those rows: over data its payload, over decisions the coefficients of its payload's
-		// terms.
-		vector<Vector> values;
+		// What a position's signature reads on those rows (deck p. 110): each column its payload reads, by value -- a
+		// NULL one value of it --, and each decision of its terms, by instance, whatever its coefficient (D83).
+		vector<const Expression *> leaves;
 		for (auto *value : payloads[f].values) {
-			values.push_back(EvaluateOnRows(context, *value, data, num_rows, tied_rows, chunk_expr_cache));
+			AppendPayloadLeaves(*value, leaves);
 		}
-		auto same_values = [&](idx_t a, idx_t b) {
-			for (auto &column : values) {
-				if (!Value::NotDistinctFrom(column.GetValue(a), column.GetValue(b))) {
-					return false;
-				}
-			}
-			return true;
-		};
-		auto has_null = [&](idx_t row) {
-			for (auto &column : values) {
-				if (column.GetValue(row).IsNull()) {
-					return true;
-				}
-			}
-			return false;
-		};
+		vector<Vector> values;
+		for (auto *leaf : leaves) {
+			values.push_back(EvaluateOnRows(context, *leaf, data, num_rows, tied_rows, chunk_expr_cache));
+		}
 		// A decision's instance at a row: the row for a per-row one, its class for a keyed one;
-		// a query-wide one, like the constant, has one instance everywhere.
+		// a query-wide one has one instance everywhere.
 		auto instance = [&](idx_t decision, idx_t row) -> idx_t {
-			if (decision == DConstants::INVALID_INDEX) {
-				return 0;
-			}
 			auto scope = decision < variable_scopes.size() ? variable_scopes[decision] : DecideVarScopeInfo::Row();
 			if (scope.IsGlobal()) {
 				return 0;
 			}
 			return scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[row] : row;
 		};
-		auto form_at = [&](idx_t row) {
-			DecidePayloadForm form;
+		auto same_signature = [&](idx_t a, idx_t b) {
+			for (auto &column : values) {
+				if (!Value::NotDistinctFrom(column.GetValue(a), column.GetValue(b))) {
+					return false;
+				}
+			}
 			for (auto &term : terms) {
-				auto coefficient = values[term.column].GetValue(row).GetValue<double>();
-				form[make_pair(term.decision, instance(term.decision, row))] += term.sign * coefficient;
+				if (term.decision != DConstants::INVALID_INDEX &&
+				    instance(term.decision, a) != instance(term.decision, b)) {
+					return false;
+				}
 			}
-			for (auto it = form.begin(); it != form.end();) {
-				it = it->second == 0.0 ? form.erase(it) : std::next(it);
-			}
-			return form;
+			return true;
 		};
 		for (auto peer : tied) {
 			const auto first = map.peer_rows[map.peer_begin[peer]];
-			// A NULL is no coefficient: a peer holding one reads one payload only where its rows
-			// read the same values, and the NULL is then no value where it is read (D84).
-			bool by_value = terms.empty();
-			for (idx_t i = map.peer_begin[peer]; !by_value && i < map.peer_begin[peer + 1]; i++) {
-				by_value = has_null(map.peer_rows[i]);
-			}
-			const auto first_form = by_value ? DecidePayloadForm() : form_at(first);
 			for (idx_t i = map.peer_begin[peer] + 1; i < map.peer_begin[peer + 1]; i++) {
-				const auto row = map.peer_rows[i];
-				if (by_value ? !same_values(first, row) : form_at(row) != first_form) {
+				if (!same_signature(first, map.peer_rows[i])) {
 					ThrowAmbiguousPeer(context, frames[f], map, peer, keys, data, num_rows, chunk_expr_cache);
 				}
 			}

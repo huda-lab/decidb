@@ -531,8 +531,10 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   (t.period) reads more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the
   setting."*
 - **One row per position** (D73): the rows of a position a frame reads -- a point's selected one, each one a range
-  visits -- must read one payload -- one value of data, one linear form over decisions (`0 * x` reads no `x`); a NULL
-  and a value are two, whichever row comes first -- else
+  visits -- must hold one signature of the payload, as the deck's frame container holds one per position (p. 110):
+  each column it reads by value, each decision by instance, whatever its coefficient. So `at(previous: t.a + t.b)`
+  over rows (1, 2) and (2, 1) at one position is two, though both read 3, and so is `t.w * x` over two rows with `t.w
+  = 0`; a NULL and a value are two, whichever row comes first. Else
   *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
   must hold one row."*
 - **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an

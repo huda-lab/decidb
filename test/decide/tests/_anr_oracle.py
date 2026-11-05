@@ -666,7 +666,8 @@ class AnrModel:
         frame by its keys (D82, deck p. 99); and a product or an ``abs`` by the fields of each
         context it holds."""
         if isinstance(node, Var):
-            return ("decision", frozenset(self._form(node, t, kept)))
+            form = self._form(node, t, kept)  # no instance at a row in no class of its key (D5) is one value
+            return ("decision", form if form is ABSENT else frozenset(form))
         if isinstance(node, Terms):
             form = self._form(node, t, kept)
             return ("linear", frozenset((atom, round(float(c), _DIGITS)) for atom, c in form.items()))
@@ -920,15 +921,14 @@ class AnrModel:
         return self._at_position(node, timeline, within, q, kept)
 
     def _at_position(self, node, timeline, within, q, kept):
-        """The payload at position ``q``: its rows read one payload, read once (D73)."""
+        """The payload at position ``q``: its rows hold one signature of it, as the deck's
+        frame container holds one per position (D73, deck p. 110) -- each column the payload
+        reads by value, each decision by instance -- and it is read once."""
         peers = timeline.peers[within]
-        candidates: dict = {}
-        for r in peers[q]:
-            value = self._form(node.payload, r, kept)
-            candidates.setdefault(ABSENT if value is ABSENT else _freeze(value), value)
-        if len(candidates) > 1:
+        signatures = {self._fields(node.payload, r, kept) for r in peers[q]}
+        if len(signatures) > 1:
             raise ScopeError("ambiguous_peer", f"{len(peers[q])} rows at {within}, {timeline.order[peers[q][0]]}")
-        return next(iter(candidates.values()))
+        return self._form(node.payload, peers[q][0], kept)
 
     def _range(self, node: Range, t, kept):
         """The reducer over the values the range reads, one per position it visits (D73); a

@@ -52,7 +52,7 @@ separate objective-side copy.
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 2a | `Finalize` → `BuildFrames` | The frame selectors' timelines and selections, their D75 checks, and the values they read appended to the input as columns (§4b) |
 | 3 | `Finalize` → `BuildKeyedMappings` | Build the row → class maps of the key scopes |
-| 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | The objective is produced once (§4a); a second variant stops the query. A frame's selected position holds one payload (D73) |
+| 3a | `Finalize` → `RunScopeChecks`, `CheckFramePeers` | The objective is produced once (§4a); a second variant stops the query. A frame's selected position holds one signature of its payload (D73) |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
@@ -272,9 +272,9 @@ an `else` on the anchors that reach it only, so an unused one never runs (a cast
 the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
 the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
 -- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing to read
-included (`DecideFrameMap::WindowVisits`) -- of several rows to one payload (D73): one value
-over data, one linear form over decisions (`DecideFramePayloads`: a point's columns, a range's reducer argument or its
-helper's member terms), a decision by its instance. A
+included (`DecideFrameMap::WindowVisits`) -- of several rows to one signature of its payload (D73, deck p. 110): each
+column the payload reads by value (`AppendPayloadLeaves` over `DecideFramePayloads`: a point's columns, a range's
+reducer argument or its helper's member terms), each decision by its instance, whatever its coefficient. A
 frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame
 (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a query-wide decision is its own read.
 

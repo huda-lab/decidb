@@ -302,9 +302,9 @@ struct DecidePreparedModel {
 	vector<DecideFrameColumn> frame_columns;
 	idx_t frame_column_base = 0;
 	//! Per frame (LogicalDecide::frames) over decisions, its payload's terms. The rows of a
-	//! selected peer must hold one payload -- one constant and one coefficient on each
-	//! decision instance -- or the position is ambiguous (D73). Empty for a frame over data,
-	//! whose one VALUE column is its whole payload.
+	//! selected peer must hold one signature -- each column the payload reads by value, each
+	//! decision by instance (deck p. 110) -- or the position is ambiguous (D73). Empty for a
+	//! frame over data, whose one VALUE column is its whole payload.
 	vector<vector<DecideFramePayloadTerm>> frame_payload_terms;
 	//! Per frame, its `else` as a signature keys it where an anchor reaches it (D82): the
 	//! FALLBACK columns of its terms (into frame_columns), and the decisions it reads at the
