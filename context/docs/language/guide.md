@@ -477,9 +477,12 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   objective reads it: a helper per row at least (or at most) its value, the way the clause pushes it, which needs a
   backend that states `MIN`/`MAX` natively when one reads it (Gurobi). Refused where a helper would have to hold it
   with no such definition (D80): a nest of sums in the objective that is not read in place (§4).
-- **Refused** (D80): `norm` inside a reducer; a reducer times a decision inside a reducer; `abs` or a square over a
-  nested reducer (*"DECIDE: abs over a reducer inside another reducer is not supported yet"*, *"... squares or
-  multiplies decisions inside nested reducers ..."*). A reducer over data alone scaling a decision is a coefficient
+- **Any function over a nested reducer** (deck p. 51): one read through anything but `+`, `-` and data factors --
+  `abs`, a square, a product with a decision -- is its helper decision first, keyed by its path and pinned on both
+  sides, so `per t.g: sum(abs(max(x) by (t.h) - 4)) by (t.g) <= 5` reads each `(t.g, t.h)` group's maximum; a square or
+  product of decisions it then makes is a quadratic row (Gurobi).
+- **Refused** (D80): `norm` inside a reducer and a reducer inside `norm`; a square in a nest the objective would have
+  a helper hold (*"... squares or multiplies decisions inside nested reducers ..."*). A reducer over data alone scaling a decision is a coefficient
   the rule of §5 refuses with its remedy (*"An aggregate over table columns ... cannot multiply a decision
   variable"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
   which is a term of the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 *

@@ -56,9 +56,8 @@ The deck composes any function over nested reducers (p. 51).
 
 - **Today:** `SUM`, `AVG`, `MIN` and `MAX` nest to any depth over decisions, each a helper decision keyed by its path
   (guide §5.5); a reducer over data alone inside one is a value of its path's group.
-- **What is left** (D80): `abs` or a square over a nested reducer whose path keeps rows (`per t.g: sum(abs(max(x) by
-  (t.h))) by (t.g) <= 5`), which are rewritten before the value rewrite reads the path; `norm` inside a reducer and a
-  reducer inside `norm`; a reducer times a decision inside a reducer.
+- **What is left** (D80): `norm` inside a reducer and a reducer inside `norm`, which is rewritten before the value
+  rewrite reads the path. `abs`, a square or a product with a decision over a nested reducer is a helper first.
 
 ## Conditional generation with `if` (pp. 58–59)
 

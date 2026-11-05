@@ -640,12 +640,15 @@ reducer's own `when` keep, grouped by every enclosing `by` key and its own, a ke
 table `FindOrCreateDecidePathKey` finds or adds. So what the outer helper holds is affine
 in helpers, decisions and data, and links are stored innermost first. A member of a SUM or
 AVG, a MIN or a MAX is pushed as its helper is, through the sign it carries in the
-argument: a MIN or MAX does not decrease when a member grows, so it passes its push on (D79). A body that would still square or multiply
-decisions there is refused (D80): `DefineNonlinearReducerBodies` has defined every such
-body a constraint, or a MIN or MAX of the objective, reads, so what is left is a nest of
-sums in the objective not read in place. The binder has refused the shapes the passes
-before this one would rewrite out of their path (an ABS or a norm around a nested reducer,
-a decision times one; stage 02).
+argument: a MIN or MAX does not decrease when a member grows, so it passes its push on
+(D79). A body that would still square or multiply decisions there is refused (D80):
+`DefineNonlinearReducerBodies` has defined every such body a constraint, or a MIN or MAX
+of the objective, reads, so what is left is a nest of sums in the objective not read in
+place. A nested reducer the passes before this one would rewrite out of its path -- one an
+ABS, a POWER or a product with a decision reads, any node but `+`, `-`, a cast or a data
+factor -- is a helper already: `LiftNestedReducers` runs right after `RewriteFrameRanges`,
+through the same `ReplaceReducer`, pinned on both sides, so the ABS and bilinear passes
+read a keyed decision (deck p. 51). The binder refuses a norm around one (stage 02).
 
 One helper per **reducer over one set of rows**: a second site holding the same reducer
 (`Equals`, alias included) over the same rows and path key reuses the first helper

@@ -144,6 +144,13 @@ private:
 	//! reducer is refused (language/errors.md §2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
+	//! A reducer inside another that is read through anything but an affine map of that one's argument -- an ABS, a
+	//! POWER, a product with a decision, a CASE -- becomes its helper decision first, keyed by its path
+	//! (language/guide.md §5.5) and pinned on both sides (D79). Those readers are rewritten before the value rewrite
+	//! reads the path, which would move the reducer out of the enclosing `when` and `by`; as RewriteFrameRanges does
+	//! for a range, every later rewrite then reads a keyed decision. Runs right after RewriteFrameRanges.
+	void LiftNestedReducers(LogicalDecide &decide);
+
 	//! Range frames over decisions (language/guide.md §5.6, D78): each becomes a helper decision with one instance per
 	//! window of the frame -- a timeline, or a position on one -- defined once per window
 	//! (LogicalDecide::reducer_value_links, with its frame), so every later rewrite reads it as an ordinary keyed

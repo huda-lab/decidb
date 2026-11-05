@@ -437,11 +437,6 @@ struct ScopePlacement {
 	const case_insensitive_map_t<idx_t> &variables;
 	//! Inside a reducer's argument.
 	bool in_reducer = false;
-	//! Inside a reducer whose `when`, `per` or `by` chooses the rows a reducer below reads
-	//! (its path, language/guide.md §5.5), or below one that does.
-	bool path_keeps_rows = false;
-	//! Directly under a `by (...)` with a key, or the colon form's relations.
-	bool under_by = false;
 };
 } // namespace
 
@@ -468,9 +463,7 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		for (idx_t i = 1; i < func.children.size(); i++) {
 			ValidateScopeData(*func.children[i], placement.variables);
 		}
-		auto reducer_placement = placement;
-		reducer_placement.under_by = func.children.size() > 1;
-		ValidateScopePlacement(*func.children[0], reducer_placement);
+		ValidateScopePlacement(*func.children[0], placement);
 		return;
 	}
 	if (IsDecideScopeMarker(expr)) {
@@ -483,36 +476,13 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		                            "in front of the constraint or inside a reducer");
 	}
 	bool reducer = TakesReducerBy(func);
-	// What a reducer inside another may not stand under (D80), each rewritten before the
-	// value rewrite reads the path, so the inner reducer would lose the enclosing `when`
-	// and `by`: an ABS, a norm, and a product with a decision.
+	// A reducer over decisions may not stand inside a norm (D80), which is rewritten before the value rewrite reads
+	// the path. Under an ABS, a POWER or a product with a decision it may: it becomes a helper first
+	// (DecideOptimizer::LiftNestedReducers).
 	if (!func.is_operator && !func.children.empty() && ContainsDecideAggregate(*func.children[0]) &&
-	    ExpressionContainsDecideVariable(*func.children[0], placement.variables)) {
-		if (StringUtil::CIEquals(func.function_name, "norm")) {
-			throw BinderException(expr, "DECIDE: a reducer inside norm is not supported yet");
-		}
-		if (StringUtil::CIEquals(func.function_name, "abs") && placement.path_keeps_rows) {
-			throw BinderException(expr, "DECIDE: abs over a reducer inside another reducer is not supported yet: %s",
-			                      expr.ToString());
-		}
-	}
-	if (placement.in_reducer && func.is_operator && func.function_name == "*") {
-		for (idx_t i = 0; i < func.children.size(); i++) {
-			// A reducer over decisions: one over data alone scaling a decision is the
-			// coefficient ValidateDecideNoNonLinearScalar refuses with its remedy.
-			if (!ContainsDecideAggregate(*func.children[i]) ||
-			    !ExpressionContainsDecideVariable(*func.children[i], placement.variables)) {
-				continue;
-			}
-			for (idx_t j = 0; j < func.children.size(); j++) {
-				if (j != i && ExpressionContainsDecideVariable(*func.children[j], placement.variables)) {
-					throw BinderException(expr,
-					                      "DECIDE: '%s' multiplies a reducer by a decision; only data can scale a "
-					                      "reducer",
-					                      expr.ToString());
-				}
-			}
-		}
+	    ExpressionContainsDecideVariable(*func.children[0], placement.variables) &&
+	    StringUtil::CIEquals(func.function_name, "norm")) {
+		throw BinderException(expr, "DECIDE: a reducer inside norm is not supported yet");
 	}
 	// A reducer nests in another to any depth (language/guide.md §5.5), a norm aside (D80). One over data alone is a
 	// value of its path's group, which the bound-side rewrite computes (RewriteRhsAggregates).
@@ -522,11 +492,7 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	auto inner = placement;
 	if (reducer) {
 		inner.in_reducer = true;
-		inner.path_keeps_rows = placement.path_keeps_rows || placement.under_by || scoped_argument;
 	}
-	inner.under_by = false;
-	// The colon form's relations keep one row of each class, as a `per` does.
-	placement.under_by = IsDecideMarker(expr, QUALIFIED_REDUCER_TAG);
 	for (idx_t i = 0; i < func.children.size(); i++) {
 		auto &child =
 		    i == 0 && scoped_argument ? PeelScopeSpelling(*func.children[0], placement.variables) : *func.children[i];

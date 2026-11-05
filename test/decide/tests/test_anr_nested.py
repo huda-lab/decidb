@@ -760,13 +760,8 @@ def test_an_inlined_group_average_stays_apart_from_another(
     "clause_sql, message",
     [
         pytest.param("sum(norm(x, 1)) <= 5", "DECIDE: norm inside a reducer is not supported yet", id="norm"),
-        # Each is rewritten before the value rewrite reads the path rule, so the inner
-        # reducer would lose the enclosing reducer's `when` and `by`: once answered wrongly.
-        pytest.param(
-            "per t.g: sum(abs(max(x) by (t.h))) by (t.g) <= 5",
-            "DECIDE: abs over a reducer inside another reducer is not supported yet",
-            id="abs-over-a-nested-reducer",
-        ),
+        # A norm is rewritten before the value rewrite reads the path rule, so the inner
+        # reducer would lose the enclosing reducer's `when` and `by`.
         pytest.param(
             "per t.g: norm(max(x) by (t.h), 1) by (t.g) <= 5",
             "DECIDE: a reducer inside norm is not supported yet",
@@ -777,17 +772,87 @@ def test_an_inlined_group_average_stays_apart_from_another(
             "DECIDE: a reducer inside norm is not supported yet",
             id="reducer-in-l0-norm",
         ),
-        pytest.param(
-            "sum((x - 1) * max(x) by (t.g)) <= 50",
-            "multiplies a reducer by a decision; only data can scale a reducer",
-            id="decision-times-a-nested-reducer",
-        ),
     ],
 )
 def test_refused_nests(decidb_cli, clause_sql, message):
     result = decidb_cli.execute_raw(_bound_query(f"x <= 9 AND {clause_sql}"))
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "a refused nest")
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause_sql, body, optimum",
+    [
+        pytest.param(
+            "per t.g: sum(abs(max(x) by (t.h) - 4)) by (t.g) <= 5",
+            le(reduce("sum", Abs(reduce("max", X, by=("h",)) - 4), by=("g",)), 5),
+            26,
+            id="abs",
+        ),
+        pytest.param(
+            "per t.g: sum(abs(max(when t.h = 'q': x) by (t.h) - 4)) by (t.g) <= 1",
+            le(reduce("sum", Abs(reduce("max", X, when=lambda r: r["h"] == "q", by=("h",)) - 4), by=("g",)), 1),
+            32,
+            id="abs-over-an-emptied-group",
+        ),
+    ],
+)
+def test_abs_over_a_nested_reducer(request, scope_solver, cli_fixture, clause_sql, body, optimum):
+    """The deck's grammar composes any function over nested reducers (p. 51): the inner
+    reducer is a helper first, keyed by its path (DecideOptimizer::LiftNestedReducers),
+    which the ABS then reads as a decision. Worked by hand: group a reads
+    2 |max(x1, x2) - 4| + |x3 - 4| <= 5, at best 17, and b |x4 - 4| <= 5, 9: 26. With the
+    inner `when`, (a, p) and (b, p) keep no row, so their members are dropped and group b
+    has none, no instance (D68, D88): |x3 - 4| <= 1, and 9 + 9 + 5 + 9 = 32."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = _bound_query(f"x <= 9 AND {clause_sql}")
+    clauses = [clause(le(X, 9)), clause(body, per=("g",))]
+    model = AnrModel(table_rows(BOUND_COLUMNS, BOUND_ROWS), [Decision("x")])
+    assert model.solve(scope_solver, clauses, MAXIMIZE_X).objective == pytest.approx(optimum)
+    result = cli.execute_raw(sql)
+    assert_no_internal_leak(result, clause_sql)
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert model.judge(answer(cli, sql), clauses, MAXIMIZE_X) == pytest.approx(optimum, abs=1e-6)
+
+
+def _largest(x, ids):
+    return max(x[i] for i in ids)
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@pytest.mark.parametrize(
+    "clause_sql, holds, optimum",
+    [
+        pytest.param(
+            "sum((x - 1) * max(x) by (t.g)) <= 50",
+            lambda x: sum((x[i] - 1) * _largest(x, (1, 2, 3)) for i in (1, 2, 3)) + (x[4] - 1) * x[4] <= 50,
+            16,
+            id="decision-times-a-nested-reducer",
+        ),
+        pytest.param(
+            "per t.g: sum(power(max(x) by (t.h), 2)) by (t.g) <= 30",
+            lambda x: 2 * _largest(x, (1, 2)) ** 2 + x[3] ** 2 <= 30 and x[4] ** 2 <= 30,
+            14,
+            id="square-of-a-nested-reducer",
+        ),
+    ],
+)
+def test_a_product_or_square_over_a_nested_reducer(decidb_cli_gurobi, decidb_cli_highs, clause_sql, holds, optimum):
+    """A product with a decision and a square over a nested reducer read its helper
+    (LiftNestedReducers), a quadratic row Gurobi states and HiGHS refuses by name. Worked by
+    hand over (a, p), (a, p), (a, q), (b, p): every x at most 9 and whole, the product
+    `(S_a - 3) * max_a + (x4 - 1) * x4 <= 50` is best at x = (4, 4, 4, 4), 16; the squares
+    `2 * max(x1, x2)^2 + x3^2 <= 30` and `x4^2 <= 30` at (3, 3, 3, 5), 14."""
+    sql = _bound_query(f"x <= 9 AND {clause_sql}")
+    x = {row["id"]: row["x"] for row in answer(decidb_cli_gurobi, sql)}
+    assert holds(x), x
+    assert sum(x.values()) == optimum, x
+    result = decidb_cli_highs.execute_raw(sql)
+    assert "squares or multiplies decision variables, which needs Gurobi" in result.stderr, result.stderr
+    assert_no_internal_leak(result, clause_sql)
 
 
 @pytest.mark.correctness

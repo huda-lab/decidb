@@ -508,12 +508,11 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 - a reducer nests in another to any depth (D79-D81, guide §5.5), and its body is held to
   the rule of any reducer's (`ValidateSumArgumentInternal` reads through a nested
   reducer's `by` and qualifier). `ValidateScopePlacement` refuses what a nest may not hold
-  (D80), each shape rewritten before the value rewrite reads the path, so the inner reducer
+  (D80), a norm rewritten before the value rewrite reads the path, so the inner reducer
   would lose the enclosing `when` and `by`: *"DECIDE: norm inside a reducer is not supported
-  yet"*, *"DECIDE: a reducer inside norm is not supported yet"*, *"DECIDE: abs over a reducer
-  inside another reducer is not supported yet"* (only where an enclosing `when`, `per` or
-  `by` chooses the inner reducer's rows: `path_keeps_rows`), and *"DECIDE: '...' multiplies a
-  reducer by a decision; only data can scale a reducer"*. A reducer over data alone added
+  yet"* and *"DECIDE: a reducer inside norm is not supported yet"*. An ABS, a square or a
+  product with a decision around a nested reducer binds: stage 05 makes that reducer a helper
+  first (`LiftNestedReducers`). A reducer over data alone added
   inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
   path's group that stage 05 computes (`RewriteRhsAggregates`); one under a `*` or `/` that
   holds a decision (`sum(avg(cap) * x)`) is a coefficient, refused by

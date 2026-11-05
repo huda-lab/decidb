@@ -119,6 +119,8 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
 	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });
+	// A reducer nested under an ABS, a POWER or a decision product becomes a helper before those are rewritten.
+	RunPass("optimizer.nested_lift", [&] { LiftNestedReducers(decide); });
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
 	// Must run before RewriteAbs: marks ABS nodes that need Big-M

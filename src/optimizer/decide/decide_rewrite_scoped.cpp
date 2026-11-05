@@ -378,6 +378,104 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 
 } // namespace
 
+void DecideOptimizer::LiftNestedReducers(LogicalDecide &decide) {
+	if (!decide.decide_constraints && !decide.decide_objective) {
+		return;
+	}
+	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
+	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
+	                             decide.aux_var_expressions);
+	Helpers helpers {optimizer.context, decide, {}, {}};
+	auto reads_decision = [&](const Expression &expr) {
+		return BoundExpressionReferencesDecide(expr, decide.decide_index);
+	};
+	// `expr` stands in the argument of a reducer read along `path` when `nested`; `affine` while every node between
+	// them is `+`, `-`, a cast or a data factor.
+	std::function<void(unique_ptr<Expression> &, const DecideReducerPath &, bool, bool, idx_t)> walk =
+	    [&](unique_ptr<Expression> &expr, const DecideReducerPath &path, bool nested, bool affine, idx_t clause) {
+		    if (!reads_decision(*expr)) {
+			    return;
+		    }
+		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			    idx_t frame;
+			    if (TryGetDecideFrame(*expr, frame)) {
+				    return; // a frame is a tuple term of the row
+			    }
+			    if (nested && !affine) {
+				    ReducerSite site {&expr, 0, false};
+				    ReplaceReducer(helpers, names, booleans, path, ExtremumPush::NONE, clause, site);
+				    return;
+			    }
+			    auto &agg = expr->Cast<BoundAggregateExpression>();
+			    auto below = path.Below(agg);
+			    for (auto &child : agg.children) {
+				    walk(child, below, true, true, clause);
+			    }
+			    return;
+		    }
+		    bool keeps = expr->GetExpressionClass() == ExpressionClass::BOUND_CAST;
+		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			    auto &func = expr->Cast<BoundFunctionExpression>();
+			    auto &name = func.function.name;
+			    if (name == "+" || name == "-") {
+				    keeps = true;
+			    } else if ((name == "*" || name == "/") && func.children.size() == 2) {
+				    // A data factor scales what it multiplies; a decision on both sides, or in a divisor, does not.
+				    keeps = !(reads_decision(*func.children[0]) && reads_decision(*func.children[1])) &&
+				            !(name == "/" && reads_decision(*func.children[1]));
+			    }
+		    }
+		    ExpressionIterator::EnumerateChildren(
+		        *expr, [&](unique_ptr<Expression> &child) { walk(child, path, nested, affine && keeps, clause); });
+	    };
+
+	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope)> clauses = [&](unique_ptr<Expression> &expr,
+	                                                                                  DecideEnclosingScope scope) {
+		scope = EnterDecideScope(*expr, scope);
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			auto &conj = expr->Cast<BoundConjunctionExpression>();
+			for (idx_t i = 0; i < conj.children.size(); i++) {
+				if (IsConstraintChild(conj, i)) {
+					clauses(conj.children[i], scope);
+				}
+			}
+			return;
+		}
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			return;
+		}
+		auto &cmp = expr->Cast<BoundComparisonExpression>();
+		idx_t source_clause_id = DConstants::INVALID_INDEX;
+		TryParseSourceClauseTag(cmp.GetAlias(), source_clause_id);
+		DecideReducerPath path;
+		if (scope.Condition()) {
+			path.conditions.push_back(scope.Condition());
+		}
+		walk(cmp.left, path, false, true, source_clause_id);
+		walk(cmp.right, path, false, true, source_clause_id);
+	};
+	if (decide.decide_constraints) {
+		clauses(decide.decide_constraints, DecideEnclosingScope());
+	}
+	if (decide.decide_objective) {
+		auto *body = &decide.decide_objective;
+		DecideEnclosingScope scope;
+		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
+			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
+				break;
+			}
+			scope = EnterDecideScope(conjunction, scope);
+			body = &conjunction.children[0];
+		}
+		DecideReducerPath path;
+		if (scope.Condition()) {
+			path.conditions.push_back(scope.Condition());
+		}
+		walk(*body, path, false, true, DConstants::INVALID_INDEX);
+	}
+}
+
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	if (!decide.decide_constraints && !decide.decide_objective) {
 		return;
