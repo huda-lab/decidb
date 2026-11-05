@@ -1,8 +1,8 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-05 at `96aa6186f0`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 6,169 passed; C++
-`build/release/test/unittest "[decidb]"` 3,789 assertions in 81 cases.
+Verified on 2026-11-05: `test/decide/run_direct_matrix.sh` at `96aa6186f0`, each of its four suites 6,169 passed;
+`make decide-test` (6,169 passed) and C++ `build/release/test/unittest "[decidb]"` (3,795 assertions in 81 cases) at
+`01bbac6ddf`, which adds only C++ cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -81,6 +81,8 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
   or stops with numerical trouble; N1 still answers.
 - **An infinite limit read from the data, with an improving row.** N1 raises unbounded, which the problem is. The solver
   stops with "Gurobi could not solve this model (numerical trouble)".
+- **A target past about 1e153.** Gurobi stops with numerical trouble. N1 answers up to the range of the squares, then
+  raises the too-large error above.
 - **Ties.** With every direction 0, any point in the ball is optimal: N1 returns 0. So does no objective.
 
 ## How it works
@@ -120,11 +122,10 @@ checks can stand below the last breaker, where one window would have to read its
 | `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |
 | C++ `[decidb]` | N1's applicability condition: 27 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
 
-Every decision point of the rule was checked by mutation: with its branch removed, at least one test above fails. The
-one exception is a failed read of a square (`DirectReadSquareTerm`): the fold after it declines the same shape, so no
-test can tell them apart, and a case only reaches it. No existing test is pinned to `off`: those that now take N1 under `auto` keep their answers, and
-`DECIDB_TEST_DIRECT_SOLVE=off` runs them on the solver. `test_many_group_limits_on_squares_solve` forces Gurobi, so it
-keeps reaching the solver.
+Every decision point of the rule was checked by mutation: with its branch removed, at least one test above fails. No
+existing test is pinned to `off`, and none needs to be: logging the rule's `Apply` over the suite, none of the 5,962
+tests outside this rule's own (`-k "not n1"`) reaches N1 under `auto`. Their quadratic limits have a bound beside them, so
+N1 declines, or they force a backend.
 
 The objective tolerance (5e-6 relative) and the ball tolerances (1e-7 on `off`, 1e-14 on `require`) are measured on these
 cases and stated in the test file. They are that file's own.
