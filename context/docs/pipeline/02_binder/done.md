@@ -514,9 +514,9 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   product with a decision around a nested reducer binds: stage 05 makes that reducer a helper
   first (`LiftNestedReducers`). A reducer over data alone added
   inside one over decisions binds as data (`ValidateSumArgumentInternal`), a value of its
-  path's group that stage 05 computes (`RewriteRhsAggregates`); one under a `*` or `/` that
-  holds a decision (`sum(avg(cap) * x)`) is a coefficient, refused by
-  `ValidateDecideNoNonLinearScalar` with its remedy.
+  path's group that stage 05 computes (`RewriteRhsAggregates`), under a `*` or `/` that holds a
+  decision too (`sum(avg(cap) * x)`), a coefficient; outside every reducer over decisions
+  (`x * avg(cap) <= 3`) `ValidateDecideNoNonLinearScalar` refuses it with its remedy.
 
 | Written | Bound |
 |---|---|

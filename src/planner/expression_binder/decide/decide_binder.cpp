@@ -888,14 +888,16 @@ static bool ContainsDataOnlyAggregate(ClientContext &context, const ParsedExpres
 	return found;
 }
 
-void ValidateDecideNoNonLinearScalar(ClientContext &context,
-                                     const ParsedExpression &expr,
-                                     const case_insensitive_map_t<idx_t> &variables) {
+//! `in_reducer`: `expr` stands in the argument of a reducer over decisions. There a reducer over data alone is a value
+//! of its path's group, a coefficient like any data (language/guide.md §5.5; deck p. 51), so it may scale or divide a
+//! decision.
+static void ValidateDecideNoNonLinearScalar(ClientContext &context, const ParsedExpression &expr,
+                                            const case_insensitive_map_t<idx_t> &variables, bool in_reducer) {
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (IsPowerFunction(func)) {
 			ValidatePowerExponent(func, variables);
-		} else if (func.is_operator && func.function_name == "*" &&
+		} else if (!in_reducer && func.is_operator && func.function_name == "*" &&
 		           ExpressionContainsDecideVariable(expr, variables) &&
 		           ContainsDataOnlyAggregate(context, expr, variables)) {
 			// A data-only aggregate multiplied by a decision variable
@@ -924,7 +926,7 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 			// A data-only aggregate stays on the bound side (S10). Like the multiplier
 			// above, it may not share a scaled term with a decision: as the divisor, or
 			// inside the dividend (`(sum(x) + sum(cap)) / 2`).
-			if (func.children.size() == 2 && ExpressionContainsDecideVariable(expr, variables) &&
+			if (!in_reducer && func.children.size() == 2 && ExpressionContainsDecideVariable(expr, variables) &&
 			    ContainsDataOnlyAggregate(context, expr, variables)) {
 				throw BinderException(
 				    "An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot %s a decision "
@@ -945,9 +947,19 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 			}
 		}
 	}
+	bool below = in_reducer;
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		below = below || (IsAggregateFunctionName(context, func) && ExpressionContainsDecideVariable(expr, variables));
+	}
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		ValidateDecideNoNonLinearScalar(context, child, variables);
+		ValidateDecideNoNonLinearScalar(context, child, variables, below);
 	});
+}
+
+void ValidateDecideNoNonLinearScalar(ClientContext &context, const ParsedExpression &expr,
+                                     const case_insensitive_map_t<idx_t> &variables) {
+	ValidateDecideNoNonLinearScalar(context, expr, variables, false);
 }
 
 //! Does this node reduce whatever is under it to an integer, whatever that operand's

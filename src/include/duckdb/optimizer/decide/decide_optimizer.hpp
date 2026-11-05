@@ -144,6 +144,14 @@ private:
 	//! reducer is refused (language/errors.md §2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
+	//! The objective's `sum(inner(e) by (G))`, the outer sum with no `per` and `e` not linear, summed in the other
+	//! order (deck p. 51; owner, 2026-11-05): one sum of `e`, each row weighted by the rows of its G group the outer
+	//! reads -- a reducer over data, `sum(1) by (G)`, read on the outer's path -- divided, for an AVG, by the group's
+	//! own members, and 0 where the inner `when` drops the row. A square of a linear form takes the weight inside, by
+	//! its root, so `MINIMIZE sum(sum(x * x) by (G))` is a convex QP rather than a helper with a quadratic
+	//! definition. Runs first, so the bound-side rewrite computes the weights.
+	void SwapObjectiveSummation(LogicalDecide &decide);
+
 	//! A reducer inside another that is read through anything but an affine map of that one's argument -- an ABS, a
 	//! POWER, a product with a decision, a CASE -- becomes its helper decision first, keyed by its path
 	//! (language/guide.md §5.5) and pinned on both sides (D79). Those readers are rewritten before the value rewrite

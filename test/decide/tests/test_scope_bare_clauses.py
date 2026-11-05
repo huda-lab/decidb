@@ -807,23 +807,6 @@ def test_count_star_by_group(request, scope_solver, cli_fixture):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("spelling", ["", "per row: ", "per (): "])
-@pytest.mark.parametrize(
-    "clause, verb",
-    [
-        ("sum(avg(cap) * x) <= 3", "multiply"),
-        ("sum(x / avg(cap)) <= 3", "divide"),
-        ("sum((x + avg(cap)) / 2) <= 3", "be divided together with"),
-    ],
-)
-def test_data_reducer_scaling_a_decision_inside_a_reducer(decidb_cli, spelling, clause, verb):
-    """A reducer over data alone that scales a decision inside a reducer is a coefficient,
-    refused with the remedy (pre-compute it) whatever the spelling -- not as a reducer
-    inside a reducer."""
-    stderr = decidb_cli.execute_raw(_query("x(INT)", f"x <= cap AND {spelling}{clause}", "MAXIMIZE SUM(x)")).stderr
-    assert f"cannot {verb} a decision variable. Pre-compute it as a scalar" in stderr, stderr
-
-
 @pytest.mark.parametrize(
     "clause",
     [

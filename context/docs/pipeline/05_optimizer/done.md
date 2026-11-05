@@ -650,6 +650,15 @@ factor -- is a helper already: `LiftNestedReducers` runs right after `RewriteFra
 through the same `ReplaceReducer`, pinned on both sides, so the ABS and bilinear passes
 read a keyed decision (deck p. 51). The binder refuses a norm around one (stage 02).
 
+**The objective's sums of group sums of squares** (`SwapObjectiveSummation`, the first pass, before
+`RewriteRhsAggregates`): `sum([when c]: inner([when c'] e) by (G))` with no `per` on the outer sum and `e` not
+linear reads each G group once per outer row of it, so it is one sum over the rows `c` keeps of `e` times a weight: the
+group's rows the outer keeps, `sum(1) by (G)`, a reducer over data the bound-side pass computes on the outer's path;
+divided by the group's own members for an AVG; 0 where `c'` (with its NULL tests) drops the row, and where the row is
+in no G group. A square of a linear form takes the weight's root inside, so the objective stays one sum of squares (a
+convex QP on both solvers); every other term takes the weight as a factor. Linear nests keep their helpers, which
+stage 06 writes in (D89).
+
 One helper per **reducer over one set of rows**: a second site holding the same reducer
 (`Equals`, alias included) over the same rows and path key reuses the first helper
 (`Helpers::Find`), whichever clause it is in. The rows `RewriteAbs` derived from one clause

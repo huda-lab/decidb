@@ -55,36 +55,21 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"does not support")
 
-    @pytest.mark.parametrize("agg", ["avg", "min", "max", "sum"])
-    def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, agg):
-        """A data-only aggregate (`AVG(p)`, `MIN(p)`, … over columns only) used as a
-        coefficient on a decision variable is rejected before symbolic normalization.
-
-        Regression: `SUM(avg(p) * x)` used to slip through — the SymEngine round-trip
-        distributed the variable into the aggregate (`avg(p)*x` -> `avg(p*x)`), a
-        different constraint, and returned a silently wrong optimum. `sum` was already
-        rejected (with a cryptic nested-SUM message); now all four reject uniformly.
-        """
+    @pytest.mark.parametrize("clause", ["x * avg(p) <= 25", "avg(p) * sum(x) <= 25", "sum(x) * max(p) <= 25"])
+    def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, clause):
+        """A data-only aggregate (`AVG(p)`, `MAX(p)`, ... over columns only) scaling a
+        decision outside every reducer over decisions is rejected: the bound side holds it
+        (S10). Inside one it is a value of its path's group, a coefficient
+        (test_anr_nested.py)."""
         decidb_cli.assert_error(
             f"""
                 SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x(BOOL)
-                SUCH THAT SUM({agg}(p) * x) <= 3
+                DECIDE x(REAL)
+                SUCH THAT x <= 1 AND {clause}
                 MAXIMIZE SUM(x)
             """,
             match=r"aggregate over table columns .* cannot multiply a decision variable",
         )
-
-    def test_data_only_aggregate_coefficient_rejected_in_objective(self, decidb_cli):
-        """The same rejection applies in an objective (`ValidateDecideNoNonLinearScalar`
-        runs on both constraints and objectives), and the message stays context-neutral
-        (no 'move it to the RHS' — an objective has no RHS)."""
-        decidb_cli.assert_error("""
-                SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x(BOOL)
-                SUCH THAT SUM(x) <= 1
-                MAXIMIZE SUM(avg(p) * x)
-            """, match=r"aggregate over table columns .* cannot multiply a decision variable")
 
     def test_data_only_aggregate_rhs_still_allowed(self, decidb_cli):
         """Guard against over-rejecting: a data-only aggregate is fine as a constraint

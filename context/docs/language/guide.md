@@ -290,7 +290,10 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- a nested reducer (
   `outer` over those values. Any kind at either level, a `when` inside either, another `by` key, more levels, other
   terms beside it and a factor on it all work. A `sum(per K: inner(e) by (G))` whose `K` lies in `G`, `inner` a `SUM`
   or `AVG`, is the objective's own sum over the groups of `G`, so a square inside it stays a quadratic objective
-  (`MINIMIZE sum(per g: sum(power(x - t, 2)) by (g))` is a convex QP).
+  (`MINIMIZE sum(per g: sum(power(x - t, 2)) by (g))` is a convex QP). So is a `sum(inner(e) by (G))` with no `per`,
+  `e` not linear, summed in the other order: each row of `e` weighted by the rows of its `G` group the outer sum reads
+  (divided by the group's own members for an `AVG`), so `MINIMIZE sum(sum(x * x) by (t.h))` is `sum(n_h * x * x)`
+  over the groups' sizes `n_h`, a convex QP on both solvers.
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
   and the Q matrix is non-singular). `-POWER(...)` under `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))`
   is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi.
@@ -476,15 +479,18 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
 - **A square or product of decisions** inside a nest is defined first, where a constraint or a `MIN`/`MAX` of the
   objective reads it: a helper per row at least (or at most) its value, the way the clause pushes it, which needs a
   backend that states `MIN`/`MAX` natively when one reads it (Gurobi). Refused where a helper would have to hold it
-  with no such definition (D80): a nest of sums in the objective that is not read in place (§4).
+  with no such definition (D80): a nest of sums in the objective neither read in place nor summed in the other order
+  (§4) -- one under a `per` its inner `by` does not hold, an outer `AVG`, or a deeper nest.
 - **Any function over a nested reducer** (deck p. 51): one read through anything but `+`, `-` and data factors --
   `abs`, a square, a product with a decision -- is its helper decision first, keyed by its path and pinned on both
   sides, so `per t.g: sum(abs(max(x) by (t.h) - 4)) by (t.g) <= 5` reads each `(t.g, t.h)` group's maximum; a square or
   product of decisions it then makes is a quadratic row (Gurobi).
 - **Refused** (D80): `norm` inside a reducer and a reducer inside `norm`; a square in a nest the objective would have
-  a helper hold (*"... squares or multiplies decisions inside nested reducers ..."*). A reducer over data alone scaling a decision is a coefficient
-  the rule of §5 refuses with its remedy (*"An aggregate over table columns ... cannot multiply a decision
-  variable"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
+  a helper hold (*"... squares or multiplies decisions inside nested reducers ..."*).
+- **A reducer over data alone scaling a decision** inside a reducer over decisions is a value of its path's group, a
+  coefficient as any data is: `sum(avg(t.p) * x) <= 25` over p = 10, 30 is `20 (x1 + x2) <= 25`, and `x / max(t.v) by
+  (t.h)` divides by each group's largest value. Outside every reducer over decisions the rule of §5 refuses it with
+  its remedy (*"An aggregate over table columns ... cannot multiply a decision variable"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
   which is a term of the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 *
   avg(t.v) by (t.h)) by (t.g)` is.
 

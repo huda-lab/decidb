@@ -29,9 +29,11 @@
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
@@ -377,6 +379,130 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 }
 
 } // namespace
+
+void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
+	if (!decide.decide_objective) {
+		return;
+	}
+	const idx_t decide_index = decide.decide_index;
+	auto real = [&](unique_ptr<Expression> expr) {
+		return BoundCastExpression::AddCastToType(optimizer.context, std::move(expr), LogicalType::DOUBLE);
+	};
+	auto number = [](double value) {
+		return make_uniq<BoundConstantExpression>(Value::DOUBLE(value));
+	};
+	// `outer` reads `inner(e) by (G)` once per row it keeps, so each G group once per such row of it: summed in the
+	// other order, it is one sum over those rows of `e` times `weight`, the group's rows the outer keeps -- divided,
+	// for an AVG, by the group's own members -- and 0 where `inner`'s own `when` drops the row. A square of a linear
+	// form is weighted inside, by the root, since a weight is never negative: the objective stays a sum of squares.
+	auto swap = [&](unique_ptr<Expression> &slot) {
+		auto &outer = slot->Cast<BoundAggregateExpression>();
+		idx_t frame, scope;
+		if (TryGetDecideFrame(outer, frame) || !StringUtil::CIEquals(outer.function.name, "sum") ||
+		    outer.children.size() != 1 || TryParseQualifiedReducerTag(outer.GetAlias(), scope)) {
+			return;
+		}
+		auto *body = UnwrapDecideCasts(*outer.children[0], decide_index);
+		if (body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+			return;
+		}
+		auto &inner = body->Cast<BoundAggregateExpression>();
+		const bool avg = StringUtil::CIEquals(inner.function.name, "avg");
+		if ((!avg && !StringUtil::CIEquals(inner.function.name, "sum")) || inner.children.size() != 1 ||
+		    TryGetDecideFrame(inner, frame) || TryParseQualifiedReducerTag(inner.GetAlias(), scope) ||
+		    DecideCanonicalizer::ContainsReducer(*inner.children[0]) || ContainsDecideFrame(*inner.children[0]) ||
+		    (inner.filter && ContainsDecideFrame(*inner.filter)) ||
+		    DecideExpressionDegree(*inner.children[0], decide_index).IsLinear()) {
+			return; // a linear nest is read through helpers, which the model writes in (D89)
+		}
+		const idx_t group_key = DecideReducerGroupKey(inner);
+		auto group_count = [&](unique_ptr<Expression> summand) {
+			vector<unique_ptr<Expression>> children;
+			children.push_back(std::move(summand));
+			auto count = optimizer.BindAggregateFunction("sum", std::move(children));
+			if (group_key != DConstants::INVALID_INDEX) {
+				count->SetAlias(MakeGroupKeyTag(group_key));
+			}
+			return real(std::move(count));
+		};
+		auto member = [&]() -> unique_ptr<Expression> {
+			if (!inner.filter) {
+				return number(1.0);
+			}
+			return make_uniq<BoundCaseExpression>(inner.filter->Copy(), number(1.0), number(0.0));
+		};
+		unique_ptr<Expression> weight = group_count(number(1.0));
+		if (avg) {
+			weight = optimizer.BindScalarFunction("/", std::move(weight), group_count(member()));
+		}
+		if (inner.filter) {
+			weight = make_uniq<BoundCaseExpression>(inner.filter->Copy(), std::move(weight), number(0.0));
+		}
+		// A row in no G group (a NULL in a key that groups NULL as none, D5) is read by no group: weight 0.
+		auto weighted = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, LogicalType::DOUBLE);
+		weighted->children.push_back(std::move(weight));
+		weighted->children.push_back(number(0.0));
+		const Expression &w = *weighted;
+
+		std::function<unique_ptr<Expression>(const Expression &)> weigh = [&](const Expression &term) {
+			auto *cur = UnwrapDecideCasts(term, decide_index);
+			if (cur->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+			    BoundExpressionReferencesDecide(*cur, decide_index)) {
+				auto &func = cur->Cast<BoundFunctionExpression>();
+				auto name = StringUtil::Lower(func.function.name);
+				if ((name == "+" || name == "-") && func.children.size() == 2) {
+					return optimizer.BindScalarFunction(name, weigh(*func.children[0]), weigh(*func.children[1]));
+				}
+				if (name == "-" && func.children.size() == 1) {
+					return optimizer.BindScalarFunction("-", weigh(*func.children[0]));
+				}
+				if (name == "*" && func.children.size() == 2) {
+					for (idx_t side = 0; side < 2; side++) {
+						if (!BoundExpressionReferencesDecide(*func.children[side], decide_index)) {
+							return optimizer.BindScalarFunction("*", real(func.children[side]->Copy()),
+							                                    weigh(*func.children[1 - side]));
+						}
+					}
+				}
+				const Expression *square = nullptr;
+				if ((name == "power" || name == "pow" || name == "**") && func.children.size() == 2) {
+					double exponent;
+					if (TryEvaluateFoldableDouble(optimizer.context, *func.children[1], exponent, FOLD_PLAIN) &&
+					    exponent == 2.0) {
+						square = func.children[0].get();
+					}
+				} else if (name == "*" && func.children.size() == 2 && func.children[0]->Equals(*func.children[1])) {
+					square = func.children[0].get();
+				}
+				if (square && DecideExpressionDegree(*square, decide_index).IsLinear()) {
+					auto root = optimizer.BindScalarFunction("sqrt", w.Copy());
+					auto scaled = optimizer.BindScalarFunction("*", std::move(root), real(square->Copy()));
+					return optimizer.BindScalarFunction("power", std::move(scaled), number(2.0));
+				}
+			}
+			return optimizer.BindScalarFunction("*", w.Copy(), real(term.Copy()));
+		};
+		vector<unique_ptr<Expression>> children;
+		children.push_back(weigh(*inner.children[0]));
+		auto swapped = optimizer.BindAggregateFunction("sum", std::move(children));
+		auto &reducer = swapped->Cast<BoundAggregateExpression>();
+		if (outer.filter) {
+			reducer.filter = outer.filter->Copy();
+		}
+		auto alias = outer.GetAlias();
+		RemoveDecideTag(alias, VALUE_REWRITE_TAG); // it holds no reducer over decisions now
+		reducer.SetAlias(std::move(alias));
+		slot = BoundCastExpression::AddCastToType(optimizer.context, std::move(swapped), outer.return_type);
+	};
+	std::function<void(unique_ptr<Expression> &)> visit = [&](unique_ptr<Expression> &expr) {
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			swap(expr);
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { visit(child); });
+	};
+	visit(decide.decide_objective);
+}
 
 void DecideOptimizer::LiftNestedReducers(LogicalDecide &decide) {
 	if (!decide.decide_constraints && !decide.decide_objective) {

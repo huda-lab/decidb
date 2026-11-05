@@ -15,7 +15,22 @@ import itertools
 import pytest
 
 from ._anr_cases import CASES, F1_COLUMNS, F1_DATA, F1_MAX, F1_SUM
-from ._anr_oracle import PER_ROW, Abs, AnrModel, Col, Decision, Objective, ScopeError, Var, clause, eq, ge, le, reduce
+from ._anr_oracle import (
+    GLOBAL,
+    PER_ROW,
+    Abs,
+    AnrModel,
+    Col,
+    Decision,
+    Objective,
+    ScopeError,
+    Var,
+    clause,
+    eq,
+    ge,
+    le,
+    reduce,
+)
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import answer, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
 from solver.types import ObjSense, SolverStatus, VarType
@@ -246,6 +261,59 @@ def test_a_data_reducer_inside_a_nest(decidb_cli, scope_solver, nest):
     assert_no_internal_leak(result, f"data nest {nest_sql}")
     assert result.returncode == 0 and not result.stderr.strip(), result.stderr
     assert model.judge(answer(decidb_cli, sql), clauses, MAXIMIZE_X) == pytest.approx(expected.objective, abs=1e-4)
+
+
+SCALE_COLUMNS = ("id", "p")
+SCALE_ROWS = ((1, 10), (2, 30))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("spelling", ["", "per row: ", "per (): "])
+@pytest.mark.parametrize(
+    "clause_sql, body, expected",
+    [
+        pytest.param(
+            "sum(avg(t.p) * x) <= 25", le(reduce("sum", reduce("avg", Col("p")) * X), 25), [0, 1], id="avg-scales"
+        ),
+        pytest.param(
+            "sum(x * min(t.p)) <= 25", le(reduce("sum", X * reduce("min", Col("p"))), 25), [1, 1], id="min-scales"
+        ),
+        pytest.param(
+            "sum(x * max(t.p)) <= 25", le(reduce("sum", X * reduce("max", Col("p"))), 25), [0, 0], id="max-scales"
+        ),
+        pytest.param("sum(x / avg(t.p)) <= 0.05", le(reduce("sum", X * (1 / 20)), 0.05), [0, 1], id="divides"),
+        pytest.param(
+            "sum((x + avg(t.p)) / 20) <= 2.05",
+            le(reduce("sum", (X + reduce("avg", Col("p"))) * (1 / 20)), 2.05),
+            [0, 1],
+            id="divided-together",
+        ),
+    ],
+)
+def test_a_data_reducer_scaling_a_decision_inside_a_reducer(
+    decidb_cli, scope_solver, spelling, clause_sql, body, expected
+):
+    """Inside a reducer over decisions a reducer over data alone is a value of its path's
+    group (deck p. 51), so it may scale or divide a decision as any data does, whatever the
+    clause's spelling. The data tells it from the decision distributed into the aggregate,
+    `avg(p * x)`, a once silently wrong reading: over p = 10, 30, `sum(avg(p) * x) <= 25` is
+    `20 (x1 + x2) <= 25`, one shipment, the one worth 30 -- where `avg(p * x)` would keep x1
+    alone."""
+    sql = f"""
+        SELECT id, x {table('t', SCALE_COLUMNS, SCALE_ROWS)}
+        DECIDE x(BOOL)
+        SUCH THAT {spelling}{clause_sql}
+        MAXIMIZE SUM(t.p * x)
+        ORDER BY id"""
+    per = GLOBAL if spelling == "per (): " else PER_ROW
+    model = AnrModel(table_rows(SCALE_COLUMNS, SCALE_ROWS), [Decision("x", var_type=VarType.BINARY)])
+    objective = Objective(ObjSense.MAXIMIZE, reduce("sum", Col("p") * X))
+    clauses = [clause(body, per=per)]
+    expected_value = sum(p * x for (_, p), x in zip(SCALE_ROWS, expected))
+    assert model.solve(scope_solver, clauses, objective).objective == pytest.approx(expected_value)
+    result = decidb_cli.execute_raw(sql)
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert [row["x"] for row in answer(decidb_cli, sql)] == expected
 
 
 FACTOR_COLUMNS = ("id", "g", "h", "v", "w")
@@ -869,21 +937,43 @@ def test_a_square_inside_a_nest_is_defined_where_a_max_reads_it(decidb_cli_gurob
     assert_no_internal_leak(result, "a square under a MAX on HiGHS")
 
 
-@pytest.mark.error
+SWAP_COLUMNS = ("id", "g", "h", "v")
+SWAP_ROWS = ((1, "a", "p", 2), (2, "a", "p", 4), (3, "a", "q", 3), (4, "b", "p", 5))
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
 @pytest.mark.quadratic
-def test_a_square_a_helper_would_define_is_refused(decidb_cli):
-    """In the objective, a nest of sums that is not a sum of group sums reads its inner sum
-    through a helper, whose definition would be a quadratic row (D80)."""
+@pytest.mark.parametrize(
+    "objective, expected",
+    [
+        pytest.param("sum(sum(x * x) by (t.h)) - sum(10 * x)", [10 / 6, 10 / 6, 5, 10 / 6], id="sum"),
+        pytest.param("sum(avg(power(x - t.v, 2)) by (t.h))", [2, 4, 3, 5], id="avg"),
+        pytest.param(
+            "sum(when t.v > 2: sum(when t.v < 5: x * x) by (t.g)) - sum(8 * x)", [9, 2, 2, 9], id="both-whens"
+        ),
+    ],
+)
+def test_a_square_in_an_objective_nest_is_summed_in_the_other_order(request, cli_fixture, objective, expected):
+    """The objective's sum of group sums of squares is one sum of squares, each row weighted
+    by the rows of its group the outer sum reads (SwapObjectiveSummation): a convex QP on both
+    solvers. Worked by hand over (a, p, 2), (a, p, 4), (a, q, 3), (b, p, 5): group p is read
+    by its three rows, so `3 (x1^2 + x2^2 + x4^2) + x3^2 - 10 sum(x)` is least at 10/6 and 5;
+    an AVG divides by the three members again, so each `(x - v)^2` once, least at x = v; with
+    both `when`s the outer keeps v > 2 and the inner v < 5, so group a's `x2^2 + x3^2` is read
+    by rows 2 and 3, group b keeps no inner row and row 4 reads nothing: 2 at rows 2 and 3,
+    and the bound 9 where only `-8 x` reads x."""
+    cli = request.getfixturevalue(cli_fixture)
     sql = f"""
-        SELECT id, x {table('t', BOUND_COLUMNS, BOUND_ROWS)}
-        DECIDE x(INT)
-        SUCH THAT x <= 9 AND x >= 1
-        MINIMIZE sum(sum(x * x) by (t.g))
+        SELECT id, x {table('t', SWAP_COLUMNS, SWAP_ROWS)}
+        DECIDE x(REAL)
+        SUCH THAT x <= 9
+        MINIMIZE {objective}
         ORDER BY id"""
-    result = decidb_cli.execute_raw(sql)
-    message = "'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers"
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a square a helper would define")
+    result = cli.execute_raw(sql)
+    assert_no_internal_leak(result, objective)
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert [row["x"] for row in answer(cli, sql)] == pytest.approx(expected, abs=1e-5)
 
 
 # ---------------------------------------------------------------------------

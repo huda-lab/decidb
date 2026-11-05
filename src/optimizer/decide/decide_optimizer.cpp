@@ -88,6 +88,9 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 	auto &decide = op->Cast<LogicalDecide>();
 
+	// The objective's sums of group sums of squares, summed in the other order: their weights are reducers over data
+	// the bound-side evaluator computes.
+	RunPass("optimizer.objective_summation", [&] { SwapObjectiveSummation(decide); });
 	// Pass 0, on every path: the bound-side evaluator, whose output both the direct-solve rules and the solver read.
 	RunPass("optimizer.rhs_aggregates", [&] { RewriteRhsAggregates(decide); });
 
