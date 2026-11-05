@@ -38,6 +38,9 @@ const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache, const 
 //! the others.
 void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset, const vector<bool> *rows,
                        DataChunk &results);
+//! The same, expression i only on the rows `*reads[i]` marks (every row when null).
+void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
+                       const vector<const vector<bool> *> &reads, DataChunk &results);
 
 //! The rows among `read` (every row when null) that `condition` keeps, NULL dropping a row.
 vector<bool> KeptRows(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,

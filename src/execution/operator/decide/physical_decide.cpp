@@ -1,6 +1,7 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
+#include "duckdb/execution/operator/decide/decide_row_store.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/executor.hpp"
@@ -169,8 +170,8 @@ const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache, const 
 //! when null), NULL on the others. A scoped clause filters before it generates
 //! (language/guide.md §6.1), so nothing is computed on a row its `when` drops:
 //! `when w > 0: x <= ln(w)` takes no logarithm of 0.
-static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
-                              const vector<const vector<bool> *> &reads, DataChunk &results) {
+void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
+                       const vector<const vector<bool> *> &reads, DataChunk &results) {
 	const idx_t count = chunk.size();
 	results.SetCardinality(count);
 	if (count == 0) {
@@ -223,11 +224,11 @@ void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row
 	ExecuteOnReadRows(executor, chunk, row_offset, vector<const vector<bool> *>(results.ColumnCount(), rows), results);
 }
 
-//! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and the chunk the coefficient was computed
-//! over, whose failing row reads them.
+//! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and the window of rows the coefficient was
+//! computed over, whose failing row reads them.
 struct ValueInputs {
 	const vector<unique_ptr<Expression>> &values;
-	DataChunk &chunk;
+	DecideRowWindows &window;
 	ClientContext &context;
 };
 
@@ -243,18 +244,10 @@ struct ValueSource {
 	const ValueInputs *inputs = nullptr;
 };
 
-//! Whether `input` is a finite number or NULL on row `row` of the chunk: the one row a failing coefficient reads it on.
+//! Whether `input` is a finite number or NULL on row `row` of the window, the one row a failing coefficient reads.
 static bool IsFiniteOnRow(const ValueInputs &inputs, const Expression &input, idx_t row) {
 	auto transformed = TransformToChunkExpression(input, inputs.context);
-	SelectionVector one_row(1);
-	one_row.set_index(0, row);
-	DataChunk slice;
-	slice.InitializeEmpty(inputs.chunk.GetTypes());
-	slice.Slice(inputs.chunk, one_row, 1);
-	ExpressionExecutor executor(inputs.context, *transformed);
-	Vector result(transformed->return_type);
-	executor.ExecuteExpression(slice, result);
-	auto value = result.GetValue(0);
+	auto value = inputs.window.ValueAt(*transformed, row);
 	return value.IsNull() || std::isfinite(value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>());
 }
 
@@ -396,18 +389,21 @@ struct GroupRows {
 
 //! Reads a key's values at the rows that name its groups. `exprs` are the expressions a message quotes, one per key
 //! column: what the key shows, not what its rows group on. A read is one row, evaluated on that row alone, so an
-//! expression is never run on a row the clause did not read (a group's rows are all read rows).
+//! expression is never run on a row the clause did not read (a group's rows are all read rows). In one pass, the
+//! values are the pass's (DecideRowStore).
 class GroupKeyReader {
 public:
 	GroupKeyReader(ClientContext &context, const ColumnDataCollection &data, const vector<const Expression *> &exprs,
-	               GroupRows rows)
-	    : data(data), rows(std::move(rows)), executor(context) {
+	               GroupRows rows, DecideRowStore *store)
+	    : data(data), rows(std::move(rows)), executor(context), store(store) {
 		for (auto *expr : exprs) {
 			executor.AddExpression(*expr);
 			types.push_back(expr->return_type);
 		}
-		InitializeDecideScan(data, scan);
-		chunk.Initialize(context, data.Types());
+		if (!store) {
+			InitializeDecideScan(data, scan);
+			chunk.Initialize(context, data.Types());
+		}
 	}
 
 	//! The values of `group`'s key columns.
@@ -416,6 +412,10 @@ public:
 		for (idx_t column = 0; column < types.size(); column++) {
 			auto &label_rows = rows.label[column];
 			idx_t row = label_rows.empty() ? rows.first[group] : label_rows[group];
+			if (store) {
+				values.push_back(store->ValueAt(*executor.expressions[column], row));
+				continue;
+			}
 			if (!data.Seek(row, scan, chunk)) {
 				throw InternalException("DECIDE: group row %llu is past the end of the data", row);
 			}
@@ -436,6 +436,7 @@ private:
 	const ColumnDataCollection &data;
 	const GroupRows rows;
 	ExpressionExecutor executor;
+	DecideRowStore *store;
 	vector<LogicalType> types;
 	ColumnDataScanState scan;
 	DataChunk chunk;
@@ -463,11 +464,11 @@ private:
 //!                      any row order; null entries quote the grouped value
 //!
 //! A key with no columns (`per ()`, `by ()`) has one class: every row the filter keeps.
-static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientContext &context,
-                          ColumnDataCollection &data, idx_t num_rows, const std::function<bool(idx_t)> &row_filter,
-                          vector<idx_t> &out_row_to_group, idx_t &out_num_groups, GroupRows &out_rows,
-                          const vector<bool> *read_rows = nullptr, const vector<bool> &null_no_group = {},
-                          const vector<const Expression *> &label_exprs = {}) {
+static void BuildGroupIds(const vector<const Expression *> &key_exprs, ChunkExprCache &chunk_expr_cache,
+                          ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                          const std::function<bool(idx_t)> &row_filter, vector<idx_t> &out_row_to_group,
+                          idx_t &out_num_groups, GroupRows &out_rows, const vector<bool> *read_rows = nullptr,
+                          const vector<bool> &null_no_group = {}, const vector<const Expression *> &label_exprs = {}) {
 	DecideProfileScope profile("extraction.group_ids");
 	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
 	out_num_groups = 0;
@@ -521,10 +522,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 	vector<data_ptr_t> group_address;
 	vector<data_ptr_t> row_address(num_rows, nullptr);
 
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
+	DecideRowWindows windows(chunk_expr_cache, context, data);
 	DataChunk key_results;
 	key_results.Initialize(context, key_types);
 	DataChunk group_chunk;
@@ -537,10 +535,10 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 	Vector addresses(LogicalType::POINTER);
 	vector<UnifiedVectorFormat> key_udatas(num_key_cols);
 	idx_t row_offset = 0;
-	while (data.Scan(scan, chunk)) {
-		idx_t count = chunk.size();
+	while (windows.Next()) {
+		idx_t count = windows.Count();
 		key_results.Reset();
-		ExecuteOnReadRows(key_executor, chunk, row_offset, read_rows, key_results);
+		windows.Execute(key_executor, read_rows, key_results);
 		for (idx_t c = 0; c < num_key_cols; c++) {
 			key_results.data[c].ToUnifiedFormat(count, key_udatas[c]);
 		}
@@ -600,7 +598,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 		out_rows.first.push_back(first_rows[created]);
 	}
 	// A collated column's label is the least spelling among its group's rows, so it is the
-	// same in any row order: a second scan finds, for each group, the row that holds it.
+	// same in any row order: a second loop finds, for each group, the row that holds it.
 	// Spellings compare by their sort keys, as the groups do.
 	if (key_types.size() > num_key_cols) {
 		vector<vector<string>> least(num_key_cols);
@@ -611,20 +609,20 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			}
 		}
 		Vector label_keys(LogicalType::BLOB);
-		InitializeDecideScan(data, scan);
+		DecideRowWindows labels(chunk_expr_cache, context, data);
 		row_offset = 0;
-		while (data.Scan(scan, chunk)) {
+		while (labels.Next()) {
 			key_results.Reset();
-			ExecuteOnReadRows(key_executor, chunk, row_offset, read_rows, key_results);
+			labels.Execute(key_executor, read_rows, key_results);
 			for (idx_t c = 0; c < num_key_cols; c++) {
 				if (label_column[c] == c) {
 					continue;
 				}
-				CreateSortKeyHelpers::CreateSortKey(key_results.data[label_column[c]], chunk.size(),
+				CreateSortKeyHelpers::CreateSortKey(key_results.data[label_column[c]], labels.Count(),
 				                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST),
 				                                    label_keys);
 				auto encoded = FlatVector::GetData<string_t>(label_keys);
-				for (idx_t i = 0; i < chunk.size(); i++) {
+				for (idx_t i = 0; i < labels.Count(); i++) {
 					auto gid = out_row_to_group[row_offset + i];
 					if (gid == DConstants::INVALID_INDEX) {
 						continue;
@@ -637,7 +635,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 					}
 				}
 			}
-			row_offset += chunk.size();
+			row_offset += labels.Count();
 		}
 	}
 }
@@ -694,9 +692,9 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 			null_no_group.push_back(element.null_mode == DecideKeyNullMode::NO_GROUP);
 		}
 		GroupRows group_rows;
-		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)> {}, entry.unfiltered_row_group_ids,
-		              entry.unfiltered_num_groups, group_rows, rows.empty() ? nullptr : &rows, null_no_group,
-		              label_exprs);
+		BuildGroupIds(key_exprs, chunk_expr_cache, context, data, num_rows, std::function<bool(idx_t)> {},
+		              entry.unfiltered_row_group_ids, entry.unfiltered_num_groups, group_rows,
+		              rows.empty() ? nullptr : &rows, null_no_group, label_exprs);
 		entry.evaluated_rows = std::move(rows);
 		entry.group_rows = group_rows.first;
 		// A message quotes what the key shows: the label of a collated column, else the value rows group on.
@@ -704,7 +702,8 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 		for (idx_t column = 0; column < key_exprs.size(); column++) {
 			shown_exprs.push_back(label_exprs[column] ? label_exprs[column] : key_exprs[column]);
 		}
-		auto reader = make_shared_ptr<GroupKeyReader>(context, data, shown_exprs, std::move(group_rows));
+		auto reader =
+		    make_shared_ptr<GroupKeyReader>(context, data, shown_exprs, std::move(group_rows), chunk_expr_cache.store);
 		key_values.values_of = [reader](idx_t group) {
 			return reader->Read(group);
 		};
@@ -819,9 +818,10 @@ struct SignatureFrames {
 //! terms (DecidePreparedModel::frame_fallback_columns) and its decisions' instances. Not the value it reads. The first
 //! class is the keys'; `owned` holds those built here.
 static void FrameFieldClasses(idx_t f, const SignatureFrames &frames, const vector<DecideVarScopeInfo> &variable_scopes,
-                              const vector<KeyedMapping> &keyed_mappings, ClientContext &context,
-                              ColumnDataCollection &data, idx_t num_rows, const vector<bool> *rows,
-                              vector<unique_ptr<vector<idx_t>>> &owned, vector<const vector<idx_t> *> &classes) {
+                              const vector<KeyedMapping> &keyed_mappings, ChunkExprCache &chunk_expr_cache,
+                              ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                              const vector<bool> *rows, vector<unique_ptr<vector<idx_t>>> &owned,
+                              vector<const vector<idx_t> *> &classes) {
 	auto &frame = frames.frames[f];
 	auto &map = frames.maps[f];
 	classes.push_back(frame.Relative() ? &map.peer : &map.timeline);
@@ -839,7 +839,8 @@ static void FrameFieldClasses(idx_t f, const SignatureFrames &frames, const vect
 		owned.push_back(make_uniq<vector<idx_t>>());
 		idx_t reached_count;
 		GroupRows reached_rows;
-		BuildGroupIds(reached, context, data, num_rows, reaches, *owned.back(), reached_count, reached_rows, rows);
+		BuildGroupIds(reached, chunk_expr_cache, context, data, num_rows, reaches, *owned.back(), reached_count,
+		              reached_rows, rows);
 		classes.push_back(owned.back().get());
 	}
 	for (auto decision : frames.prepared.frame_fallback_decisions[f]) {
@@ -888,8 +889,8 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 		case DecideSignatureFieldKind::FRAME:
 			// Its keys (FrameFieldClasses). An anchor where it reads no value -- a NULL at the selected row, or no
 			// position -- has no instance, so it is no variant either (D84).
-			FrameFieldClasses(field.frame, frames, variable_scopes, keyed_mappings, context, data, num_rows, rows,
-			                  frame_classes, classes);
+			FrameFieldClasses(field.frame, frames, variable_scopes, keyed_mappings, chunk_expr_cache, context, data,
+			                  num_rows, rows, frame_classes, classes);
 			absent_frames.push_back(&frames.maps[field.frame]);
 			break;
 		case DecideSignatureFieldKind::BY_KEY:
@@ -920,7 +921,8 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 			return true;
 		};
 	}
-	BuildGroupIds(exprs, context, data, num_rows, has_value, ids, count, group_rows, rows, null_no_group);
+	BuildGroupIds(exprs, chunk_expr_cache, context, data, num_rows, has_value, ids, count, group_rows, rows,
+	              null_no_group);
 	if (per_row) {
 		// A per-row decision: every kept row is an instance of its own.
 		count = 0;
@@ -1002,8 +1004,9 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 		if (column.kind != DecideFrameColumn::Kind::AGGREGATE) {
 			continue;
 		}
-		if (data.ColumnCount() != prepared.frame_column_base + j) {
-			throw InternalException("DECIDE: frame aggregate %llu follows %llu columns", j, data.ColumnCount());
+		if (DecideColumnCount(chunk_expr_cache, data) != prepared.frame_column_base + j) {
+			throw InternalException("DECIDE: frame aggregate %llu follows %llu columns", j,
+			                        DecideColumnCount(chunk_expr_cache, data));
 		}
 		auto &reducer = column.value->Cast<BoundAggregateExpression>();
 		auto name = StringUtil::Lower(reducer.function.name);
@@ -1019,8 +1022,8 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 		vector<idx_t> group;
 		idx_t groups = 0;
 		GroupRows group_rows;
-		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)>(), group, groups, group_rows,
-		              nullptr, null_no_group);
+		BuildGroupIds(key_exprs, chunk_expr_cache, context, data, num_rows, std::function<bool(idx_t)>(), group, groups,
+		              group_rows, nullptr, null_no_group);
 		// Its own `per`: each class once per signature, read at the signature's first row.
 		vector<bool> member = read;
 		if (column.class_key != DConstants::INVALID_INDEX) {
@@ -1084,14 +1087,15 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 		}
 		vector<unique_ptr<Vector>> appended;
 		appended.push_back(std::move(out));
-		AppendDecideColumns(context, data, appended);
+		AppendDecideColumns(context, data, chunk_expr_cache, appended);
 	}
 }
 
 //! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` --
 //! a column's spelling -- as ORDER BY places it.
 static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
-                                       ClientContext &context, ColumnDataCollection &data) {
+                                       ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                       ColumnDataCollection &data) {
 	vector<idx_t> least(num_classes, DConstants::INVALID_INDEX);
 	vector<string> least_key(num_classes);
 	vector<bool> read(row_to_class.size());
@@ -1100,21 +1104,18 @@ static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_
 	}
 	ExpressionExecutor executor(context);
 	executor.AddExpression(expr);
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
+	DecideRowWindows windows(chunk_expr_cache, context, data);
 	DataChunk result;
 	result.Initialize(context, {expr.return_type});
 	Vector keys(LogicalType::BLOB);
 	idx_t offset = 0;
-	while (data.Scan(scan, chunk)) {
+	while (windows.Next()) {
 		result.Reset();
-		ExecuteOnReadRows(executor, chunk, offset, &read, result);
-		CreateSortKeyHelpers::CreateSortKey(result.data[0], chunk.size(),
+		windows.Execute(executor, &read, result);
+		CreateSortKeyHelpers::CreateSortKey(result.data[0], windows.Count(),
 		                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST), keys);
 		auto encoded = FlatVector::GetData<string_t>(keys);
-		for (idx_t i = 0; i < chunk.size(); i++) {
+		for (idx_t i = 0; i < windows.Count(); i++) {
 			auto cls = row_to_class[offset + i];
 			if (cls == DConstants::INVALID_INDEX) {
 				continue;
@@ -1125,7 +1126,7 @@ static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_
 				least_key[cls] = std::move(key);
 			}
 		}
-		offset += chunk.size();
+		offset += windows.Count();
 	}
 	return least;
 }
@@ -1177,12 +1178,13 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 		if (!class_elements[c].collated) {
 			continue;
 		}
-		auto least = LeastSpellingRows(*exprs[c], class_ids, variants_per_class.size(), context, data);
+		auto least =
+		    LeastSpellingRows(*exprs[c], class_ids, variants_per_class.size(), chunk_expr_cache, context, data);
 		for (auto class_of_variant : class_of) {
 			group_rows.label[c].push_back(least[class_of_variant]);
 		}
 	}
-	auto reader = make_shared_ptr<GroupKeyReader>(context, data, exprs, std::move(group_rows));
+	auto reader = make_shared_ptr<GroupKeyReader>(context, data, exprs, std::move(group_rows), chunk_expr_cache.store);
 	auto class_columns = class_elements.size();
 	// Variants that differ only by the decision instance they read (`per t.g: x <= t.v` over two rows of one class with
 	// one `v`) show the same values: each is named by the row it is read at as well.
@@ -1403,10 +1405,10 @@ static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const v
 //! composed MIN/MAX rewrite folds a clause's `when` in front of a term's own, which must
 //! not be read where the clause's drops.
 static void KeepChunkRowsWhere(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                               DataChunk &chunk, vector<bool> &rows) {
+                               DecideRowWindows &window, vector<bool> &rows) {
 	if (condition.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 		for (auto &part : condition.Cast<BoundConjunctionExpression>().children) {
-			KeepChunkRowsWhere(*part, chunk_expr_cache, context, chunk, rows);
+			KeepChunkRowsWhere(*part, chunk_expr_cache, context, window, rows);
 		}
 		return;
 	}
@@ -1415,7 +1417,7 @@ static void KeepChunkRowsWhere(const Expression &condition, ChunkExprCache &chun
 		std::fill(rows.begin(), rows.end(), false);
 		for (auto &part : condition.Cast<BoundConjunctionExpression>().children) {
 			vector<bool> kept = undecided;
-			KeepChunkRowsWhere(*part, chunk_expr_cache, context, chunk, kept);
+			KeepChunkRowsWhere(*part, chunk_expr_cache, context, window, kept);
 			for (idx_t row = 0; row < kept.size(); row++) {
 				if (kept[row]) {
 					rows[row] = true;
@@ -1428,11 +1430,11 @@ static void KeepChunkRowsWhere(const Expression &condition, ChunkExprCache &chun
 	ExpressionExecutor executor(context, CachedTransformToChunkExpression(chunk_expr_cache, condition, context));
 	DataChunk result;
 	result.Initialize(context, {LogicalType::BOOLEAN});
-	ExecuteOnReadRows(executor, chunk, 0, &rows, result);
+	window.Execute(executor, 0, {&rows}, result);
 	UnifiedVectorFormat kept;
-	result.data[0].ToUnifiedFormat(chunk.size(), kept);
+	result.data[0].ToUnifiedFormat(window.Count(), kept);
 	auto values = UnifiedVectorFormat::GetData<bool>(kept);
-	for (idx_t i = 0; i < chunk.size(); i++) {
+	for (idx_t i = 0; i < window.Count(); i++) {
 		if (rows[i]) {
 			auto index = kept.sel->get_index(i);
 			rows[i] = kept.validity.RowIsValid(index) && values[index];
@@ -1441,25 +1443,20 @@ static void KeepChunkRowsWhere(const Expression &condition, ChunkExprCache &chun
 }
 
 //! The rows among `read` (every row when null) that each of `conditions` keeps (KeepChunkRowsWhere), all read in one
-//! scan of `data`.
+//! loop over the rows.
 static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &conditions, const vector<bool> *read,
                                            ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                            ColumnDataCollection &data, idx_t num_rows) {
 	vector<vector<bool>> masks(conditions.size(), read ? *read : vector<bool>(num_rows, true));
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
-	idx_t row_offset = 0;
-	while (!conditions.empty() && data.Scan(scan, chunk)) {
-		auto begin = NumericCast<int64_t>(row_offset);
-		auto end = NumericCast<int64_t>(row_offset + chunk.size());
+	DecideRowWindows windows(chunk_expr_cache, context, data);
+	while (!conditions.empty() && windows.Next()) {
+		auto begin = NumericCast<int64_t>(windows.Offset());
+		auto end = NumericCast<int64_t>(windows.Offset() + windows.Count());
 		for (idx_t c = 0; c < conditions.size(); c++) {
 			vector<bool> chunk_rows(masks[c].begin() + begin, masks[c].begin() + end);
-			KeepChunkRowsWhere(*conditions[c], chunk_expr_cache, context, chunk, chunk_rows);
+			KeepChunkRowsWhere(*conditions[c], chunk_expr_cache, context, windows, chunk_rows);
 			std::copy(chunk_rows.begin(), chunk_rows.end(), masks[c].begin() + begin);
 		}
-		row_offset += chunk.size();
 	}
 	return masks;
 }
@@ -1663,27 +1660,23 @@ EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<Term
 		bl_reads.push_back(&term_reads[term_idx]);
 	}
 	if (!bl_route.empty()) {
-		ColumnDataScanState bl_scan;
-		InitializeDecideScan(data, bl_scan);
-        DataChunk bl_chunk;
-        bl_chunk.Initialize(context, data.Types());
-        DataChunk bl_results;
-        bl_results.Initialize(context, bl_types);
-		idx_t row_offset = 0;
-		while (data.Scan(bl_scan, bl_chunk)) {
+		DecideRowWindows bl_windows(chunk_expr_cache, context, data);
+		DataChunk bl_results;
+		bl_results.Initialize(context, bl_types);
+		while (bl_windows.Next()) {
+			const idx_t row_offset = bl_windows.Offset();
 			bl_results.Reset();
-			ExecuteOnReadRows(bl_executor, bl_chunk, row_offset, bl_reads, bl_results);
+			bl_windows.Execute(bl_executor, row_offset, bl_reads, bl_results);
 			for (idx_t j = 0; j < bl_route.size(); j++) {
 				idx_t term_idx = bl_route[j];
 				auto &col = ebts[term_idx].row_coefficients.MutableDense();
-				ValueInputs inputs {terms[term_idx].inputs, bl_chunk, context};
+				ValueInputs inputs {terms[term_idx].inputs, bl_windows, context};
 				ExtractDoubleColumn(
-				    bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
+				    bl_results.data[j], bl_windows.Count(), terms[term_idx].sign, col,
 				    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names, clause, &inputs}, null_rows,
 				    &term_reads[term_idx], row_offset);
 				ebts[term_idx].row_coefficients.SyncSize();
 			}
-			row_offset += bl_chunk.size();
 		}
 	}
 
@@ -2243,13 +2236,15 @@ struct UnboundedCandidateProvider {
 		vector<idx_t> row_to_group;
 		idx_t num_groups = 0;
 		GroupRows group_rows;
-		BuildGroupIds(keys, context, data, num_rows, std::function<bool(idx_t)> {}, row_to_group, num_groups,
+		// A diagnosis of the solved model's columns, after the evaluation: it reads the input itself.
+		ChunkExprCache no_pass;
+		BuildGroupIds(keys, no_pass, context, data, num_rows, std::function<bool(idx_t)> {}, row_to_group, num_groups,
 		              group_rows);
 		idx_t cap = std::max(params.min_categories, (idx_t)(params.categorical_ratio * (double)denom));
 		if (num_groups < 2 || num_groups > cap) {
 			return false;
 		}
-		GroupKeyReader reader(context, data, keys, std::move(group_rows));
+		GroupKeyReader reader(context, data, keys, std::move(group_rows), nullptr);
 		out.column = input_column_names[ci];
 		out.clause_referenced = ci < input_column_in_clause.size() && input_column_in_clause[ci];
 		out.instance_to_group = std::move(row_to_group); // row-indexed
@@ -2489,6 +2484,151 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 // Finalize: PHASE 1.4 — Frame selectors
 //===--------------------------------------------------------------------===//
 
+//! The annotated tree (deck pp. 81, 99), node by node: what each reads on a row -- a key's columns, the parts of a
+//! condition, a value -- is registered for the pass. The tree is the operator's tables: the keys every scope, `by`
+//! and timeline names, the clauses and the objective with their terms, the composed clauses, the helpers' value
+//! links, the frames with their payloads and the reducers over them, the signatures and the scope checks.
+void PhysicalDecide::RegisterEvaluation(ClientContext &context, DecideGlobalSinkState &gstate,
+                                        ChunkExprCache &chunk_expr_cache, DecideRowStore &store) const {
+	// A value holding a reducer is no row's: its reducer is a set of terms or a column by now.
+	auto value = [&](const Expression *expr) {
+		if (expr && !expr->IsAggregate()) {
+			store.Register(CachedTransformToChunkExpression(chunk_expr_cache, *expr, context));
+		}
+	};
+	// A condition's parts are read one after another, each on the rows the ones before leave undecided
+	// (KeepChunkRowsWhere).
+	std::function<void(const Expression *)> condition = [&](const Expression *expr) {
+		if (!expr) {
+			return;
+		}
+		auto type = expr->GetExpressionType();
+		if (type == ExpressionType::CONJUNCTION_AND || type == ExpressionType::CONJUNCTION_OR) {
+			for (auto &part : expr->Cast<BoundConjunctionExpression>().children) {
+				condition(part.get());
+			}
+			return;
+		}
+		value(expr);
+	};
+	auto terms = [&](const vector<DecideTerm> &list) {
+		for (auto &term : list) {
+			value(term.coefficient.get());
+			condition(term.filter.get());
+		}
+	};
+	// The columns a payload reads, by value (CheckDecideFramePeers).
+	std::function<void(const Expression &)> leaves = [&](const Expression &expr) {
+		auto kind = expr.GetExpressionClass();
+		if (kind == ExpressionClass::BOUND_COLUMN_REF || kind == ExpressionClass::BOUND_REF) {
+			value(&expr);
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr, leaves);
+	};
+
+	for (idx_t key = 0; key < keys.size(); key++) {
+		for (auto &element : DecideKeyElements(keys, key)) {
+			value(&element.Grouping());
+			value(element.expression.get());
+		}
+	}
+	auto clause = [&](const DecideConstraint &constraint) {
+		condition(constraint.scope.when.get());
+		terms(constraint.lhs_terms);
+		value(constraint.rhs_expr.get());
+		for (auto &term : constraint.bilinear_terms) {
+			value(term.coefficient.get());
+			condition(term.filter.get());
+		}
+		for (auto &group : constraint.quadratic_groups) {
+			terms(group.inner_terms);
+			value(group.scale.get());
+			condition(group.filter.get());
+		}
+		if (constraint.admitted_lower) {
+			value(constraint.admitted_a.get());
+			value(constraint.admitted_r.get());
+			condition(constraint.admitted_member.get());
+			// The ends read the row and the two projections, numbered after every column (EvaluateConstraints).
+			BoundReferenceExpression a_column(LogicalType::DOUBLE, store.ColumnCount() + prepared.frame_columns.size());
+			BoundReferenceExpression r_column(LogicalType::DOUBLE, a_column.index + 1);
+			for (auto *end : {constraint.admitted_lower.get(), constraint.admitted_upper.get()}) {
+				store.KeepColumnsOf(
+				    *TransformToChunkExpression(*DecideBindAdmittedInputs(*end, a_column, r_column), context));
+			}
+		}
+	};
+	for (auto &constraint : prepared.constraints) {
+		clause(*constraint);
+	}
+	for (auto &constraint : prepared.singleton_row_constraints) {
+		clause(*constraint);
+	}
+	if (prepared.objective) {
+		auto &objective = *prepared.objective;
+		condition(objective.when_condition.get());
+		terms(objective.terms);
+		terms(objective.squared_terms);
+		for (auto &term : objective.bilinear_terms) {
+			value(term.coefficient.get());
+			condition(term.filter.get());
+		}
+	}
+	auto composed = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &list) {
+		for (auto &term : list) {
+			condition(term.filter.get());
+			value(term.scale.get());
+			terms(term.inner_terms);
+		}
+	};
+	for (auto &spec : composed_minmax_constraints) {
+		condition(spec.scope.when.get());
+		value(spec.rhs_expr.get());
+		composed(spec.terms);
+	}
+	composed(composed_minmax_objective_terms);
+	for (auto &link : reducer_value_links) {
+		condition(link.when.get());
+		condition(link.filter.get());
+		terms(link.inner_terms);
+		terms(link.fallback_terms);
+	}
+	for (auto &frame : frames) {
+		condition(frame.rows.get());
+		value(frame.order.get());
+		value(frame.fallback.get());
+	}
+	for (auto &payload : DecideFramePayloads(frames, prepared, reducer_value_links)) {
+		for (auto *payload_value : payload.values) {
+			value(payload_value);
+			leaves(*payload_value);
+		}
+	}
+	for (auto &column : prepared.frame_columns) {
+		if (column.kind == DecideFrameColumn::Kind::REDUCED || column.kind == DecideFrameColumn::Kind::AGGREGATE) {
+			auto &reducer = column.value->Cast<BoundAggregateExpression>();
+			condition(reducer.filter.get());
+			if (!reducer.children.empty()) {
+				value(reducer.children[0].get());
+				leaves(*reducer.children[0]);
+			}
+		} else if (column.kind != DecideFrameColumn::Kind::DEFINED) {
+			value(column.value.get());
+		}
+		value(column.fallback.get());
+	}
+	for (auto &signature : signatures) {
+		condition(signature.rows.get());
+		for (auto &field : signature.fields) {
+			value(field.value.get());
+		}
+	}
+	for (auto &check : scope_checks) {
+		value(check.value.get());
+	}
+}
+
 void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                  ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache) const {
 	if (frames.empty()) {
@@ -2578,26 +2718,22 @@ static vector<bool> NullRows(const vector<const Expression *> &exprs, ChunkExprC
 		executor.AddExpression(lowered);
 		types.push_back(lowered.return_type);
 	}
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
+	DecideRowWindows windows(chunk_expr_cache, context, data);
 	DataChunk results;
 	results.Initialize(context, types);
-	idx_t offset = 0;
-	while (data.Scan(scan, chunk)) {
+	while (windows.Next()) {
+		const idx_t offset = windows.Offset();
 		results.Reset();
-		ExecuteOnReadRows(executor, chunk, offset, read, results);
+		windows.Execute(executor, read, results);
 		for (idx_t col = 0; col < results.ColumnCount(); col++) {
 			UnifiedVectorFormat format;
-			results.data[col].ToUnifiedFormat(chunk.size(), format);
-			for (idx_t i = 0; i < chunk.size(); i++) {
+			results.data[col].ToUnifiedFormat(windows.Count(), format);
+			for (idx_t i = 0; i < windows.Count(); i++) {
 				if ((!read || (*read)[offset + i]) && !format.validity.RowIsValid(format.sel->get_index(i))) {
 					nulls[offset + i] = true;
 				}
 			}
 		}
-		offset += chunk.size();
 	}
 	return nulls;
 }
@@ -2955,10 +3091,24 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     PerGroupCache per_group_cache;
 
 	//===--------------------------------------------------------------------===//
+	// PHASE 1.3: The one pass (deck §3): every expression the evaluation reads on a row, evaluated in one scan of the
+	// input, which every loop below reads (decide_row_store.hpp)
+	//===--------------------------------------------------------------------===//
+
+	DecideProfileScope phase("execution.one_pass");
+	unique_ptr<DecideRowStore> row_store;
+	if (std::getenv("DECIDB_ONE_PASS")) {
+		row_store = make_uniq<DecideRowStore>(context, gstate.data);
+		RegisterEvaluation(context, gstate, chunk_expr_cache, *row_store);
+		row_store->Build();
+		chunk_expr_cache.store = row_store.get();
+	}
+
+	//===--------------------------------------------------------------------===//
 	// PHASE 1.4: Frame selectors -- their timelines, and the values they read as columns
 	//===--------------------------------------------------------------------===//
 
-	DecideProfileScope phase("execution.frames");
+	phase.Next("execution.frames");
 	BuildFrames(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
 
 	//===--------------------------------------------------------------------===//
@@ -3007,7 +3157,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
     DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
-    phase.Next("execution.assemble_input");
+	if (row_store) {
+		DecideProfileScope::Counter("execution.late_reads", static_cast<double>(row_store->LateReads()));
+	}
+	phase.Next("execution.assemble_input");
     ResolveGroupNames(per_group_cache, gstate);
     VarIndexer var_indexer;
     SolverInput solver_input =
@@ -3069,20 +3222,15 @@ vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_c
 	executor.AddExpression(transformed);
 	vector<Value> values;
 	values.reserve(data.Count());
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
+	DecideRowWindows windows(chunk_expr_cache, context, data);
 	DataChunk result;
 	result.Initialize(context, {transformed.return_type});
-	idx_t offset = 0;
-	while (data.Scan(scan, chunk)) {
+	while (windows.Next()) {
 		result.Reset();
-		ExecuteOnReadRows(executor, chunk, offset, rows, result);
-		for (idx_t i = 0; i < chunk.size(); i++) {
+		windows.Execute(executor, rows, result);
+		for (idx_t i = 0; i < windows.Count(); i++) {
 			values.push_back(result.data[0].GetValue(i));
 		}
-		offset += chunk.size();
 	}
 	return values;
 }
@@ -3094,8 +3242,8 @@ vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_c
 static string DescribeFrameDifference(const DecideSignatureField &field, const vector<DecideKey> &keys,
                                       const vector<DecideVarScopeInfo> &variable_scopes,
                                       const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
-                                      const vector<idx_t> &ids, ClientContext &context, ColumnDataCollection &data,
-                                      const vector<bool> *rows,
+                                      const vector<idx_t> &ids, ChunkExprCache &chunk_expr_cache,
+                                      ClientContext &context, ColumnDataCollection &data, const vector<bool> *rows,
                                       const std::function<bool(const Expression &, string &)> &varies) {
 	auto &frame = frames.frames[field.frame];
 	auto &map = frames.maps[field.frame];
@@ -3132,8 +3280,8 @@ static string DescribeFrameDifference(const DecideSignatureField &field, const v
 	}
 	vector<unique_ptr<vector<idx_t>>> owned;
 	vector<const vector<idx_t> *> classes;
-	FrameFieldClasses(field.frame, frames, variable_scopes, keyed_mappings, context, data, ids.size(), rows, owned,
-	                  classes);
+	FrameFieldClasses(field.frame, frames, variable_scopes, keyed_mappings, chunk_expr_cache, context, data, ids.size(),
+	                  rows, owned, classes);
 	// The classes after the keys' are the fallback's.
 	for (idx_t c = 1; c < classes.size(); c++) {
 		idx_t seen = DConstants::INVALID_INDEX;
@@ -3220,8 +3368,8 @@ static string DescribeVariantDifference(const DecideSignature &signature, const 
 			break;
 		}
 		case DecideSignatureFieldKind::FRAME: {
-			auto why = DescribeFrameDifference(field, keys, variable_scopes, keyed_mappings, frames, ids, context, data,
-			                                   rows, varies);
+			auto why = DescribeFrameDifference(field, keys, variable_scopes, keyed_mappings, frames, ids,
+			                                   chunk_expr_cache, context, data, rows, varies);
 			if (!why.empty()) {
 				return why;
 			}
@@ -3547,12 +3695,6 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
 
-        // Scan data and evaluate LHS coefficients
-        ColumnDataScanState scan_state;
-        InitializeDecideScan(gstate.data, scan_state);
-
-        DataChunk chunk;
-        chunk.Initialize(context, gstate.data.Types());
 
         // Store variable indices for all terms (before scanning data). Capture each term's
         // symbolic coefficient label too (`l_extendedprice` for `buy * l_extendedprice`) so
@@ -3673,23 +3815,20 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
 		const auto names = Names();
 		const auto clause = WrittenClause(constraint->source_clause_id);
-		idx_t coefficient_row_base = 0;
-		while (gstate.data.Scan(scan_state, chunk)) {
-			if (constraint->lhs_terms.empty()) {
-                continue;
-            }
-            coef_results.Reset();
-			ExecuteOnReadRows(coef_executor, chunk, coefficient_row_base, term_read_ptrs, coef_results);
+		DecideRowWindows coef_windows(chunk_expr_cache, context, gstate.data);
+		while (!constraint->lhs_terms.empty() && coef_windows.Next()) {
+			const idx_t coefficient_row_base = coef_windows.Offset();
+			coef_results.Reset();
+			coef_windows.Execute(coef_executor, coefficient_row_base, term_read_ptrs, coef_results);
 			for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 				auto &col = eval_const.row_coefficients[term_idx].MutableDense();
 				auto &term = constraint->lhs_terms[term_idx];
-				ValueInputs inputs {term.inputs, chunk, context};
-				ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(), term.sign, col,
+				ValueInputs inputs {term.inputs, coef_windows, context};
+				ExtractDoubleColumn(coef_results.data[term_idx], coef_windows.Count(), term.sign, col,
 				                    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs},
 				                    &null_rows, &term_reads[term_idx], coefficient_row_base);
 				eval_const.row_coefficients[term_idx].SyncSize();
 			}
-			coefficient_row_base += chunk.size();
 		}
 
 		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
@@ -3972,7 +4111,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			}
 			// The admitted ends read `a` and `r` many times, so they are two projections: `[a, r]` on the rows the
 			// member filter keeps (as a term's coefficients are read), then the ends over the row and those columns.
-			auto data_types = gstate.data.Types();
+			auto data_types = DecideColumnTypes(chunk_expr_cache, gstate.data);
 			unique_ptr<Expression> lower_over_inputs, upper_over_inputs;
 			ExpressionExecutor input_executor(context);
 			ExpressionExecutor end_executor(context);
@@ -3999,20 +4138,17 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				eval_const.admitted_lower.Reserve(num_rows);
 				eval_const.admitted_upper.Reserve(num_rows);
 			}
-			ColumnDataScanState scan_state;
-			InitializeDecideScan(gstate.data, scan_state);
-			DataChunk scan_chunk;
-			scan_chunk.Initialize(context, data_types);
+			DecideRowWindows windows(chunk_expr_cache, context, gstate.data);
 			DataChunk row_result;
 			if (rhs_per_row) {
 				row_result.Initialize(context, row_types);
 			}
-			idx_t scanned = 0;
-			while (gstate.data.Scan(scan_state, scan_chunk)) {
-				const idx_t count = scan_chunk.size();
+			while (windows.Next()) {
+				const idx_t scanned = windows.Offset();
+				const idx_t count = windows.Count();
 				if (rhs_per_row) {
 					row_result.Reset();
-					ExecuteOnReadRows(row_executor, scan_chunk, scanned, &scoped_kept, row_result);
+					windows.Execute(row_executor, &scoped_kept, row_result);
 				}
 				if (admitted) {
 					// Both projections read only the members among the kept rows; a row that is no member admits every
@@ -4020,14 +4156,14 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					vector<bool> members(scoped_kept.begin() + NumericCast<int64_t>(scanned),
 					                     scoped_kept.begin() + NumericCast<int64_t>(scanned + count));
 					if (constraint->admitted_member) {
-						KeepChunkRowsWhere(*constraint->admitted_member, chunk_expr_cache, context, scan_chunk,
-						                   members);
+						KeepChunkRowsWhere(*constraint->admitted_member, chunk_expr_cache, context, windows, members);
 					}
 					inputs.Reset();
-					ExecuteOnReadRows(input_executor, scan_chunk, 0, &members, inputs);
+					windows.Execute(input_executor, 0, {&members, &members}, inputs);
 					end_input.Reset();
-					for (idx_t col = 0; col < scan_chunk.ColumnCount(); col++) {
-						end_input.data[col].Reference(scan_chunk.data[col]);
+					auto &row = windows.Input(end_executor);
+					for (idx_t col = 0; col < row.ColumnCount(); col++) {
+						end_input.data[col].Reference(row.data[col]);
 					}
 					end_input.data[data_types.size()].Reference(inputs.data[0]);
 					end_input.data[data_types.size() + 1].Reference(inputs.data[1]);
@@ -4057,8 +4193,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					// ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
 					// was folded as a column bound in its bare spelling must stay legal
 					// in its rebuilt one. `inf - inf` still yields NaN and is still refused.
-					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
-					                    eval_const.rhs_values.MutableDense(),
+					ExtractDoubleColumn(row_result.data[column++], count, 1.0, eval_const.rhs_values.MutableDense(),
 					                    {DecideValueRole::BOUND, *constraint->rhs_expr, names},
 					                    tightest_frame_bound ? &bound_null : &null_rows, &scoped_kept, scanned);
 					eval_const.rhs_values.SyncSize();
@@ -4073,7 +4208,6 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					eval_const.admitted_lower.SyncSize();
 					eval_const.admitted_upper.SyncSize();
 				}
-				scanned += scan_chunk.size();
 			}
 		}
 		if (tightest_frame_bound) {
@@ -4155,19 +4289,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                         CachedTransformToChunkExpression(chunk_expr_cache, *qg.scale, context);
                     ExpressionExecutor scale_executor(context);
                     scale_executor.AddExpression(transformed);
-                    ColumnDataScanState scale_scan;
-                    InitializeDecideScan(gstate.data, scale_scan);
-                    DataChunk scale_chunk;
-                    scale_chunk.Initialize(context, gstate.data.Types());
-                    bool got_scale = false;
-                    while (!got_scale && gstate.data.Scan(scale_scan, scale_chunk)) {
-                        if (scale_chunk.size() == 0) {
-                            continue;
-                        }
-                        DataChunk scale_result;
+					DecideRowWindows scale_windows(chunk_expr_cache, context, gstate.data);
+					bool got_scale = false;
+					while (!got_scale && scale_windows.Next()) {
+						DataChunk scale_result;
                         scale_result.Initialize(context, {transformed.return_type});
-                        scale_executor.Execute(scale_chunk, scale_result);
-                        Value value = scale_result.data[0].GetValue(0);
+						scale_windows.Execute(scale_executor, nullptr, scale_result);
+						Value value = scale_result.data[0].GetValue(0);
 						got_scale = true;
 						if (value.IsNull()) {
 							// A NULL factor makes every instance of the clause NULL.
@@ -4215,27 +4343,23 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					}
 				}
 				if (!qg.inner_terms.empty()) {
-					ColumnDataScanState qscan;
-					InitializeDecideScan(gstate.data, qscan);
-                    DataChunk qchunk;
-                    qchunk.Initialize(context, gstate.data.Types());
-                    DataChunk q_results;
-                    q_results.Initialize(context, q_types);
-					idx_t q_offset = 0;
-					while (gstate.data.Scan(qscan, qchunk)) {
+					DecideRowWindows q_windows(chunk_expr_cache, context, gstate.data);
+					DataChunk q_results;
+					q_results.Initialize(context, q_types);
+					while (q_windows.Next()) {
+						const idx_t q_offset = q_windows.Offset();
 						q_results.Reset();
-						ExecuteOnReadRows(q_executor, qchunk, q_offset, &q_reads, q_results);
+						q_windows.Execute(q_executor, &q_reads, q_results);
 						for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
 							auto &col = eqg.row_coefficients[inner_idx].MutableDense();
 							auto &term = qg.inner_terms[inner_idx];
-							ValueInputs inputs {term.inputs, qchunk, context};
+							ValueInputs inputs {term.inputs, q_windows, context};
 							ExtractDoubleColumn(
-							    q_results.data[inner_idx], qchunk.size(), term.sign, col,
+							    q_results.data[inner_idx], q_windows.Count(), term.sign, col,
 							    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs}, &null_rows,
 							    &q_reads, q_offset);
 							eqg.row_coefficients[inner_idx].SyncSize();
 						}
-						q_offset += qchunk.size();
 					}
 				}
 				if (quadratic_filters[group_idx].has_filter) {
@@ -4429,10 +4553,6 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                 }
             }
 
-            ColumnDataScanState obj_scan_state;
-            InitializeDecideScan(gstate.data, obj_scan_state);
-            DataChunk obj_chunk;
-            obj_chunk.Initialize(context, gstate.data.Types());
             DataChunk obj_results;
             if (!route.empty()) {
                 obj_results.Initialize(context, obj_result_types);
@@ -4446,13 +4566,11 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			}
 
 			const auto objective = WrittenClause(DConstants::INVALID_INDEX);
-			idx_t obj_row_offset = 0;
-			while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
-				if (route.empty()) {
-					continue;
-				}
+			DecideRowWindows obj_windows(chunk_expr_cache, context, gstate.data);
+			while (!route.empty() && obj_windows.Next()) {
+				const idx_t obj_row_offset = obj_windows.Offset();
 				obj_results.Reset();
-				ExecuteOnReadRows(obj_executor, obj_chunk, obj_row_offset, obj_reads, obj_results);
+				obj_windows.Execute(obj_executor, obj_row_offset, obj_reads, obj_results);
 				for (idx_t j = 0; j < route.size(); j++) {
 					auto &b = buckets[route[j].first];
 					idx_t term_idx = route[j].second;
@@ -4461,13 +4579,12 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 					auto &filter = (*b.out_term_filters)[term_idx];
 					// A NULL term was read as 0 before like terms merged (DropNullObjectiveTerms).
 					auto &term = (*b.src_terms)[term_idx];
-					ValueInputs inputs {term.inputs, obj_chunk, context};
-					ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(), static_cast<double>(term_sign), out,
+					ValueInputs inputs {term.inputs, obj_windows, context};
+					ExtractDoubleColumn(obj_results.data[j], obj_windows.Count(), static_cast<double>(term_sign), out,
 					                    {DecideValueRole::COEFFICIENT, *term.coefficient, names, objective, &inputs},
 					                    nullptr, filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
 					(*b.out_coeffs)[term_idx].SyncSize();
 				}
-				obj_row_offset += obj_chunk.size();
 			}
 
 			// Apply each term's own `when` filter and the objective's `when`
@@ -4583,22 +4700,17 @@ static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &da
 	}
 	DataChunk results;
 	results.Initialize(context, types);
-	ColumnDataScanState scan_state;
-	InitializeDecideScan(data, scan_state);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
-	idx_t row_base = 0;
-	while (data.Scan(scan_state, chunk)) {
+	DecideRowWindows windows(chunk_expr_cache, context, data);
+	while (windows.Next()) {
 		results.Reset();
-		ExecuteOnReadRows(executor, chunk, row_base, &read, results);
+		windows.Execute(executor, &read, results);
 		for (idx_t t = 0; t < terms.size(); t++) {
-			ValueInputs inputs {terms[t].inputs, chunk, context};
-			ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
+			ValueInputs inputs {terms[t].inputs, windows, context};
+			ExtractDoubleColumn(results.data[t], windows.Count(), terms[t].sign, columns[t].MutableDense(),
 			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause, &inputs}, nullptr,
-			                    &read, row_base);
+			                    &read, windows.Offset());
 			columns[t].SyncSize();
 		}
-		row_base += chunk.size();
 	}
 }
 
@@ -4637,20 +4749,14 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
             CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
         ExpressionExecutor exec(context);
         exec.AddExpression(transformed);
-        ColumnDataScanState scan;
-        InitializeDecideScan(gstate.data, scan);
-        DataChunk chunk;
-        chunk.Initialize(context, gstate.data.Types());
-        double v = 1.0;
+		DecideRowWindows windows(chunk_expr_cache, context, gstate.data);
+		double v = 1.0;
         bool got = false;
-        while (!got && gstate.data.Scan(scan, chunk)) {
-            if (chunk.size() == 0) {
-                continue;
-            }
-            DataChunk result;
+		while (!got && windows.Next()) {
+			DataChunk result;
             result.Initialize(context, {transformed.return_type});
-            exec.Execute(chunk, result);
-            Value val = result.data[0].GetValue(0);
+			windows.Execute(exec, nullptr, result);
+			Value val = result.data[0].GetValue(0);
             if (val.IsNull()) {
 				is_null = true;
 				return 0.0;
@@ -4660,8 +4766,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				ThrowInvalidValue({DecideValueRole::COEFFICIENT, scale, Names(), clause});
 			}
             got = true;
-        }
-        if (!got) {
+		}
+		if (!got) {
             return 1.0;
         }
         if (divides) {

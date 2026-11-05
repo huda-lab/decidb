@@ -8,10 +8,28 @@ import json
 
 import pytest
 
-from ._anr_cases import EXAMPLE_9, F1_MAX, F1_SUM, F2_PREVIOUS
+from ._anr_cases import EXAMPLE_9, F1_MAX, F1_SUM, F2_PREVIOUS, LAZY_REACHED, LAZY_UNUSED
 
 #: Scans of the input per case, today; each phase of the one-pass work lowers them, to 1.
 SCANS = {F1_MAX.name: 19, F1_SUM.name: 19, F2_PREVIOUS.name: 9, EXAMPLE_9.name: 18}
+
+#: Rows where a guarded function fails: a `when` drops them, or an AND's or OR's first part decides them, so no error
+#: is raised; without a guard, the row is read and its error is.
+GUARD = "(VALUES (1, 0.0, 10), (2, 4.0, 20), (3, 9.0, 30)) t(id, w, v)"
+GUARDED = [
+    f"SELECT id, x FROM {GUARD} DECIDE x(INT) SUCH THAT x <= t.v AND when t.w > 0: x <= ln(t.w) * 10 "
+    "MAXIMIZE SUM(x) ORDER BY id",
+    f"SELECT id, x FROM {GUARD} DECIDE x(INT) SUCH THAT x <= t.v AND max(when t.w > 0: ln(t.w) * x) <= 20 "
+    "MAXIMIZE SUM(x) ORDER BY id",
+    f"SELECT id, x FROM {GUARD} DECIDE x(INT) SUCH THAT x <= t.v AND when t.w <= 0 OR ln(t.w) > 1.5: x <= 5 "
+    "MAXIMIZE SUM(x) ORDER BY id",
+    f"SELECT id, x FROM {GUARD} DECIDE x(INT) SUCH THAT x <= t.v AND x <= ln(t.w) * 10 MAXIMIZE SUM(x) ORDER BY id",
+]
+
+
+def one_pass(cli):
+    """`cli` with the evaluation in one pass (DECIDB_ONE_PASS)."""
+    return cli.with_env({"DECIDB_ONE_PASS": "1"})
 
 
 def input_scans(cli, sql: str) -> list[float]:
@@ -34,3 +52,26 @@ def input_scans(cli, sql: str) -> list[float]:
 def test_the_input_is_scanned(decidb_cli, case):
     """Each evaluation reports how often it read the input."""
     assert input_scans(decidb_cli.without_verify_serializer(), case.sql) == [SCANS[case.name]]
+
+
+@pytest.mark.parametrize("case", [F1_MAX, F1_SUM, F2_PREVIOUS, EXAMPLE_9], ids=lambda case: case.name)
+def test_one_pass_reads_the_input_once(decidb_cli, case):
+    """In one pass, the evaluation reads the input once: the pass."""
+    assert input_scans(one_pass(decidb_cli.without_verify_serializer()), case.sql) == [1]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        pytest.param(case.sql, id=case.name)
+        for case in (F1_MAX, F1_SUM, F2_PREVIOUS, EXAMPLE_9, LAZY_REACHED, LAZY_UNUSED)
+    ]
+    + [pytest.param(sql, id=f"guard_{i}") for i, sql in enumerate(GUARDED)],
+)
+def test_one_pass_answers_as_the_scans(decidb_cli, sql):
+    """The pass evaluates every row, a row's error kept until a read reaches it: each query answers, or fails with
+    the message, the scans give."""
+    sql = "SET decide_direct_solve = 'off';\n" + sql
+    scans = decidb_cli.execute_raw(sql)
+    passed = one_pass(decidb_cli).execute_raw(sql)
+    assert (passed.returncode, passed.stdout, passed.stderr) == (scans.returncode, scans.stdout, scans.stderr)

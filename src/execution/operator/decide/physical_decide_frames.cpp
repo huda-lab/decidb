@@ -14,6 +14,7 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
+#include "duckdb/execution/operator/decide/decide_row_store.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
@@ -32,18 +33,13 @@ static Vector EvaluateOnRows(ClientContext &context, const Expression &expr, Col
 	Vector values(lowered.return_type, num_rows + 1);
 	ExpressionExecutor executor(context);
 	executor.AddExpression(lowered);
-	ColumnDataScanState scan;
-	InitializeDecideScan(data, scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
+	DecideRowWindows windows(chunk_expr_cache, context, data);
 	DataChunk result;
 	result.Initialize(context, {lowered.return_type});
-	idx_t offset = 0;
-	while (data.Scan(scan, chunk)) {
+	while (windows.Next()) {
 		result.Reset();
-		ExecuteOnReadRows(executor, chunk, offset, &rows, result);
-		VectorOperations::Copy(result.data[0], values, chunk.size(), 0, offset);
-		offset += chunk.size();
+		windows.Execute(executor, &rows, result);
+		VectorOperations::Copy(result.data[0], values, windows.Count(), 0, windows.Offset());
 	}
 	return values;
 }
@@ -232,17 +228,14 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 		auto &order = CachedTransformToChunkExpression(chunk_expr_cache, *frame.order, context);
 		ExpressionExecutor executor(context);
 		executor.AddExpression(order);
-		ColumnDataScanState scan;
-		InitializeDecideScan(data, scan);
-		DataChunk chunk;
-		chunk.Initialize(context, data.Types());
+		DecideRowWindows windows(chunk_expr_cache, context, data);
 		DataChunk result;
 		result.Initialize(context, {order.return_type});
-		idx_t offset = 0;
-		while (data.Scan(scan, chunk)) {
-			const idx_t count = chunk.size();
+		while (windows.Next()) {
+			const idx_t offset = windows.Offset();
+			const idx_t count = windows.Count();
 			result.Reset();
-			ExecuteOnReadRows(executor, chunk, offset, &map.anchors, result);
+			windows.Execute(executor, &map.anchors, result);
 			Vector keys(LogicalType::BLOB, count);
 			CreateSortKeyHelpers::CreateSortKey(result.data[0], count, modifiers, keys);
 			UnifiedVectorFormat format;
@@ -253,7 +246,6 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 					sort_keys[offset + i] = key_data[format.sel->get_index(i)].GetString();
 				}
 			}
-			offset += count;
 		}
 	}
 
@@ -587,9 +579,9 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		return;
 	}
 	// Stage 05 numbered these columns after the input's own, before any other was added.
-	if (data.ColumnCount() != prepared.frame_column_base) {
+	if (DecideColumnCount(chunk_expr_cache, data) != prepared.frame_column_base) {
 		throw InternalException("DECIDE: the frame columns follow %llu input columns, not %llu",
-		                        prepared.frame_column_base, data.ColumnCount());
+		                        prepared.frame_column_base, DecideColumnCount(chunk_expr_cache, data));
 	}
 	vector<unique_ptr<Vector>> values_of;
 	// DEFINED reads the frame's other columns, so it is computed after them. A reducer over data reading frames is
@@ -684,12 +676,19 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		}
 	}
 
-	AppendDecideColumns(context, data, values_of);
+	AppendDecideColumns(context, data, chunk_expr_cache, values_of);
 }
 
-void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data,
+void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
                          const vector<unique_ptr<Vector>> &values_of) {
 	if (values_of.empty()) {
+		return;
+	}
+	if (chunk_expr_cache.store) {
+		// Computed bottom-up, the columns stay beside the pass's: the input is not read again.
+		for (auto &values : values_of) {
+			chunk_expr_cache.store->AppendColumn(*values);
+		}
 		return;
 	}
 	auto types = data.Types();

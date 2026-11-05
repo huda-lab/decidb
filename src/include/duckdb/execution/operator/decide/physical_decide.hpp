@@ -19,10 +19,16 @@ namespace duckdb {
 //! physical_decide.cpp. Finalize's private phase methods take it by reference.
 class DecideGlobalSinkState;
 
+class DecideRowStore;
+
 //! Per-Finalize cache of TransformToChunkExpression results, keyed by the original
 //! (unlowered) expression pointer. Outlives every ExpressionExecutor built during
 //! Finalize, so it's safe for executors to retain references into cached entries.
-using ChunkExprCache = std::unordered_map<const Expression *, unique_ptr<Expression>>;
+//! While the evaluation runs in one pass, it also carries the pass's store, which every
+//! read of the input consults (decide_row_store.hpp).
+struct ChunkExprCache : public std::unordered_map<const Expression *, unique_ptr<Expression>> {
+	DecideRowStore *store = nullptr;
+};
 
 //! One cached key grouping: the key's row→group assignment, groups numbered by key
 //! value, over the rows the key was computed on. A key computed once (e.g. by a
@@ -298,6 +304,10 @@ private:
     //! Layer 8 never re-selects: it looks up the name stage 05 recorded.
     SolverBackend PlannedSolverBackend() const;
 
+	//! PHASE 1.3: the annotated tree of the one pass (deck pp. 81, 99): every expression a later phase reads on a row,
+	//! registered for the pass to evaluate (DecideRowStore).
+	void RegisterEvaluation(ClientContext &context, DecideGlobalSinkState &gstate, ChunkExprCache &chunk_expr_cache,
+	                        DecideRowStore &store) const;
 	//! PHASE 1.4: each frame selector's timelines and selections (gstate.frame_maps), then
 	//! the values the frames read appended to the input as columns
 	//! (DecidePreparedModel::frame_columns), so every later phase reads them as data.
