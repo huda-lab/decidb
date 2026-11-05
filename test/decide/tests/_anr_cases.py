@@ -430,6 +430,25 @@ F7_RANGE = Case(
         MAXIMIZE sum(x) ORDER BY id""",
     error="ambiguous_peer",
 )
+F7_NULL_COLUMNS = ("id", "period", "w")
+F7_NULL_DATA = ((1, 1, 2), (2, 2, None), (3, 2, 1), (4, 3, 2))
+#: Period 2 holds a row reading no value (its w is NULL) before one reading 1 * x3: two payloads
+#: (D73). Period 3's window reads that position alone, and skips its first row's NULL, yet visits
+#: it, so it is refused as in the other row order.
+F7_RANGE_NULL_FIRST = Case(
+    "F7_range_null_first",
+    "D73",
+    5,
+    F7_NULL_COLUMNS,
+    F7_NULL_DATA,
+    (Decision("x"),),
+    (clause(le(X, 9)), clause(ge(X, Range("max", previous(), previous(), Col("w") * X, Over("period"))))),
+    Objective(MINIMIZE, reduce("sum", X)),
+    f"""SELECT id, x {table('t', F7_NULL_COLUMNS, F7_NULL_DATA)} DECIDE x(INT)
+        SUCH THAT x <= 9 AND x >= max(from previous to previous: t.w * x) over (t.period)
+        MINIMIZE sum(x) ORDER BY id""",
+    error="ambiguous_peer",
+)
 
 F8_COLUMNS = ("id", "period", "cap")
 F8_DATA = ((1, 2, 10), (2, None, 3), (3, 1, 7))
@@ -1197,6 +1216,7 @@ CASES = (
     F6_ELSE,
     F7_POINT,
     F7_RANGE,
+    F7_RANGE_NULL_FIRST,
     F8_LAST,
     F8_LAST_DESC,
     F8_FIRST,

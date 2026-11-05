@@ -76,6 +76,9 @@ struct DecideFrameMap {
 	//! none does (SkipNullReads).
 	vector<bool> null_payload;
 	vector<bool> null_fallback;
+	//! The windows SkipNullReads left with nothing to read: they still visit their positions, each read as no value,
+	//! which D73 holds to one payload as any position read.
+	vector<bool> emptied;
 
 	//! The row the frame reads at `row` -- its selected peer's first --, or INVALID_INDEX.
 	idx_t SelectedRow(idx_t row) const {
@@ -108,6 +111,10 @@ struct DecideFrameMap {
 	//! Whether window `w` reads nothing: its anchors are absent.
 	bool WindowAbsent(idx_t w) const {
 		return absent[window_anchor[w]];
+	}
+	//! Whether window `w` visits its positions: it reads something, or reads only NULLs (`emptied`).
+	bool WindowVisits(idx_t w) const {
+		return !WindowAbsent(w) || (!emptied.empty() && emptied[w]);
 	}
 	//! The `else` values window `w` reads: one per missing position, with an `else` that holds a value.
 	idx_t WindowFallbacks(idx_t w) const {
@@ -159,9 +166,11 @@ struct DecideFrameMap {
 	void SkipNullReads(vector<bool> payload, vector<bool> else_values) {
 		null_payload = std::move(payload);
 		null_fallback = std::move(else_values);
-		vector<bool> emptied(WindowCount(), false);
+		emptied.resize(WindowCount(), false);
 		for (idx_t w = 0; w < WindowCount(); w++) {
-			emptied[w] = !WindowAbsent(w) && ValueCount(w) == 0;
+			if (!WindowAbsent(w) && ValueCount(w) == 0) {
+				emptied[w] = true;
+			}
 		}
 		for (idx_t row = 0; row < anchors.size(); row++) {
 			if (anchors[row] && window[row] != DConstants::INVALID_INDEX && emptied[window[row]]) {

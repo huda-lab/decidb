@@ -271,7 +271,8 @@ registered (`DecidePreparedModel::frame_columns`): a payload is evaluated on the
 an `else` on the anchors that reach it only, so an unused one never runs (a cast that would fail there does not), and
 the values are gathered onto the anchors. Every later phase reads the frames as data columns, and readback references
 the input's own columns only. Once the keyed mappings exist, `CheckDecideFramePeers` holds each position a frame reads
--- a point's selected peer, every position a range's window visits -- of several rows to one payload (D73): one value
+-- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing to read
+included (`DecideFrameMap::WindowVisits`) -- of several rows to one payload (D73): one value
 over data, one linear form over decisions (`DecideFramePayloads`: a point's columns, a range's reducer argument or its
 helper's member terms), a decision by its instance. A
 frame's decision terms read `gstate.ReadVariable`: a frame read numbered once per decision and frame

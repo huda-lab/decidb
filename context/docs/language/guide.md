@@ -531,7 +531,8 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   (t.period) reads more than 4 values over its ranges, above decide_frame_limit (4). Narrow the range, or raise the
   setting."*
 - **One row per position** (D73): the rows of a position a frame reads -- a point's selected one, each one a range
-  visits -- must read one payload -- one value of data, one linear form over decisions (`0 * x` reads no `x`) -- else
+  visits -- must read one payload -- one value of data, one linear form over decisions (`0 * x` reads no `x`); a NULL
+  and a value are two, whichever row comes first -- else
   *"DECIDE: at(previous: x) over (t.period within t.product) finds 2 rows at t.product = 'A', t.period = 1; a position
   must hold one row."*
 - **Under `per K`** (D75): each class of `K` lies in one timeline of every frame its body reads directly, else an

@@ -556,7 +556,8 @@ void SkipDecideRangeNullReads(ClientContext &context, const vector<const Express
 }
 
 //! Whether the frame reads `peer`, for each peer of `map`: a point where some anchor selects it, a range where some
-//! window that reads something visits it.
+//! window visits it -- one that reads only NULLs included, else which row of a tied position comes first would decide
+//! whether its rows are compared.
 static vector<bool> ReadPeers(const DecideFrameMap &map) {
 	vector<bool> read(map.peer_begin.size(), false);
 	if (!map.range) {
@@ -568,7 +569,7 @@ static vector<bool> ReadPeers(const DecideFrameMap &map) {
 		return read;
 	}
 	for (idx_t w = 0; w < map.WindowCount(); w++) {
-		if (map.WindowAbsent(w)) {
+		if (!map.WindowVisits(w)) {
 			continue;
 		}
 		const auto list = map.window_list[w];
