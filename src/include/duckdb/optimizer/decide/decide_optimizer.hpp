@@ -148,7 +148,7 @@ private:
 	//! window of the frame -- a timeline, or a position on one -- defined once per window
 	//! (LogicalDecide::reducer_value_links, with its frame), so every later rewrite reads it as an ordinary keyed
 	//! decision and the canonical shape stands. Runs first among the rewrites, before any copies a clause; a MIN/MAX
-	//! helper is pinned on the side its comparison pushes it, through SUM and AVG (D79).
+	//! helper is pinned on the side its comparison pushes it, through SUM, AVG, MIN and MAX (D79).
 	void RewriteFrameRanges(LogicalDecide &decide);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.

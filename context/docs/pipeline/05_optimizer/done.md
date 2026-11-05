@@ -639,8 +639,8 @@ replaced first, each by a helper keyed by its path (`DecideReducerPath`,
 reducer's own `when` keep, grouped by every enclosing `by` key and its own, a key of the
 table `FindOrCreateDecidePathKey` finds or adds. So what the outer helper holds is affine
 in helpers, decisions and data, and links are stored innermost first. A member of a SUM or
-AVG is pushed as its helper is, through the sign it carries in the argument; a member of a
-MIN or MAX is pinned from both sides (D79). A body that would still square or multiply
+AVG, a MIN or a MAX is pushed as its helper is, through the sign it carries in the
+argument: a MIN or MAX does not decrease when a member grows, so it passes its push on (D79). A body that would still square or multiply
 decisions there is refused (D80): `DefineNonlinearReducerBodies` has defined every such
 body a constraint, or a MIN or MAX of the objective, reads, so what is left is a nest of
 sums in the objective not read in place. The binder has refused the shapes the passes
@@ -860,7 +860,7 @@ one instance per window (a keyed scope of its own, `KeyedScopeInfo::value_link`,
 plan to name it by; stage 08 numbers the windows from the frame map) and a `ReducerValueLink` naming the frame, one per
 frame however many copies the clause holds. It goes through the value rewrite's door (`AddValueHelper`,
 `DecideHelperSides`): the helper's sides are read off the way its comparison pushes it, through `+`, `-`, data factors
-and enclosing SUM and AVG (`WalkPolarity`), both sides under a MIN, a MAX or a norm (D79). It runs first among the
+and enclosing SUM, AVG, MIN and MAX (`WalkPolarity`, `CollectRangeSigns`), both sides under a norm (D79). It runs first among the
 rewrites, so ABS, `norm`, `<>`, MIN/MAX and the value rewrite each read the helper as a keyed decision and the canonical
 shape stands. A reducer's own `when` keeps the copy of the range its NULL test holds (stage 04), which the linear form
 reads as the frame's DEFINED column. The value rewrite's helpers no longer stand at their own link's index

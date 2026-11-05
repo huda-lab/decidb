@@ -1987,6 +1987,26 @@ class TestAbsenceAndTies:
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+def test_a_range_under_a_max_takes_its_push(request, scope_solver, cli_fixture):
+    """D79: a MAX passes its push on to a range over decisions it reads, as a SUM does.
+    Minimizing the largest three-period maximum pushes each window's MAX down, which its
+    envelope alone holds, so no bound above x is needed. The optimum is the largest demand,
+    6."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows = ((1, "A", 1, 3, 0), (2, "A", 2, 1, 0), (3, "A", 3, 4, 0), (4, "B", 1, 2, 0), (5, "B", 2, 6, 0))
+    sql = f"""SELECT id, x {table('t', EDGE, rows)} DECIDE x(REAL) SUCH THAT x >= t.v
+        MINIMIZE max(max(from previous to next: x) over (t.period within t.product)) ORDER BY id"""
+    clauses = [clause(ge(X, Col("v")))]
+    objective = Objective(ObjSense.MINIMIZE, reduce("max", Range("max", previous(), next_(), X, TIMELINE)))
+    model = AnrModel(table_rows(EDGE, rows), [Decision("x", var_type=VarType.CONTINUOUS)])
+    assert model.solve(scope_solver, clauses, objective).objective == pytest.approx(6)
+    result = cli.execute_raw(sql)
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert model.judge(answer(cli, sql), clauses, objective) == pytest.approx(6, abs=1e-6)
+
+
+@pytest.mark.correctness
 class TestFieldsByKeys:
     """A frame is a signature field by its keys, as the deck's annotated tree holds it (D82,
     deck p. 99): its timeline and the anchor's position there, not the value it reads."""

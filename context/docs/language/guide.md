@@ -466,8 +466,11 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   on a bound, infinity is a value.
 - **How it is solved.** Every reducer of a nest over decisions is a helper decision (§6.4) keyed by its path, one
   instance per path group, defined once per group, innermost first, and read by the reducers around it. A helper is
-  pinned on the side its readers push it, through `SUM` and `AVG` levels; under a `MIN` or `MAX`, on both (D79). So
-  the running example needs no Big-M: each inner `MAX` is pushed down, and its envelope alone holds it. A bound
+  pinned on the side its readers push it, through `SUM`, `AVG`, `MIN` and `MAX` levels -- a `MIN` or `MAX` does not
+  decrease when a member grows, so it passes its push on --, and on both sides under `=`, `<>`, `abs`, a norm or a
+  factor of unknown sign (D79). So the running example needs no Big-M: each inner `MAX` is pushed down, and its
+  envelope alone holds it; and so does `MINIMIZE max(per t.rid: sum(per t.cid: max(ship) by (t.cid)) by (t.rid))`,
+  an LP whatever bounds the shipments have. A bound
   written only at the root reaches an inner `MIN`/`MAX` that needs its closing side: in `per t.g: sum(max(x) by (t.g,
   t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper's Big-M is read off the outer one's box.
 - **A square or product of decisions** inside a nest is defined first, where a constraint or a `MIN`/`MAX` of the

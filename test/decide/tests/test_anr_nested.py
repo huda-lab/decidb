@@ -14,7 +14,7 @@ import itertools
 
 import pytest
 
-from ._anr_cases import CASES, F1_MAX, F1_SUM
+from ._anr_cases import CASES, F1_COLUMNS, F1_DATA, F1_MAX, F1_SUM
 from ._anr_oracle import PER_ROW, Abs, AnrModel, Col, Decision, Objective, ScopeError, Var, clause, eq, ge, le, reduce
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import answer, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
@@ -85,6 +85,41 @@ def test_the_running_example_is_a_helper_per_path_group(decidb_cli, tmp_path, ca
     dump = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(case.sql, tmp_path / "f1.dump")
     assert dump_counts(dump) == counts
     # A MAX pushed down needs only its envelope: no indicator, no Big-M (D79).
+    assert "bin=1" not in dump, dump
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("bounded", [True, False], ids=["bounded", "unbounded"])
+def test_a_nested_extremum_under_a_max_takes_its_push(request, scope_solver, tmp_path, cli_fixture, bounded):
+    """D79: a MIN or MAX does not decrease when a member grows, so it passes its push on, as
+    a SUM does. Minimizing the largest region total pushes each customer's MAX down, which
+    its envelope alone holds: an LP of nine columns -- the six shipments, c1's and c4's MAX
+    and the regions' -- and seven rows -- the total, four envelope rows and one per region
+    --, and no bound above the shipments is needed. The optimum, worked by hand: East reads
+    c1's 20, West c2's 10 plus c4's 25, so 35."""
+    cli = request.getfixturevalue(cli_fixture)
+    bound = "ship <= 100 AND " if bounded else ""
+    sql = f"""
+        SELECT tid, ship {table('t', F1_COLUMNS, F1_DATA)}
+        DECIDE ship(REAL)
+        SUCH THAT {bound}ship >= t.d AND sum(ship) >= 150
+        MINIMIZE max(per t.rid: sum(when t.p per t.cid: max(ship) by (t.cid)) by (t.rid))
+        ORDER BY tid"""
+    ship = Var("ship")
+    clauses = [clause(ge(ship, Col("d"))), clause(ge(reduce("sum", ship), 150), per=())]
+    if bounded:
+        clauses.append(clause(le(ship, 100)))
+    regions = reduce("sum", reduce("max", ship, by=("cid",)), when=lambda r: r["p"], per=("cid",), by=("rid",))
+    objective = Objective(ObjSense.MINIMIZE, reduce("max", regions, per=("rid",)))
+    model = AnrModel(table_rows(F1_COLUMNS, F1_DATA), [Decision("ship", var_type=VarType.CONTINUOUS)])
+    expected = model.solve(scope_solver, clauses, objective)
+    assert expected.objective == pytest.approx(35)
+    result = cli.execute_raw(sql)
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert model.judge(answer(cli, sql), clauses, objective) == pytest.approx(35, abs=1e-6)
+    dump = cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(sql, tmp_path / "m.dump")
+    assert dump_counts(dump) == {"num_vars": 9, "num_rows": 7}
     assert "bin=1" not in dump, dump
 
 

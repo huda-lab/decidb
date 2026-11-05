@@ -108,7 +108,8 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   nested reducers (guide §5.5): the canonicalizer gives a clause that holds a nest the VALUE shape, and tags the
   outermost reducer of each nest in the objective (`TagNestedObjectiveReducers`, D81). Every reducer of a nest becomes
   a helper decision keyed by its path key (`DecideReducerPath`, `FindOrCreateDecidePathKey`), innermost first, over
-  the rows its path keeps; a member of a `MIN`/`MAX` is pinned from both sides (D79). The objective's `sum(per K:
+  the rows its path keeps; a member is pinned on the side its readers push it, through `MIN` and `MAX` as through
+  `SUM` and `AVG` (D79). The objective's `sum(per K:
   inner(e) by (G))` with `K` in `G` is read in place instead (`InlineSumOfGroupSums`).
 - `RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) turns every reducer on a bound into a side-table column of
   the source, grouped by its `by` key over the rows the clause keeps, and reduces a varying bound to its group's

@@ -56,7 +56,8 @@ bool HoldsRangeOverDecisions(const LogicalDecide &decide, const Expression &expr
 }
 
 //! The sign each range over decisions in `expr` carries once `expr` is read as a sum (WalkPolarity): through SUM and
-//! AVG, whose members it keeps, and 0 under a MIN, a MAX or a norm, which pins its helper from both sides (D79).
+//! AVG, whose members it keeps, and through a MIN or a MAX, which does not decrease when a member grows; 0 under a
+//! norm, which pins its helper from both sides (D79).
 void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expression &expr, int sign,
                        unordered_map<const Expression *, int> &signs) {
 	PolarityHolds holds = [&](const Expression &node) {
@@ -74,11 +75,13 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expr
 		auto &reducer = node.Cast<BoundAggregateExpression>();
 		auto name = StringUtil::Lower(reducer.function.name);
 		string norm;
-		if ((name == "sum" || name == "avg") && !TryParseNormMarker(reducer.GetAlias(), norm)) {
+		const bool is_norm = TryParseNormMarker(reducer.GetAlias(), norm);
+		if ((name == "sum" || name == "avg") && !is_norm) {
 			return false;
 		}
+		const int member_sign = !is_norm && (name == "min" || name == "max") ? node_sign : 0;
 		for (auto &child : reducer.children) {
-			WalkPolarity(context, *child, 0, holds, visit);
+			WalkPolarity(context, *child, member_sign, holds, visit);
 		}
 		return true;
 	};

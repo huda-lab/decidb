@@ -227,7 +227,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
-	const bool extremum = agg_name == "min" || agg_name == "max";
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
 	// reducers inside it become helpers.
 	auto plan_label = RenderDecideSource(agg, names);
@@ -238,8 +237,8 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	bool need_envelope, need_closing;
 	DecideHelperSides(agg_name, push, need_envelope, need_closing);
 
-	// A member of a SUM or AVG is pushed as the helper is, through the sign it carries in the argument; a member of a
-	// MIN or MAX is pinned from both sides (D79).
+	// A member is pushed as the helper is, through the sign it carries in the argument: a SUM or AVG is linear in it,
+	// and a MIN or MAX does not decrease when it grows, so either passes its push on (D79).
 	vector<ReducerSite> nested;
 	if (!agg.children.empty()) {
 		CollectReducerSites(agg.children[0], 1, helpers.context, decide.decide_index, booleans, nested);
@@ -248,8 +247,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	for (auto &inner : nested) {
 		// The binder refuses a decision times a reducer inside a reducer (D80).
 		D_ASSERT(!inner.under_decision);
-		ReplaceReducer(helpers, names, booleans, below, extremum ? ExtremumPush::NONE : push, source_clause_id,
-		               inner);
+		ReplaceReducer(helpers, names, booleans, below, push, source_clause_id, inner);
 	}
 	// Among nested reducers every one is a helper, so none is summed in place: a square or product of decisions in
 	// its body would make the helper's definition quadratic (D80). DefineNonlinearReducerBodies has named such a
