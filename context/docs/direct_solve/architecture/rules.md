@@ -122,6 +122,5 @@ test, adding one is a task in that rule's `todo.md`.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
-`build/release/test/unittest "[decidb]"`. Each takes about 30 seconds. `test/decide/run_direct_matrix.sh` runs all five
-and prints one summary line each (`auto: 3089 passed, 0 xfailed, 0 failed`); run `make release` first. The exit code is 0
-only when no check fails.
+`build/release/test/unittest "[decidb]"`. `test/decide/run_direct_matrix.sh` runs all five and prints one summary line
+each; run `make release` first. The exit code is 0 only when no check fails.

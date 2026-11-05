@@ -76,7 +76,7 @@ Unlike A3, the squared terms allow the optimum to lie inside the rectangle rathe
 | Edge optimum | Fix one parameter at one of its bounds, then solve the remaining one-dimensional problem. There are four edges. |
 | Corner optimum | Evaluate the four combinations of parameter bounds. |
 | Weighted regression | Use nonnegative weights in all aggregates. The candidate structure stays the same. |
-| One fit per entity | Compute and rank candidates separately for each entity or group. |
+| One fit per key | Compute and rank candidates separately for each key or group. |
 | Singular data | If the data cannot uniquely determine both parameters, the objective is flat in some direction. SQL uses an explicit edge or corner candidate with the same objective value. |
 | Zero total weight | The objective is constant, so SQL returns a canonical legal corner. |
 

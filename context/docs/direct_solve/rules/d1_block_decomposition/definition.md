@@ -71,7 +71,7 @@ After fixed decisions are substituted:
 
 A useful way to detect the split is to connect decisions that occur together in a constraint or a nonseparable objective term. Separate connected components may be solved independently.
 
-A query does not belong to D1 when a shared decision, resource constraint, scalar, or objective term connects the apparent groups. For example, one budget across all departments reconnects them.
+A query does not belong to D1 when a shared decision, resource constraint, query-wide decision, or objective term connects the apparent groups. For example, one budget across all departments reconnects them.
 
 ## Supported variants
 
@@ -116,7 +116,7 @@ For an additive objective, the total value is the sum of the component values. R
 
 An outer MIN or MAX needs an additional monotonicity proof. For example, maximizing the minimum of independent component values permits maximizing every component first, because increasing a component cannot reduce the minimum. Each required component optimum must be finite and attained.
 
-Disjoint internal identities ensure that the union contains one assignment per decision. The final identity join reproduces entity and scalar values on the correct source rows.
+Disjoint internal identities ensure that the union contains one assignment per decision. The final identity join reproduces keyed and query-wide values on the correct source rows.
 
 ## Eligibility conditions
 
@@ -125,17 +125,17 @@ Every remaining constraint and every nonseparable objective term belongs wholly 
 an additive combination of component objectives, or an outer MIN/MAX whose required direction is proved coordinatewise
 monotone. > > • Every component optimum needed by an outer MIN/MAX is finite and attained. > > • Under an additive
 objective, an infeasible component makes the global problem infeasible, while a component unbounded in the favorable
-direction makes it unbounded. > > • Exact row, entity, and scalar decision identities are known, and no decision
-identity occurs in more than one component. > > • Component membership follows the complete entity key and proved
+direction makes it unbounded. > > • Exact row, keyed, and query-wide decision identities are known, and no decision
+identity occurs in more than one component. > > • Component membership follows the complete key of a keyed decision and proved
 functional dependencies rather than coincidental equality of data values. > > • `per` and `by` keys, `when` masks, qualified
 reducers, join multiplicities, and data-valued right-hand sides are normalized before decomposition. > > • A NULL
-`by` key is no group (D5). Shared scalars or any factor that spans groups reconnect the affected decisions. > > •
+`by` key is no group (D5). Shared query-wide decisions or any factor that spans groups reconnect the affected decisions. > > •
 Every component matches one complete leaf rule and satisfies that rule's full **Valid when** checklist. A proof failure
 in any component rejects the complete D1 rewrite and keeps the original DECIDE query on the solver path. > > • Component
 keys and solver-read coefficients are non-NULL and finite wherever DECIDE requires them. Empty, infeasible, and
 unbounded outcomes preserve DECIDE's precedence and cannot appear as missing join rows. > > • Every leaf emits one typed
 assignment per internal decision identity. Assembly verifies complete, duplicate-free coverage and preserves source
-cardinality, entity and scalar fan-out, schema, ordering, status, NULL behavior, and numeric semantics.
+cardinality, keyed and query-wide fan-out, schema, ordering, status, NULL behavior, and numeric semantics.
 
 ## Exactness
 

@@ -113,7 +113,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 | A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises `x >= 2 cannot hold for a BOOL variable.` before it reads a row, so an empty source raises it too, and under `DIAGNOSE` too. A query that can only fail has no speed to win, so S1 declines it (`DirectContradictsDomain`) and the solver answers. The same bound with a `when` is admitted and raises DECIDE's generic infeasible error from the plan, as the solver does. An affine spelling (`1*x >= 2`) folds too, and S1 declines it the same way | Not planned |
 
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
-`REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with
+`REAL` variables (A1 and the R classes); more than one decision, keyed or query-wide decisions (D1); lower and upper bounds with
 different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that are infinite, NaN or above 2^53
 (not exactly representable); an objective with a `per` or a two-level reducer, other reducers (`MIN`, `MAX`, `AVG`),
 `norm`; an objective `when` that is volatile or can raise; `DIAGNOSE`.

@@ -44,7 +44,7 @@ CROSS JOIN answer a;
 
 After normalization:
 
-> • one REAL scalar or entity decision is shared by many rows;
+> • one REAL query-wide or keyed decision is shared by many rows;
 >
 > • each row compares that shared decision with an observed value;
 >
@@ -71,9 +71,9 @@ Independent row decisions do not belong to A2. Applying AVG(value) to them would
 
 The decision can be:
 
-> • scalar, giving one center for the entire input;
+> • query-wide, giving one center for the entire input;
 >
-> • entity-scoped, giving one center per entity or group.
+> • keyed, giving one center per key or group.
 
 ## Relational construction
 
@@ -107,7 +107,7 @@ Bounds are handled by projecting the unconstrained answer onto the legal interva
 
 ## Eligibility conditions
 
-> • Each component contains exactly one shared REAL scalar or entity decision.
+> • Each component contains exactly one shared REAL query-wide or keyed decision.
 >
 > • The objective is exactly one supported MINIMIZE loss, with no additional decision-dependent term.
 >

@@ -9,7 +9,7 @@ IR and back end; the rules are the back end.
 
 - **Only one file knows the tree layout** (`direct_ir.cpp`). If the tree changes, the front end changes and the rules
   do not.
-- **A new language changes one file.** A change to the bound tree changes the front end: it reads the constructs the rules know (a `when`, a reducer's own `when`) and marks the others not proved (a `by` key, `per K:` on a clause). The rules change only where the language's meaning changes (nothing is computed on a row a `when` drops).
+- **A new language changes one file.** A change to the bound tree changes the front end: it reads the constructs the rules know (a `when`, a reducer's own `when`, a `by` key, `per K:` on an aggregate clause) and marks the others not proved (`per K:` on a per-row clause, `ReadPerClass`). The rules change only where the language's meaning changes (nothing is computed on a row a `when` drops).
 - **Matching a familiar subtree is unsafe.** The solver's flattened model is built later and can silently drop a
   term. Reading the complete bound tree means a rule sees everything the user wrote.
 
