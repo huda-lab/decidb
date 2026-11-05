@@ -1,8 +1,8 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-05 at `d5a5559a49`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
+Verified on 2026-11-05 at `96aa6186f0`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 6,169 passed; C++
-`build/release/test/unittest "[decidb]"` 3,783 assertions in 81 cases.
+`build/release/test/unittest "[decidb]"` 3,789 assertions in 81 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -120,8 +120,9 @@ checks can stand below the last breaker, where one window would have to read its
 | `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |
 | C++ `[decidb]` | N1's applicability condition: 27 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
 
-Every decision point of the rule was checked by mutation: with its branch removed, at least one test above fails. No
-existing test is pinned to `off`: those that now take N1 under `auto` keep their answers, and
+Every decision point of the rule was checked by mutation: with its branch removed, at least one test above fails. The
+one exception is a failed read of a square (`DirectReadSquareTerm`): the fold after it declines the same shape, so no
+test can tell them apart, and a case only reaches it. No existing test is pinned to `off`: those that now take N1 under `auto` keep their answers, and
 `DECIDB_TEST_DIRECT_SOLVE=off` runs them on the solver. `test_many_group_limits_on_squares_solve` forces Gurobi, so it
 keeps reaching the solver.
 
