@@ -320,6 +320,19 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 // Plan
 //===--------------------------------------------------------------------===//
 
+//! One item's values on one read of the source, each as the expression that reads its column of the plan
+//! ItemStages::Build returns. A row has one item per decision.
+struct ItemExprs {
+	//! The value v, the break-even price, the finite rooms up and down (units of budget), and whether each room is
+	//! infinite.
+	ExprPtr v, t, up_fin, down_fin, up_inf, down_inf;
+	//! The item's anchor spend, whether its box is empty, and 1.0 when an item outside the ranking improves without
+	//! end.
+	ExprPtr sterm, empty, u1;
+	//! Outside the ranking (w = 0 or no budget), the sign of w, the item's best end, its anchor, weight and box.
+	ExprPtr wz, pos, best, a, w, l, u;
+};
+
 //! The algebra of definition.md § Relational construction over expressions alone, which the two classes below share:
 //! ItemStages computes the item values it reads, AggregatePlanBuilder runs the verdicts, the price, the sums at the
 //! price and the answer in aggregates over items and joins. Nothing here knows which column an expression reads or
@@ -330,18 +343,6 @@ public:
 	}
 
 protected:
-
-	//! One item's values, each as the expression that reads it.
-	struct ItemExprs {
-		//! The break-even price, the finite rooms up and down (units of budget), and whether each room is infinite.
-		ExprPtr t, up_fin, down_fin, up_inf, down_inf;
-		//! The same infinite rooms as 1.0 / 0.0 counts, the item's anchor spend, whether its box is empty, and 1.0 when
-		//! an item outside the ranking improves without end.
-		ExprPtr upi, dni, sterm, empty, u1;
-		//! Outside the ranking (w = 0 or no budget), the sign of w, the item's best end, its anchor, weight and box.
-		ExprPtr wz, pos, best, a, w, l, u;
-	};
-
 	//! The group sums the verdicts and the target spend read, in this order.
 	enum TotalSlot : idx_t {
 		TOTAL_EMPTY,
@@ -430,9 +431,9 @@ protected:
 		inputs[TOTAL_EMPTY] = Flag(item.empty);
 		inputs[TOTAL_S] = item.sterm;
 		inputs[TOTAL_SUP] = item.up_fin;
-		inputs[TOTAL_CUP] = item.upi;
+		inputs[TOTAL_CUP] = Flag(item.up_inf);
 		inputs[TOTAL_SDN] = item.down_fin;
-		inputs[TOTAL_CDN] = item.dni;
+		inputs[TOTAL_CDN] = Flag(item.down_inf);
 		inputs[TOTAL_U1] = item.u1;
 		inputs[TOTAL_LO] = calc.If(item.up_inf, t, NullDouble());
 		inputs[TOTAL_HI] = calc.If(item.down_inf, t, NullDouble());
@@ -461,21 +462,25 @@ protected:
 		}
 		return total;
 	}
-	//! TotalInputs for a row of several items: each slot is what the row's items add together.
+	//! What a row of several items adds to each slot: its items' parts of that slot, combined by the slot's function.
+	vector<ExprPtr> InputsOfRow(const vector<vector<ExprPtr>> &per_item, const char *(*function)(idx_t)) const {
+		vector<ExprPtr> inputs(per_item[0].size());
+		for (idx_t slot = 0; slot < inputs.size(); slot++) {
+			vector<ExprPtr> parts;
+			for (auto &item_inputs : per_item) {
+				parts.push_back(item_inputs[slot]);
+			}
+			inputs[slot] = CombineOfRow(function(slot), parts);
+		}
+		return inputs;
+	}
+	//! TotalInputs for a row of several items.
 	vector<ExprPtr> TotalInputsOfRow(const vector<ItemExprs> &items) const {
 		vector<vector<ExprPtr>> per_item;
 		for (auto &item : items) {
 			per_item.push_back(TotalInputs(item));
 		}
-		vector<ExprPtr> inputs(TOTAL_COUNT);
-		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
-			vector<ExprPtr> parts;
-			for (auto &item_inputs : per_item) {
-				parts.push_back(item_inputs[slot]);
-			}
-			inputs[slot] = CombineOfRow(TotalFunction(slot), parts);
-		}
-		return inputs;
+		return InputsOfRow(per_item, TotalFunction);
 	}
 
 	//! Infeasible when a box is empty, the limits cross, or the reachable spend [S - down, S + up] misses [L, U] (an
@@ -578,21 +583,13 @@ protected:
 		return inputs;
 	}
 
-	//! PriceSumInputs for a row of several items: each slot is what the row's items add together.
+	//! PriceSumInputs for a row of several items.
 	vector<ExprPtr> PriceSumInputsOfRow(const vector<ItemExprs> &items, const ExprPtr &price) const {
 		vector<vector<ExprPtr>> per_item;
 		for (auto &item : items) {
 			per_item.push_back(PriceSumInputs(item, price));
 		}
-		vector<ExprPtr> inputs(SUM_COUNT);
-		for (idx_t slot = 0; slot < SUM_COUNT; slot++) {
-			vector<ExprPtr> parts;
-			for (auto &item_inputs : per_item) {
-				parts.push_back(item_inputs[slot]);
-			}
-			inputs[slot] = CombineOfRow("sum", parts);
-		}
-		return inputs;
+		return InputsOfRow(per_item, [](idx_t) { return "sum"; });
 	}
 
 	//! An item's answer. Above the price an item is at its high end, below it at its low end, and an item with w = 0 at
@@ -604,21 +601,6 @@ protected:
 		                      calc.If(Greater(item.t, price), high, calc.If(Less(item.t, price), low, shared)));
 		return calc.Add(calc.Min({calc.Max({answer, item.l}), item.u}), Zero());
 	}
-};
-
-//! One decision's item values on one read of the source, as bindings of the plan ItemStages::Build returns. A binding
-//! is DOUBLE unless the name says otherwise.
-struct DecisionColumns {
-	//! The value v.
-	ColumnBinding v;
-	//! The weight, the box, the anchor, the break-even price and the best end.
-	ColumnBinding w, l, u, a, t, best;
-	//! BOOLEAN: the box is empty, the item is outside the ranking (w = 0 or no budget), w is positive, and the room up
-	//! and the room down are infinite.
-	ColumnBinding empty, wz, pos, up_inf, down_inf;
-	//! The finite rooms up and down, the anchor spend, 1.0 when an item outside the ranking improves without end, and
-	//! the open rooms up and down as 1.0 / 0.0 counts.
-	ColumnBinding up_fin, down_fin, sterm, u1, upi, dni;
 };
 
 //! Where ItemStages::Build leaves the values of one read of the source: the first stage of the aggregate plan, "item
@@ -639,7 +621,7 @@ struct ItemColumns {
 	//! What the aggregates of each limit read from the data read on the row, per data limit and per input.
 	vector<vector<DirectGroupInputColumns>> limits;
 	//! The items of the row, one per decision.
-	vector<DecisionColumns> decisions;
+	vector<ItemExprs> decisions;
 };
 
 //! Stage 1 of the aggregate plan (definition.md § The plan): one projection chain over one read of the source that
@@ -658,7 +640,7 @@ struct ItemColumns {
 //! columns of its own, suffixed with the decision's index):
 //!
 //!   P0 scope             whether the row belongs to a budget (scoped budgets only)
-//!   P1 raw values        every coefficient, bound, mask and limit read from the data, evaluated on every row
+//!   P1 raw values        every coefficient, bound, mask and limit read from the data, on the rows that read it
 //!   P2 bounds, v         each clause's bounds, each decision's value, the check on every raw value and every limit
 //!   P3 box               each decision's l and u
 //!   P4 anchor, price     whether the box is empty, a, whether w = 0, t
@@ -682,22 +664,20 @@ public:
 		read_index = read_table_index;
 		auto when = condition.when ? OverState(*condition.when) : nullptr;
 		// The key is read on the rows of the read projection.
-		vector<DirectKeyElement> keys;
-		for (auto &key : condition.group_keys) {
-			DirectKeyElement element;
-			element.grouping = OverState(*key.grouping);
-			element.no_group = key.no_group;
-			keys.push_back(std::move(element));
-		}
-		unique_ptr<Expression> instance;
-		if (condition.gated) {
-			vector<DirectKeyElement> classes;
-			for (auto &key : condition.per_class_keys) {
+		auto over_read = [&](const vector<DirectKeyElement> &proved) {
+			vector<DirectKeyElement> elements;
+			for (auto &key : proved) {
 				DirectKeyElement element;
 				element.grouping = OverState(*key.grouping);
 				element.no_group = key.no_group;
-				classes.push_back(std::move(element));
+				elements.push_back(std::move(element));
 			}
+			return elements;
+		};
+		auto keys = over_read(condition.group_keys);
+		unique_ptr<Expression> instance;
+		if (condition.gated) {
+			auto classes = over_read(condition.per_class_keys);
 			ColumnBinding flag;
 			read = DirectAddInstanceFlag(optimizer, std::move(read), when.get(), classes, flag);
 			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
@@ -757,29 +737,27 @@ public:
 			}
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto binding = [&](const char *name) {
-				return columns.at(Dec(name, k)).binding;
+			auto column = [&](const char *name) {
+				return C(Dec(name, k));
 			};
-			DecisionColumns decision;
-			decision.v = binding("v");
-			decision.w = binding("w");
-			decision.l = binding("l");
-			decision.u = binding("u");
-			decision.a = binding("a");
-			decision.t = binding("t");
-			decision.best = binding("best");
-			decision.empty = binding("empty");
-			decision.wz = binding("wz");
-			decision.pos = binding("pos");
-			decision.up_inf = binding("up_inf");
-			decision.down_inf = binding("down_inf");
-			decision.up_fin = binding("up_fin");
-			decision.down_fin = binding("down_fin");
-			decision.sterm = binding("sterm");
-			decision.u1 = binding("u1");
-			decision.upi = binding("upi");
-			decision.dni = binding("dni");
-			items.decisions.push_back(decision);
+			ItemExprs item;
+			item.v = column("v");
+			item.w = column("w");
+			item.l = column("l");
+			item.u = column("u");
+			item.a = column("a");
+			item.t = column("t");
+			item.best = column("best");
+			item.empty = column("empty");
+			item.wz = column("wz");
+			item.pos = column("pos");
+			item.up_inf = column("up_inf");
+			item.down_inf = column("down_inf");
+			item.up_fin = column("up_fin");
+			item.down_fin = column("down_fin");
+			item.sterm = column("sterm");
+			item.u1 = column("u1");
+			items.decisions.push_back(item);
 		}
 		return items;
 	}
@@ -953,14 +931,6 @@ private:
 		}
 	}
 
-	//! The check, read only on the rows of the budget when the budget has a scope.
-	unique_ptr<Expression> ReadOnBudgetRows(unique_ptr<Expression> check) const {
-		if (!condition.scoped) {
-			return check;
-		}
-		return DirectCheckOnKeptRows(calc, calc.Out(C(ELIGIBLE)), std::move(check));
-	}
-
 	//! P1: every raw value, computed on the rows that read it: a row a `when` drops reads nothing, as on the solver
 	//! path. A clause's values are NULL on the rows its `when` drops, where its bounds are not read; a row outside the
 	//! budget has the weight 0, as an item outside every budget. Returns the check on each, built over P1, which raises
@@ -989,8 +959,7 @@ private:
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			auto weight = weights.empty() ? Zero() : calc.Wrap(SumOf(weights));
-			added.emplace_back(Dec("w", k),
-			                   condition.scoped && !weights.empty() ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
+			added.emplace_back(Dec("w", k), condition.scoped ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (values.empty()) {
@@ -1037,8 +1006,7 @@ private:
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
-				auto message = number(Dec("w", k), condition.budget.names[k]);
-				messages.push_back(condition.scoped ? DirectOnKeptRows(calc, C(ELIGIBLE), message) : message);
+				messages.push_back(number(Dec("w", k), condition.budget.names[k]));
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
@@ -1173,8 +1141,6 @@ private:
 			added.emplace_back(Dec("sterm", k), calc.Mul(w, a));
 			added.emplace_back(Dec("best", k), best_end);
 			added.emplace_back(Dec("u1", k), Flag(And(And(wz, Not(empty)), unbounded_end)));
-			added.emplace_back(Dec("upi", k), Flag(up_open));
-			added.emplace_back(Dec("dni", k), Flag(down_open));
 		}
 		Project(added);
 	}
@@ -1242,7 +1208,7 @@ private:
 //! item per decision, each in columns of its own; no stage unpivots the row except the price, which crosses the narrow
 //! prices and rooms with the decision numbers (Narrow):
 //!
-//!   1. item values      ItemColumns   a projection over a read of the source; per decision, DecisionColumns
+//!   1. item values      ItemColumns   a projection over a read of the source; per decision, ItemExprs
 //!   2. group totals     TotalColumns  a hash aggregate per group over stage 1 (a row adds the sum of its items, and
 //!                                     the MIN or MAX of each limit read from the data), then a projection: the
 //!                                     group's limits L and U, the verdicts, as checks that raise, and the target
@@ -1361,36 +1327,6 @@ private:
 		return items;
 	}
 
-	ItemExprs ItemOf(const DecisionColumns &c) const {
-		ItemExprs item;
-		item.t = DoubleColumn(c.t);
-		item.up_fin = DoubleColumn(c.up_fin);
-		item.down_fin = DoubleColumn(c.down_fin);
-		item.up_inf = BoolColumn(c.up_inf);
-		item.down_inf = BoolColumn(c.down_inf);
-		item.upi = DoubleColumn(c.upi);
-		item.dni = DoubleColumn(c.dni);
-		item.sterm = DoubleColumn(c.sterm);
-		item.empty = BoolColumn(c.empty);
-		item.u1 = DoubleColumn(c.u1);
-		item.wz = BoolColumn(c.wz);
-		item.pos = BoolColumn(c.pos);
-		item.best = DoubleColumn(c.best);
-		item.a = DoubleColumn(c.a);
-		item.w = DoubleColumn(c.w);
-		item.l = DoubleColumn(c.l);
-		item.u = DoubleColumn(c.u);
-		return item;
-	}
-	//! The items of a row, one per decision.
-	vector<ItemExprs> ItemsOf(const ItemColumns &c) const {
-		vector<ItemExprs> items;
-		for (auto &decision : c.decisions) {
-			items.push_back(ItemOf(decision));
-		}
-		return items;
-	}
-
 	unique_ptr<Expression> Aggregate(const char *function, const ExprPtr &value) const {
 		vector<unique_ptr<Expression>> children;
 		children.push_back(calc.Out(value));
@@ -1457,7 +1393,7 @@ private:
 	//! has no verdict.
 	Stage<TotalColumns> GroupTotals() {
 		auto items = ReadItems();
-		auto inputs = TotalInputsOfRow(ItemsOf(items.columns));
+		auto inputs = TotalInputsOfRow(items.columns.decisions);
 		AggregateStage aggregate(binder);
 		vector<ColumnBinding> key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
@@ -1471,10 +1407,9 @@ private:
 		}
 		// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
 		vector<ColumnBinding> value_messages;
-		for (idx_t k = 0; k < items.columns.decisions.size(); k++) {
+		for (auto &item : items.columns.decisions) {
 			value_messages.push_back(
-			    aggregate.Add(Aggregate("min", DirectNumberMessage(calc, DoubleColumn(items.columns.decisions[k].v),
-			                                                       condition.objective_written))));
+			    aggregate.Add(Aggregate("min", DirectNumberMessage(calc, item.v, condition.objective_written))));
 		}
 		for (auto message : items.columns.computed_messages) {
 			value_messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
@@ -1567,8 +1502,7 @@ private:
 	Narrow NarrowOf(Items items) {
 		auto &columns = items.columns;
 		vector<ExprPtr> prices, rooms;
-		for (auto &decision : columns.decisions) {
-			auto item = ItemOf(decision);
+		for (auto &item : columns.decisions) {
 			prices.push_back(item.t);
 			rooms.push_back(calc.Add(item.up_fin, item.down_fin));
 		}
@@ -1725,7 +1659,7 @@ private:
 		auto &group = price.columns;
 		auto joined = JoinOnKey(std::move(items.plan), items.columns.keys, std::move(price.plan), group.key);
 		auto lam = DoubleColumn(group.price);
-		auto inputs = PriceSumInputsOfRow(ItemsOf(items.columns), lam);
+		auto inputs = PriceSumInputsOfRow(items.columns.decisions, lam);
 
 		AggregateStage aggregate(binder);
 		vector<ColumnBinding> key;
@@ -1785,8 +1719,7 @@ private:
 		for (idx_t i = 0; i < sources; i++) {
 			out.Add(calc.Col(reader.SourceTypes()[i], items.columns.sources[i]));
 		}
-		for (auto &decision : items.columns.decisions) {
-			auto item = ItemOf(decision);
+		for (auto &item : items.columns.decisions) {
 			auto up_move = calc.If(item.up_inf, DoubleColumn(group.open_share),
 			                       calc.Mul(item.up_fin, DoubleColumn(group.fraction)));
 			auto down_move = calc.If(item.down_inf, DoubleColumn(group.open_share),
