@@ -37,8 +37,8 @@ class RuleFixture:
     late_errors: tuple
     #: The source column the late-error subqueries expose.
     late_column: str
-    #: The text a forced backend raises on `applies` when it cannot solve that problem at all; empty when it can.
-    forced_backend_refusal: str = ""
+    #: The CLI fixture that forces a backend able to solve `applies`.
+    forced_backend_cli: str = "decidb_cli_highs"
 
 
 S1 = RuleFixture(
@@ -360,8 +360,8 @@ N1 = RuleFixture(
         ),
     ),
     late_column="i",
-    # HiGHS has no quadratic constraints, so a forced HiGHS backend reaches the solver path and stops there.
-    forced_backend_refusal="which needs Gurobi",
+    # HiGHS has no quadratic constraints.
+    forced_backend_cli="decidb_cli_gurobi",
 )
 
 
