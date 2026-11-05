@@ -575,10 +575,9 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 `ValidateDecideScopeSpellings` reads a frame before it binds (`ValidateFrame`, `decide_binder.cpp`; D80): its order
 key and `within` key take data only (*"DECIDE: x is a decision; a frame's order key and within may only use data"*),
 no window, no reducer and no frame; its payload and fallback hold no reducer and no other frame and square or
-multiply no decision (*"... squares or multiplies decisions inside at(...)"*); a `*`, `/` or power that multiplies a
-frame over decisions by a decision is refused (`ValidateFrameProduct`: *"... multiplies a decision read at another row
-by a decision, which is not supported yet"*); a frame over data is a coefficient read at another row, as a column is
-one read at the row. A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
+multiply no decision (*"... squares or multiplies decisions inside at(...)"*); a frame over decisions a decision
+multiplies, or squared, binds: stage 05 makes it the range of its one position, a helper per position
+(`RewriteFrameRanges`); a frame over data is a coefficient read at another row, as a column is one read at the row. A payload or fallback not linear in the decisions otherwise -- `abs(x - 3)`, a decision
 divisor -- is refused too (`FindNonlinearDecisionUse`: *"... inside at(...) is not linear in the decisions, which is
 not supported yet; write it outside the frame"*): the rewrite rows of an `abs` would stand at the anchor while the
 frame reads another row. So is an `else` that reads a decision beside a payload that reads none, which no layer below

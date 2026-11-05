@@ -524,8 +524,11 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   `per` key does, and a row whose written `within` column is NULL is in no timeline (D5, D75). `e` is read at the
   selected row, `v` at the anchor row; `v` is a number (`else true`, `else 0.5`, `else c` all are), and keeps its own
   type.
-- **A frame's term is linear**: its payload and fallback square or multiply no decision, and take no `abs` of one.
-  A data factor on a frame over decisions is linear: `t.w * at(previous: x) over (t.period)`.
+- **A frame's payload is linear**: it and the fallback square or multiply no decision, and take no `abs` of one. A
+  data factor on a frame over decisions is linear: `t.w * at(previous: x) over (t.period)`. A decision times a frame
+  over decisions, or a frame over decisions squared, is a quadratic term (deck p. 51): the frame is the range of its
+  one position first, a helper per position, so `y * at(previous: x) over (t.period) <= 4` is a bilinear row and
+  `sum(power(x - at(previous else 0: x) over (t.period), 2))` a square of the objective (Gurobi).
 - **A missing position** (before the first row, after the last): `else v` supplies `v` -- a range reads it once per
   missing position; `all` makes the whole range select nothing; otherwise a range keeps the positions that exist. A
   point frame that selects nothing, a NULL read at its selected row and a NULL fallback are no value (D84), and so is a
@@ -574,8 +577,7 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   (t.period within t.product). Its rows span t.product = 'A', 'B'."*), whatever the timelines read; one read from more
   than one position or fallback of one timeline is an error saying the objective would be produced more than once.
 - **Refused** (D80): a frame in a `when`, a `per`, a `by`, a `within` or an order key; a reducer or another frame
-  inside a frame's payload or fallback; a frame over decisions multiplied by a decision or squared (*"... multiplies a
-  decision read at another row by a decision, which is not supported yet"*). A frame over data is a coefficient read
+  inside a frame's payload or fallback. A frame over data is a coefficient read
   at another row: `x * at(previous: t.v) over (...)`, `x / at(previous else 1: t.w) over (...)`, and a data factor on
   a frame over decisions are linear.
 

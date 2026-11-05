@@ -203,16 +203,6 @@ class TestSyntax:
                 id="frame-in-a-fallback",
             ),
             pytest.param(
-                "sum(x * at(previous: x) over (t.period)) <= 3",
-                "multiplies a decision read at another row by a decision, which is not supported yet",
-                id="decision-times-decision-frame",
-            ),
-            pytest.param(
-                "power(at(previous: x) over (t.period), 2) <= 3",
-                "multiplies a decision read at another row by a decision, which is not supported yet",
-                id="square-of-a-frame",
-            ),
-            pytest.param(
                 "abs(from first to last: x) over (t.period) <= 3",
                 "DECIDE: a range frame reduces with sum, avg, min, max or count, found abs",
                 id="range-reducer",
@@ -1984,6 +1974,62 @@ class TestAbsenceAndTies:
         result = decidb_cli_highs.execute_raw(sql)
         assert "the objective squares an expression containing more than one decision variable" in result.stderr
         assert_no_internal_leak(result, "a square over a frame on HiGHS")
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@pytest.mark.parametrize(
+    "decide, clause_sql, objective, expected, objective_value",
+    [
+        pytest.param(
+            "x(REAL), per t.product: y(REAL)",
+            "x <= t.v AND y <= 2 AND y * at(previous: x) over (t.period within t.product) <= 4",
+            "MAXIMIZE sum(x) + sum(per t.product: y)",
+            None,
+            11 + 4 / 6 + 10 + 4 / 7,
+            id="decision-times-a-frame",
+        ),
+        pytest.param(
+            "x(REAL)",
+            "x <= t.v AND power(at(previous: x) over (t.period within t.product), 2) <= 9",
+            "MAXIMIZE sum(x)",
+            [3, 3, 1, 3, 3],
+            13,
+            id="square-of-a-frame",
+        ),
+        pytest.param(
+            "x(REAL)",
+            "x <= t.v",
+            "MINIMIZE sum(power(x - at(previous else 0: x) over (t.period within t.product), 2)) - sum(x)",
+            [5 / 6, 7 / 6, 1, 1, 1.5],
+            None,
+            id="square-in-the-objective",
+        ),
+    ],
+)
+def test_a_frame_over_decisions_in_a_quadratic_term(
+    decidb_cli_gurobi, decidb_cli_highs, decide, clause_sql, objective, expected, objective_value
+):
+    """A frame over decisions a product of decisions or a square reads is the range of its one
+    position first, a helper per position (deck p. 51), so the term is an ordinary quadratic one:
+    Gurobi answers, HiGHS refuses by name. Worked by hand over A (v 4, 6, 1) and B (v 7, 3):
+    `y_A x1 <= 4` and `y_A x2 <= 4` keep every x at its bound and y_A at 4/6, B's `y_B x4 <= 4`
+    y_B at 4/7; the squares bound x1, x2 and x4 by 3; the objective's sums of squared
+    differences are least at (5/6, 7/6, 1), with x3's bound 1 active, and (1, 1.5)."""
+    sql = _edge(clause_sql, decide=decide, objective=objective, select="x")
+    rows = answer(decidb_cli_gurobi, sql)
+    x = [row["x"] for row in rows]
+    if expected is not None:
+        assert x == pytest.approx(expected, abs=1e-4), x
+    if objective_value is not None and "y" in decide:
+        y_sql = sql.replace("SELECT id, x", "SELECT DISTINCT t.product, y", 1).replace("ORDER BY id", "ORDER BY 1")
+        y = [row["y"] for row in answer(decidb_cli_gurobi, y_sql)]
+        assert sum(x) + sum(y) == pytest.approx(objective_value, abs=1e-4), (x, y)
+    elif objective_value is not None:
+        assert sum(x) == pytest.approx(objective_value, abs=1e-4), x
+    result = decidb_cli_highs.execute_raw(sql)
+    assert "needs Gurobi" in result.stderr, result.stderr
+    assert_no_internal_leak(result, clause_sql)
 
 
 @pytest.mark.correctness

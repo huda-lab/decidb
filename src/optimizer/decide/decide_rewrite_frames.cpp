@@ -8,8 +8,8 @@
 // depends on the anchor, else a position on one -- so it becomes a helper decision with one instance per window,
 // defined once from what the window reads (LogicalDecide::reducer_value_links, with its frame; stage 08 lists each
 // window's members from the frame map). It runs first among the rewrites, so every pass after it reads an ordinary
-// keyed decision and none copies a range. A point frame is read in place (decide_linear_form.cpp), and a range over
-// data is a value of the row.
+// keyed decision and none copies a range. A point frame is read in place (decide_linear_form.cpp) -- one a product of
+// decisions or a square reads is the range of its one position first -- and a range over data is a value of the row.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -22,7 +22,9 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -86,6 +88,33 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, Expr
 		return true;
 	};
 	WalkPolarity(context, expr, sign, holds, visit);
+}
+
+//! Each point frame over decisions a product of decisions or a square reads -- a term of degree 2 -- becomes the range
+//! of its one position, `sum(from F to F: e)`, which reads the same value: that position's payload, its `else` where
+//! the position is missing, no value where it has none (D84), one row per position (D73). The lifter then makes it a
+//! helper per window, which the product or square reads as a keyed decision (deck p. 51): read in place it would be a
+//! decision at another row inside a quadratic term, which no term states.
+void PointsInQuadraticTermsAsRanges(LogicalDecide &decide, Expression &expr, bool quadratic) {
+	idx_t frame;
+	if (TryGetDecideFrame(expr, frame)) {
+		if (quadratic && frame < decide.frames.size() && !decide.frames[frame].range &&
+		    BoundExpressionReferencesDecide(expr, decide.decide_index)) {
+			auto &spec = decide.frames[frame];
+			spec.range = true;
+			spec.reducer = "sum";
+			spec.to = spec.from;
+			spec.to_k = spec.from_k;
+		}
+		return;
+	}
+	bool below = quadratic;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &name = expr.Cast<BoundFunctionExpression>().function.name;
+		below = below || (name != "+" && name != "-" && !DecideExpressionDegree(expr, decide.decide_index).IsLinear());
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](Expression &child) { PointsInQuadraticTermsAsRanges(decide, child, below); });
 }
 
 //! Replaces each range over decisions in `slot` by its frame's helper decision, made the first time the frame is met,
@@ -164,6 +193,14 @@ private:
 } // namespace
 
 void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
+	if (!decide.frames.empty()) {
+		if (decide.decide_constraints) {
+			PointsInQuadraticTermsAsRanges(decide, *decide.decide_constraints, false);
+		}
+		if (decide.decide_objective) {
+			PointsInQuadraticTermsAsRanges(decide, *decide.decide_objective, false);
+		}
+	}
 	bool any = false;
 	for (auto &frame : decide.frames) {
 		any = any || frame.range;

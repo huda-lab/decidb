@@ -377,38 +377,6 @@ static void ValidateFrame(const DecideFrameExpression &frame, const case_insensi
 	}
 }
 
-//! A product, quotient or square that multiplies a frame over decisions by a decision reads
-//! one decision at one row and another at another (D80): refused. A frame over data is a
-//! coefficient read at another row, as a column is one read at the row itself.
-static void ValidateFrameProduct(const FunctionExpression &func, const case_insensitive_map_t<idx_t> &variables) {
-	auto name = StringUtil::Lower(func.function_name);
-	bool product = func.is_operator && (name == "*" || name == "/");
-	bool square = IsNonlinearPower(func);
-	if (!product && !square) {
-		return;
-	}
-	for (idx_t i = 0; i < func.children.size(); i++) {
-		auto frame_over_decisions = FindNode(*func.children[i], [&](const ParsedExpression &node) {
-			return node.GetExpressionClass() == ExpressionClass::DECIDE_FRAME &&
-			       ExpressionContainsDecideVariable(node, variables);
-		});
-		if (!frame_over_decisions) {
-			continue;
-		}
-		bool times_decision = square && i == 0 && ExpressionContainsDecideVariable(*func.children[i], variables);
-		for (idx_t j = 0; j < func.children.size(); j++) {
-			times_decision =
-			    times_decision || (product && j != i && ExpressionContainsDecideVariable(*func.children[j], variables));
-		}
-		if (times_decision) {
-			throw BinderException(func,
-			                      "DECIDE: '%s' multiplies a decision read at another row by a decision, which is not "
-			                      "supported yet",
-			                      func.ToString());
-		}
-	}
-}
-
 //! `[when c] [per K]:` off a clause or a reducer's argument: the key elements and the
 //! condition are validated as data, and the body is returned.
 static const ParsedExpression &PeelScopeSpelling(const ParsedExpression &expr,
@@ -455,7 +423,6 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		return;
 	}
 	auto &func = expr.Cast<const FunctionExpression>();
-	ValidateFrameProduct(func, placement.variables);
 	if (func.is_operator && func.function_name == REDUCER_BY_TAG) {
 		if (!TakesReducerBy(UnwrapReducerMarkers(*func.children[0]))) {
 			throw BinderException(expr, "DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count");

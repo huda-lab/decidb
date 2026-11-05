@@ -88,7 +88,6 @@ formulates; their open work is in the owning stage's `todo.md`.
 | **D80** A frame in a `when`, `per`, `by`, `within` or an order key | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
 | **D80** A reducer or a frame inside a frame's payload or fallback | `DECIDE: a reducer inside at(...) is not supported; reduce outside the frame` · `DECIDE: a frame selector inside at(...) is not supported` |
 | **D80** A square or product of decisions in a frame's payload | `DECIDE: 'x * x' squares or multiplies decisions inside at(...), which is not supported yet` |
-| **D80** A frame over decisions times a decision, or squared | `DECIDE: '(x * at(previous: x) over (t.period))' multiplies a decision read at another row by a decision, which is not supported yet` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: power(x, 2) <> 9` |
 | `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates.` |

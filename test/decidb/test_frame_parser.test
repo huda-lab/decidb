@@ -217,18 +217,8 @@ SELECT id, x FROM T DECIDE x(REAL) SUCH THAT at(previous else at(next: x) over (
 ----
 Binder Error: DECIDE: a frame selector inside at(...) is not supported
 
-# a frame over decisions times a decision, by either side
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT sum(x * at(previous: x) over (T.period)) <= 3 MAXIMIZE sum(x);
-----
-Binder Error: DECIDE: '(x * at(previous: x) over (T.period))' multiplies a decision read at another row by a decision, which is not supported yet
-
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT power(at(previous: x) over (T.period), 2) <= 3 MAXIMIZE sum(x);
-----
-Binder Error: DECIDE: 'power(at(previous: x) over (T.period), 2)' multiplies a decision read at another row by a decision, which is not supported yet
-
-# ... while a data coefficient on a decision frame is a linear term
+# a data coefficient on a decision frame is a linear term (a decision or a square on one is a quadratic term,
+# test_anr_frames.py)
 query II
 SELECT id, x FROM T DECIDE x(INT) SUCH THAT x <= 9 AND T.price * at(previous: x) over (T.period within T.product) <= 3 MAXIMIZE sum(x) ORDER BY id;
 ----
@@ -268,16 +258,11 @@ SELECT id, x FROM T DECIDE x(BOOL) SUCH THAT at(previous: x) over (T.period) MAX
 ----
 Binder Error: 'at(previous: x) over (T.period)' is not a valid SUCH THAT constraint on its own; compare it with a value
 
-# a frame's term is linear: a square of a decision inside its payload, or of the frame
+# a frame's payload is linear: a square of a decision inside it
 statement error
 SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= at(previous: x * x) over (T.period) MAXIMIZE sum(x);
 ----
 Binder Error: DECIDE: '(x * x)' squares or multiplies decisions inside at(...), which is not supported yet
-
-statement error
-SELECT id, x FROM T DECIDE x(REAL) SUCH THAT x <= at(previous: x) over (T.period) ^ 2 MAXIMIZE sum(x);
-----
-multiplies a decision read at another row by a decision, which is not supported yet
 
 # no reducer in an order key
 statement error
