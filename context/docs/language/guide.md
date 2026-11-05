@@ -480,8 +480,8 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   the rule of §5 refuses with its remedy (*"An aggregate over table columns ... cannot multiply a decision
   variable"*).
 
-Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, a grid of nests at depth 2 and 3, the bounds through a
-nest), `test_scope_objective.py` (the objective).
+Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, the deck's example 9 as written among them, a grid of
+nests at depth 2 and 3, the bounds through a nest), `test_scope_objective.py` (the objective).
 
 ### 5.6 Frame selectors — `at(...) over (...)`
 
@@ -576,8 +576,9 @@ first to last: x) over (t.period)' has type DOUBLE and can take fractional value
 Tests: `test/decidb/test_frame_parser.test` (answers, parse and bind errors, ordinary SQL windows unchanged),
 `test/decide/tests/test_anr_frames.py` (`TestSyntax`; `TestPoint` and `TestRange`: every frame fixture of
 `_anr_cases`, every pair of ends under both steps, each policy, open and cyclic, judged by the oracle; the deck's
-examples 1, 4 and 5 as written, 2 and 6 with their bound adapted to the test's data, and the DeQL comparison with its
-declarations adapted; shapes and errors), `test/decide/tests/test_anr_composition.py`
+examples 1, 3, 4 and 5 and the clauses of pp. 50, 52 and 53 as written, 2 and 6 with a decision added to their bound
+(the deck writes them over data alone, which a clause refuses), and the DeQL comparison with its declarations adapted;
+shapes and errors), `test/decide/tests/test_anr_composition.py`
 (members dropped, under `abs` and `norm`, the objective, composed `MIN`/`MAX`, both solvers),
 `test/decide/tests/test_anr_diagnostics.py` (DIAGNOSE and EXPLAIN over variants, nests and frames),
 `test/common/test_decidb_plan_serialization.cpp` (a placed point and range round-trip).
@@ -736,8 +737,9 @@ per (): sum(ship) <= networkCapacity
 
 `EXPLAIN ANALYZE` prints, under a clause whose classes held more than one variant, how many instances they made
 (§9): *"↳ per t.g: 2 constraints from 1 class, one per distinct (t.a) within a class"*. A plain `EXPLAIN` reads no data,
-so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `test_anr_variants.py`,
-`test_scope_variant_paths.py` and the scope grid (`test_scope_combinations.py`).
+so it cannot count them. Tests: `test/decide/tests/test_scope_variants.py`, `test_anr_variants.py` (the deck's pp.
+26, 27 and 34-36 as written among its fixtures), `test_scope_variant_paths.py` and the scope grid
+(`test_scope_combinations.py`).
 
 ### 7.2 NULL and empty sets
 

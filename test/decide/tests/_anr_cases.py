@@ -39,7 +39,7 @@ from ._anr_oracle import (
     previous,
     reduce,
 )
-from ._scope_cases import literal, table
+from ._scope_cases import literal, table, values
 from solver.types import ObjSense, SolverStatus, VarType
 
 MAXIMIZE, MINIMIZE = ObjSense.MAXIMIZE, ObjSense.MINIMIZE
@@ -1197,6 +1197,223 @@ NULL_BY = Case(
     {1: ("x1 <= 5", "x1 <= 5", "x3 <= 5")},
 )
 
+# ---------------------------------------------------------------------------
+# The deck's examples as the slides write them (pp. 25-27, 34, 46, 50, 52-53)
+# ---------------------------------------------------------------------------
+
+#: Example 9's shipments: customer c1 ships from both depots, so each depot's sum reads its own c1 maximum.
+EXAMPLE_9_SHIPMENTS = (
+    (1, "D1", "c1", True, 30),
+    (2, "D1", "c1", True, 30),
+    (3, "D1", "c2", True, 30),
+    (4, "D1", "c3", False, 100),
+    (5, "D2", "c4", True, 20),
+    (6, "D2", "c4", True, 20),
+    (7, "D2", "c1", True, 15),
+)
+EXAMPLE_9_DEPOTS = (("D1", 30), ("D2", 20))
+EXAMPLE_9_COLUMNS = ("shipmentID", "depotID", "customerID", "priority", "demand", "priorityCapacity")
+#: Deck p. 25: each depot's priority customers, each by its largest shipment, within the depot's priority capacity.
+EXAMPLE_9 = Case(
+    "deck_example_9",
+    "deck p. 25",
+    2,
+    EXAMPLE_9_COLUMNS,
+    tuple(row + (dict(EXAMPLE_9_DEPOTS)[row[1]],) for row in EXAMPLE_9_SHIPMENTS),
+    (Decision("ship"),),
+    (
+        clause(le(SHIP, Col("demand"))),
+        clause(
+            le(
+                reduce(
+                    "sum",
+                    reduce("max", SHIP, by=("customerID",)),
+                    when=lambda r: r["priority"],
+                    per=("customerID",),
+                    by=("depotID",),
+                ),
+                Col("priorityCapacity"),
+            ),
+            per=("depotID",),
+        ),
+    ),
+    Objective(MAXIMIZE, reduce("sum", SHIP)),
+    f"""
+        SELECT S.shipmentID, ship
+        FROM {values(EXAMPLE_9_SHIPMENTS, 'S', ('shipmentID', 'depotID', 'customerID', 'priority', 'demand'))}
+        JOIN {values(EXAMPLE_9_DEPOTS, 'D', ('depotID', 'priorityCapacity'))} USING (depotID)
+        DECIDE ship(INT)
+        SUCH THAT ship <= S.demand AND
+            per D.depotID:
+                sum(
+                    when S.priority per S.customerID:
+                        max(ship) by (S.customerID)
+                ) by (D.depotID)
+                <= D.priorityCapacity
+        MAXIMIZE sum(ship)
+        ORDER BY S.shipmentID""",
+    200,
+    {1: ("ship3 + max(ship1, ship2) <= 30", "ship7 + max(ship5, ship6) <= 20")},
+)
+
+SCOPE_SHIPMENTS = ((1, "D1", "East"), (2, "D1", "West"), (3, "D2", "East"))
+SCOPE_DEPOTS = (("D1", "North", 12), ("D2", "South", 9))
+SCOPE_COLUMNS = ("shipment", "depotID", "sregion", "dregion", "regionalLimit")
+
+
+def _scope_rule(name, by, by_sql, optimum, rendered, source) -> Case:
+    depots = {row[0]: row[1:] for row in SCOPE_DEPOTS}
+    sql = f"""
+        SELECT S.shipment, ship
+        FROM {values(SCOPE_SHIPMENTS, 'S', ('shipment', 'depotID', 'region'))}
+        JOIN {values(SCOPE_DEPOTS, 'D', ('depotID', 'region', 'regionalLimit'))} USING (depotID)
+        DECIDE ship(INT)
+        SUCH THAT ship <= 10 AND per D.depotID: sum(ship) by ({by_sql}) <= regionalLimit
+        MAXIMIZE sum(ship)
+        ORDER BY S.shipment"""
+    return Case(
+        name,
+        source,
+        1,
+        SCOPE_COLUMNS,
+        tuple(row + depots[row[1]] for row in SCOPE_SHIPMENTS),
+        (Decision("ship"),),
+        (clause(le(SHIP, 10)), clause(le(reduce("sum", SHIP, by=by), Col("regionalLimit")), per=("depotID",))),
+        Objective(MAXIMIZE, reduce("sum", SHIP)),
+        sql,
+        optimum,
+        {1: rendered},
+    )
+
+
+#: Deck p. 26: every row of a depot carries its D.region, so each depot is one regional constraint.
+SCOPE_ONE_REGION = _scope_rule(
+    "deck_scope_one_region", ("dregion",), "D.region", 21, ("ship1 + ship2 <= 12", "ship3 <= 9"), "deck p. 26"
+)
+#: Deck p. 27: D1's rows hold two S.region values, so D1 is one constraint per region (pp. 34-40), D2 one.
+SCOPE_TWO_REGIONS = _scope_rule(
+    "deck_scope_two_regions",
+    ("sregion",),
+    "S.region",
+    19,
+    ("ship1 + ship3 <= 12", "ship2 <= 12", "ship1 + ship3 <= 9"),
+    "deck p. 27",
+)
+
+#: Deck p. 34: a tuple term is a reducer grouped by its own value, so avg(P.lim) by (P.lim) is F3_region again.
+F3_AVG_LIMIT = Case(
+    "F3_avg_limit",
+    "deck p. 34",
+    1,
+    F3_COLUMNS,
+    F3_DATA,
+    (Decision("ship"),),
+    (
+        clause(
+            le(reduce("sum", SHIP, by=("region",)), reduce("avg", Col("lim"), by=("lim",))),
+            per=("depotID",),
+        ),
+    ),
+    Objective(MAXIMIZE, reduce("sum", SHIP)),
+    f"""
+        SELECT shipment, ship {table('P', F3_COLUMNS, F3_DATA)}
+        DECIDE ship(INT)
+        SUCH THAT per P.depotID: sum(ship) by (P.region) <= avg(P.lim) by (P.lim)
+        MAXIMIZE sum(ship)
+        ORDER BY shipment""",
+    130,
+    {0: F3_REGION.instances[0]},
+)
+
+PRODUCT_ROWS = ((1, "A", 1, 12), (2, "A", 2, 11), (3, "A", 3, 7), (4, "B", 1, 15), (5, "B", 2, 4))
+POLICY_ROWS = (("A", 5, "food"), ("B", 3, "food"))
+PRODUCT_COLUMNS = ("tid", "productID", "period", "cap", "priorInventoryLimit", "category")
+PRODUCT_FROM = (
+    f"FROM {values(PRODUCT_ROWS, 'T', ('tid', 'productID', 'period', 'cap'))} "
+    f"JOIN {values(POLICY_ROWS, 'P', ('productID', 'priorInventoryLimit', 'category'))} USING (productID)"
+)
+PRODUCT_TIMELINE = Over("period", within=("productID",))
+PREVIOUS_INVENTORY = At(previous(), INVENTORY, PRODUCT_TIMELINE)
+
+
+def _deck_frame(name, source, clause_sql, body, sense, optimum, rendered, error=None) -> Case:
+    policy = {row[0]: row[1:] for row in POLICY_ROWS}
+    return Case(
+        name,
+        source,
+        4,
+        PRODUCT_COLUMNS,
+        tuple(row + policy[row[1]] for row in PRODUCT_ROWS),
+        (Decision("inventory"),),
+        (clause(le(INVENTORY, Col("cap"))), body),
+        Objective(sense, reduce("sum", INVENTORY)),
+        f"""
+        SELECT T.tid, inventory {PRODUCT_FROM}
+        DECIDE inventory(INT)
+        SUCH THAT inventory <= T.cap AND
+            {clause_sql}
+        {'MAXIMIZE' if sense == MAXIMIZE else 'MINIMIZE'} sum(inventory)
+        ORDER BY T.tid""",
+        optimum,
+        {1: rendered} if rendered else {},
+        error=error,
+    )
+
+
+#: Deck p. 46: the previous inventory of every period but each product's first, summed per product.
+FRAME_EXAMPLE_3 = _deck_frame(
+    "deck_frame_example_3",
+    "deck p. 46",
+    """per T.productID:
+                sum(at(previous: inventory) over (T.period within T.productID)) by (T.productID)
+                <= P.priorInventoryLimit""",
+    clause(le(reduce("sum", PREVIOUS_INVENTORY, by=("productID",)), Col("priorInventoryLimit")), per=("productID",)),
+    MAXIMIZE,
+    19,
+    ("inventory1 + inventory2 <= 5", "inventory4 <= 3"),
+)
+#: Deck p. 50, reduced NULL: each first period reads NULL, which the outer sum ignores.
+FRAME_NULL_REDUCED = _deck_frame(
+    "deck_frame_null_reduced",
+    "deck p. 50",
+    "per (): sum(at(previous: inventory) over (period within productID)) >= 10",
+    clause(ge(reduce("sum", PREVIOUS_INVENTORY), 10), per=GLOBAL),
+    MINIMIZE,
+    10,
+    ("inventory1 + inventory2 + inventory4 >= 10",),
+)
+#: Deck p. 50, non-reduced NULL: each first period's instance is skipped.
+FRAME_NULL_SKIPPED = _deck_frame(
+    "deck_frame_null_skipped",
+    "deck p. 50",
+    "per row: at(previous: inventory) over (period within productID) >= 10",
+    clause(ge(PREVIOUS_INVENTORY, 10)),
+    MINIMIZE,
+    30,
+    ("inventory1 >= 10", "inventory2 >= 10", "inventory4 >= 10"),
+)
+#: Deck p. 52: every row of a product points to its one timeline, so a product-level frame is well defined.
+FRAME_ONE_TIMELINE = _deck_frame(
+    "deck_frame_one_timeline",
+    "deck p. 52",
+    "per T.productID: at(first else NULL: inventory) over (T.period within T.productID) >= 1",
+    clause(ge(At(FIRST, INVENTORY, PRODUCT_TIMELINE), 1), per=("productID",)),
+    MINIMIZE,
+    2,
+    ("inventory1 >= 1", "inventory4 >= 1"),
+)
+#: Deck p. 53: the food category holds two product timelines, so P.category does not determine T.productID.
+FRAME_TWO_TIMELINES = _deck_frame(
+    "deck_frame_two_timelines",
+    "deck p. 53",
+    "per P.category: at(first else NULL: inventory) over (T.period within T.productID) >= 1",
+    clause(ge(At(FIRST, INVENTORY, PRODUCT_TIMELINE), 1), per=("category",)),
+    MINIMIZE,
+    None,
+    None,
+    error="frame_partition",
+)
+
 #: Every case.
 CASES = (
     F1_MAX,
@@ -1260,6 +1477,15 @@ CASES = (
     NULL_IN_RANGE,
     NULL_WITHIN,
     NULL_BY,
+    EXAMPLE_9,
+    SCOPE_ONE_REGION,
+    SCOPE_TWO_REGIONS,
+    F3_AVG_LIMIT,
+    FRAME_EXAMPLE_3,
+    FRAME_NULL_REDUCED,
+    FRAME_NULL_SKIPPED,
+    FRAME_ONE_TIMELINE,
+    FRAME_TWO_TIMELINES,
 )
 
 # ---------------------------------------------------------------------------
