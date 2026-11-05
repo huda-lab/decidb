@@ -297,7 +297,9 @@ private:
 	//! The chunk column holding `value` read the way `kind` says for frame `frame`.
 	unique_ptr<Expression> FrameColumnRef(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
 		auto slot = FrameColumnSlot(kind, frame, value);
-		return make_uniq<BoundReferenceExpression>(op.frames[frame].text, op.prepared.frame_columns[slot].type,
+		auto name = op.frames[frame].text;
+		AddDecideTag(name, FRAME_COLUMN_TAG);
+		return make_uniq<BoundReferenceExpression>(std::move(name), op.prepared.frame_columns[slot].type,
 		                                           op.prepared.frame_column_base + slot);
 	}
 

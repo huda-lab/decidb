@@ -222,7 +222,7 @@ one group at a time. No test asserts an answer its docstring derives.
 - **`test_anr_frames.py`** — frame selectors (guide §5.6). `TestSyntax`: a point and a
   range echo as written, every refusal of D80 names its construct, and an AVG range under
   `<>` is fractional. `TestPoint`:
-  every point fixture (F19 and F21 aside, refused: a frame on the bound side of a group)
+  every point fixture (F19 aside, refused: a frame inside a reducer of a bound)
   on both solvers, judged by `_anr_oracle`, and F2's model pinned at its six columns and
   one row per instance (D78). `TestPointDeck`: the deck's examples 1, 4 and 5 and the
   DeQL comparison as written. `TestPointShapes` and `TestPointErrors`: a data factor, an

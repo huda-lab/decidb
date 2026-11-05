@@ -300,8 +300,8 @@ class TestSyntax:
 # Point selectors (phase 4)
 # ---------------------------------------------------------------------------
 
-#: F19 and F21 read a frame on the bound side of a clause over groups: not supported yet (TestPointErrors).
-BOUND_SIDE_CASES = ("F19", "F21")
+#: F19 reads a frame inside a reducer of its bound: not supported yet (TestPointErrors).
+BOUND_SIDE_CASES = ("F19",)
 POINT_CASES = [
     pytest.param(case, id=case.name) for case in CASES if case.phase == 4 and case.name not in BOUND_SIDE_CASES
 ]
@@ -1043,28 +1043,60 @@ class TestPointErrors:
         "case", [pytest.param(case, id=case.name) for case in CASES if case.name in BOUND_SIDE_CASES]
     )
     def test_a_frame_on_the_bound_side_of_a_group_is_refused(self, decidb_cli, case):
-        """F19 reads a frame inside a reducer of its bound, F21 one in the bound of a clause
-        over groups, which takes its group's tightest value: neither is supported yet."""
+        """F19 reads a frame inside a reducer of its bound: not supported yet."""
         result = decidb_cli.execute_raw(case.sql)
-        phrase = {"F19": "a reducer over data, is not supported yet", "F21": "on the bound side of"}[case.name]
-        assert phrase in result.stderr and "is not supported yet" in result.stderr, result.stderr
+        assert "a reducer over data, is not supported yet" in result.stderr, result.stderr
         assert_no_internal_leak(result, case.name)
 
+    @pytest.mark.correctness
+    @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
     @pytest.mark.parametrize(
-        "clause_sql, message",
+        "clause_sql, body, sense, optimum",
         [
             pytest.param(
                 "max(x) by (t.product) >= at(previous: t.v) over (t.period within t.product)",
-                "DECIDE: at(previous: t.v) over (t.period within t.product) on the bound side of "
-                "max(x) by (t.product) is not supported yet",
+                ge(reduce("max", X, by=("product",)), At(previous(), Col("v"), TIMELINE)),
+                ObjSense.MINIMIZE,
+                13,
                 id="hard-max-bound",
             ),
             pytest.param(
                 "min(x) by (t.product) <= at(previous: t.v) over (t.period within t.product) - 4",
-                "DECIDE: at(previous: t.v) over (t.period within t.product) on the bound side of "
-                "min(x) by (t.product) is not supported yet",
+                le(reduce("min", X, by=("product",)), At(previous(), Col("v"), TIMELINE) - 4),
+                ObjSense.MAXIMIZE,
+                30,
                 id="hard-min-bound",
             ),
+        ],
+    )
+    def test_a_bound_over_groups_takes_its_tightest_frame_value(
+        self, request, scope_solver, cli_fixture, clause_sql, body, sense, optimum
+    ):
+        """D85: a frame bound of a clause over groups that differs within a group is the group's
+        tightest value among the anchors where it has one, which execution takes (no side
+        table can read a frame). Worked by hand: A's anchors read 4 and 6, B's 7, so the largest
+        x of A is at least 6 and of B at least 7 (13); the least of A at most 0 and of B at most
+        3, the others at their bound 9 (30)."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = _edge(clause_sql, objective=f"{sense.name} sum(x)")
+        objective = Objective(sense, reduce("sum", X))
+        rows = table_rows(EDGE, EDGE_ROWS)
+        assert _judged(cli, scope_solver, sql, rows, [Decision("x")], [CAP, clause(body)], objective) == optimum
+
+    def test_an_equal_frame_bound_with_two_values_in_a_group(self, decidb_cli):
+        """D85 under `=`: a group's anchors reading two values bound one instance two ways, the
+        message a column bound gives (the frame named as written)."""
+        result = decidb_cli.execute_raw(
+            _edge("sum(x) by (t.product) = at(previous: t.v) over (t.period within t.product)")
+        )
+        assert (
+            "`at(previous: t.v) over (t.period within t.product)` takes more than one value here (4 and 6)"
+            in result.stderr
+        ), result.stderr
+
+    @pytest.mark.parametrize(
+        "clause_sql, message",
+        [
             pytest.param(
                 "sum(x) <= sum(per t.product: at(previous: t.v) over (t.period within t.product))",
                 "DECIDE: at(previous: t.v) over (t.period within t.product) inside "

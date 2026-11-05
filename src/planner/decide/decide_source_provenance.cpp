@@ -409,10 +409,11 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		break;
 	}
 	case ExpressionClass::BOUND_REF: {
-		// A column the physical plan resolved to a chunk position keeps its name as alias.
+		// A column the physical plan resolved to a chunk position keeps its name as alias; a frame column's name is
+		// the frame as written.
 		auto name = StripDecideTags(expr.GetAlias());
 		if (!name.empty()) {
-			return QuoteDecideIdentifier(name);
+			return HasDecideTag(expr.GetAlias(), FRAME_COLUMN_TAG) ? name : QuoteDecideIdentifier(name);
 		}
 		break;
 	}

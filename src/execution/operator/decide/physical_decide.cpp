@@ -3244,6 +3244,52 @@ static idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups
 	return count;
 }
 
+//! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
+//! each group's instance takes its tightest value among its kept rows where the bound has one -- the least under `<`
+//! and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a column's (paper
+//! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
+//! (`null_rows`). `row_group_ids` empty is every row in one group.
+static void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
+                                   const vector<bool> &bound_null, const vector<idx_t> &row_group_ids, idx_t num_groups,
+                                   vector<double> &rhs, vector<bool> &null_rows) {
+	const bool one_group = row_group_ids.empty();
+	auto group_of = [&](idx_t row) {
+		return one_group ? idx_t(0) : row_group_ids[row];
+	};
+	const idx_t groups = one_group ? 1 : num_groups;
+	vector<double> least(groups, std::numeric_limits<double>::infinity());
+	vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
+	vector<bool> has_value(groups, false);
+	for (idx_t row = 0; row < kept.size(); row++) {
+		const idx_t group = group_of(row);
+		if (!kept[row] || bound_null[row] || group == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		least[group] = MinValue(least[group], rhs[row]);
+		greatest[group] = MaxValue(greatest[group], rhs[row]);
+		has_value[group] = true;
+	}
+	const bool upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
+	                   comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+	                   comparison == ExpressionType::COMPARE_EQUAL;
+	for (idx_t row = 0; row < kept.size(); row++) {
+		const idx_t group = group_of(row);
+		if (!kept[row] || group == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (!has_value[group]) {
+			null_rows[row] = true;
+			continue;
+		}
+		if (comparison == ExpressionType::COMPARE_EQUAL && least[group] != greatest[group]) {
+			throw InvalidInputException("`%s` takes more than one value here (%g and %g) — an `=` bound cannot hold "
+			                            "two different values at once, so this DECIDE query is infeasible.",
+			                            written, least[group], greatest[group]);
+		}
+		rhs[row] = upper ? least[group] : greatest[group];
+	}
+}
+
 //! A NULL that reaches a comparison unreduced makes that instance NULL, and a NULL instance
 //! is skipped (deck p. 50): in the aggregate shape the group the row is in (its bound and its
 //! terms beside the reducers are one value per group), else the row. `row_group_ids` empty
@@ -3757,6 +3803,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// read first, so a NULL or NaN there is reported as the right side's.
 		bool rhs_per_row = constraint->rhs_expr->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT;
 		bool admitted = constraint->admitted_lower != nullptr;
+		const bool tightest_frame_bound =
+		    rhs_per_row && HasDecideTag(constraint->rhs_expr->GetAlias(), FRAME_TIGHTEST_BOUND_TAG);
+		vector<bool> bound_null(tightest_frame_bound ? num_rows : 0, false);
 		if (rhs_per_row || admitted) {
 			ExpressionExecutor row_executor(context);
 			vector<LogicalType> row_types;
@@ -3853,9 +3902,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					// ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
 					// was folded as a column bound in its bare spelling must stay legal
 					// in its rebuilt one. `inf - inf` still yields NaN and is still refused.
-					ExtractDoubleColumn(
-					    row_result.data[column++], scan_chunk.size(), 1.0, eval_const.rhs_values.MutableDense(),
-					    {DecideValueRole::BOUND, *constraint->rhs_expr, names}, &null_rows, &scoped_kept, scanned);
+					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
+					                    eval_const.rhs_values.MutableDense(),
+					                    {DecideValueRole::BOUND, *constraint->rhs_expr, names},
+					                    tightest_frame_bound ? &bound_null : &null_rows, &scoped_kept, scanned);
 					eval_const.rhs_values.SyncSize();
 				}
 				if (admitted) {
@@ -3870,6 +3920,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 				scanned += scan_chunk.size();
 			}
+		}
+		if (tightest_frame_bound) {
+			TakeTightestFrameBound(constraint->comparison_type, eval_const.rhs_written, scoped_kept, bound_null,
+			                       eval_const.row_group_ids, eval_const.num_groups,
+			                       eval_const.rhs_values.MutableDense(), null_rows);
 		}
 
 		// AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator

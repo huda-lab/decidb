@@ -25,8 +25,9 @@
 //
 // A frame selector's values are columns execution computes from the rows it selects
 // (DecidePreparedModel::frame_columns), so no side table can read one: a row-wise bound reads a frame as it reads a
-// column, as does a bound over groups that has one value per group, which execution checks as it reads it. A frame in a
-// bound that takes its group's tightest value, or inside a reducer of a bound, is refused as not supported yet.
+// column, as does a bound over groups that has one value per group, which execution checks as it reads it; one that
+// takes its group's tightest value execution takes too (FRAME_TIGHTEST_BOUND_TAG, D85). A frame inside a reducer of a
+// bound is refused as not supported yet.
 //
 // The values the side tables hold are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
 // NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
@@ -193,11 +194,14 @@ private:
 		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
 		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
 		if (!frame.empty()) {
+			// Execution reads the bound, and its NaN, as it reads a row-wise one; one that may differ within a group
+			// it reads as the group's tightest value (D85).
 			if (reduces) {
-				throw BinderException("DECIDE: %s on the bound side of %s is not supported yet", frame,
-				                      Written(*comparison.left));
+				auto alias = comparison.right->GetAlias();
+				AddDecideTag(alias, FRAME_TIGHTEST_BOUND_TAG);
+				comparison.right->SetAlias(std::move(alias));
 			}
-			return; // execution reads the bound, and its NaN, as it reads a row-wise one
+			return;
 		}
 		if (reduces) {
 			InClassOnly(comparison.right);

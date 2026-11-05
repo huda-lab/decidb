@@ -583,6 +583,14 @@ inline bool IsQueryWideBoundTag(const string &alias) {
 	return HasDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 }
 
+//! On the bound of a clause over groups: a bound that reads a frame and may differ within a group, which takes the
+//! group's tightest value among the rows where it has one (D85). No side table can read a frame, so execution takes it.
+static constexpr const char *FRAME_TIGHTEST_BOUND_TAG = "__frame_tightest_bound__";
+
+//! On a reference to a frame column (DecidePreparedModel::frame_columns): its name is the frame as written, which a
+//! message prints as it stands, not as an identifier.
+static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
+
 //! Tag prefix for ABS envelope constraint linking.
 //! Format: "__abs_ub_pos_<aux_idx>__" on C1 (aux >= inner)
 //!         "__abs_ub_neg_<aux_idx>__" on C2 (aux >= -inner)

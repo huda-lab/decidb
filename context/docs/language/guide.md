@@ -572,6 +572,10 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
   periods read. The auxiliary has no value where what it reads has none, so `sum(abs(x - max(at(previous: x) over
   (t.period within t.product)) by (t.product)))` drops the member of a product with one period, whose inner `max`
   has no member.
+- **On the bound of a clause over groups** a frame that reads more than one value in a group bounds the group's
+  instance by its tightest one among the anchors where it has one (D85): `sum(x) by (t.g) <= at(previous: t.cap)
+  over (t.period within t.g)` is the least previous cap of each group, `>=` the greatest, `=` its one value (two are
+  an error, as for a column); a group none of whose anchors reads a value has no instance.
 - **The objective** is produced once, `per ()` (D72, D75): a root frame whose kept rows span two timelines is the
   `per ()` error above (*"DECIDE: the objective (per ()) does not determine the timeline t.product of at(first: x) over
   (t.period within t.product). Its rows span t.product = 'A', 'B'."*), whatever the timelines read; one read from more
@@ -586,9 +590,7 @@ reducer over decisions too, under `abs`, `norm` and a `MIN`/`MAX` of several ter
 selected row's own column, with no helper decision; a range over decisions is its helper per window
 ([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a frame inside a
 reducer over data, on a bound or inside a reducer over decisions (*"DECIDE: at(previous: t.v) over (...) inside
-sum(...), a reducer over data, is not supported yet"*), or in the bound of
-a clause over groups that would take its group's tightest value (D85) -- a `first` or `last` frame, or a range from
-`first` to `last`, whose timeline lies within each group reads one value per group, and is read; an `else` that reads
+sum(...), a reducer over data, is not supported yet"*); an `else` that reads
 a decision while the payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
 first to last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
 

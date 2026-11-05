@@ -305,6 +305,12 @@ chunk expression cache, keyed by node, never meets a freed one, and its decision
 where the frame reads no value is no variant (`BuildSignatureIds` filters it), so the objective's check (D72) counts
 only anchors that read one, and names what differs among them: a position, a timeline or a fallback.
 
+A frame bound of a clause over groups that differs within a group (`FRAME_TIGHTEST_BOUND_TAG`, D85) is read row by
+row as any bound, its NULLs apart, and then each group's rows take the group's tightest value among those where it has
+one (`TakeTightestFrameBound`): the least under `<=`, the greatest under `>=`, the one value under `=`, whose second is
+the `=` message a side table raises for a column; a group with none is marked in `null_rows`, so its instance is
+skipped. Its frame columns print as the frame is written (`FRAME_COLUMN_TAG`).
+
 A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
 one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- the
 first row of every `every`-th position from its first end to its last, whose other rows read the same payload (D73), a

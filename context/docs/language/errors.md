@@ -82,7 +82,6 @@ formulates; their open work is in the owning stage's `todo.md`.
 | **D80** A reducer inside `norm` | `DECIDE: a reducer inside norm is not supported yet` |
 | **D80** A square or product of decisions inside nested reducers that no body definition names: a nest of sums in the objective neither read in place nor summed in the other order | `DECIDE: 'sum(x * x) by (t.g)' squares or multiplies decisions inside nested reducers, which is not supported yet` |
 | A frame inside a reducer over data, on a bound or inside a reducer over decisions | `DECIDE: at(previous: t.v) over (t.period within t.product) inside sum(per t.product: at(previous: t.v) over (t.period within t.product)), a reducer over data, is not supported yet` |
-| A frame in the bound of a clause over groups that takes its group's tightest value (D85): one that does not read one row per group | `DECIDE: at(previous: t.cap) over (t.period within t.g) on the bound side of sum(x) by (t.g) is not supported yet` |
 | A frame's payload not linear in the decisions (`abs`, a decision divisor) | `DECIDE: 'abs((x - 3))' inside at(...) is not linear in the decisions, which is not supported yet; write it outside the frame` |
 | A frame's `else` that reads a decision while its payload reads none | `DECIDE: in at(previous else s: t.demand) over (t.period), else s reads a decision while the payload reads none, which is not supported yet` |
 | **D80** A frame in a `when`, `per`, `by`, `within` or an order key | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
