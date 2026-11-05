@@ -588,9 +588,10 @@ sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
 **Status.** Points and ranges are formulated, over data or decisions, in constraints and the objective, inside a
 reducer over decisions too, under `abs`, `norm` and a `MIN`/`MAX` of several terms: a point reads a decision at the
 selected row's own column, with no helper decision; a range over decisions is its helper per window
-([roadmap.md](roadmap.md)). Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): a frame inside a
-reducer over data, on a bound or inside a reducer over decisions (*"DECIDE: at(previous: t.v) over (...) inside
-sum(...), a reducer over data, is not supported yet"*); an `else` that reads
+([roadmap.md](roadmap.md)). A reducer over data whose argument reads a frame, on a bound or inside a reducer over
+decisions, is computed once the frames are, over the rows its path keeps, each class of its own `per` once per
+signature (the frame by its keys, D82): `sum(per t.product: at(first: t.v) over (t.period within t.product))` reads
+each product's first value once. Not supported yet ([errors.md §2](errors.md#2-not-supported-yet)): an `else` that reads
 a decision while the payload reads none; an AVG range under `<>`, which is fractional (*"Comparison '<>' is not supported here: 'avg(from
 first to last: x) over (t.period)' has type DOUBLE and can take fractional values ..."*).
 

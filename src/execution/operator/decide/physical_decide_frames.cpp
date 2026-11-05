@@ -591,12 +591,15 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		throw InternalException("DECIDE: the frame columns follow %llu input columns, not %llu",
 		                        prepared.frame_column_base, data.ColumnCount());
 	}
-	auto types = data.Types();
 	vector<unique_ptr<Vector>> values_of;
-	// DEFINED reads the frame's other columns, so it is computed after them.
+	// DEFINED reads the frame's other columns, so it is computed after them. A reducer over data reading frames is
+	// computed once they are appended, its column after every frame's (AppendDecideFrameAggregates).
 	vector<idx_t> defined;
 	for (idx_t j = 0; j < columns.size(); j++) {
 		auto &column = columns[j];
+		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
+			break;
+		}
 		auto &map = maps[column.frame];
 		auto out = make_uniq<Vector>(column.type, num_rows);
 		if (column.kind == DecideFrameColumn::Kind::DEFINED) {
@@ -652,7 +655,6 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 				}
 			}
 		}
-		types.push_back(column.type);
 		values_of.push_back(std::move(out));
 	}
 	for (auto j : defined) {
@@ -668,7 +670,7 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 				validity.SetInvalid(row);
 			}
 		}
-		for (idx_t k = 0; k < columns.size() && !map.range; k++) {
+		for (idx_t k = 0; k < values_of.size() && !map.range; k++) {
 			auto kind = columns[k].kind;
 			if (columns[k].frame != columns[j].frame ||
 			    (kind != DecideFrameColumn::Kind::READ && kind != DecideFrameColumn::Kind::FALLBACK)) {
@@ -682,6 +684,18 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		}
 	}
 
+	AppendDecideColumns(context, data, values_of);
+}
+
+void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data,
+                         const vector<unique_ptr<Vector>> &values_of) {
+	if (values_of.empty()) {
+		return;
+	}
+	auto types = data.Types();
+	for (auto &values : values_of) {
+		types.push_back(values->GetType());
+	}
 	// The input again, these columns after its own.
 	ColumnDataCollection widened(context, types);
 	ColumnDataAppendState append;
@@ -733,6 +747,9 @@ vector<DecideFramePayload> DecideFramePayloads(const vector<DecideFrameSpec> &fr
 	vector<DecideFramePayload> payloads(frames.size());
 	for (idx_t j = 0; j < prepared.frame_columns.size(); j++) {
 		auto &column = prepared.frame_columns[j];
+		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
+			continue; // no frame's payload: a reducer over data reading frames (AppendDecideFrameAggregates)
+		}
 		auto &payload = payloads[column.frame];
 		if (column.kind == DecideFrameColumn::Kind::REDUCED) {
 			payload.values.push_back(column.value->Cast<BoundAggregateExpression>().children[0].get());

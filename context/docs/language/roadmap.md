@@ -47,8 +47,8 @@ order, no stepped range and no fill or complete-frame boundary policy.
   §5.6): a point is read in place, a range over data is a value of the row, and a range over decisions a helper
   decision per window (D78). They compose with variants (D82), nesting, `abs`, `norm` and a `MIN`/`MAX` of several
   terms, and a frame that selects nothing inside a reducer over decisions drops its member (D87, D88).
-- **What is left:** a frame inside a reducer over data. A
-  frame's payload is a tuple-level expression (p. 51), so a reducer or frame inside one is no deck feature (D80).
+- **What is left:** nothing the deck defines. A frame's payload is a tuple-level expression (p. 51), so a reducer or
+  frame inside one is no deck feature (D80).
 
 ## Reducers nested in reducers (pp. 25, 28–32, 51)
 

@@ -311,6 +311,13 @@ one (`TakeTightestFrameBound`): the least under `<=`, the greatest under `>=`, t
 the `=` message a side table raises for a column; a group with none is marked in `null_rows`, so its instance is
 skipped. Its frame columns print as the frame is written (`FRAME_COLUMN_TAG`).
 
+A reducer over data reading a frame (`DecideFrameColumn::Kind::AGGREGATE`, after every frame column) is computed once
+the frames' columns are appended (`AppendDecideFrameAggregates`, in column order, so one may read another): over the
+rows its filter keeps, grouped by its path key, each class of its own `per` once per signature -- `BuildSignatureIds`
+over the columns its argument reads, each frame by its keys (`CollectFrameAggregateFields`) --, its values reduced as
+SQL's aggregate does, a NULL skipped. Each row reads its group's value, NULL in no group or where the group has
+nothing to reduce (`count`: 0); the column is appended (`AppendDecideColumns`).
+
 A range's map lists its **windows** (`ListRangeWindows`): one per timeline when neither end depends on the anchor, else
 one per position, parted at an anchor that reaches an `else` reading its own row. Each window reads a list -- the
 first row of every `every`-th position from its first end to its last, whose other rows read the same payload (D73), a

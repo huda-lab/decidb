@@ -939,6 +939,145 @@ static void BuildSignatureIds(const DecideSignature &signature, const vector<Dec
 	}
 }
 
+//! The fields a frame aggregate's argument reads, for its own `per`'s variants (BuildSignatureIds): each frame it reads
+//! by its keys (D82), and every other column -- of the input, a side table or a frame aggregate inside -- by value
+//! (D83).
+static void CollectFrameAggregateFields(const Expression &expr, const DecidePreparedModel &prepared,
+                                        vector<DecideSignatureField> &fields) {
+	auto add = [&](DecideSignatureField field) {
+		for (auto &known : fields) {
+			if (known.kind == field.kind && known.frame == field.frame &&
+			    (known.value ? field.value && known.value->Equals(*field.value) : !field.value)) {
+				return;
+			}
+		}
+		fields.push_back(std::move(field));
+	};
+	auto kind = expr.GetExpressionClass();
+	if (kind == ExpressionClass::BOUND_REF || kind == ExpressionClass::BOUND_COLUMN_REF) {
+		DecideSignatureField field;
+		if (kind == ExpressionClass::BOUND_REF && HasDecideTag(expr.GetAlias(), FRAME_COLUMN_TAG)) {
+			auto &column =
+			    prepared.frame_columns[expr.Cast<BoundReferenceExpression>().index - prepared.frame_column_base];
+			if (column.kind != DecideFrameColumn::Kind::AGGREGATE) {
+				field.kind = DecideSignatureFieldKind::FRAME;
+				field.frame = column.frame;
+				add(std::move(field));
+				return;
+			}
+		}
+		field.kind = DecideSignatureFieldKind::VALUE;
+		field.value = expr.Copy();
+		add(std::move(field));
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { CollectFrameAggregateFields(child, prepared, fields); });
+}
+
+//! Each reducer over data reading frames (DecideFrameColumn::Kind::AGGREGATE), in its column's order once the frames'
+//! columns are in `data`, so one may read another before it: over the rows its filter keeps, each class of its own
+//! `per` once per signature, as a reducer over decisions counts them (BuildSignatureIds), its argument's values reduced
+//! as SQL's aggregate does, a NULL skipped. On each row its group's value; NULL on a row in no group, and where the
+//! group has nothing to reduce (`count`: 0, deck p. 50; D68).
+static void AppendDecideFrameAggregates(ClientContext &context, const SignatureFrames &frames,
+                                        const vector<DecideKey> &keys,
+                                        const vector<DecideVarScopeInfo> &variable_scopes, ColumnDataCollection &data,
+                                        idx_t num_rows, ChunkExprCache &chunk_expr_cache) {
+	auto &prepared = frames.prepared;
+	auto &columns = prepared.frame_columns;
+	const vector<KeyedMapping> no_keyed_mappings;
+	for (idx_t j = 0; j < columns.size(); j++) {
+		auto &column = columns[j];
+		if (column.kind != DecideFrameColumn::Kind::AGGREGATE) {
+			continue;
+		}
+		if (data.ColumnCount() != prepared.frame_column_base + j) {
+			throw InternalException("DECIDE: frame aggregate %llu follows %llu columns", j, data.ColumnCount());
+		}
+		auto &reducer = column.value->Cast<BoundAggregateExpression>();
+		auto name = StringUtil::Lower(reducer.function.name);
+		auto read = reducer.filter ? KeptRows(*reducer.filter, chunk_expr_cache, context, data, num_rows)
+		                           : vector<bool>(num_rows, true);
+		// Each row's group of the path key, INVALID_INDEX on a row in none.
+		vector<const Expression *> key_exprs;
+		vector<bool> null_no_group;
+		for (auto &element : DecideKeyElements(keys, column.key)) {
+			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, element.Grouping(), context));
+			null_no_group.push_back(element.null_mode == DecideKeyNullMode::NO_GROUP);
+		}
+		vector<idx_t> group;
+		idx_t groups = 0;
+		GroupRows group_rows;
+		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)>(), group, groups, group_rows,
+		              nullptr, null_no_group);
+		// Its own `per`: each class once per signature, read at the signature's first row.
+		vector<bool> member = read;
+		if (column.class_key != DConstants::INVALID_INDEX) {
+			DecideSignature signature;
+			signature.key = column.class_key;
+			if (!reducer.children.empty()) {
+				CollectFrameAggregateFields(*reducer.children[0], prepared, signature.fields);
+			}
+			vector<idx_t> ids;
+			idx_t count = 0;
+			BuildSignatureIds(signature, keys, variable_scopes, no_keyed_mappings, frames, chunk_expr_cache, context,
+			                  data, num_rows, &read, ids, count);
+			std::unordered_set<uint64_t> seen;
+			for (idx_t row = 0; row < num_rows; row++) {
+				member[row] = read[row] && ids[row] != DConstants::INVALID_INDEX &&
+				              group[row] != DConstants::INVALID_INDEX &&
+				              seen.insert((static_cast<uint64_t>(group[row]) << 32) ^ ids[row]).second;
+			}
+		}
+		vector<Value> values;
+		if (!reducer.children.empty()) {
+			values = ReadRowValues(*reducer.children[0], chunk_expr_cache, context, data, &member);
+		}
+		vector<double> sum(groups, 0.0);
+		vector<double> least(groups, std::numeric_limits<double>::infinity());
+		vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
+		vector<idx_t> counted(groups, 0);
+		for (idx_t row = 0; row < num_rows; row++) {
+			const idx_t g = group[row];
+			if (g == DConstants::INVALID_INDEX || !member[row]) {
+				continue;
+			}
+			if (values.empty()) {
+				counted[g]++; // count(*)
+				continue;
+			}
+			if (values[row].IsNull()) {
+				continue;
+			}
+			const double value = values[row].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+			sum[g] += value;
+			least[g] = MinValue(least[g], value);
+			greatest[g] = MaxValue(greatest[g], value);
+			counted[g]++;
+		}
+		auto out = make_uniq<Vector>(LogicalType::DOUBLE, num_rows);
+		auto result = FlatVector::GetData<double>(*out);
+		auto &validity = FlatVector::Validity(*out);
+		const bool counts = name == "count" || name == "count_star";
+		for (idx_t row = 0; row < num_rows; row++) {
+			const idx_t g = group[row];
+			if (g == DConstants::INVALID_INDEX || (!counts && counted[g] == 0)) {
+				validity.SetInvalid(row);
+				continue;
+			}
+			result[row] = counts          ? static_cast<double>(counted[g])
+			              : name == "avg" ? sum[g] / static_cast<double>(counted[g])
+			              : name == "min" ? least[g]
+			              : name == "max" ? greatest[g]
+			                              : sum[g];
+		}
+		vector<unique_ptr<Vector>> appended;
+		appended.push_back(std::move(out));
+		AppendDecideColumns(context, data, appended);
+	}
+}
+
 //! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` --
 //! a column's spelling -- as ORDER BY places it.
 static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
@@ -2383,6 +2522,9 @@ void PhysicalDecide::BuildFrames(ClientContext &context, DecideGlobalSinkState &
 		gstate.frame_column_refs.push_back(
 		    make_uniq<BoundReferenceExpression>(prepared.frame_columns[j].type, prepared.frame_column_base + j));
 	}
+	AppendDecideFrameAggregates(context,
+	                            SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs}, keys,
+	                            variable_scopes, gstate.data, num_rows, chunk_expr_cache);
 	if (DecideProfileScope::Enabled()) {
 		// The positions the frames request: one per anchor of a point, and each value a range's window lists, once per
 		// window however many anchors share it.

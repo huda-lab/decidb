@@ -26,8 +26,8 @@
 // A frame selector's values are columns execution computes from the rows it selects
 // (DecidePreparedModel::frame_columns), so no side table can read one: a row-wise bound reads a frame as it reads a
 // column, as does a bound over groups that has one value per group, which execution checks as it reads it; one that
-// takes its group's tightest value execution takes too (FRAME_TIGHTEST_BOUND_TAG, D85). A frame inside a reducer of a
-// bound is refused as not supported yet.
+// takes its group's tightest value execution takes too (FRAME_TIGHTEST_BOUND_TAG, D85), and a reducer over data whose
+// argument reads one execution computes (MakeFrameAggregate, LogicalDecide::frame_aggregates).
 //
 // The values the side tables hold are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
 // NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
@@ -349,10 +349,8 @@ private:
 	//! path key and the rows it reads pass every enclosing `when` too; the reducers in its argument are recorded
 	//! first, and its argument reads their columns.
 	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
-		auto frame = reducer.children.empty() ? string() : FrameText(*reducer.children[0]);
-		if (!frame.empty()) {
-			throw BinderException("DECIDE: %s inside %s, a reducer over data, is not supported yet", frame,
-			                      Written(reducer));
+		if (!reducer.children.empty() && !FrameText(*reducer.children[0]).empty()) {
+			return MakeFrameAggregate(reducer, path);
 		}
 		unique_ptr<Expression> argument;
 		if (!reducer.children.empty()) {
@@ -385,6 +383,29 @@ private:
 		auto column = RecordAggregate(std::move(record), reads);
 		reducer_columns.push_back({column, std::move(keys)});
 		return NamedReducerValue(reducer, key, calc.Col(reducer.return_type, column));
+	}
+
+	//! A reducer over data whose argument reads a frame: no side table can compute it, since a frame's values are
+	//! columns execution computes. It stays a reducer over the rows it reads (`Reads`, its new filter), tagged with its
+	//! entry of LogicalDecide::frame_aggregates -- its path key and its `per` key --, which stage 05 makes a frame
+	//! column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). The reducers inside its
+	//! argument are columns first, as for any reducer.
+	unique_ptr<Expression> MakeFrameAggregate(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+		auto marker = reducer.Copy();
+		auto &aggregate = marker->Cast<BoundAggregateExpression>();
+		ReplaceReducers(aggregate.children[0], path.Below(reducer));
+		auto reads = Reads(path, reducer.filter.get());
+		aggregate.filter = reads ? calc.Out(reads) : nullptr;
+		LogicalDecide::FrameAggregate record;
+		record.key = PathKeyOf(reducer, path);
+		idx_t scope_idx;
+		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+			record.class_key = decide.keyed_scopes[scope_idx].key;
+		}
+		record.text = Written(reducer);
+		aggregate.SetAlias(MakeFrameAggregateTag(decide.frame_aggregates.size()));
+		decide.frame_aggregates.push_back(std::move(record));
+		return marker;
 	}
 
 	//! Adds `record` to the node's bound aggregates, reading the rows `reads` (null for every row) of the clause being

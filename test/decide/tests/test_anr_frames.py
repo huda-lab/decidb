@@ -300,11 +300,7 @@ class TestSyntax:
 # Point selectors (phase 4)
 # ---------------------------------------------------------------------------
 
-#: F19 reads a frame inside a reducer of its bound: not supported yet (TestPointErrors).
-BOUND_SIDE_CASES = ("F19",)
-POINT_CASES = [
-    pytest.param(case, id=case.name) for case in CASES if case.phase == 4 and case.name not in BOUND_SIDE_CASES
-]
+POINT_CASES = [pytest.param(case, id=case.name) for case in CASES if case.phase == 4]
 
 
 @pytest.mark.correctness
@@ -1039,15 +1035,6 @@ class TestPointErrors:
             Objective(ObjSense.MAXIMIZE, reduce("sum", X) + At(previous(), X, Over("period"))),
         )
 
-    @pytest.mark.parametrize(
-        "case", [pytest.param(case, id=case.name) for case in CASES if case.name in BOUND_SIDE_CASES]
-    )
-    def test_a_frame_on_the_bound_side_of_a_group_is_refused(self, decidb_cli, case):
-        """F19 reads a frame inside a reducer of its bound: not supported yet."""
-        result = decidb_cli.execute_raw(case.sql)
-        assert "a reducer over data, is not supported yet" in result.stderr, result.stderr
-        assert_no_internal_leak(result, case.name)
-
     @pytest.mark.correctness
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
     @pytest.mark.parametrize(
@@ -1094,29 +1081,72 @@ class TestPointErrors:
             in result.stderr
         ), result.stderr
 
+    @pytest.mark.correctness
     @pytest.mark.parametrize(
-        "clause_sql, message",
+        "clause_sql, body, optimum",
         [
             pytest.param(
-                "sum(x) <= sum(per t.product: at(previous: t.v) over (t.period within t.product))",
-                "DECIDE: at(previous: t.v) over (t.period within t.product) inside "
-                "sum(per t.product: at(previous: t.v) over (t.period within t.product)), a reducer over data, "
-                "is not supported yet",
-                id="inside-a-bound-reducer",
+                "sum(x) <= sum(at(previous: t.v) over (t.period within t.product))",
+                le(reduce("sum", X), reduce("sum", At(previous(), Col("v"), TIMELINE))),
+                17,
+                id="bound-reducer",
             ),
             pytest.param(
-                "sum(x + max(at(previous: t.v) over (t.period within t.product)) by (t.product)) <= 30",
-                "DECIDE: at(previous: t.v) over (t.period within t.product) inside "
-                "max(at(previous: t.v) over (t.period within t.product)) by (t.product), a reducer over data, "
-                "is not supported yet",
-                id="inside-a-data-reducer-in-a-decision-reducer",
+                "sum(x) <= sum(per t.product: at(previous: t.v) over (t.period within t.product))",
+                le(reduce("sum", X), reduce("sum", At(previous(), Col("v"), TIMELINE), per=("product",))),
+                17,
+                id="bound-reducer-per-position",
+            ),
+            pytest.param(
+                "per t.product: sum(x) by (t.product) <= "
+                "sum(per t.product: at(first: t.v) over (t.period within t.product)) by (t.product)",
+                le(
+                    reduce("sum", X, by=("product",)),
+                    reduce("sum", At(FIRST, Col("v"), TIMELINE), per=("product",), by=("product",)),
+                ),
+                11,
+                id="bound-reducer-per-timeline",
+            ),
+            pytest.param(
+                "sum(x) <= avg(at(previous: t.v) over (t.period within t.product))",
+                le(reduce("sum", X), reduce("avg", At(previous(), Col("v"), TIMELINE))),
+                5,
+                id="avg",
+            ),
+            pytest.param(
+                "sum(x) <= min(at(previous: t.v) over (t.period within t.product))",
+                le(reduce("sum", X), reduce("min", At(previous(), Col("v"), TIMELINE))),
+                4,
+                id="min",
+            ),
+            pytest.param(
+                "sum(x) <= count(at(previous: t.v) over (t.period within t.product))",
+                le(reduce("sum", X), reduce("count", At(previous(), Col("v"), TIMELINE))),
+                3,
+                id="count",
+            ),
+            pytest.param(
+                "sum(x + max(at(previous: t.v) over (t.period within t.product)) by (t.product)) <= 40",
+                le(reduce("sum", X + reduce("max", At(previous(), Col("v"), TIMELINE), by=("product",))), 40),
+                8,
+                id="inside-a-reducer-over-decisions",
             ),
         ],
     )
-    def test_a_bound_over_groups_names_the_frame(self, decidb_cli, clause_sql, message):
-        result = decidb_cli.execute_raw(_edge(clause_sql))
-        assert message in result.stderr, result.stderr
-        assert_no_internal_leak(result, "a bound-side frame")
+    def test_a_reducer_over_data_reading_a_frame(self, decidb_cli, scope_solver, clause_sql, body, optimum):
+        """A reducer over data whose argument reads a frame is computed by execution after the
+        frames (no side table can read one), each class of its own `per` once per signature, the
+        frame by its keys (D82). Worked by hand over A (v 4, 6, 1) and B (v 7, 3): the previous
+        values are 4, 6 and 7, 17, read from three positions under `per t.product` too; each
+        product's first value is one signature, its timeline, so A's sum is at most 4 and B's 7
+        (11); their mean is 17/3, their least 4 and their count 3; A's largest previous value is
+        6 and B's 7, so `sum(x) + 3 * 6 + 2 * 7 <= 40`."""
+        per = ("product",) if clause_sql.startswith("per ") else PER_ROW
+        rows = table_rows(EDGE, EDGE_ROWS)
+        reached = _judged(
+            decidb_cli, scope_solver, _edge(clause_sql), rows, [Decision("x")], [CAP, clause(body, per=per)], MAXIMIZE_X
+        )
+        assert reached == optimum
 
     @pytest.mark.correctness
     @pytest.mark.parametrize(

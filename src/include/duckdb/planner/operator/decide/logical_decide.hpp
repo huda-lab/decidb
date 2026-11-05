@@ -688,6 +688,21 @@ public:
 	//! has built their side tables (DirectSourceReader::AddSideTable).
 	vector<DecideBoundAggregate> bound_aggregates;
 
+	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
+	//! values execution computes, so the reducer stays in the tree, tagged with its entry (FRAME_AGGREGATE_TAG_PREFIX)
+	//! over the rows it reads (its filter), and stage 05 makes it a frame column execution computes after the frames
+	//! (DecideFrameColumn::Kind::AGGREGATE). Made by the bound-side rewrite; not serialized (an optimized plan never
+	//! is).
+	struct FrameAggregate {
+		//! Its path key: it has one value per group (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
+		idx_t key = DConstants::INVALID_INDEX;
+		//! Its own `per` key, whose classes it counts once per signature; INVALID_INDEX for `per row`.
+		idx_t class_key = DConstants::INVALID_INDEX;
+		//! The reducer as written.
+		string text;
+	};
+	vector<FrameAggregate> frame_aggregates;
+
 	//! The registered name ("gurobi", "highs") of the solver this query will run on,
     //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here
     //! to PhysicalDecide. A NAME and not a handle: layer 3 describes the query, and a

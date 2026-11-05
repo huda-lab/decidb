@@ -412,7 +412,21 @@ private:
 		if (!expr) {
 			return;
 		}
-		idx_t frame;
+		idx_t frame, aggregate;
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    TryParseFrameAggregateTag(expr->GetAlias(), aggregate)) {
+			// A reducer over data reading a frame (LogicalDecide::frame_aggregates): its frames first; once every
+			// frame has its columns, a column of its own after them (lower_aggregates).
+			auto &reducer = expr->Cast<BoundAggregateExpression>();
+			for (auto &child : reducer.children) {
+				LowerFrames(child);
+			}
+			LowerFrames(reducer.filter);
+			if (lower_aggregates) {
+				expr = FrameAggregateRef(aggregate, *expr);
+			}
+			return;
+		}
 		if (expr->GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL) {
 			auto &test = expr->Cast<BoundOperatorExpression>();
 			if (test.children.size() == 1 && TryGetDecideFrame(*test.children[0], frame) &&
@@ -474,10 +488,46 @@ private:
 	}
 
 	//! Every expression execution evaluates, over the columns frames read (LowerFrames).
+	//! The column of frame aggregate `index` (made when new, after every frame column), as the reducer `marker`'s
+	//! parent reads it: of its type, and named by the reducer as written.
+	unique_ptr<Expression> FrameAggregateRef(idx_t index, const Expression &marker) {
+		auto &columns = op.prepared.frame_columns;
+		auto slot = frame_aggregate_slots.find(index);
+		if (slot == frame_aggregate_slots.end()) {
+			auto &record = op.frame_aggregates[index];
+			DecideFrameColumn column;
+			column.kind = DecideFrameColumn::Kind::AGGREGATE;
+			column.value = marker.Copy();
+			column.type = LogicalType::DOUBLE;
+			column.key = record.key;
+			column.class_key = record.class_key;
+			columns.push_back(std::move(column));
+			slot = frame_aggregate_slots.emplace(index, columns.size() - 1).first;
+		}
+		auto name = op.frame_aggregates[index].text;
+		AddDecideTag(name, BOUND_REDUCER_TAG);
+		AddDecideTag(name, FRAME_COLUMN_TAG);
+		auto column = make_uniq<BoundReferenceExpression>(std::move(name), LogicalType::DOUBLE,
+		                                                  op.prepared.frame_column_base + slot->second);
+		return BoundCastExpression::AddCastToType(context, std::move(column), marker.return_type);
+	}
+
 	void LowerFramesInPreparedModel() {
 		if (op.frames.empty()) {
 			return;
 		}
+		// Twice: the frames first, then each reducer over data reading one, whose column follows every frame's.
+		lower_aggregates = false;
+		LowerFramesOnce();
+		if (!op.frame_aggregates.empty()) {
+			lower_aggregates = true;
+			LowerFramesOnce();
+		}
+		op.prepared.frame_payload_terms.resize(op.frames.size());
+		RecordFallbackColumns();
+	}
+
+	void LowerFramesOnce() {
 		for (auto *constraints : {&op.prepared.constraints, &op.prepared.singleton_row_constraints}) {
 			for (auto &constraint : *constraints) {
 				LowerFrames(*constraint);
@@ -514,8 +564,6 @@ private:
 			LowerFrames(link.filter);
 			LowerFrames(link.when);
 		}
-		op.prepared.frame_payload_terms.resize(op.frames.size());
-		RecordFallbackColumns();
 	}
 
 	//===------------------------------------------------------------------===//
@@ -1330,6 +1378,10 @@ private:
 	idx_t decide_index;
 	DecideTermSplitter splitter;
 	DecideCanonicalizer canonicalizer;
+	//! LowerFramesInPreparedModel's second pass: each reducer over data reading a frame becomes its column.
+	bool lower_aggregates = false;
+	//! Frame aggregate (LogicalDecide::frame_aggregates) -> its column (into DecidePreparedModel::frame_columns).
+	unordered_map<idx_t, idx_t> frame_aggregate_slots;
 };
 
 void BuildDecidePreparedModel(ClientContext &context, LogicalDecide &decide) {

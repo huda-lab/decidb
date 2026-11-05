@@ -210,6 +210,10 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
                               ColumnDataCollection &data, idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
+//! `data` with the columns `values_of` (one value per row each) after its own.
+void AppendDecideColumns(ClientContext &context, ColumnDataCollection &data,
+                         const vector<unique_ptr<Vector>> &values_of);
+
 //! What a frame reads at each row of a position it reads, as D73 compares the rows (deck p. 110): each column `values`
 //! read, by value, and the instance of each decision of `terms` -- term `i` the coefficient `values[terms[i].column]`
 //! on decision `terms[i].decision` --, whatever its coefficient.

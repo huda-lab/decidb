@@ -591,6 +591,24 @@ static constexpr const char *FRAME_TIGHTEST_BOUND_TAG = "__frame_tightest_bound_
 //! message prints as it stands, not as an identifier.
 static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
 
+//! On a reducer over data whose argument reads a frame: "__frame_aggregate_<i>__" indexes
+//! LogicalDecide::frame_aggregates. No side table can read a frame, so execution computes it after the frames.
+static constexpr const char *FRAME_AGGREGATE_TAG_PREFIX = "__frame_aggregate_";
+
+inline string MakeFrameAggregateTag(idx_t index) {
+	return string(FRAME_AGGREGATE_TAG_PREFIX) + to_string(index) + "__";
+}
+
+inline bool TryParseFrameAggregateTag(const string &alias, idx_t &index) {
+	string payload;
+	if (!ExtractDecideTagPayload(alias, FRAME_AGGREGATE_TAG_PREFIX, payload) || payload.empty() ||
+	    payload.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	index = static_cast<idx_t>(std::stoull(payload));
+	return true;
+}
+
 //! Tag prefix for ABS envelope constraint linking.
 //! Format: "__abs_ub_pos_<aux_idx>__" on C1 (aux >= inner)
 //!         "__abs_ub_neg_<aux_idx>__" on C2 (aux >= -inner)

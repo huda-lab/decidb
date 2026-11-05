@@ -264,14 +264,22 @@ struct DecideObjective {
 //!              holds one, a range's window reads something; NULL elsewhere (BOOLEAN; `value`
 //!              is null): what a reducer's NULL test reads for a frame over decisions in its
 //!              argument (DecideCanonicalizer::SkipNullData)
+//! A reducer over data whose argument reads a frame (LogicalDecide::frame_aggregates) is one column of its own, after
+//! every frame's, computed once they are:
+//!   AGGREGATE — `value`, the reducer over the rows its filter keeps, its argument reading frame columns: on each row
+//!              its group's value of `key` (a DOUBLE), each class of `class_key` counted once per signature; NULL on
+//!              a row in no group, and where the group has none to reduce (`count`: 0). `frame` is INVALID_INDEX
 struct DecideFrameColumn {
-	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED };
+	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED, AGGREGATE };
 	Kind kind = Kind::READ;
 	idx_t frame = DConstants::INVALID_INDEX;
 	unique_ptr<Expression> value;
 	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
+	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys (LogicalDecide::FrameAggregate).
+	idx_t key = DConstants::INVALID_INDEX;
+	idx_t class_key = DConstants::INVALID_INDEX;
 };
 
 //! One term of a frame's payload over decisions: `sign * coefficient * decision`, its
