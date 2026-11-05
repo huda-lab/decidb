@@ -901,14 +901,16 @@ static void ValidatePowerExponent(const FunctionExpression &func,
 // True if `expr` contains an aggregate over table columns only (no DECIDE
 // variable anywhere in its argument) — e.g. `AVG(price)`, `MIN(cost)`. Such a
 // value needs the whole row set, so it is a scalar the query must pre-compute,
-// not a per-row coefficient. Recurses so nested forms (`AVG(p) * 2`) are caught.
+// not a per-row coefficient. Recurses so nested forms (`AVG(p) * 2`) are caught,
+// but not into a reducer over decisions: its operand is a scoped expression of
+// its own (deck p. 29), checked where the walk reaches it, so in
+// `2 * sum(x - avg(v) by (h)) by (g)` the `avg` scales no decision.
 static bool ContainsDataOnlyAggregate(ClientContext &context, const ParsedExpression &expr,
                                       const case_insensitive_map_t<idx_t> &variables) {
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
-		if (IsAggregateFunctionName(context, func) &&
-		    !ExpressionContainsDecideVariable(expr, variables)) {
-			return true;
+		if (IsAggregateFunctionName(context, func)) {
+			return !ExpressionContainsDecideVariable(expr, variables);
 		}
 	}
 	bool found = false;

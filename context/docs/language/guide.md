@@ -478,7 +478,9 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   nested reducer (*"DECIDE: abs over a reducer inside another reducer is not supported yet"*, *"... squares or
   multiplies decisions inside nested reducers ..."*). A reducer over data alone scaling a decision is a coefficient
   the rule of §5 refuses with its remedy (*"An aggregate over table columns ... cannot multiply a decision
-  variable"*).
+  variable"*). A factor on a reducer over decisions scales that reducer, not a reducer over data in its operand,
+  which is a term of the operand's own scope: `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as `sum(2 * x - 2 *
+  avg(t.v) by (t.h)) by (t.g)` is.
 
 Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, the deck's example 9 as written among them, a grid of
 nests at depth 2 and 3, the bounds through a nest), `test_scope_objective.py` (the objective).

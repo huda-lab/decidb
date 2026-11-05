@@ -213,6 +213,56 @@ def test_a_data_reducer_inside_a_nest(decidb_cli, scope_solver, nest):
     assert model.judge(answer(decidb_cli, sql), clauses, MAXIMIZE_X) == pytest.approx(expected.objective, abs=1e-4)
 
 
+FACTOR_COLUMNS = ("id", "g", "h", "v", "w")
+FACTOR_ROWS = ((1, "a", "u", 2, 1), (2, "a", "v", 3, 2), (3, "b", "u", 5, 3))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause_sql, body, optimum",
+    [
+        pytest.param(
+            "2 * sum(x - avg(t.v) by (t.h)) by (t.g) <= 8",
+            le(2 * reduce("sum", X - reduce("avg", Col("v"), by=("h",)), by=("g",)), 8),
+            18,
+            id="constant",
+        ),
+        pytest.param(
+            "t.w * sum(x - avg(t.v) by (t.h)) by (t.g) <= 8",
+            le(Col("w") * reduce("sum", X - reduce("avg", Col("v"), by=("h",)), by=("g",)), 8),
+            16,
+            id="row-varying",
+        ),
+        pytest.param(
+            "per t.g: sum(3 * max(x - avg(t.v) by (t.h)) by (t.h)) by (t.g) <= 9",
+            le(reduce("sum", 3 * reduce("max", X - reduce("avg", Col("v"), by=("h",)), by=("h",)), by=("g",)), 9),
+            16,
+            id="inside-the-nest",
+        ),
+    ],
+)
+def test_a_factor_on_a_nest_reading_a_data_reducer(decidb_cli, scope_solver, clause_sql, body, optimum):
+    """A factor on a reducer over decisions scales the reducer, not the reducer over data
+    inside its operand: that one is a term of the operand's own scope (deck p. 29), so
+    `2 * sum(x - avg(t.v) by (t.h)) by (t.g)` is linear, as its distributed spelling is. The
+    optimum is worked by hand: group a's sum is x1 + x2 - 5 and group b's x3 - 5."""
+    sql = f"""
+        SELECT id, x {table('t', FACTOR_COLUMNS, FACTOR_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= 10 AND {clause_sql}
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    per = ("g",) if clause_sql.startswith("per ") else PER_ROW
+    clauses = [clause(le(X, 10)), clause(body, per=per)]
+    model = AnrModel(table_rows(FACTOR_COLUMNS, FACTOR_ROWS), [Decision("x")])
+    expected = model.solve(scope_solver, clauses, MAXIMIZE_X)
+    result = decidb_cli.execute_raw(sql)
+    assert_no_internal_leak(result, clause_sql)
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert model.judge(answer(decidb_cli, sql), clauses, MAXIMIZE_X) == pytest.approx(expected.objective, abs=1e-6)
+    assert expected.objective == optimum
+
+
 #: A NULL `h` puts row 1 in no group of it (D5); `q` keeps no row a `when t.v > 4` reads.
 NULL_COLUMNS = ("id", "g", "h", "v")
 NULL_ROWS = ((1, "a", None, 3), (2, "a", "q", 4), (3, "b", "p", 5), (4, "b", "q", None))
