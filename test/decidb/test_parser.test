@@ -25,6 +25,12 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) MAXIMIZE SUM(x*l_quantity) LIMIT 1
 ----
 Parser Error: DECIDE requires a SUCH THAT clause
 
+# A missing comma between declarations: the query has its SUCH THAT
+statement error
+SELECT l_quantity FROM lineitem DECIDE x(INT) y(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+----
+Parser Error: syntax error at or near "y"
+
 # No DECIDE variable
 statement error
 SELECT l_quantity FROM lineitem DECIDE SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;

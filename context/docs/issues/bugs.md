@@ -2,12 +2,6 @@
 
 ## Open
 
-- **BUG-44 — A missing comma between declarations is reported as a missing `SUCH THAT`.** `DECIDE x(INT) y(INT) FROM t
-  SUCH THAT ...` fails with `Parser Error: DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one
-  constraint`, though the query has that clause, and the caret points at the declaration rather than the second
-  variable. With `x(INT), y(INT)` the query runs. The message comes from `select.y`. The paper's Figure 1 prints its
-  declarations without the comma, so a reader copying it hits this message. Repro: `SELECT id, x, y DECIDE
-  x(INT) y(INT) FROM t SUCH THAT x <= 5 AND y <= 5 MAXIMIZE SUM(x + y)`. Found 2026-11-02.
 - **BUG-45 — A data-derived bound multiplied by a decision is repaired as if it were a literal.** `DIAGNOSE` should relax
   a user's literal before a bound derived from data. It does so for `x <= cap`, but `x <= cap * o` is repaired ahead of
   the literal, whichever clause is written first. Canonicalization moves `cap * o` to the left side, which leaves a

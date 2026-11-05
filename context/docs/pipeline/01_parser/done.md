@@ -32,6 +32,14 @@ second `DECIDE` arriving through `decide_body` reports *"DECIDE appears twice;
 declare the variables either before FROM or with SUCH THAT, not both"* instead of
 a generic syntax error.
 
+A declaration with no `SUCH THAT` is refused by the transformer
+(`DECIDE_NO_CONSTRAINTS_MESSAGE`), not by a grammar action: Bison reduces by default, so
+an action runs before the parser reads the next token, and an error raised there would
+hide a syntax error at that token. `DECIDE x(INT) y(INT) FROM t SUCH THAT ...` therefore
+reports `syntax error at or near "y"`. Only an objective where the constraints belong is
+refused in the grammar, by `decide_tail`'s `MAXIMIZE` and `MINIMIZE` alternatives, since
+without them it would be a syntax error at the word the message can explain.
+
 ### Variable declarations
 
 `typed_decide_variable` accepts a name with its type, alone or behind a `per` scope;

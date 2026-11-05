@@ -104,6 +104,10 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
         // DeciDB's decide
         if (stmt.decideClause) {
             auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
+			if (!decide_clause.constraints) {
+				throw ParserException::SyntaxError(*RootTransformer().parsed_query, DECIDE_NO_CONSTRAINTS_MESSAGE,
+				                                   NumericCast<idx_t>(decide_clause.location));
+			}
             TransformExpressionList(*decide_clause.variables, result.decide_variables);
             result.decide_constraints = TransformExpression(decide_clause.constraints);
             if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {

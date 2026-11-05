@@ -508,6 +508,32 @@ doNegateFloat(PGValue *v)
 }
 
 /*
+ * DeciDB: a declaration with no SUCH THAT: a clause with no constraints, which the
+ * transformer refuses. Bison reduces by default, so an action here runs before the
+ * parser reads the token after the declaration; an error raised here would hide a
+ * syntax error there (DECIDE x(INT) y(INT) FROM t SUCH THAT ...) behind a claim
+ * that the query has no SUCH THAT.
+ */
+static PGNode *
+makeDecideWithoutBody(int location)
+{
+	PGDecideClause *clause = makeNode(PGDecideClause);
+
+	clause->location = location;
+	return (PGNode *) clause;
+}
+
+/* DeciDB: an objective where the tail's constraints belong. */
+static void
+decideRefuseNoConstraints(int location, core_yyscan_t yyscanner)
+{
+	ereport(ERROR,
+			(errcode(PG_ERRCODE_SYNTAX_ERROR),
+			 errmsg("%s", DECIDE_NO_CONSTRAINTS_MESSAGE),
+			 parser_errposition(location)));
+}
+
+/*
  * DeciDB: combine the two DECIDE slots into the single PGDecideClause the rest
  * of the system consumes. The declaration may sit before FROM (the paper's
  * order) or inline in the body block (the original order), but not both, and
@@ -525,13 +551,7 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 	if (decl == NULL && body == NULL)
 		return NULL;
 
-	if (body == NULL)
-		ereport(ERROR,
-				(errcode(PG_ERRCODE_SYNTAX_ERROR),
-				 errmsg("DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"),
-				 parser_errposition(decl_location)));
-
-	clause = (PGDecideClause *) body;
+	clause = (PGDecideClause *) (body ? body : makeDecideWithoutBody(decl_location));
 
 	if (decl == NULL)
 	{
@@ -544,7 +564,7 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 	}
 
 	clause->variables = decl;
-	return body;
+	return (PGNode *) clause;
 }
 
 /*

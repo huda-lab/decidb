@@ -207,6 +207,8 @@ static void insertSelectOptions(PGSelectStmt *stmt,
 static PGNode *makeSetOp(PGSetOperation op, bool all, PGNode *larg, PGNode *rarg);
 static PGNode *doNegate(PGNode *n, int location);
 static void doNegateFloat(PGValue *v);
+static PGNode *makeDecideWithoutBody(int location);
+static void decideRefuseNoConstraints(int location, core_yyscan_t yyscanner);
 static PGNode *makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 								int body_location, core_yyscan_t yyscanner);
 static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,

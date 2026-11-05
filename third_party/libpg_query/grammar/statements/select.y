@@ -452,7 +452,18 @@ decide_objective_item:
  * NULL; whoever has the declaration attaches it.
  */
 decide_tail:
-			SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
+			/* An objective with no constraints in front of it. */
+			MAXIMIZE
+				{
+					decideRefuseNoConstraints(@1, yyscanner);
+					$$ = NULL;
+				}
+			| MINIMIZE
+				{
+					decideRefuseNoConstraints(@1, yyscanner);
+					$$ = NULL;
+				}
+			| SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
@@ -494,7 +505,8 @@ decide_tail:
 		;
 
 /* SUCH is not in this rule's follow set, so the empty alternative adds no
- * shift/reduce conflict; decide_clause turns the NULL into a real error.
+ * shift/reduce conflict. A declaration with no tail is refused once the whole
+ * query has parsed (see makeDecideClause).
  */
 opt_decide_tail:
 			decide_tail								{ $$ = $1; }
@@ -511,13 +523,8 @@ decide_clause:
                                 (errcode(PG_ERRCODE_SYNTAX_ERROR),
                                  errmsg("DECIDE appears twice; declare the variables either before FROM or with SUCH THAT, not both"),
                                  parser_errposition(@1)));
-                    if ($3 == NULL)
-                        ereport(ERROR,
-                                (errcode(PG_ERRCODE_SYNTAX_ERROR),
-                                 errmsg("DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"),
-                                 parser_errposition(@1)));
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
-                    n = (PGDecideClause *) $3;
+                    n = (PGDecideClause *) ($3 ? $3 : makeDecideWithoutBody(@1));
                     n->variables = $2;
                     $$ = (PGNode *)n;
                 }

@@ -14,6 +14,8 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A parenthesized key | parse | `write per a, b: without parentheses; parentheses are only for per ()` |
 | An expression in a `per` key | parse | `a per key lists columns or relations; put expressions in by (...)` |
 | A declaration with no type | parse | `DECIDE variable "x" needs a type; write x(INT), x(BOOL) or x(REAL)` |
+| A declaration with no `SUCH THAT` | parse | `DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint` |
+| A declaration right after another, with no comma | parse | syntax error at the second declaration |
 | A comma between constraints | parse | `comma-separated SUCH THAT constraints are not supported; use AND between constraints` |
 | `by` after anything but a function call (a column, literal, `CASE`, `CAST`, `::`, `COALESCE`, parentheses, …), or a scope inside such a form | parse | syntax error |
 | A removed spelling | parse (`D.x`: bind) | names the new spelling (§3) |

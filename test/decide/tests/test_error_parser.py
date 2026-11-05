@@ -19,6 +19,37 @@ class TestParserErrors:
                 DECIDE x(INT) MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"DECIDE requires a SUCH THAT clause")
 
+    def test_objective_without_such_that_minimize(self, decidb_cli):
+        """MINIMIZE where the constraints belong."""
+        decidb_cli.assert_error(
+            """
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT) MINIMIZE SUM(x*l_quantity) LIMIT 1
+            """,
+            match=r"DECIDE requires a SUCH THAT clause",
+        )
+
+    def test_body_declaration_with_no_tail(self, decidb_cli):
+        """A declaration after FROM with nothing of the tail."""
+        decidb_cli.assert_error(
+            """
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT) LIMIT 1
+            """,
+            match=r"DECIDE requires a SUCH THAT clause",
+        )
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            pytest.param("SELECT id DECIDE x(INT) y(INT) FROM t SUCH THAT x <= 5 MAXIMIZE SUM(x)", id="before_from"),
+            pytest.param("SELECT id FROM t DECIDE x(INT) y(INT) SUCH THAT x <= 5 MAXIMIZE SUM(x)", id="after_from"),
+        ],
+    )
+    def test_missing_comma_is_a_syntax_error_at_the_second_declaration(self, decidb_cli, query):
+        """The query has its SUCH THAT, so nothing may claim otherwise: the parser reports the token it stopped at."""
+        decidb_cli.assert_error(query, match=r'syntax error at or near "y"')
+
     def test_missing_decide_variable(self, decidb_cli):
         """DECIDE without a variable name."""
         decidb_cli.assert_error("""

@@ -1284,7 +1284,10 @@ typedef struct PGDecideClause {
     int tail_start;         /* the text from SUCH THAT through the objective */
     int tail_end;
     PGList *spans;          /* PGDecideSpan of every DECIDE construct parsed so far in the query */
+    int location;           /* of the DECIDE, for a clause with no constraints */
 } PGDecideClause;
+
+#define DECIDE_NO_CONSTRAINTS_MESSAGE "DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"
 
 /*
  * DeciDB: the scope written in front of a constraint, an objective, a declared
