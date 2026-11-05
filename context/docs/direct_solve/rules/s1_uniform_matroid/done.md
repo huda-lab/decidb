@@ -1,8 +1,8 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 5,194 passed; C++
-`build/release/test/unittest "[decidb]"` 2,869 assertions in 69 cases.
+Verified on 2026-11-05 on top of `5b14e8697b` with objective `when`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off
+make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each
+5,962 passed; C++ `build/release/test/unittest "[decidb]"` 3,045 assertions in 78 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`; its scope projection and bound validation are the shared
 fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [definition.md](definition.md).
@@ -39,8 +39,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 - **Scope:** global, optionally with a deterministic source-only `when` in front of the clause, inside the sum, or
   both (the sum then counts the rows both keep). All count clauses must share identical membership. Rows the sum's own `when` leaves out are outside the count but still obey
   per-row fixed values. A `when` that keeps no row, or a sum whose own `when` keeps no row, leaves the clause with no
-  instance, as on the solver (D68). A `by`
-  key on the sum, or a `per K:` in front of the clause, makes S1 decline (`todo.md`).
+  instance, as on the solver (D68).
 - **Per-row bounds on `x`:** any comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) against a foldable constant, a numeric
   source column, or a deterministic nonthrowing numeric expression over source columns (`COALESCE`, `TRY_CAST` of a
   column), with an optional source-only `when`. Each row's value is read as the set of {0, 1} it allows. Both allowed
@@ -67,7 +66,11 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing. Each `SUM(...)` may carry a
   constant factor or divisor (`2 * SUM(score*x)`, `SUM(score*x) / 2`, `-1.5 * SUM(...)`, `(1 + 1) * SUM(...)`) that scales
   that part's coefficients: a negative one reverses the part, zero makes every row score 0, and each part keeps its own.
-  The factor must be a finite foldable constant, and a divisor must not be zero.
+  The factor must be a finite foldable constant, and a divisor must not be zero. The objective may have a `when` in
+  front, and each `SUM` one inside (`MAXIMIZE when f: SUM(s*x)`, `MAXIMIZE SUM(when f: s*x)`), each a deterministic
+  source predicate that cannot raise. A row they drop (false or NULL) scores 0 in that part and reads no coefficient
+  there, so a NaN or a value that raises on it does not raise; the row still counts toward the bounds. A `when` that
+  keeps no row leaves every score 0.
 
 It raises an error wherever the solver does: NaN bounds on a row that reads them, NaN or infinite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1`
 or `COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it
@@ -112,15 +115,15 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
 `REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with
 different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that are infinite, NaN or above 2^53
-(not exactly representable); an objective with a `when`, a `per` or a two-level reducer, other reducers (`MIN`, `MAX`,
-`AVG`), `norm`; `DIAGNOSE`.
+(not exactly representable); an objective with a `per` or a two-level reducer, other reducers (`MIN`, `MAX`, `AVG`),
+`norm`; an objective `when` that is volatile or can raise; `DIAGNOSE`.
 
 ## Verified by
 
 | Check | What it covers |
 |---|---|
-| `test_direct_s1_uniform_matroid.py` (578 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `by` and NULL keys, a `when` in front, inside the sum and in both places, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `by`, a `when` in front and inside the sum, their NULL, NaN and infinity errors, a group they read no row of, and every declined reducer), negated count bodies (each comparison and an interval, every scope, a group whose own `when` keeps no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits), constant terms with and without `by` and an own `when` included, pins and per-row bounds on `x` (a generated grid with and without `when`), column pins, no objective (every count bound shape, with and without `by` and `when`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, and tied scores. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (an infeasible `byR` bound, an equality bound that varies within a group, a NaN fixed value, NaN in a group-aggregate bound); empty sets on both paths are in `test_empty_groups.py`. Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum Grouped cases run on both paths, with NULL keys and per-class differential cases. |
-| `test_direct_rule_conformance.py` (118 tests, shared with A1) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, an empty source, constant bounds that contradict the built-in domain, and near misses, each of which must decline under `require`, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
+| `test_direct_s1_uniform_matroid.py` (642 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `by` and NULL keys, a `when` in front, inside the sum and in both places, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `by`, a `when` in front and inside the sum, their NULL, NaN and infinity errors, a group they read no row of, and every declined reducer), negated count bodies (each comparison and an interval, every scope, a group whose own `when` keeps no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits), constant terms with and without `by` and an own `when` included, pins and per-row bounds on `x` (a generated grid with and without `when`), column pins, no objective (every count bound shape, with and without `by` and `when`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, objective `when` shapes (in front, inside the sum, in both places, on one part and on every part, a NULL `when`, one that keeps no row, beside a count `when` and a `by` key, over a NULL coefficient, on rows whose coefficient is NaN or raises, and the NaN error on a row it keeps, word for word with the solver's), and tied scores. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (an infeasible `byR` bound, an equality bound that varies within a group, a NaN fixed value, NaN in a group-aggregate bound); empty sets on both paths are in `test_empty_groups.py`. Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum Grouped cases run on both paths, with NULL keys and per-class differential cases. |
+| `test_direct_rule_conformance.py` (50 tests, shared with A1 and R1) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, an empty source, constant bounds that contradict the built-in domain, and near misses, each of which must decline under `require`, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
 | `test_direct_user_facing.py` (75 tests, shared with A1) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer, the full text of every NaN error compared with the solver's, a NULL bound skipped on both paths, unused wide columns pruned, forced-backend and binder-error policy |
 | C++ `[decidb]` | S1 applicability condition, IR, rule driver |
 
@@ -156,6 +159,20 @@ skips. A shape whose solver model is cheap would show a smaller win.
 0.07 s at 100,000 rows, 0.06 against 0.28 s (85 against 325 MiB) at 1,000,000, and 0.16 against 1.23 s (541 to 657 MiB
 against 1.6 GiB) at 5,000,000.
 
+**With an objective `when`** (`SUM(pick) <= 0.1 * COUNT(*)` over TPC-H `partsupp`, `MAXIMIZE when ps_supplycost < 500:
+SUM(ps_availqty * pick)` and the same `when` inside the sum), measured 2026-11-05 on 800,000 rows with
+`benchmark/decide/direct_solve/run.py` (a fresh process per run, 3 runs each, median, every run's objective within 1e-6
+of direct's; none timed out). The plain query on the same rows is the line under it.
+
+| Shape | Direct | Direct, 1 thread | Gurobi | Speedup | Direct peak | Gurobi peak |
+|---|---:|---:|---:|---:|---:|---:|
+| `when` in front | 0.214 s | 0.215 s | 0.616 s | 2.9x | 199 MiB | 452 MiB |
+| `when` inside the sum | 0.219 s | 0.214 s | 0.645 s | 2.9x | 199 MiB | 453 MiB |
+| no `when` | 0.206 s | 0.206 s | 0.947 s | 4.6x | 177 MiB | 465 MiB |
+
+The `when` adds about 5% to direct. The speedup is smaller because Gurobi's own time falls with the `when`, which drops
+about half the rows' terms here. At 400,000 rows the `when` shapes are 3.5x.
+
 **Weak spots**
 
 | Case | Result |
@@ -181,3 +198,6 @@ $P --widths 0 --output-kinds aggregate --modes direct gurobi --scopes grouped --
 
 Add `--output file.csv` to keep the raw rows. The runner pins `require` for direct and `off` for the solver, so a run never
 silently uses the other path. The wide database needs about 3 GiB of disk.
+
+The objective `when` table: put the two queries above in `benchmark/decide/direct_solve/queries/`, then run
+`python3 benchmark/decide/direct_solve/run.py --sf 0.5 1 --modes direct direct_1t gurobi --queries s1_global <their names>`.

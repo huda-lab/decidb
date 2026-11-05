@@ -79,6 +79,9 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x)<=2 AND x>1.5", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x)<=2 AND x>2", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x)>9007199254740992", "MAXIMIZE SUM(p*x)"),
+        # An objective `when` that is not a source predicate: on the objective and on its sum.
+        ("x(BOOL)", "SUM(x)<=2", "MAXIMIZE when txid_current() >= 0: SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=2", "MAXIMIZE SUM(when txid_current() >= 0: p*x)"),
     ),
     # A query that looks like a near miss and applies: a right-hand aggregate is a window column of the source (H-19), so
     # S1 reads it as a source-valued bound. The conformance test asserts that `require` applies and that `auto`, `off`
@@ -204,6 +207,9 @@ R1 = RuleFixture(
         ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(p*x) - SUM(POWER(x, 2))"),
         # Two decisions in one budget apply; a per-row constraint that reads both links them.
         ("x(REAL), y(REAL)", "x <= cap AND y <= cap AND x + y <= 4 AND SUM(w*x + w*y) <= 5", "MAXIMIZE SUM(p*x + p*y)"),
+        # An objective `when` that is not a source predicate: on the objective and on its sum.
+        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE when txid_current() >= 0: SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(when txid_current() >= 0: p*x)"),
     ),
     # Forms that look like near misses and apply: a minimum, an exact fill, and one sum compared twice (a range), two
     # decisions in one budget (the pieces of a benefit), and a budget read from the data (a column of the source, and

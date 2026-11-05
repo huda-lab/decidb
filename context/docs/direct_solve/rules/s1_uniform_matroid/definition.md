@@ -132,6 +132,10 @@ count.
 Stable ordering by decision identity chooses one deterministic answer when scores tie. Other tied selections may be
 equally optimal.
 
+The argument takes any finite scores, 0 included. A row an objective `when` drops (false or NULL) has no term in that
+part of the objective, on the solver as well: its score there is 0, and the row is ranked with that score. A row whose
+score is 0 neither gains nor loses, so it is selected only when a lower bound needs it, at no cost to the objective.
+
 ## Eligibility conditions
 
 > • Every free decision is Boolean and contributes exactly 1 to its count.
@@ -149,5 +153,8 @@ equally optimal.
 > • A group with L > U produces DECIDE's infeasible result.
 >
 > • Rows a `when` drops are in no group and still obey their fixed values; a NULL `by` key is in no group (D5).
+>
+> • An objective `when`, in front of the objective or inside a sum, is a predicate of the source that cannot raise. A
+> row it drops scores 0 in that part and reads no coefficient there; it still counts toward the bounds.
 >
 > • Empty input, ties, Boolean types, decision identity, and output mapping preserve DECIDE semantics.

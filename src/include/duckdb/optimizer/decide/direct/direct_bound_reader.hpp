@@ -159,4 +159,9 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
                           DirectLinearPart &out);
 
+//! The rows an objective part reads: those the objective's `when` and the part's own both keep, over the source, or
+//! null for every row. A row they drop (a false or NULL `when`) has no coefficient in the part, which a rule reads as
+//! 0. False when a `when` is not a predicate of the source that cannot raise.
+bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept);
+
 } // namespace duckdb

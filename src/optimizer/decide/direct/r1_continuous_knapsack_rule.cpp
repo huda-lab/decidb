@@ -78,6 +78,8 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<DataLimit> data_limits;
 	//! The objective's parts, each a signed, scaled sum of linear terms. None for no objective.
 	vector<DirectLinearPart> objective;
+	//! The rows each part reads (DirectObjectivePartKept), null for every row: any other row's value in it is 0.
+	vector<unique_ptr<Expression>> objective_kept;
 	//! The objective as a message names it: an item's value, its parts' values summed and scaled, past a DOUBLE names
 	//! it, as the solver path names the coefficient it merges.
 	string objective_written;
@@ -296,20 +298,19 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 
 //! The objective: signed, scaled `SUM(v*x)` parts, or none. Each coefficient must be a value of the source row.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	if (ir.objective.scope.when) {
-		return false;
-	}
 	for (auto &part : ir.objective.parts) {
-		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
-		    part.qualifier != DConstants::INVALID_INDEX || !part.by.empty() ||
-		    !OnlyLinearTerms(part.terms, ir.decisions.size())) {
+		if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
+		    !part.by.empty() || !OnlyLinearTerms(part.terms, ir.decisions.size())) {
 			return false;
 		}
 		DirectLinearPart read;
-		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read)) {
+		unique_ptr<Expression> kept;
+		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
+		    !DirectObjectivePartKept(ir, part, kept)) {
 			return false;
 		}
 		condition.objective.push_back(std::move(read));
+		condition.objective_kept.push_back(std::move(kept));
 	}
 	condition.objective_written = ir.objective.written;
 	return true;
@@ -992,9 +993,15 @@ private:
 			                   condition.scoped && !weights.empty() ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
-				if (!values.empty()) {
-					added.emplace_back(Dec("o" + std::to_string(p), k), calc.Wrap(SumOf(values)));
+				if (values.empty()) {
+					continue;
 				}
+				auto value = calc.Wrap(SumOf(values));
+				// A row the part drops reads no value, so nothing in it can raise, and its value in the part is 0.
+				if (auto &kept = condition.objective_kept[p]) {
+					value = calc.If(calc.Wrap(DirectActiveWhen(calc, OverState(*kept).get())), value, Zero());
+				}
+				added.emplace_back(Dec("o" + std::to_string(p), k), value);
 			}
 		}
 		auto p1 = Project(added);

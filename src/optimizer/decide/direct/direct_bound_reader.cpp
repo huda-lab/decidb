@@ -10,6 +10,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 
 namespace duckdb {
 
@@ -220,6 +221,21 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 			}
 		}
 		out.names.push_back(DirectNamesOf(ir, like, clause));
+	}
+	return true;
+}
+
+bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept) {
+	for (auto when : {ir.objective.scope.when.get(), part.filter.get()}) {
+		if (!when) {
+			continue;
+		}
+		if (!DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
+			return false;
+		}
+		kept =
+		    kept ? make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(kept), when->Copy())
+		         : when->Copy();
 	}
 	return true;
 }

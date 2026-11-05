@@ -117,7 +117,16 @@ TIES = [
     )
 ]
 
-DATASETS = {"main": MAIN, "ties": TIES}
+# `cap2` is NaN on the rows `flag` leaves out.
+NAN_WHERE_DROPPED = [
+    _row(0, "a", 9.0, 2, True, cap2=3.0),
+    _row(1, "a", 5.5, 2, False, cap2=math.nan),
+    _row(2, "b", -1.0, 2, True, cap2=-2.0),
+    _row(3, "b", 8.0, 2, False, cap2=math.nan),
+    _row(4, "b", 4.0, 2, True, cap2=7.0),
+]
+
+DATASETS = {"main": MAIN, "ties": TIES, "nan": NAN_WHERE_DROPPED}
 
 # Objective name -> (SQL, per-row coefficient of x). The oracle evaluates the Python function.
 OBJECTIVES = {
@@ -144,8 +153,35 @@ OBJECTIVES = {
         "SUM(score * ((id + 1) // id) * x)",
         lambda r: 0.0 if r["id"] == 0 else r["score"] * ((r["id"] + 1) // r["id"]),
     ),
+    # A `when` drops a row's term where it is false or NULL (`fixed_value` holds both): the row's coefficient is 0.
+    "when_front": ("when fixed_value: SUM(score * x)", lambda r: r["score"] if r["fixed_value"] else 0.0),
+    "when_inside": ("SUM(when fixed_value: score * x)", lambda r: r["score"] if r["fixed_value"] else 0.0),
+    "when_front_and_inside": (
+        "when id > 2: SUM(when flag: score * x)",
+        lambda r: r["score"] if r["flag"] and r["id"] > 2 else 0.0,
+    ),
+    "when_on_one_part": (
+        "SUM(when flag: score * x) - SUM(cap * x)",
+        lambda r: (r["score"] if r["flag"] else 0.0) - r["cap"],
+    ),
+    "when_on_every_part": (
+        "when flag: (SUM(score * x) - SUM(cap * x))",
+        lambda r: r["score"] - r["cap"] if r["flag"] else 0.0,
+    ),
+    "when_keeps_no_row": ("when id < 0: SUM(score * x)", lambda r: 0.0),
+    # The cast raises on every row below 5, which the `when` drops.
+    "when_drops_a_row_whose_coefficient_raises": (
+        "when id >= 5: SUM(CAST(id - 5 AS UTINYINT) * x)",
+        lambda r: float(r["id"] - 5) if r["id"] >= 5 else 0.0,
+    ),
+    "when_over_a_null_coefficient": (
+        "SUM(when flag: nhi * x)",
+        lambda r: r["nhi"] if r["flag"] and r["nhi"] is not None else 0.0,
+    ),
+    # Runs on the `nan` rows alone: `cap2` is NaN on the rows the `when` drops.
+    "when_drops_a_nan_coefficient": ("when flag: SUM(cap2 * x)", lambda r: r["cap2"] if r["flag"] else 0.0),
 }
-NEW_OBJECTIVES = [name for name in OBJECTIVES if name not in ("score", "score_plus_id")]
+NEW_OBJECTIVES = [name for name in OBJECTIVES if name not in ("score", "score_plus_id", "when_drops_a_nan_coefficient")]
 
 # A count bound that is a column or an expression: SQL text -> its value on a row, given the number of
 # rows `n` the bound's clause covers in the row's group. The oracle evaluates the Python function.
@@ -511,6 +547,12 @@ _MAXIMIZE_ONLY = (
     "nullable_in_a_sum_of_columns",
     "nullable_like_terms",
     "division_by_zero",
+    "when_front_and_inside",
+    "when_on_one_part",
+    "when_on_every_part",
+    "when_keeps_no_row",
+    "when_drops_a_row_whose_coefficient_raises",
+    "when_over_a_null_coefficient",
 )
 for _name in NEW_OBJECTIVES:
     for _sense in ("MAXIMIZE",) if _name in _MAXIMIZE_ONLY else ("MAXIMIZE", "MINIMIZE"):
@@ -519,6 +561,20 @@ for _name in NEW_OBJECTIVES:
             "objective": _name,
             "sense": _sense,
         }
+S1_CASES["objective_when_drops_a_nan_coefficient"] = {
+    "data": "nan",
+    "bounds": [(">=", 1), ("<=", 3)],
+    "objective": "when_drops_a_nan_coefficient",
+}
+# The plan reads the `when` above the scope projection: the group key's.
+S1_CASES["objective_when_inside_per_interval"] = {
+    "bounds": [(">=", 1), ("<=", 2)],
+    "per": True,
+    "objective": "when_inside",
+}
+# A `when` on the count and another on the objective are independent. A row outside the count takes its own score's
+# best, which is 0 and not chosen where the objective's `when` drops it too.
+S1_CASES["objective_when_beside_a_count_when"] = {"bounds": [("<=", 1)], "when": "top", "objective": "when_inside"}
 
 
 _REDUCER_CALL = re.compile(r"\b(COUNT|MIN|MAX|SUM|AVG)\([^()]*\)")
@@ -862,6 +918,8 @@ CONTEXT_CASES = [
     ("no_objective_ge_whole_global", "joined_source"),
     ("no_objective_source_lower_local_when_per", "recombined_filters"),
     ("no_objective_count_star_lower_top_when_per", "parent_join"),
+    ("objective_when_front_max", "joined_source"),
+    ("objective_when_inside_per_interval", "wide_source"),
 ]
 
 
@@ -1011,6 +1069,20 @@ def test_s1_column_coefficient_raises_the_solver_error(decidb_cli, rows):
     """A coefficient read from the row (`w*x <= 1`) is checked on every row the clause keeps, with the solver's own
     message: S1 applies and raises it word for word."""
     sql = _problem(rows, "id, score, w", "SUM(x) <= 2 AND w*x <= 1")
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert str(direct_error.value) == str(solver_error.value)
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective", ["when flag: SUM(score*x)", "SUM(when flag: score*x)"], ids=["front", "inside"])
+def test_s1_objective_when_raises_the_solver_error_on_a_row_it_keeps(decidb_cli, objective):
+    sql = _problem("(1, 'NaN'::DOUBLE, TRUE), (2, 5.0, FALSE)", "id, score, flag", "SUM(x) <= 1", objective=objective)
     with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     with pytest.raises(DeciDBCliError) as direct_error:

@@ -89,7 +89,8 @@ bounds, a `<=` budget.
 
 An *item* is one `REAL` decision on one row; a row with several decisions gives several items. An item has a box
 [l, u], where a bound of magnitude 1e20 or more is infinite; a weight w, its coefficient in the budget; and a value v,
-its objective coefficient, negated under `MINIMIZE` and zero with no objective. The budget asks L ≤ Σ w·x ≤ U: `<=`
+its objective coefficient, negated under `MINIMIZE`, zero with no objective and zero in a part whose `when` drops the
+row. The budget asks L ≤ Σ w·x ≤ U: `<=`
 has L = −∞, `>=` has U = +∞, `=` has L = U. At a price λ per unit of budget, an item earns v − λ·w per unit.
 
 An item with w ≠ 0 has:
@@ -218,6 +219,10 @@ objective term keeps the query on the solver. The pieces of a benefit are theref
 the greedy fill matches the solver whether the piece values shrink or grow. The catalogue needs concavity only to
 rebuild one variable from its pieces; R1 never rebuilds, because each decision answers in its own column.
 
+**An objective `when`.** A row a part's `when` drops (false or NULL) has no term in that part, on the solver as well,
+so v is 0 there. The certificate takes any v, so nothing else changes: the item keeps its weight and its place in the
+budget, with t = 0.
+
 **Infeasible.** Every assignment spends inside [S − Σ down, S + Σ up], so when that range misses [L, U], or a box is
 empty, no assignment exists. Infeasibility is tested before boundedness because a problem with no assignment is
 infeasible whatever its open bounds would allow.
@@ -292,5 +297,9 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > reads one L and one U: an upper limit takes the group's MIN, a lower one its MAX, and an equality needs one value in
 > the group. The steps are unchanged, since a group's limits are constants within it. A data value is the number it is;
 > an infinite one is infinite.
+>
+> • **Objective `when`.** A `when` in front of the objective or inside a `SUM` of it, a predicate of the source that
+> cannot raise, drops a row's value in that part: the value is 0 and is not read, so a NaN or a value that raises there
+> does not raise. The row keeps its weight in the budget. A row whose value it drops is not unbounded for that value.
 >
 > • **Errors.** An empty box on any row is infeasible; NULL or NaN values raise as they do on the solver.

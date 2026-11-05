@@ -194,6 +194,10 @@ duckdb::vector<Shape> S1AppliesShapes() {
 	shapes.push_back(S1("fixed values against a constant, a Boolean column and a number column",
 	                    "SUM(x) <= 2 AND x = 1 AND x >= flag AND x <= cap AND x >= -3"));
 	shapes.push_back(S1("a scaled objective part", "SUM(x) <= 2", nullptr, "MINIMIZE 2 * SUM(w*x) / 4"));
+	shapes.push_back(S1("an objective WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
+	shapes.push_back(S1("an objective part with a WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(when flag: w*x)"));
+	shapes.push_back(S1("a WHEN on the objective and on its part", "SUM(x) <= 2", nullptr,
+	                    "MAXIMIZE when flag: SUM(when cap > 1: w*x)"));
 	shapes.push_back(S1("a count bound below zero", "SUM(x) <= -1"));
 	shapes.push_back(S1("a feasibility problem", "SUM(x) <= 2", nullptr, ""));
 	shapes.push_back(S1("an aggregate-local WHEN", "SUM(when flag: x) <= 2 AND SUM(when flag: x) >= 1"));
@@ -255,7 +259,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a per-row clause over another decision", "SUM(x) <= 2 AND x <= 1",
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
 	// CheckCondition: the objective.
-	shapes.push_back(S1("an objective WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
 	shapes.push_back(S1("an objective with a by key", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
 	shapes.push_back(
 	    S1("a sense with no objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts.clear(); }));
@@ -351,8 +354,10 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	    }));
 	// ProveObjective.
 	shapes.push_back(S1("an average objective", "SUM(x) <= 2", nullptr, "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(S1("an objective part with a WHEN", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.objective.parts[0].filter = True(); }));
+	shapes.push_back(S1("an objective WHEN that reads more than the source", "SUM(x) <= 2", nullptr,
+	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
+	shapes.push_back(S1("an objective part WHEN that reads more than the source", "SUM(x) <= 2", nullptr,
+	                    "MAXIMIZE SUM(when txid_current() >= 0: w*x)"));
 	shapes.push_back(S1("a nested objective part", "SUM(x) <= 2",
 	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(
@@ -560,6 +565,11 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	                    "when flag: x = cap AND x >= -3 AND when NOT flag: x <= cap AND SUM(cap*x) <= 5"));
 	shapes.push_back(R1("no objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, ""));
 	shapes.push_back(R1("a minimizing objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MINIMIZE SUM(w*x)"));
+	shapes.push_back(R1("an objective WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
+	shapes.push_back(
+	    R1("an objective part with a WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(when flag: w*x)"));
+	shapes.push_back(R1("a WHEN on the objective and on its part", "x <= cap AND SUM(cap*x) <= 5", nullptr,
+	                    "MAXIMIZE when flag: SUM(when cap > 1: w*x)"));
 	shapes.push_back(R1("an objective of two scaled parts", "x <= cap AND SUM(cap*x) <= 5", nullptr,
 	                    "MAXIMIZE 2 * SUM(w*x) - SUM(f*x) / 4"));
 	shapes.push_back(R1("a budget of two terms", "x <= cap AND SUM(cap*x + w*x) <= 5"));
@@ -722,10 +732,11 @@ duckdb::vector<Shape> R1DeclineShapes() {
 		LeftPart(ir).by[0].grouping =
 		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
 	}));
-	shapes.push_back(R1("an objective WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
+	shapes.push_back(R1("an objective WHEN that reads more than the source", "x <= cap AND SUM(cap*x) <= 5", nullptr,
+	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
+	shapes.push_back(R1("an objective part WHEN that reads more than the source", "x <= cap AND SUM(cap*x) <= 5",
+	                    nullptr, "MAXIMIZE SUM(when txid_current() >= 0: w*x)"));
 	shapes.push_back(R1("an average objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(R1("an objective part with a filter", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.objective.parts[0].filter = True(); }));
 	shapes.push_back(R1("a nested objective part", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(R1("a qualified objective part", "x <= cap AND SUM(cap*x) <= 5",

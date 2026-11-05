@@ -86,6 +86,8 @@ struct Condition final : DirectApplicabilityCondition {
 	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
 	//! names once every share is fine and their sum is not.
 	vector<DirectNumberNames> part_names;
+	//! The rows each reducer reads (DirectObjectivePartKept), null for every row: any other row scores 0 in it.
+	vector<unique_ptr<Expression>> part_kept;
 	string objective_written;
 	//! The `by` key every bound shares: the groups whose rows the count bounds, each its own interval. Empty for one
 	//! group of all the rows the bounds cover. A row with a NULL in a NO_GROUP element is in no group (D5).
@@ -293,9 +295,6 @@ public:
 			condition->bound_factors.push_back(&ir_node);
 		}
 		if (condition->bound_factors.empty()) {
-			return nullptr;
-		}
-		if (ir.objective.scope.when) {
 			return nullptr;
 		}
 		if (ir.objective.parts.empty() && ir.objective.sense != DecideSense::FEASIBILITY) {
@@ -543,8 +542,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t term_count = 0;
 	condition.objective_written = ir.objective.written;
 	for (auto &part : parts) {
-		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
-		    part.qualifier != DConstants::INVALID_INDEX || !part.by.empty()) {
+		if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
+		    !part.by.empty()) {
 			return false;
 		}
 		for (auto &term : part.terms) {
@@ -558,7 +557,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
 		DirectLinearPart read;
-		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read)) {
+		unique_ptr<Expression> kept;
+		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
+		    !DirectObjectivePartKept(ir, part, kept)) {
 			return false;
 		}
 		for (auto &term : read.terms) {
@@ -570,6 +571,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		}
 		// Every term is in `x`, the one decision.
 		condition.part_names.push_back(std::move(read.names[0]));
+		condition.part_kept.push_back(std::move(kept));
 	}
 	return true;
 }
@@ -795,6 +797,11 @@ private:
 			auto coefficient = CopyIntoState(*part.coefficient, scope);
 			auto term = calc.Wrap(
 			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides));
+			if (auto &kept = condition.part_kept[part.part]) {
+				// A row the part drops reads no coefficient, so nothing in it can raise, and scores 0.
+				auto over_state = CopyIntoState(*kept, scope);
+				term = calc.If(calc.Wrap(DirectActiveWhen(calc, over_state.get())), term, calc.Num(0.0));
+			}
 			combined_score = combined_score ? calc.Add(combined_score, term) : term;
 			part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
 		}

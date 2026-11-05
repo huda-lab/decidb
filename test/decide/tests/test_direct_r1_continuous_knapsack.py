@@ -181,6 +181,26 @@ OBJECTIVES = {
     "scaled": Objective("MAXIMIZE 4*SUM(v*amount)/2", True, lambda r: 2.0 * r["v"]),
     "two_parts": Objective("MAXIMIZE SUM(v*amount) - SUM(w*amount)", True, lambda r: r["v"] - r["w"]),
     "min_scaled": Objective("MINIMIZE 2*SUM(v*amount)", False, lambda r: 2.0 * r["v"]),
+    # A `when` drops a row's value where it is false or NULL (the scoped rows' `f`): the row's value is 0.
+    "when_front": Objective("MAXIMIZE when f: SUM(v*amount)", True, lambda r: r["v"] if r["f"] else 0.0),
+    "when_front_min": Objective("MINIMIZE when f: SUM(v*amount)", False, lambda r: r["v"] if r["f"] else 0.0),
+    "when_inside": Objective("MAXIMIZE SUM(when f: v*amount)", True, lambda r: r["v"] if r["f"] else 0.0),
+    "when_front_and_inside": Objective(
+        "MAXIMIZE when f: SUM(when id > 2: v*amount)", True, lambda r: r["v"] if r["f"] and r["id"] > 2 else 0.0
+    ),
+    "when_on_one_part": Objective(
+        "MAXIMIZE SUM(when f: v*amount) - SUM(w*amount)", True, lambda r: (r["v"] if r["f"] else 0.0) - r["w"]
+    ),
+    "when_on_every_part": Objective(
+        "MAXIMIZE when f: (SUM(v*amount) - SUM(w*amount))", True, lambda r: r["v"] - r["w"] if r["f"] else 0.0
+    ),
+    "when_keeps_no_row": Objective("MAXIMIZE when id < 0: SUM(v*amount)", True, lambda r: 0.0),
+    # The cast raises on every row below 3, which the `when` drops.
+    "when_drops_a_row_whose_value_raises": Objective(
+        "MAXIMIZE when id >= 3: SUM(CAST(id - 3 AS UTINYINT)*amount)",
+        True,
+        lambda r: float(r["id"] - 3) if r["id"] >= 3 else 0.0,
+    ),
 }
 
 BUDGETS = {
@@ -367,7 +387,8 @@ add(
 add("worked_example_min", WORKED, "between_constants_and_cap", 14.0, "min")
 
 # Weights of every sign, positive lower bounds, ties between rows, under every objective.
-for _objective in OBJECTIVES:
+# The objective `when` shapes read columns of the scoped rows, and run there (OBJECTIVE_WHEN).
+for _objective in (name for name in OBJECTIVES if not name.startswith("when_")):
     add(f"mixed_binding_{_objective}", MIXED, "row_lower_and_cap", 8.0, _objective)
 add("mixed_not_binding_max", MIXED, "row_lower_and_cap", 1000.0, "max")
 add("mixed_not_binding_min", MIXED, "row_lower_and_cap", 1000.0, "min")
@@ -1104,6 +1125,77 @@ scoped(
     per=("g", "h"),
 )
 
+# An objective `when`. The rows hold true, false and NULL, and rows the plain objective would fill first.
+OBJECTIVE_WHEN = (
+    _srow(1, "a", 4.0, 2.0, 10.0, f=True),
+    _srow(2, "a", 3.0, 3.0, 90.0, f=False),
+    _srow(3, "a", 5.0, 2.0, 40.0, f=None),
+    _srow(4, "b", 4.0, 1.0, 2.0, f=True),
+    _srow(5, "b", 5.0, 1.0, -3.0, f=True),
+    _srow(6, "b", 6.0, 1.0, 7.0, f=None),
+)
+for _objective in (
+    "when_front",
+    "when_inside",
+    "when_front_and_inside",
+    "when_on_one_part",
+    "when_on_every_part",
+    "when_keeps_no_row",
+    "when_drops_a_row_whose_value_raises",
+):
+    scoped(f"objective_{_objective}", OBJECTIVE_WHEN, "SUM(w*amount) <= 6", (-INF, 6.0), objective=_objective)
+# A dropped row's value 0 is free of the budget's price: a minimum cover fills it first, an exact fill takes it past
+# the rows that lose.
+scoped("objective_when_cover", OBJECTIVE_WHEN, "SUM(w*amount) >= 6", (6.0, INF), objective="when_front_min")
+scoped("objective_when_exact_fill", OBJECTIVE_WHEN, "SUM(w*amount) = 6", (6.0, 6.0), objective="when_front")
+# The plan reads the `when` above the scope projection: the group key's, and a budget `when` that differs from it.
+scoped(
+    "objective_when_per_group",
+    OBJECTIVE_WHEN,
+    "SUM(w*amount) by (g) <= 6",
+    (-INF, 6.0),
+    per=("g",),
+    objective="when_inside",
+)
+scoped(
+    "objective_when_beside_a_budget_when",
+    OBJECTIVE_WHEN,
+    "when id > 1: SUM(w*amount) <= 6",
+    (-INF, 6.0),
+    when=lambda r: r["id"] > 1,
+    objective="when_front",
+)
+# Unbounded without the objective's `when`: an uncapped row earns more with every unit, by a weight that frees budget
+# (row 1), and outside the budget (row 3). The `when` drops their values, so each stays at its anchor.
+scoped(
+    "objective_when_drops_an_uncapped_row_in_the_budget",
+    (_srow(1, "a", 1e30, -1.0, 5.0, f=False), _srow(2, "a", 4.0, 1.0, 3.0)),
+    "SUM(w*amount) <= 2",
+    (-INF, 2.0),
+    objective="when_front",
+)
+scoped(
+    "objective_when_drops_an_uncapped_row_outside_the_budget",
+    (_srow(1, "a", 4.0, 1.0, 3.0), _srow(2, "a", 4.0, 2.0, 5.0), _srow(3, "a", 1e30, 1.0, 5.0, f=False)),
+    "when id < 3: SUM(w*amount) <= 2",
+    (-INF, 2.0),
+    when=lambda r: r["id"] < 3,
+    objective="when_inside",
+)
+# NaN and infinite values on the rows the `when` drops read nothing.
+scoped(
+    "objective_when_drops_a_nan_and_an_infinite_value",
+    (
+        _srow(1, "a", 4.0, 1.0, 3.0),
+        _srow(2, "a", 4.0, 1.0, math.nan, f=False),
+        _srow(3, "a", 4.0, 2.0, 5.0),
+        _srow(4, "a", 4.0, 1.0, INF, f=None),
+    ),
+    "SUM(w*amount) <= 2",
+    (-INF, 2.0),
+    objective="when_front",
+)
+
 
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
@@ -1134,9 +1226,6 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
         ("when f: SUM(w*amount) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
         ("when f: SUM(w*amount) >= 1 AND when id > 4: SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
         ("when f: SUM(w*amount) >= 1 AND SUM(when cap > 3: w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-        # The objective's own `when` is not read.
-        ("SUM(w*amount) by (g) <= 6", "MAXIMIZE when f: SUM(v*amount)"),
-        ("when f: SUM(w*amount) <= 6", "MAXIMIZE when f: SUM(v*amount)"),
     ],
 )
 def test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver(decidb_cli, budget, objective):
@@ -1771,6 +1860,29 @@ R1_ERROR_CASES.update(
         ),
     }
 )
+
+
+@pytest.mark.error
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective", ["MAXIMIZE when f: SUM(v*amount)", "MAXIMIZE SUM(when f: v*amount)"], ids=["front", "inside"]
+)
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param((_srow(1, "a", 4.0, 1.0, math.nan), _srow(2, "a", 4.0, 1.0, 3.0, f=False)), id="nan_value"),
+        pytest.param((_srow(1, "a", 1e30, -1.0, 5.0), _srow(2, "a", 4.0, 1.0, 3.0, f=False)), id="unbounded"),
+    ],
+)
+def test_r1_objective_when_raises_the_solver_error_on_a_row_it_keeps(decidb_cli, rows, objective):
+    sql = _scoped_sql(rows, "SUM(w*amount) <= 2", objective)
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert str(direct_error.value) == str(solver_error.value)
 
 
 @pytest.mark.error
@@ -2549,6 +2661,8 @@ class PieceCase:
     maximize: bool = True
     #: The decisions the objective names.
     value_on: tuple = None
+    #: The `when` inside the objective's sum, as (SQL, the same test on a row in Python).
+    value_when: tuple = None
 
 
 PIECE_CASES = {}
@@ -2571,7 +2685,8 @@ def _piece_sql(case_):
     total += " by (g)" if case_.per else ""
     lower, upper = case_.limits
     budget = case_.written.format(sum=total, upper=upper, lower=lower)
-    value = "SUM(" + " + ".join(f"v{d}*{decisions[d]}" for d in _on(case_, "value_on")) + ")"
+    kept = f"when {case_.value_when[0]}: " if case_.value_when else ""
+    value = f"SUM({kept}" + " + ".join(f"v{d}*{decisions[d]}" for d in _on(case_, "value_on")) + ")"
     objective = ("MAXIMIZE " if case_.maximize else "MINIMIZE ") + value
     declared = ", ".join(f"{name}(REAL)" for name in decisions)
     selected = ", ".join(["id", *decisions])
@@ -2594,12 +2709,19 @@ def _piece_coefficients(case_, row, field, prefix):
     return [row[f"{prefix}{d}"] if d in chosen else 0.0 for d in range(case_.count)]
 
 
+def _piece_values(case_, row):
+    """The row's value of each decision in the objective; 0 where the objective's `when` drops the row."""
+    if case_.value_when and not case_.value_when[1](row):
+        return [0.0] * case_.count
+    return _piece_coefficients(case_, row, "value_on", "v")
+
+
 def _solve_pieces_with_oracle(oracle_solver, case_):
     oracle_solver.create_model("direct_r1_several_decisions")
     members, linear = {}, {}
     for index, row in enumerate(case_.rows):
         weights = _piece_coefficients(case_, row, "budget_on", "w")
-        values = _piece_coefficients(case_, row, "value_on", "v")
+        values = _piece_values(case_, row)
         for d in range(case_.count):
             name = f"{PIECE_NAMES[d]}_{index}"
             oracle_solver.add_variable(name, VarType.CONTINUOUS, 0.0, min(row[f"cap{d}"], BIG))
@@ -2625,7 +2747,7 @@ def _check_pieces(case_, rows, columns, oracle, mode):
     spend, total = {}, 0.0
     for result, source in zip(rows, case_.rows):
         weights = _piece_coefficients(case_, source, "budget_on", "w")
-        values = _piece_coefficients(case_, source, "value_on", "v")
+        values = _piece_values(case_, source)
         for d in range(case_.count):
             value = result[1 + d]
             assert isinstance(value, float), (mode, source["id"], d, value)
@@ -2785,6 +2907,17 @@ pieces(
     ),
     (-INF, 4.0),
     per=True,
+)
+# An objective `when` drops both of a row's decisions: their items stay in the budget's ranking with the value 0.
+pieces(
+    "two_decisions_objective_when",
+    (
+        _prow(1, "p", (2.0, 1.0, 8.0), (2.0, 1.0, 4.0)),
+        _prow(2, "q", (3.0, 2.0, 10.0), (1.0, 2.0, 2.0)),
+        _prow(3, "p", (2.0, 1.0, 6.0), (4.0, 1.0, 3.0)),
+    ),
+    (-INF, 7.0),
+    value_when=("g = 'p'", lambda r: r["g"] == "p"),
 )
 # The same prices tie across decisions and rows: any split of the tie is optimal.
 pieces(
