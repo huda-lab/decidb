@@ -4694,7 +4694,8 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		spec.need_envelope = link.need_envelope;
 		spec.need_closing = link.need_closing;
 		spec.label = link.label;
-		if (link.frame != DConstants::INVALID_INDEX) {
+		spec.frame = link.frame != DConstants::INVALID_INDEX;
+		if (spec.frame) {
 			EvaluateFrameLink(context, gstate, num_rows, chunk_expr_cache, link, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
 			continue;

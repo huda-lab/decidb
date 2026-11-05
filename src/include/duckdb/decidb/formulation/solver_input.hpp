@@ -493,6 +493,8 @@ struct ReducerValueLinkSpec {
     bool need_closing = false;
     //! The reducer as written, for the rows and columns a diagnosis names.
     string label;
+	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
+	bool frame = false;
 	ReducerValueMembers members;
 	//! Set by InlineReducerValueLinks for one written into its rows and the objective (D89): they read an instance's
 	//! members in place of its column. Its bounds are still derived (a bound flows through it to the helpers among

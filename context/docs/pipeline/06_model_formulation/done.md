@@ -799,7 +799,9 @@ A helper decision costs a column, a definition row and its reads; written where 
 its members' terms stand in each reader instead. An instance of `m` terms read `k` times costs `m·k` nonzeros
 inlined, against `m + 1` for its definition and `k` for its reads, so `InlineReducerValueLinks` (the end of assembly,
 stage 08) inlines a helper where the sum over its instances adds no nonzero (D89): the model only ever loses columns
-and rows. `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row per input row,
+and rows. The `SUM` and `AVG` links of a nest -- one whose outer link is a SUM or AVG, and that outer link -- are
+inlined whatever the count (`flattened`), as the deck writes a nest's sums into the rows that read them (pp. 115,
+119), so a region read by two rows is written into both however many members it has. `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row per input row,
 the windows written into their anchors' rows, where a helper per window doubled both.
 
 Where it may write a helper in is decided in the same pass, from every reader the model has (`PlaceHelpers`): into

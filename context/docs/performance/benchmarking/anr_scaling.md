@@ -48,8 +48,8 @@ it is written into, a group of one member written in), 2026-11-04, `python3 benc
 
 Every workload grows at most linearly. Each range's windows are written into the rows of their anchors (one reader
 each), so the model has one column and one row per input row; a `MAX` over windows of several members keeps its
-helper, and a nest writes its outermost sum into the clause row that bounds it and keeps its `MAX` helpers; an inner
-sum is written into the `MAX` above it only where that adds no nonzero (D89), which at 10^5 rows it does not.
+helper, and a nest writes its sums into the clause row that bounds it and keeps its `MAX` helpers; an inner sum under
+a `MAX` is written into the `MAX` above it only where that adds no nonzero (D89), which at 10^5 rows it does not.
 
 That holds because every width here is fixed. A range whose width grows with the input reads O(n) positions per window,
 so its model grows quadratically: `x <= sum(from first to previous else 0: x) over (t.id) + 1` has 5,049 nonzeros at

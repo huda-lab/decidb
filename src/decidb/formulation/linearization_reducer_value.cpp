@@ -446,6 +446,19 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held) {
 		outer = std::move(expanded);
 	};
 
+	// The SUM and AVG reducers of a nest -- one nested in a SUM or AVG, and one a nested reducer stands in -- are
+	// written where they are read whatever that costs, as the deck draws a nest's model (pp. 115, 119; owner,
+	// 2026-11-05); every other helper, a range frame's among them, only where that adds no nonzero (D89).
+	vector<bool> flattened(links.size(), false);
+	for (idx_t i = 0; i < links.size(); i++) {
+		const idx_t outer = place[i].outer;
+		if (outer == DConstants::INVALID_INDEX || links[i].frame || links[outer].frame || IsExtremum(links[outer])) {
+			continue;
+		}
+		flattened[outer] = true;
+		flattened[i] = !IsExtremum(links[i]);
+	}
+
 	// Inline, innermost first: a link folded into its outer one has had its own inner links folded into it already,
 	// so what it hands on is decisions and kept helpers alone.
 	vector<bool> folded(links.size(), false);
@@ -499,7 +512,7 @@ bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held) {
 			}
 			continue;
 		}
-		if (!InliningAddsNoNonzero(link, reads[i], group_of_instance[i])) {
+		if (!flattened[i] && !InliningAddsNoNonzero(link, reads[i], group_of_instance[i])) {
 			continue;
 		}
 		input.variable_scopes[link.value_var].scope = DecideVarScope::INLINED;

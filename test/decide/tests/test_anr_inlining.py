@@ -17,7 +17,7 @@ import re
 
 import pytest
 
-from ._anr_cases import F1_SUM
+from ._anr_cases import F1_COLUMNS, F1_DATA, F1_SUM
 from ._anr_oracle import (
     FIRST,
     LAST,
@@ -164,6 +164,65 @@ class TestIntoMembers:
         east = frozenset({(0, 1.0), (1, 1.0)})
         west = frozenset({(2, 1.0), (4, 1.0), (5, 1.0)})
         assert _rows(dump) == {("<", 22.5, east), ("<", 48.5, west), ("<", 37.5, west)}
+
+    @pytest.mark.parametrize(
+        "inner, extra, counts, west",
+        [
+            pytest.param(
+                "sum",
+                tuple((tid, "d2", "West", "Air", "c4", True, 0, 45) for tid in (7, 8, 9)),
+                {"num_vars": 9, "num_rows": 3},
+                frozenset((column, 1.0) for column in (2, 4, 5, 6, 7, 8)),
+                id="sum-in-sum",
+            ),
+            pytest.param(
+                "max",
+                tuple((tid, "d2", "West", "Air", f"c{tid - 2}", True, 0, 45) for tid in (7, 8, 9, 10)),
+                {"num_vars": 10 + 2, "num_rows": 3 + 4},
+                None,
+                id="max-in-sum",
+            ),
+        ],
+    )
+    def test_a_nest_of_sums_is_written_in_however_large(
+        self, decidb_cli, scope_solver, tmp_path, inner, extra, counts, west
+    ):
+        """The deck writes a nest's sums into the rows that read them, whatever that costs
+        (pp. 115, 119): F1 with West grown, read by two clause rows. With an inner SUM, c4's
+        five shipments make West a sum of six, written into both West rows: the nine
+        shipments and the three rows, where D89 alone kept West's column. With an inner MAX,
+        four more customers of one shipment each make West six terms -- ship3, c4's MAX and
+        the four shipments -- written into both rows: the ten shipments, c1's and c4's MAX,
+        their four envelope rows and the three clause rows."""
+        data = F1_DATA + extra
+        sql = f"""
+            SELECT tid, ship {table('t', F1_COLUMNS, data)}
+            DECIDE ship(INT)
+            SUCH THAT ship <= 100 AND
+                per t.id: sum(when t.p per t.cid: {inner}(ship) by (t.cid)) by (t.rid)
+                          + 0.10 * sum(t.d) by (t.m) <= t.c
+            MAXIMIZE sum(ship)
+            ORDER BY tid"""
+        dump = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}).dump_model(sql, tmp_path / "nest.dump")
+        assert dump_counts(dump) == counts
+        if west is not None:
+            east = frozenset({(0, 1.0), (1, 1.0)})
+            assert _rows(dump) == {("<", 22.5, east), ("<", 48.5, west), ("<", 37.5, west)}
+        ship = Var("ship")
+        regional = reduce("sum", reduce(inner, ship, by=("cid",)), when=lambda r: r["p"], per=("cid",), by=("rid",))
+        clauses = [
+            clause(le(ship, 100)),
+            clause(le(regional + 0.10 * reduce("sum", Col("d"), by=("m",)), Col("c")), per=("id",)),
+        ]
+        _judged(
+            decidb_cli,
+            scope_solver,
+            sql,
+            table_rows(F1_COLUMNS, data),
+            [Decision("ship")],
+            clauses,
+            Objective(ObjSense.MAXIMIZE, reduce("sum", ship)),
+        )
 
     @BOTH_SOLVERS
     def test_group_sums_into_the_objectives_maximum(self, request, cli_fixture, scope_solver, tmp_path):
