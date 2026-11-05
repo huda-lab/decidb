@@ -385,7 +385,6 @@ TEST_CASE("Direct-solve IR models products and squares, and declines a two-level
 	auto &constraints = products.ir.constraints;
 	REQUIRE(constraints.size() == 2);
 	REQUIRE(constraints[0].lhs[0].terms[0].kind == DecideTermKind::PRODUCT);
-	REQUIRE(constraints[0].degree == 2);
 	REQUIRE(constraints[1].lhs[0].terms[0].kind == DecideTermKind::SQUARE);
 
 	// No rule models `outer(per k: inner(e) by (k))` yet.

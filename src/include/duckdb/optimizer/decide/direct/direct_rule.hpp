@@ -152,7 +152,6 @@ struct DirectIRConstraint {
 	//! instance. Empty for `per ()`.
 	bool per_class = false;
 	vector<DirectKeyElement> classes;
-	idx_t degree = 0;
 
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
 	//! otherwise. Its own `when`, if any, is the returned part's `filter`.

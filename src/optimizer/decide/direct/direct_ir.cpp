@@ -15,7 +15,6 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
@@ -426,7 +425,6 @@ private:
 			D_ASSERT(leaf.type == ExpressionType::COMPARE_IN);
 			auto &membership = leaf.Cast<BoundOperatorExpression>();
 			ir_node.comparison = ExpressionType::COMPARE_IN;
-			ir_node.degree = 1;
 			ir_node.lhs.push_back(ReadRowPart(*membership.children[0]));
 		} else {
 			D_ASSERT(leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON);
@@ -443,7 +441,6 @@ private:
 			}
 			ir_node.rhs = comparison.right->Copy();
 			ReadGroupBound(leaf, ir_node);
-			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
 			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);
 			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.
