@@ -76,7 +76,8 @@ assertions in 82 cases.
   value a projection computes, naming the values it is made of, and is null when they are finite constants;
   `DirectRaiseTooLarge` checks a number computed from values checked before it. Every check that raises is built with
   `DirectRaiseUnless(ok, error)`, `DirectRaiseIf(bad, error)` (both return true or raise), `DirectRaiseMessage` (raises
-  a per-row message where it is not NULL) or `DirectCheckOnKeptRows` (runs a check only where the clause keeps the row).
+  a per-row message where it is not NULL). A check of a value computed only on the rows a `when` keeps needs no mask of
+  its own: the value is NULL on a dropped row, and `DirectCheckNumber` and `DirectValidBoundPredicate` pass a NULL.
   A list of checks is joined by `DirectAllHold`, a `CASE` chain in the order given, so an earlier check guards the later
   ones. `DirectWarnIf` and `DirectBelowNormalRange` build the warning, which is always true (Number-range warning,
   below). A rule raises in the solver's order within a group (scope checks, the bound's NaN, an `=` bound's
@@ -141,7 +142,9 @@ assertions in 82 cases.
   scope projection (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`, and
   `DirectRowBoundMessage` for the same check as a per-row message) and `DirectWindowExtremum` are shared in
   `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a group key, or whose bound comes from
-  the data, needs them.
+  the data, needs them. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
+  projection: its coefficient, right side and ends, each computed only on the rows the clause keeps, and the checks of
+  the coefficient and the right side, which pass on a dropped row because both values are NULL there.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It holds:

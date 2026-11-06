@@ -75,7 +75,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: invalid data-valued bounds and fixed
   values on the rows that read them; invalid objective coefficients (NULL, NaN, infinity); infeasibility. Nothing is
   computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path
-  (`DirectOnKeptRows`, `DirectCheckOnKeptRows`; `test_direct_source_values.py` checks each place a rule masks). Silently answering where the solver refuses is a wrong answer. What
+  (`DirectOnKeptRows`, which makes the value NULL there, so its check passes; `test_direct_source_values.py` checks
+  each place a rule masks). Silently answering where the solver refuses is a wrong answer. What
   the rule does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
   enough), the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
   name, or a refusal over a number only the solver's own model computes. A square `k*(w*x + t)^2` expands to a

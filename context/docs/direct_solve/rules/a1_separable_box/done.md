@@ -100,7 +100,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 One projection per stage, with no sort, no window and no join, and no row held:
 
 1. raw values (every coefficient, bound, mask), each evaluated on the rows its `when` keeps and NULL on the others
-   (`DirectOnKeptRows`), with its checks masked the same way (`DirectCheckOnKeptRows`);
+   (`DirectOnKeptRows`), so its check passes there;
 2. each clause's lower and upper bound on its decision, each decision's objective coefficients `(a, b)`, and the check on
    every raw value;
 3. each decision's box;

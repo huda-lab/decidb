@@ -31,6 +31,11 @@ mark it not proved.
 
 ## Things worth knowing
 
+- A keyed decision (`per k:`) carries its key in `DirectIRKeyedScope::key`, read by the same `ReadKey` as a reducer's
+  `by` key: each element's grouping expression (the collated one), its label and name, and `no_group`. A column element
+  puts a row with a NULL in no class; an element that stands for a relation's columns (`per D:`) takes NULL as a value.
+  The source columns alone cannot tell the two apart, which is why the key, not its slots, is in the IR.
+  `DirectKeyElement::Copy()` copies an element.
 - A per-row comparison carries the solver path's own reading of it (`DecideReadSingletonRow`): `singleton_row`
   when it is a bound on one decision, and `bound`, the interval of values it admits as DuckDB evaluates the comparison
   (D64). `variable_bound` is set when the solver path folds it into its decision's box instead of emitting a model row

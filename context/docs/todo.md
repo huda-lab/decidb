@@ -7,19 +7,13 @@ Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/a2_single_facility_location/definition.md`. Checks: `direct_solve/framework/todo.md` § How to work
 any task.
 
-Each batch finishes completely. Lanes: G2; G3 after G2; G4 after G3.
+Each batch finishes completely. Lanes: G3; G4 after G3.
 
 ## Owner decisions
 
-- [ ] A2-4 Negative data weights on the square — direct_solve/rules/a2_single_facility_location/todo.md § A2-4
-- [ ] A2-7 Whether A2 takes the L0 loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-7
+- [ ] A2-9 Data weights on the absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-9
 
-## G2. Keys and data bounds
-
-- [ ] A2-2 Keyed decision `per K:` — direct_solve/rules/a2_single_facility_location/todo.md § A2-2
-- [ ] A2-3 Bounds read from data — direct_solve/rules/a2_single_facility_location/todo.md § A2-3
-
-## G3. Weights and other losses (after G2)
+## G3. Weights and other losses
 
 - [ ] A2-4 Data weights on the square — direct_solve/rules/a2_single_facility_location/todo.md § A2-4
 - [ ] A2-5 Absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-5
