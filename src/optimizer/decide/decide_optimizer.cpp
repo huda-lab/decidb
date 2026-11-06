@@ -164,12 +164,18 @@ bool decide_rewrite::TryParseNormMarker(const string &alias, string &payload) {
 	return true;
 }
 
-void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expression &to) {
+void decide_rewrite::CopySourceClauseTag(const string &from_alias, Expression &to) {
 	idx_t source_id;
-	auto alias = to.GetAlias();
 	if (TryParseSourceClauseTag(from_alias, source_id)) {
+		auto alias = to.GetAlias();
 		AddDecideTag(alias, MakeSourceClauseTag(source_id));
+		to.SetAlias(std::move(alias));
 	}
+}
+
+void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expression &to) {
+	CopySourceClauseTag(from_alias, to);
+	auto alias = to.GetAlias();
 	idx_t removal_id;
 	if (TryParseRemovalGroupTag(from_alias, removal_id)) {
 		AddDecideTag(alias, MakeRemovalGroupTag(removal_id));

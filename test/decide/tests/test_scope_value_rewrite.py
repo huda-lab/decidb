@@ -1134,6 +1134,28 @@ def test_diagnose_relaxes_one_of_two_clauses_sharing_a_helper(decidb_cli):
     assert_no_internal_leak(result, "DIAGNOSE over a shared value helper")
 
 
+@pytest.mark.diagnose
+def test_a_shared_helper_row_joins_no_removal_group(decidb_cli_gurobi):
+    """Every `<>` clause reads the helper of `SUM(x * x)`, and the first one is written first. The helper's defining
+    row names that clause for a message, but it is shared, so dropping that clause leaves the row in place. Each value
+    of x from 4 to 10 is excluded twice, so no single `<>` drop frees a value, and `x IN (4, 5, 6, 7)` is the one
+    single removal that fixes the query (the best sum then is 3). Were the row in the first clause's removal group,
+    dropping that clause would free the helper and the diagnosis would report it instead (the best sum 7)."""
+    excluded = sorted({v * v - v for v in range(4, 11)})
+    clauses = ["x <> SUM(x * x)", "x IN (4, 5, 6, 7)"]
+    for k in excluded:
+        clauses += [f"x <> SUM(x * x) - {k}", f"x + 1 <> SUM(x * x) - {k - 1}"]
+    sql = f"""
+        SELECT id, x FROM (VALUES (1)) t(id)
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 10 AND {" AND ".join(clauses)}
+        MAXIMIZE SUM(x)"""
+    result = run_diagnose(decidb_cli_gurobi, sql)
+    removal = 'infeasible,"x IN (4, 5, 6, 7)",remove this clause,NULL,NULL,NULL,remove_only,'
+    assert removal in result.stdout, result.stdout
+    assert "infeasible,NULL,NULL,3.0,NULL,NULL,achievable_objective," in result.stdout, result.stdout
+
+
 _DROP_CLAUSES = [
     ("x <> sum(x) - 1", lambda xs: all(x != sum(xs) - 1 for x in xs)),
     ("x <> sum(x)", lambda xs: all(x != sum(xs) for x in xs)),

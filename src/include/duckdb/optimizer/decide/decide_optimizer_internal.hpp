@@ -35,6 +35,10 @@ ObjectiveAggregateType StrToAggType(const string &name);
 //! Recognize the binder's `norm` marker alias and return its payload.
 bool TryParseNormMarker(const string &alias, string &payload);
 
+//! Carry only the source clause's id onto `to`: the clause a message about it quotes, with none of the removal or
+//! repair grouping a full copy brings.
+void CopySourceClauseTag(const string &from_alias, Expression &to);
+
 //! Carry a source clause's provenance tags onto an expression a rewrite emitted
 //! in its place, so diagnostics still name the clause the user typed.
 void CopyClauseProvenanceTags(const string &from_alias, Expression &to);
