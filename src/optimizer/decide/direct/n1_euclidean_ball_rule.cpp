@@ -233,11 +233,15 @@ bool Rule::ProveObjectiveTerm(const DirectIR &ir, ClientContext &context, const 
 
 //! K is one constant on every row with a linear term. A `when`, or a NULL a guard skips, leaves a row with no square,
 //! so a square on some rows must share its part with every linear term.
+//!
+//! The NULL guard of a nullable `t` in `(w*x + t)^2` wraps every coefficient of the term (GuardCoefficients), `w` among
+//! them, so a guarded `w` is how the square's absence on a row shows here. This reads that reach: a guard that spared
+//! `w` would leave the square on every row and this check blind to it.
 static bool SquareCoversEveryLinearTerm(const vector<Part> &parts) {
 	for (auto &square : parts) {
 		bool on_some_rows = square.has_square && square.kept;
 		for (auto &inner : square.square.inner_linear) {
-			on_some_rows = on_some_rows || &DecideUnguarded(*inner.expr) != inner.expr.get();
+			on_some_rows = on_some_rows || DecideIsGuarded(*inner.expr);
 		}
 		for (auto &other : parts) {
 			if (on_some_rows && &other != &square && !other.linear.terms.empty()) {
@@ -335,7 +339,7 @@ public:
 		}
 		from_scope.eligible = state.eligible;
 		from_scope.keys = state.keys;
-		key_types = state.key_types;
+		from_scope.key_types = state.key_types;
 
 		Stage p1(binder.GenerateTableIndex());
 		auto raw = LayoutRawValues(p1, from_scope, state.state_index);
@@ -402,6 +406,8 @@ private:
 		//! Set only for a scoped clause.
 		ColumnBinding eligible;
 		vector<ColumnBinding> keys;
+		//! The types of `keys`.
+		vector<LogicalType> key_types;
 	};
 	//! Columns of P1, per part of the objective.
 	struct RawPart {
@@ -452,7 +458,6 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
-	mutable vector<LogicalType> key_types;
 
 	ExprPtr Double(ColumnBinding binding) const {
 		return calc.Col(LogicalType::DOUBLE, binding);
@@ -476,8 +481,9 @@ private:
 			to.eligible = stage.Add(calc.Out(Boolean(from.eligible)));
 		}
 		for (idx_t i = 0; i < from.keys.size(); i++) {
-			to.keys.push_back(stage.Add(calc.Out(calc.Col(key_types[i], from.keys[i]))));
+			to.keys.push_back(stage.Add(calc.Out(calc.Col(from.key_types[i], from.keys[i]))));
 		}
+		to.key_types = from.key_types;
 		return to;
 	}
 
@@ -485,7 +491,7 @@ private:
 	//! nothing to the group whose key it shares, and the answer does not read what the window returns on it.
 	unique_ptr<Expression> OverGroup(const Carried &carried, unique_ptr<BoundWindowExpression> window) const {
 		for (idx_t i = 0; i < carried.keys.size(); i++) {
-			window->partitions.push_back(calc.Out(calc.Col(key_types[i], carried.keys[i])));
+			window->partitions.push_back(calc.Out(calc.Col(carried.key_types[i], carried.keys[i])));
 		}
 		return std::move(window);
 	}

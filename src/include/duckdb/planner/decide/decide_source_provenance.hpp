@@ -58,6 +58,9 @@ string RenderDecideSource(const Expression &expr, const vector<string> &fragment
 //! is a constant: the guard itself reads a column.
 const Expression &DecideUnguarded(const Expression &expr);
 
+//! Whether `expr` is a NULL guard (NULL_GUARD_TAG), so DecideUnguarded reads through it.
+bool DecideIsGuarded(const Expression &expr);
+
 //! What a message about a clause renders with: the registries above. A column reads as the user wrote it
 //! (`D.depotID`): its bound reference carries that spelling as a source fragment.
 struct DecideSourceNames {

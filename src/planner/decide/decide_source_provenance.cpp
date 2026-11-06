@@ -89,8 +89,12 @@ static RenderContext ContextOf(const DecideSourceNames &names) {
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence = 0);
 
+bool DecideIsGuarded(const Expression &expr) {
+	return HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG);
+}
+
 const Expression &DecideUnguarded(const Expression &expr) {
-	if (!HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
+	if (!DecideIsGuarded(expr)) {
 		return expr;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
