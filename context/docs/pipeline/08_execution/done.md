@@ -35,12 +35,11 @@ rather than for one consumer, because it carries objective terms and composed-MI
 
 Coefficient evaluation that both the constraint and objective paths need is
 factored into shared file-scope helpers rather than duplicated per path:
-`EvaluateBilinearTerms` (bilinear coefficient scan + filter masking, used by
-both `EvaluateConstraints` and `EvaluateObjective`) and `ScaleAvgRows` (the
-AVG-denominator division, used by every AVG-scaled term — linear, bilinear, or
-a quadratic group's inner columns — on both sides). `EvaluatedConstraint::
-BilinearTerm` (`solver_input.hpp`) is the one bilinear-term struct; there is no
-separate objective-side copy.
+`EvaluateProductGroups` (each product group's weight and the coefficients of its forms, scanned once with filter
+masking, used by both `EvaluateConstraints` and `EvaluateObjective`) and `ScaleAvgRows` (the
+AVG-denominator division, used by every AVG-scaled term — a linear term's coefficient or a product group's
+weight — on both sides). `EvaluatedProductGroup` (`solver_input.hpp`) is the one struct for a term of degree 2; the
+constraint and the objective share it.
 
 ---
 
@@ -174,7 +173,7 @@ tightened box.
 
 The pass is a single sweep, not a fixpoint: a bound derived for one variable is
 not fed back to tighten others in the same pass. It skips constraints it cannot
-reason about soundly — any negative coefficient, bilinear or quadratic terms,
+reason about soundly — any negative coefficient, product groups (squares and products),
 MIN/MAX and `<>` indicator rows, and a clause with rows outside its row map, such as one
 under a `when` (whose bound would wrongly cap the excluded rows, since the derived bound
 is shared across all of a variable's rows). A `per K:` clause with no `when` is not
@@ -202,7 +201,7 @@ reducer's own `per` (`qualifier_scope_idx`); plus the RHS expression, the compar
 type, the clause's scope (`DecideClauseScope`: `when`, `per`, `class_key`), its `by` key (`group_key`), and the metadata
 linking it to indicators and diagnosis provenance. The
 objective arrives the same way, with its `when`, the two-level form's key
-(`two_level_key`, an index into the key table), and `squared_terms` and `bilinear_terms` alongside `terms`.
+(`two_level_key`, an index into the key table), and `product_groups` alongside `terms`.
 `ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
 construct is left re-deriving its own.
 
@@ -444,7 +443,7 @@ row stands for (D28, §4a); when its key leaves no class among the kept rows (ev
 NULL), the clause has no instance.
 
 **An absent decision reads like a NULL.** After the terms are read,
-`MarkAbsentDecisionReads` marks each row where a linear, bilinear or square term reads a
+`MarkAbsentDecisionReads` marks each row where a linear term or a product group's form reads a
 decision on its absent entity (§4), and `SkipNullInstances` skips that row's instance as
 it skips one with a NULL coefficient. So `sum(x) by (g) <= 0.5 * sum(x)` gives a NULL-`g`
 row no limit (its `by (g)` helper is absent there) while the total still counts it.
@@ -464,7 +463,7 @@ Term-level filters are carried on individual terms, not on the whole constraint:
 
 1. Each distinct filter expression is evaluated once into a boolean row mask, on the
    clause's kept rows only (`KeptRowsOfEach`).
-2. Linear, bilinear and quadratic terms get coefficient `0` on rows their own
+2. Linear terms and product groups get coefficient `0` (a group, weight `0`) on rows their own
    filter excludes — **for that term only**.
 3. A row joins a group when the clause's `when` keeps it and some reducer's own `when`
    keeps it (a reducer with no `when` keeps every kept row).
@@ -517,8 +516,7 @@ marked `avg_scale` are divided by the number of rows the reducer reads in the ro
 In the objective the two-level form's classes are the groups. A class no row reads is no
 group, so no denominator is zero.
 
-Quadratic AVG terms scale their inner linear coefficients by `1/√N`, so the
-resulting outer product is scaled by `1/N`.
+A product group from an AVG scales its weight by `1/N`.
 
 ### Validation
 
@@ -679,11 +677,10 @@ A `SolverInput` carrying `num_rows`, `num_decide_vars`, `variable_types`
 `lower_bounds` / `upper_bounds`, the `EvaluatedConstraint` vector, objective
 coefficient and variable-index arrays, entity mappings, and `sense`.
 
-When the objective is quadratic, the same evaluation runs on `squared_terms` **in
-addition to** `terms`, not instead of: `EvaluateObjectiveTermList` is called once
-per non-empty list, filling `objective_coefficients` / `objective_variable_indices`
-for the linear half and `quadratic_inner_coefficients` /
-`quadratic_variable_indices` for the quadratic half. Each term's filter — its own
+When the objective is quadratic, the same evaluation runs on `product_groups` **in
+addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /
+`objective_variable_indices`, and `EvaluateProductGroups` fills `objective_product_groups`
+for the quadratic half. Each term's filter — its own
 `when` with the objective's folded in — applies to each list independently.
 
 `CoefficientColumn` keeps this compact: a column that is uniform across rows — a

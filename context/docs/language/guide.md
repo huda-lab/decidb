@@ -204,12 +204,16 @@ data and unaffected.
   `<>` is two indicator constraints, with no Big-M. `AVG(x) <> K` becomes `SUM(x) <> K·n`.
 - **`IN`** on a column is a filter; on a decision it restricts the domain (K binary indicators). `IN` on a reducer is
   not supported.
-- **Degree**: linear terms, products of two different decisions (§4) and `POWER(linear, 2)` are allowed; a product of
-    three or more decisions is refused.
+- **Degree**: a term has at most two decision factors. Linear terms, products of two decisions (§4) and squares
+  (`POWER(linear, 2)`, `linear ** 2`, `linear * linear`) are allowed, and every spelling of one polynomial answers
+  alike: `2*x*x`, `x*2*x` and `2*POWER(x, 2)` are one term, and `(x+y)*(y+x)` is `POWER(x + y, 2)`. `POWER(e, n)` over a
+  decision takes a whole `n` known before the query runs: `POWER(x, 1)` is `x`, `POWER(x, CAST(2 AS INTEGER))` is
+  `POWER(x, 2)`, `POWER(x, 0)` is 1. A term of three or more decision factors, `POWER(x, 3)` included, is refused.
 - **Data operands**: any operand that reads no decision is data, evaluated per row as SQL evaluates it: a comparison
   as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda (`SUM(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared
-  statement's `$1`, a table macro's parameter. `CASE` is the exception and is refused in every operand and term (a
-  `when` condition, a `by` key and a subquery are SQL over the rows and accept one). A comparison that
+  statement's `$1`, a table macro's parameter. A `CASE` that reads no decision is data as well, a per-row coefficient as
+  `COALESCE` over data is (`SUM(x * CASE WHEN tier = 1 THEN 1 ELSE 2 END)`); a `CASE` over a decision is refused (§5).
+  A comparison that
   reads a decision, used as a number (`x <= (x > 1)`), is refused: *"SUCH THAT does not support '(x > 1)'"*.
 - **Subqueries**: scalar subqueries, uncorrelated or correlated, may be bounds or factors. A correlated one becomes a
   per-row value and follows the bound rule of §5. A subquery cannot reference the enclosing query's decisions.
@@ -237,6 +241,7 @@ SUCH THAT POWER(x - target, 2) <= 9                                     -- per r
 SUCH THAT SUM(POWER(x - target, 2)) <= 1000                             -- total
 SUCH THAT per department: SUM(POWER(x - target, 2)) by (department) <= 50
 -- POWER(e, 2), e ** 2 and (e) * (e) are the same; -POWER(e, 2) and K * POWER(e, 2) work
+-- a data weight works too: SUM(w * POWER(x, 2)) <= 1000
 ```
 
 Gurobi only; HiGHS has no quadratic constraints, and the query is refused at plan time.
@@ -292,12 +297,16 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
   refused, since `sum` over the classes ranks solutions the same way.
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
   and the Q matrix is non-singular). `-POWER(...)` under `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))`
-  is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi.
+  is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi. An objective may hold
+  any number of squares (`SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))`). A square with a data weight
+  (`SUM(w * POWER(x, 2))`, `SUM(w * x * x)`) or a factor known only when the query runs
+  (`(SELECT m) * SUM(POWER(x, 2))`) is Gurobi only, as `x * y` is, because its sign is not known before then; HiGHS
+  refuses it at plan time. A constant factor works on both.
 - **A square or product under `MIN`/`MAX`**, in the objective or a constraint (`MINIMIZE MAX(POWER(x - t, 2))`,
   `SUM(x) + MAX(POWER(x, 2)) <= 20`): Gurobi only ([problem_types.md](problem_types.md)).
 - **Bilinear (`x * y`)**, in objectives and constraints: with one `BOOL` factor it is linearized exactly (McCormick;
   both solvers; the other factor needs a finite upper bound, written or inferred, §5). Otherwise it is non-convex,
-  Gurobi only. Data coefficients work (`SUM(profit * b * x)`); three-factor products are refused.
+  Gurobi only. Data coefficients work (`SUM(profit * b * x)`); products of three decisions are refused.
 
 Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver support: [problem_types.md](problem_types.md).
 
@@ -351,8 +360,11 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   ways. `M` is inferred from bounds when omitted; `e` must have finite bounds. The tolerance defaults to `1e-4`
   (`SET decide_l0_tolerance`); a value forced strictly between 0 and the tolerance is infeasible. Over data only,
   `norm(e, 0)` is a plain count of nonzero rows.
-- **Other scalar functions over a decision** (`sqrt`, `exp`, `ln`, `floor`, …) are refused: they would make the model
-  non-linear. Only `ABS` and `POWER(…, 2)` wrap a decision. Any function over data only is a per-row coefficient.
+- **Other functions and operators over a decision** (`sqrt`, `exp`, `ln`, `floor`, `%`, `COALESCE`, …) are refused: the
+  model has no reading for them. So are a division by a decision, a `POWER` whose exponent is not a whole number known
+  before the query runs, and a `CASE` over a decision. Only `ABS` and `POWER` with a whole exponent wrap a decision, and
+  a term of degree above 2 is refused. Each message quotes the clause as written and points at the term. Any function,
+  operator or `CASE` over data only is a per-row coefficient.
 
 ### 5.1 The colon form — `SUM(D: e)`
 

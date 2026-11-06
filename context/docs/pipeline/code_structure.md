@@ -13,27 +13,29 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 |---|---|---|
 | `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `DecideScopeCheckKind`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
-| `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverCapabilities`, `SolverConstructSupport`, `SolverModelClass` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
+| `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverCapabilities`, `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
 | `parser/decide/decide_removed_spellings.hpp` | 01 | `RefuseRemovedDecideSpellings` |
-| `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts`, the integrality gate and `DecideValueIsWholeNumbered` |
+| `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts`, `ValidateDecideNoDataAggregateFactor`, the integrality gate and `DecideValueIsWholeNumbered` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
 | `planner/expression_binder/decide/decide_declarations_binder.hpp` | 02 | `DecideDeclarationsBinder` — the whole DECIDE clause: declarations, scopes, then `SUCH THAT` and the objective |
-| `planner/expression_binder/decide/decide_degree.hpp` | 02 | `DecideDegree`, `DecideExpressionDegree` — the one definition of polynomial degree, and which degree-2 shape produced it |
 | `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `KeyedScopeInfo`, every metadata field |
 | `planner/operator/decide/logical_decide_diagnose.hpp` | 03 | `LogicalDecideDiagnose` — the `DIAGNOSE <select>` plan node and the shape of the relation it returns |
 | `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
+| `planner/decide/decide_product_form.hpp` | 04 | The one spelling of a product of decisions: `NormalizeProducts`, `ReadDecideProduct`, `BuildDecideProduct`, `DecideDegreeOf` — the one definition of polynomial degree |
+| `planner/decide/decide_shape_check.hpp` | 04 | `DecideShapeCheck` — the one place the algebra of a clause is judged |
+| `planner/decide/decide_term_split.hpp` | 04/05 | `DecideTermSplitter` — reads one atom's body in the one spelling as terms; never refuses |
 | `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when`, `per K:` and two-level objective wrappers, and the constraint-position walk every stage shares |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
 | `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
-| `planner/decide/decide_prepared_model.hpp` | 05/08 | The prepared linear form — stage 05's flattened terms, stage 08's coefficients |
+| `planner/decide/decide_prepared_model.hpp` | 05/08 | The prepared linear form — stage 05's flattened terms and `DecideProductGroup`s, stage 08's coefficients |
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |
 | `optimizer/decide/decide_optimizer_internal.hpp` | 05 | Helpers shared by the `decide_rewrite_*.cpp` passes; internal to `src/optimizer/decide/` |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
-| `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
+| `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `EvaluatedProductGroup`, `CoefficientColumn`, `EntityMapping` |
 | `decidb/formulation/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
 | `decidb/formulation/ilp_linearization.hpp` | 06 | `LowerDecideConstructs` and the Big-M derivations: a tagged constraint becomes solver rows |
 | `decidb/formulation/ilp_linearization_internal.hpp` | 06 | Helpers shared by the `linearization_*.cpp` passes; internal to `src/decidb/formulation/` |
@@ -57,12 +59,14 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective, its scope and the two-level form |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations and their scopes, the parsed-tree validators (`RefuseQualifiedDecisionReferences` among them), and the `SUCH THAT` / objective binds |
-| `planner/expression_binder/decide/decide_degree.cpp` | 02 | The degree walk, `DecideExpressionDegree`, and the constraint-degree validator |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
-| `planner/binder/query_node/plan_select_node.cpp` | 03/04 | Subquery flattening, correlation provenance, the user canonicalization call |
+| `planner/binder/query_node/plan_select_node.cpp` | 03/04 | Subquery flattening, correlation provenance, the user canonicalization call and the shape check |
 | `planner/operator/decide/logical_decide.cpp` | 03 | `AddConstraint`, `SetObjective`, EXPLAIN strings |
 | `planner/operator/decide/logical_decide_diagnose.cpp` | 03 | The DIAGNOSE node: EXPLAIN strings and serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | The one shape boundary |
+| `planner/decide/decide_product_form.cpp` | 04 | `NormalizeProducts` and the readers of the product spelling, `DecideDegreeOf` |
+| `planner/decide/decide_shape_check.cpp` | 04 | `DecideShapeCheck`: vocabulary, exponents, divisors, `CASE` and degree, run once in `plan_select_node.cpp` |
+| `planner/decide/decide_term_split.cpp` | 04/05 | `DecideTermSplitter` |
 | `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
 | `optimizer/decide/decide_optimizer.cpp` | 05 | The eleven-pass dispatcher and the helpers the passes share |
@@ -142,7 +146,7 @@ classDiagram
 ```
 
 `ValidateSumArgument()`, `ValidateDecideScopeSpellings()`,
-`ValidateDecideNoNonLinearScalar()`, `ValidateDecideNoExplicitDecisionCasts()` and
+`ValidateDecideNoDataAggregateFactor()`, `ValidateDecideNoExplicitDecisionCasts()` and
 `FindOrCreateKeyScope()` are free functions declared in `decide_binder.hpp`, not
 methods.
 
@@ -207,14 +211,12 @@ classDiagram
   refused with a message that names its replacement.
 
 ### `src/planner/expression_binder/decide/decide_binder.cpp` — stage 02
-- **`ValidateSumArgument()`** — linear (or optionally quadratic) combination check.
+- **`ValidateSumArgument()`** — what only the binder sees in a reducer's argument (a nested reducer over data, a
+  subquery that is not scalar, a truth value over a decision); it judges no algebra.
 - **`ValidateDecideScopeSpellings()`** — where `when`, `per` and `by` may stand.
 - **`FindOrCreateKeyScope()`** — the one key scope per set of key columns.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
 - **`BindQualifiedReducer()` / `BindScopedReducer()` / `BindReducerBy()`**.
-
-Polynomial degree, not occurrence count, is `DecideExpressionDegree()` in
-`decide_degree.cpp`.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
 - **`CanonicalizeTree()` / `CanonicalizeComparison()` / `CanonicalizeObjective()`** — pure.
@@ -222,6 +224,16 @@ Polynomial degree, not occurrence count, is `DecideExpressionDegree()` in
 - **`ClassifyScoped()` / `ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `VALUE` / `INVALID`.
 - **`BuildConstraintScopeChecks()` / `BuildObjectiveScopeChecks()`** — the run-time checks.
 - **`VerifyCanonical()` / `VerifyCanonicalObjective()`** — non-mutating, throwing.
+
+### `src/planner/decide/decide_product_form.cpp` — stage 04
+- **`NormalizeProducts()`** — the bottom-up rewrite rule that writes every product of decisions in the one spelling.
+- **`ReadDecideProduct()` / `BuildDecideProduct()`** — the reader of the spelling and the builder every pass that
+  multiplies uses.
+- **`DecideDegreeOf()`** — polynomial degree, not occurrence count: the one definition.
+
+### `src/planner/decide/decide_shape_check.cpp` — stage 04
+- **`DecideShapeCheck::CheckConstraints()` / `CheckObjective()`** — the algebra of each clause, judged once on the
+  canonical spelling; every refusal quotes the clause as written and carries the term's location.
 
 ### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
 Header-only, and the one place that answers "which children of this node are
@@ -295,8 +307,8 @@ a condition as another constraint.
   **`SolverRegistry::Find` / `Backends` / `BackendsSupporting`**.
 
 ### `src/optimizer/decide/decide_solver_gate.cpp` — stage 05
-- **`DeriveDecideModelClass()` / `RequireDecideSolverSupport()`** — the plan-time
-  model-class gate. Refuses, before a row is read, a query whose model class the chosen
+- **`DeriveDecideModelClass()` / `RequireDecideSolverSupport()`** — the plan-time model-class gate
+  (`ClassifyDecideModel` over the prepared groups). Refuses, before a row is read, a query whose model class the chosen
   backend cannot take.
 
 ---

@@ -110,6 +110,11 @@ too-open one.
   `virtual_offset` machinery that already served column bounds. `EXPLAIN` reads the same
   registry, so it stopped printing the algebra too.
 
+  A term canonicalization only respells, such as the product `x * w` into `w * x`
+  (`../pipeline/04_canonicalizer/done.md` §3.3b), is quoted as written too: the canonical clause a repair edits keeps
+  that text, cut from the query at the term's source location (the `TERM` span), and never searches for it by canonical
+  text. EXPLAIN's `≡` line shows the respelling.
+
   It stays narrow deliberately. Where only **one** side carries decisions the rewrite is
   a clean move and the leftover bound folds into something *better* than what was
   written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an opaque subquery into a

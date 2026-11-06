@@ -32,15 +32,17 @@ Each clause appears in up to three layers:
 | Layer | Marker | Shown when | Source |
 |---|---|---|---|
 | As written | none | always | `ConstraintSourceInfo::written_*`, set by `InitializeConstraintSourceInfo` on the bound tree before canonicalization |
-| Canonical | `≡` | canonicalization changed it | `ConstraintSourceInfo::canonical_*`, set by `FinalizeConstraintSourceInfo` |
+| Canonical | `≡` | canonicalization changed it | `ConstraintSourceInfo::spelled_*`, set by `FinalizeConstraintSourceInfo` |
 | Rewritten | `↳` | the optimizer changed it | the post-optimizer tree, walked at render time |
 
-A clause nothing touched stays one line, and a row that reads the same as the layer above is left out. Under a
+A clause nothing touched stays one line, and a row that reads the same as the layer above is left out. The canonical
+layer prints the spelling canonicalization wrote, with every product coefficient first, so a clause written
+`SUM(x * w) <= 6` prints `≡ sum(w * x) <= 6`; the clause already written in that order stays one line. Under a
 rewritten clause, the account lines (what the rewrite made of the construct) come first, then the rows. An account is
 a fact the rewrite recorded (`LogicalDecide::rewrite_accounts`), worded in one place by `RenderDecideRewriteAccount`
-(D27). The objective has the same layers (`written_objective`, `canonical_objective`, captured around
-`CanonicalizeObjective` in `Binder::CreatePlan`); rows a rewrite added for it carry `OBJECTIVE_ROW_TAG` and print under
-`Objective:`.
+(D27). The objective has the same layers (`written_objective`, cut from the `OBJECTIVE` span; `canonical_objective` and
+`objective_canonical_differs`, captured around `CanonicalizeObjective` in `Binder::CreatePlan`); rows a rewrite added
+for it carry `OBJECTIVE_ROW_TAG` and print under `Objective:`.
 
 EXPLAIN shows the model that was built, not only the query: the rows linearization emitted are part of the picture.
 An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`, `max(ship)`,
@@ -51,7 +53,8 @@ An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(
 
 **Written text is cut, never re-rendered** (a source map, as Clang's SourceManager and DuckDB's `CreateInfo::sql`).
 Inside a DECIDE clause the parser records spans (`{anchor, role, start, end}`) for a comparison's two sides, `when`,
-`per`, `by` and every column. `SelectNode::decide_text` (`DecideSourceText`) keeps the tail as typed and its spans
+`per`, `by`, every column, every product, power and function call (`TERM`), and the objective (`OBJECTIVE`, anchored at
+the start of the tail). `SelectNode::decide_text` (`DecideSourceText`) keeps the tail as typed and its spans
 keyed by `(query_location, role)`; it is serialized, `Equals` ignores it, and `SelectNode::ToString` prints the tail
 verbatim, so a print-and-parse round trip keeps the spans. Binders cut text into `source_fragments` and tag the bound
 node; a bound data column carries its spelling (`TagWrittenColumn`). A table macro whose argument lands in a DECIDE
@@ -59,9 +62,11 @@ tail clears `decide_text`, since the argument is not in the body's text; that cl
 nodes strip only the source-fragment tag (`StripSourceFragmentTags`); rewrites read the other tags.
 
 **One tree renderer.** `RenderDecideSource` (`decide_source_provenance.cpp`) prints text DeciDB writes itself (the
-canonical layer, moved bounds, edited clauses) and any node without a span. `Expression::ToString()` is not used because the bound tree is not the query: it carries
-casts the binder inserted, prints functions in call form, and keeps pipeline tags in aliases that `GetName()` prints
-verbatim (`__source_clause_0__`).
+canonical layer, moved bounds, edited clauses) and any node without a span. A term canonicalization respelled carries
+`WRITTEN_TERM_TAG_PREFIX` and the text cut at its `TERM` span: a message and a `DIAGNOSE` repair print that text, the
+canonical layer prints the respelled term, and neither searches for the other's text. `Expression::ToString()` is not
+used because the bound tree is not the query: it carries casts the binder inserted, prints functions in call form,
+and keeps pipeline tags in aliases that `GetName()` prints verbatim (`__source_clause_0__`).
 
 **The style** (D32): quoted text as typed; written text with reducers, `norm` and keywords in lower case; the
 `when c per K:` qualifier in front; a

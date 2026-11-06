@@ -29,7 +29,7 @@ Conventions that apply to every row:
 |---|---|---|---|
 | IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectIR`, `DirectIRDecision`, `DirectIRConstraint`, `DirectIRObjective`, `DirectIRScope`, `DirectIREntityScope`, `FindDirectIRInput`; variables `ir`, `ir_node`; test helpers `QueryIR`, `IRQuery`; `direct_ir.cpp`; `direct_solve/architecture/ir.md` |
 | front end | The pass that reads the source tree and builds the IR; the only code that knows `LogicalDecide`'s layout | Compiler texts | `DirectFrontEnd` |
-| conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `MarkNotProved`. Not the canonicalizer's `DecideTermKind::UNKNOWN` |
+| conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `MarkNotProved` |
 | reducer | An aggregate function (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) applied over DECIDE variables; DECIDE's name for it, so it is never confused with a SQL aggregate over data | DeciDB term | `DirectReducer`, the S1 rule's `Reducer`, `QUALIFIED_REDUCER_TAG` (`__qualified_reducer__`), `ContainsReducer`, `ReadReducer`, `ClassifyReducerCall`, `RhsBoundRewriter::MakeReducerColumn`, `testing/coverage.md#relation-qualified-reducers` |
 | singleton-row bound | A constraint on one variable, folded into that variable's bounds before the model is built | Presolve (Andersen & Andersen 1995; Achterberg et al. 2020) | `FoldSingletonRows`, `DecideFoldSingletonRow`, `DecideReadSingletonRow`, `DecideSingletonRow`, `DirectIsSingletonRow`, `DecideWrittenBox`, `FoldSingletonRowsInExpression`, `singleton_row_boxes`, `user_singleton_row_bounds`, `SINGLETON_ROW_BOUND_TAG`, phase `optimizer.fold_singleton_rows` |
 | fixed variable | A decision whose value the problem fixes before optimizing | Optimization texts | `ProveFixedVariables`, `FixedTerms`, `SourceFixedValue`, `SourceBooleanFixedValue` |
@@ -120,7 +120,6 @@ A few names stay as they are because renaming them would break something or beca
   tests. Changing any of them means re-solving those tests with Gurobi.
 - **Benchmark flags.** `--pins` and the JSON key `pins` in `benchmark/decide/direct_solve/archive/profile_direct_s1_api.*`, because the
   measurement commands in `direct_solve/rules/s1_uniform_matroid/done.md` use them.
-- **Other meanings.** DuckDB's aggregate-state `Absorb`; `AbsorbAdditive` (`decide_degree.cpp`, merging a child's degree
-  into its parent); `DecideTermKind::UNKNOWN`; "pin" (a test pins `require`) and "boundary" in their everyday senses;
-  "near miss" (a testing term); a cache "miss"; "proof" and "prove" in the mathematical sense and in the `Prove*` helpers
-  that certify one part of the IR; the variable name `calc` for an `ExpressionBuilder`.
+- **Other meanings.** DuckDB's aggregate-state `Absorb`; "pin" (a test pins `require`) and "boundary" in their
+  everyday senses; "near miss" (a testing term); a cache "miss"; "proof" and "prove" in the mathematical sense and in
+  the `Prove*` helpers that certify one part of the IR; the variable name `calc` for an `ExpressionBuilder`.

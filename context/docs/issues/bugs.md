@@ -2,13 +2,14 @@
 
 ## Open
 
-- **BUG-46 — A data weight on a square gets a message that says its degree is above 2.** `SUM(w * POWER(x, 2)) <= 25`
-  is refused with `DECIDE expression contains an unsupported product factor that still references decision variables
-  after normalization (total degree > 2 or unexpanded nonlinear product). ...` (`decide_term_split.cpp`, the
-  "unsupported product factor" message). The expression has degree 2, and the text does not say that a constant factor
-  (`SUM(2 * POWER(x, 2))`) or `POWER(sqrt(w) * x, 2)` is accepted. Repro: that clause over `t(id, w DOUBLE, s DOUBLE)`
-  with `DECIDE x(REAL) ... MAXIMIZE SUM(s * x)`. Found 2026-11-06 (N1 review). Fix: `pipeline/04_canonicalizer/todo.md`
-  § CAN-1.
+- **BUG-50 — A COALESCE over a decision is refused without a caret.** `SUM(COALESCE(x, 0)) <= 5` is refused by the
+  shape check (`DECIDE: operator 'COALESCE' cannot take a DECIDE variable. In the SUCH THAT clause ...`), and the
+  message underlines no term. The transformer gives a parsed COALESCE no source location (`transform_coalesce.cpp` and
+  the two-argument form in `transform_function.cpp` build the operator without one), so the bound node has none for
+  the refusal to point at, and the gap spans several transformer sites. Every other shape-check refusal carries a
+  caret. Repro: that clause over `t(id)` with
+  `DECIDE x(REAL) ... MAXIMIZE SUM(x)`. Found 2026-11-06 (CAN-1). Fix: set the location on each parsed special form in
+  the transformer.
 
 ## Limitations (not bugs)
 

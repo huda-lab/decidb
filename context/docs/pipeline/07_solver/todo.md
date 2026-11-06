@@ -16,7 +16,9 @@ Open work in the backends and their limits. Finished work is in [done.md](done.m
     `DecideSolverRuns(ClassifyDecideModel(ir.model_shape))`, and passes it to `Apply`. The texts reach run time as the
     constants inside `error(...)`.
   - The direct reader reports less when unsure, which keeps the advice.
-  - The classifier and the shape readers are built by CAN-1 (`04_canonicalizer/todo.md` § CAN-1, ruling f).
+  - The classifier and the shape readers exist: `ClassifyDecideModel(const DecideModelShape &)`
+    (`decide_solver_capabilities.hpp`) is filled by the gate from the prepared groups, by direct solve into
+    `DirectIR::model_shape`, and by the built model (`SolverModel::ModelClass`).
 - **Problem.** `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.` and its
   unbounded twin are raised by both paths (`ilp_solver.cpp`, `direct_runtime_checks.cpp`). With no Gurobi, `DIAGNOSE`
   on a query with a quadratic limit is refused ("which needs Gurobi"). With Gurobi, an unbounded quadratic model
@@ -29,8 +31,11 @@ Open work in the backends and their limits. Finished work is in [done.md](done.m
 - **Ruling (owner, 2026-11-06).** The rule driver decides once per query whether a backend can run it and hands the
   rules the matching error text (a context object), rather than each rule asking for itself; the task runs in the lane
   that edits the four rule files, after a `decidb-architect` review of where that decision is read.
-- **Needs.** The model class of the query at rule time: `DeriveDecideModelClass` reads `op.prepared`, which
-  `BuildDecidePreparedModel` fills only at physical planning, so the driver reads the IR or the bound constraints instead.
+- **Needs.** The model class of the query at rule time: `DirectIR::model_shape`, which `ReadModelShape` fills from the
+  parts' split terms and `ClassifyDecideModel` classifies. It reports less when unsure: it skips terms under MIN and
+  MAX and nested parts, and reads integral columns from declared domains only. `DeriveDecideModelClass` reads
+  `op.prepared`, which `BuildDecidePreparedModel` fills only at physical planning, so the driver reads the IR. What is
+  left is the driver reading `model_shape` and passing the texts to the rules.
 - **Done when.** With no Gurobi licence, `SUM(POWER(x, 2)) <= -1` under `require` raises the infeasible error without the
   DIAGNOSE sentence; with Gurobi, `test_direct_user_facing.py` still compares the two paths word for word; the NULL-key
   repro keeps the sentence.

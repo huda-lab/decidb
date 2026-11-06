@@ -147,7 +147,7 @@ For a keyed variable, every row of a class maps to the same column, and their
 coefficients **accumulate** — which is exactly right: one keyed decision participates
 in the objective across all of its rows. Every merged sum grows through one helper,
 `AddCoefficient(target, value, written)` (`ilp_model.hpp`): the accumulator, the per-row map,
-the objective's linear, square and bilinear sums, quadratic rows, fixed terms moved to the
+the objective's linear and product-group sums, quadratic rows, fixed terms moved to the
 bound side, implied bounds, `<>`, MIN/MAX rows and value links. A sum past a DOUBLE raises
 `DecideInvalidValueMessage`'s TOO_LARGE role naming the clause (`constraint_sources`) or the
 objective (`objective_written`), never an InternalException or a solver API error. The model's hand-off checks raise
@@ -255,7 +255,7 @@ coefficients directly.
 
 ### Quadratic and bilinear constraints
 
-Constraints with bilinear terms or `POWER(..., 2)` go through the quadratic
+Constraints with product groups (a square or a product of two decisions) go through the quadratic
 constraint builder into `model.quadratic_constraints`. Linear fixed LHS terms use
 the same `INVALID_INDEX` convention and are subtracted from the RHS over the
 selected row set before the quadratic constraint is finalized. A decision beside the
@@ -329,7 +329,7 @@ column bounds upstream (stage 05), for the same reason the step is unsafe.
 
 ## 6. Quadratic objective
 
-When `input.has_quadratic_objective`, Q is built for the form
+When `input.objective_product_groups` is non-empty, Q is built for the form
 `minimize xᵀQx + cᵀx` — **not** the `(1/2) xᵀQx` form that some solvers take. A
 stored value is the plain coefficient of its monomial: `q_vals[k]` multiplies
 `x[q_rows[k]] · x[q_cols[k]]` exactly once, so `3·x²` stores 3 and `4·x·y` stores 4.
@@ -337,29 +337,31 @@ stored value is the plain coefficient of its monomial: `q_vals[k]` multiplies
 converts to its own solver's spelling rather than assuming one (§7 of
 `../07_solver/done.md`).
 
-The inner linear expression of `SUM(POWER(expr, 2))` is already evaluated per row
-in `quadratic_inner_coefficients`; for row *r* it is `Σₜ a_{t,r}·x_{varₜ}`. Q is
-the sum of outer products across rows:
+Stage 08 evaluates every product group (`EvaluatedProductGroup`, `solver_input.hpp`) on each row: its weight `w`
+(the group's sign times its coefficient, 0 on a row the group does not read) and the coefficients of the linear
+form `l = a·x + c` it multiplies, and of `r = b·x + d` for a product. One loop (`AddProductGroupRow`) adds each
+group on each row, in the objective and in a quadratic constraint alike:
 
-1. **Variable terms** — `Q[i,i] += aᵢ²` on the diagonal and `Q[i,j] += 2·aᵢ·aⱼ`
-   off it. The factor of 2 is not a convention choice: expanding the square
-   produces the pair `aᵢ·aⱼ·xᵢxⱼ` twice, once each way round, and only one
-   triangle is stored.
-2. **Constant terms** — a constant `c` in the inner expression expands as
-   `(expr + c)² = expr² + 2c·expr + c²`, so the cross-terms `2c·aₜ` are added to
-   `obj_coeffs`.
-3. **Storage** — accumulated in a `std::map<pair<int,int>, double>` over the lower
-   triangle, then serialized to `q_rows` / `q_cols` / `q_vals`.
+1. **A square**, `w·(a·x + c)²`, is the symmetric rank-one update `w·a·aᵀ` (BLAS `SYR`): `Q[i,i] += w·aᵢ²` on the
+   diagonal and `Q[i,j] += 2·w·aᵢ·aⱼ` off it. The factor of 2 is not a convention choice: expanding the square
+   produces the pair `aᵢ·aⱼ·xᵢxⱼ` twice, once each way round, and only one triangle is stored.
+2. **A product**, `w·(a·x + c)·(b·x + d)`, is the general rank-one update `w·a·bᵀ`: each pair `(aᵢ, bⱼ)` is added
+   to the monomial `xᵢxⱼ` it is.
+3. **Constants** — the cross terms with a form's constant go to `obj_coeffs` (`2wc·a` for a square, `wd·a + wc·b` for
+   a product) and the product of the constants to the objective's constant. In a constraint they go to the row's
+   linear part and its right side.
+4. **Storage** — accumulated in a map over the lower triangle, then serialized to `q_rows` / `q_cols` / `q_vals`.
 
-**Convexity is guaranteed by construction**: `Q = Σ a·aᵀ = AᵀA` is positive
-semidefinite. That is the payoff of enforcing convexity through the syntax rather
-than checking it numerically.
+**Convexity is judged per group, not guaranteed by construction.** A square with weight `w` adds `w·a·aᵀ`, which is
+positive semi-definite for `w > 0` and negative semi-definite for `w < 0`, so a sum of squares is convex exactly when
+every weight's sign agrees with the sense. A product is indefinite. The builder records `nonconvex_quadratic` from
+`IsNonconvexProductGroup`, the predicate stage 05's plan-time prediction reads (`../05_optimizer/done.md` → "The
+model-class gate"). A weight whose sign only the query knows (data) has `weight_sign` 0 and counts as non-convex.
 
-It is also, for a `POWER` group spanning more than one decision variable, *singular*
+A square of a form over more than one decision variable, and any product, is *singular*
 — one row of `A` gives a Q of rank one, whose minimizers form a flat valley rather
 than a point. Gurobi handles that. HiGHS is declared not to support the
-`singular_quadratic` model class, so stage 05 refuses the query before rows are read;
-see `../05_optimizer/done.md` → "The model-class gate".
+`singular_quadratic` model class, so stage 05 refuses the query before rows are read.
 
 ---
 

@@ -37,9 +37,9 @@ A change belongs to the stage that owns its behavior, not the stage that calls i
 | # | Stage | Owns | Primary source |
 |---|---|---|---|
 | 01 | [parser](pipeline/01_parser/done.md) | Grammar, the DECIDE keyword tokens (`WHEN`, `PER`, `BY`), the transformer, the refusal of removed spellings | `third_party/libpg_query/grammar/statements/select.y`, `src/parser/decide/decide_removed_spellings.cpp` |
-| 02 | [binder](pipeline/02_binder/done.md) | Decision declarations and their keys, where `when` / `per` / `by` may stand, types, degree, reducers, DECIDE validity | `src/planner/expression_binder/decide/*.cpp` |
+| 02 | [binder](pipeline/02_binder/done.md) | Decision declarations and their keys, where `when` / `per` / `by` may stand, types, reducers, the refusals only binding can make | `src/planner/expression_binder/decide/*.cpp` |
 | 03 | [logical_plan](pipeline/03_logical_plan/done.md) | `LogicalDecide`, subquery provenance, `AddConstraint` / `SetObjective`, serialization | `src/planner/operator/decide/logical_decide.cpp`, `src/planner/binder/query_node/plan_select_node.cpp` |
-| 04 | [canonicalizer](pipeline/04_canonicalizer/done.md) | The one shape boundary: decisions left, bound right, the per-row / aggregate / value shape, the scope checks | `src/planner/decide/decide_canonicalizer.cpp` |
+| 04 | [canonicalizer](pipeline/04_canonicalizer/done.md) | The one shape boundary: decisions left, bound right, the per-row / aggregate / value shape, one spelling per product of decisions, the scope checks, the shape check of the algebra and degree | `src/planner/decide/decide_canonicalizer.cpp`, `decide_product_form.cpp`, `decide_shape_check.cpp` |
 | 05 | [optimizer](pipeline/05_optimizer/done.md) | Formulation choice: NORM, IN, ABS, MIN/MAX, AVG, `<>`, bilinear, the value rewrite; direct solve's entry point | `src/optimizer/decide/decide_optimizer.cpp` |
 | 06 | [model_formulation](pipeline/06_model_formulation/done.md) | `SolverInput` to `SolverModel`: variable layout, coefficients, bounds, Q matrix | `src/decidb/formulation/ilp_model_builder.cpp` |
 | 07 | [solver](pipeline/07_solver/done.md) | Backend dispatch, Gurobi and HiGHS translation, status normalization, time limits | `src/decidb/solver/ilp_solver.cpp`, `src/decidb/gurobi/`, `src/decidb/naive/` |

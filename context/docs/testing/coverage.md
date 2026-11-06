@@ -950,7 +950,8 @@ Tests live in:
 Covers `POWER(expr, 2)` via Q matrix construction. Convex forms run on both
 solvers; non-convex and MIQP require Gurobi. Three syntax forms supported:
 `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)` self-product, plus negated
-variants.
+variants. Canonicalization writes every spelling of a square the same way, and
+`test_product_normal_form.py` pins that (below).
 
 ### Scenarios covered (objectives)
 
@@ -960,6 +961,8 @@ All oracle-verified; gurobi-gated cases noted:
 - **Non-convex** `MAXIMIZE SUM(POWER(x, 2))` — gurobi-gated.
 - **MIQP** (integer vars + convex QP, `test_maximize_convex_power_integer_case_b`) — gurobi-gated.
 - **Mixed linear + quadratic**: same SUM (`SUM(POWER(x-t,2) + c*x)`), sibling SUMs, and negated quadratic + linear.
+- **Two squares in one objective** (`test_qp_two_quadratic_groups_answer`): `SUM(POWER(x - a, 2)) +
+  SUM(POWER(y - b, 2))` under a shared limit, against the oracle.
 - **Composition**: QP objective under a `when`; QP objective beside a `per` constraint (`test_per_interactions.py`).
 - **Two-level objectives**: `sum(per grp: sum(power(x - t, 2)) by (grp))` (binding per-group cap, unconstrained, and with no constant term), `sum(per grp: avg(power(x - t, 2)) by (grp))` with unequal groups (`test_quadratic.py`); hard inner `sum(per grp: max(power(...)) by (grp))` / `min` in `test_per_objective.py` — gurobi-gated.
 
@@ -992,9 +995,11 @@ side alone.
 
 ### Error cases
 
-- Exponent rejections (`test_quadratic.py`): `POWER(x, 3)`, variable exponents.
-- Multiple POWER groups in one objective rejected (`test_quadratic.py`).
-- Degree > 2 rejections — self-product of POWER, product of two POWERs, variable × POWER — each tested in both objective (`test_quadratic.py`) and constraint (`test_quadratic_constraints.py`) positions.
+- Exponent rejections (`test_quadratic.py`, `test_error_binder.py`): a variable, column or fractional exponent (*"POWER
+  over a DECIDE variable needs an exponent that is a whole number"*); `POWER(x, 3)` and `POWER(x, 4)` are degree
+  refusals.
+- Degree > 2 rejections — self-product of POWER, product of two POWERs, variable × POWER — each tested in both objective
+  (`test_quadratic.py`) and constraint (`test_quadratic_constraints.py`) positions.
 - HiGHS rejects non-convex QP, MIQP, and a `POWER` group coupling two decision variables (`test_quadratic.py::TestHighsRejection` + `_expect_gurobi` pattern) and quadratic constraints (`test_quadratic_constraints.py`). Each is checked to refuse at plan time, with no model built.
 - Infeasible quadratic constraint with tight `match=` (`test_infeasible_negative_budget`).
 
@@ -1020,6 +1025,30 @@ side alone.
 | QP objective | two-level, outer SUM | ✓ |
 | QP objective | two-level, inner MIN (hard) | ✓ |
 | QP objective | two-level, inner MAX (hard) | ✓ |
+
+## Product spellings and the shape check
+
+Tests live in `test/decide/tests/test_product_normal_form.py` and `test_error_case_expression.py`. Canonicalization
+writes every product of decisions as a coefficient times powers of its decision factors
+(`../pipeline/04_canonicalizer/done.md` §3.3b), and the shape check refuses what the model cannot read (§3.11).
+
+- **Each spelling of a square answers as the oracle's model of its polynomial**, under `MINIMIZE` and under a limit,
+  on Gurobi: `2*x*x`, `x*2*x`, `POWER(x, CAST(2 AS INTEGER))`, `POWER(x - w, 2)`, `(x+y)*(y+x)`, and a data weight as
+  `w*POWER(x, 2)`, `w*x*x` and `POWER(x, 2)*w`. On forced HiGHS a constant coefficient (`3*x*x`) and `POWER(w*x, 2)`
+  answer; a query-wide factor on a square answers on Gurobi.
+- **`POWER(x, 1)` is `x` and `POWER(x, 0)` is 1**, in a constraint and in the objective; `SUM(POWER(x, 0))` counts
+  rows, so the clause holds with five rows and is infeasible with six.
+- **A product of `BOOL` decisions** (`b*b`, `(b+d)*(d+b)`) answers through the McCormick rewrite, against the oracle.
+- **Each refusal quotes the clause and points at the term**: degree 3 (`x*x*y`, `POWER(x, 3)`), a fractional
+  exponent, `EXP`, a division by a decision, `%`, and a `CASE` over a decision, each with a caret; the objective is
+  quoted as typed, from the `OBJECTIVE` span.
+- **A data weight on a square is refused on forced HiGHS by the gate**, before a row is read.
+- **`CASE` over data answers** as a per-row coefficient (`SUCH THAT`, the objective, inside `AVG`, `MIN`/`MAX` and a
+  `per` constraint, outside a reducer, and as a query-wide objective constant), against the oracle; a `CASE` over a
+  decision is refused with no internal error.
+- **A respelled clause prints its `≡` line in EXPLAIN**
+  (`test_explain.py::test_a_respelled_product_prints_its_canonical_line`); a clause already in canonical order stays
+  one line.
 
 ## Subqueries
 
@@ -1099,7 +1128,9 @@ Categories covered in `test_error_binder.py` unless noted:
 
 - Name/scope conflicts: variable conflicts with column, duplicate DECIDE variables, unknown variable in constraint.
 - Unsupported syntax in SUCH THAT: IS NULL, `SUM(x) IN (...)`, non-DECIDE variable in constraint, non-SUM/AVG/MIN/MAX function in objective.
-- Non-linear / invalid aggregate: no DECIDE variable in SUM, multiple DECIDE variables in SUM, nonlinear DECIDE variables.
+- Non-linear / invalid aggregate: no DECIDE variable in SUM, multiple DECIDE variables in SUM. A function, operator,
+  exponent or division that the model cannot read (`sqrt`, `exp`, `log`, `floor`, `POWER(x, 0.5)`, `x / y`) is the
+  shape check's refusal, pinned in `test_error_binder.py` (*"DECIDE: function 'sqrt' cannot take a DECIDE variable."*).
 - RHS shape: non-scalar BETWEEN / SUM RHS / `SUM = RHS`, DECIDE variable in BETWEEN bounds, IN RHS, or constraint RHS.
 - Objective: a constant added to the objective is accepted
   (`test_objective_with_addition_succeeds`); a bare data column is rejected.

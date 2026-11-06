@@ -10,6 +10,8 @@ current code.
 
 - `src/planner/decide/decide_canonicalizer.cpp`
 - `src/include/duckdb/planner/decide/decide_canonicalizer.hpp`
+- `src/planner/decide/decide_product_form.cpp` and its header — the one spelling of a product of decisions (§3.3b)
+- `src/planner/decide/decide_shape_check.cpp` and its header — the one place the algebra is judged (§3.11)
 
 ---
 
@@ -25,6 +27,9 @@ Keeping transformation and user-facing validation as separate operations is fine
 The invariant is that both happen at one boundary, before optimization, and that
 no later layer partitions a comparison again.
 
+A third operation follows at the same place: the **shape check** (§3.11) judges the algebra of every clause on the
+canonical spelling, once.
+
 One boundary, three call sites, and there must not be a fourth:
 
 | Entry point | Covers |
@@ -34,7 +39,22 @@ One boundary, three call sites, and there must not be a fourth:
 | `LogicalDecide::SetObjective` | Objectives rewritten by `DecideOptimizer` |
 
 Assigning `decide_constraints` or `decide_objective` directly bypasses both
-canonicalization and verification.
+canonicalization and verification. The shape check runs only at the first entry point, on what the user wrote.
+
+### The contract
+
+Every rule of the pass is an identity for every input. There are five:
+
+- additive decomposition of each side;
+- moving a term across the relation by whether it references a decision;
+- distributing a factor known before the query runs over an additive spine (`2 * (x - 1)` is `2 * x - 2`);
+- merging like terms under such factors, over products as over atoms (`x + x` is `2 * x`, `x*x + x*x` is
+  `2 * POWER(x, 2)`);
+- writing each product of decisions as a coefficient on the left times powers of its decision factors (§3.3b).
+
+The pass never multiplies out a power or a product of sums, never folds constants, and never opens `ABS`, `MIN`/`MAX`
+or a subquery. It is total (it never declines an input), pure (it returns a new tree), writes one spelling per meaning,
+and is a fixed point. The shape check runs right after it.
 
 ### Why it runs after binding
 
@@ -44,13 +64,13 @@ form `PlanSubqueries` produces. Both facts pin it to this point.
 
 ### Why it is total
 
-The pass **never opens a term algebraically**. It decomposes each side additively
+The pass **never multiplies out a term**. It decomposes each side additively
 and asks one question of each resulting term — "does it reference a decision
 variable?" — then moves terms across the relation. A quadratic `POWER(x-t,2)`, a
 composed `MAX(x*v)` and a filtered `sum(when c: x)` are all just decision-bearing
-terms here, indistinguishable from `x`. The one look inside a term, a `MIN` or `MAX` handing
-its constant addends to the side (§3.3), is an identity that holds for every body, so it
-cannot decline either.
+terms here, indistinguishable from `x`. Two looks inside a term are identities that hold for every body, so
+neither can decline: a `MIN` or `MAX` handing its constant addends to the side (§3.3), and the respelling of a
+product's factors (§3.3b), which opens none of them.
 
 That restriction is the whole design. A pass that may decline can never be the
 single home for anything: every consumer downstream then has to handle both "it
@@ -72,6 +92,9 @@ PlanSubqueries and retain query-wide/correlated provenance
 canonicalize + validate constraints AND objective   <-- single shape boundary
         |
         v
+DecideShapeCheck: the algebra, judged once on the canonical spelling
+        |
+        v
 LogicalDecide  ---> VerifyCanonical
         |
         v
@@ -86,9 +109,10 @@ physical extraction and runtime RHS/group evaluation
 
 | Stage | Responsibility once canonicalization owns shape |
 |---|---|
-| Parser | Parse with the intended association and retain NORM/IN source structure. Does not move comparison terms. |
-| Binder | Resolve names, types, scopes, reducers, subquery correlation. Determines *whether* a comparison is a DECIDE constraint; does not flip or repartition it. |
+| Parser | Parse with the intended association and retain NORM/IN source structure. Does not move comparison terms. Refuses syntax only. |
+| Binder | Resolve names, types, scopes, reducers, subquery correlation. Determines *whether* a comparison is a DECIDE constraint; does not flip or repartition it. Refuses binding errors and what only it can see; judges no algebra. |
 | Canonicalizer | Put every accepted bound comparison into §3 and reject unsupported mixtures once. |
+| Shape check | Judge the algebra of the canonical spelling: the vocabulary, exponents, divisors, `CASE` and degree (§3.11). Every refusal quotes the clause as written. |
 | Logical plan | Store canonical constraints. New ones enter only through `AddConstraint`. |
 | Optimizer | Assume canonical input; lower NORM/IN and select other formulations. Generated rows return through `AddConstraint`. |
 | Physical extraction | Read model terms from the left and the bound from the right. May assert the invariant; must not repair it. |
@@ -120,14 +144,14 @@ a rendering job rather than a re-plumbing job.
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
-| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`); a group whose factors cancel is left as written. A `MIN` or `MAX` term hands its constant addends to the side (§3.3); otherwise the pass never opens an atom or distributes a cast. |
+| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one, over products as over atoms (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`, `x*x + x*x` is `2 * POWER(x, 2)`); a group whose factors cancel is left as written. A `MIN` or `MAX` term hands its constant addends to the side (§3.3); otherwise the pass never opens an atom or distributes a cast. |
 | **C5** | Every comparison takes one shape of §3.10: per-row (no decision reducer), aggregate (decision reducers sharing one `by` key, beside query-wide terms only) or value (any other side with a decision reducer, which the value rewrite turns per-row). A shape §3.10 refuses is rejected here. |
 | **C6** | A factor attached to a decision-bearing reducer has one canonical representation, outside the reducer. In the objective it is one value for the whole query; in a constraint it may vary by row, which makes the comparison VALUE. A decision is never a factor. |
 | **C7** | Structural tags and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
+| **C8** | Every product of decisions, in every reducer body and per-row side, is written in the one spelling of §3.3b: a coefficient on the left times decision-bearing factors raised to whole powers. |
 
-This is a **structural** canonical form, not algebraic simplification. The model
-builder already accumulates coefficients per solver column, so `2*x + 3*x` is not
-combined into `5*x` here.
+This is a **structural** canonical form, not algebraic simplification. It never multiplies out a power or a product
+of sums and never folds constants. It merges like terms (§3.7) and respells products (§3.3b), both identities.
 
 ### 3.3 Additive decomposition
 
@@ -140,7 +164,7 @@ anything else -> one atomic term
 ```
 
 Indivisible atoms include `x`, `price * x`, `POWER(x - target, 2)`,
-`SUM(x * price)`, `MAX(x * value)`, `sum(when condition: x)`.
+`SUM(price * x)`, `MAX(value * x)`, `sum(when condition: x)`.
 
 One atom gives up part of itself. A `MIN` or `MAX` term hands each constant addend of its
 body to the side, under the reducer's factor: `2 * max(x + 0.75) > 7` is `2 * max(x) + 2 *
@@ -168,6 +192,67 @@ before the optimizer formulates the clause. This swaps one atom for another and
 opens nothing, so the pass stays total. L0 needs indicator variables, which are
 formulation, so its marker stays for `RewriteNorm`. `VerifyCanonical` (debug builds)
 fails if an L1, L2 or 'inf' marker survives.
+
+### 3.3b One spelling per meaning: products of decisions
+
+Every product of decisions is written as a coefficient on the left (a constant, data, or a product of data factors)
+times decision-bearing factors, each a linear form or an opaque term raised to a whole number:
+
+| Written | Canonical |
+|---|---|
+| `2*x*x`, `x*2*x` | `2 * POWER(x, 2)` |
+| `w*x*x`, `x*w*x`, `POWER(x, 2)*w` | `w * POWER(x, 2)` |
+| `(x-t)*(x-t)` | `POWER(x - t, 2)` |
+| `(x+y)*(y+x)` | `POWER(x + y, 2)` |
+| `(b*x)*(b*x)` | `(b * b) * POWER(x, 2)`, a data coefficient |
+| `x * w` | `w * x` |
+| `POWER(x, 1)` | `x` |
+| `POWER(x, CAST(2 AS INTEGER))` | `POWER(x, 2)` |
+| `w*POWER(x, 0)` | `w + 0 * x` |
+
+`NormalizeProducts` (`decide_product_form.cpp`) is a bottom-up rewrite rule over every decision-bearing `*` and
+whole-exponent `POWER` node, as DuckDB's `ArithmeticSimplificationRule` is over constant arithmetic. It runs after
+`DesugarNorms`, at the head of `CanonicalizeTree`, `CanonicalizeComparison` and `CanonicalizeObjective`, so the
+additive pass below reads one spelling. The rule:
+
+- flattens `*`, the binder's casts over decisions, unary minus and `POWER(b, k)` for a whole `k`;
+- merges equal decision-bearing factors into powers, comparing trees with their structural tags, and additive forms
+  as multisets of signed terms, so `(x+y)*(y+x)` is `POWER(x + y, 2)`;
+- composes data factors into the coefficient with `*` and never merges or folds them, so SQL's arithmetic over the
+  data is the one written, overflow included;
+- never multiplies out a power or distributes over a sum, so a square is never expanded;
+- keeps a `POWER` whose base has degree 1 as one linear form: `POWER(b*x, 2)` has coefficient 1 and runs on HiGHS;
+- writes a whole exponent as its number, so a folded exponent (`CAST(2 AS INTEGER)`) and a written `2` are one
+  spelling;
+- gives a rebuilt node its own name (a decision's column name), or the replaced node's name when it has none, and
+  every tag the replaced node carried, so the canonical layer of `EXPLAIN` prints `x` for `POWER(x, 1)`.
+
+Like terms merge along a clause's additive spine (§3.7). Inside one reducer body they do not: `SUM(x + x)` stays two
+terms, which stage 05's term reader adds into one coefficient, so the model is the same.
+
+`POWER(e, 0)` over a decision is 1, as in SQL. The product keeps the decisions of `e` at coefficient 0 (`w + 0 * x`),
+as `0 * x` and `x - x` keep theirs, so a reducer over it stays decision-bearing and `SUM(POWER(x, 0)) <= 5` answers as
+`COUNT(*) <= 5`. Data keeps its `POWER(w, 0)`, which SQL makes NULL on a NULL. A product of `BOOL` decisions (`b * b`,
+`(b+d)*(d+b)`) takes the spelling like any other; stage 05 linearizes it, and `POWER(b, k)` is not rewritten to `b`
+here.
+
+Every other node is a factor that is never opened: `EXP(x)`, `POWER(x, 0.5)`, `x / y`, `CASE`, `ABS`, a reducer, a
+subquery. So the rule is total, and the shape check (§3.11) is where such a factor is refused. Each rebuilt node is
+cast back to the type of the node it replaces and keeps its alias and source location. The tree is rebuilt from the
+factor list in first-seen order, as a left-deep chain, so a second pass changes nothing (C7). A pass that builds a
+product of decisions calls `BuildDecideProduct`, which writes it in this spelling.
+
+`MergeLikeAtoms` keys on the product form, the decision-bearing factors with their powers in any order, and sums the
+constant multiples (`x*x + x*x` is `2 * POWER(x, 2)`, `2 * x + x * 3` is `5 * x`). A coefficient that is data or a
+subquery is not summable, so those atoms stay apart. No list of shapes decides this: any two atoms with the same
+decision-bearing factors are like terms.
+
+**Quoting.** A respelled node is tagged `WRITTEN_TERM_TAG_PREFIX` with its text as written, cut from the query at its
+source location. The grammar records a `TERM` span for each product, `**` or `^` power and function call, and an
+`OBJECTIVE` span for the objective, as Clang underlines a source range and does not reprint its syntax tree. A message
+or a `DIAGNOSE` repair quotes the clause as written and never searches for canonical text. EXPLAIN's `≡` line prints the canonical spelling, so a clause written `x * w` prints a second line,
+`w * x`. A parsed `COALESCE` gets no source location from the transformer, so a refusal over one has no caret
+(BUG-50).
 
 ### 3.4 Placement
 
@@ -311,10 +396,11 @@ subquery, is not distributed: the product stays one atom and takes the VALUE sha
 
 **Like terms merge.** After decomposition, decision atoms that are multiples of one
 term, each by a factor known before the query runs (a reducer's peeled factor, none
-counting as 1 and a divisor as its reciprocal; for a bare decision the constant factors
-it stands under, `PeelBareDecisionFactors`), become one atom scaled by the sum of their
+counting as 1 and a divisor as its reciprocal; for any other term the constant factors of its
+product form, §3.3b), become one atom scaled by the sum of their
 signed factors (`MergeLikeAtoms`): `x + x >= -4` is emitted as `2 * x >= -4`,
-`x - 3 * x <= 4` as `-2 * x <= 4`, `2 * min(x) + min(x) >= -6` as `3 * min(x) >= -6`. The
+`x - 3 * x <= 4` as `-2 * x <= 4`, `2 * min(x) + min(x) >= -6` as `3 * min(x) >= -6`,
+`x*x + x*x <= 8` as `2 * POWER(x, 2) <= 8`. The
 merge runs on each written side and again on the partitioned decision side, where a term
 that crossed the relation meets its twin: `3 * x >= x - 4` is `2 * x >= -4`, and the
 result is a fixed point (C7). The linear form merged
@@ -466,6 +552,40 @@ wrapper adds no row; it names the classes each group's row stands for, which the
 form reads as the clause's class key and a diagnosis reports one by one (D28). A
 VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
 
+### 3.11 The shape check
+
+`DecideShapeCheck` (`decide_shape_check.cpp`) is the one place the algebra of a clause is judged. It is the
+semantic-analysis pass of a compiler front end: the parser has refused syntax and the binder has refused what only it
+sees (`../02_binder/done.md` §2), and what remains is whether the model has a reading for each term. It runs in
+`Binder::CreatePlan`, right after the constraints' source info is finalized and, for the objective, right after it is
+canonicalized. It reads the one spelling of §3.3b, so a shape has one reading whichever way the user wrote it, and it
+runs only on what the user wrote.
+
+It refuses, for each clause as written:
+
+| Refused | Message |
+|---|---|
+| A function over a decision outside the vocabulary (`+`, `-`, `*`, a division by data, a whole-exponent `POWER`, `ABS`, the reducers and DeciDB's markers) | `DECIDE: function 'sqrt' cannot take a DECIDE variable.` |
+| An operator over a decision outside it (`%`, `COALESCE`) | `DECIDE: operator '%' cannot take a DECIDE variable.` |
+| A `POWER` over a decision whose exponent is not a whole number known before the query runs | `POWER over a DECIDE variable needs an exponent that is a whole number known before the query runs, found '0.5'.` |
+| A division by a decision | `DECIDE: cannot divide by a DECIDE variable.` |
+| A `CASE` over a decision (a `CASE` over data is a per-row coefficient, as `COALESCE` over data is) | `CASE over a DECIDE variable is not supported.` and the alternatives: a scope in front, `per`, or a CTE |
+| A term of degree above 2 | `DECIDE: the SUCH THAT clause ... has a term of degree 3, which no solver DeciDB supports can optimize.` and the advice to write each term with at most two decision factors |
+
+Every refusal is an Invalid Input error that ends with the clause as written (`In the SUCH THAT clause ...`, `In the
+objective ...`) and carries the source location of the term, so the caret underlines it. The degree refusal puts the
+clause in its first sentence and underlines the smallest product of the highest degree. The vocabulary is judged
+before the degree, the constraints before the objective, and a binder refusal comes before all of them: when a query
+has two refusals, the one the pipeline reaches first is reported.
+
+Degree is read by `DecideDegreeOf` (`decide_product_form.cpp`), the one definition: a decision is 1, data is 0, a
+reducer has the degree of what it reduces, `+`, `-` and `ABS` take the largest child, `*` the sum, a whole-exponent
+`POWER` its base times the exponent, and a division by data its numerator. A node outside the vocabulary makes the
+term not a polynomial. Degree is not an occurrence count: `(x + y) * z` has three occurrences and degree 2.
+
+The check reads and never rewrites. Nothing downstream repeats it: the clauses an optimizer rewrite emits are not
+checked, and term extraction (stage 05) raises an internal error for a decision-bearing term it cannot read.
+
 ---
 
 ## 4. Classification and verification
@@ -492,8 +612,8 @@ tags.
 
 They throw `InternalException`: past this boundary a non-canonical tree is an
 engine bug, not user input. Unsupported user syntax has already failed earlier,
-through binder/planning validation. Non-comparison leaves stay legal so the
-optimizer's `TRUE` placeholders for extracted composed MIN/MAX constraints satisfy
+through binder/planning validation, or fails right after, in the shape check (§3.11). Non-comparison leaves stay legal
+so the optimizer's `TRUE` placeholders for extracted composed MIN/MAX constraints satisfy
 C0.
 
 Verification runs at three points: immediately after user canonicalization, on
@@ -549,14 +669,14 @@ here, through `RenderDecideSource`, from source fragments and relation aliases
 
 ## 5. What this stage does not do
 
-- expand products or powers;
-- combine like terms;
+- multiply out a power or a product of sums;
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, L0 `norm()` or `IN`;
-- look inside reducer bodies, except to read them, unchanged, for the scope checks.
-  Splitting a body into `coefficient * variable` terms opens terms and can fail, so it
-  lives beside this stage in `DecideTermSplitter` (`decide_term_split.cpp`), which reads
-  canonical atoms;
+- open `ABS`, `MIN`/`MAX` or a subquery, or look inside reducer bodies beyond respelling their products (§3.3b)
+  and reading them, otherwise unchanged, for the scope checks. Splitting a body into `coefficient * variable`
+  terms lives beside this stage in `DecideTermSplitter` (`decide_term_split.cpp`), which reads the one spelling and
+  never refuses;
+- refuse a term for its algebra: that is the shape check (§3.11);
 - evaluate data, reducers, `when` conditions, `per` classes or `by` groups;
 - choose a solver formulation.
 
@@ -574,7 +694,10 @@ reinterprets a parsed expression tree.
 - Do not infer cast authorship from a bound cast, and do not add target-type
   exceptions. §3.6 is the settled contract.
 - Keep transformation and validation at this boundary. Do not restore a binder,
-  optimizer or physical fallback.
+  optimizer or physical fallback. A new refusal of the algebra belongs in `DecideShapeCheck`, not in the binder,
+  the term splitter or the solver gate.
+- A pass that builds a product of decisions uses `BuildDecideProduct`, so what it builds is already in the
+  one spelling.
 - Any new optimizer pass that mutates a constraint in place must go through
   `AddConstraint` rather than editing the tree. C2 is enforced by a throwing check
   at physical extraction, so a rewrite that breaks it fails loudly — but it does
@@ -594,6 +717,7 @@ test/decide/.venv/bin/python3 -m pytest \
   test/decide/tests/test_canonicalize_side_agnostic.py \
   test/decide/tests/test_canonicalize_homogeneity.py \
   test/decide/tests/test_canonicalize_idempotence.py \
+  test/decide/tests/test_product_normal_form.py \
   test/decide/tests/test_bilinear.py \
   -v
 
@@ -613,6 +737,7 @@ What each focused file pins:
 | `test_canonicalize_homogeneity.py` | A query-wide decision beside a reducer (aggregate shape, under `per` too); a per-row or keyed decision, or a row-varying coefficient on a query-wide one, beside a reducer answered per row |
 | `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `when` and `per` wrappers |
 | `test_query_diagnostics_relation.py` | Forward and reversed uncorrelated subquery bounds emit the same editable SQL suggestion |
+| `test_product_normal_form.py` | Each spelling of a square answers as the oracle's model of the polynomial it denotes, on Gurobi and (for a constant coefficient) HiGHS; `POWER(x, 0)` and `POWER(x, 1)`; a product of `BOOL` decisions; each shape-check refusal quotes the clause and points at the term; a data weight on a square is refused on HiGHS by the gate |
 | `test_bilinear.py` (`TestFactoredProductDegree`) | `SUM((x + y) * z)` is accepted in both clauses |
 
 Passing the suite is necessary but not sufficient. At the start of this work the
@@ -629,6 +754,8 @@ raising, so a single statement is enough and nothing has to survive an error.
 | Concern | Location |
 |---|---|
 | Canonical transformation (constraints and objective) | `src/planner/decide/decide_canonicalizer.cpp` |
+| Product spelling, degree, `NormalizeProducts` | `src/planner/decide/decide_product_form.cpp` |
+| The shape check | `src/planner/decide/decide_shape_check.cpp` |
 | Term splitting of canonical atoms | `src/planner/decide/decide_term_split.cpp` |
 | Contract, in code | `src/include/duckdb/planner/decide/decide_canonicalizer.hpp` |
 | Cast policy and unwrapping | `src/planner/decide/decide_cast_policy.cpp` |

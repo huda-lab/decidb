@@ -106,9 +106,9 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   auxiliary and walker as composed constraints; the sense plays the comparison's role. A keyed reducer inside keeps
   its de-duplication (`ComposedMinMaxTerm::qualifier_scope_idx`); for `MIN`/`MAX` that is a no-op, applied anyway so
   there is one code path.
-- **Quadratic inner in the two-level form**: `sum(per g: sum(power(x - t, 2)) by (g))` reaches the QP extractor
-  intact, since nothing expands it before binding. A `MIN`/`MAX` over a squared body is modelled as a sum of squares —
-  a known wrong answer (`../issues/bugs.md`).
+- **Quadratic inner in the two-level form**: `sum(per g: sum(power(x - t, 2)) by (g))` reaches the QP extractor intact,
+  since the canonicalizer never multiplies out a square. A `MIN`/`MAX` over a squared body is modelled as a sum of
+  squares — a known wrong answer (`../issues/bugs.md`).
 - **Linear objectives** become the `c` vector; a `when` in front zeroes other rows' coefficients, a reducer's own
   `when` zeroes only its term's. Additive constants accumulate on `LogicalDecide::objective_constant_offset`.
 - Code: `decide_objective_binder.cpp` (`BindScopedObjective`, `BindTwoLevelObjective`); `AnalyzeObjective` and
@@ -128,10 +128,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   read one number computed in DuckDB's own types, and nothing is computed on a dropped row. `AVG` on a bound keeps its
   fractional value: the AVG→SUM rewrite skips an `AVG` with no decision. Tests: `test_cons_rhs_aggregate.py`.
 - **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The optimizer
-  rewrites it to `SUM` tagged `AVG_REWRITE_TAG`; execution scales linear and bilinear coefficients by `1/n` and
-  quadratic inner terms by `1/√n`. In the two-level objective, `avg` inside scales each row by `1/n_g`. Flat
-  `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so `AVG(a) + SUM(b)` is
-  not `SUM(a) + SUM(b)`. Tests: `test_avg.py`.
+  rewrites it to `SUM` tagged `AVG_REWRITE_TAG`; execution scales linear coefficients and the weight of each product
+  group (a square or a product of decisions) by `1/n`. In the two-level objective, `avg` inside scales each row by
+  `1/n_g`. Flat `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so
+  `AVG(a) + SUM(b)` is not `SUM(a) + SUM(b)`. Tests: `test_avg.py`.
 - **`MIN`/`MAX`.** The inner expression is any linear combination plus a constant (`max((cost + 1) * x)`,
   `max(cost * x + 5)`). Each link row is summed per solver column before emission (the model builder's
   `SparseCoeffAccumulator`, then one reused `MinMaxLinkRow` per link: `EmitExtremumLink` asks an
@@ -162,20 +162,26 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   - Code: `TagAbsForBigM` / `CollectAbsWithSign` and `RewriteAbs` (`decide_rewrite_abs.cpp`); links in
     `LogicalDecide::abs_maximize_links` (both Path B users, objective and constraint). Tests:
     `test_abs_linearization.py`.
-- **Non-linear functions over a decision** are refused by `ValidateDecideNoNonLinearScalar` (`decide_binder.cpp`) on
-  the parsed tree, before binding, in every position (per row, inside a reducer, inside `ABS`). Without it, such a
-  function would be dropped or reach execution unmodelled. The same pass checks `POWER`'s exponent. A catalog lookup
-  keeps scalar and aggregate refusals apart. Tests: `test_error_binder.py`.
-- **Functions and operators over data only** (`%`, bitwise, `mod()`, `floor()`, `POWER(qty, 3)`, `COALESCE`) are
+- **Other functions and operators over a decision** are refused by the shape check (`decide_shape_check.cpp`), once,
+  after canonicalization and before any rewrite, in every position (per row, inside a reducer, inside `ABS`). It allows
+  `+`, `-`, `*`, a division by data, `POWER` with a whole exponent known before the query runs, `ABS` and the reducers;
+  any other function reads *"DECIDE: function 'sqrt' cannot take a DECIDE variable."*, any other operator (`%`,
+  `COALESCE`) *"DECIDE: operator '%' cannot take a DECIDE variable."*, a `POWER` with another exponent asks for a whole
+  number known before the query runs, and a `CASE` over a decision gets its own message with the alternatives. Each
+  quotes the clause as written and points at the term (a `COALESCE` has no caret, BUG-50). Without the check, such a
+  function would be dropped or reach execution unmodelled. `POWER(x, 1)` is `x` and `POWER(x, 0)` is 1. Tests:
+  `test_error_binder.py`, `test_product_normal_form.py`, `test_error_case_expression.py`.
+- **Functions and operators over data only** (`%`, bitwise, `mod()`, `floor()`, `POWER(qty, 3)`, `COALESCE`, `CASE`) are
   per-row coefficients: the term is an atom nothing opens, and DuckDB's `ExpressionExecutor` evaluates it. A data-only
   *aggregate* inside a reducer (`SUM(avg(col) * x)`) is refused, since it needs the whole row set; compute it as a
   scalar subquery. Tests: `test_error_unsupported_operator.py`, `test_power_over_data.py`.
 - **Division** by a constant or data column folds into the coefficient (`x / col` → `1/col[row]`), in per-row
-  constraints, reducers and quadratic bases; division by a decision is refused. Code: `SplitLinear`
-  (`decide_term_split.cpp`), `IsLinearInDecideVars`.
-- **Per-row linear left sides** (`x + 3 <= 10`, `x - col <= 1`, `-x <= -2`, `x / 2 + 1 <= 3`): `SplitLinear` separates
-  decision terms from constants and data, and the model builder moves the latter to the per-row bound. A decision
-  under anything else is an unknown term, never read as a plain variable. Tests: `test_cons_perrow.py`.
+  constraints, reducers and quadratic bases; division by a decision is refused (*"DECIDE: cannot divide by a DECIDE
+  variable."*). Code: `DecideTermSplitter::Split` (`decide_term_split.cpp`), `DecideShapeCheck`.
+- **Per-row linear left sides** (`x + 3 <= 10`, `x - col <= 1`, `-x <= -2`, `x / 2 + 1 <= 3`): the term splitter
+  separates decision terms from constants and data, and the model builder moves the latter to the per-row bound. A
+  decision under anything else is an opaque term or a shape-check refusal, never read as a plain variable. Tests:
+  `test_cons_perrow.py`.
 - **`IN` on a decision** binds as a marker; `RewriteInDomain` (`decide_rewrite_norm_in.cpp`) lowers it to K binaries
   with `Σ z = 1` and `x = Σ v·z`. `x IN (0, 1)` on a `BOOL` is dropped; `x IN (v)` becomes `x = v`. Large K grows the
   model; a range is cheaper when it fits.

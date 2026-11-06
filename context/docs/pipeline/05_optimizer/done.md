@@ -135,11 +135,23 @@ different reasons:
   DECIDB_FORCE_SOLVER, or ...`) instead of asking for an install.
 - **Not model load.** The old refusals lived in the HiGHS backend and fired after a
   full scan and a full model build. Nothing about the four classes needs a single
-  row: `quadratic_constraints` is tree shape, `miqp` is declared integrality,
-  `nonconvex_quadratic` is the sign of `quadratic_sign` against the sense — a
-  plan-time constant, since this stage already refuses a scale factor it cannot fold —
-  and `singular_quadratic` is a count of distinct `variable_index` values across the
-  objective's `squared_terms`, two or more meaning the square couples two decisions.
+  row: `quadratic_constraints` is tree shape (a constraint with a product group), `miqp` is declared
+  integrality, `nonconvex_quadratic` is judged per product group of the objective
+  (`IsNonconvexProductGroup(square, weight_sign, sense)`) and `singular_quadratic` is whether a group couples
+  two decisions. A product of two forms is always non-convex. A square is non-convex when the sign of its weight
+  fights the sense (a positive weight under `MAXIMIZE`, a negative one under `MINIMIZE`) or is not known before the
+  query runs. The plan knows a constant weight's sign (`ScaleSignAtPlanTime`) and not a data weight's, which counts as
+  0. So `MINIMIZE SUM(w * POWER(x, 2))` is refused on HiGHS: *"the objective multiplies a squared decision term by a
+  value whose sign is known only when the query runs"*, with the advice to multiply the square by a constant or use a
+  linear objective. A group couples two decisions when it is a product, or a square of a form over two or more
+  decisions.
+
+`ClassifyDecideModel(const DecideModelShape &)` (`decide_solver_capabilities.hpp`) is the one classifier of a model's
+shape into the class a backend must take. `DecideModelShape::AddTerm(objective, square, weight_sign, decisions)` fills
+it, and three readers do: the gate from the prepared groups (`ReadPreparedModelShape`, which `DeriveDecideModelClass`
+classifies), direct solve into `DirectIR::model_shape` from its IR's split terms (`../07_solver/todo.md` § SOL-4), and
+the built model (`SolverModel::ModelClass`) from its matrix. An integral column and a coupled Q matter only beside a
+quadratic objective: a MILP with quadratic rows is QCQP, not MIQP.
 
 `DeriveDecideModelClass` is a *prediction* of what `SolverModel::ModelClass()` will
 report once the rows are in, and it must never predict less. Where it cannot be exact
@@ -149,8 +161,10 @@ during execution, a `<>` is admitted over whole-numbered decisions only and a MI
 held by indicator rows leaves a mark (a hard clause label, a composed term, a MIN/MAX
 value link or objective). A continuous helper (an ABS envelope beside
 `SUM(POWER(...))`) therefore leaves the QP continuous, and HiGHS takes it.
-`HasCoupledQuadraticTerms` over-reports, counting a bilinear objective as coupled without checking whether the
-built Q ends up with a nonzero off-diagonal. `SolveModel` re-derives the class from
+A square of a form over two decisions counts as coupled whatever its coefficients turn out to be, and a product counts
+as coupled without checking whether the built Q ends up with a nonzero off-diagonal. Direct solve's reader errs the
+other way: it reports less when unsure, skipping terms under MIN and MAX and nested parts and reading integral columns
+from declared domains only. `SolveModel` re-derives the class from
 the built model and asserts the backend covers it, so a prediction that ever comes up
 short fails loudly instead of handing a backend a model it cannot load.
 
@@ -204,8 +218,8 @@ A thirteenth pass, `BuildDecidePreparedModel`, belongs to this stage but is
 ## 1a. Linear-form flattening — `BuildDecidePreparedModel`
 
 Turns each canonical comparison and the objective into additive terms:
-`sign * coefficient * variable`. This is where DECIDE does its linear algebra —
-distributing `K * (1 - pick)` into `K - K*pick`, pulling coefficients out of `*`
+`sign * coefficient * variable`, and product groups for the terms of degree 2. This is where DECIDE does its linear
+algebra — distributing `K * (1 - pick)` into `K - K*pick`, pulling coefficients out of `*`
 chains, pushing a divisor into every produced coefficient, folding unary minus,
 stripping binder casts, and multiplying a peeled reducer scale into everything the
 reducer produced.
@@ -241,7 +255,7 @@ comparison's `by` stamp gives `group_key`, an index into `LogicalDecide::keys`. 
 easy MIN/MAX (`MINMAX_EASY_REWRITE_TAG` on the comparison, its reducer kept:
 `was_minmax_easy`) extracts its body's terms with the reducer's `when` as their filter,
 one row per member (`ExtractEasyExtremumTerms`). The filter is attached once, after
-extraction, to every term the body produced — linear, bilinear and quadratic alike
+extraction, to every term the body produced — linear terms and product groups alike
 (`AttachReducerFilter`, shared with the aggregate shape) — rather than threaded through
 the extraction branches: a branch that forgot it (the decision-free cast arm once did)
 left one term unfiltered, and stage 08 then read every kept row as a member, so the rows
@@ -256,11 +270,49 @@ The objective's `when` wrapper gives `DecideObjective::when_condition`, and the 
 form's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`, outside the `when`) gives `DecideObjective::two_level_key`,
 the key `k` of `outer(per k: inner(e) by (k))`. A decision outside the objective's reducers
 — query-wide or not — is a `NONE` term, counted once at execution, and so is a product of
-two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a bilinear term with `reduction`
+two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a product group with `reduction`
 NONE; inside a reducer it is SUM and weighted by every row, `SUM(w * s * u)`). Any other
 product of decisions left there is refused (*"... multiplies decisions outside a reducer,
 which is not supported yet"*), since it has no once-only reading in the model.
 `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
+
+### Terms of degree 2 — product groups
+
+`DecideTermSplitter` (`decide_term_split.cpp`) reads one atom's body in the canonical spelling
+(`../04_canonicalizer/done.md` §3.3b) as terms of one kind: `{sign, coefficient (null = 1, never a decision), degree}`
+and, by degree, the decision a linear term multiplies, the one linear form a square squares, or the two a product
+multiplies. A decision-bearing node it does not open (an `ABS`, a reducer, a marker a rewrite left) is an opaque term,
+which each reader takes or declines. It never refuses: the shape check has already refused what the model has no
+reading for (`../04_canonicalizer/done.md` §3.11), and an opaque term that reaches term extraction is an internal
+error. The solver path, singleton-row folding and direct solve read the same terms, so a shape one of them admits
+cannot mean something else to another.
+
+One struct, `DecideProductGroup`, carries every term of degree 2 from here through stage 06 and stage 08, in a
+constraint and in the objective. It stands for `Q += w · l · rᵀ` summed over the rows its reducer reads:
+
+| Field | Meaning |
+|---|---|
+| `left`, `right` | Linear forms (terms of degree 0 and 1) in the row's decisions. A square has an empty `right` and multiplies `left` by itself. |
+| `weight` | The coefficient, never a decision; null means 1. A reducer's factor (`2 * SUM(POWER(x, 2))`) is multiplied into it as into a linear term's coefficient, a factor known only when the query runs included. |
+| `sign` | The term's sign. |
+| `weight_sign` | The sign of `sign * weight` as the plan knows it (`ScaleSignAtPlanTime`): +1 or -1, and 0 for a weight known only when the query runs. The gate reads convexity from it. |
+| `filter`, `avg_scale`, `qualifier_scope_idx`, `reduction`, `inputs` | As for `DecideTerm`: the reducer's own `when`, AVG's `1/N`, the key scope of its `per`, whether it is a SUM or counted once, and the values `weight` is computed from. |
+
+The model builder writes a square as a symmetric rank-one update and a product as a general one
+(`../06_model_formulation/done.md` §6). AVG scales the group's weight by `1/N`.
+
+**Departure from the standard idea.** A rank-one update `Q += l · rᵀ` carries the weight inside `l`, so a square
+with weight `w` is `l = w·f, r = f`. This stage keeps `weight` as a field of its own. A square's entry is `w·l_i·l_j`,
+evaluated in that order, so its arithmetic is bitwise the same as the weight times the form's two coefficients, with
+no weight folded into each coefficient of the form first; and the weight is evaluated once per group and row, not
+once per coefficient of the form.
+
+What the group admits: two or more squares in one objective, each a group summed into
+the one Q; a data weight on a square (`w*POWER(x, 2)`, `w*x*x`), whose sign is known only when the query runs; and a
+query-wide factor on a square. The last two are non-convex to the gate, so Gurobi only. A product outside every reducer
+in the objective is refused unless the two decisions are distinct query-wide decisions or one is `BOOL`
+(*"... multiplies decisions outside a reducer, which is not supported yet"*), since it has no once-only reading in the
+model.
 
 ### Like-term collection
 
@@ -283,7 +335,7 @@ across any of that:
 | `qualifier_scope_idx` | Selects a de-duplication mask (the reducer's own `per`, or `SUM(D: ...)`) — again a statement about which rows contribute |
 
 Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS is
-not a repeated column. Quadratic and bilinear terms are left alone too — they feed
+not a repeated column. Product groups are left alone too — they feed
 an outer product rather than a linear row.
 
 **This closes a trap, not a defect.** The model builder already folded duplicate
@@ -443,6 +495,10 @@ DROP removes them with their clause, whose `removal_group_id` they carry.
 | Boolean × other | McCormick: `w <= U·b`, `w >= x - U·(1-b)` and the `L` corners (needs runtime bounds) |
 | Non-Boolean × non-Boolean | Left in place for the Q-matrix path in the physical operator |
 
+The pass reads a product in the canonical spelling (`ReadDecideProduct`, `../04_canonicalizer/done.md` §3.3b): its
+data coefficient and sign scale every term it builds, and its two sides are the two decision-bearing factors, or one
+factor squared.
+
 The pass records a `BilinearLink` for both Boolean rows and emits none itself; stage 06 emits the rows once per
 instance of the auxiliary (`LinearizeBilinear`, `../06_model_formulation/done.md`).
 
@@ -498,7 +554,7 @@ MAX is 4. The definition belongs to no clause, as the value rewrite's does: it c
 clause provenance, a DROP of a reading clause leaves it (a row on a helper nothing else
 reads always holds), and each reading clause accounts for the helper in its own plan.
 
-**Which bodies.** Every MIN or MAX whose body is not linear (`DecideExpressionDegree`). In
+**Which bodies.** Every MIN or MAX whose body is not linear (`DecideDegreeOf`). In
 a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
 reads them as linear (`sum(power(x, 2)) + max(x) <= 30`); and in a constraint of the VALUE shape, whose helper is
 defined over linear members (`sum(power(x, 2)) + gcap * s <= 30`). A SUM or AVG that no MIN or MAX reads needs no
@@ -770,9 +826,9 @@ binaries and emits the disjunction rows once bounds are known. A hard MIN/MAX's 
 
 The two rows a `<>` becomes hold a linear left side. The pass runs after
 `RewriteBilinear`, so a product with a `BOOL` decision is already an auxiliary; a square
-or a product of decisions still on the left (`DecideExpressionDegree` above 1) has no
+or a product of decisions still on the left (`DecideDegreeOf` above 1) has no
 formulation and is refused here (*"DECIDE: <> over a product or a power of decisions is
-not supported yet: power(x, 2) <> 9"*). `LinearizeNotEqual` (stage 06) throws an
+not supported yet: SUM(POWER(x,2)) <> 3"*, the clause as written). `LinearizeNotEqual` (stage 06) throws an
 `InternalException` if one reaches it.
 
 ### AVG → SUM — `RewriteAvgToSum`
@@ -986,23 +1042,14 @@ stage 07.
 
 ## 5. What this stage does not do
 
-- Judge the polynomial degree of an expression — stage 02, which owns the one
-  definition (`DecideExpressionDegree`) and refuses degree > 2 on the bound tree
-  before any pass here runs. This stage *calls* that definition, never a copy of
-  it, and only to assert: the term splitter (`decide_term_split.cpp`) reports an
-  internal error when the inner expression of a `POWER(..., 2)` or a self-product
-  is not linear, and for a product with more than two decision factors. Both were `InvalidInputException` and reachable by a user —
-  that was the leak, since a per-row constraint bypassed stage 02's gate
-  entirely. They are kept because the passes here synthesize their own
-  expressions (the `IN` expansion, ABS linearization, `norm` lowering) that stage
-  02 never saw, so nothing upstream can vouch for them; an assertion is the only
-  thing that can. See [`../02_binder/done.md`](../02_binder/done.md) §2.
-
-  Two refusals in the splitter's `ClassifyProduct` stay user-facing and are *not*
-  degree: a product factor that is not a bare decision (`ABS(x) * y`) and a
-  same-variable product outside the recognised quadratic patterns (`x * (2*x)`).
-  Both are degree 2, which stage 02 legitimately admits — they are formulation
-  limits of this stage, which is exactly what this stage may decide.
+- Judge the polynomial degree of an expression, or any other algebra — the shape check, stage 04
+  (`../04_canonicalizer/done.md` §3.11), which owns the one definition (`DecideDegreeOf`) and refuses degree > 2 on the
+  canonical tree before any pass here runs. This stage *calls* that definition, never a copy of it. The term
+  splitter reads the one spelling and never refuses; a decision-bearing term it leaves opaque and that reaches term
+  extraction is an internal error. The passes here synthesize expressions the shape check never saw (the `IN`
+  expansion, ABS linearization, `norm` lowering), which is why extraction asserts. A product with an `ABS` factor
+  (`ABS(x) * y`) is read after `RewriteAbs` has replaced the `ABS` with its auxiliary, so it is a product of
+  decisions like any other.
 - Decide which side of a comparison a term sits on — stage 04. Every pass here was
   audited against that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`

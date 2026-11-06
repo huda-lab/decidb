@@ -325,7 +325,7 @@ In execution order:
 | 2 | `RefuseQualifiedDecisionReferences` | Refuses `D.x` where `D` is a relation of the FROM clause with no column `x` and `x` is a decision, in the constraints, the objective, the select list and `ORDER BY`: *"DECIDE: write x, not D.x; a decision is referenced by its bare name"*; in a `when` condition, a `per` key or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43). A qualified name that binds to a column, a struct field or a `USING` column is left to the SQL binder. |
 | 3 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
 | 4 | `ValidateDecideNoExplicitDecisionCasts` | Rejects `CAST`, `TRY_CAST` and `::` whose child subtree contains a decision reference, in `SUCH THAT` and the objective. Target type is irrelevant. Must run here: a source cast and a binder cast are both `BoundCastExpression`, so authorship cannot be recovered later. The post-solve `SELECT` projection is not scanned. |
-| 5 | `ValidateDecideNoNonLinearScalar` | Rejects a scalar function over a decision other than `ABS` and `POWER(..., 2)`, a decision in a divisor, and a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before anything downstream has to interpret them. |
+| 5 | `ValidateDecideNoDataAggregateFactor` | Rejects a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before symbolic normalization could distribute the decision into it. Every other refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11). |
 | 6 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
 | 7 | `TagDecideSourceFragments` | Stamps each cast and scalar subquery of the constraints and the objective with an id, so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
 
@@ -419,6 +419,7 @@ every test.
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
 | DECIDE `WHEN`, `PER` and `BY` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
 | Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`, `absorbRemovedPerKey`) |
+| Source spans (a comparison's sides, scopes, columns, a product, power or function call, the objective) | `grammar/grammar.cpp` (`noteDecideSpan`, `noteDecideSides`, `noteDecideTerm`); the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
 | DECIDE tag construction | `src/parser/transform/expression/transform_operator.cpp` |

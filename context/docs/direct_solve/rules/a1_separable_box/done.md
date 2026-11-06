@@ -70,7 +70,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 | An objective with a `per` or a two-level reducer; `AVG`, `MIN`, `MAX`, `norm` of order 1 or ∞ | Not a sum of one term per row. |
 | Entity-scoped (`T.x`) or scalar decisions | Not one decision per row. |
 | `random()`, a correlated subquery, a parameter, in a bound, a coefficient or a `when` | Not a deterministic source value. A scalar subquery that does not depend on the row is read as a source column and is admitted. |
-| A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | The solver rejects these itself, with the same message, on both paths. |
+| A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | A1 reads a square only through `DirectReadSquareTerm`, which takes a constant coefficient and declines a data one, and reads one square. The solver path answers these on Gurobi (a data weight on a square is Gurobi only). |
 | Strict bounds on a `REAL` | The binder rejects them before any rule runs. |
 | A bound that contradicts the variable's built-in domain (`x <= -1` on a non-negative decision, `BOOL x >= 2`) | The solver rejects it before it reads a row, even on an empty source, so the solver reports it. |
 

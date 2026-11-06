@@ -6,13 +6,9 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: Q1; C4b after Q1; C5 after C4b; C6 last.
+Each batch finishes completely. Lanes: C4b; C5 after C4b; C6 last.
 
-## Q1. Polynomial form (one lane)
-
-- [ ] CAN-1 One polynomial form and one shape check after it — pipeline/04_canonicalizer/todo.md § CAN-1
-
-## C4b. Shared code that reads squares (one lane; needs: Q1)
+## C4b. Shared code that reads squares (one lane)
 
 - [ ] H-39 One fragment for the separable square objective — direct_solve/framework/todo.md § H-39
 - [ ] H-41 The precision warning comes from the shared arithmetic — direct_solve/framework/todo.md § H-41 (needs: H-39)

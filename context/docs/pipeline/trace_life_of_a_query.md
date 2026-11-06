@@ -48,7 +48,8 @@ index 0. No `per`, so `variable_scopes[0] = Row()`.
 **No `x >= 0 AND x <= 1` constraints are synthesized.** The `[0,1]` box travels as
 `is_boolean_var` and is applied directly to the solver column at model-build time.
 
-`x * weight` binds: degree 1 in the decision variables, since `weight` is data.
+`x * weight` binds. Its degree in the decision variables is 1, since `weight` is data; the shape check reads that
+after canonicalization (`weight * x`).
 `WHERE category='electronics'` binds as an ordinary filter, entirely outside the
 DECIDE machinery.
 
@@ -67,15 +68,16 @@ LogicalDecide  [x]
 
 ## Stage 04 — Canonicalizer
 
-The constraint is already canonical, and the pass confirms it rather than changing
-it: `SUM(x*weight)` is one decision-bearing atom on the left, `50` is one
+The pass writes the product `x * weight` with its coefficient first, `weight * x` (EXPLAIN shows it on a `≡` line).
+The constraint is otherwise canonical: `SUM(weight * x)` is one decision-bearing atom on the left, `50` is one
 decision-free atom on the right, no scale to peel, no cast to see through.
 `ClassifyScoped` reads one decision reducer with nothing beside it: the `AGGREGATE`
 shape, one row for the one `by ()` group of the kept rows. The scope checks find
 nothing to check — no `when`, no `per`, a literal bound.
 
-The objective is canonicalized through the same machinery: one additive term,
-decision-bearing, nothing to fold into `objective_constant_offset`.
+The objective is canonicalized through the same machinery: one additive term, `value * x`,
+decision-bearing, nothing to fold into `objective_constant_offset`. The shape check then reads both clauses: every term
+has degree 1 and nothing is outside the model's vocabulary, so it refuses nothing.
 
 `VerifyCanonical` and `VerifyCanonicalObjective` both pass, and re-canonicalizing
 a copy produces an identical tree — the C7 / O5 fixed point.

@@ -17,7 +17,7 @@ the clause the user wrote.
   DECIDE-only tokens inside a DECIDE clause: `WHEN_DECIDE` (`WHEN_DECIDE_OBJECTIVE` after `MAXIMIZE`/`MINIMIZE`),
   `PER_DECIDE`, `PER_DECIDE_PAREN` before `(`, `PER_DECIDE_ROW` before `ROW`, and `BY_DECIDE` for a `BY` right after
   `)`. Ordinary SQL never sees these tokens, so `GROUP BY`, `CASE WHEN` and columns named `per` are unaffected. A
-  `WHEN` inside `CASE … END` stays SQL's (`decide_case_depth`) so the binder can refuse the `CASE` by name.
+  `WHEN` inside `CASE … END` stays SQL's (`decide_case_depth`), so a `CASE` parses as SQL.
 - The lexer state is pushed at every `DECIDE` and `SUCH` and popped when the clause reduces
   (`PGDecidePushLexState` / `PGDecidePopLexState`), so a nested DECIDE leaves the outer clause's keywords intact.
 - Grammar (`third_party/libpg_query/grammar/statements/select.y`): `decide_when`, `decide_per`, `decide_scope`,
@@ -52,8 +52,10 @@ the clause the user wrote.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
   nothing. `BindTwoLevelObjective` binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a
   `TWO_LEVEL_OBJECTIVE_TAG` wrapper (child 0 the objective) tagged with the key's entry.
-- `CASE WHEN` is refused with one message in every operand and term (`ValidateDecideNoCase`, before any binder
-  classifies a shape); a `when` condition, a key and a `by` key are SQL over the rows and accept one.
+- A `CASE WHEN` that reads no decision is data wherever it stands, a per-row coefficient as `COALESCE` over data is; a
+  `when` condition, a key and a `by` key are SQL over the rows and accept one. A `CASE` over a decision is refused by
+  the shape check after canonicalization, with one message that quotes the clause
+  (`../pipeline/04_canonicalizer/done.md` §3.11).
 
 ## Canonicalizer — shape and checks
 

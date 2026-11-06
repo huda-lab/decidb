@@ -53,7 +53,8 @@ So the operator is built in this order:
    `ROW_VARYING_SUBQUERY_TAG`, so the same semantic fact survives copies and
    optimizer-generated re-canonicalization even where the table-index sets are
    unavailable.
-5. **Canonicalize** constraints and objective, then verify (stage 04).
+5. **Canonicalize** constraints and objective, then verify (stage 04), then run the shape check on the canonical
+   spelling (stage 04, `../04_canonicalizer/done.md` §3.11).
 
 The objective is collected too, and must be: an uncorrelated `(SELECT k) * MAX(x)`
 is otherwise indistinguishable from a row-varying column and hits the fail-safe
@@ -385,7 +386,10 @@ dropped as reconciliation noise.
 
 `source_fragments` therefore rides on `LogicalDecide` (serialized as field 238)
 and is copied to `PhysicalDecide`, alongside the `constraint_sources` registry
-that shares the same renderer.
+that shares the same renderer. The registry entry holds a clause's canonical text with each respelled term quoted as
+written (`canonical_lhs`, `canonical_rhs`) and the canonical spelling a plan shows (`spelled_lhs`, `spelled_rhs`). The
+objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span, and
+`objective_canonical_differs` says canonicalization changed it.
 
 See [`../../language/explain.md`](../../language/explain.md)
 for the output itself.

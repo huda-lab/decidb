@@ -69,6 +69,9 @@ solver path answers those queries, so none of them is wrong, only slower.
   answer with its flag, so a rule that reuses a closed form warns where it does. N1 computes "the row reads the scale"
   once for both the answer and the warning. `architecture/rules.md` § What every rule must match states the obligation
   and the row set. No new window or pass (owner's precision rule).
+- **Ruling (orchestrator, for the owner while away, 2026-11-06).** For the owner to confirm. A warning reads the rows
+  the rule's error checks read: every row the clause keeps, before any row is released, as A1 and R1 do. So a warning
+  does not depend on a `LIMIT` or filter above the query, as the solver path's warning, from the whole model, does not.
 - **Needs.** H-39.
 - **Done when.** A tiny square factor warns on A1 and N1 alike; the existing warning tests of A1, N1 and R1 pass.
 

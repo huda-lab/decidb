@@ -42,17 +42,25 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A strict bound on a `MIN`/`MAX` whose body can be fractional once its constant addends move to the bound | bind | `Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) ... Compare with '>=' instead.` |
 | A NULL beside a decision | bind | `DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in COALESCE(column, 0)` |
 | A cast over a decision | bind | refused in `SUCH THAT` and the objective ([guide.md §3.2](guide.md#32-numeric-precision-and-casts)) |
-| A non-linear function over a decision | bind | `Scalar function 'sqrt' over a DECIDE variable is not supported: it would make the model non-linear. Only ABS() and POWER(..., 2) can wrap a decision variable.` |
-| `POWER(e, n)` over a decision with `n` other than the constant 2 | bind | names the exponent |
-| Division by a decision | bind | `Division by a DECIDE variable is not supported` |
-| Three or more decisions in one product | bind | `Triple or higher-order products of DECIDE variables are not supported (total degree > 2)` |
+| A function over a decision outside `+`, `-`, `*`, `/` by data, `POWER`, `ABS` and the reducers (`sqrt`, `exp`, `floor`) | plan | `DECIDE: function 'sqrt' cannot take a DECIDE variable. In the SUCH THAT clause \`SUM(sqrt(x)) <= 10\`.` |
+| An operator over a decision outside that vocabulary (`%`, `COALESCE`) | plan | `DECIDE: operator '%' cannot take a DECIDE variable. In the objective \`SUM(x % 2)\`.` |
+| `POWER(e, n)` over a decision with `n` not a whole number known before the query runs (`0.5`, `-1`, a decision, a column) | plan | `POWER over a DECIDE variable needs an exponent that is a whole number known before the query runs, found '0.5'. In the SUCH THAT clause ...` |
+| Division by a decision | plan | `DECIDE: cannot divide by a DECIDE variable. In the SUCH THAT clause ...` |
+| A `CASE` over a decision (a `CASE` over data is a per-row coefficient) | plan | `CASE over a DECIDE variable is not supported. Write the condition as a scope in front of the clause ... In the SUCH THAT clause ...` |
+| A term of degree above 2 (three decisions in one product, `POWER(x, 3)`) | plan | `DECIDE: the SUCH THAT clause \`SUM(x*x*x) <= 10\` has a term of degree 3, which no solver DeciDB supports can optimize. Instead, write each term with at most two decision factors, as in x, POWER(x, 2) or x * y.` |
 | A `BOOL` bound that cannot hold (`x >= 2`) | before reading rows | `DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable.` |
 | A NaN in the data, or an infinite coefficient | run | `DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.` (a bound: `DECIDE: the bound v is NaN on some rows. Skip those rows with 'when NOT isnan(v):'.`) |
 | A number past a DOUBLE that DeciDB derives (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a Big-M or range over the decisions' bounds) or a literal coefficient (`2e308*x`) | run | `DECIDE: SUM(b * x) <= 10 computes a number too large for a DOUBLE. Scale its data down.` (names the clause, or the objective) |
 | An infinite bound under `ABS`, `MIN`, `MAX` or `<>` | run | `DECIDE: the bound v is infinite on some rows, and this clause needs a finite one. Skip those rows with 'when isfinite(v):'.` |
 | An unbounded member under a lowered hard `MIN`/`MAX`, `<>`, Big-M `ABS` or McCormick product | run | names the variable and the bound to add |
 | A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi; a quadratic limit is quoted: `DECIDE: the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\` squares or multiplies decision variables, which needs Gurobi — not available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision variable.` |
+| A square multiplied by a value whose sign is known only when the query runs (`SUM(w * POWER(x, 2))`, a data weight or a query-wide subquery), on HiGHS | plan | `DECIDE: the objective multiplies a squared decision term by a value whose sign is known only when the query runs, which needs Gurobi — not available on this machine. Install Gurobi, or multiply the square by a constant, or use a linear objective.` |
 | A square or product under a `MIN`/`MAX` on HiGHS | plan | `DECIDE: 'max(power(x, 2))' takes the maximum of a squared or multiplied expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace power(x, 2) with an expression linear in the decision variables.` |
+
+Each refusal of the shape check (stage 04, the six rows from the function row to the degree row) quotes the clause as
+written, in an ending `In the SUCH THAT clause ...` or `In the objective ...` (the degree message names it in its first
+sentence), and points a caret at the term. A `COALESCE` over a decision is refused without a caret (BUG-50). When a
+query has two refusals, the one the pipeline reaches first is reported: the binder's, then the shape check's.
 
 DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the number-range
 warning (`../pipeline/07_solver/done.md`), and the solver's verdict on them stands. An infinite bound is no bound. A
@@ -75,11 +83,10 @@ what DeciDB formulates; their open work is in the owning stage's `todo.md`.
 | **roadmap** A two-level `by` key other than its `per` key | `DECIDE: in min(per g: sum(...) by (id)) the by key must be the per key; any other is not supported yet` |
 | **roadmap** An outer `AVG` in the two-level objective | `DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not supported yet; write sum, min or max over them` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
-| `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: power(x, 2) <> 9` |
+| `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: SUM(POWER(x,2)) <> 3` |
 | `<>` on a `MIN`/`MAX`, alone or composed | `DECIDE does not support <> comparison with MIN/MAX aggregates.` |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | `DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet` |
 | A scope inside an ordinary SQL subquery written in the clause | `DECIDE: 'WHEN condition:' is not supported yet` (or `'PER key:'`, `'PER ():'`, `'PER ROW:'`, `'BY (key)'`) |
-| `CASE WHEN` inside a constraint or objective | one message naming the `when`/`per` scopes and the CTE alternative |
 | `IN` on a reducer | refused |
 
 A reducer over data only stays on the bound side of a comparison.

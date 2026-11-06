@@ -13,7 +13,7 @@ Each decision contributes a different amount to the shared sum-of-squares bound:
 
 SUM(POWER(SQRT(weight) \* x, 2)) \<= B
 
-The factor stands inside the square. DECIDE refuses a data weight outside one (SUM(weight \* POWER(x, 2)), "unsupported product factor"), so that spelling never reaches a rule.
+The factor stands inside the square. DECIDE reads a data weight outside one (SUM(weight \* POWER(x, 2))) as a weight on the square, which the direct rules decline (`DirectReadSquareTerm` takes a constant coefficient only) and the solver path answers on Gurobi.
 
 For example:
 

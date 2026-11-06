@@ -38,9 +38,9 @@ grammar conflict DECIDE introduces is keyed on a DECIDE token.
 ```mermaid
 graph TD
     User[User SQL] --> P[01 Parser: grammar, DECIDE keyword tokens, removed-spelling refusal]
-    P --> B[02 Binder: names, scopes, types, degree, reducers]
+    P --> B[02 Binder: names, scopes, types, reducers]
     B --> L[03 Logical plan: PlanSubqueries + correlation provenance]
-    L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective]
+    L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective; the shape check judges the algebra]
     C --> O[05 Optimizer: formulation choice; output re-canonicalized]
     O --> PH[Physical plan: verify canonical once more]
     PH --> S[08 Sink: materialize surviving rows]
@@ -108,8 +108,8 @@ concurrent modifications cannot affect a running solve.
 | Concern | Owner | Not owner |
 |---|---|---|
 | Syntax and expression association | Stage 01 | Anything that moves comparison terms |
-| Names, scopes, types, degree | Stage 02 | Anything that picks a formulation |
-| Where terms sit | Stage 04 | Every other stage |
+| Names, scopes, types | Stage 02 | Anything that picks a formulation |
+| Where terms sit, the spelling of a product, the algebra's validity and degree | Stage 04 | Every other stage |
 | Formulation (Big-M, McCormick, easy/hard) | Stage 05 | The binder, the physical operator |
 | Numeric values | Stage 08 | The canonicalizer, which never evaluates |
 | Backend translation | Stage 07 | Anything that inspects a SQL plan |

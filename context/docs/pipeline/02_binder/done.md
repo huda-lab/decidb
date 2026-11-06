@@ -1,7 +1,8 @@
 # Stage 02 — Binder
 
-Resolves names, scopes and types; recognizes reducers; and decides whether a
-DECIDE clause is *semantically valid*. It produces a bound representation and
+Resolves names, scopes and types; recognizes reducers; and refuses what only
+binding can see (§2). The algebra of a clause is judged after canonicalization, by the
+shape check of stage 04. It produces a bound representation and
 nothing else — it does not move terms across a comparison, flip a relation, or
 choose a solver formulation.
 
@@ -140,37 +141,42 @@ the backend a contradictory pair.
 
 ---
 
-## 2. Degree, not occurrence count
+## 2. What the binder refuses, and where the algebra is judged
 
-Degree is one concept with one owner, and this stage is it.
-`DecideExpressionDegree` (`decide_degree.cpp`) is the only implementation in
-DeciDB. It reads the **bound** tree and returns a `DecideDegree`: the polynomial
-degree in decision variables, plus — at degree 2 — which of the two supported
-shapes produced it.
+Four layers refuse a DECIDE query, each for what only it can see:
 
-```
-decision column              -> 1
-data column / constant       -> 0
-cast                         -> degree(child)
-reducer (SUM/AVG/MIN/MAX)    -> degree(argument)   (combines rows, does not
-                                                    multiply them)
-ABS(e)                       -> degree(e)          (linearized at stage 05;
-                                                    changes magnitude, not degree)
-+ / -                        -> max over children
-*                            -> sum over children
-/ (binary)                   -> degree(numerator)  (a decision-bearing divisor
-                                                    is unclassifiable)
-POWER(base, n) / base ** n   -> degree(base) * n   (constant non-negative
-                                                    integer n only)
-anything else over a decision -> unclassifiable (refused)
-```
+| Layer | Refuses |
+|---|---|
+| Parser (stage 01) | Syntax: the removed spellings and the grammar's own errors (a missing type, a comma between constraints). |
+| Binder (this stage) | Binding: names, scopes, aggregation levels, function resolution. Language not built yet (*"is not supported yet"*). What only this stage can see: cast authorship, the declared types an integer step needs, a truth value read as a number. |
+| Shape check (stage 04, `DecideShapeCheck`) | Algebra: the function and operator vocabulary over a decision, exponents, division by a decision, `CASE` over a decision, degree (`../04_canonicalizer/done.md` §3.11). |
+| Solver gate (stage 05, `RequireDecideSolverSupport`) | What the chosen backend cannot take: quadratic rows on HiGHS, non-convexity, MIQP, a singular Q. |
 
-Degree is not an occurrence count: `(x + y) * z` has **three** occurrences but
-degree **2**, because it expands to `x*z + y*z`. Degree ≤ 2 is the gate. At
-degree 2, `is_quadratic_form` separates the two formulations — true when the
-degree came from squaring (`x*x`, `POWER(x, 2)`, `POWER(x+y, 2)`), which feeds a
-Q matrix, and false when two *different* decisions were multiplied (`x*y`),
-which feeds McCormick envelopes.
+**What this stage refuses.** Each of these needs the parsed tree, the declared types or the binding context:
+
+- a name that collides, a decision used where only data may stand, `D.x` (§1, §4a);
+- a volatile function, below;
+- a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): a source cast and a binder cast are
+  both `BoundCastExpression`, so authorship is observable only on the parsed tree;
+- an aggregate over table columns that multiplies or divides a decision (`ValidateDecideNoDataAggregateFactor`);
+- a NULL beside a decision, a reducer with no argument, a reducer inside a reducer, a non-scalar subquery or one that
+  reads a decision (§4a, §4);
+- a comparison, `BETWEEN` or conjunction that reads a decision, used as a number (*"SUM expression does not support
+  '(x > 1)'"*), and an `OR` between constraints (§4);
+- `<`, `>` and `<>` over a `REAL` decision or a fractional operand (§4): the rule is stated on declared types, which
+  only this stage reads without reading a row;
+- every *"not supported yet"* shape (§4a, §5).
+
+**Why the algebra is not judged here.** The binder sees the tree as the user wrote it, and one polynomial has many
+spellings: `2*x*x`, `x*2*x`, `w*x*x` and `(x-t)*(x-t)` are products with different trees. A judgement on that tree
+needs a recognizer per spelling, a list of cases that keeps growing, and each gap in it refuses a legal query. After
+canonicalization every product has one spelling (`../04_canonicalizer/done.md` §3.3b), so the shape check reads each
+shape one way and carries no list of cases. The check runs before any optimizer rewrite, so whether a query is legal
+cannot depend on what a rewrite did, as the integrality gate (§4) cannot. A refusal underlines the term: a respelled
+node keeps the source location of the term it replaces.
+
+The binder keeps no definition of degree. `DecideDegreeOf` (`decide_product_form.cpp`) is the one, and the shape check
+the one place that refuses on it.
 
 **Volatile functions are refused** (`RefuseVolatile`, `decide_declarations_binder.cpp`),
 over the whole bound constraint tree, the objective and every `by` key: *"DECIDE:
@@ -182,26 +188,6 @@ rows each time; refusing it here is what lets those stages evaluate a clause fre
 A value computed once per row in a subquery or CTE before DECIDE is data and stays
 legal. Functions constant within one query (`now()`, `txid_current()`) are allowed.
 
-`ValidateDecideConstraintDegree` and `ValidateDecideObjectiveDegree` run in
-`decide_declarations_binder.cpp` immediately after the constraint and objective binders,
-and they are **total**: the constraint validator descends conjunctions and the
-`when` and `per` wrappers to every comparison that becomes a model row, and checks
-both sides. That totality is the point: a check scoped to reducer arguments would
-miss a bare per-row constraint, so `SUM(POWER(x*y,2)) <= 10` and `POWER(x*y,2) <= 5`
-would be refused by different layers, in different words, depending on spelling.
-
-**Why the judgement stays here rather than moving to stage 05**, which is the
-only stage that can see the tree after its rewrites have run: validity must
-follow from the query and the schema, exactly as the integrality gate does
-(§4) — whether `POWER(x*y,2) <= 5` is a legal DECIDE query cannot depend on what
-`RewriteInDomain` did to it. And only a bind-time refusal can point at the term:
-a `BinderException` raised here carries a caret to the offending product, which
-a plan-time `InvalidInputException` has no way to do.
-
-Stage 05 consumes the same function to assert that its own rewrites preserved
-what was admitted — it never decides. See
-[`../05_optimizer/done.md`](../05_optimizer/done.md) §1a.
-
 ### Bound nodes carry a source location
 
 The DECIDE binders dispatch through `BindExpression`, which bypasses the
@@ -209,10 +195,8 @@ propagation `ExpressionBinder::Bind` does at its own entry point, so without hel
 bound tree would reach the post-binding validators with no location.
 `DecideBinder::PreserveQueryLocation` stamps it in each `BindExpression`
 override — filling only an empty location, so an inner node keeps its own span
-rather than being widened to its parent's. The degree gate needs this to point a
-caret, and the integrality gate's two refusals (§4) gained one as a side effect;
-they had been passing no node to `BinderException` because there was nothing
-useful to pass.
+rather than being widened to its parent's. The shape check needs this to point a
+caret at a term, and so do the integrality gate's two refusals (§4).
 
 ---
 
@@ -292,10 +276,9 @@ data.
 
 `GetExpressionType`'s `norm`/`SUM`/`AVG`/`MIN`/`MAX` classification is shared with
 `DecideObjectiveBinder` through `DecideBinder::ClassifyReducerCall` — the base class
-both subclasses already derive from. The one real difference between a constraint and
-an objective reducer stays a parameter rather than getting flattened: constraints pass
-`allow_bilinear=true` to the argument validator, objectives don't, since a bilinear
-term is accepted in a `SUCH THAT` clause and refused in `MAXIMIZE`/`MINIMIZE`. Each
+both subclasses already derive from. The argument validator (`ValidateSumArgument`) is the same for both: it reads
+what only the binder sees (a nested reducer over data, a subquery that is not scalar or reads a decision, a truth
+value over a decision, an `ABS` of the wrong arity) and judges no algebra. Each
 subclass keeps its own fallthrough for a non-reducer function — the shapes a
 constraint's left-hand side and an objective body accept past that point diverge.
 
@@ -311,7 +294,7 @@ is a run-time check (stage 04, "Scope checks"). Arithmetic composes freely, `-`
 included: a bound is evaluated as an expression over the row, so subtraction is no
 different from addition, and `-5.0::DOUBLE` is a negative bound like any other. A colon-form or `by` marker recurses
 into child 0 only: its relations or key are not values on that side. A data-only
-reducer never shares a scaled term with a decision (S10): `ValidateDecideNoNonLinearScalar`
+reducer never shares a scaled term with a decision (S10): `ValidateDecideNoDataAggregateFactor`
 refuses `x * avg(cap)`, `sum(x) / sum(cap)` and `(sum(x) + sum(cap)) / 2` on the parsed
 tree.
 
@@ -322,11 +305,10 @@ its own rules (`DecideBinder::IsDataOperand`). The shape does not matter: a comp
 read as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda and its parameters
 (`sum(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared statement's `$1`. A
 function and a subquery keep their DECIDE handling: a function may be a reducer or a
-scope marker, and a subquery has the checks below. A CASE never reaches these walks:
-`ValidateDecideNoCase` refuses one in every operand and term of the constraints and the
-objective, with one message, before any binder classifies a shape (a front-end check on
-the parsed tree, beside `RefuseQualifiedDecisionReferences`). A `when` condition, a key,
-a `by` key and a subquery are SQL over the rows, and a CASE there is not refused.
+scope marker, and a subquery has the checks below. A CASE that reads no decision is data, as a
+`COALESCE` over data is: DuckDB binds and evaluates it per row, and a clause reads its value as a coefficient. A
+CASE that reads a decision binds like any other node and is refused by the shape check (stage 04, §3.11) with one
+message, which quotes the clause and names the alternatives (a scope in front, `per`, or a CTE).
 
 The rule holds in four places, one per walk that reads an operand:
 
@@ -334,7 +316,7 @@ The rule holds in four places, one per walk that reads an operand:
 - The reducer-argument validator (`ValidateSumArgument`): a shape it does not list is a
   per-row coefficient when it reads no decision, as a data-only operator is.
 - The bound check (`IsAllowedDecisionFreeBoundExpression`): a parameter is one value, and
-  a comparison, conjunction, `BETWEEN` or lambda is allowed when every part is.
+  a comparison, conjunction, `BETWEEN`, lambda or `CASE` is allowed when every part is.
 
 A comparison, `BETWEEN` or conjunction that reads a decision, below the top, is neither a
 constraint nor data. `x <= (x > 1 AND cap > 1)` has a meaning in SQL (DuckDB casts the
@@ -508,7 +490,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 - a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
   yet"*, except the objective's two-level form (`IsTwoLevelObjective`), and except a
   reducer over data alone under a `*` or `/` that holds a decision (`sum(avg(cap) * x)`):
-  that is a coefficient, refused by `ValidateDecideNoNonLinearScalar` with its remedy.
+  that is a coefficient, refused by `ValidateDecideNoDataAggregateFactor` with its remedy.
 
 | Written | Bound |
 |---|---|
@@ -598,6 +580,8 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 ## 7. What this stage does not do
 
 - Move a term across a comparison or flip a relation — stage 04.
+- Judge the algebra: the function and operator vocabulary over a decision, exponents, division by a decision, `CASE`
+  over a decision, degree — the shape check, stage 04 (`../04_canonicalizer/done.md` §3.11).
 - Pick a linearization (ABS envelope, MIN/MAX easy vs hard, McCormick) — stage 05.
 - Evaluate anything against data — stage 08.
 
@@ -609,7 +593,7 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 |---|---|
 | Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
 | Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateScope`, `BindKey`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
-| Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
+| Degree, and the check that refuses on it (stage 04) | `src/planner/decide/decide_product_form.cpp`, `decide_shape_check.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
 | Refusing a DECIDE that reads an outer query | `src/planner/binder/query_node/bind_select_node.cpp` |
