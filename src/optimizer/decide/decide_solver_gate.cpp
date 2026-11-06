@@ -104,6 +104,8 @@ struct RefusalText {
 string FirstQuadraticClause(const LogicalDecide &op) {
 	for (auto &constraint : op.prepared.constraints) {
 		if (constraint->has_quadratic || constraint->has_bilinear) {
+			// A quadratic row without a source clause is an engine bug, not a query to refuse.
+			D_ASSERT(constraint->source_clause_id < op.constraint_sources.size());
 			return QuoteWrittenClause(op.constraint_sources[constraint->source_clause_id]);
 		}
 	}
