@@ -1,0 +1,350 @@
+#include "duckdb/planner/decide/decide_product_form.hpp"
+
+#include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+
+#include <cmath>
+
+namespace duckdb {
+
+bool IsDecidePowerCall(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	auto name = StringUtil::Lower(func.function.name);
+	return func.children.size() == 2 && (name == "pow" || name == "power" || name == "**" || name == "^");
+}
+
+bool TryGetDecideWholeExponent(ClientContext &context, const Expression &exponent, idx_t &out) {
+	double value;
+	if (!TryEvaluateFoldableDouble(context, exponent, value, FOLD_CATCH_ALL) || !std::isfinite(value) ||
+	    value < 1.0 || value != std::floor(value) || value > 1e9) {
+		return false;
+	}
+	out = static_cast<idx_t>(value);
+	return true;
+}
+
+static bool IsFunctionNamed(const Expression &expr, const char *name, idx_t arity) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	       expr.Cast<BoundFunctionExpression>().function.name == name &&
+	       expr.Cast<BoundFunctionExpression>().children.size() == arity;
+}
+
+DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, idx_t decide_index) {
+	DecideTermDegree result;
+	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
+		return result;
+	}
+	auto &node = *UnwrapDecideCasts(expr, decide_index);
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		result.degree = 1;
+		return result;
+	}
+	auto absorb = [&](const Expression &child, bool add) {
+		auto degree = DecideDegreeOf(context, child, decide_index);
+		result.degree = add ? result.degree + degree.degree : MaxValue(result.degree, degree.degree);
+		result.polynomial = result.polynomial && degree.polynomial;
+	};
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		// A reducer combines rows without multiplying them: the degree of what it reduces.
+		for (auto &child : node.Cast<BoundAggregateExpression>().children) {
+			absorb(*child, false);
+		}
+		return result;
+	}
+	if (node.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		ExpressionIterator::EnumerateChildren(node, [&](const Expression &child) { absorb(child, false); });
+		result.polynomial = false;
+		return result;
+	}
+	auto &func = node.Cast<BoundFunctionExpression>();
+	auto name = StringUtil::Lower(func.function.name);
+	if (name == "+" || name == "-" || name == "abs") {
+		for (auto &child : func.children) {
+			absorb(*child, false);
+		}
+		return result;
+	}
+	if (name == "*") {
+		for (auto &child : func.children) {
+			absorb(*child, true);
+		}
+		return result;
+	}
+	idx_t exponent;
+	if (IsDecidePowerCall(func) && TryGetDecideWholeExponent(context, *func.children[1], exponent)) {
+		absorb(*func.children[0], false);
+		result.degree *= exponent;
+		return result;
+	}
+	if (name == "/" && func.children.size() == 2 && !BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
+		absorb(*func.children[0], false);
+		return result;
+	}
+	for (auto &child : func.children) {
+		absorb(*child, false);
+	}
+	result.polynomial = false;
+	return result;
+}
+
+//! Equals ignores aliases. On a decision-bearing node they are structure (a reducer's `by` and `per`), so they must
+//! agree there; on data they are provenance (where a column was written), which two equal values may differ in.
+static bool DecisionAliasesEqual(const Expression &left, const Expression &right, idx_t decide_index) {
+	if (!BoundExpressionReferencesDecide(left, decide_index)) {
+		return true;
+	}
+	if (left.GetAlias() != right.GetAlias()) {
+		return false;
+	}
+	vector<const Expression *> left_children;
+	vector<const Expression *> right_children;
+	ExpressionIterator::EnumerateChildren(left, [&](const Expression &child) { left_children.push_back(&child); });
+	ExpressionIterator::EnumerateChildren(right, [&](const Expression &child) { right_children.push_back(&child); });
+	if (left_children.size() != right_children.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < left_children.size(); i++) {
+		if (!DecisionAliasesEqual(*left_children[i], *right_children[i], decide_index)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DecideTermsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
+	return Expression::Equals(left, right) && DecisionAliasesEqual(left, right, decide_index);
+}
+
+bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
+	if (DecideTermsEqual(left, right, decide_index)) {
+		return true;
+	}
+	// An additive form is a multiset of signed terms: `x + y` and `y + x` are one factor.
+	auto left_atoms = ReadCanonicalAtoms(left, decide_index);
+	auto right_atoms = ReadCanonicalAtoms(right, decide_index);
+	if (left_atoms.size() < 2 || left_atoms.size() != right_atoms.size()) {
+		return false;
+	}
+	vector<bool> matched(right_atoms.size(), false);
+	for (auto &atom : left_atoms) {
+		bool found = false;
+		for (idx_t i = 0; i < right_atoms.size() && !found; i++) {
+			if (!matched[i] && right_atoms[i].sign == atom.sign &&
+			    DecideTermsEqual(*UnwrapDecideCasts(*atom.term, decide_index),
+			                     *UnwrapDecideCasts(*right_atoms[i].term, decide_index), decide_index)) {
+				matched[i] = true;
+				found = true;
+			}
+		}
+		if (!found) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DecideFactorListsEqual(const vector<DecideProductFactor> &left, const vector<DecideProductFactor> &right,
+                            idx_t decide_index) {
+	if (left.size() != right.size()) {
+		return false;
+	}
+	vector<bool> matched(right.size(), false);
+	for (auto &factor : left) {
+		bool found = false;
+		for (idx_t i = 0; i < right.size() && !found; i++) {
+			if (!matched[i] && right[i].power == factor.power &&
+			    DecideFactorsEqual(*factor.base, *right[i].base, decide_index)) {
+				matched[i] = true;
+				found = true;
+			}
+		}
+		if (!found) {
+			return false;
+		}
+	}
+	return true;
+}
+
+namespace {
+
+struct ProductReader {
+	ClientContext &context;
+	idx_t decide_index;
+	DecideProductForm &form;
+
+	void AddFactor(vector<DecideProductFactor> &into, const Expression &base, idx_t power,
+	               const Expression *written_power) {
+		into.push_back({&base, power, written_power});
+	}
+
+	void Read(const Expression &expr, idx_t power) {
+		if (!BoundExpressionReferencesDecide(expr, decide_index)) {
+			// Data: a factor of the coefficient, as written.
+			AddFactor(form.coefficient, expr, power, nullptr);
+			return;
+		}
+		auto &node = *UnwrapDecideCasts(expr, decide_index);
+		if (IsFunctionNamed(node, "*", 2)) {
+			for (auto &child : node.Cast<BoundFunctionExpression>().children) {
+				Read(*child, power);
+			}
+			return;
+		}
+		if (IsFunctionNamed(node, "-", 1)) {
+			if (power % 2 == 1) {
+				form.sign = -form.sign;
+			}
+			Read(*node.Cast<BoundFunctionExpression>().children[0], power);
+			return;
+		}
+		idx_t exponent;
+		if (IsDecidePowerCall(node) &&
+		    TryGetDecideWholeExponent(context, *node.Cast<BoundFunctionExpression>().children[1], exponent)) {
+			auto &base = *node.Cast<BoundFunctionExpression>().children[0];
+			if (DecideDegreeOf(context, base, decide_index).degree == 1) {
+				// One linear form squared stays whole: POWER(b * x, 2) keeps coefficient 1.
+				AddFactor(form.factors, *UnwrapDecideCasts(base, decide_index), power * exponent,
+				          power == 1 && exponent >= 2 ? &node : nullptr);
+				return;
+			}
+			Read(base, power * exponent);
+			return;
+		}
+		AddFactor(form.factors, node, power, nullptr);
+	}
+};
+
+} // namespace
+
+DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &expr, idx_t decide_index) {
+	DecideProductForm form;
+	ProductReader reader {context, decide_index, form};
+	reader.Read(expr, 1);
+	// Equal decision-bearing factors are one factor raised to the sum of their powers.
+	for (idx_t i = 0; i < form.factors.size(); i++) {
+		for (idx_t j = i + 1; j < form.factors.size();) {
+			if (!DecideFactorsEqual(*form.factors[i].base, *form.factors[j].base, decide_index)) {
+				j++;
+				continue;
+			}
+			form.factors[i].power += form.factors[j].power;
+			form.factors[i].written_power = nullptr;
+			form.factors.erase(form.factors.begin() + static_cast<int64_t>(j));
+		}
+	}
+	return form;
+}
+
+static unique_ptr<Expression> Bind(ClientContext &context, const string &name, vector<unique_ptr<Expression>> children) {
+	FunctionBinder function_binder(context);
+	ErrorData error;
+	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
+	if (error.HasError()) {
+		throw InternalException("DECIDE failed to bind '%s' while writing a product: %s", name, error.Message());
+	}
+	return result;
+}
+
+static unique_ptr<Expression> Bind(ClientContext &context, const string &name, unique_ptr<Expression> left,
+                                   unique_ptr<Expression> right) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(left));
+	children.push_back(std::move(right));
+	return Bind(context, name, std::move(children));
+}
+
+static unique_ptr<Expression> BuildFactor(ClientContext &context, const DecideProductFactor &factor) {
+	if (factor.written_power) {
+		return factor.written_power->Copy();
+	}
+	if (factor.power == 1) {
+		return factor.base->Copy();
+	}
+	return Bind(context, "power", factor.base->Copy(),
+	            make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(factor.power))));
+}
+
+//! The form written as a left-deep chain: the coefficient's factors, then the decision-bearing ones.
+unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const DecideProductForm &form) {
+	unique_ptr<Expression> result;
+	for (auto *factors : {&form.coefficient, &form.factors}) {
+		for (auto &factor : *factors) {
+			auto term = BuildFactor(context, factor);
+			result = result ? Bind(context, "*", std::move(result), std::move(term)) : std::move(term);
+		}
+	}
+	if (form.sign < 0) {
+		vector<unique_ptr<Expression>> children;
+		children.push_back(std::move(result));
+		result = Bind(context, "-", std::move(children));
+	}
+	return result;
+}
+
+//! A decision-bearing `*`, or a POWER with a whole exponent: the nodes the rule rewrites.
+bool IsDecideProductNode(ClientContext &context, const Expression &expr, idx_t decide_index) {
+	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
+		return false;
+	}
+	idx_t exponent;
+	return IsFunctionNamed(expr, "*", 2) ||
+	       (IsDecidePowerCall(expr) &&
+	        TryGetDecideWholeExponent(context, *expr.Cast<BoundFunctionExpression>().children[1], exponent));
+}
+
+//! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is.
+static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node) {
+	auto form = ReadDecideProduct(context, node, decide_index);
+	auto rebuilt = BuildDecideProductForm(context, form);
+	if (rebuilt->return_type != node.return_type) {
+		rebuilt = BoundCastExpression::AddCastToType(context, std::move(rebuilt), node.return_type);
+	}
+	if (Expression::Equals(*rebuilt, node)) {
+		return nullptr;
+	}
+	rebuilt->SetAlias(node.GetAlias());
+	rebuilt->SetQueryLocation(node.GetQueryLocation());
+	return rebuilt;
+}
+
+void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr) {
+	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<Expression> &child) { NormalizeProductsInPlace(context, decide_index, child); });
+	if (!IsDecideProductNode(context, *expr, decide_index)) {
+		return;
+	}
+	auto rebuilt = RewriteProduct(context, decide_index, *expr);
+	if (rebuilt) {
+		expr = std::move(rebuilt);
+	}
+}
+
+unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr) {
+	auto result = expr.Copy();
+	NormalizeProductsInPlace(context, decide_index, result);
+	return result;
+}
+
+unique_ptr<Expression> BuildDecideProduct(ClientContext &context, idx_t decide_index, unique_ptr<Expression> left,
+                                          unique_ptr<Expression> right) {
+	auto product = Bind(context, "*", std::move(left), std::move(right));
+	auto rebuilt = RewriteProduct(context, decide_index, *product);
+	return rebuilt ? std::move(rebuilt) : std::move(product);
+}
+
+} // namespace duckdb

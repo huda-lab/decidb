@@ -8,7 +8,7 @@
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -367,8 +367,8 @@ bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
 		return IsBooleanFactor(*func.children[0]); // the sign FoldNegationIntoFactor gives a negated reducer
 	}
 	if (func.function.name == "*" && func.children.size() == 2) {
-		// Data times the Boolean: the binder admits no product of two decisions beside a reducer (degree 3), so
-		// exactly one side bears the decision.
+		// Data times the Boolean. A product of two decisions beside a reducer is degree 3, which the shape check
+		// refuses after canonicalization, so reading its first decision here only decides the shape it is refused in.
 		return IsBooleanFactor(*func.children[ReferencesDecideVar(*func.children[0]) ? 0 : 1]);
 	}
 	return false;
@@ -592,9 +592,8 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			// A constraint takes any data factor (a row-varying one is a tuple term, below), and a clause of
 			// either kind a Boolean decision on a bare reducer: the clause takes the VALUE shape, where the
 			// reducer becomes a helper decision and the product `b * helper` is linearized as every Boolean
-			// product is. An INT or REAL decision is not convex. (A divisor that bears a decision is refused
-			// by the binder, before this runs.)
-			const bool boolean_factor = IsBooleanFactor(*factor) &&
+			// product is. An INT or REAL decision is not convex, and no decision divides.
+			const bool boolean_factor = !factor_divides && IsBooleanFactor(*factor) &&
 			                            UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() ==
 			                                ExpressionClass::BOUND_AGGREGATE;
 			if (!boolean_factor) {
@@ -872,51 +871,13 @@ unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundAggregateEx
 	return result;
 }
 
-//! The bare decision `expr` is a constant multiple of, with that multiple folded into
-//! `value` -- `2 * x`, `x * 2`, `-x`, `x / 2` -- or `expr` itself with `value` untouched
-//! when it is not one. PeelScale peels factors off reducers only, so a plain decision
-//! carries its factor inside the atom; the like-term merge needs it outside.
-static const Expression *PeelBareDecisionFactors(ClientContext &context, const Expression &expr, idx_t decide_index,
-                                                 double &value) {
-	auto *cur = UnwrapDecideCasts(expr, decide_index);
-	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-		return cur;
-	}
-	auto &func = cur->Cast<BoundFunctionExpression>();
-	const auto &name = func.function.name;
-	auto constant = [&](const Expression &candidate, double &c) {
-		return TryEvaluateFoldableDouble(context, candidate, c, FOLD_CATCH_ALL) && std::isfinite(c) && c != 0.0;
-	};
-	double c;
-	double inner = 1.0;
-	const Expression *term = nullptr;
-	if (name == "-" && func.children.size() == 1) {
-		term = PeelBareDecisionFactors(context, *func.children[0], decide_index, inner);
-		inner = -inner;
-	} else if (name == "*" && func.children.size() == 2) {
-		for (idx_t side = 0; side < 2 && !term; side++) {
-			if (constant(*func.children[side], c)) {
-				term = PeelBareDecisionFactors(context, *func.children[1 - side], decide_index, inner);
-				inner *= c;
-			}
-		}
-	} else if (name == "/" && func.children.size() == 2 && constant(*func.children[1], c)) {
-		term = PeelBareDecisionFactors(context, *func.children[0], decide_index, inner);
-		inner /= c;
-	}
-	if (!term || term->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-		return cur;
-	}
-	value *= inner;
-	return term;
-}
-
 bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
-	// The term an atom is a multiple of, and that multiple as a number known before the
-	// query runs: the factor PeelScale peeled off a reducer (none is 1, a divisor its
-	// reciprocal), with the constant factors a bare decision stands under folded in.
-	// False when the factor is data or a subquery, which is not summable here.
-	auto key_of = [&](const Atom &atom, const Expression *&term, double &value) {
+	// The term an atom is a multiple of -- its product form without the constant -- and
+	// that multiple as a number known before the query runs: the factor PeelScale peeled
+	// off a reducer (none is 1, a divisor its reciprocal), a constant divisor's
+	// reciprocal, and the product's constant coefficient and sign. False when a factor is
+	// data or a subquery, which is not summable here.
+	auto key_of = [&](const Atom &atom, DecideProductForm &key, double &value) {
 		value = 1.0;
 		if (atom.scale) {
 			double scale;
@@ -925,26 +886,47 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 				return false;
 			}
 			value = atom.scale_divides ? 1.0 / scale : scale;
-			term = atom.expr;
-			return true;
 		}
-		term = PeelBareDecisionFactors(context, *atom.expr, decide_index, value);
+		const Expression *term = UnwrapDecideCasts(*atom.expr, decide_index);
+		double divisor;
+		while (term->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+		       term->Cast<BoundFunctionExpression>().function.name == "/" &&
+		       term->Cast<BoundFunctionExpression>().children.size() == 2 &&
+		       TryEvaluateFoldableDouble(context, *term->Cast<BoundFunctionExpression>().children[1], divisor,
+		                                 FOLD_CATCH_ALL) &&
+		       std::isfinite(divisor) && divisor != 0.0) {
+			value /= divisor;
+			term = UnwrapDecideCasts(*term->Cast<BoundFunctionExpression>().children[0], decide_index);
+		}
+		key = ReadDecideProduct(context, *term, decide_index);
+		double coefficient = key.sign;
+		for (auto &factor : key.coefficient) {
+			double c;
+			if (!TryEvaluateFoldableDouble(context, *factor.base, c, FOLD_CATCH_ALL) || !std::isfinite(c) ||
+			    c == 0.0) {
+				return false;
+			}
+			coefficient *= std::pow(c, static_cast<double>(factor.power));
+		}
+		key.coefficient.clear();
+		key.sign = 1;
+		value *= coefficient;
 		return true;
 	};
 	bool merged = false;
 	for (idx_t i = 0; i < atoms.size(); i++) {
-		const Expression *term;
+		DecideProductForm key;
 		double total;
-		if (atoms[i].placement != Placement::LEFT || !key_of(atoms[i], term, total)) {
+		if (atoms[i].placement != Placement::LEFT || !key_of(atoms[i], key, total)) {
 			continue;
 		}
 		total *= atoms[i].sign;
 		vector<idx_t> like;
 		for (idx_t j = i + 1; j < atoms.size(); j++) {
-			const Expression *other;
+			DecideProductForm other;
 			double value;
 			if (atoms[j].placement == Placement::LEFT && key_of(atoms[j], other, value) &&
-			    CanonicalTreesEqual(*term, *other)) {
+			    DecideFactorListsEqual(key.factors, other.factors, decide_index)) {
 				total += atoms[j].sign * value;
 				like.push_back(j);
 			}
@@ -956,7 +938,14 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 		}
 		const bool whole = total == std::floor(total) && std::fabs(total) < 2147483647.0;
 		atoms[i].sign = 1;
-		atoms[i].expr = term;
+		if (key.factors.size() == 1 && key.factors[0].power == 1) {
+			atoms[i].expr = key.factors[0].base;
+		} else {
+			// The product without its constant, in the one spelling.
+			auto owned = BuildDecideProductForm(context, key);
+			atoms[i].expr = owned.get();
+			atoms[i].owned = std::move(owned);
+		}
 		atoms[i].scale = make_uniq_base<Expression, BoundConstantExpression>(
 		    whole ? Value::INTEGER(static_cast<int32_t>(total)) : Value::DOUBLE(total));
 		atoms[i].scale_divides = false;
@@ -967,6 +956,7 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 	}
 	return merged;
 }
+
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
                                                    unique_ptr<Expression> right) const {
@@ -1003,9 +993,14 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 			// with the factor on the LEFT. `SUM(x) * 2`, `2 * SUM(x)` and the cast-laden
 			// variants all converge here, which is what lets each downstream consumer
 			// match a single shape instead of four.
-			term = atom.scale_divides
-			           ? BindOp("/", std::move(term), atom.scale->Copy())
-			           : BindOp("*", atom.scale->Copy(), std::move(term));
+			// A data factor on a decision-bearing term that is not a scaled reducer (a merged
+			// `2 * POWER(x, 2)`, a distributed `2 * (x * y)`) is a product, written as every
+			// product is.
+			const bool product = !atom.scale_divides && !ContainsReducer(*atom.expr) &&
+			                     ReferencesDecideVar(*atom.expr) && !ReferencesDecideVar(*atom.scale);
+			term = atom.scale_divides ? BindOp("/", std::move(term), atom.scale->Copy())
+			       : product          ? BuildDecideProduct(context, decide_index, atom.scale->Copy(), std::move(term))
+			                          : BindOp("*", atom.scale->Copy(), std::move(term));
 		}
 		if (!acc) {
 			if (sign >= 0) {
@@ -1049,7 +1044,8 @@ void DecideCanonicalizer::FoldNegationIntoFactor(Atom &atom) const {
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
 	auto desugared = DesugarNorms(expr);
-	return CanonicalizeComparisonInternal(desugared ? *desugared : expr);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : expr);
+	return CanonicalizeComparisonInternal(*written);
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const Expression &expr) const {
@@ -1178,7 +1174,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
                                                                   double &out_constant_offset) const {
 	auto desugared = DesugarNorms(objective);
-	return CanonicalizeObjectiveInternal(desugared ? *desugared : objective, out_constant_offset);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective);
+	return CanonicalizeObjectiveInternal(*written, out_constant_offset);
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
@@ -1307,7 +1304,7 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	for (auto &atom : lhs_atoms) {
 		if (!ContainsReducer(*atom.expr)) {
 			only_plain_avgs = false;
-			if (!DecideExpressionDegree(*atom.expr, decide_index).IsLinear()) {
+			if (!DecideDegreeOf(context, *atom.expr, decide_index).IsLinear()) {
 				value = true; // `sum(x) + b * s`: the product beside the reducer is a term of each row
 			}
 			decision_beside = decision_beside || ReferencesDecideVar(*atom.expr);
@@ -1634,7 +1631,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints) const {
 	auto desugared = DesugarNorms(constraints);
-	auto result = CanonicalizeTreeInternal(desugared ? *desugared : constraints);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints);
+	auto result = CanonicalizeTreeInternal(*written);
 	ValidateCanonicalTree(*result);
 	return result;
 }

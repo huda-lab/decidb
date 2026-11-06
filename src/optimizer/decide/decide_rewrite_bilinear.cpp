@@ -9,6 +9,7 @@
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -279,107 +280,115 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	if (!expr) return;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr->Cast<BoundFunctionExpression>();
-		string fname = StringUtil::Lower(func.function.name);
-
-		if (fname == "*" && func.children.size() == 2) {
-			// Check if this is a bilinear product of two different decide variable expressions
-			vector<idx_t> left_vars, right_vars;
-			CollectDecideVarIndices(*func.children[0], decide.decide_index, left_vars);
-			CollectDecideVarIndices(*func.children[1], decide.decide_index, right_vars);
-
-			// A reducer under a factor (`b * SUM(x)`) is not a product of two variables: it is the value
-			// rewrite's, which holds the reducer in a helper decision and hands the product back here.
-			if (!left_vars.empty() && !right_vars.empty() && !ContainsReducer(*func.children[0]) &&
-			    !ContainsReducer(*func.children[1]) && func.children[0]->ToString() != func.children[1]->ToString()) {
-				// (Identical factors are a square: the QP pipeline's.) Each factor is an affine expression in the
-				// decisions, and the product distributes over its terms.
-				Affine left, right;
-				auto is_bool = [&](idx_t var) {
-					return var < decide.is_boolean_var.size() && decide.is_boolean_var[var];
+	if (IsDecideProductNode(optimizer.context, *expr, decide.decide_index)) {
+		// A product of degree 2 in the canonical spelling: `coefficient * l * r`, or `coefficient * POWER(l, 2)`,
+		// whose two sides are one linear form.
+		auto form = ReadDecideProduct(optimizer.context, *expr, decide.decide_index);
+		vector<const Expression *> sides;
+		for (auto &factor : form.factors) {
+			for (idx_t i = 0; i < factor.power; i++) {
+				sides.push_back(factor.base);
+			}
+		}
+		// A reducer under a factor (`b * SUM(x)`) is not a product of two variables: it is the value
+		// rewrite's, which holds the reducer in a helper decision and hands the product back here.
+		if (sides.size() == 2 && !ContainsReducer(*sides[0]) && !ContainsReducer(*sides[1])) {
+			// Each side is an affine expression in the decisions, and the product distributes over its terms.
+			Affine left, right;
+			auto is_bool = [&](idx_t var) {
+				return var < decide.is_boolean_var.size() && decide.is_boolean_var[var];
+			};
+			auto has_bool = [&](const Affine &affine) {
+				return std::any_of(affine.terms.begin(), affine.terms.end(),
+				                   [&](const AffineTerm &term) { return is_bool(term.var); });
+			};
+			if (ReadAffine(optimizer, *sides[0], decide.decide_index, left) &&
+			    ReadAffine(optimizer, *sides[1], decide.decide_index, right) &&
+			    (has_bool(left) || has_bool(right))) {
+				// The terms of the product: `coefficient * first * second` for a pair of decisions (`second` is
+				// INVALID for one decision, both INVALID for the constant), merged by the pair.
+				struct ProductTerm {
+					idx_t first;
+					idx_t second;
+					unique_ptr<Expression> coefficient;
 				};
-				auto has_bool = [&](const Affine &affine) {
-					return std::any_of(affine.terms.begin(), affine.terms.end(),
-					                   [&](const AffineTerm &term) { return is_bool(term.var); });
+				vector<ProductTerm> product;
+				auto add = [&](idx_t first, idx_t second, unique_ptr<Expression> coefficient) {
+					// A Boolean squared is itself.
+					if (first == second && first != DConstants::INVALID_INDEX && is_bool(first)) {
+						second = DConstants::INVALID_INDEX;
+					}
+					auto same = std::find_if(product.begin(), product.end(), [&](const ProductTerm &term) {
+						const bool swapped = term.first == second && term.second == first &&
+						                     second != DConstants::INVALID_INDEX;
+						return (term.first == first && term.second == second) || swapped;
+					});
+					if (same == product.end()) {
+						product.push_back({first, second, std::move(coefficient)});
+					} else {
+						same->coefficient =
+						    AddCoefficients(optimizer, std::move(same->coefficient), std::move(coefficient));
+					}
 				};
-				if (ReadAffine(optimizer, *func.children[0], decide.decide_index, left) &&
-				    ReadAffine(optimizer, *func.children[1], decide.decide_index, right) &&
-				    (has_bool(left) || has_bool(right))) {
-					// The terms of the product: `coefficient * first * second` for a pair of decisions (`second` is
-					// INVALID for one decision, both INVALID for the constant), merged by the pair.
-					struct ProductTerm {
-						idx_t first;
-						idx_t second;
-						unique_ptr<Expression> coefficient;
-					};
-					vector<ProductTerm> product;
-					auto add = [&](idx_t first, idx_t second, unique_ptr<Expression> coefficient) {
-						// A Boolean squared is itself.
-						if (first == second && first != DConstants::INVALID_INDEX && is_bool(first)) {
-							second = DConstants::INVALID_INDEX;
-						}
-						auto same = std::find_if(product.begin(), product.end(), [&](const ProductTerm &term) {
-							const bool swapped = term.first == second && term.second == first &&
-							                     second != DConstants::INVALID_INDEX;
-							return (term.first == first && term.second == second) || swapped;
-						});
-						if (same == product.end()) {
-							product.push_back({first, second, std::move(coefficient)});
-						} else {
-							same->coefficient =
-							    AddCoefficients(optimizer, std::move(same->coefficient), std::move(coefficient));
-						}
-					};
-					auto copy = [](const unique_ptr<Expression> &coefficient) {
-						return coefficient ? coefficient->Copy() : nullptr;
-					};
-					for (auto &a : left.terms) {
-						for (auto &b : right.terms) {
-							add(a.var, b.var,
-							    MultiplyCoefficients(optimizer, copy(a.coefficient), copy(b.coefficient)));
-						}
-						if (right.constant) {
-							add(a.var, DConstants::INVALID_INDEX,
-							    MultiplyCoefficients(optimizer, copy(a.coefficient), right.constant->Copy()));
-						}
+				auto copy = [](const unique_ptr<Expression> &coefficient) {
+					return coefficient ? coefficient->Copy() : nullptr;
+				};
+				for (auto &a : left.terms) {
+					for (auto &b : right.terms) {
+						add(a.var, b.var,
+						    MultiplyCoefficients(optimizer, copy(a.coefficient), copy(b.coefficient)));
 					}
-					if (left.constant) {
-						for (auto &b : right.terms) {
-							add(b.var, DConstants::INVALID_INDEX,
-							    MultiplyCoefficients(optimizer, left.constant->Copy(), copy(b.coefficient)));
-						}
-						if (right.constant) {
-							add(DConstants::INVALID_INDEX, DConstants::INVALID_INDEX,
-							    MultiplyCoefficients(optimizer, left.constant->Copy(), right.constant->Copy()));
-						}
+					if (right.constant) {
+						add(a.var, DConstants::INVALID_INDEX,
+						    MultiplyCoefficients(optimizer, copy(a.coefficient), right.constant->Copy()));
 					}
-
-					auto column = [&](idx_t var) -> unique_ptr<Expression> {
-						auto &ref = decide.decide_variables[var]->Cast<BoundColumnRefExpression>();
-						return make_uniq<BoundColumnRefExpression>(ref.alias, ref.return_type, ref.binding);
-					};
-					unique_ptr<Expression> sum;
-					for (auto &term : product) {
-						unique_ptr<Expression> factor;
-						if (term.first == DConstants::INVALID_INDEX) {
-							factor = nullptr;
-						} else if (term.second == DConstants::INVALID_INDEX) {
-							factor = column(term.first);
-						} else if (is_bool(term.first) || is_bool(term.second)) {
-							factor = column(AddBooleanProduct(decide, links, clause_alias, term.first,
-							                                  term.second));
-						} else {
-							// Two decisions, neither Boolean: the Q matrix's.
-							factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
-						}
-						auto value = MultiplyCoefficients(optimizer, std::move(term.coefficient), std::move(factor));
-						sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value))
-						          : std::move(value);
-					}
-					expr = std::move(sum);
-					return;
 				}
+				if (left.constant) {
+					for (auto &b : right.terms) {
+						add(b.var, DConstants::INVALID_INDEX,
+						    MultiplyCoefficients(optimizer, left.constant->Copy(), copy(b.coefficient)));
+					}
+					if (right.constant) {
+						add(DConstants::INVALID_INDEX, DConstants::INVALID_INDEX,
+						    MultiplyCoefficients(optimizer, left.constant->Copy(), right.constant->Copy()));
+					}
+				}
+
+				auto column = [&](idx_t var) -> unique_ptr<Expression> {
+					auto &ref = decide.decide_variables[var]->Cast<BoundColumnRefExpression>();
+					return make_uniq<BoundColumnRefExpression>(ref.alias, ref.return_type, ref.binding);
+				};
+				// The product's coefficient, its data factors and sign, scales every term.
+				unique_ptr<Expression> scale = form.sign < 0 ? make_uniq<BoundConstantExpression>(Value::INTEGER(-1)) : nullptr;
+				for (auto &factor : form.coefficient) {
+					auto part = factor.power == 1 ? factor.base->Copy()
+					                              : optimizer.BindScalarFunction(
+					                                    "power", factor.base->Copy(),
+					                                    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(factor.power))));
+					scale = MultiplyCoefficients(optimizer, std::move(scale), std::move(part));
+				}
+				unique_ptr<Expression> sum;
+				for (auto &term : product) {
+					unique_ptr<Expression> factor;
+					if (term.first == DConstants::INVALID_INDEX) {
+						factor = nullptr;
+					} else if (term.second == DConstants::INVALID_INDEX) {
+						factor = column(term.first);
+					} else if (is_bool(term.first) || is_bool(term.second)) {
+						factor = column(AddBooleanProduct(decide, links, clause_alias, term.first,
+						                                  term.second));
+					} else {
+						// Two decisions, neither Boolean: the Q matrix's.
+						factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
+					}
+					auto value = MultiplyCoefficients(
+					    optimizer, MultiplyCoefficients(optimizer, copy(scale), std::move(term.coefficient)),
+					    std::move(factor));
+					sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value))
+					          : std::move(value);
+				}
+				expr = std::move(sum);
+				return;
 			}
 		}
 	}
