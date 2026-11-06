@@ -45,8 +45,8 @@ row that computes it. Nothing is computed on a row a `when` drops. Every input r
 late bad row raises under `LIMIT 1`, `COUNT(*)` or a filter; only `LIMIT 0` skips it. An empty source returns no rows,
 whatever the limit says.
 
-**With no Gurobi.** The solver path refuses a quadratic limit on a machine with no Gurobi license ("a SUCH THAT clause
-squares or multiplies decision variables, which needs Gurobi"). That refusal is raised when the solver plan is built
+**With no Gurobi.** The solver path refuses a quadratic limit on a machine with no Gurobi license ("the SUCH THAT clause
+`SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables, which needs Gurobi"). That refusal is raised when the solver plan is built
 (`plan_decide.cpp`, `RequireDecideSolverSupport`), after a rule has replaced the DECIDE node, so N1 answers such a query.
 A forced backend turns direct solve off, so forced HiGHS still refuses it.
 

@@ -51,7 +51,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A number past a DOUBLE that DeciDB derives (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a Big-M or range over the decisions' bounds) or a literal coefficient (`2e308*x`) | run | `DECIDE: SUM(b * x) <= 10 computes a number too large for a DOUBLE. Scale its data down.` (names the clause, or the objective) |
 | An infinite bound under `ABS`, `MIN`, `MAX` or `<>` | run | `DECIDE: the bound v is infinite on some rows, and this clause needs a finite one. Skip those rows with 'when isfinite(v):'.` |
 | An unbounded member under a lowered hard `MIN`/`MAX`, `<>`, Big-M `ABS` or McCormick product | run | names the variable and the bound to add |
-| A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi |
+| A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi; a quadratic limit is quoted: `DECIDE: the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\` squares or multiplies decision variables, which needs Gurobi — not available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision variable.` |
 | A square or product under a `MIN`/`MAX` on HiGHS | plan | `DECIDE: 'max(power(x, 2))' takes the maximum of a squared or multiplied expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace power(x, 2) with an expression linear in the decision variables.` |
 
 DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the number-range

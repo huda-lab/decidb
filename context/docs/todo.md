@@ -6,15 +6,17 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: C3; C4 after C3; C5 after C4; C6 last.
+Each batch finishes completely. Lanes: Q1 and U1 side by side; C4 after Q1; C5 after C4; C6 last.
 
-## C3. Refusal messages (one lane)
+## Q1. Polynomial form (one lane; architect review first)
 
-- [ ] SOL-3 A quadratic-limit refusal names the clause — pipeline/07_solver/todo.md § SOL-3
-- [ ] BUG-47 A forced HiGHS says Gurobi is not available — issues/bugs.md § BUG-47
-- [ ] BUG-46 A data weight on a square says degree above 2 — issues/bugs.md § BUG-46
+- [ ] CAN-1 One polynomial form for decision products — pipeline/04_canonicalizer/todo.md § CAN-1
 
-## C4. Shared code before N2 (one lane; needs: C3)
+## U1. Unbounded diagnosis (one lane)
+
+- [ ] UNB-1 Name the runaway decision of a model with a quadratic row — diagnostics/unbounded/todo.md § UNB-1
+
+## C4. Shared code before N2 (one lane; needs: Q1)
 
 - [ ] H-38 The plan helpers A1, N1 and R1 each copy — direct_solve/framework/todo.md § H-38
 - [ ] H-40 `DirectPart::IsPlainSum()` — direct_solve/framework/todo.md § H-40
@@ -31,7 +33,3 @@ Each batch finishes completely. Lanes: C3; C4 after C3; C5 after C4; C6 last.
 ## C6. Measurement (last; the owner runs it)
 
 - [ ] N1-6 Benchmark sizes past `sf=1` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-6
-
-## Later (not scheduled)
-
-- [ ] UNB-1 Name the runaway decision of a model with a quadratic row — diagnostics/unbounded/todo.md § UNB-1

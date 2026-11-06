@@ -2,18 +2,6 @@
 
 Open work in the backends and their limits. Finished work is in [done.md](done.md).
 
-## SOL-3 — A quadratic-limit refusal names the clause
-
-- **Problem.** With no Gurobi, a query N1 declines because of one extra clause (`x <= 50 AND SUM(POWER(x, 2)) <= 25`)
-  is refused with `DECIDE: a SUCH THAT clause squares or multiplies decision variables, which needs Gurobi — not
-  available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision
-  variable.` (`DescribeGap`, `decide_solver_gate.cpp`). It does not say which clause, and its rewrite would delete the
-  sum of squares. The same holds for `x >= -2`, `x >= 1` and `when f: x >= 0`.
-- **Change.** Quote the clause as the user wrote it, from its source text, in place of "a SUCH THAT clause". No hint
-  about the direct-solve shape (a decline is a plain yes or no).
-- **Done when.** The no-Gurobi refusal of the repro names `SUM(POWER(x, 2)) <= 25`; the existing refusal tests read the
-  quoted clause.
-
 ## SOL-4 — Errors point to DIAGNOSE only where it runs
 
 - **Ruling (owner, 2026-11-06).** Leave the advice out only where `DIAGNOSE` would be refused for lack of a solver,

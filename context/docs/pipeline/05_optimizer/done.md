@@ -127,6 +127,12 @@ different reasons:
 - **Not bind time.** The same SQL is legal on every machine. What differs is whether
   this machine has a solver that can run it — so this is a planning failure, not a
   semantic one, and the message blames the host and names the solver to install.
+  A quadratic limit is quoted as written (`the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\`
+  squares or multiplies decision variables`): `FirstQuadraticClause` reads the first
+  quadratic row's source clause, and asserts the row has one. When `DECIDB_FORCE_SOLVER`
+  excludes an installed backend that could run the query, the sentence names the
+  override (`... which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset
+  DECIDB_FORCE_SOLVER, or ...`) instead of asking for an install.
 - **Not model load.** The old refusals lived in the HiGHS backend and fired after a
   full scan and a full model build. Nothing about the four classes needs a single
   row: `quadratic_constraints` is tree shape, `miqp` is declared integrality,
@@ -527,7 +533,10 @@ inner reducer). The refusal names the reducer and not a column to bound, because
 EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decision per row,
 at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
 `BODY_EQUAL`). The defining row itself is left out (`BODY_DEFINITION_TAG` on the row): it
-restates the body the reducer already prints. A MIN or MAX over defined members that is not
+restates the body the reducer already prints. The row carries the source clause of the
+first clause that reads the helper (`CopySourceClauseTag`), so a refusal can quote it, and
+no removal group: every clause that reads the helper shares the row, so DIAGNOSE drops
+none of them with it. A MIN or MAX over defined members that is not
 held by its envelope alone `becomes an extremum column stated to the solver natively`
 (`EXTREMUM_NATIVE`, `EXTREMUM_PER_GROUP_NATIVE`), read off `BODY_DEFINITION_TAG` on the
 reducer, instead of claiming indicator rows it never has.
