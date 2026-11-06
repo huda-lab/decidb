@@ -77,8 +77,11 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path
   (`DirectOnKeptRows`, `DirectCheckOnKeptRows`; `test_direct_source_values.py` checks each place a rule masks). Silently answering where the solver refuses is a wrong answer. What
   the rule does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
-  enough), or the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
-  name. Every other message the solver words for the user is the solver's text (see User-facing wording).
+  enough), the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
+  name, or a refusal over a number only the solver's own model computes. A square `k*(w*x + t)^2` expands to a
+  constant `k*t^2` that moves no answer, and DuckDB evaluates `SUM(POWER(x - v, 2))` at the answer without it; the
+  solver path refuses such a query once its running constant passes a DOUBLE (and on Gurobi already from about 1e200,
+  as unbounded), and a rule answers it. A rule raises a number past a DOUBLE only where its own plan computes one. Every other message the solver words for the user is the solver's text (see User-facing wording).
 - **One numeric domain.** Values are evaluated with DuckDB's semantics, then converted to DOUBLE. Counts are exact only
   up to 2^53, and a rule declines anything it cannot represent exactly.
 - **Results.** Every source column in order, then one column per decision: `INTEGER` 0/1 for `BOOL`, `BIGINT` for

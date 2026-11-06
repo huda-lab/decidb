@@ -27,20 +27,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - Never without the owner: large-tier benchmarks or other long CPU-bound runs, regenerating goldens before reading the
   diff, pushing, new branches or worktrees, `git stash`.
 
-## H-47 — A square's constant past a DOUBLE answers where the solver raises
-
-- **Problem.** `SELECT id, x FROM (SELECT 1 AS id, 1e200 AS v) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1e300
-  MINIMIZE SUM(POWER(x - v, 2))` raises "computes a number too large for a DOUBLE" under `off` and answers 1e200
-  under `require` (A1). A2's `per ():` form does the same. The solver expands `k*(w*x + t)^2` and its constant
-  `k*t^2` overflows. `DirectLayoutQuadraticPart` lays out `w` and `t` and the rules fold only `a` and `b`, so no
-  check reads the constant. Answering where the solver refuses is a wrong answer (`../architecture/rules.md` § What
-  every rule must match from the solver).
-- **Change.** Check the square's constant where the solver computes it, in the shared layout or fold, so that every
-  rule using them raises the solver's text. Find where the solver raises (per term or on the summed constant) and match
-  that point.
-- **Done when.** The repro raises the same text under `require` and `off` for A1, A2 and N1's square objective, in
-  `test_direct_user_facing.py`, and a constant just below the limit still answers on both paths.
-
 ## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
 
 - **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. `ReadObjective`

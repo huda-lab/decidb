@@ -76,6 +76,9 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 ## Where it differs from the solver
 
+- **A square's constant past a DOUBLE** (`SUM(POWER(x - v, 2))` with `v = 1e200`): the solver path expands the square
+  and refuses once its constant `k*t^2` passes a DOUBLE; A1 answers `x = v`, which never reads that constant
+  (`../../architecture/rules.md` § What every rule must match from the solver).
 - **Values within the solver's tolerance of an integer** (`INT x <= 1.9999999`). Direct solve reads every bound exactly,
   as S1 decided; the solver accepts a violation of about 1e-6 and returns 2. The tests use values that are
   exact in a double, so they never sit in that band.

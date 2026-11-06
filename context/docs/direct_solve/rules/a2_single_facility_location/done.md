@@ -65,8 +65,9 @@ on these shapes is in [todo.md](todo.md).
 - **Its own warning.** The divisor is the summed square factor `a` in `-b / (2a)`, through `DirectTurningPoint`; the rule
   is the framework's [Number-range warning](../../framework/done.md).
 - **Ties.** With no kept row, the solver may return any value of the interval; A2 returns the point nearest 0.
-- **A square's constant past a DOUBLE** (`v = 1e200`): the solver raises, and A2 answers. The same holds for A1; the
-  fix belongs in the shared layout ([framework todo](../../framework/todo.md)).
+- **A square's constant past a DOUBLE** (`v = 1e200`): the solver path expands the square and refuses once its
+  constant `k*t^2` passes a DOUBLE; A2 answers the true center, which never reads that constant
+  (`../../architecture/rules.md` § What every rule must match from the solver).
 
 ## Tests
 

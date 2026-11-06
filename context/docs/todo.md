@@ -7,7 +7,7 @@ Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/a2_single_facility_location/definition.md`. Checks: `direct_solve/framework/todo.md` § How to work
 any task.
 
-Each batch finishes completely. Lanes: G2, beside H1; G3 after G2; G4 after G3.
+Each batch finishes completely. Lanes: G2; G3 after G2; G4 after G3.
 
 ## Owner decisions
 
@@ -25,10 +25,6 @@ Each batch finishes completely. Lanes: G2, beside H1; G3 after G2; G4 after G3.
 - [ ] A2-5 Absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-5
 - [ ] A2-6 Maximum absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-6
 - [ ] A2-7 L0 loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-7
-
-## H1. Framework fixes found on the way
-
-- [ ] H-47 A square's constant past a DOUBLE — direct_solve/framework/todo.md § H-47
 
 ## G4. Measurement (the orchestrator, after G3)
 
