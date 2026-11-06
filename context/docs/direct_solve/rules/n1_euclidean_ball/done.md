@@ -1,7 +1,7 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-06, on top of `0c7ca74627`: `test/decide/run_direct_matrix.sh`, each of its four suites 6,207 passed;
-C++ `build/release/test/unittest "[decidb]"` (3,804 assertions in 81 cases).
+Verified on 2026-11-06, on top of `116edc98f5`: `test/decide/run_direct_matrix.sh`, each of its four suites 6,230 passed;
+C++ `build/release/test/unittest "[decidb]"` (3,817 assertions in 81 cases).
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -17,9 +17,10 @@ One row-scoped `REAL` decision, with:
   is in a ball when the scope keeps it and its key has no NULL in an element that does not group NULLs.
 - **The limit's value.** A constant of magnitude below 1e20, or a value of the source row
   (`DirectIsSourceOnlyNumericMayRaise`). The tightest value in a group applies and a NULL has no limit, so a group with
-  no value has no ball. A limit that differs between a group's rows reaches the rule as its group's tightest value; a
-  limit that is an aggregate of the rows does not, unless the sum has its own `when`, where the driver computes it first
-  and the rule reads a column.
+  no value has no ball. Or an aggregate of the rows (`<= SUM(budget) by (k)`, `<= 0.5 * SUM(l)`), a value of its group
+  that the plan computes in a window over the ball's group, as S1 and R1 do (`DirectGroupBoundIsReadable`,
+  `DirectWindowSink`); a NULL sum has no limit, and a NaN sum raises the solver's error. A sum with its own `when` is
+  computed first by the driver, and the rule reads it as a column.
 - **The box.** Exactly `[0, inf)` (`x >= 0`, or nothing written) or `(-inf, inf)` (`x >= -1e30`).
 - **The objective.** None, or signed `SUM` parts, each with an optional constant factor or divisor and an optional `when`,
   plus an optional objective-level `when`. Terms: a row-valued coefficient times the decision, a per-row constant, and at
@@ -61,7 +62,6 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 | A ball off center (`SUM(POWER(x - 1, 2)) <= 9`), a constant or a linear term in the limit | Not a ball around zero. |
 | `=`, `>=`, `BETWEEN`, two limit clauses, `2 * SUM(...)`, `-SUM(...) >= -25`, `AVG(...)` | Not one plain `<=`. |
 | A per-row `POWER(x, 2) <= 9` | Not a sum. |
-| `<= SUM(budget) by (k)`, `<= 0.5 * SUM(l)` | The limit is a value of the group's aggregate, left to the plan. |
 | A constant limit of magnitude 1e20 or more | The solver stops reading such a right side as a number. |
 | `MAXIMIZE` of a convex square, `MINIMIZE` of a concave one, a row-valued slope in the objective's square | Not one K, or not convex. |
 | A square on some rows with a linear term elsewhere (`SUM(when f: POWER(x, 2)) + SUM(s * x)`, `SUM(POWER(x - t, 2)) + SUM(s * x)` over a nullable `t`) | K differs between rows with a linear term. |

@@ -49,17 +49,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
 
-## H-38 — The plan helpers A1, N1 and R1 each copy
-
-- **Problem.** `architecture/rules.md` § Keep the layer lean moves a helper to shared code once a second rule needs it.
-  A1 and N1 carry identical `Stage` structs (R1 has `ProjectionStage`), and each of A1, N1 and R1 has its own `SumOf`,
-  number check (`ValidNumber` in A1, `CheckNumber` in N1), `TooLarge`, and `And`/`Not` built from `calc.If`.
-- **Change.** One projection stage in `direct_plan_fragments`; `DirectSumOf`; one number check that returns a nullable
-  check (A1's shape) and `DirectRaiseTooLarge` in `direct_runtime_checks`; `ExpressionBuilder::And` and `::Not`. Each
-  rule calls the shared form and drops its copy.
-- **Done when.** No behavior change; `run_tests.sh -k "a1 or n1 or r1"` and C++ `[decidb]` pass; no rule file defines
-  a helper the shared files hold.
-
 ## H-39 — One fragment for the separable square objective
 
 - **Problem.** A1 and N1 each lay out a square's `w` and `t` columns in P1 and fold `k*w*w` and `2*k*w*t` into the row's
@@ -67,18 +56,8 @@ solver path answers those queries, so none of them is wrong, only slower.
   and A1's `Part`/`Term` hold the same reading in two layouts.
 - **Change.** A shared reading of a part with linear terms, constants and squares (`DirectReadQuadraticPart`), a P1
   layout and a P2 fold in `direct_plan_fragments`. A1 calls the fold per decision, N1 for its one decision.
-- **Needs.** H-36 and H-38.
 - **Done when.** No behavior change; `run_tests.sh -k "a1 or n1"` and C++ `[decidb]` pass; neither rule file expands a
   square itself.
-
-## H-40 — `DirectPart::IsPlainSum()`
-
-- **Problem.** A1, N1, R1 and S1 each test a plain `SUM` objective part with the same four-way condition
-  (`reducer == SUM`, no `inner`, no qualifier, no `by`). `DirectIRConstraint` has `PlainSum()`; `DirectPart` has none. A1
-  alone reads the objective's `when` and the part filter itself instead of through `DirectObjectivePartKept`.
-- **Change.** Add `DirectPart::IsPlainSum()` and call it in the four rules; A1 reads the kept rows through
-  `DirectObjectivePartKept`.
-- **Done when.** No behavior change; `run_tests.sh -k "a1 or n1 or r1 or s1"` passes.
 
 ## H-41 — The precision warning comes from the shared arithmetic
 
@@ -100,7 +79,7 @@ solver path answers those queries, so none of them is wrong, only slower.
   `DirectObjectivePartKept`, `DirectWarnIf` or `DirectBelowNormalRange`. The stamp predates the shared code. A1's, R1's
   and N1's `done.md` each carry an "Its own warning" paragraph that restates one rule. `direct_bound_reader` holds
   objective-term readers that its name does not cover.
-- **Change.** Correct both docs to the shared code after H-38 to H-41; one warning paragraph in the framework
+- **Change.** Correct both docs to the shared code after H-39 and H-41; one warning paragraph in the framework
   `done.md`, linked from each rule; state the bound reader's wider scope in its header and `done.md`.
-- **Needs.** H-38, H-39, H-40, H-41.
+- **Needs.** H-39, H-41.
 - **Done when.** Every helper the rules call is listed once; no rule `done.md` restates the warning rule; doc-only.

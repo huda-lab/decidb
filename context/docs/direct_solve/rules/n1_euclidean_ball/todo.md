@@ -4,20 +4,6 @@ N1 keeps one sum of squares inside a limit by scaling the direction or the targe
 [definition.md](definition.md); what N1 does today, with its measurements, is in [done.md](done.md). How to work and the
 checks are in `../../framework/todo.md` § How to work any task.
 
-## N1-2 — A data limit through the shared group-bound path
-
-- **Problem.** N1 builds its own "tightest limit of the group" (`ProveLimitValue` reads
-  `clause.group_bound->inputs[0].invalid` directly; `PlanBuilder::Build` hand-builds the `W1` min window). S1 and R1
-  read a data limit through `DirectGroupBoundIsReadable`, `DirectTightestBound` and a group sink. The duplicate reaches
-  into the group bound's internals, and N1 declines `<= SUM(budget) by (k)` and `<= 0.5 * SUM(l)`, which S1 and R1 admit
-  (`done.md` § What it does not admit; a conformance near miss). N2 would copy N1's version.
-- **Change.** Read the limit as R1's `ProveDataLimit` does. Move S1's window sink (`RankWindowSink`) to
-  `direct_plan_fragments` as the shared window form of `DirectGroupSink`, and have S1 and N1 use it. Read the limit and
-  its NaN message from `DirectGroupValues`. Remove `Condition::limit_invalid`.
-- **Done when.** `<= SUM(budget) by (k)` and `<= 0.5 * SUM(l)` answer under `require` and match the oracle (new oracle
-  cases); the near miss that declined them moves to the "applies" forms; S1's tests pass unchanged; the decline row in
-  `done.md` is removed.
-
 ## N1-5 — Guide §10 teaches N1's shape
 
 - **Problem.** The N1 bullet in `language/guide.md` § 10 says "decisions" (N1 takes one), does not say that any other

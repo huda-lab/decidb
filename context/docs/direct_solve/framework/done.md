@@ -47,13 +47,17 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   measurements: `../architecture/result_adapter.md`.
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
   form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
-  `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient) and
-  `DirectOnKeptRows`. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
+  `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient),
+  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE) and `DirectOnKeptRows`. A rule assembles each
+  projection of its plan in a `DirectProjectionStage`, which gives every column its binding as it is added. S1 and R1
+  also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
-  and `DirectNumberMessage`. Every check that raises is built with `DirectRaiseUnless(ok,
+  and `DirectNumberMessage`. `DirectCheckNumber` checks a raw value a projection computes, naming the values it is made
+  of, and is null when they are finite constants; `DirectRaiseTooLarge` checks a number computed from values checked
+  before it. Every check that raises is built with `DirectRaiseUnless(ok,
   error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
   `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
   the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
@@ -92,7 +96,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
   build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
-  arithmetic, comparisons, `IsNull`, `Cast`, `Coalesce`, `If`, `Min`, `Max` and `Any`. It takes the `ClientContext`,
+  arithmetic, comparisons, `IsNull`, `Cast`, `Coalesce`, `If`, `Min`, `Max`, `And`, `Not` and `Any`. `And` and `Not`
+  are `CASE` forms that read a NULL condition as false, and `And` evaluates its second value only where the first holds. It takes the `ClientContext`,
   which it binds functions with (as DuckDB's `FunctionBinder` does), so a rule's `CheckCondition`, a binder and the
   optimizer can all make one. The nodes it has no operation for are built by hand, each with a comment: the window
   expressions, and the typed NULLs in `LogicalDirectResultAdapter::PruneUnusedOutputs`, an overridden DuckDB method
@@ -128,7 +133,7 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   cases).
 - **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectIsSourceOnlyNumeric`,
   `DirectIsSourceOnlyNumericMayRaise`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
-  `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectIRConstraint::PlainSum` answer "may a rule use this value"
+  `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and `DirectPart::IsPlainSum` answer "may a rule use this value"
   once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's own
   `when` or the clause's `when`; with both, the rules decline (the solver reads both).
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
@@ -164,7 +169,7 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     (`DirectTightestBound`); a bound that reads data only through reducers of exactly the clause's group
     (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule adds the aggregates to
     the group aggregate it already runs, with no branch per bound (`DirectAddGroupBound` and a rule's
-    `DirectGroupSink`: S1 a window, R1 its hash aggregate), so a direct plan has no side table for them. Only the
+    `DirectGroupSink`: S1 and N1 a window through `DirectWindowSink`, R1 its hash aggregate), so a direct plan has no side table for them. Only the
     solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
     in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
     reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` are
