@@ -348,14 +348,16 @@ def test_two_decide_nodes_that_both_warn_print_one_line(decidb_cli, oracle_solve
     """The inner DECIDE is an N1 problem whose scores make h leave the normal range, so a direct plan warns from its own
     arithmetic (the solver path warns on the same query too, with DECIDB_TEST_DIRECT_SOLVE=off or a forced backend). The
     outer holds the coefficient 2000000, so its solver model warns. Both go through one per-query state: one line.
-    The inner's value (7) leaves the outer's bound non-binding, so the oracle solves the outer without it."""
+    The inner's value is 7 on a direct plan and 0 on Gurobi (it answers 0 for scores this small), so the outer bound is
+    `100 + (inner)`: at least 100 whatever the inner returns, never binding on the outer's optimum (3), and the oracle
+    solves the outer with an upper bound of 100."""
     inner = (
         "SELECT SUM(y) FROM (VALUES (1, 3e-155::DOUBLE), (2, 4e-155::DOUBLE)) u(id, s) "
         "DECIDE y(REAL) SUCH THAT SUM(POWER(y, 2)) <= 25 MAXIMIZE SUM(s * y)"
     )
     sql = f"""
         SELECT id, x FROM {_TWO_ROWS}
-        DECIDE x(INT) SUCH THAT x >= 0 AND x <= ({inner}) AND SUM(2000000 * x) <= 7000000
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= 100 + ({inner}) AND SUM(2000000 * x) <= 7000000
         MAXIMIZE SUM(x)
     """
     xs = _values(decidb_cli, sql, expect_number_range=True)
