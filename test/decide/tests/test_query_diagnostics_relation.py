@@ -279,8 +279,9 @@ class TestDiagnoseRelationShape:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_qp_unbounded_says_why_it_cannot_name_a_variable(self, request, cli_fixture):
         """A5/C8: an unbounded solve that names no variable must not report a
-        content-free row. A quadratic objective attaches no ray, so the diagnosis says
-        plainly that it is unavailable and why (Gurobi reaches UNBOUNDED here; HiGHS
+        content-free row. The runaway sits inside the square, which holds it still, so
+        no ray is found and the diagnosis says plainly that it is unavailable and why
+        (Gurobi reaches UNBOUNDED here; HiGHS
         rejects the non-convex QP in pre-solve)."""
         cli = request.getfixturevalue(cli_fixture)
         qp_sql = (

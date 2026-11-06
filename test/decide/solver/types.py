@@ -11,6 +11,7 @@ class SolverStatus(Enum):
     OPTIMAL = auto()
     INFEASIBLE = auto()
     UNBOUNDED = auto()
+    INF_OR_UNBD = auto()
     TIME_LIMIT = auto()
     ERROR = auto()
 

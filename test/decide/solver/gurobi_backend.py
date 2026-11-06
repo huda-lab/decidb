@@ -167,7 +167,8 @@ class GurobiSolver(OracleSolver):
 
         t0 = time.perf_counter()
         self._model.optimize()
-        if self._model.status == gp.GRB.INF_OR_UNBD:
+        presolve_blurred = self._model.status == gp.GRB.INF_OR_UNBD
+        if presolve_blurred:
             # Presolve dual reductions blur infeasible vs unbounded; Gurobi's
             # documented recipe is to disable them and re-solve, which yields
             # a definitive INFEASIBLE or UNBOUNDED status.
@@ -182,6 +183,10 @@ class GurobiSolver(OracleSolver):
             gp.GRB.TIME_LIMIT: SolverStatus.TIME_LIMIT,
         }
         solver_status = status_map.get(self._model.status, SolverStatus.ERROR)
+        if solver_status == SolverStatus.ERROR and presolve_blurred:
+            # A quadratic constraint's barrier cannot settle the blur even with dual reductions off. Say so
+            # rather than calling it an error: the caller decides what else it knows.
+            solver_status = SolverStatus.INF_OR_UNBD
 
         obj_val = None
         var_vals = {}

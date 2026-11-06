@@ -56,11 +56,7 @@ void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backe
 		return; // already known exactly — RejectIntegerCeilingOptimum names its own column
 	}
 
-	SolverModel ray_model;
-	if (!BuildUnboundedRayFallbackModel(model, ray_model)) {
-		return;
-	}
-
+	SolverModel ray_model = BuildUnboundedRayFallbackModel(model);
 	SolverResult ray_result = SolvePreparedModel(ray_model, backend, diagnostic_options);
 	if (DidDiagnosticSolveStopEarly(ray_result)) {
 		result.diagnostic_timed_out = true;
@@ -426,9 +422,10 @@ static SolverResult RejectIntegerCeilingOptimum(const SolverModel &model, const 
 			// The pinned column IS the escaping direction, so hand the ray over rather
 			// than making the fallback re-derive it. It cannot: the constructs that get
 			// a query into this state (a native `<>`, its indicator rows) are exactly
-			// what BuildUnboundedRayFallbackModel refuses, which is why the diagnosis
-			// would otherwise fall back to "a non-linear term prevents naming the
-			// variable" while we are holding the variable's name.
+			// the ones BuildUnboundedRayFallbackModel holds still, and the pinned column
+			// sits in one of them, so the diagnosis would otherwise fall back to "a
+			// non-linear term prevents naming the variable" while we are holding the
+			// variable's name.
 			unbounded.ray.assign(model.num_vars, 0.0);
 			unbounded.ray[col] = open_above ? 1.0 : -1.0;
 			return unbounded;

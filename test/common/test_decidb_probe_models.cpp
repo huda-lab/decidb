@@ -35,8 +35,7 @@ double ObjectiveValue(const SolverModel &model, const duckdb::vector<double> &so
 }
 
 duckdb::vector<double> SolveFallbackRayWithHighs(const SolverModel &model) {
-	SolverModel ray_model;
-	REQUIRE(BuildUnboundedRayFallbackModel(model, ray_model));
+	SolverModel ray_model = BuildUnboundedRayFallbackModel(model);
 
 	SolverResult result = SolvePreparedModel(ray_model, SolverRegistry::Find("highs"));
 	REQUIRE(result.status == SolverStatus::OPTIMAL);
@@ -153,8 +152,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 		SolverModel model = MakeLinearModel({1.0, 1.0}, true);
 		model.is_integer = {true, true};
 
-		SolverModel ray_model;
-		REQUIRE(BuildUnboundedRayFallbackModel(model, ray_model));
+		SolverModel ray_model = BuildUnboundedRayFallbackModel(model);
 		REQUIRE(ray_model.is_integer.size() == 2);
 		CHECK(!ray_model.is_integer[0]);
 		CHECK(!ray_model.is_integer[1]);
