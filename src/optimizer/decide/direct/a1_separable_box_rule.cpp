@@ -154,7 +154,8 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate) const override;
+	                       const DirectApplicabilityCondition &candidate,
+	                       const DirectStateErrors &errors) const override;
 
 private:
 	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
@@ -210,9 +211,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p)
+	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p) {
+	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
@@ -330,6 +331,7 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
+	const DirectStateErrors &errors;
 
 	vector<ColumnBinding> Passthrough(DirectProjectionStage &stage, const vector<ColumnBinding> &columns) const {
 		vector<ColumnBinding> result;
@@ -525,9 +527,9 @@ private:
 			checks.push_back(DirectRaiseTooLarge(optimizer, calc.Col(LogicalType::DOUBLE, answers.b[d]),
 			                                     condition.objective_written));
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
-			                               DirectInfeasibleErrorPredicate(optimizer)));
+			                               DirectInfeasibleErrorPredicate(optimizer, errors)));
 			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),
-			                                   DirectUnboundedErrorPredicate(optimizer)));
+			                                   DirectUnboundedErrorPredicate(optimizer, errors)));
 			if (DirectIsWholeNumbered(condition.decisions[d].domain)) {
 				checks.push_back(DirectRaiseUnless(calc, WithinExactRange(answers.value[d]),
 				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));
@@ -556,9 +558,9 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate) const {
+                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
 	if (!condition.constant_problem) {
 		// Verify, then stream: the verdict is read first, and every read after it waits for it.
 		reader.Gate(DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {

@@ -312,7 +312,8 @@ public:
 		return "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate) const override;
+	                       const DirectApplicabilityCondition &candidate,
+	                       const DirectStateErrors &errors) const override;
 
 private:
 	bool ProveScope(const DirectIR &ir, Condition &condition) const;
@@ -584,9 +585,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p)
+	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p) {
+	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 		score_index = binder.GenerateTableIndex();
 		window_index = binder.GenerateTableIndex();
@@ -676,6 +677,7 @@ private:
 	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
+	const DirectStateErrors &errors;
 	idx_t score_index;
 	idx_t window_index;
 	idx_t result_index;
@@ -1065,11 +1067,11 @@ private:
 	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot) const {
 		// `ok` must hold; a NULL `ok` fails.
 		auto must_hold = [&](const ExprPtr &ok) {
-			return DirectRaiseUnless(calc, calc.Out(ok), DirectInfeasibleErrorPredicate(optimizer));
+			return DirectRaiseUnless(calc, calc.Out(ok), DirectInfeasibleErrorPredicate(optimizer, errors));
 		};
 		// `bad` must not hold; a NULL `bad` passes.
 		auto must_not_hold = [&](const ExprPtr &bad) {
-			return DirectRaiseIf(calc, calc.Out(bad), DirectInfeasibleErrorPredicate(optimizer));
+			return DirectRaiseIf(calc, calc.Out(bad), DirectInfeasibleErrorPredicate(optimizer, errors));
 		};
 		auto fixed_count = [&]() {
 			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
@@ -1193,11 +1195,11 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate) const {
+                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
 	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
-	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
 	return DirectBuildOverOneRead(
 	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
 }

@@ -180,6 +180,14 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	return ClassifyDecideModel(ReadPreparedModelShape(op));
 }
 
+SolverModelClassGap FindDecideSolverGap(const SolverModelClass &needed, const SolverBackend &backend) {
+	return FindModelClassGap(needed, backend.Capabilities().model_classes);
+}
+
+bool DecideSolverRuns(const SolverModelClass &needed) {
+	return FindDecideSolverGap(needed, SelectSolverBackend()) == SolverModelClassGap::NONE;
+}
+
 void RequireDecideSolverSupport(const LogicalDecide &op) {
 	// The name was recorded by ChooseDecideSolver; resolving it back to a registry entry
 	// is a table lookup, not a session, so the model-class question can still be asked
@@ -187,7 +195,7 @@ void RequireDecideSolverSupport(const LogicalDecide &op) {
 	SolverBackend backend = SolverRegistry::Find(op.solver_backend_name);
 	D_ASSERT(backend.IsValid());
 	SolverModelClass needed = DeriveDecideModelClass(op);
-	SolverModelClassGap gap = FindModelClassGap(needed, backend.Capabilities().model_classes);
+	SolverModelClassGap gap = FindDecideSolverGap(needed, backend);
 	if (gap == SolverModelClassGap::NONE) {
 		return;
 	}

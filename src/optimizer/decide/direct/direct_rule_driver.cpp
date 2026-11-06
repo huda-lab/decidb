@@ -11,6 +11,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
+#include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -256,6 +257,11 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	annotation.mode = ModeName(mode);
 	annotation.rule = selected.rule->Name();
 	annotation.condition = selected.rule->Summary();
+	// DIAGNOSE advice is in the state errors only where DIAGNOSE would run on this query: decided once, here, by the
+	// solver-support check DIAGNOSE goes through, from the model the IR reads (it reports less than the solver's model
+	// when unsure, which keeps the advice).
+	auto diagnose_runs = DecideSolverRuns(ClassifyDecideModel(ir.model_shape));
+	DirectStateErrors errors {DecideInfeasibleMessage(diagnose_runs), DecideUnboundedMessage(diagnose_runs)};
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers with the DECIDE node's outputs: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
@@ -287,7 +293,7 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	                          late_materialization.stored_columns);
 	DirectAddBoundTables(optimizer, reader, decide);
 	DirectAddRowChecks(optimizer, reader, ir.row_checks);
-	auto substitute = selected.rule->Apply(reader, optimizer, *selected.condition);
+	auto substitute = selected.rule->Apply(reader, optimizer, *selected.condition, errors);
 	// A rule passes every column of its read along: the node's source columns, then the source row id and the bounds'
 	// values. The node's outputs have neither of the last, so the adapter is not told of them.
 	auto read_only = reader.SourceBindings().size() - source_columns;

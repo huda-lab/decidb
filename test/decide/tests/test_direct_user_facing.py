@@ -4,8 +4,10 @@ The answers themselves are checked in `test_direct_s1_uniform_matroid.py` and wh
 the conformance suite, `test_direct_rule_conformance.py`.
 """
 
+import os
 import re
 import math
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -425,6 +427,89 @@ def test_n1_errors_are_the_solvers_word_for_word(decidb_cli, s, y, l, k, decide,
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
+# The infeasible and unbounded errors advise prefixing the query with DIAGNOSE only where DIAGNOSE runs. The rule driver
+# asks the solver-support check DIAGNOSE goes through (DecideSolverRuns) once per query. On a machine with no Gurobi,
+# HiGHS takes a linear model and a convex quadratic objective over continuous decisions, and refuses the rest.
+_ADVICE = "Prefix the query with DIAGNOSE"
+# Row 2 has a NULL key, so it is in no ball and its linear objective improves without end.
+_NULL_KEY_BALL = "SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)"
+_EMPTY_BOX = "x >= 2 AND x <= 1"
+
+
+def _two_rows_query(domain, decide):
+    return f"SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, 'a'), (2, 4.0::DOUBLE, NULL)) t(id, s, k) DECIDE x({domain}) SUCH THAT {decide}) q"
+
+
+def _without_gurobi(decidb_exe_path, tmp_path):
+    """Runs a statement in a process that cannot reach a Gurobi licence."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
+    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+
+    def run(sql):
+        return subprocess.run(
+            [decidb_exe_path, "-noheader", "-list", "-c", sql], env=env, capture_output=True, text=True
+        )
+
+    return run
+
+
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "domain,decide,state",
+    [
+        # QCQP: HiGHS takes no quadratic limit.
+        pytest.param("REAL", "SUM(POWER(x, 2)) <= -1", "infeasible", id="infeasible-quadratic-limit"),
+        pytest.param("REAL", _NULL_KEY_BALL, "unbounded", id="unbounded-quadratic-limit"),
+        # MIQP: HiGHS takes a quadratic objective over continuous decisions only.
+        pytest.param(
+            "INT", f"{_EMPTY_BOX} MINIMIZE SUM(POWER(x - s, 2))", "infeasible", id="infeasible-integer-square"
+        ),
+    ],
+)
+def test_the_state_errors_leave_out_diagnose_where_it_is_refused(decidb_exe_path, tmp_path, domain, decide, state):
+    run = _without_gurobi(decidb_exe_path, tmp_path)
+    sql = _two_rows_query(domain, decide)
+    # The premise: DIAGNOSE on this query is refused for lack of a solver.
+    assert "which needs Gurobi" in run(f"SET decide_direct_solve='auto'; DIAGNOSE {sql}").stderr
+    error = run(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert error.strip() == f"Invalid Input Error: DECIDE optimization is {state}.", error
+
+
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "domain,decide,state",
+    [
+        pytest.param("REAL", f"{_EMPTY_BOX} MAXIMIZE SUM(s * x)", "infeasible", id="infeasible-linear"),
+        pytest.param(
+            "REAL", f"{_EMPTY_BOX} MINIMIZE SUM(POWER(x - s, 2))", "infeasible", id="infeasible-convex-square"
+        ),
+        pytest.param("REAL", "x >= 0 MAXIMIZE SUM(s * x)", "unbounded", id="unbounded-linear"),
+    ],
+)
+def test_the_state_errors_keep_diagnose_where_it_runs_without_gurobi(decidb_exe_path, tmp_path, domain, decide, state):
+    run = _without_gurobi(decidb_exe_path, tmp_path)
+    sql = _two_rows_query(domain, decide)
+    assert "which needs Gurobi" not in run(f"SET decide_direct_solve='auto'; DIAGNOSE {sql}").stderr
+    error = run(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert f"DECIDE optimization is {state}. {_ADVICE}" in error, error
+
+
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "decide,state",
+    [
+        # Gurobi takes any model class, so DIAGNOSE runs on a quadratic limit. A row whose key is NULL is in no ball, and
+        # its linear objective improves without end; DIAGNOSE cannot name a variable there, and the error still advises it.
+        ("SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)", "unbounded"),
+        ("SUM(POWER(x, 2)) <= -1", "infeasible"),
+    ],
+)
+def test_the_state_errors_keep_diagnose_where_gurobi_runs_it(decidb_cli, decide, state):
+    sql = f"SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, NULL::VARCHAR)) t(id, s, k) DECIDE x(REAL) SUCH THAT {decide}) q"
+    error = _raw(decidb_cli, sql, mode="require").stderr
+    assert f"DECIDE optimization is {state}. {_ADVICE}" in error, error
+
+
 @pytest.mark.correctness
 def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(decidb_cli):
     # The solver has no such number: it computes no sum of squares. The text is the one every rule raises for a number
@@ -624,8 +709,9 @@ def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(
     full, _ = _run(decidb_cli, setup + f"SELECT i, score, payload, x FROM ({decide}) q WHERE i=0")
     assert full == [(0, 0.0, "p" * 200, 0)]
 
-    throwing_relation = relation.replace("s.payload", "CASE WHEN s.i=4999 THEN error('joined payload boom') "
-                                                  "ELSE s.payload END AS payload")
+    throwing_relation = relation.replace(
+        "s.payload", "CASE WHEN s.i=4999 THEN error('joined payload boom') " "ELSE s.payload END AS payload"
+    )
     throwing = f"""
         SELECT COUNT(*) FROM (
             FROM {throwing_relation} DECIDE x(BOOL)

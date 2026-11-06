@@ -50,14 +50,12 @@ unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<uniqu
 	return calc.Out(chain);
 }
 
-unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer) {
-	return DirectErrorPredicate(optimizer, "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see "
-	                                       "which clause to change.");
+unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors) {
+	return DirectErrorPredicate(optimizer, errors.infeasible);
 }
 
-unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
-	return DirectErrorPredicate(optimizer, "DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see "
-	                                       "which decision needs a bound.");
+unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors) {
+	return DirectErrorPredicate(optimizer, errors.unbounded);
 }
 
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,

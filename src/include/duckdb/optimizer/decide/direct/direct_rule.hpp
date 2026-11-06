@@ -8,6 +8,7 @@
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
+#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
@@ -283,9 +284,11 @@ public:
 	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
 	//! `reader` reads the DECIDE input, gated by the row checks when there are any; the rule reads the source
-	//! `condition.source_reads` times through it and finishes its plan with it (DirectSourceReader::Finish).
+	//! `condition.source_reads` times through it and finishes its plan with it (DirectSourceReader::Finish). `errors`
+	//! are the texts of the state errors the plan raises.
 	virtual DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                               const DirectApplicabilityCondition &condition) const = 0;
+	                               const DirectApplicabilityCondition &condition,
+	                               const DirectStateErrors &errors) const = 0;
 };
 
 //! A plan over one read the reader gave (ReadSource), written over the source's own bindings: `build` makes it over

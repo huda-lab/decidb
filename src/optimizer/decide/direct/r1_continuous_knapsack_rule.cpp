@@ -124,7 +124,8 @@ public:
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate) const override;
+	                       const DirectApplicabilityCondition &candidate,
+	                       const DirectStateErrors &errors) const override;
 
 private:
 	bool ProveDecision(const DirectIR &ir) const;
@@ -1201,8 +1202,10 @@ private:
 //! no answer still raises.
 class AggregatePlanBuilder : public ItemAlgebra {
 public:
-	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
+	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p,
+	                     const DirectStateErrors &errors_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p),
+	      errors(errors_p) {
 		// A limit the rewrite left as a group bound is one already; any other is one value per group, whose group
 		// extremum is the limit.
 		for (auto &limit : condition.data_limits) {
@@ -1265,6 +1268,7 @@ private:
 	vector<unique_ptr<DecideGroupBound>> limit_bounds;
 	Binder &binder;
 	DirectSourceReader &reader;
+	const DirectStateErrors &errors;
 	idx_t reads_made = 0;
 	//! The types of the group key: BOOLEAN, then the group keys. Empty without a scope.
 	vector<LogicalType> key_types;
@@ -1441,9 +1445,9 @@ private:
 			checks.push_back(DirectRaiseTooLarge(optimizer, totals[slot], condition.budget_written));
 		}
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_rows, verdict.infeasible)),
-		                               DirectInfeasibleErrorPredicate(optimizer)));
+		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_rows, verdict.unbounded)),
-		                               DirectUnboundedErrorPredicate(optimizer)));
+		                               DirectUnboundedErrorPredicate(optimizer, errors)));
 		// A group that raises nothing warns when an item's price lost precision.
 		checks.push_back(DirectWarnIf(calc, calc.Out(BoolColumn(imprecise))));
 
@@ -1724,10 +1728,10 @@ private:
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate) const {
+                             const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	D_ASSERT(condition.source_reads == SOURCE_READS);
-	AggregatePlanBuilder builder(condition, optimizer, reader);
+	AggregatePlanBuilder builder(condition, optimizer, reader, errors);
 	return builder.Build();
 }
 

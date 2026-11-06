@@ -81,8 +81,8 @@ public:
 	string Summary() const override {
 		return "stub";
 	}
-	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &) const override {
+	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer, const DirectApplicabilityCondition &,
+	                       const DirectStateErrors &) const override {
 		if (validation == StubValidation::VERDICT) {
 			reader.Gate(DirectBuildOverRead(reader, reader.ReadSource(), [&](duckdb::unique_ptr<LogicalOperator> rows) {
 				auto valid = Valid(optimizer, rows->types[0], rows->GetColumnBindings()[0]);
@@ -731,7 +731,8 @@ public:
 	string Summary() const override {
 		return "stub";
 	}
-	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &) const override {
+	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &,
+	                       const DirectStateErrors &) const override {
 		throw InternalException("never applies");
 	}
 

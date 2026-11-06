@@ -50,6 +50,23 @@ inline string DecideInvalidValueMessage(DecideValueRole role, const string &writ
 	       "):'.";
 }
 
+//! The error of a model with no feasible point, and of one whose objective improves without end. Both paths raise
+//! them, from these two texts. They advise prefixing the query with DIAGNOSE only where DIAGNOSE would run on it
+//! (`diagnose_runs`): a query whose model no solver on the host takes is refused by DIAGNOSE
+//! (RequireDecideSolverSupport) before it names anything. The solver path raises them only after a backend ran the
+//! model, so it passes true.
+inline string DecideInfeasibleMessage(bool diagnose_runs) {
+	return diagnose_runs ? "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to "
+	                       "change."
+	                     : "DECIDE optimization is infeasible.";
+}
+
+inline string DecideUnboundedMessage(bool diagnose_runs) {
+	return diagnose_runs ? "DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision "
+	                       "needs a bound."
+	                     : "DECIDE optimization is unbounded.";
+}
+
 //! The objective as a TOO_LARGE message names it: the sense, then the objective as EXPLAIN prints it
 //! (`MAXIMIZE sum(a * x)`). Empty with no objective. The solver path and the direct-solve plans both build it here.
 inline string DecideWrittenObjective(DecideSense sense, const string &objective) {

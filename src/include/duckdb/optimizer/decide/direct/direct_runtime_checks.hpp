@@ -87,11 +87,19 @@ unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, uniq
 //! that is false or NULL, not an error, makes the whole false. No checks join to true.
 unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<unique_ptr<Expression>> checks);
 
+//! The text of the two state errors a rule raises. The rule driver decides once per query whether DIAGNOSE would run on
+//! it (DecideSolverRuns) and hands the rules the matching texts (DecideInfeasibleMessage, DecideUnboundedMessage), so
+//! no rule asks for itself.
+struct DirectStateErrors {
+	string infeasible;
+	string unbounded;
+};
+
 //! DECIDE's infeasibility error, as a BOOLEAN expression that raises it when evaluated.
-unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
+unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors);
 
 //! DECIDE's unboundedness error: some decision can improve the objective without limit.
-unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
+unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer, const DirectStateErrors &errors);
 
 //! Evaluates to true for a DOUBLE bound that is not NaN, and raises the bound error, naming the bound as the user
 //! `written` it, otherwise. Infinity is a valid bound (no bound on that side), and a NULL one skips the instance it
