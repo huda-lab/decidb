@@ -23,12 +23,11 @@ Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 a
 - [ ] H-44 The warning's text — direct_solve/framework/todo.md § H-44
 - [ ] H-46 Test helpers say "number range" — direct_solve/framework/todo.md § H-46
 
-## C3. Refusal and error messages (one lane)
+## C3. Refusal messages (one lane)
 
 - [ ] SOL-3 A quadratic-limit refusal names the clause — pipeline/07_solver/todo.md § SOL-3
 - [ ] BUG-47 A forced HiGHS says Gurobi is not available — issues/bugs.md § BUG-47
 - [ ] BUG-46 A data weight on a square says degree above 2 — issues/bugs.md § BUG-46
-- [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4
 
 ## C4. Shared code before N2 (one lane; needs: C1, C2)
 
@@ -37,6 +36,7 @@ Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 a
 - [ ] H-39 One fragment for the separable square objective — direct_solve/framework/todo.md § H-39 (needs: H-36, H-38)
 - [ ] H-41 The precision warning comes from the shared arithmetic — direct_solve/framework/todo.md § H-41 (needs: H-39)
 - [ ] N1-2 A data limit through the shared group-bound path — direct_solve/rules/n1_euclidean_ball/todo.md § N1-2
+- [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4
 
 ## C5. Docs (the orchestrator; needs: C4)
 

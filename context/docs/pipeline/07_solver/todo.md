@@ -29,6 +29,11 @@ Open work in the backends and their limits. Finished work is in [done.md](done.m
   The direct path's infeasible and unbounded errors (`DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`)
   drop the DIAGNOSE sentence when it says no. The solver path raises these errors only after a backend ran the model,
   so its text keeps the sentence.
+- **Ruling (owner, 2026-11-06).** The rule driver decides once per query whether a backend can run it and hands the
+  rules the matching error text (a context object), rather than each rule asking for itself; the task runs in the lane
+  that edits the four rule files, after a `decidb-architect` review of where that decision is read.
+- **Needs.** The model class of the query at rule time: `DeriveDecideModelClass` reads `op.prepared`, which
+  `BuildDecidePreparedModel` fills only at physical planning, so the driver reads the IR or the bound constraints instead.
 - **Done when.** With no Gurobi licence, `SUM(POWER(x, 2)) <= -1` under `require` raises the infeasible error without the
   DIAGNOSE sentence; with Gurobi, `test_direct_user_facing.py` still compares the two paths word for word; the NULL-key
   repro keeps the sentence.
