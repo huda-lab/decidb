@@ -8,11 +8,6 @@ Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 
 Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 and C2; C5 after C4; C6 last.
 
-## 0. Owner decisions
-
-- [ ] H-44 The warning's text — direct_solve/framework/todo.md § H-44
-- [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4
-
 ## C1. N1 bugs and small fixes (one lane)
 
 - [ ] N1-1 The radius is `sqrt(B) / sqrt(q)` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-1
@@ -20,20 +15,20 @@ Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 a
 - [ ] N1-3 `EXPLAIN` names both forms N1 answers — direct_solve/rules/n1_euclidean_ball/todo.md § N1-3
 - [ ] N1-4 Two smells in `PlanBuilder` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-4
 
-## C2. Warning plumbing and solver-path text (one lane; needs: 0)
+## C2. Warning plumbing (one lane)
 
 - [ ] H-37 Undo two unrelated formatting changes — direct_solve/framework/todo.md § H-37
 - [ ] H-43 `decide_warn_numbers` is internal — direct_solve/framework/todo.md § H-43
 - [ ] H-42 One warning state per query for both paths — direct_solve/framework/todo.md § H-42
 - [ ] H-44 The warning's text — direct_solve/framework/todo.md § H-44
-- [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4
 - [ ] H-46 Test helpers say "number range" — direct_solve/framework/todo.md § H-46
 
-## C3. Refusal messages (one lane)
+## C3. Refusal and error messages (one lane)
 
 - [ ] SOL-3 A quadratic-limit refusal names the clause — pipeline/07_solver/todo.md § SOL-3
 - [ ] BUG-47 A forced HiGHS says Gurobi is not available — issues/bugs.md § BUG-47
 - [ ] BUG-46 A data weight on a square says degree above 2 — issues/bugs.md § BUG-46
+- [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4
 
 ## C4. Shared code before N2 (one lane; needs: C1, C2)
 
@@ -51,3 +46,7 @@ Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 a
 ## C6. Measurement (last; the owner runs it)
 
 - [ ] N1-6 Benchmark sizes past `sf=1` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-6
+
+## Later (not scheduled)
+
+- [ ] UNB-1 Name the runaway decision of a model with a quadratic row — diagnostics/unbounded/todo.md § UNB-1

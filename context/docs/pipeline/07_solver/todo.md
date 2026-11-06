@@ -16,17 +16,19 @@ Open work in the backends and their limits. Finished work is in [done.md](done.m
 
 ## SOL-4 — Errors point to DIAGNOSE only where it runs
 
-- **Decision needed.** Whether the infeasible and unbounded errors keep their DIAGNOSE advice where DIAGNOSE cannot
-  answer.
+- **Ruling (owner, 2026-11-06).** Leave the advice out only where `DIAGNOSE` would be refused for lack of a solver,
+  decided by the same solver-support check `DIAGNOSE` goes through (`decide_solver_gate.cpp`), so it is one yes or no
+  and both paths word the error alike. Where `DIAGNOSE` runs but names no variable, the error keeps the advice; that gap
+  is `diagnostics/unbounded/todo.md` § UNB-1.
 - **Problem.** `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.` and its
   unbounded twin are raised by both paths (`ilp_solver.cpp`, `direct_runtime_checks.cpp`). With no Gurobi, `DIAGNOSE`
   on a query with a quadratic limit is refused ("which needs Gurobi"). With Gurobi, an unbounded quadratic model
   diagnoses as `a non-linear term prevents naming the variable.` (repro: `SUM(POWER(x, 2)) by (k) <= 25` with a NULL `k`
   row, `MAXIMIZE SUM(s * x)`).
-- **Options.** 1. Leave the advice out when DIAGNOSE cannot run on the query (one condition, the same on both paths, so
-  the two texts stay identical). 2. Keep the texts and say in `language/guide.md` § 8 that DIAGNOSE needs Gurobi for a
-  quadratic model and cannot name the variable of a quadratic unbounded one.
-- **Recommendation.** 1.
-- **Change.** Per the ruling.
-- **Done when.** Each repro raises the agreed text on `off` and `require`; `test_direct_user_facing.py` still compares
-  the two paths word for word.
+- **Change.** A non-throwing form of the solver-support check that says whether a backend can run the query's model.
+  The direct path's infeasible and unbounded errors (`DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`)
+  drop the DIAGNOSE sentence when it says no. The solver path raises these errors only after a backend ran the model,
+  so its text keeps the sentence.
+- **Done when.** With no Gurobi licence, `SUM(POWER(x, 2)) <= -1` under `require` raises the infeasible error without the
+  DIAGNOSE sentence; with Gurobi, `test_direct_user_facing.py` still compares the two paths word for word; the NULL-key
+  repro keeps the sentence.

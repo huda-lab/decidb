@@ -136,13 +136,11 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 ## H-44 — The warning's text
 
-- **Decision needed.** The words of `DECIDE_NUMBER_RANGE_WARNING`.
+- **Ruling (owner, 2026-11-06).** The line is `DECIDE: a very large or very small number may make this answer
+  inaccurate. Scale its data toward 1.` on both paths.
 - **Problem.** The line reads `very large or very small number detected - numerical precision may make the solution
   unstable`. It has no `DECIDE:` prefix, unlike every other DECIDE message, so a script's stderr does not say where it
   came from, and it gives no action. The too-large error ends "Scale its data down."
-- **Options.** 1. `DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1.`
-  (one string, both paths, every test that reads the line). 2. Keep the text.
-- **Recommendation.** 1.
 - **Change.** Replace the string in `decide_numeric_policy.hpp` and the tests' expected line (`decidb_cli.py`).
 - **Done when.** `make decide-test` passes with the new line on both paths.
 
