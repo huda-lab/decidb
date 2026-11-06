@@ -254,15 +254,15 @@ def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
     large = lambda weight: any(abs(weight(ck)) >= 1e6 for ck in custkeys)  # noqa: E731
     single, _ = decidb_cli.execute(
         template.format(nation_key=nation_key, reducer="c: c.c_acctbal * keepC"),
-        expect_large_numbers=large(lambda ck: acctbal[ck]),
+        expect_number_range=large(lambda ck: acctbal[ck]),
     )
     composite, _ = decidb_cli.execute(
         template.format(nation_key=nation_key, reducer="c,o: c.c_acctbal * keepC"),
-        expect_large_numbers=large(lambda ck: acctbal[ck] * order_count[ck]),
+        expect_number_range=large(lambda ck: acctbal[ck] * order_count[ck]),
     )
     unqualified, _ = decidb_cli.execute(
         template.format(nation_key=nation_key, reducer="c.c_acctbal * keepC"),
-        expect_large_numbers=large(lambda ck: acctbal[ck] * row_count[ck]),
+        expect_number_range=large(lambda ck: acctbal[ck] * row_count[ck]),
     )
 
     single_keep = _keep_by_nation(single, 0, 3)

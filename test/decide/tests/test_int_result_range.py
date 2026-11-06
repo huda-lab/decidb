@@ -44,7 +44,7 @@ from solver.types import VarType, ObjSense, SolverStatus
 _LIMIT = 5000000000
 
 # A direct-solve rule answers this query when the run leaves direct solve on, with no model and no warning; on a solver
-# (a forced backend, or DECIDB_TEST_DIRECT_SOLVE=off) its model holds the large number.
+# (a forced backend, or DECIDB_TEST_DIRECT_SOLVE=off) its model holds the number out of range.
 _WARNS_ON_A_SOLVER = {"direct": False, "gurobi": True, "highs": True}
 
 _DECLARED_BOUND = f"""
@@ -80,7 +80,7 @@ def test_a_declared_bound_beyond_int32_returns_the_optimum(decidb_cli, oracle_so
     This one a bind-time range check could have caught. The two below are why one
     would not have been enough.
     """
-    rows, _ = decidb_cli.execute(_DECLARED_BOUND, expect_large_numbers=_WARNS_ON_A_SOLVER)
+    rows, _ = decidb_cli.execute(_DECLARED_BOUND, expect_number_range=_WARNS_ON_A_SOLVER)
     result = _single_int_oracle(oracle_solver, "declared_bound", _LIMIT)
 
     assert result.status == SolverStatus.OPTIMAL
@@ -97,7 +97,7 @@ def test_a_bound_read_from_data_beyond_int32_returns_the_optimum(decidb_cli, ora
     is executed, by which point the bind-time refusal the bug report proposed is long
     past.
     """
-    rows, _ = decidb_cli.execute(_BOUND_FROM_DATA, expect_large_numbers=_WARNS_ON_A_SOLVER)
+    rows, _ = decidb_cli.execute(_BOUND_FROM_DATA, expect_number_range=_WARNS_ON_A_SOLVER)
     result = _single_int_oracle(oracle_solver, "bound_from_data", _LIMIT)
 
     assert result.status == SolverStatus.OPTIMAL
@@ -115,7 +115,7 @@ def test_an_aggregate_row_beyond_int32_returns_the_optimum(decidb_cli, oracle_so
     onto one of them. There is nothing a binder could reject, so the readback is the
     only layer that can be right about this.
     """
-    rows, _ = decidb_cli.execute(_AGGREGATE_ROW, expect_large_numbers=True)
+    rows, _ = decidb_cli.execute(_AGGREGATE_ROW, expect_number_range=True)
     result = _single_int_oracle(oracle_solver, "aggregate_row", _LIMIT)
 
     assert result.status == SolverStatus.OPTIMAL
@@ -219,7 +219,7 @@ def test_a_value_past_exact_integer_range_is_refused_in_sql_terms(decidb_cli):
         DECIDE x(INT) SUCH THAT SUM(x) <= 90071992547409920 MAXIMIZE SUM(x)
         """,
         match="beyond the range DeciDB can return as a whole number",
-        expect_large_numbers=True,
+        expect_number_range=True,
     )
 
 
@@ -230,8 +230,8 @@ def test_a_value_past_exact_integer_range_is_refused_in_sql_terms(decidb_cli):
 ], ids=["declared-bound", "bound-from-data", "aggregate-row"])
 def test_the_backends_agree_beyond_int32(decidb_cli_highs, decidb_cli_gurobi, sql):
     """Readback is backend-neutral, so neither solver may disagree about the value."""
-    highs_rows, _ = decidb_cli_highs.execute(sql, expect_large_numbers=True)
-    gurobi_rows, _ = decidb_cli_gurobi.execute(sql, expect_large_numbers=True)
+    highs_rows, _ = decidb_cli_highs.execute(sql, expect_number_range=True)
+    gurobi_rows, _ = decidb_cli_gurobi.execute(sql, expect_number_range=True)
 
     assert highs_rows == gurobi_rows
     assert highs_rows[0][1] == _LIMIT
@@ -249,6 +249,6 @@ def test_a_helper_beyond_int32_is_not_read_back(decidb_cli):
         DECIDE x(INT), y(INT)
         SUCH THAT x <= cap AND y <= 0 AND per row: y + sum(x * 1000000000) >= 3000000000
         MINIMIZE SUM(x) + SUM(y)""",
-        expect_large_numbers=True,
+        expect_number_range=True,
     )
     assert sum(row[cols.index("x")] for row in rows) == 3, rows

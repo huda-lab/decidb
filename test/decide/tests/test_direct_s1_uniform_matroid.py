@@ -44,7 +44,7 @@ from solver.types import ObjSense, VarType
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import agree_with_oracle, outcome as _outcome, run as _run, sql_literal
-from ._large_numbers import writes_large_number
+from ._number_range import writes_number_out_of_range
 from ._direct_oracle_common import values_clause
 
 
@@ -840,7 +840,7 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
             coeff_fn=lambda row: {"x": float(coefficient(rows_data[by_id[row[0]]]))},
         )
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, large_numbers=writes_large_number(sql))
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, number_range=writes_number_out_of_range(sql))
 
 
 @pytest.mark.var_boolean
@@ -1225,7 +1225,7 @@ def test_s1_count_bound_raises_only_where_the_solver_does(decidb_cli, name):
         f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
     # A bound of 1e6 or more that the solver evaluates is in its model; an error is raised before one is built.
-    solver = _outcome(decidb_cli, sql, "off", expected == "ok" and writes_large_number(constraint))
+    solver = _outcome(decidb_cli, sql, "off", expected == "ok" and writes_number_out_of_range(constraint))
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
     direct = _outcome(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
@@ -1685,7 +1685,7 @@ def test_s1_bound_over_a_column_raises_only_where_the_solver_does(decidb_cli, na
         f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
     # A bound of 1e6 or more that the solver evaluates is in its model; an error is raised before one is built.
-    solver = _outcome(decidb_cli, sql, "off", expected == "ok" and writes_large_number(constraint))
+    solver = _outcome(decidb_cli, sql, "off", expected == "ok" and writes_number_out_of_range(constraint))
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
     direct = _outcome(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"

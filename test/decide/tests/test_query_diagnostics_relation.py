@@ -47,9 +47,9 @@ _EXPECTED_SCHEMA = [
 ]
 
 
-def _diagnose(cli, decide_sql, scope=None, expect_large_numbers=False):
+def _diagnose(cli, decide_sql, scope=None, expect_number_range=False):
     """Run `DIAGNOSE <decide_sql>` on one stdin session and return the result."""
-    return _diagnose_relation.run(cli, decide_sql, scope=scope, expect_large_numbers=expect_large_numbers)
+    return _diagnose_relation.run(cli, decide_sql, scope=scope, expect_number_range=expect_number_range)
 
 
 def _rows(result):
@@ -113,7 +113,7 @@ def _clause_edits(rows):
     return edits
 
 
-def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_large_numbers=False):
+def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_number_range=False):
     """E1 apply-the-fix harness: apply every reported edit to the SQL (loosen —
     replace the clause with its suggested_change; drop — remove the clause) and
     assert the edited query actually solves. This checks the core promise that the
@@ -121,8 +121,8 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_large_number
     trusting the diagnosis. `subject_to_sql` maps a rendered clause subject to the
     literal SQL fragment when the two differ (BETWEEN sides, reversed bounds,
     MAX(x) composition, subquery/foldable RHS, whitespace). Returns the edited SQL
-    so callers can oracle-check the achievable objective against it. `expect_large_numbers` declares the
-    large-number warning of the edited query, as `DeciDBCli.execute` takes it; a function of the edited
+    so callers can oracle-check the achievable objective against it. `expect_number_range` declares the
+    number-range warning of the edited query, as `DeciDBCli.execute` takes it; a function of the edited
     SQL is called on it, for a caller that cannot know the edit before it is made."""
     subject_to_sql = subject_to_sql or {}
     edits = _clause_edits(rows)
@@ -148,9 +148,9 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_large_number
             fixed_sql = fixed_sql[: found.start()] + edit["suggested_change"] + fixed_sql[found.end() :]
             edited = True
     assert edited, f"diagnosis reported no applicable edit:\n{rows}"
-    if callable(expect_large_numbers):
-        expect_large_numbers = expect_large_numbers(fixed_sql)
-    result = cli.execute_script(".mode csv\n" + fixed_sql + ";\n", expect_large_numbers=expect_large_numbers)
+    if callable(expect_number_range):
+        expect_number_range = expect_number_range(fixed_sql)
+    result = cli.execute_script(".mode csv\n" + fixed_sql + ";\n", expect_number_range=expect_number_range)
     errors = [
         line for line in result.stderr.strip().splitlines()
         if line and not line.startswith("Warning:")
@@ -1524,7 +1524,7 @@ class TestDiagnosticsRelation:
         )
         # The repair model keeps the one-decision rows as rows, so its coefficient of 1e7 is a number of the model;
         # the edited query folds that row into a bound on `x`.
-        result = _diagnose(cli, sql, expect_large_numbers=True)
+        result = _diagnose(cli, sql, expect_number_range=True)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -2010,7 +2010,7 @@ class TestInfeasibleHeadlineAndRendering:
             "DECIDE x(REAL) SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
         )
         # The bound 1234567890 is under the threshold for a bound; the repair model's own coefficients are not.
-        result = _diagnose(cli, sql, expect_large_numbers=True)
+        result = _diagnose(cli, sql, expect_number_range=True)
         rows = _rows(result)
         attrs = _attrs(rows, "clause", "x <= 1")
         assert attrs["suggested_change"] == "x <= 1234567890"
@@ -2804,14 +2804,14 @@ class TestRepairsTheModelCanReach:
         hundred million, and a floor derived from the latter reports "no loosening
         restores feasibility" about a query that is one `x <= 7` away from solving."""
         cli = request.getfixturevalue(cli_fixture)
-        rows = _rows(_diagnose(cli, self._SMALL_EDIT_SQL, expect_large_numbers=True))
+        rows = _rows(_diagnose(cli, self._SMALL_EDIT_SQL, expect_number_range=True))
         edits = _clause_edits(rows)
         assert edits, f"the repair was filtered away as noise:\n{rows}"
         reported = float(_attrs(rows, "model", "NULL")["achievable_objective"])
-        fixed_sql = _apply_reported_fix(cli, self._SMALL_EDIT_SQL, rows, expect_large_numbers=True)
+        fixed_sql = _apply_reported_fix(cli, self._SMALL_EDIT_SQL, rows, expect_number_range=True)
         solved = list(
             csv.DictReader(
-                io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n", expect_large_numbers=True).stdout)
+                io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n", expect_number_range=True).stdout)
             )
         )
         assert reported == pytest.approx(sum(float(r["contrib"]) for r in solved))

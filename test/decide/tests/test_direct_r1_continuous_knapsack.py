@@ -34,7 +34,7 @@ from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
-from ._large_numbers import writes_large_number
+from ._number_range import writes_number_out_of_range
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import agree_with_oracle
 from ._direct_oracle_common import outcome as _run_all, run as _run, sql_literal, values_clause
@@ -2001,7 +2001,7 @@ def test_r1_an_upper_limit_of_minus_infinity_is_infeasible_though_a_row_has_no_f
 def test_r1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
-    solver = _run_all(decidb_cli, sql, "off", writes_large_number(sql))
+    solver = _run_all(decidb_cli, sql, "off", writes_number_out_of_range(sql))
     assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
@@ -2031,7 +2031,7 @@ def test_r1_leaves_a_limit_the_solver_reads_as_no_bound_to_the_solver(decidb_cli
     require = _run_all(decidb_cli, sql, "require")
     assert require == ("error", "direct_not_applied")
     # A limit of 1e20 is a right-hand side of the model both solver runs build; an infinite one is no number.
-    large = writes_large_number(sql)
+    large = writes_number_out_of_range(sql)
     assert _run_all(decidb_cli, sql, "auto", large) == _run_all(decidb_cli, sql, "off", large)
 
 
@@ -2052,7 +2052,7 @@ def test_r1_leaves_a_limit_the_solver_reads_as_no_bound_to_the_solver(decidb_cli
 def test_r1_leaves_a_minimum_or_exact_fill_the_solver_reads_as_no_bound_to_the_solver(decidb_cli, budget):
     sql = _problem(WORKED, bounds="amount >= 0 AND amount <= cap", budget=budget)
     assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
-    large = writes_large_number(sql)
+    large = writes_number_out_of_range(sql)
     assert _run_all(decidb_cli, sql, "auto", large) == _run_all(decidb_cli, sql, "off", large)
 
 
@@ -3328,7 +3328,7 @@ def test_r1_prices_in_the_normal_range_are_silent(decidb_cli):
 @pytest.mark.var_real
 @pytest.mark.correctness
 def test_r1_warns_when_a_price_leaves_the_normal_range(decidb_cli):
-    _run(decidb_cli, _two_items("5e-310", "2e19", "1e-310", "3e19", "3e19"), "require", expect_large_numbers=True)
+    _run(decidb_cli, _two_items("5e-310", "2e19", "1e-310", "3e19", "3e19"), "require", expect_number_range=True)
 
 
 @pytest.mark.var_real

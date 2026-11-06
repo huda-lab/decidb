@@ -32,27 +32,29 @@ from tests._output_helpers import assert_no_internal_leak
 _STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 
 #: The stderr line DeciDB prints once per query when a number may make the answer unstable (DECIDE_NUMBER_RANGE_WARNING).
-_LARGE_NUMBER_WARNING = "DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1."
+_NUMBER_RANGE_WARNING = (
+    "DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1."
+)
 
 
-class LargeNumberWarningMismatch(Exception):
-    """The large-number warning was printed when the test did not declare it, or not printed (exactly once per query
+class NumberRangeWarningMismatch(Exception):
+    """The number-range warning was printed when the test did not declare it, or not printed (exactly once per query
     run) when it did. Deliberately not a ``DeciDBCliError`` or an ``AssertionError``: a test that expects a query to
     fail, or a helper that compares two queries' outcomes, catches those, and would pass over the mismatch."""
 
 
-def _settle_large_number_warning(
-    stderr: str, expect_large_numbers, backend: str, verify_serializer: bool, direct_solve: bool = False
+def _settle_number_range_warning(
+    stderr: str, expect_number_range, backend: str, verify_serializer: bool, direct_solve: bool = False
 ) -> str:
-    """``stderr`` without the large-number warning line, after checking the test declared it.
+    """``stderr`` without the number-range warning line, after checking the test declared it.
 
     The warning is part of the output: a test that does not declare it did not expect it, and fails here
     rather than passing over it. A declared warning must be printed exactly once, or twice under
     ``verify_serializer`` (the harness runs the query again on the plan's deserialized copy), so a declaration
     cannot outlive the behavior it names and a repeated warning cannot pass.
 
-    ``expect_large_numbers`` is a bool, or a dict keyed by backend (``{"gurobi": bool, "highs": bool}``) for a
-    model whose large number exists on one backend only (a Big-M exists only where a construct is lowered). A
+    ``expect_number_range`` is a bool, or a dict keyed by backend (``{"gurobi": bool, "highs": bool}``) for a
+    model whose out-of-range number exists on one backend only (a Big-M exists only where a construct is lowered). A
     backend the dict does not name expects none.
 
     The dict may also carry a ``"direct"`` key, for a query a direct-solve rule answers when the run leaves direct
@@ -60,22 +62,22 @@ def _settle_large_number_warning(
     warns, when a backend is forced or ``DECIDB_TEST_DIRECT_SOLVE=off``. ``"direct"`` is read only on such a run; every
     other run, and a dict without the key, reads the backend's key.
     """
-    if isinstance(expect_large_numbers, dict):
-        key = "direct" if direct_solve and "direct" in expect_large_numbers else backend
-        expect_large_numbers = expect_large_numbers.get(key, False)
+    if isinstance(expect_number_range, dict):
+        key = "direct" if direct_solve and "direct" in expect_number_range else backend
+        expect_number_range = expect_number_range.get(key, False)
     lines = stderr.splitlines(keepends=True)
-    printed = sum(1 for line in lines if line.strip() == _LARGE_NUMBER_WARNING)
+    printed = sum(1 for line in lines if line.strip() == _NUMBER_RANGE_WARNING)
     runs = 2 if verify_serializer else 1
-    if expect_large_numbers and printed != runs:
-        raise LargeNumberWarningMismatch(
-            f"expected the large-number warning {runs} time(s), printed {printed}\nstderr: {stderr[:500]}"
+    if expect_number_range and printed != runs:
+        raise NumberRangeWarningMismatch(
+            f"expected the number-range warning {runs} time(s), printed {printed}\nstderr: {stderr[:500]}"
         )
-    if not expect_large_numbers and printed:
-        raise LargeNumberWarningMismatch(
-            "undeclared large-number warning (pass expect_large_numbers=True if the test expects it):\n"
+    if not expect_number_range and printed:
+        raise NumberRangeWarningMismatch(
+            "undeclared number-range warning (pass expect_number_range=True if the test expects it):\n"
             f"{stderr[:500]}"
         )
-    return "".join(line for line in lines if line.strip() != _LARGE_NUMBER_WARNING)
+    return "".join(line for line in lines if line.strip() != _NUMBER_RANGE_WARNING)
 
 
 def _extract_status(stderr: str) -> str | None:
@@ -379,11 +381,11 @@ class DeciDBCli:
         """
         return DeciDBCli(self.exe, self.db, env=self.env, verify_serializer=False)
 
-    def _settle_large_number_warning(self, stderr: str, expect_large_numbers, direct_solve: bool | None = None) -> str:
+    def _settle_number_range_warning(self, stderr: str, expect_number_range, direct_solve: bool | None = None) -> str:
         if direct_solve is None:
             direct_solve = self.leaves_direct_solve_on()
-        return _settle_large_number_warning(
-            stderr, expect_large_numbers, self.warning_backend(), self.verify_serializer, direct_solve
+        return _settle_number_range_warning(
+            stderr, expect_number_range, self.warning_backend(), self.verify_serializer, direct_solve
         )
 
     def leaves_direct_solve_on(self) -> bool:
@@ -392,13 +394,13 @@ class DeciDBCli:
         env = {**os.environ, **(self.env or {})}
         return not env.get("DECIDB_FORCE_SOLVER") and env.get(_DIRECT_SOLVE_ENV) != "off"
 
-    def _settled(self, proc: subprocess.CompletedProcess, expect_large_numbers) -> subprocess.CompletedProcess:
-        """``proc`` with the large-number warning settled out of its stderr (see ``_settle_large_number_warning``)."""
-        stderr = self._settle_large_number_warning(proc.stderr, expect_large_numbers)
+    def _settled(self, proc: subprocess.CompletedProcess, expect_number_range) -> subprocess.CompletedProcess:
+        """``proc`` with the number-range warning settled out of its stderr (see ``_settle_number_range_warning``)."""
+        stderr = self._settle_number_range_warning(proc.stderr, expect_number_range)
         return subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout, stderr)
 
     def warning_backend(self) -> str:
-        """The backend this wrapper's queries run on, as ``expect_large_numbers`` names it. An unforced run takes
+        """The backend this wrapper's queries run on, as ``expect_number_range`` names it. An unforced run takes
         the preferred one, Gurobi."""
         return (self.env or {}).get("DECIDB_FORCE_SOLVER") or os.environ.get("DECIDB_FORCE_SOLVER") or "gurobi"
 
@@ -426,7 +428,7 @@ class DeciDBCli:
         return {**os.environ, **overlay}
 
     def execute(
-        self, sql: str, *, timeout: float = 120, expect_large_numbers: bool | dict[str, bool] = False
+        self, sql: str, *, timeout: float = 120, expect_number_range: bool | dict[str, bool] = False
     ) -> tuple[list[tuple], list[str]]:
         """Run a SQL query and return ``(rows, column_names)``.
 
@@ -436,15 +438,15 @@ class DeciDBCli:
         Raises
         ------
         DeciDBCliError
-            If the CLI writes anything to stderr (error messages), including the large-number warning
-            when the test did not declare it with ``expect_large_numbers``; a declared one must be printed.
+            If the CLI writes anything to stderr (error messages), including the number-range warning
+            when the test did not declare it with ``expect_number_range``; a declared one must be printed.
         """
         env = self._subprocess_env(status_markers=True)
         proc = _run_in_session(self._argv(), sql, env, json_mode=True, timeout=timeout) or _run(
             self._argv("-json", "-c", sql), sql, timeout=timeout, env=env
         )
 
-        stderr = self._settle_large_number_warning(proc.stderr, expect_large_numbers).strip()
+        stderr = self._settle_number_range_warning(proc.stderr, expect_number_range).strip()
         # Filter known solver warnings (not errors), and lift out any DECIDB_STATUS
         # marker so the terminal is available structurally instead of by grepping the
         # user-facing message.
@@ -477,7 +479,7 @@ class DeciDBCli:
         return rows, cols
 
     def dump_model(
-        self, sql: str, path, *, timeout: float = 120, expect_large_numbers: bool | dict[str, bool] = False
+        self, sql: str, path, *, timeout: float = 120, expect_number_range: bool | dict[str, bool] = False
     ) -> str:
         """Run a query with ``DECIDB_DUMP_MODEL`` on and return the dumped model text.
 
@@ -498,8 +500,8 @@ class DeciDBCli:
         proc = _run(cli._argv("-c", sql), sql, timeout=timeout, env=env)
         errors = [
             line
-            for line in self._settle_large_number_warning(
-                proc.stderr, expect_large_numbers, direct_solve=False
+            for line in self._settle_number_range_warning(
+                proc.stderr, expect_number_range, direct_solve=False
             ).splitlines()
             if line and not line.startswith("Warning:")
         ]
@@ -515,19 +517,19 @@ class DeciDBCli:
         *,
         timeout: float = 120,
         removed_spelling: bool = False,
-        expect_large_numbers: bool | dict[str, bool] = False,
+        expect_number_range: bool | dict[str, bool] = False,
     ) -> subprocess.CompletedProcess:
         """Run a SQL query and return the raw ``CompletedProcess``. ``removed_spelling``
-        says the query is expected to be refused for a removed DECIDE spelling. The large-number warning is
+        says the query is expected to be refused for a removed DECIDE spelling. The number-range warning is
         settled out of ``stderr`` first (see ``execute``), so a caller reads the rest of it as it was printed."""
         env = self._subprocess_env()
         proc = _run_in_session(
             self._argv(), sql, env, json_mode=False, timeout=timeout, removed_spelling=removed_spelling
         ) or _run(self._argv("-c", sql), sql, removed_spelling=removed_spelling, timeout=timeout, env=env)
-        return self._settled(proc, expect_large_numbers)
+        return self._settled(proc, expect_number_range)
 
     def execute_script(
-        self, sql: str, *, timeout: float = 120, expect_large_numbers: bool | dict[str, bool] = False
+        self, sql: str, *, timeout: float = 120, expect_number_range: bool | dict[str, bool] = False
     ) -> subprocess.CompletedProcess:
         """Run a multi-statement script via stdin on a single connection.
 
@@ -538,7 +540,7 @@ class DeciDBCli:
         connection.
         """
         proc = _run(self._argv(), sql, input=sql, timeout=timeout, env=self._subprocess_env())
-        return self._settled(proc, expect_large_numbers)
+        return self._settled(proc, expect_number_range)
 
     def execute_interactive(
         self, sql: str, responses: str, *, timeout: float = 60
@@ -623,15 +625,15 @@ class DeciDBCli:
         *,
         match: str | None = None,
         timeout: float = 120,
-        expect_large_numbers: bool | dict[str, bool] = False,
+        expect_number_range: bool | dict[str, bool] = False,
     ) -> None:
         """Assert that *sql* produces an error on stderr.
 
         Both stdout and stderr are searched for the *match* pattern so that
-        the test works regardless of where the CLI prints diagnostics. The large-number warning is not the
-        error: the test declares it with ``expect_large_numbers`` (see ``execute``).
+        the test works regardless of where the CLI prints diagnostics. The number-range warning is not the
+        error: the test declares it with ``expect_number_range`` (see ``execute``).
         """
-        result = self.execute_raw(sql, timeout=timeout, expect_large_numbers=expect_large_numbers)
+        result = self.execute_raw(sql, timeout=timeout, expect_number_range=expect_number_range)
         stderr = result.stderr.strip()
         assert stderr, (
             f"Expected error but stderr was empty.\n"

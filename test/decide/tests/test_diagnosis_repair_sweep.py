@@ -26,7 +26,7 @@ from .test_query_diagnostics_relation import (
     _errors,
     _rows,
 )
-from ._large_numbers import writes_large_number
+from ._number_range import writes_number_out_of_range
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
@@ -34,7 +34,7 @@ _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 def _warns(sql):
     """The one data column of these queries (`w` of the heavy row) is a coefficient; the other literals stand where
     they are written."""
-    return writes_large_number(sql, data="coefficient")
+    return writes_number_out_of_range(sql, data="coefficient")
 
 
 #: Where the user's numbers stay under the thresholds and DeciDB derives one: at scale 1e6 the box is 5e6 and the floor
@@ -169,10 +169,10 @@ def test_the_reported_repair_repairs_the_query(request, name, cli_fixture):
     backend = cli_fixture.rsplit("_", 1)[1]
     large = _warns_on(name, backend)(sql)
     assert _errors(
-        cli.execute_script(".mode csv\n" + sql + ";\n", expect_large_numbers=large)
+        cli.execute_script(".mode csv\n" + sql + ";\n", expect_number_range=large)
     ), f"{name}: the sweep needs an infeasible query, but this one solved"
 
-    result = _diagnose(cli, sql, expect_large_numbers=large)
+    result = _diagnose(cli, sql, expect_number_range=large)
     assert not _errors(result), f"{name}: DIAGNOSE raised instead of reporting: {result.stderr}"
     rows = _rows(result)
     edits = _clause_edits(rows)
@@ -182,7 +182,7 @@ def test_the_reported_repair_repairs_the_query(request, name, cli_fixture):
         assert "undiagnosed" in _attrs(rows, "model", "NULL"), (
             f"{name}: no repair and no explanation:\n{rows}")
         return
-    _apply_reported_fix(cli, sql, rows, subject_to_sql, expect_large_numbers=_warns_on(name, backend))
+    _apply_reported_fix(cli, sql, rows, subject_to_sql, expect_number_range=_warns_on(name, backend))
 
 
 @pytest.mark.query_diagnostics
@@ -196,7 +196,7 @@ def test_both_backends_blame_the_same_clauses(request, name, decidb_cli_gurobi,
     sql, _ = CASES[name]
     reported = {}
     for label, cli in (("gurobi", decidb_cli_gurobi), ("highs", decidb_cli_highs)):
-        rows = _rows(_diagnose(cli, sql, expect_large_numbers=_warns_on(name, label)(sql)))
+        rows = _rows(_diagnose(cli, sql, expect_number_range=_warns_on(name, label)(sql)))
         reported[label] = sorted(e["subject"] for e in _clause_edits(rows))
     if not reported["gurobi"] or not reported["highs"]:
         return  # one host could not analyse it; covered by the test above

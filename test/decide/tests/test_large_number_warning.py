@@ -15,7 +15,7 @@ direct-solve rule builds no model, so these thresholds do not apply to it; N1 wa
 precision (`test_direct_n1_euclidean_ball.py`). An open bound (DECIDE_SOLVER_INFINITY, the default of a variable with no
 written bound) is not a number.
 
-`DeciDBCli.execute(..., expect_large_numbers=...)` is how a test declares the warning: an undeclared line fails the
+`DeciDBCli.execute(..., expect_number_range=...)` is how a test declares the warning: an undeclared line fails the
 test, and so does a declared one that is not printed exactly once per query run. Every case below runs on both
 backends through the forced-backend fixtures, which also keep a query on the solver path.
 
@@ -50,7 +50,7 @@ from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._large_numbers import LARGE_COEFFICIENT, LARGE_TOTAL
+from ._number_range import LARGE_COEFFICIENT, LARGE_TOTAL
 from ._oracle_helpers import add_ne_indicator
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
@@ -62,9 +62,9 @@ def _cli(request, fixture):
     return request.getfixturevalue(fixture)
 
 
-def _values(cli, sql, expect_large_numbers):
+def _values(cli, sql, expect_number_range):
     """The decision `x` per row, in row order, after declaring whether the query warns."""
-    rows, columns = cli.execute(sql, expect_large_numbers=expect_large_numbers)
+    rows, columns = cli.execute(sql, expect_number_range=expect_number_range)
     ordered = sorted(rows, key=lambda row: row[columns.index("id")])
     return [row[columns.index("x")] for row in ordered]
 
@@ -131,7 +131,7 @@ def test_a_number_in_a_linear_position_warns_from_its_threshold(
 ):
     decide, oracle_arguments = _POSITIONS[position]
     sql = f"SELECT id, x FROM {_TWO_ROWS} {decide.format(n=n)}"
-    xs = _values(_cli(request, cli_fixture), sql, expect_large_numbers=warns)
+    xs = _values(_cli(request, cli_fixture), sql, expect_number_range=warns)
     arguments = oracle_arguments(float(n))
     result = _linear_oracle(oracle_solver, f"number_{position}_{n}", **arguments)
 
@@ -147,21 +147,21 @@ _SMALL_OBJECTIVE_CASES = [("0.000001", True), ("-0.000001", True), ("0.0000011",
 @pytest.mark.parametrize("n,warns", _SMALL_OBJECTIVE_CASES, ids=[n for n, _ in _SMALL_OBJECTIVE_CASES])
 def test_a_small_objective_coefficient_warns_from_its_threshold(request, n, warns, cli_fixture):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM({n} * x)"
-    _values(_cli(request, cli_fixture), sql, expect_large_numbers=warns)
+    _values(_cli(request, cli_fixture), sql, expect_number_range=warns)
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("cli_fixture", _BACKENDS)
 def test_a_small_quadratic_objective_coefficient_warns(request, cli_fixture):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x >= 1 MINIMIZE SUM(0.0000001 * POWER(x, 2))"
-    _values(_cli(request, cli_fixture), sql, expect_large_numbers=True)
+    _values(_cli(request, cli_fixture), sql, expect_number_range=True)
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("cli_fixture", _BACKENDS)
 def test_a_small_constraint_coefficient_is_silent(request, cli_fixture):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT x <= 100 AND SUM(0.0000001 * x) <= 1 MAXIMIZE SUM(x)"
-    assert _values(_cli(request, cli_fixture), sql, expect_large_numbers=False) == pytest.approx([100.0, 100.0])
+    assert _values(_cli(request, cli_fixture), sql, expect_number_range=False) == pytest.approx([100.0, 100.0])
 
 
 @pytest.mark.correctness
@@ -173,7 +173,7 @@ def test_a_large_quadratic_objective_coefficient_warns(request, oracle_solver, c
         DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 1
         MINIMIZE SUM(2000000 * POWER(x, 2) - 999999 * x)
     """
-    xs = _values(_cli(request, cli_fixture), sql, expect_large_numbers=True)
+    xs = _values(_cli(request, cli_fixture), sql, expect_number_range=True)
 
     oracle_solver.create_model("large_quadratic_objective")
     for i in range(2):
@@ -188,7 +188,7 @@ def test_a_large_quadratic_objective_coefficient_warns(request, oracle_solver, c
     assert value == pytest.approx(result.objective_value, rel=1e-5)
 
 
-# name -> (the clause that holds the large number, the oracle's linear part, Q coefficient and right-hand side).
+# name -> (the clause that holds the number out of range, the oracle's linear part, Q coefficient and right-hand side).
 _QUADRATIC_ROWS = {
     "q-coefficient": ("SUM(2000000 * POWER(x, 2)) <= 500000", 0.0, 2e6, 5e5),
     "linear-coefficient": ("SUM(POWER(x, 2) + 2000000 * x) <= 500000", 2e6, 1.0, 5e5),
@@ -207,7 +207,7 @@ def test_a_large_quadratic_constraint_number_warns(decidb_cli_gurobi, oracle_sol
         DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 10 AND {clause}
         MAXIMIZE SUM(x)
     """
-    xs = _values(decidb_cli_gurobi, sql, expect_large_numbers=True)
+    xs = _values(decidb_cli_gurobi, sql, expect_number_range=True)
 
     oracle_solver.create_model(f"large_quadratic_row_{row}")
     for i in range(2):
@@ -240,7 +240,7 @@ def test_a_large_indicator_number_warns(decidb_cli_gurobi, oracle_solver, row):
         DECIDE x(INT) SUCH THAT x >= 0 AND x <= 900000 AND {clause}
         {sense} SUM(x)
     """
-    xs = _values(decidb_cli_gurobi, sql, expect_large_numbers=True)
+    xs = _values(decidb_cli_gurobi, sql, expect_number_range=True)
 
     oracle_solver.create_model(f"large_indicator_{row}")
     for i in range(2):
@@ -263,7 +263,7 @@ def test_a_big_m_derived_over_the_threshold_warns_where_it_exists(request, oracl
         DECIDE x(INT) SUCH THAT x >= 0 AND x <= 900000 AND SUM(x) <> 7
         MAXIMIZE SUM(x)
     """
-    xs = _values(_cli(request, cli_fixture), sql, expect_large_numbers={"gurobi": False, "highs": True})
+    xs = _values(_cli(request, cli_fixture), sql, expect_number_range={"gurobi": False, "highs": True})
 
     oracle_solver.create_model("derived_big_m")
     for i in range(2):
@@ -286,7 +286,7 @@ def test_a_number_just_under_each_threshold_is_silent(request, oracle_solver, cl
         DECIDE x(REAL) SUCH THAT x >= -4503599627 AND x <= 4503599627 AND SUM(999999 * x) <= 4503599627
         MAXIMIZE SUM(999999 * x)
     """
-    xs = _values(_cli(request, cli_fixture), sql, expect_large_numbers=False)
+    xs = _values(_cli(request, cli_fixture), sql, expect_number_range=False)
     result = _linear_oracle(
         oracle_solver,
         "just_under_the_thresholds",
@@ -317,7 +317,7 @@ def test_open_bounds_are_silent(request, oracle_solver, name, cli_fixture):
     -1e30 or an upper at 1e30 is the same infinity. Infinity is no number."""
     bounds, lower = _OPEN_BOUNDS[name]
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(REAL) SUCH THAT {bounds} AND SUM(x) >= 1 MINIMIZE SUM(x)"
-    xs = _values(_cli(request, cli_fixture), sql, expect_large_numbers=False)
+    xs = _values(_cli(request, cli_fixture), sql, expect_number_range=False)
     result = _linear_oracle(
         oracle_solver,
         f"open_bounds_{name}",
@@ -340,7 +340,7 @@ def test_many_large_numbers_print_one_line(request, cli_fixture):
         DECIDE x(REAL) SUCH THAT x >= -5000000000 AND x <= 6000000000 AND SUM(2000000 * x) <= 7000000000
         MAXIMIZE SUM(4000000 * x)
     """
-    _values(_cli(request, cli_fixture), sql, expect_large_numbers=True)
+    _values(_cli(request, cli_fixture), sql, expect_number_range=True)
 
 
 @pytest.mark.correctness
@@ -358,7 +358,7 @@ def test_two_decide_nodes_that_both_warn_print_one_line(decidb_cli, oracle_solve
         DECIDE x(INT) SUCH THAT x >= 0 AND x <= ({inner}) AND SUM(2000000 * x) <= 7000000
         MAXIMIZE SUM(x)
     """
-    xs = _values(decidb_cli, sql, expect_large_numbers=True)
+    xs = _values(decidb_cli, sql, expect_number_range=True)
 
     oracle_solver.create_model("two_decide_nodes")
     for i in range(2):
@@ -382,7 +382,7 @@ def test_diagnose_prints_once_when_the_solved_model_is_large(request, cli_fixtur
         DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 6000000000
         MAXIMIZE SUM(x)
         """,
-        expect_large_numbers=True,
+        expect_number_range=True,
     )
 
     assert {row[columns.index("state")] for row in rows} == {"infeasible"}
@@ -391,16 +391,16 @@ def test_diagnose_prints_once_when_the_solved_model_is_large(request, cli_fixtur
 @pytest.mark.query_diagnostics
 @pytest.mark.parametrize("cli_fixture", _BACKENDS)
 def test_diagnose_prints_once_for_a_number_only_the_repair_model_holds(request, cli_fixture):
-    """`10000000 * x <= 50000000` is a bound on one decision, so the solved model holds `x <= 5` and no large number;
-    the repair model keeps the row, and its coefficient is the large number."""
+    """`10000000 * x <= 50000000` is a bound on one decision, so the solved model holds `x <= 5` and no number out of
+    range; the repair model keeps the row, and its coefficient is the number out of range."""
     cli = _cli(request, cli_fixture)
     sql = f"""
         SELECT id, x FROM (VALUES (1, 5)) t(id, lo)
         DECIDE x(INT) SUCH THAT x <> 5 AND x >= lo AND 10000000 * x <= 50000000
         MINIMIZE SUM(x)
     """
-    cli.assert_error(sql, match="(?i)infeasible", expect_large_numbers=False)
-    rows, columns = cli.execute("DIAGNOSE " + sql, expect_large_numbers=True)
+    cli.assert_error(sql, match="(?i)infeasible", expect_number_range=False)
+    rows, columns = cli.execute("DIAGNOSE " + sql, expect_number_range=True)
 
     assert {row[columns.index("state")] for row in rows} == {"infeasible"}
 
@@ -410,8 +410,8 @@ def test_a_direct_solved_query_prints_nothing(request, decidb_cli, cli_fixture):
     """The A1 rule answers `x <= 5000000000` with no solver and no model, so no solver tolerance applies. The same
     query on the solver path (`off`, which a forced backend takes anyway) holds the bound and warns."""
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5000000000 MAXIMIZE SUM(x)"
-    direct, _ = decidb_cli.execute(f"SET decide_direct_solve='require'; {sql}", expect_large_numbers=False)
-    solver = _values(_cli(request, cli_fixture), sql, expect_large_numbers=True)
+    direct, _ = decidb_cli.execute(f"SET decide_direct_solve='require'; {sql}", expect_number_range=False)
+    solver = _values(_cli(request, cli_fixture), sql, expect_number_range=True)
 
     assert sorted(row[1] for row in direct) == solver == [5000000000, 5000000000]
 
@@ -423,7 +423,7 @@ def test_the_direct_key_declares_a_query_that_warns_only_on_a_solver(decidb_cli,
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5000000000 MAXIMIZE SUM(x)"
     declared = {"direct": False, "gurobi": True, "highs": True}
     for cli in (decidb_cli, decidb_cli_highs):
-        rows, _ = cli.execute(sql, expect_large_numbers=declared)
+        rows, _ = cli.execute(sql, expect_number_range=declared)
         assert sorted(row[1] for row in rows) == [5000000000, 5000000000]
 
 
@@ -436,10 +436,10 @@ def test_a_row_is_satisfied_within_the_feasibility_tolerance(request, cli_fixtur
     (HiGHS at its own 1e-7 says infeasible). A miss of 1.5e-6 is outside it."""
     cli = _cli(request, cli_fixture)
     query = "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 0.5 AND SUM(x) >= {n} MINIMIZE SUM(x)"
-    xs = _values(cli, query.format(n="1.5000005"), expect_large_numbers=False)
+    xs = _values(cli, query.format(n="1.5000005"), expect_number_range=False)
     assert sum(xs) == pytest.approx(1.5000005, abs=1e-9)
     assert max(xs) - 0.5 <= 1e-6
-    cli.assert_error(query.format(n="1.5000015"), match="(?i)infeasible", expect_large_numbers=False)
+    cli.assert_error(query.format(n="1.5000015"), match="(?i)infeasible", expect_number_range=False)
 
 
 @pytest.mark.correctness
@@ -470,6 +470,6 @@ def test_an_integer_column_is_integral_within_the_integrality_tolerance(request,
         ),
         key=lambda point: point[0] + 2 * point[1] + 2 * point[2],
     )
-    result, _ = _cli(request, cli_fixture).execute(sql, expect_large_numbers=False)
+    result, _ = _cli(request, cli_fixture).execute(sql, expect_number_range=False)
 
     assert result == [best]

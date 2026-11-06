@@ -80,7 +80,7 @@ def test_answer_is_the_value_duckdb_admits(
             full = f"SET decide_direct_solve='{mode}'; {sql}"
             if expected is None:
                 with pytest.raises(DeciDBCliError, match=_INFEASIBLE):
-                    cli.execute(full, expect_large_numbers=large)
+                    cli.execute(full, expect_number_range=large)
             else:
-                rows, _ = cli.execute(full, expect_large_numbers=large)
+                rows, _ = cli.execute(full, expect_number_range=large)
                 assert rows == [(expected,)], f"[{mode}] {rows} != {expected}"

@@ -43,7 +43,7 @@ from solver.types import ObjSense, VarType
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import agree_with_oracle, outcome as _run_all, run as _run, sql_literal, values_clause
-from ._large_numbers import writes_large_number
+from ._number_range import writes_number_out_of_range
 
 
 INF = math.inf
@@ -337,8 +337,8 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
     def check_assignment(rows, columns, mode):
         _check_assignment(case_, rows, columns, oracle, mode)
 
-    large = writes_large_number(sql, bounded=[name for name, _ in case_.decisions])
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, large_numbers=large)
+    large = writes_number_out_of_range(sql, bounded=[name for name, _ in case_.decisions])
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, number_range=large)
 
 
 # ---------------------------------------------------------------------------
@@ -1058,7 +1058,7 @@ BOUNDARY_CASES = {
 def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
-    solver = _run_all(decidb_cli, sql, "off", writes_large_number(sql))
+    solver = _run_all(decidb_cli, sql, "off", writes_number_out_of_range(sql))
     assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
@@ -1418,7 +1418,7 @@ def test_a1_coefficients_that_keep_their_precision_are_silent(decidb_cli, object
     ],
 )
 def test_a1_warns_when_a_coefficient_beside_a_square_leaves_the_normal_range(decidb_cli, objective):
-    _run(decidb_cli, _one_decision(objective), "require", expect_large_numbers=True)
+    _run(decidb_cli, _one_decision(objective), "require", expect_number_range=True)
 
 
 @pytest.mark.var_real
@@ -1428,4 +1428,4 @@ def test_a1_warns_when_only_a_later_decision_loses_precision(decidb_cli):
         "SELECT x, y FROM (FROM (VALUES (1)) t(id) DECIDE x(REAL), y(REAL) SUCH THAT x <= 10 AND y <= 10 "
         "MAXIMIZE SUM(x) - SUM(1e-310 * POWER(y - 0.3333333333333333, 2))) q"
     )
-    _run(decidb_cli, sql, "require", expect_large_numbers=True)
+    _run(decidb_cli, sql, "require", expect_number_range=True)

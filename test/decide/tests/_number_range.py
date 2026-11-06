@@ -2,14 +2,15 @@
 
 DeciDB warns about a coefficient of 1e6 or more (1 / the integrality tolerance), about a right-hand side or a bound of
 about 4.5e9 or more (the feasibility tolerance / the machine epsilon), and about a nonzero objective coefficient of 1e-6 or
-less (the optimality tolerance). `writes_large_number` reads the SQL text for a literal past the threshold of the position
-it stands in, independently of the model, so a test declares the warning (`expect_large_numbers`) from what the query says.
+less (the optimality tolerance). `writes_number_out_of_range` reads the SQL text for a literal past the threshold of the
+position it stands in, independently of the model, so a test declares the warning (`expect_number_range`) from what the
+query says.
 
 A position is read from the syntax alone: a literal beside `*` is a coefficient, and any other literal is a right-hand side
 or a bound. A literal in a `VALUES` list is data whose role the SQL text does not give; the caller says which (`data`).
 The read does not follow a number through a rewrite: a query that folds a literal away (`10000000 * x <= 50000000` is a
-bound on `x`), or builds a large number from small ones, is for the caller to judge. The harness checks the declaration
-both ways, so a wrong read fails the test that makes it.
+bound on `x`), or builds a number out of range from small ones, is for the caller to judge. The harness checks the
+declaration both ways, so a wrong read fails the test that makes it.
 """
 
 import re
@@ -55,7 +56,7 @@ def _values_spans(sql):
     return spans
 
 
-def writes_large_number(sql, bounded=(), data="total"):
+def writes_number_out_of_range(sql, bounded=(), data="total"):
     """Does the SQL write a literal at or past the threshold of its position?
 
     `bounded` names decisions whose bound `d <= v` or `d >= v` is read as written: a literal of 1e20 or more there is no

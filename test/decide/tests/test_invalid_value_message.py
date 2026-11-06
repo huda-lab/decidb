@@ -575,7 +575,7 @@ def test_the_constant_terms_of_the_objective_are_never_summed(request, cli_fixtu
 def test_a_model_of_finite_huge_numbers_keeps_the_solvers_verdict(decidb_cli_gurobi, decidb_cli_highs, mode):
     def stderr(cli, decide):
         sql = f"SET decide_direct_solve='{mode}'; {_huge_query(decide)}"
-        return cli.execute_raw(sql, expect_large_numbers=True).stderr
+        return cli.execute_raw(sql, expect_number_range=True).stderr
 
     unbounded = stderr(decidb_cli_gurobi, "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))")
     assert "DECIDE optimization is unbounded." in unbounded, unbounded

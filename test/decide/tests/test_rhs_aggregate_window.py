@@ -149,7 +149,7 @@ def _agree(cli, oracle_solver, rows, constraint, limits):
 
     # A limit of 1e6 or more is a right-hand side of the model the solver is handed.
     large = any(limit is not None and abs(limit) >= 1e6 for _, limit in limits)
-    agree_with_oracle(cli, _sql(rows, constraint), oracle, check_assignment, modes=("off",), large_numbers=large)
+    agree_with_oracle(cli, _sql(rows, constraint), oracle, check_assignment, modes=("off",), number_range=large)
 
 
 @pytest.mark.cons_aggregate
@@ -319,7 +319,7 @@ def test_diagnose_names_the_clause_with_a_right_hand_aggregate(decidb_cli):
     """The right side is a window column inside the plan, but the clause reads as the user wrote it."""
     sql = f"""DIAGNOSE SELECT id, x FROM (VALUES {_values(ROWS)}) t({COLUMNS})
         DECIDE x(BOOL) SUCH THAT SUM(x * w) by (g) >= SUM(cap) by (g) + 100 MAXIMIZE SUM(p*x)"""
-    rows, columns = decidb_cli.execute(sql, expect_large_numbers=True)
+    rows, columns = decidb_cli.execute(sql, expect_number_range=True)
     clauses = {row[columns.index("clause")] for row in rows if row[columns.index("clause")]}
     assert "sum(x * w) by (g) >= sum(cap) by (g) + 100" in clauses, rows
 

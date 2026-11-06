@@ -97,7 +97,7 @@ _MAX_SCORE = {
 }
 
 
-def _solver_model_has_a_large_number(source, rule):
+def _solver_model_has_a_number_out_of_range(source, rule):
     """A1 minimizes `SUM(POWER(x - score, 2))`, so the linear coefficient of `x` on a row is `-2 * score`; S1
     maximizes `SUM(score * x)`, so it is `score`. The solver (`off`) warns when one reaches 1e6; a direct plan builds
     no model."""
@@ -149,7 +149,7 @@ def test_a_pass_that_moves_bindings_above_a_source_keeps_the_parents_reads_bound
     without_pass = _plan(decidb_cli, setup, query, "require", disabled=optimizer)
     assert plan != without_pass, f"{optimizer} did not change the plan"
 
-    solver = outcome(decidb_cli, setup + query, "off", _solver_model_has_a_large_number(source, rule))
+    solver = outcome(decidb_cli, setup + query, "off", _solver_model_has_a_number_out_of_range(source, rule))
     assert solver[0] == "ok", solver
     for mode in ("auto", "require"):
         direct = outcome(decidb_cli, setup + query, mode)
