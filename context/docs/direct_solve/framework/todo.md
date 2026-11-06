@@ -60,7 +60,9 @@ solver path answers those queries, so none of them is wrong, only slower.
   and for `n1` (0.080 s and 0.079 s at 800,000 rows). Measured with the profiler on `a2` at `sf=1`: the window takes
   15 ms and the answer's projection 35 ms of 71 ms. The solver path takes 50 ms, as it folds the shared decision into
   one variable whose coefficients are the same sums; A2's `a2` query is 0.8 to 0.9 times Gurobi's speed
-  (A2 `done.md` § Performance). The keyed plan does the same per-row work in parallel and stays ahead.
+  (A2 `done.md` § Performance). The keyed plan does the same per-row work in parallel and stays ahead. The same
+  projection carries constant branches DuckDB leaves unfolded (`CASE WHEN false THEN true ...`, read in the
+  profiler's plan), which computing the answer once per class would also take off the per-row path.
 - **Options.**
   1. Group-then-join: aggregate per class (a hash aggregate on the key, or an ungrouped one for a query-wide
      decision), compute the answer and its checks on the aggregate's rows, and join the answer back to the rows on the
