@@ -238,6 +238,34 @@ class TestEverySpellingIsOnePolynomial:
         assert sum(float(r[xi]) for r in out) == pytest.approx(result.objective_value, rel=1e-6)
 
 
+def _canonical(decidb_cli, constraint):
+    """The plan's text, without box glyphs or whitespace, for a query with this constraint."""
+    out = decidb_cli.execute_raw(
+        f"SET decide_direct_solve='off'; EXPLAIN SELECT id, x FROM {_TABLE} DECIDE x(REAL) "
+        f"SUCH THAT x <= {_UB} AND {constraint} MAXIMIZE SUM(x)"
+    ).stdout
+    return "".join("".join(" " if ch in "│┌┐└┘├┤┬┴┼─" else ch for ch in out).split())
+
+
+@pytest.mark.explain
+class TestOneSpellingOfAWholeExponent:
+    """A whole exponent is written as its number however it was spelled, so `POWER(x, CAST(2 AS INTEGER))` and
+    `POWER(x, 2)` are one term and merge as like terms do. A square in a limit needs Gurobi."""
+
+    @pytest.mark.parametrize(
+        "constraint, canonical",
+        [
+            ("POWER(x, CAST(2 AS INTEGER)) + POWER(x, 2) <= 5", "≡2*power(x,2)<=5"),
+            ("SUM(POWER(x, CAST(2 AS INTEGER))) + SUM(POWER(x, 2)) <= 5", "≡2*sum(power(x,2))<=5"),
+            ("SUM(POWER(x, CAST(2 AS INTEGER)) + POWER(x, 2)) <= 5", "≡sum(power(x,2)+power(x,2))<=5"),
+        ],
+        ids=["per row", "over reducers", "inside a reducer"],
+    )
+    def test_a_cast_exponent_is_the_number(self, decidb_cli_gurobi, canonical, constraint):
+        packed = _canonical(decidb_cli_gurobi, constraint)
+        assert canonical in packed, packed
+
+
 @pytest.mark.correctness
 class TestBooleanProducts:
     """A product of BOOL decisions takes the general path: a square of b is b * b, linearized like b * d."""

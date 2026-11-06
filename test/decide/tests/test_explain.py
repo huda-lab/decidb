@@ -823,6 +823,23 @@ def test_objective_layers_render_too(decidb_cli):
 
 
 @pytest.mark.explain
+def test_a_product_respelled_as_one_decision_prints_its_name(decidb_cli):
+    """`POWER(x, 1)` respells to `x`, which carries the written text's tag: the canonical layer prints the decision,
+    in a clause and in the objective, and never the tag."""
+    sql = """
+        SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
+        DECIDE x(REAL)
+        SUCH THAT x <= 4 AND SUM(POWER(x,1) + w*x) <= 5
+        MAXIMIZE SUM(POWER(x, 1))
+    """
+    out = _explain(decidb_cli, sql)
+    assert INTERNAL_TAG_RE.search(out) is None, _plan_text(out)
+    packed = _packed(out)
+    assert "≡sum(x+w*x)<=5" in packed, _plan_text(out)
+    assert "MAXIMIZESUM(POWER(x,1))≡sum(x)" in packed, _plan_text(out)
+
+
+@pytest.mark.explain
 def test_layers_survive_a_prepared_statement(decidb_cli):
     """The written and canonical layers are hand-serialized, so replay is the risk.
 

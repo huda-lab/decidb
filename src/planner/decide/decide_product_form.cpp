@@ -187,15 +187,14 @@ struct ProductReader {
 	idx_t decide_index;
 	DecideProductForm &form;
 
-	void AddFactor(vector<DecideProductFactor> &into, const Expression &base, idx_t power,
-	               const Expression *written_power) {
-		into.push_back({&base, power, written_power});
+	void AddFactor(vector<DecideProductFactor> &into, const Expression &base, idx_t power) {
+		into.push_back({&base, power});
 	}
 
 	void Read(const Expression &expr, idx_t power) {
 		if (!BoundExpressionReferencesDecide(expr, decide_index)) {
 			// Data: a factor of the coefficient, as written.
-			AddFactor(form.coefficient, expr, power, nullptr);
+			AddFactor(form.coefficient, expr, power);
 			return;
 		}
 		auto &node = *UnwrapDecideCasts(expr, decide_index);
@@ -218,8 +217,7 @@ struct ProductReader {
 			auto &base = *node.Cast<BoundFunctionExpression>().children[0];
 			if (power * exponent != 0 && DecideDegreeOf(context, base, decide_index).degree == 1) {
 				// One linear form squared stays whole: POWER(b * x, 2) keeps coefficient 1.
-				AddFactor(form.factors, *UnwrapDecideCasts(base, decide_index), power * exponent,
-				          power == 1 && exponent >= 2 ? &node : nullptr);
+				AddFactor(form.factors, *UnwrapDecideCasts(base, decide_index), power * exponent);
 				return;
 			}
 			Read(base, power * exponent);
@@ -231,7 +229,7 @@ struct ProductReader {
 			AddZeroDecisions(node);
 			return;
 		}
-		AddFactor(form.factors, node, power, nullptr);
+		AddFactor(form.factors, node, power);
 	}
 
 	//! The decisions of a term raised to 0, which the product keeps at coefficient 0, as the merge keeps `x - x`.
@@ -268,7 +266,6 @@ DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &ex
 				continue;
 			}
 			form.factors[i].power += form.factors[j].power;
-			form.factors[i].written_power = nullptr;
 			form.factors.erase(form.factors.begin() + static_cast<int64_t>(j));
 		}
 	}
@@ -294,10 +291,9 @@ static unique_ptr<Expression> Bind(ClientContext &context, const string &name, u
 	return Bind(context, name, std::move(children));
 }
 
+//! A factor as the spelling writes it: its base, or POWER of its base and the whole exponent as its number, however the
+//! exponent was written (`CAST(2 AS INTEGER)` is 2).
 static unique_ptr<Expression> BuildFactor(ClientContext &context, const DecideProductFactor &factor) {
-	if (factor.written_power) {
-		return factor.written_power->Copy();
-	}
 	if (factor.power == 1) {
 		return factor.base->Copy();
 	}
@@ -347,6 +343,15 @@ bool IsDecideProductNode(ClientContext &context, const Expression &expr, idx_t d
 	        TryGetDecideWholeExponent(context, *expr.Cast<BoundFunctionExpression>().children[1], exponent));
 }
 
+//! The alias of a node rebuilt in place of another. DECIDE tags are appended to an ordinary alias and stripped where a
+//! node is printed (StripDecideTags), so the rebuilt node keeps its own ordinary alias (a column's name, when the
+//! product is one decision), takes the replaced node's when it has none, and carries every tag the replaced node did.
+static string RebuiltAlias(const string &own, const string &replaced) {
+	auto replaced_name = StripDecideTags(replaced);
+	auto alias = StripDecideTags(own).empty() ? replaced_name + own : own;
+	return alias + replaced.substr(replaced_name.size());
+}
+
 //! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is. With `written`, the
 //! rewritten node also names its text as written, cut at its location.
 static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node,
@@ -361,7 +366,7 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 	if (Expression::Equals(*rebuilt, node)) {
 		return nullptr;
 	}
-	auto alias = node.GetAlias();
+	auto alias = RebuiltAlias(rebuilt->GetAlias(), node.GetAlias());
 	// The text goes on the product itself, below the cast back, which a reader looks through.
 	idx_t fragment_id;
 	string text;

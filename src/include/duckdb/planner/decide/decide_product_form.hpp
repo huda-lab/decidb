@@ -60,8 +60,6 @@ struct DecideWrittenTerms {
 struct DecideProductFactor {
 	const Expression *base = nullptr;
 	idx_t power = 1;
-	//! The POWER node the factor was read from, when its exponent is `power`: the rebuild copies it.
-	const Expression *written_power = nullptr;
 };
 
 //! A product read as the spelling above: `sign * coefficient * factors`.
