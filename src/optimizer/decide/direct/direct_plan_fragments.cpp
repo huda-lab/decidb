@@ -74,6 +74,124 @@ unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSign
 	return total;
 }
 
+DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                                 DirectProjectionStage &p1, const DirectQuadraticPart &part,
+                                                 idx_t decision_count, const vector<ColumnBinding> &source_bindings,
+                                                 const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                                                 vector<unique_ptr<Expression>> &checks) {
+	DirectQuadraticColumns columns;
+	// A value is computed and checked only on the rows the part reads.
+	ExprPtr kept;
+	if (part.kept) {
+		columns.has_mask = true;
+		kept = calc.Wrap(DirectActiveWhen(calc, over ? over(*part.kept).get() : part.kept.get()));
+		columns.mask = p1.Add(calc.Out(kept));
+	}
+	auto on_kept = [&](const ExprPtr &value) {
+		return p1.Add(calc.Out(DirectOnKeptRows(calc, kept, value)));
+	};
+	auto check_number = [&](ColumnBinding number, const DirectNumberNames &names,
+	                        const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
+	                        bool divides = false) {
+		if (auto check = DirectCheckNumber(optimizer, number, names, values, source_bindings, p1.index, scaled, scale,
+		                                   divides)) {
+			checks.push_back(std::move(check));
+		}
+	};
+	// Linear coefficients add up per decision.
+	vector<vector<DirectSignedValue>> linear_values(decision_count);
+	for (auto &term : part.linear.terms) {
+		linear_values[term.decision].push_back({term.sign, term.coefficient->Copy()});
+	}
+	for (auto &square : part.squares) {
+		DirectQuadraticColumns::Square laid;
+		laid.decision = square.decision;
+		laid.factor = square.sign * square.scale;
+		laid.w = on_kept(calc.Wrap(DirectSumOf(optimizer, square.inner_linear, over)));
+		check_number(laid.w, square.inner_linear_names, square.inner_linear);
+		if (square.inner_constant.empty()) {
+			laid.t = p1.Add(calc.Out(calc.Num(0.0)));
+		} else {
+			laid.t = on_kept(calc.Wrap(DirectSumOf(optimizer, square.inner_constant, over)));
+			check_number(laid.t, square.inner_constant_names, square.inner_constant);
+		}
+		columns.squares.push_back(laid);
+	}
+	for (idx_t d = 0; d < decision_count; d++) {
+		if (linear_values[d].empty()) {
+			continue;
+		}
+		auto binding = on_kept(calc.Wrap(DirectSumOf(optimizer, linear_values[d], over)));
+		check_number(binding, part.linear.names[d], linear_values[d]);
+		columns.linear_decision.push_back(d);
+		columns.linear.push_back(binding);
+	}
+	// A constant adds nothing to the answer, so like the solver path it is read one term at a time, with the part's
+	// factor applied, and never added up; each must still be valid.
+	for (auto &term : part.constants) {
+		auto value = calc.Wrap(DirectScaledTerm(optimizer, over ? over(*term.value) : term.value->Copy(), term.sign,
+		                                        part.linear.scaled, part.linear.scale, part.linear.divides));
+		vector<DirectSignedValue> read;
+		read.push_back({term.sign, term.value->Copy()});
+		check_number(on_kept(value), term.value_names, read, part.linear.scaled, part.linear.scale,
+		             part.linear.divides);
+	}
+	return columns;
+}
+
+DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                       const vector<DirectQuadraticPart> &parts,
+                                       const vector<DirectQuadraticColumns> &columns, idx_t decision) {
+	D_ASSERT(parts.size() == columns.size());
+	DirectQuadraticSum sum;
+	sum.a = calc.Num(0.0);
+	sum.b = calc.Num(0.0);
+	sum.linear = calc.Num(0.0);
+	bool has_linear = false;
+	for (idx_t p = 0; p < parts.size(); p++) {
+		auto &part = parts[p];
+		auto &laid = columns[p];
+		ExprPtr a_part = calc.Num(0.0);
+		ExprPtr linear_part = calc.Num(0.0);
+		ExprPtr cross_part = calc.Num(0.0);
+		bool touched = false;
+		for (idx_t i = 0; i < laid.linear.size(); i++) {
+			if (laid.linear_decision[i] == decision) {
+				linear_part = calc.Add(linear_part, calc.Col(LogicalType::DOUBLE, laid.linear[i]));
+				touched = true;
+				has_linear = true;
+			}
+		}
+		for (auto &square : laid.squares) {
+			if (square.decision != decision) {
+				continue;
+			}
+			auto k = calc.Num(square.factor);
+			auto w = calc.Col(LogicalType::DOUBLE, square.w);
+			auto t = calc.Col(LogicalType::DOUBLE, square.t);
+			a_part = calc.Add(a_part, calc.Mul(k, calc.Mul(w, w)));
+			cross_part = calc.Add(cross_part, calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t))));
+			touched = true;
+		}
+		if (!touched) {
+			continue;
+		}
+		auto scaled = [&](ExprPtr value) {
+			auto result = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), part.linear.sign, part.linear.scaled,
+			                                         part.linear.scale, part.linear.divides));
+			return laid.has_mask ? calc.If(calc.Col(LogicalType::BOOLEAN, laid.mask), result, calc.Num(0.0)) : result;
+		};
+		auto linear_scaled = scaled(linear_part);
+		sum.a = calc.Add(sum.a, scaled(a_part));
+		sum.b = calc.Add(sum.b, calc.Add(linear_scaled, scaled(cross_part)));
+		sum.linear = calc.Add(sum.linear, linear_scaled);
+	}
+	if (!has_linear) {
+		sum.linear = nullptr;
+	}
+	return sum;
+}
+
 unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_ptr<LogicalOperator> child,
                                                  const vector<ExprPtr> &groups,
                                                  vector<unique_ptr<Expression>> aggregates) {

@@ -24,17 +24,6 @@ namespace direct_n1_euclidean_ball {
 
 constexpr const char *RULE_NAME = "N1_EUCLIDEAN_BALL";
 
-//! One `sign * scale * SUM(...)` of the objective: its linear terms, per-row constants and square, on the rows it
-//! reads.
-struct Part {
-	DirectLinearPart linear;
-	//! The rows the part reads (DirectObjectivePartKept), null for every row.
-	unique_ptr<Expression> kept;
-	vector<DirectConstantTerm> constants;
-	bool has_square = false;
-	DirectSquareTerm square;
-};
-
 //! What CheckCondition proved: one row-scoped REAL decision in a box [0, inf) or (-inf, inf), one `SUM(q * x^2) <= B`
 //! per group over the rows the clause covers, and an objective that orients on every row as minimize `K*x^2 + b*x`.
 //! K is one constant on every row with a linear term, and positive.
@@ -58,7 +47,7 @@ struct Condition final : DirectApplicabilityCondition {
 	unique_ptr<Expression> limit_value;
 	unique_ptr<DecideGroupBound> limit_group;
 	double square_factor = 1.0;
-	vector<Part> parts;
+	vector<DirectQuadraticPart> parts;
 	bool has_square = false;
 };
 
@@ -120,9 +109,6 @@ private:
 	                     Condition &condition) const;
 	bool ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjectiveTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term,
-	                        Condition &condition, Part &read) const;
-	bool ProveSquare(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, Part &read) const;
 };
 
 //! The one aggregate clause: a plain `SUM` of one square, centered on zero, with `<=`. Every other clause is a per-row
@@ -204,31 +190,16 @@ bool Rule::ProveBox(const DirectIR &ir, ClientContext &context, Condition &condi
 }
 
 //! The square of an objective part: its factor folds to one constant, and it is convex in the sense.
-bool Rule::ProveSquare(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, Part &read) const {
+static bool SquareIsConvex(ClientContext &context, const DirectIR &ir, const DirectQuadraticPart &part) {
 	double factor;
-	if (!DirectReadSquareTerm(ir, context, term, ir.objective.written, read.square) ||
-	    !FoldSquareFactor(context, read.square, factor)) {
+	if (!FoldSquareFactor(context, part.squares[0], factor)) {
 		return false;
 	}
-	auto &linear = read.linear;
+	auto &linear = part.linear;
 	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
 	double sense = ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
 	double oriented = sense * linear.sign * part_factor * factor;
-	read.has_square = std::isfinite(oriented) && oriented > 0.0;
-	return read.has_square;
-}
-
-//! A term of an objective part: linear (DirectReadLinearPart read it), a per-row constant, or the one square.
-bool Rule::ProveObjectiveTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term,
-                              Condition &condition, Part &read) const {
-	if (term.IsLinear()) {
-		return true;
-	}
-	if (term.IsConstant()) {
-		read.constants.emplace_back();
-		return DirectReadConstantTerm(ir, term, ir.objective.written, read.constants.back());
-	}
-	return term.IsSquare() && !condition.has_square && !read.has_square && ProveSquare(ir, context, term, read);
+	return std::isfinite(oriented) && oriented > 0.0;
 }
 
 //! K is one constant on every row with a linear term. A `when`, or a NULL a guard skips, leaves a row with no square,
@@ -237,11 +208,13 @@ bool Rule::ProveObjectiveTerm(const DirectIR &ir, ClientContext &context, const 
 //! The NULL guard of a nullable `t` in `(w*x + t)^2` wraps every coefficient of the term (GuardCoefficients), `w` among
 //! them, so a guarded `w` is how the square's absence on a row shows here. This reads that reach: a guard that spared
 //! `w` would leave the square on every row and this check blind to it.
-static bool SquareCoversEveryLinearTerm(const vector<Part> &parts) {
+static bool SquareCoversEveryLinearTerm(const vector<DirectQuadraticPart> &parts) {
 	for (auto &square : parts) {
-		bool on_some_rows = square.has_square && square.kept;
-		for (auto &inner : square.square.inner_linear) {
-			on_some_rows = on_some_rows || DecideIsGuarded(*inner.expr);
+		bool on_some_rows = !square.squares.empty() && square.kept;
+		for (auto &term : square.squares) {
+			for (auto &inner : term.inner_linear) {
+				on_some_rows = on_some_rows || DecideIsGuarded(*inner.expr);
+			}
 		}
 		for (auto &other : parts) {
 			if (on_some_rows && &other != &square && !other.linear.terms.empty()) {
@@ -255,20 +228,16 @@ static bool SquareCoversEveryLinearTerm(const vector<Part> &parts) {
 //! No objective, or `SUM` parts of linear terms, per-row constants and at most one square, convex in the sense.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &part : ir.objective.parts) {
-		if (!part.IsPlainSum()) {
+		DirectQuadraticPart read;
+		if (!part.IsPlainSum() || !DirectReadQuadraticPart(ir, context, part, ir.objective.written, read)) {
 			return false;
 		}
-		Part read;
-		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read.linear) ||
-		    !DirectObjectivePartKept(ir, part, read.kept)) {
-			return false;
-		}
-		for (auto &term : part.terms) {
-			if (!ProveObjectiveTerm(ir, context, term, condition, read)) {
+		if (!read.squares.empty()) {
+			if (condition.has_square || read.squares.size() > 1 || !SquareIsConvex(context, ir, read)) {
 				return false;
 			}
+			condition.has_square = true;
 		}
-		condition.has_square = condition.has_square || read.has_square;
 		condition.parts.push_back(std::move(read));
 	}
 	return SquareCoversEveryLinearTerm(condition.parts);
@@ -398,21 +367,11 @@ private:
 		//! The types of `keys`.
 		vector<LogicalType> key_types;
 	};
-	//! Columns of P1, per part of the objective.
-	struct RawPart {
-		bool has_mask = false;
-		ColumnBinding mask;
-		bool has_linear = false;
-		ColumnBinding linear;
-		//! The square's slope and constant inside it: `(w*x + t)^2`.
-		ColumnBinding w;
-		ColumnBinding t;
-	};
 	struct Raw {
 		Carried carried;
 		//! What the aggregates of the limit read, one member per input of the limit's group bound.
 		vector<DirectGroupInputColumns> limit_inputs;
-		vector<RawPart> parts;
+		vector<DirectQuadraticColumns> parts;
 		vector<unique_ptr<Expression>> checks;
 	};
 	//! Columns of P2.
@@ -513,64 +472,14 @@ private:
 				raw.limit_inputs.push_back(columns);
 			}
 		}
-		for (auto &part : condition.parts) {
-			raw.parts.push_back(LayoutPart(p1, raw, part, state_index));
-		}
-		return raw;
-	}
-
-	RawPart LayoutPart(DirectProjectionStage &p1, Raw &raw, const Part &part, idx_t state_index) const {
-		RawPart columns;
-		// A value is computed and checked only on the rows the part keeps.
-		ExprPtr kept;
-		if (part.kept) {
-			columns.has_mask = true;
-			kept = calc.Wrap(DirectActiveWhen(calc, Over(*part.kept, state_index).get()));
-			columns.mask = p1.Add(calc.Out(kept));
-		}
-		auto on_kept = [&](const ExprPtr &value) {
-			return p1.Add(calc.Out(DirectOnKeptRows(calc, kept, value)));
-		};
 		auto over_state = [&](const Expression &value) {
 			return Over(value, state_index);
 		};
-		auto check_number = [&](ColumnBinding number, const DirectNumberNames &names,
-		                        const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
-		                        bool divides = false) {
-			if (auto check = DirectCheckNumber(optimizer, number, names, values, source_bindings, p1.index, scaled,
-			                                   scale, divides)) {
-				raw.checks.push_back(std::move(check));
-			}
-		};
-		vector<DirectSignedValue> linear;
-		for (auto &term : part.linear.terms) {
-			linear.push_back({term.sign, term.coefficient->Copy()});
+		for (auto &part : condition.parts) {
+			raw.parts.push_back(
+			    DirectLayoutQuadraticPart(optimizer, calc, p1, part, 1, source_bindings, over_state, raw.checks));
 		}
-		if (!linear.empty()) {
-			columns.has_linear = true;
-			columns.linear = on_kept(calc.Wrap(DirectSumOf(optimizer, linear, over_state)));
-			check_number(columns.linear, part.linear.names[0], linear);
-		}
-		if (part.has_square) {
-			columns.w = on_kept(calc.Wrap(DirectSumOf(optimizer, part.square.inner_linear, over_state)));
-			auto &constant = part.square.inner_constant;
-			columns.t =
-			    on_kept(constant.empty() ? calc.Num(0.0) : calc.Wrap(DirectSumOf(optimizer, constant, over_state)));
-			if (!constant.empty()) {
-				check_number(columns.t, part.square.inner_constant_names, constant);
-			}
-		}
-		// A constant adds nothing to the answer, so like the solver path it is read one term at a time, with the part's
-		// factor applied, and never added up; each must still be valid.
-		for (auto &term : part.constants) {
-			auto value = calc.Wrap(DirectScaledTerm(optimizer, Over(*term.value, state_index), term.sign,
-			                                        part.linear.scaled, part.linear.scale, part.linear.divides));
-			vector<DirectSignedValue> read;
-			read.push_back({term.sign, term.value->Copy()});
-			check_number(on_kept(value), term.value_names, read, part.linear.scaled, part.linear.scale,
-			             part.linear.divides);
-		}
-		return columns;
+		return raw;
 	}
 
 	//===------------------------------------------------------------------===//
@@ -591,31 +500,10 @@ private:
 			}
 			result.limit_inputs.push_back(columns);
 		}
-		ExprPtr a = calc.Num(0.0);
-		ExprPtr b = calc.Num(0.0);
-		for (idx_t p = 0; p < condition.parts.size(); p++) {
-			auto &part = condition.parts[p];
-			auto &columns = raw.parts[p];
-			auto scaled = [&](const ExprPtr &value) {
-				auto result_value =
-				    calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), part.linear.sign, part.linear.scaled,
-				                               part.linear.scale, part.linear.divides));
-				return columns.has_mask ? calc.If(Boolean(columns.mask), result_value, calc.Num(0.0)) : result_value;
-			};
-			if (columns.has_linear) {
-				b = calc.Add(b, scaled(Double(columns.linear)));
-			}
-			if (part.has_square) {
-				auto k = calc.Num(part.square.sign * part.square.scale);
-				auto w = Double(columns.w);
-				auto t = Double(columns.t);
-				a = calc.Add(a, scaled(calc.Mul(k, calc.Mul(w, w))));
-				b = calc.Add(b, scaled(calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t)))));
-			}
-		}
+		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, 0);
 		auto sense = calc.Num(condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0);
-		result.a = p2.Add(calc.Out(calc.Mul(sense, a)));
-		result.b = p2.Add(calc.Out(calc.Mul(sense, b)));
+		result.a = p2.Add(calc.Out(calc.Mul(sense, sum.a)));
+		result.b = p2.Add(calc.Out(calc.Mul(sense, sum.b)));
 		// Every check is true or raises; a row passes when all of them do.
 		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;

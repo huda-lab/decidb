@@ -192,6 +192,23 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, const string &clause,
                           DirectSquareTerm &out);
 
+//! One part of an objective that holds linear terms, per-row constants and squares: its sign and factor with its linear
+//! terms (`linear`), the rows it reads (`kept`), and its constants and squares in the order they came.
+struct DirectQuadraticPart {
+	DirectLinearPart linear;
+	//! The rows the part reads (DirectObjectivePartKept), null for every row.
+	unique_ptr<Expression> kept;
+	vector<DirectConstantTerm> constants;
+	vector<DirectSquareTerm> squares;
+};
+
+//! Reads a part of an objective into its linear terms, constants and squares (DirectReadLinearPart,
+//! DirectReadConstantTerm, DirectReadSquareTerm, DirectObjectivePartKept). False when any of them cannot be read, a
+//! linear term names a decision the IR does not declare, or a term is of another kind. How many squares the rule
+//! admits, and which signs, is the rule's to check on `out`.
+bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
+                             DirectQuadraticPart &out);
+
 //! The rows an objective part reads: those the objective's `when` and the part's own both keep, over the source, or
 //! null for every row. A row they drop (a false or NULL `when`) has no coefficient in the part, which a rule reads as
 //! 0. False when a `when` is not a predicate of the source that cannot raise.

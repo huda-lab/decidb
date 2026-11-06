@@ -32,25 +32,6 @@ namespace direct_a1_separable_box {
 
 constexpr const char *RULE_NAME = "A1_SEPARABLE_BOX";
 
-//! A term of an objective part that is not linear: a constant, or a square. The linear terms are read by the shared
-//! DirectReadLinearPart.
-struct Term {
-	enum class Kind : uint8_t { CONSTANT, SQUARE };
-	Kind kind = Kind::CONSTANT;
-	DirectConstantTerm constant;
-	DirectSquareTerm square;
-};
-
-struct Part {
-	//! The part's sign and constant factor, and its linear terms.
-	DirectLinearPart linear;
-	//! The rows the part reads (DirectObjectivePartKept): the objective's `when` and the part's own filter. Null for
-	//! every row.
-	unique_ptr<Expression> kept;
-	//! The constant and square terms, in the order they came.
-	vector<Term> terms;
-};
-
 struct Decision {
 	//! The declared name, which the whole-number range error quotes.
 	string name;
@@ -70,8 +51,7 @@ struct Condition final : DirectApplicabilityCondition {
 	string objective_written;
 	vector<Decision> decisions;
 	vector<DirectBoundClause> clauses;
-	vector<Part> parts;
-	bool has_square = false;
+	vector<DirectQuadraticPart> parts;
 	//! Every value is a constant and nothing is conditional, so a check that fails on one row fails on all of them.
 	bool constant_problem = false;
 };
@@ -103,12 +83,13 @@ bool IsConstantProblem(const Condition &condition) {
 				return false;
 			}
 		}
-		for (auto &term : part.terms) {
-			if (term.kind == Term::Kind::SQUARE) {
-				if (!constant_values(term.square.inner_linear) || !constant_values(term.square.inner_constant)) {
-					return false;
-				}
-			} else if (!constant(*term.constant.value)) {
+		for (auto &square : part.squares) {
+			if (!constant_values(square.inner_linear) || !constant_values(square.inner_constant)) {
+				return false;
+			}
+		}
+		for (auto &term : part.constants) {
+			if (!constant(*term.value)) {
 				return false;
 			}
 		}
@@ -146,11 +127,6 @@ public:
 		for (auto &part : ir.objective.parts) {
 			if (!part.IsPlainSum()) {
 				return nullptr;
-			}
-			for (auto &term : part.terms) {
-				if (!term.IsLinear() && !term.IsConstant() && !term.IsSquare()) {
-					return nullptr;
-				}
 			}
 		}
 		auto condition = make_uniq<Condition>();
@@ -199,42 +175,19 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 	return true;
 }
 
+//! Each part reads as linear terms, per-row constants and squares, and the objective holds at most one square (the
+//! solver rejects a second).
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	auto &objective = ir.objective;
-	idx_t decision_count = ir.decisions.size();
-	for (auto &part : objective.parts) {
-		Part prepared;
-		if (!DirectReadLinearPart(ir, context, part, objective.written, prepared.linear) ||
-		    !DirectObjectivePartKept(ir, part, prepared.kept)) {
+	idx_t squares = 0;
+	for (auto &part : ir.objective.parts) {
+		DirectQuadraticPart prepared;
+		if (!DirectReadQuadraticPart(ir, context, part, ir.objective.written, prepared)) {
 			return false;
 		}
-		for (auto &term : prepared.linear.terms) {
-			if (term.decision >= decision_count) {
-				return false;
-			}
-		}
-		for (auto &term : part.terms) {
-			if (term.IsLinear()) {
-				continue;
-			}
-			Term built;
-			if (term.IsConstant()) {
-				built.kind = Term::Kind::CONSTANT;
-				if (!DirectReadConstantTerm(ir, term, objective.written, built.constant)) {
-					return false;
-				}
-			} else {
-				built.kind = Term::Kind::SQUARE;
-				if (condition.has_square || !DirectReadSquareTerm(ir, context, term, objective.written, built.square)) {
-					return false;
-				}
-				condition.has_square = true;
-			}
-			prepared.terms.push_back(std::move(built));
-		}
+		squares += prepared.squares.size();
 		condition.parts.push_back(std::move(prepared));
 	}
-	return true;
+	return squares <= 1;
 }
 
 //===--------------------------------------------------------------------===//
@@ -303,21 +256,7 @@ private:
 	struct Raw {
 		vector<ColumnBinding> source;
 		vector<DirectBoundColumns> clauses;
-		struct SquareColumns {
-			idx_t decision = 0;
-			double scale = 1.0;
-			ColumnBinding linear;
-			ColumnBinding constant;
-		};
-		struct PartColumns {
-			bool has_mask = false;
-			ColumnBinding mask;
-			//! The sum of the linear coefficients of each decision, with their signs.
-			vector<idx_t> linear_decision;
-			vector<ColumnBinding> linear;
-			vector<SquareColumns> squares;
-		};
-		vector<PartColumns> parts;
+		vector<DirectQuadraticColumns> parts;
 	};
 
 	//! Columns of P2: each clause's bounds on its decision, and each decision's objective coefficients.
@@ -435,92 +374,8 @@ private:
 			raw.clauses.push_back(columns);
 		}
 		for (auto &part : condition.parts) {
-			Raw::PartColumns columns;
-			// The rows the part reads, as an expression over the source; null for every row.
-			ExprPtr kept;
-			if (part.kept) {
-				columns.has_mask = true;
-				kept = calc.Wrap(DirectActiveWhen(calc, part.kept.get()));
-				columns.mask = p1.Add(calc.Out(kept));
-			}
-			AddObjectiveValues(p1, checks, part, columns, kept);
-			raw.parts.push_back(std::move(columns));
-		}
-	}
-
-	void AddObjectiveValues(DirectProjectionStage &p1, vector<unique_ptr<Expression>> &all_checks, const Part &part,
-	                        Raw::PartColumns &columns, const ExprPtr &kept) const {
-		// A value is computed and checked only on the rows the part keeps.
-		vector<unique_ptr<Expression>> checks;
-		auto on_kept = [&](ExprPtr value) {
-			return DirectOnKeptRows(calc, kept, value);
-		};
-		// Linear coefficients add up per decision. A constant adds nothing to the answer, so like the solver path it
-		// is read one term at a time, with the part's factor applied, and never added up; each must still be valid,
-		// and is checked after the sums.
-		vector<ExprPtr> linear_sums(condition.decisions.size());
-		vector<vector<DirectSignedValue>> linear_values(condition.decisions.size());
-		vector<unique_ptr<Expression>> constant_checks;
-		for (auto &term : part.linear.terms) {
-			auto value = calc.Wrap(DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false));
-			auto &sum = linear_sums[term.decision];
-			sum = sum ? calc.Add(sum, value) : value;
-			linear_values[term.decision].push_back({term.sign, term.coefficient->Copy()});
-		}
-		for (auto &term : part.terms) {
-			if (term.kind == Term::Kind::CONSTANT) {
-				auto &constant = term.constant;
-				auto value = calc.Wrap(DirectScaledTerm(optimizer, constant.value->Copy(), constant.sign,
-				                                        part.linear.scaled, part.linear.scale, part.linear.divides));
-				vector<DirectSignedValue> read;
-				read.push_back({constant.sign, constant.value->Copy()});
-				if (auto check = DirectCheckNumber(optimizer, p1.Add(calc.Out(on_kept(value))), constant.value_names,
-				                                   read, source_bindings, p1.index, part.linear.scaled,
-				                                   part.linear.scale, part.linear.divides)) {
-					constant_checks.push_back(std::move(check));
-				}
-			} else {
-				auto &read = term.square;
-				Raw::SquareColumns square;
-				square.decision = read.decision;
-				square.scale = read.sign * read.scale;
-				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, read.inner_linear)))));
-				if (auto check = DirectCheckNumber(optimizer, square.linear, read.inner_linear_names, read.inner_linear,
-				                                   source_bindings, p1.index)) {
-					checks.push_back(std::move(check));
-				}
-				if (!read.inner_constant.empty()) {
-					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, read.inner_constant)))));
-					if (auto check = DirectCheckNumber(optimizer, square.constant, read.inner_constant_names,
-					                                   read.inner_constant, source_bindings, p1.index)) {
-						checks.push_back(std::move(check));
-					}
-				} else {
-					square.constant = p1.Add(calc.Out(calc.Num(0.0)));
-				}
-				columns.squares.push_back(square);
-			}
-		}
-		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			if (!linear_sums[d]) {
-				continue;
-			}
-			auto binding = p1.Add(calc.Out(on_kept(linear_sums[d])));
-			if (auto check = DirectCheckNumber(optimizer, binding, part.linear.names[d], linear_values[d],
-			                                   source_bindings, p1.index)) {
-				checks.push_back(std::move(check));
-			}
-			columns.linear_decision.push_back(d);
-			columns.linear.push_back(binding);
-		}
-		for (auto &check : constant_checks) {
-			checks.push_back(std::move(check));
-		}
-		for (auto &check : checks) {
-			all_checks.push_back(
-			    columns.has_mask ? DirectCheckOnKeptRows(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, columns.mask)),
-			                                             std::move(check))
-			                     : std::move(check));
+			raw.parts.push_back(DirectLayoutQuadraticPart(optimizer, calc, p1, part, condition.decisions.size(),
+			                                              source_bindings, nullptr, checks));
 		}
 	}
 
@@ -550,58 +405,14 @@ private:
 		}
 		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			ExprPtr a_total = calc.Num(0.0);
-			ExprPtr b_total = calc.Num(0.0);
+			auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, d);
 			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x), as the
 			// solver path reads it. P1 checked each value, so a total past a DOUBLE names the objective.
-			ExprPtr linear_total = calc.Num(0.0);
-			bool has_linear = false;
-			for (idx_t p = 0; p < condition.parts.size(); p++) {
-				auto &part = condition.parts[p];
-				auto &columns = raw.parts[p];
-				ExprPtr a_part = calc.Num(0.0);
-				ExprPtr linear_part = calc.Num(0.0);
-				ExprPtr cross_part = calc.Num(0.0);
-				bool touched = false;
-				for (idx_t i = 0; i < columns.linear.size(); i++) {
-					if (columns.linear_decision[i] == d) {
-						linear_part = calc.Add(linear_part, calc.Col(LogicalType::DOUBLE, columns.linear[i]));
-						touched = true;
-						has_linear = true;
-					}
-				}
-				for (auto &square : columns.squares) {
-					if (square.decision != d) {
-						continue;
-					}
-					auto k = calc.Num(square.scale);
-					auto w = calc.Col(LogicalType::DOUBLE, square.linear);
-					auto t = calc.Col(LogicalType::DOUBLE, square.constant);
-					a_part = calc.Add(a_part, calc.Mul(k, calc.Mul(w, w)));
-					cross_part = calc.Add(cross_part, calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t))));
-					touched = true;
-				}
-				if (!touched) {
-					continue;
-				}
-				auto scaled = [&](ExprPtr value) {
-					auto result =
-					    calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), part.linear.sign, part.linear.scaled,
-					                               part.linear.scale, part.linear.divides));
-					return columns.has_mask
-					           ? calc.If(calc.Col(LogicalType::BOOLEAN, columns.mask), result, calc.Num(0.0))
-					           : result;
-				};
-				auto linear_scaled = scaled(linear_part);
-				a_total = calc.Add(a_total, scaled(a_part));
-				b_total = calc.Add(b_total, calc.Add(linear_scaled, scaled(cross_part)));
-				linear_total = calc.Add(linear_total, linear_scaled);
+			if (sum.linear) {
+				checks.push_back(DirectRaiseTooLarge(optimizer, sum.linear, condition.objective_written));
 			}
-			if (has_linear) {
-				checks.push_back(DirectRaiseTooLarge(optimizer, linear_total, condition.objective_written));
-			}
-			bounds.a.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), a_total))));
-			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), b_total))));
+			bounds.a.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a))));
+			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b))));
 		}
 		// Every check is true or raises; a row passes when all of them do.
 		bounds.valid_data = p2.Add(DirectAllHold(calc, std::move(checks)));

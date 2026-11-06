@@ -294,4 +294,33 @@ bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_
 	return true;
 }
 
+bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
+                             DirectQuadraticPart &out) {
+	if (!DirectReadLinearPart(ir, context, part, clause, out.linear) || !DirectObjectivePartKept(ir, part, out.kept)) {
+		return false;
+	}
+	for (auto &term : out.linear.terms) {
+		if (term.decision >= ir.decisions.size()) {
+			return false;
+		}
+	}
+	for (auto &term : part.terms) {
+		if (term.IsLinear()) {
+			continue;
+		}
+		if (term.IsConstant()) {
+			out.constants.emplace_back();
+			if (!DirectReadConstantTerm(ir, term, clause, out.constants.back())) {
+				return false;
+			}
+		} else {
+			out.squares.emplace_back();
+			if (!DirectReadSquareTerm(ir, context, term, clause, out.squares.back())) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 } // namespace duckdb

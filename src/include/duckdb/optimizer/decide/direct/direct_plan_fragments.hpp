@@ -56,6 +56,52 @@ private:
 unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSignedValue> &values,
                                    const std::function<unique_ptr<Expression>(const Expression &)> &over = nullptr);
 
+//===--------------------------------------------------------------------===//
+// A separable quadratic objective: `a*x^2 + b*x` per decision
+//===--------------------------------------------------------------------===//
+
+//! The columns of one DirectQuadraticPart in a rule's first projection: the rows the part reads, the sums of its
+//! linear coefficients, and the slope `w` and constant `t` inside each square `k*(w*x + t)^2`. Each is NULL on a row
+//! the part does not read.
+struct DirectQuadraticColumns {
+	struct Square {
+		idx_t decision = 0;
+		//! The square's `sign * scale`, the `k` of `k*(w*x + t)^2`.
+		double factor = 1.0;
+		ColumnBinding w;
+		ColumnBinding t;
+	};
+	bool has_mask = false;
+	ColumnBinding mask;
+	//! The decisions that have a linear coefficient in the part, and the sum of each one's.
+	vector<idx_t> linear_decision;
+	vector<ColumnBinding> linear;
+	vector<Square> squares;
+};
+
+//! Lays out a part in the projection `p1`: its mask, its sums and its squares, each computed on the rows the part
+//! reads. The check of each value that can fail (DirectCheckNumber) is appended to `checks`; a value NULL on a row the
+//! part drops raises nothing there. `over` re-points a value of the source before it is read (null: as it is), and
+//! `source_bindings` are the source columns `p1` carries first.
+DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                                 DirectProjectionStage &p1, const DirectQuadraticPart &part,
+                                                 idx_t decision_count, const vector<ColumnBinding> &source_bindings,
+                                                 const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                                                 vector<unique_ptr<Expression>> &checks);
+
+//! One decision's objective as `a*x^2 + b*x`, summed over the parts, each scaled by its sign and factor. A part that
+//! has neither a linear term nor a square on the decision adds nothing. `linear` is the part of `b` the linear terms
+//! make, which a rule tests for a number past a DOUBLE; it is null when no part has one. The rule applies the
+//! objective's sense.
+struct DirectQuadraticSum {
+	ExprPtr a;
+	ExprPtr b;
+	ExprPtr linear;
+};
+DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                       const vector<DirectQuadraticPart> &parts,
+                                       const vector<DirectQuadraticColumns> &columns, idx_t decision);
+
 //! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for an
 //! operator above that projection to read it.
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,
