@@ -116,6 +116,7 @@ class BoundComparisonExpression;
 class BoundConjunctionExpression;
 struct DecideSourceNames;
 struct DecideWrittenTerms;
+struct DecideProductForm;
 class BoundColumnRefExpression;
 class BoundFunctionExpression;
 
@@ -371,6 +372,13 @@ private:
 	//! `2 * x`, `x - 3 * x` is `-2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`. A group
 	//! whose factors cancel is left as written. Returns whether anything merged.
 	bool MergeLikeAtoms(vector<Atom> &atoms) const;
+	//! The term `atom` is a multiple of -- its product form without the constant -- and that multiple as a number
+	//! known before the query runs: its sign, the factor PeelScale peeled off a reducer (a divisor its reciprocal),
+	//! its constant divisors' reciprocals and the product's constant coefficient. False when a factor is data or a
+	//! subquery, which is not summable here.
+	bool ReadLikeTermMultiple(const Atom &atom, DecideProductForm &term, double &multiple) const;
+	//! Make `atom` the merged group: `multiple` times `term`.
+	void ScaleAtomBy(Atom &atom, const DecideProductForm &term, double multiple) const;
 
 	//! A MIN or MAX term with a constant addend in its body (SplitExtremumBody), pushed as the reducer over the rest
 	//! and each constant beside it under the reducer's factor. False, pushing nothing, for any other term.

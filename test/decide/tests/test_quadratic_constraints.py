@@ -1503,7 +1503,7 @@ class TestQuadraticConstraintErrors:
             SUCH THAT x >= 0 AND x <= 3
                 AND SUM(POWER(x, 2) * POWER(x, 2)) <= 16
             MINIMIZE SUM(-x)
-        """, match=r"self-product .* non-linear|degree > 2")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_constraint_product_of_two_powers_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(y, 2) inside a constraint = x^2 y^2.
@@ -1514,7 +1514,7 @@ class TestQuadraticConstraintErrors:
             SUCH THAT x >= 0 AND x <= 5 AND y >= 0 AND y <= 5
                 AND SUM(POWER(x, 2) * POWER(y, 2)) <= 10
             MAXIMIZE SUM(x + y)
-        """, match=r"degree > 2")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_constraint_variable_times_power_rejected(self, decidb_cli):
         # a * POWER(x, 2) inside a constraint = a x^2 (total degree 3).
@@ -1525,4 +1525,4 @@ class TestQuadraticConstraintErrors:
             SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
                 AND SUM(a * POWER(x, 2)) <= 20
             MAXIMIZE SUM(a + x)
-        """, match=r"degree > 2")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")

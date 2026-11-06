@@ -86,7 +86,7 @@ struct DecideTermDegree {
 
 DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, idx_t decide_index);
 
-//! True when `exponent` is known before the query runs and is a whole number of at least 1.
+//! True when `exponent` is known before the query runs and is a whole number (0 included).
 bool TryGetDecideWholeExponent(ClientContext &context, const Expression &exponent, idx_t &out);
 
 //! True for a `pow`, `power`, `**` or `^` call with two arguments.

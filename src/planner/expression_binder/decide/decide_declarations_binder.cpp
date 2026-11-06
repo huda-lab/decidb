@@ -15,7 +15,6 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_constraints_binder.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_objective_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
@@ -244,14 +243,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true);
         }
 
-        // A CASE is refused wherever the algebra would read it, before any binder classifies a shape.
-        if (statement.decide_constraints) {
-            ValidateDecideNoCase(*statement.decide_constraints);
-        }
-        if (statement.decide_objective) {
-            ValidateDecideNoCase(*statement.decide_objective);
-        }
-
         // This is the only point where cast authorship is still observable. Reject
         // explicit casts over decisions before DECIDE generates any parsed nodes and
         // before DuckDB binding adds its own type-reconciliation casts. SELECT-list
@@ -281,9 +272,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
 
         if (statement.decide_constraints) {
-            // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
-            // DECIDE variable, before anything downstream has to interpret them.
-            ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
+            // An aggregate over data that scales a decision is refused before symbolic
+            // normalization could distribute the decision into it.
+            ValidateDecideNoDataAggregateFactor(context, *statement.decide_constraints, decide_variable_names);
             // A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
             // are encoded by stepping the bound one integer unit — and the declared type
             // says so without reading a row. Rejecting here names the variable and quotes
@@ -297,7 +288,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             TagDecideSourceFragments(*statement.decide_constraints, decide_source_fragments);
         }
         if (statement.decide_objective) {
-            ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
+            ValidateDecideNoDataAggregateFactor(context, *statement.decide_objective, decide_variable_names);
             // The objective quotes its own SQL in a message (a `when` that keeps no row, a
             // term that reads no decision), so its casts and subqueries keep their written
             // text, as every constraint's do.
@@ -335,11 +326,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // they are the whole refusal, so the model builder no longer raises one.
 			    DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
 			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
-                // Degree has one owner, and this is it. Running on the bound tree makes the
-                // rule total: a reducer argument and a bare per-row constraint are judged
-                // the same way, which the parsed-tree gate could not do because it was only
-                // ever called for SUM/AVG/MIN/MAX arguments.
-                ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
 			    result.decide_constraint_sources =
 			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
 			                                       result.decide_index, &keys, &statement.decide_text);
@@ -353,7 +339,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             result.decide_objective = decide_objective_binder.Bind(objective);
             if (result.decide_objective) {
                 RefuseVolatile(*result.decide_objective, "the objective");
-                ValidateDecideObjectiveDegree(*result.decide_objective, result.decide_index);
             }
         }
 	    for (auto &key : keys) {

@@ -153,7 +153,7 @@ class TestBinderErrors:
                 DECIDE x(INT)
                 SUCH THAT SUM(x*x*x) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"Triple.*products.*not supported")
+            """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_between_non_scalar(self, decidb_cli):
         """SUM BETWEEN with a column bound is now supported (C1).
@@ -370,19 +370,30 @@ class TestBinderErrors:
                 MAXIMIZE SUM(ABS(sqrt(x) - 1)) LIMIT 1
             """, match=r"'sqrt' over a DECIDE variable is not supported")
 
-    # --- POWER with exponent != 2 ---
-    # Catches cases that used to crash the symbolic layer with InternalException
-    # or silently produce identity/vacuous constraints (POWER(x,1), POWER(x,0)).
+    # --- POWER over a decision ---
+    # The shape check judges POWER on the canonical tree: a whole exponent is a product of
+    # factors, which the degree rule then judges; any other exponent has no reading in the
+    # model. POWER(x, 0) and POWER(x, 1) answer (test_product_normal_form.py).
 
-    @pytest.mark.parametrize("exp", ["0", "1", "3", "4", "0.5", "2.5", "-1"])
+    @pytest.mark.parametrize("exp", ["0.5", "2.5", "-1"])
     def test_power_bad_constant_exponent_in_sum(self, decidb_cli, exp):
-        """SUM(POWER(x, <non-2>)) — only POWER(expr, 2) is supported."""
+        """SUM(POWER(x, <not a whole number>)) has no reading in the model."""
         decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
-            """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
+            """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
+
+    @pytest.mark.parametrize("exp", ["3", "4"])
+    def test_power_whole_exponent_above_two_is_a_degree_refusal(self, decidb_cli, exp):
+        """SUM(POWER(x, 3)) is x * x * x: the degree rule refuses it, not the exponent rule."""
+        decidb_cli.assert_error(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(REAL)
+                SUCH THAT x <= 5
+                MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
+            """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_power_variable_exponent_rejected(self, decidb_cli):
         """POWER(x, x) — exponent is itself a decide var; must be a constant."""
@@ -391,7 +402,7 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, x)) LIMIT 1
-            """, match=r"POWER exponent.*must be a constant integer")
+            """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
     def test_power_column_exponent_rejected(self, decidb_cli):
         """POWER(x, col) — exponent is a table column, not a constant."""
@@ -400,7 +411,7 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, l_quantity)) LIMIT 1
-            """, match=r"POWER exponent.*must be a constant integer")
+            """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
     def test_power_bad_exponent_per_row_constraint(self, decidb_cli):
         """POWER(x, 0.5) <= K as per-row (no SUM) — same clean rejection as inside SUM."""
@@ -409,7 +420,7 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT POWER(x, 0.5) <= 3
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
+            """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
     def test_power_over_data_column_allowed(self, decidb_cli):
         """POWER(col, 3) where col is a table column is fine — folds to a
@@ -423,48 +434,35 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """)
 
-    def test_power_cast_exponent_rejected(self, decidb_cli):
-        """POWER(x, CAST(2 AS INTEGER)) — exponent wrapped in a cast is not a
-        bare CONSTANT; rejected with the same 'must be a constant integer'
-        message as POWER(x, col). Could be loosened later; defensive for now."""
-        decidb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
-                DECIDE x(REAL) SUCH THAT x <= 5
-                MINIMIZE SUM(POWER(x, CAST(2 AS INTEGER))) LIMIT 1
-            """, match=r"POWER exponent.*must be a constant integer")
-
     def test_power_wrapping_bilinear_rejected(self, decidb_cli):
         """POWER(x * y, 2) — base is bilinear, so total degree is 4.
 
-        The refusal is still the binder's; only its wording moved. It used to come from
-        the SUM-argument gate, which reported the base as "products of different DECIDE
-        variables ... only allowed in objectives and bilinear constraints" — misleading
-        here, because bilinear *is* allowed in an objective and the real fault is that
-        squaring it reaches degree 4. The degree owner says so directly."""
+        The fault is that squaring a bilinear base reaches degree 4, not the bilinear base,
+        which an objective accepts. The degree rule says so directly."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
-            """, match=r"higher-order products.*total degree > 2")
+            """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     @pytest.mark.parametrize("expr", [
         "POWER(x, 2) * y",
         "POWER(x, 2) * POWER(y, 2)",
     ])
     def test_power_degree_rejected_in_constraint(self, decidb_cli, expr):
-        """POWER contributes degree(base) * n, so these reach the binder gate.
+        """POWER contributes degree(base) * n, so these reach the degree rule.
 
         Before the degree function understood POWER, POWER(x, 2) counted as
-        degree 1 and these passed the gate, to be refused much later by physical
-        extraction with a message naming a normalization pass that no longer
-        exists. Pin the rejection at the binder, where it is worded for a user."""
+        degree 1 and these were refused much later by physical extraction with a
+        message naming a normalization pass that no longer exists. Pin the
+        rejection at the shape check, where it is worded for a user."""
         decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT SUM({expr}) <= 10 AND x <= 5 AND y <= 5
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+            """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_power_degree_rejected_in_objective(self, decidb_cli):
         """Same shape in an objective takes the same path and the same error."""
@@ -473,7 +471,7 @@ class TestBinderErrors:
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x, 2) * y) LIMIT 1
-            """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+            """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     @pytest.mark.parametrize("constraint", [
         "POWER(x * y, 2) <= 5",
@@ -485,22 +483,21 @@ class TestBinderErrors:
         """A per-row constraint is held to the same degree rule as a reducer argument.
 
         These four used to bind cleanly and be refused at plan time by term extraction,
-        because the binder's degree gate was reachable only from ValidateSumArgument and
-        so ran for `SUM(...)` arguments alone. Degree is one judgement with one owner, so
-        the spelling must not decide which layer refuses."""
+        because the degree gate ran for `SUM(...)` arguments alone. Degree is one
+        judgement with one owner, the shape check, so the spelling must not decide which
+        layer refuses."""
         decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT), y(INT)
                 SUCH THAT {constraint} AND SUM(x) >= 1
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+            """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_degree_refusal_points_at_the_offending_term(self, decidb_cli):
         """The refusal carries a source location.
 
-        This is the whole reason the judgement stays at bind time rather than moving to
-        the layer that can see the post-rewrite tree: a bound-tree refusal can only point
-        a caret if the binder stamped the node, and a plan-time one cannot point at all."""
+        The shape check judges the canonical tree, so a respelled product keeps the source
+        location of the term as written; a plan-time refusal could not point at all."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT), y(INT)

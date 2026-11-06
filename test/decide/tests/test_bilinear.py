@@ -958,7 +958,7 @@ class TestFactoredProductDegree:
                   AND z >= 0 AND z <= 1 AND w >= 0 AND w <= 1
                   AND {constraint_expr}
             {self.OBJECTIVE}
-        """, match=r"Triple|higher-order")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
 
 # ===================================================================
@@ -978,7 +978,7 @@ class TestBilinearErrors:
             DECIDE a(BOOL), b(BOOL), c(BOOL)
             SUCH THAT a >= 0 AND b >= 0 AND c >= 0
             MAXIMIZE SUM(a * b * c)
-        """, match=r"Triple|higher-order")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_quad_bilinear_chain_rejected(self, decidb_cli):
         """SUM((b1 * x) * (b2 * y)) — degree-4 chain of two bilinear terms.
@@ -993,7 +993,7 @@ class TestBilinearErrors:
             DECIDE b1(BOOL), b2(BOOL), x(REAL), y(REAL)
             SUCH THAT x <= 10 AND y <= 10
             MAXIMIZE SUM((b1 * x) * (b2 * y))
-        """, match=r"Triple|higher-order")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_missing_upper_bound_rejected(self, decidb_cli):
         """b * x without an upper bound on x should be rejected."""

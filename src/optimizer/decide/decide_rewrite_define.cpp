@@ -22,7 +22,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -138,12 +138,12 @@ void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx
 //! The reducers under `expr` whose body is not linear and holds no reducer. A SUM or AVG qualifies with `sums`
 //! (a constraint that holds a MIN or MAX) or `under_extremum` (the inner reducer of a two-level objective). A reducer
 //! the polarity walk did not reach (`signs`) is pushed neither way.
-void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extremum_clause, bool under_extremum,
+void CollectBodySites(ClientContext &context, Expression &expr, idx_t decide_index, bool sums, bool extremum_clause, bool under_extremum,
                       ExtremumPush outer, const unordered_map<const Expression *, int> &signs,
                       const string &source_alias, const DecideEnclosingScope &scope, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
-			CollectBodySites(child, decide_index, sums, extremum_clause, under_extremum, outer, signs, source_alias,
+			CollectBodySites(context, child, decide_index, sums, extremum_clause, under_extremum, outer, signs, source_alias,
 			                 scope, sites);
 		});
 		return;
@@ -152,11 +152,11 @@ void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extr
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
-		CollectBodySites(body, decide_index, sums, extremum_clause, is_extremum, outer, signs, source_alias, scope,
+		CollectBodySites(context, body, decide_index, sums, extremum_clause, is_extremum, outer, signs, source_alias, scope,
 		                 sites);
 		return;
 	}
-	if (DecideExpressionDegree(body, decide_index).IsLinear() || (!is_extremum && !sums && !under_extremum)) {
+	if (DecideDegreeOf(context, body, decide_index).IsLinear() || (!is_extremum && !sums && !under_extremum)) {
 		return;
 	}
 	auto sign = signs.find(&expr);
@@ -262,9 +262,9 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 			CollectReducerSigns(context, *comparison.left, 1, decide_index, signs);
 			CollectReducerSigns(context, *comparison.right, -1, decide_index, signs);
 			const auto outer = ExtremumPushOf(comparison.type);
-			CollectBodySites(*comparison.left, decide_index, true, extremum_clause, false, outer, signs, source_alias,
+			CollectBodySites(context, *comparison.left, decide_index, true, extremum_clause, false, outer, signs, source_alias,
 			                 scope, sites);
-			CollectBodySites(*comparison.right, decide_index, true, extremum_clause, false, outer, signs, source_alias,
+			CollectBodySites(context, *comparison.right, decide_index, true, extremum_clause, false, outer, signs, source_alias,
 			                 scope, sites);
 		};
 		walk(*decide.decide_constraints, string(), DecideEnclosingScope());
@@ -289,7 +289,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		unordered_map<const Expression *, int> signs;
 		CollectReducerSigns(context, *body, 1, decide_index, signs);
 		const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
-		CollectBodySites(*body, decide_index, false, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope, sites);
+		CollectBodySites(context, *body, decide_index, false, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope, sites);
 	}
 
 	if (!decide.use_native_constructs.min_max) {

@@ -28,7 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -60,7 +60,7 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		// decision is linear by now (RewriteBilinear runs before this pass); a product or a
 		// power of decisions still here has no formulation, and dropping its terms would
 		// change the answer.
-		if (!DecideExpressionDegree(*comp.left, decide.decide_index).IsLinear()) {
+		if (!DecideDegreeOf(optimizer.context, *comp.left, decide.decide_index).IsLinear()) {
 			throw BinderException(comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
 			                      QuoteWrittenClause(decide.constraint_sources[SourceClauseOf(comp, decide)]));
 		}

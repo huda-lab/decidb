@@ -123,7 +123,7 @@ def test_coalesce_over_decide_variable_inside_reducer_is_rejected(decidb_cli, cl
         FROM range(1, 4) items(id)
         DECIDE keep(BOOL)
         {clauses}
-    """, match=r"(?i)unsupported operator expression.*DECIDE variable")
+    """, match=r"DECIDE: operator 'COALESCE' cannot take a DECIDE variable\.")
 
 
 @pytest.mark.parametrize("clause", ["SUM(keep + NULL) <= 1", "keep + NULL <= 1"])

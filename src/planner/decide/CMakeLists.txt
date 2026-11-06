@@ -4,6 +4,7 @@ add_library_unity(
   decide_canonicalizer.cpp
   decide_cast_policy.cpp
   decide_product_form.cpp
+  decide_shape_check.cpp
   decide_source_provenance.cpp
   decide_term_split.cpp)
 set(ALL_OBJECT_FILES

@@ -148,7 +148,8 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
         case ExpressionClass::COMPARISON:
         case ExpressionClass::CONJUNCTION:
         case ExpressionClass::BETWEEN:
-        case ExpressionClass::LAMBDA: {
+        case ExpressionClass::LAMBDA:
+        case ExpressionClass::CASE: {
             // Data as long as every part is: `sum(x) <= CAST(cap > 2 AS INT)`.
             bool allowed = true;
             ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
@@ -508,6 +509,12 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
         return BindConjunction(expr_ptr, depth);
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+	case ExpressionClass::CASE:
+		// A CASE below the top binds as SQL; DecideShapeCheck refuses one over a decision.
+		if (!is_top_expression) {
+			return ExpressionBinder::BindExpression(expr_ptr, depth);
+		}
+		break;
     default:
         break;
     }

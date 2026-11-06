@@ -65,7 +65,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT COUNT(l_quantity) <= 5 M
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x*x*x) <= 5 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: Triple or higher-order products of DECIDE variables are not supported.*
+<REGEX>:Invalid Input Error: DECIDE: the SUCH THAT clause `SUM\(x\*x\*x\) <= 5` has a term of degree 3.*
 
 # Top argument is not DECIDE variables
 statement error

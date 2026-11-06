@@ -871,63 +871,87 @@ unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundAggregateEx
 	return result;
 }
 
+//! `term` under its constant divisors (`e / 2 / 4`), each folded into `multiple`.
+static const Expression &PeelConstantDivisors(ClientContext &context, const Expression &term, idx_t decide_index,
+                                              double &multiple) {
+	const Expression *node = UnwrapDecideCasts(term, decide_index);
+	double divisor;
+	while (node->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	       node->Cast<BoundFunctionExpression>().function.name == "/" &&
+	       node->Cast<BoundFunctionExpression>().children.size() == 2 &&
+	       TryEvaluateFoldableDouble(context, *node->Cast<BoundFunctionExpression>().children[1], divisor,
+	                                 FOLD_CATCH_ALL) &&
+	       std::isfinite(divisor) && divisor != 0.0) {
+		multiple /= divisor;
+		node = UnwrapDecideCasts(*node->Cast<BoundFunctionExpression>().children[0], decide_index);
+	}
+	return *node;
+}
+
+//! Fold a product's sign and coefficient into `multiple`, leaving its decision-bearing factors. False when a
+//! coefficient factor is data or a subquery, which is not summable.
+static bool FoldProductCoefficient(ClientContext &context, DecideProductForm &form, double &multiple) {
+	double coefficient = form.sign;
+	for (auto &factor : form.coefficient) {
+		double value;
+		if (!TryEvaluateFoldableDouble(context, *factor.base, value, FOLD_CATCH_ALL) || !std::isfinite(value) ||
+		    value == 0.0) {
+			return false;
+		}
+		coefficient *= std::pow(value, static_cast<double>(factor.power));
+	}
+	form.coefficient.clear();
+	form.sign = 1;
+	multiple *= coefficient;
+	return true;
+}
+
+bool DecideCanonicalizer::ReadLikeTermMultiple(const Atom &atom, DecideProductForm &term, double &multiple) const {
+	multiple = atom.sign;
+	if (atom.scale) {
+		double scale;
+		if (!TryEvaluateFoldableDouble(context, *atom.scale, scale, FOLD_PLAIN) || !std::isfinite(scale) ||
+		    (atom.scale_divides && scale == 0.0)) {
+			return false;
+		}
+		multiple *= atom.scale_divides ? 1.0 / scale : scale;
+	}
+	auto &body = PeelConstantDivisors(context, *atom.expr, decide_index, multiple);
+	term = ReadDecideProduct(context, body, decide_index);
+	return FoldProductCoefficient(context, term, multiple);
+}
+
+void DecideCanonicalizer::ScaleAtomBy(Atom &atom, const DecideProductForm &term, double multiple) const {
+	atom.sign = 1;
+	if (term.factors.size() == 1 && term.factors[0].power == 1) {
+		atom.expr = term.factors[0].base;
+	} else {
+		// The product without its constant, in the one spelling.
+		auto owned = BuildDecideProductForm(context, term);
+		atom.expr = owned.get();
+		atom.owned = std::move(owned);
+	}
+	const bool whole = multiple == std::floor(multiple) && std::fabs(multiple) < 2147483647.0;
+	atom.scale = make_uniq_base<Expression, BoundConstantExpression>(
+	    whole ? Value::INTEGER(static_cast<int32_t>(multiple)) : Value::DOUBLE(multiple));
+	atom.scale_divides = false;
+}
+
 bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
-	// The term an atom is a multiple of -- its product form without the constant -- and
-	// that multiple as a number known before the query runs: the factor PeelScale peeled
-	// off a reducer (none is 1, a divisor its reciprocal), a constant divisor's
-	// reciprocal, and the product's constant coefficient and sign. False when a factor is
-	// data or a subquery, which is not summable here.
-	auto key_of = [&](const Atom &atom, DecideProductForm &key, double &value) {
-		value = 1.0;
-		if (atom.scale) {
-			double scale;
-			if (!TryEvaluateFoldableDouble(context, *atom.scale, scale, FOLD_PLAIN) || !std::isfinite(scale) ||
-			    (atom.scale_divides && scale == 0.0)) {
-				return false;
-			}
-			value = atom.scale_divides ? 1.0 / scale : scale;
-		}
-		const Expression *term = UnwrapDecideCasts(*atom.expr, decide_index);
-		double divisor;
-		while (term->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
-		       term->Cast<BoundFunctionExpression>().function.name == "/" &&
-		       term->Cast<BoundFunctionExpression>().children.size() == 2 &&
-		       TryEvaluateFoldableDouble(context, *term->Cast<BoundFunctionExpression>().children[1], divisor,
-		                                 FOLD_CATCH_ALL) &&
-		       std::isfinite(divisor) && divisor != 0.0) {
-			value /= divisor;
-			term = UnwrapDecideCasts(*term->Cast<BoundFunctionExpression>().children[0], decide_index);
-		}
-		key = ReadDecideProduct(context, *term, decide_index);
-		double coefficient = key.sign;
-		for (auto &factor : key.coefficient) {
-			double c;
-			if (!TryEvaluateFoldableDouble(context, *factor.base, c, FOLD_CATCH_ALL) || !std::isfinite(c) ||
-			    c == 0.0) {
-				return false;
-			}
-			coefficient *= std::pow(c, static_cast<double>(factor.power));
-		}
-		key.coefficient.clear();
-		key.sign = 1;
-		value *= coefficient;
-		return true;
-	};
 	bool merged = false;
 	for (idx_t i = 0; i < atoms.size(); i++) {
-		DecideProductForm key;
+		DecideProductForm term;
 		double total;
-		if (atoms[i].placement != Placement::LEFT || !key_of(atoms[i], key, total)) {
+		if (atoms[i].placement != Placement::LEFT || !ReadLikeTermMultiple(atoms[i], term, total)) {
 			continue;
 		}
-		total *= atoms[i].sign;
 		vector<idx_t> like;
 		for (idx_t j = i + 1; j < atoms.size(); j++) {
 			DecideProductForm other;
-			double value;
-			if (atoms[j].placement == Placement::LEFT && key_of(atoms[j], other, value) &&
-			    DecideFactorListsEqual(key.factors, other.factors, decide_index)) {
-				total += atoms[j].sign * value;
+			double multiple;
+			if (atoms[j].placement == Placement::LEFT && ReadLikeTermMultiple(atoms[j], other, multiple) &&
+			    DecideFactorListsEqual(term.factors, other.factors, decide_index)) {
+				total += multiple;
 				like.push_back(j);
 			}
 		}
@@ -936,19 +960,7 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 		if (like.empty() || total == 0.0) {
 			continue;
 		}
-		const bool whole = total == std::floor(total) && std::fabs(total) < 2147483647.0;
-		atoms[i].sign = 1;
-		if (key.factors.size() == 1 && key.factors[0].power == 1) {
-			atoms[i].expr = key.factors[0].base;
-		} else {
-			// The product without its constant, in the one spelling.
-			auto owned = BuildDecideProductForm(context, key);
-			atoms[i].expr = owned.get();
-			atoms[i].owned = std::move(owned);
-		}
-		atoms[i].scale = make_uniq_base<Expression, BoundConstantExpression>(
-		    whole ? Value::INTEGER(static_cast<int32_t>(total)) : Value::DOUBLE(total));
-		atoms[i].scale_divides = false;
+		ScaleAtomBy(atoms[i], term, total);
 		for (auto it = like.rbegin(); it != like.rend(); ++it) {
 			atoms.erase(atoms.begin() + static_cast<int64_t>(*it));
 		}
@@ -956,7 +968,6 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 	}
 	return merged;
 }
-
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
                                                    unique_ptr<Expression> right) const {

@@ -1022,7 +1022,7 @@ class TestQuadraticErrors:
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 3))
-        """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_product_of_different_vars_now_supported(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
@@ -1116,7 +1116,7 @@ class TestQuadraticErrors:
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, exp))
-        """, match=r"POWER exponent.*must be a constant integer")
+        """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
     def test_qp_multiple_quadratic_groups_rejected(self, decidb_cli):
         decidb_cli.assert_error("""
@@ -1140,7 +1140,7 @@ class TestQuadraticErrors:
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 3
             MINIMIZE SUM(POWER(x - 1, 2) * POWER(x - 1, 2)) + SUM(-2 * x)
-        """, match=r"self-product .* non-linear|degree > 2")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_qp_product_of_two_powers_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(y, 2) = x^2 y^2 — falls into the bilinear branch
@@ -1152,7 +1152,7 @@ class TestQuadraticErrors:
             DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
             MINIMIZE SUM(POWER(x, 2) * POWER(y, 2))
-        """, match=r"degree > 2")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
     def test_qp_variable_times_power_rejected(self, decidb_cli):
         # a * POWER(x, 2) with a a DECIDE var — total degree 3; same bilinear
@@ -1163,7 +1163,7 @@ class TestQuadraticErrors:
             DECIDE a(REAL), x(REAL)
             SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
             MAXIMIZE SUM(a * POWER(x, 2))
-        """, match=r"degree > 2")
+        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
 
 # ===========================================================================

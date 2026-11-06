@@ -7,7 +7,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
@@ -233,7 +233,7 @@ bool DecideTermSplitter::TryGetBareDecideFactor(const Expression &expr, idx_t &v
 //! splitting is still what layer 2 admitted, because rewrites (the IN expansion, ABS linearization, the norm
 //! lowering) synthesize expressions layer 2 never saw.
 bool DecideTermSplitter::IsLinear(const Expression &expr) const {
-	return DecideExpressionDegree(expr, decide_index).IsLinear();
+	return DecideDegreeOf(context, expr, decide_index).IsLinear();
 }
 
 bool DecideTermSplitter::ClassifyProduct(const Expression &expr, ProductFactors &result,

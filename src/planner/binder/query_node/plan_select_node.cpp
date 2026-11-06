@@ -6,6 +6,7 @@
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_product_form.hpp"
+#include "duckdb/planner/decide/decide_shape_check.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -173,6 +174,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			canonicalizer.QuoteMessagesWith(message_names);
 			DecideWrittenTerms written_terms {statement.decide_text, statement.decide_source_fragments};
 			canonicalizer.QuoteRespelledTermsFrom(written_terms);
+			// The algebra of every clause, judged once on the one spelling canonicalization wrote.
+			DecideShapeCheck shape_check(context, statement.decide_index, message_names);
 			if (statement.decide_constraints) {
 				canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
 				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
@@ -180,6 +183,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
 				                             statement.decide_source_fragments, statement.keyed_scopes,
 				                             &statement.decide_keys);
+				shape_check.CheckConstraints(*statement.decide_constraints, statement.decide_constraint_sources);
 				canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
 				                           statement.decide_keys);
 			}
@@ -199,6 +203,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				                                                                 statement.objective_constant_offset);
 				canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
 				canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
+				shape_check.CheckObjective(*statement.decide_objective, written_objective);
 				if (canonical_objective == written_objective) {
 					canonical_objective.clear();
 				}

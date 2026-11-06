@@ -68,19 +68,12 @@ struct DecideQualifierContext {
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
-                         bool allow_quadratic = false);
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 //! A function's name as the user wrote it: `count(*)` reaches the binder as `count_star`.
 string DecideWrittenFunctionName(const FunctionExpression &func);
-
-//! Refuses a CASE anywhere in a parsed constraint or objective with the one message that names the alternatives (a
-//! scope in front, `per`, or a CTE). Run before any binder classifies a shape, so the text does not depend on which
-//! path reaches the CASE first. A `when` condition, a key and a `by` key are SQL over the rows, and a subquery is a
-//! query of its own: a CASE there is not visited.
-void ValidateDecideNoCase(const ParsedExpression &expr);
 
 //! Reject a user-written CAST/TRY_CAST/:: whose child contains a DECIDE variable.
 //!
@@ -108,16 +101,11 @@ bool IsTwoLevelObjective(const ParsedExpression &body);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 
-//! Reject non-linear scalar functions (SQRT, EXP, LOG, FLOOR, ...) that wrap a
-//! DECIDE variable. Throws BinderException on violation. Runs on the parsed tree,
-//! catching cases that would otherwise silently strip the scalar in per-row
-//! constraints or reach the model builder as an unreadable term. Uses the
-//! catalog to distinguish scalar from aggregate functions so aggregate-shaped
-//! mis-uses (e.g., BIT_AND(x), STDDEV(x)) fall through to BindAggregate's
-//! aggregate-specific error instead.
-void ValidateDecideNoNonLinearScalar(ClientContext &context,
-                                     const ParsedExpression &expr,
-                                     const case_insensitive_map_t<idx_t> &variables);
+//! Reject an aggregate over table columns that multiplies or divides a decision (`SUM(avg(p) * x)`): it spans all
+//! rows, so it is no per-row coefficient, and symbolic normalization would distribute the decision into it. Runs on
+//! the parsed tree, before that normalization. Every other algebra refusal is DecideShapeCheck's.
+void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExpression &expr,
+                                         const case_insensitive_map_t<idx_t> &variables);
 
 //! Reject a `<`, `>` or `<>` whose comparison references a REAL decision variable.
 //!
@@ -226,8 +214,7 @@ protected:
     bool IsRowInvariantExpression(const ParsedExpression &expr) const;
     //! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
     //! own rules: it reads no decision, and it is not a function (a reducer or a scope
-    //! marker) or a subquery, which keep their DECIDE handling. A CASE never gets this far
-    //! (ValidateDecideNoCase).
+    //! marker) or a subquery, which keep their DECIDE handling. A CASE over data is plain data.
     bool IsDataOperand(const ParsedExpression &expr) const;
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;

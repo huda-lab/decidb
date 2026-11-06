@@ -222,6 +222,12 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 			return ExpressionBinder::BindExpression(expr_ptr, depth);
 		}
 		break;
+	case ExpressionClass::CASE:
+		// A CASE below the top binds as SQL; DecideShapeCheck refuses one over a decision.
+		if (!is_top_expression) {
+			return ExpressionBinder::BindExpression(expr_ptr, depth);
+		}
+		break;
 	case ExpressionClass::OPERATOR:
 		// The aggregate classifier already validated this reducer body before
 		// BindAggregate descends into it. A nested operator here is therefore a

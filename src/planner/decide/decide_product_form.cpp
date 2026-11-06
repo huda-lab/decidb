@@ -29,7 +29,7 @@ bool IsDecidePowerCall(const Expression &expr) {
 
 bool TryGetDecideWholeExponent(ClientContext &context, const Expression &exponent, idx_t &out) {
 	double value;
-	if (!TryEvaluateFoldableDouble(context, exponent, value, FOLD_CATCH_ALL) || !std::isfinite(value) || value < 1.0 ||
+	if (!TryEvaluateFoldableDouble(context, exponent, value, FOLD_CATCH_ALL) || !std::isfinite(value) || value < 0.0 ||
 	    value != std::floor(value) || value > 1e9) {
 		return false;
 	}
@@ -216,7 +216,7 @@ struct ProductReader {
 		if (IsDecidePowerCall(node) &&
 		    TryGetDecideWholeExponent(context, *node.Cast<BoundFunctionExpression>().children[1], exponent)) {
 			auto &base = *node.Cast<BoundFunctionExpression>().children[0];
-			if (DecideDegreeOf(context, base, decide_index).degree == 1) {
+			if (power * exponent != 0 && DecideDegreeOf(context, base, decide_index).degree == 1) {
 				// One linear form squared stays whole: POWER(b * x, 2) keeps coefficient 1.
 				AddFactor(form.factors, *UnwrapDecideCasts(base, decide_index), power * exponent,
 				          power == 1 && exponent >= 2 ? &node : nullptr);
@@ -225,7 +225,11 @@ struct ProductReader {
 			Read(base, power * exponent);
 			return;
 		}
-		AddFactor(form.factors, node, power, nullptr);
+		// A decision raised to 0 is 1: a decision is never NULL. Data keeps its POWER(w, 0), which SQL makes NULL
+		// on a NULL.
+		if (power != 0) {
+			AddFactor(form.factors, node, power, nullptr);
+		}
 	}
 };
 
@@ -289,6 +293,9 @@ unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const Deci
 			result = result ? Bind(context, "*", std::move(result), std::move(term)) : std::move(term);
 		}
 	}
+	if (!result) {
+		result = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+	}
 	if (form.sign < 0) {
 		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(result));
@@ -339,6 +346,8 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 		}
 	}
 	rebuilt->SetAlias(std::move(alias));
+	// The product is the written term respelled, so it points where the term was written, as the cast back does.
+	spelled->SetQueryLocation(node.GetQueryLocation());
 	rebuilt->SetQueryLocation(node.GetQueryLocation());
 	return rebuilt;
 }

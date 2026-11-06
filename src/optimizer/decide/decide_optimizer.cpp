@@ -26,7 +26,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
-#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -46,7 +46,7 @@ ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
 
 //! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
 static void VerifyNormMarkersLowered(LogicalDecide &decide);
-static void VerifyExtremumBodiesLinear(LogicalDecide &decide);
+static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide);
 
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
@@ -134,7 +134,7 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	// Classify + rewrite min/max (creates indicators and SUM nodes)
 	RunPass("optimizer.minmax", [&] {
 		RewriteMinMax(decide);
-		VerifyExtremumBodiesLinear(decide);
+		VerifyExtremumBodiesLinear(optimizer.context, decide);
 	});
 	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
 	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
@@ -347,10 +347,10 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 //! something else. DefineNonlinearReducerBodies names every such body before they run, so
 //! a non-linear member here is a body that pass missed. The cheap half of a MIN/MAX
 //! (MINMAX_EASY_REWRITE_TAG) bounds each member in its own quadratic row and is exempt.
-static void VerifyExtremumBodiesLinear(LogicalDecide &decide) {
+static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
 	auto check = [&](const Expression &body) {
-		if (!DecideExpressionDegree(body, decide_index).IsLinear()) {
+		if (!DecideDegreeOf(context, body, decide_index).IsLinear()) {
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());
 		}
 	};
