@@ -24,10 +24,11 @@ constexpr const char *RULE_NAME = "A2_SINGLE_FACILITY_LOCATION";
 
 //! What CheckCondition proved: one query-wide or keyed REAL decision `c`, bounded by constants and by per-row bounds
 //! that each class of the key intersects, and an objective that is one square `K * (w*c + t)^2` of a linear form of `c`
-//! and a source value, with `w` a nonzero constant and `K` positive once the sense is applied. The square is summed
-//! over the rows the objective keeps, so the objective is `a*c^2 + b*c` with `a` the sum of `K*w^2` and `b` the sum of
-//! `2*K*w*t`, and its minimum over the interval is the turning point `-b / (2*a)` clamped into it. A keyed decision has
-//! one such problem per class of its key.
+//! and a source value, with `w` a nonzero constant and `K` a constant that is positive once the sense is applied, or a
+//! value read from the data. The square is summed over the rows the objective keeps, so the objective is `a*c^2 + b*c`
+//! with `a` the sum of `K*w^2` and `b` the sum of `2*K*w*t`. Where `a` is positive its minimum over the interval is the
+//! turning point `-b / (2*a)` clamped into it; otherwise (a data weight that sums to 0 or less) it is an end of the
+//! interval. A keyed decision has one such problem per class of its key.
 struct Condition final : DirectApplicabilityCondition {
 	//! The box before any per-row bound (DirectDecisionBox): the default floor of 0 or the written lower bound, and the
 	//! written upper bound.
@@ -104,9 +105,24 @@ bool Rule::ProveInterval(const DirectIR &ir, ClientContext &context, Condition &
 	return true;
 }
 
+//! The square is convex in the sense: its factor `K * w^2`, with the sense, the part's sign and its constant factor
+//! applied, is positive. A weight read from the data has no sign before the rows are read, so the check is left to the
+//! plan, which reads the sign of the total.
+static bool SquareIsConvex(ClientContext &context, const DirectIR &ir, const DirectQuadraticPart &part, double slope) {
+	double weight;
+	if (!DirectFoldConstantSum(context, part.squares[0].weight, weight)) {
+		return true;
+	}
+	auto &linear = part.linear;
+	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
+	double sense = ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
+	double oriented = sense * linear.sign * part_factor * (weight * (slope * slope));
+	return std::isfinite(oriented) && oriented > 0.0;
+}
+
 //! One plain `SUM` of one square, and nothing else: no linear term, no per-row constant, no second part. The square's
-//! slope folds to a nonzero constant, and the square is convex once the sense, the part's sign and its factor are
-//! applied. The rows it reads (the objective's `when` and the part's own) are the part's `kept`.
+//! slope folds to a nonzero constant, and its weight is a constant that makes it convex (SquareIsConvex) or a value
+//! read from the data. The rows it reads (the objective's `when` and the part's own) are the part's `kept`.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	if (ir.objective.parts.size() != 1 || !ir.objective.parts[0].IsPlainSum()) {
 		return false;
@@ -118,16 +134,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	if (part.squares.size() != 1 || !part.linear.terms.empty() || !part.constants.empty()) {
 		return false;
 	}
-	auto &square = part.squares[0];
 	double slope;
-	if (!DirectFoldConstantSum(context, square.inner_linear, slope) || slope == 0.0) {
-		return false;
-	}
-	auto &linear = part.linear;
-	double part_factor = linear.scaled ? (linear.divides ? 1.0 / linear.scale : linear.scale) : 1.0;
-	double sense = ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
-	double oriented = sense * linear.sign * part_factor * (square.sign * square.scale * (slope * slope));
-	if (!std::isfinite(oriented) || oriented <= 0.0) {
+	if (!DirectFoldConstantSum(context, part.squares[0].inner_linear, slope) || slope == 0.0 ||
+	    !SquareIsConvex(context, ir, part, slope)) {
 		return false;
 	}
 	condition.parts.push_back(std::move(part));
@@ -244,6 +253,23 @@ private:
 		//! Whether some row of a floor-lifting clause is kept, one per such clause.
 		vector<ColumnBinding> lowering_whens;
 	};
+	//! The minimum of `a*c^2 + b*c` over `[lower, upper]` for `a <= 0`, where the objective is concave or linear and
+	//! the minimum is at an end: the upper one when `f(U) - f(L) = (U - L) * (a*(L + U) + b)` is negative, the lower
+	//! one when it is positive (a NaN counts as positive: it comes from two infinite ends, where either is unbounded),
+	//! and on a tie the end nearest 0. With `a = 0` the factor is `b` alone, since `0 * infinity` is not a number, and
+	//! a tie
+	//! (`b = 0`) leaves every point optimal, so the target is 0 for the caller's clamp to bring nearest.
+	ExprPtr EndOfInterval(const ExprPtr &a, const ExprPtr &b, const ExprPtr &lower, const ExprPtr &upper) const {
+		auto zero = calc.Num(0.0);
+		auto flat = calc.Cmp(ExpressionType::COMPARE_EQUAL, a, zero);
+		auto upper_gain = calc.If(flat, b, calc.Add(calc.Mul(a, calc.Add(lower, upper)), b));
+		auto nearer_lower =
+		    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, calc.Fn("abs", lower), calc.Fn("abs", upper));
+		auto tie = calc.If(flat, zero, calc.If(nearer_lower, lower, upper));
+		return calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, upper_gain, zero), upper,
+		               calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, upper_gain, zero), lower, tie));
+	}
+
 	//! Columns of P3.
 	struct Interval {
 		Carried carried;
@@ -418,11 +444,13 @@ private:
 		ExprPtr lower, upper;
 		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, interval.floor), condition.upper, interval.clause_lowers,
 		             interval.clause_uppers, lower, upper);
-		// Convex: the turning point, clamped into the interval. With no square on any row of the class every value is
-		// optimal, and the point of the interval nearest 0 is the answer. A row the objective drops has `a = b = 0`,
-		// never NULL, so every row carries a sum.
+		// Convex: the turning point, clamped into the interval. Otherwise the objective is concave or linear and an
+		// end of the interval is the answer (EndOfInterval); with no square on any row of the class `a = b = 0`, every
+		// value is optimal, and the point of the interval nearest 0 is the answer. A row the objective drops has
+		// `a = b = 0`, never NULL, so every row carries a sum.
+		auto convex = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total_a, zero);
 		auto turning = DirectTurningPoint(calc, total_a, total_b, false);
-		auto target = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total_a, zero), turning.target, zero);
+		auto target = calc.If(convex, turning.target, EndOfInterval(total_a, total_b, lower, upper));
 		// Adding 0.0 turns -0.0 into 0.0.
 		auto answer = calc.Add(calc.Min({calc.Max({target, lower}), upper}), zero);
 		// A row with no class has no decision and shows NULL.
@@ -435,6 +463,12 @@ private:
 		// it, so a query whose only bounds are constants has two constants here, which DuckDB folds.
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
 		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
+		// An infinite answer is a concave or linear objective whose best end is infinite: it improves without limit.
+		// (A turning point is finite: the sums are checked and `a` is positive.)
+		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, answer, calc.Num(POSITIVE_INFINITY)),
+		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, answer, calc.Num(NEGATIVE_INFINITY))});
+		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, infinite)),
+		                               DirectUnboundedErrorPredicate(optimizer, errors)));
 		checks.push_back(DirectRaiseTooLarge(optimizer, total_a, condition.objective_written));
 		checks.push_back(DirectRaiseTooLarge(optimizer, total_b, condition.objective_written));
 		checks.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));

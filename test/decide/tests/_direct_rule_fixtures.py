@@ -405,24 +405,28 @@ A2 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_a2_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: a whole-numbered decision (the mean is not a whole number), a
-    # linear term beside the square, a loss that is not a square, and a weight read from the data.
+    # linear term beside the square, a loss that is not a square, and a weight fixed only within the query.
     near_misses=(
         ("per (): c(INT)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2) + w * c)"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(ABS(c - p))"),
-        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(w * POWER(c - p, 2))"),
+        # A weight fixed only within the query is no value of the source row.
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(txid_current() * POWER(c - p, 2))"),
         # An objective `when` that is not a source predicate: on the objective and on its sum.
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE when txid_current() >= 0: SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(when txid_current() >= 0: POWER(c - p, 2))"),
     ),
     # Forms that look like near misses and apply: the square written the other way round, a slope on the decision, a
-    # factor, a maximized negative square, a `when`, an interval open on one side, a bound read from the data (the
-    # interval of a class is the tightest of its rows'), and a floor lowered under a `when`.
+    # factor, a maximized negative square, a weight read from the data, a `when`, an interval open on one side, a bound
+    # read from the data (the interval of a class is the tightest of its rows'), and a floor lowered under a `when`.
     near_miss_applies=(
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(p - c, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(2 * c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE 3 * SUM(POWER(c - p, 2)) / 2"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE -SUM(POWER(c - p, 2))"),
+        # A weight read from the data, of either sign once the sense is applied: the plan reads the sign of the total.
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(w * POWER(c - p, 2))"),
+        ("per cap: c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE SUM(w * POWER(c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE when cap > 3: SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c >= -1e30 AND c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),

@@ -185,6 +185,13 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		if (!DirectReadQuadraticPart(ir, context, part, ir.objective.written, prepared)) {
 			return false;
 		}
+		for (auto &square : prepared.squares) {
+			// A1 takes a nonzero constant weight; one read from the data (or zero) stays on the solver path.
+			double weight;
+			if (!DirectFoldConstantSum(context, square.weight, weight) || weight == 0.0) {
+				return false;
+			}
+		}
 		squares += prepared.squares.size();
 		condition.parts.push_back(std::move(prepared));
 	}

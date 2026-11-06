@@ -61,13 +61,13 @@ unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSign
 //===--------------------------------------------------------------------===//
 
 //! The columns of one DirectQuadraticPart in a rule's first projection: the rows the part reads, the sums of its
-//! linear coefficients, and the slope `w` and constant `t` inside each square `k*(w*x + t)^2`. Each is NULL on a row
-//! the part does not read.
+//! linear coefficients, and the weight `k`, slope `w` and constant `t` of each square `k*(w*x + t)^2`. Each is NULL on
+//! a row the part does not read.
 struct DirectQuadraticColumns {
 	struct Square {
 		idx_t decision = 0;
-		//! The square's `sign * scale`, the `k` of `k*(w*x + t)^2`.
-		double factor = 1.0;
+		//! The square's weight, the `k` of `k*(w*x + t)^2`: a constant, or a value of the row.
+		ColumnBinding k;
 		ColumnBinding w;
 		ColumnBinding t;
 	};

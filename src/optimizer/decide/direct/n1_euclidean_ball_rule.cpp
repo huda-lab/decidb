@@ -51,13 +51,15 @@ struct Condition final : DirectApplicabilityCondition {
 	bool has_square = false;
 };
 
-//! `sign * scale * w^2` of a square, where its inner slope `w` folds to a constant; false otherwise.
+//! `weight * w^2` of a square, where its weight and its inner slope `w` fold to constants; false otherwise. A weight
+//! read from the data is not one: the rule declines it here.
 bool FoldSquareFactor(ClientContext &context, const DirectSquareTerm &square, double &factor) {
-	double slope;
-	if (!DirectFoldConstantSum(context, square.inner_linear, slope)) {
+	double weight, slope;
+	if (!DirectFoldConstantSum(context, square.weight, weight) ||
+	    !DirectFoldConstantSum(context, square.inner_linear, slope)) {
 		return false;
 	}
-	factor = square.sign * square.scale * (slope * slope);
+	factor = weight * (slope * slope);
 	return std::isfinite(factor);
 }
 
@@ -132,7 +134,7 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 		return false;
 	}
 	DirectSquareTerm square;
-	if (!DirectReadSquareTerm(ir, context, terms[0], clause->written, square) || !square.inner_constant.empty() ||
+	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner_constant.empty() ||
 	    !FoldSquareFactor(context, square, condition.square_factor) || condition.square_factor <= 0.0) {
 		return false;
 	}

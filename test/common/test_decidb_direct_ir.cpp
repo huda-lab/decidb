@@ -8,6 +8,7 @@
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 using namespace duckdb;
@@ -568,7 +569,11 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	auto &inside_square = inside.ir.objective.parts[0].terms[0];
 	REQUIRE(inside_square.IsSquare());
 	REQUIRE(inside_square.coefficient != nullptr);
-	REQUIRE(ExpressionExecutor::EvaluateScalar(*con.context, *inside_square.coefficient).GetValue<double>() == 3.0);
+	// A NULL `w` skips the row, so the coefficient is guarded as every other term's is (GuardCoefficients); the guard
+	// reads 0 on that row and 3 on every other.
+	REQUIRE(DecideIsGuarded(*inside_square.coefficient));
+	REQUIRE(ExpressionExecutor::EvaluateScalar(*con.context, DecideUnguarded(*inside_square.coefficient))
+	            .GetValue<double>() == 3.0);
 	QueryIR outside(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE 2*SUM(POWER(x - w, 2))"));
 	REQUIRE(outside.ir.objective.parts[0].scale != nullptr);
 	REQUIRE(!outside.ir.objective.parts[0].scale_divides);
@@ -587,7 +592,7 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(expanded_terms[2].IsConstant());
 
 	// A row-valued coefficient inside the square is in its form; one outside it, written either way, is the square's
-	// coefficient, which the IR reads and a rule's square reader declines (DirectReadSquareTerm).
+	// coefficient, which the IR reads and a rule's square reader takes as the square's weight (DirectReadSquareTerm).
 	QueryIR inner_weight(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2))"));
 	REQUIRE(inner_weight.ir.objective.status == DirectAnalysisStatus::PROVED);
 	for (auto objective : {"MINIMIZE SUM(w*POWER(x - 1, 2))", "MINIMIZE SUM(w*x*x)"}) {

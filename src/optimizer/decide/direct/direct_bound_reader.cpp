@@ -238,18 +238,18 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 	return true;
 }
 
-bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, const string &clause,
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
                           DirectSquareTerm &out) {
-	// The scale is a constant the plan knows; a data coefficient on a square is the solver's (its sign is a row's).
-	double scale = 1.0;
-	if (!term.IsSquare() ||
-	    (term.coefficient && !TryEvaluateFoldableDouble(context, *term.coefficient, scale, FOLD_PLAIN)) ||
-	    !std::isfinite(scale) || scale == 0.0) {
+	if (!term.IsSquare() || (term.coefficient && !DirectProveValue(ir, *term.coefficient))) {
 		return false;
 	}
 	auto &form = term.factors[0].form;
-	out.sign = term.sign;
-	out.scale = scale;
+	// The weight is the term's sign and coefficient (1 when it has none); a rule that needs it constant folds it.
+	DirectSignedValue weight;
+	weight.sign = term.sign;
+	weight.expr = term.coefficient ? term.coefficient->Copy() : make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
+	out.weight.push_back(std::move(weight));
+	out.weight_names = DirectNamesOf(ir, out.weight, clause);
 	bool has_decision = false;
 	for (auto &inner : form) {
 		if (inner.IsLinear()) {
@@ -327,7 +327,7 @@ bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const D
 			}
 		} else {
 			out.squares.emplace_back();
-			if (!DirectReadSquareTerm(ir, context, term, clause, out.squares.back())) {
+			if (!DirectReadSquareTerm(ir, term, clause, out.squares.back())) {
 				return false;
 			}
 		}

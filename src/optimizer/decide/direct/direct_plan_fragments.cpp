@@ -106,7 +106,8 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	for (auto &square : part.squares) {
 		DirectQuadraticColumns::Square laid;
 		laid.decision = square.decision;
-		laid.factor = square.sign * square.scale;
+		laid.k = on_kept(calc.Wrap(DirectSumOf(optimizer, square.weight, over)));
+		check_number(laid.k, square.weight_names, square.weight);
 		laid.w = on_kept(calc.Wrap(DirectSumOf(optimizer, square.inner_linear, over)));
 		check_number(laid.w, square.inner_linear_names, square.inner_linear);
 		if (square.inner_constant.empty()) {
@@ -202,7 +203,7 @@ DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBui
 			if (square.decision != decision) {
 				continue;
 			}
-			auto k = calc.Num(square.factor);
+			auto k = calc.Col(LogicalType::DOUBLE, square.k);
 			auto w = calc.Col(LogicalType::DOUBLE, square.w);
 			auto t = calc.Col(LogicalType::DOUBLE, square.t);
 			a_part = calc.Add(a_part, calc.Mul(k, calc.Mul(w, w)));

@@ -54,7 +54,7 @@ NAMES = [name for name, _ in COLUMNS]
 
 
 #: The type of every column a case table uses.
-TYPES = dict(COLUMNS, k="VARCHAR", j="INTEGER", lo="DOUBLE", cap="DOUBLE")
+TYPES = dict(COLUMNS, k="VARCHAR", j="INTEGER", lo="DOUBLE", cap="DOUBLE", w="DOUBLE")
 
 
 def _row(id, v, f):
@@ -1045,3 +1045,301 @@ def test_a2_coefficients_that_keep_their_precision_are_silent(decidb_cli, object
 )
 def test_a2_warns_when_the_turning_point_leaves_the_normal_range(decidb_cli, objective):
     _run(decidb_cli, _one_row(objective), "require", expect_number_range=True)
+
+
+# ---------------------------------------------------------------------------
+# Data weights on the square: `SUM(w * POWER(c - v, 2))` with `w` read from the data
+# ---------------------------------------------------------------------------
+# A class's objective is `W*c^2 - 2*c*SUM(w*v) + constant` with `W` the total weight of its rows. Where `W > 0` the
+# answer is the weighted mean clamped into the interval. Where `W <= 0` the objective is concave or linear and the
+# answer is an end of the interval: the upper one when `a*(L+U) + b < 0`, and on a tie the point nearest 0 (the lower
+# end when two ends are as near). An infinite end that is chosen is unbounded. A NULL weight skips its row; a NaN or
+# infinite weight raises. The solver path answers these queries on Gurobi only: HiGHS refuses a square whose sign is
+# known when the query runs, so a HiGHS run compares that refusal and nothing else.
+
+
+def _wrow(id, k, v, w):
+    return dict(id=id, k=k, v=v, w=w)
+
+
+def _weighted(slope, t_of, k_of=_plain, mask=None):
+    """`k * (slope*c + t)^2` with `k = k_of(w)` read from the row; a row with a NULL value or weight adds nothing."""
+
+    def coefficients(row):
+        if row["v"] is None or row["w"] is None or (mask is not None and not mask(row)):
+            return (0.0, 0.0)
+        k = k_of(row["w"])
+        return (k * slope * slope, 2.0 * k * slope * t_of(row["v"]))
+
+    return coefficients
+
+
+WEIGHTED_OBJECTIVES = {
+    "w_sq": Objective("MINIMIZE SUM(w * POWER(c - v, 2))", False, _weighted(1.0, _minus)),
+    "w_sq_maximized": Objective("MAXIMIZE SUM(w * POWER(c - v, 2))", True, _weighted(1.0, _minus)),
+    "w_sq_part_negated": Objective("MAXIMIZE -SUM(w * POWER(c - v, 2))", True, _weighted(1.0, _minus, _minus)),
+    "w_sq_negated_weight": Objective("MINIMIZE SUM(-w * POWER(c - v, 2))", False, _weighted(1.0, _minus, _minus)),
+    "w_sq_slope": Objective("MINIMIZE SUM(w * POWER(2*c - v, 2))", False, _weighted(2.0, _minus)),
+    "w_sq_computed_weight": Objective(
+        "MINIMIZE SUM((w + 1) * POWER(c - v, 2))", False, _weighted(1.0, _minus, lambda w: w + 1.0)
+    ),
+    "w_sq_scaled": Objective(
+        "MINIMIZE 3 * SUM(w * POWER(c - v, 2)) / 2", False, _weighted(1.0, _minus, lambda w: 1.5 * w)
+    ),
+    "w_sq_when": Objective(
+        "MINIMIZE when v > 0: SUM(w * POWER(c - v, 2))", False, _weighted(1.0, _minus, mask=lambda r: r["v"] > 0)
+    ),
+}
+
+# (value, weight) pairs of one class. The comment says which branch of the answer the class reaches on [0, 10].
+W_SETS = {
+    "positive": ((2.0, 1.0), (4.0, 2.0), (9.0, 0.5), (-1.5, 1.0)),  # W > 0: the weighted mean
+    "negative_far_upper": ((2.0, -1.0), (4.0, -2.0), (3.0, -1.0)),  # W < 0, a*(L+U)+b < 0: the upper end
+    "negative_far_lower": ((7.0, -1.0), (9.0, -1.0), (8.0, -2.0)),  # W < 0, a*(L+U)+b > 0: the lower end
+    "negative_total": ((2.0, 1.0), (6.0, -3.0), (4.0, 0.5)),  # signs mixed, W < 0
+    "positive_total": ((2.0, 3.0), (6.0, -1.0), (4.0, 1.0)),  # signs mixed, W > 0: a mean from negative weights too
+    "zero_total_lower": ((2.0, 1.0), (5.0, -1.0)),  # W = 0, b > 0: the lower end
+    "zero_total_upper": ((5.0, 1.0), (2.0, -1.0)),  # W = 0, b < 0: the upper end
+    "zero_total_flat": ((3.0, 1.0), (3.0, -1.0)),  # W = 0, b = 0: every point is optimal, the one nearest 0
+    "zero_weights": ((2.0, 0.0), (4.0, 0.0)),
+    "null_weights_skip_their_rows": ((2.0, 1.0), (4.0, 2.0), (9.0, 0.5), (3.0, None), (None, None)),
+    "every_weight_null": ((2.0, None), (4.0, None)),
+    "concave_tie": ((5.0, -1.0),),  # W < 0 and f(L) = f(U) on [0, 10]: the end nearest 0
+    "concave_tie_below_zero": ((-3.5, -1.0),),  # f(L) = f(U) on [-5, -2]: the upper end is the nearer
+    "concave_tie_as_near": ((0.0, -1.0),),  # f(L) = f(U) on [-5, 5], both as near 0: the lower end
+}
+
+
+def _query_wide_rows(triples):
+    return tuple(_wrow(i, "a", v, w) for i, (v, w) in enumerate(triples, start=1))
+
+
+def _keyed_rows(**classes):
+    rows = []
+    for label, triples in classes.items():
+        for v, w in triples:
+            rows.append(_wrow(len(rows) + 1, label, v, w))
+    return tuple(rows)
+
+
+KEYED_W_ROWS = _keyed_rows(
+    a=W_SETS["positive"],
+    b=W_SETS["negative_far_upper"],
+    c=W_SETS["negative_far_lower"],
+    d=W_SETS["zero_total_lower"],
+    e=W_SETS["zero_total_upper"],
+    f=W_SETS["zero_total_flat"],
+    g=W_SETS["every_weight_null"],
+    h=W_SETS["positive_total"],
+    i=W_SETS["negative_total"],
+    j=W_SETS["concave_tie"],
+    k=W_SETS["concave_tie_below_zero"],
+    m=W_SETS["concave_tie_as_near"],
+)
+# A row with a NULL key has no decision, so its weight is never read.
+KEYED_W_NULL_KEY_ROWS = KEYED_W_ROWS + (_wrow(40, None, 100.0, math.nan), _wrow(41, None, 3.0, -2.0))
+
+W_FINITE_BOXES = ("interior", "clamped_up", "clamped_down", "negative_interval", "negative_lower_replaces_default")
+W_OBJECTIVE = WEIGHTED_OBJECTIVES["w_sq"]
+
+
+def _weighted_case(box, objective, rows, keys=()):
+    return Case(BOXES[box], WEIGHTED_OBJECTIVES[objective], rows, keys)
+
+
+W_CASES = {}
+for _set, _triples in W_SETS.items():
+    for _box in W_FINITE_BOXES:
+        W_CASES[f"{_set}_in_{_box}"] = _weighted_case(_box, "w_sq", _query_wide_rows(_triples))
+# Every spelling of the weighted objective, on a class that sums to a positive, a negative and a mixed weight.
+for _name in WEIGHTED_OBJECTIVES:
+    for _set in ("positive", "negative_far_upper", "positive_total", "negative_total"):
+        W_CASES[f"{_set}_under_{_name}"] = _weighted_case("interior", _name, _query_wide_rows(W_SETS[_set]))
+# An interval open on one side: a chosen finite end is the answer, and the improving direction of a linear objective
+# decides whether the open end is chosen (the error table has that case).
+W_CASES["zero_total_upper_with_an_open_lower_end"] = _weighted_case(
+    "open_lower", "w_sq", _query_wide_rows(W_SETS["zero_total_upper"])
+)
+W_CASES["zero_total_flat_with_both_ends_open"] = _weighted_case(
+    "open_both", "w_sq", _query_wide_rows(W_SETS["zero_total_flat"])
+)
+W_CASES["positive_with_both_ends_open"] = _weighted_case("open_both", "w_sq", _query_wide_rows(W_SETS["positive"]))
+W_CASES["negative_far_upper_with_an_open_lower_end"] = _weighted_case(
+    "open_lower", "w_sq", _query_wide_rows(W_SETS["negative_far_upper"])
+)
+W_CASES["concave_tie_in_a_point_interval"] = _weighted_case("point", "w_sq", _query_wide_rows(W_SETS["concave_tie"]))
+# A NaN and an infinite weight on rows a `when` drops are never read.
+W_CASES["bad_weights_on_dropped_rows"] = _weighted_case(
+    "interior",
+    "w_sq_when",
+    _query_wide_rows(W_SETS["positive"] + ((-5.0, math.nan), (-3.0, INF))),
+)
+for _box in W_FINITE_BOXES:
+    W_CASES[f"keyed_in_{_box}"] = _weighted_case(_box, "w_sq", KEYED_W_ROWS, ("k",))
+    W_CASES[f"keyed_null_key_in_{_box}"] = _weighted_case(_box, "w_sq", KEYED_W_NULL_KEY_ROWS, ("k",))
+for _name in WEIGHTED_OBJECTIVES:
+    W_CASES[f"keyed_under_{_name}"] = _weighted_case("interior", _name, KEYED_W_ROWS, ("k",))
+W_CASES["keyed_with_an_open_lower_end"] = _weighted_case(
+    "open_lower",
+    "w_sq",
+    _keyed_rows(a=W_SETS["positive"], b=W_SETS["zero_total_upper"], c=W_SETS["zero_total_flat"]),
+    ("k",),
+)
+
+# Weights beside bounds read from the data: each class's interval is the tightest of its rows'.
+_WEIGHT_BY_ID = {1: 1.0, 2: -2.0, 3: 1.5, 4: 0.5, 5: -1.0, 6: 2.0, 7: 1.0}
+_WEIGHT_NEGATIVE_BY_ID = {1: -1.0, 2: -2.0, 3: -1.5, 4: -0.5, 5: -1.0, 6: -2.0, 7: -1.0}
+for _label, _by_id in (("mixed", _WEIGHT_BY_ID), ("negative", _WEIGHT_NEGATIVE_BY_ID)):
+    _rows = tuple(dict(row, w=_by_id[row["id"]]) for row in TIGHT_D_ROWS)
+    W_CASES[f"{_label}_weights_with_data_bounds_per_class"] = Case(DATA_BOXES["both"], W_OBJECTIVE, _rows, ("k",))
+    # Class "a" alone: its interval is [0, 3].
+    W_CASES[f"{_label}_weights_with_data_bounds_query_wide"] = Case(
+        DATA_BOXES["both"], W_OBJECTIVE, tuple(row for row in _rows if row["k"] == "a")
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(W_CASES))
+def test_a2_weighted_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, W_CASES[name])
+
+
+W_CONTEXT_CASES = [
+    (base, wrap)
+    for base in (
+        "keyed_null_key_in_interior",
+        "mixed_weights_with_data_bounds_per_class",
+        "zero_total_lower_in_interior",
+    )
+    for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("base,wrap", W_CONTEXT_CASES)
+def test_a2_weighted_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
+    _agree(decidb_cli, oracle_solver, W_CASES[base], wrap=wrap)
+
+
+def _ruled_point(a, b, lower, upper):
+    """The point the rulings name for a class that minimizes `a*c^2 + b*c` on the finite interval [lower, upper], derived
+    by enumeration and not by the plan's formula: the best of the two ends when the objective is concave or linear,
+    and among the optimal points the one nearest 0 (the lower of two as near), as the A2 tie rule says."""
+    if a > 0:
+        return min(max(-b / (2.0 * a), lower), upper)
+
+    def value(c):
+        return a * c * c + b * c
+
+    best = min(value(lower), value(upper))
+    if a == 0 and b == 0:
+        optimal = [min(max(0.0, lower), upper)]
+    else:
+        optimal = [c for c in (lower, upper) if value(c) == best]
+    return min(optimal, key=lambda c: (abs(c), c))
+
+
+W_PINNED = sorted(name for name in W_CASES if "open" not in name and "bad_weights" not in name)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", W_PINNED)
+def test_a2_a_weighted_class_answers_the_ruled_point(decidb_cli, name):
+    # The oracle accepts any optimal point; the rulings pick one, and this derives it in Python for every class.
+    case_ = W_CASES[name]
+    rows, _ = _run(decidb_cli, _sql(case_), "require")
+    classes = _classes(case_)
+    in_class = {id(row): key for key, members in classes.items() for row in members}
+    sign = -1.0 if case_.objective.maximize else 1.0
+    answers = {}
+    for source_row, row in zip(case_.rows, rows):
+        key = in_class.get(id(source_row))
+        if key is None:
+            assert row[1] is None
+            continue
+        if key not in answers:
+            members = classes[key]
+            a, b = _totals(case_, members)
+            lower, upper = _interval(case_, members)
+            answers[key] = _ruled_point(sign * a, sign * b, lower, upper)
+        assert row[1] == pytest.approx(answers[key], abs=1e-9, rel=1e-9), (key, row, answers[key])
+        assert row[1] != 0.0 or math.copysign(1.0, row[1]) == 1.0, "-0.0 must print as 0.0"
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a2_highs_refuses_a_square_whose_weight_is_read_from_the_data(decidb_cli_highs):
+    # Recorded, not required of A2: on HiGHS the solver path cannot answer these queries (Gurobi does), so the
+    # weighted forms are compared with Gurobi above. The refusal names the cause.
+    with pytest.raises(DeciDBCliError, match="sign is known only when the query runs"):
+        _run(decidb_cli_highs, _sql(W_CASES["positive_in_interior"]), "off")
+
+
+# name -> (sql, error class the two paths must share). The two paths must raise, whichever error each chooses.
+W_ERROR_CASES = {
+    "nan_weight": (
+        _problem(_query_wide_rows(W_SETS["positive"] + ((1.0, math.nan),)), obj=W_OBJECTIVE.sql),
+        "invalid_value",
+    ),
+    "infinite_weight": (
+        _problem(_query_wide_rows(W_SETS["positive"] + ((1.0, INF),)), obj=W_OBJECTIVE.sql),
+        "invalid_value",
+    ),
+    "nan_weight_in_a_computed_weight": (
+        _problem(
+            _query_wide_rows(W_SETS["positive"] + ((1.0, math.nan),)),
+            obj=WEIGHTED_OBJECTIVES["w_sq_computed_weight"].sql,
+        ),
+        "invalid_value",
+    ),
+    "nan_weight_of_a_keyed_row": (
+        _problem(KEYED_W_ROWS[:-1] + (_wrow(99, "j", 1.0, math.nan),), obj=W_OBJECTIVE.sql, key="k"),
+        "invalid_value",
+    ),
+    # A concave class whose best end is infinite improves without limit; so does a linear one that improves toward an
+    # open end, and a maximized convex one.
+    "negative_weights_with_no_upper_end": (
+        _problem(_query_wide_rows(W_SETS["negative_far_upper"]), "c >= 0", W_OBJECTIVE.sql),
+        "unbounded",
+    ),
+    "negative_weights_with_no_lower_end": (
+        _problem(_query_wide_rows(W_SETS["negative_far_lower"]), "c >= -1e30 AND c <= 4", W_OBJECTIVE.sql),
+        "unbounded",
+    ),
+    "negative_weights_with_both_ends_open": (
+        _problem(_query_wide_rows(W_SETS["negative_far_lower"]), "c >= -1e30 AND c <= 1e30", W_OBJECTIVE.sql),
+        "unbounded",
+    ),
+    "zero_total_improving_toward_an_open_end": (
+        _problem(_query_wide_rows(W_SETS["zero_total_lower"]), "c >= -1e30 AND c <= 4", W_OBJECTIVE.sql),
+        "unbounded",
+    ),
+    "maximized_positive_weights_with_no_upper_end": (
+        _problem(_query_wide_rows(W_SETS["positive"]), "c >= 0", WEIGHTED_OBJECTIVES["w_sq_maximized"].sql),
+        "unbounded",
+    ),
+    "one_unbounded_class": (
+        _problem(_keyed_rows(a=W_SETS["positive"], b=W_SETS["negative_far_upper"]), "c >= 0", W_OBJECTIVE.sql, key="k"),
+        "unbounded",
+    ),
+    # An empty interval is infeasible whatever the weights are.
+    "negative_weights_in_an_empty_interval": (
+        _problem(_query_wide_rows(W_SETS["negative_far_upper"]), "c >= 5 AND c <= 3", W_OBJECTIVE.sql),
+        "infeasible",
+    ),
+}
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(W_ERROR_CASES))
+def test_a2_weighted_error_cases_fail_on_both_paths(decidb_cli, name):
+    sql, expected = W_ERROR_CASES[name]
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert error_class(str(direct_error.value)) == error_class(str(solver_error.value)) == expected

@@ -522,6 +522,57 @@ def test_a2_a_nan_data_bound_is_the_solvers_word_for_word(decidb_cli, declaratio
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "declaration,objective,rows,message",
+    [
+        # A NaN or infinite weight names the weight as the user wrote it, query-wide and keyed.
+        (
+            "per ()",
+            "SUM(w * POWER(c - v, 2))",
+            "(1, 'a', 2.0, 1.0), (2, 'a', 3.0, 'NaN'::DOUBLE)",
+            "DECIDE: w is NaN or infinite on some rows. Skip those rows with 'when isfinite(w):'.",
+        ),
+        (
+            "per k",
+            "SUM(w * POWER(c - v, 2))",
+            "(1, 'a', 2.0, 1.0), (2, 'b', 3.0, 'Infinity'::DOUBLE)",
+            "DECIDE: w is NaN or infinite on some rows. Skip those rows with 'when isfinite(w):'.",
+        ),
+        (
+            "per ()",
+            "SUM((w + 1) * POWER(c - v, 2))",
+            "(1, 'a', 2.0, 1.0), (2, 'a', 3.0, 'NaN'::DOUBLE)",
+            "DECIDE: w + 1 is NaN or infinite on some rows. Skip those rows with 'when isfinite(w + 1):'.",
+        ),
+        # A row with no class is never read: no error on either path.
+        ("per k", "SUM(w * POWER(c - v, 2))", "(1, 'a', 2.0, 1.0), (2, NULL, 3.0, 'NaN'::DOUBLE)", None),
+        # A concave total whose best end is infinite improves without limit.
+        (
+            "per ()",
+            "SUM(w * POWER(c - v, 2))",
+            "(1, 'a', 2.0, -1.0), (2, 'a', 3.0, -2.0)",
+            "DECIDE optimization is unbounded.",
+        ),
+    ],
+)
+def test_a2_a_data_weight_is_the_solvers_word_for_word(decidb_cli, declaration, objective, rows, message):
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES {rows}) t(id, k, v, w) "
+        f"DECIDE {declaration}: c(REAL) SUCH THAT c >= 0 MINIMIZE {objective}) q ORDER BY id"
+    )
+    if message is None:
+        sql = sql.replace("c >= 0", "c BETWEEN 0 AND 10")
+    direct = _raw(decidb_cli, sql, mode="require")
+    solver = _raw(decidb_cli, sql, mode="off")
+    if message is None:
+        assert direct.returncode == 0 and solver.returncode == 0, (direct.stderr, solver.stderr)
+        assert direct.stdout == solver.stdout
+    else:
+        assert message in direct.stderr, direct.stderr
+        assert direct.stderr == solver.stderr
+
+
 # The infeasible and unbounded errors advise prefixing the query with DIAGNOSE only where DIAGNOSE runs. The rule driver
 # asks the solver-support check DIAGNOSE goes through (DecideSolverRuns) once per query. On a machine with no Gurobi,
 # HiGHS takes a linear model and a convex quadratic objective over continuous decisions, and refuses the rest.

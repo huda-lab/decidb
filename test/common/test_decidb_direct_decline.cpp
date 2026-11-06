@@ -532,6 +532,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 		        make_uniq<BoundConstantExpression>(Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
+	shapes.push_back(A1("a square weighted by a column", "x <= cap", nullptr, "MINIMIZE SUM(w * POWER(x - cap, 2))"));
 	// The binder rejects an objective with two quadratic groups, so the second square is added to the IR.
 	shapes.push_back(A1(
 	    "two squares", "x <= cap",
@@ -1032,6 +1033,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	                             "MINIMIZE SUM(POWER(txid_current() * x, 2))"));
 	shapes.push_back(N1Objective("a center in the objective fixed only within the query",
 	                             "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
+	shapes.push_back(N1Objective("a square weighted by a column", "MINIMIZE SUM(w * POWER(x, 2))"));
 	shapes.push_back(
 	    N1Objective("a square of slope zero in the objective", "MINIMIZE SUM(POWER(x, 2))", [](DirectIR &ir) {
 		    SquareForm(ir.objective.parts[0].terms[0])[0].coefficient =
@@ -1105,6 +1107,11 @@ duckdb::vector<Shape> A2AppliesShapes() {
 	    A2("a WHEN on the sum", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(when flag: POWER(c - w, 2))"));
 	shapes.push_back(A2("an objective constant", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2)) + 5"));
 	shapes.push_back(A2("a slope other than one", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(2 * c - w, 2))"));
+	// A weight read from the data has no sign before the rows: the plan reads the sign of the total.
+	shapes.push_back(
+	    A2("a square weighted by a column", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(cap * POWER(c - w, 2))"));
+	shapes.push_back(A2("a maximized square weighted by a column", "c BETWEEN 0 AND 10", nullptr,
+	                    "MAXIMIZE SUM(cap * POWER(c - w, 2))"));
 	// Bounds read from the data, or under a WHEN, are clauses the plan intersects per class.
 	shapes.push_back(A2("a bound read from the data", "c <= cap"));
 	shapes.push_back(A2("a lower bound read from the data", "c >= w - 4"));
@@ -1143,8 +1150,8 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	    A2("a linear term beside the square", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2) + w * c)"));
 	shapes.push_back(A2("a per-row constant beside the square", "c BETWEEN 0 AND 10", nullptr,
 	                    "MINIMIZE SUM(POWER(c - w, 2) + cap)"));
-	shapes.push_back(
-	    A2("a square weighted by a column", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(w * POWER(c - f, 2))"));
+	shapes.push_back(A2("a square weighted by a value fixed only within the query", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE SUM(txid_current() * POWER(c - w, 2))"));
 	shapes.push_back(
 	    A2("a slope read from the data", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(w * c - f, 2))"));
 	shapes.push_back(A2("a square of slope zero", "c BETWEEN 0 AND 10", [](DirectIR &ir) {

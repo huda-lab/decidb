@@ -176,14 +176,16 @@ struct DirectConstantTerm {
 	DirectNumberNames value_names;
 };
 
-//! `sign * scale * (inner)^2`, where the inner expression is linear in one decision.
+//! `weight * (inner)^2`, where the inner expression is linear in one decision and the weight is the term's sign times
+//! its coefficient, a numeric value of the source row (a constant, or read from the data).
 struct DirectSquareTerm {
 	idx_t decision = 0;
-	int sign = 1;
-	double scale = 1.0;
+	//! The values whose sum is the weight: one, the term's sign and its coefficient (1 when it has none).
+	vector<DirectSignedValue> weight;
 	vector<DirectSignedValue> inner_linear;
 	vector<DirectSignedValue> inner_constant;
-	//! What a message names for the sums of the two (DirectNamesOf).
+	//! What a message names for the sums of the three (DirectNamesOf).
+	DirectNumberNames weight_names;
 	DirectNumberNames inner_linear_names;
 	DirectNumberNames inner_constant_names;
 };
@@ -192,15 +194,14 @@ struct DirectSquareTerm {
 bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
                             DirectConstantTerm &out);
 
-//! Reads a square of a part: a linear form squared under a constant coefficient. False when the coefficient is data,
-//! zero or not finite, the form is not linear in one decision, or a value in it is not a numeric value of the source
-//! row.
-bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, const string &clause,
-                          DirectSquareTerm &out);
+//! Reads a square of a part: a linear form squared under a coefficient. False when the form is not linear in one
+//! decision, or the coefficient or a value in the form is not a numeric value of the source row. A weight read from the
+//! data is read like any other; a rule that needs a constant one folds it (DirectFoldConstantSum).
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectSquareTerm &out);
 
 //! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient
-//! 0), so a square's slope `DirectSquareTerm::inner_linear` folds to the number every row shares. False when a value is
-//! not a finite constant.
+//! 0), so a square's weight `DirectSquareTerm::weight` or slope `DirectSquareTerm::inner_linear` folds to the number
+//! every row shares. False when a value is not a finite constant.
 bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total);
 
 //! One part of an objective that holds linear terms, per-row constants and squares: its sign and factor with its linear

@@ -280,8 +280,8 @@ private:
 	}
 
 	//! Each coefficient of `term` read as 0 on a row `valid` fails: a SUM that skips a row adds nothing for it. A term
-	//! of degree 2 is 0 when its factors are, so the forms it multiplies are guarded and its coefficient stays the
-	//! constant a rule reads.
+	//! of degree 2 is guarded in the forms it multiplies and in its own coefficient (a square's weight), which a rule
+	//! that needs a constant reads through (DecideUnguarded).
 	void GuardCoefficients(const ExpressionBuilder &calc, const ExprPtr &valid, DecideSplitTerm &term) const {
 		auto zero = [&](const LogicalType &type) {
 			return calc.Constant(Value::INTEGER(0).DefaultCastAs(type));
@@ -298,12 +298,9 @@ private:
 				GuardCoefficients(calc, valid, part);
 			}
 		}
-		if (!term.factors.empty()) {
-			return;
-		}
 		if (term.coefficient) {
 			term.coefficient = guard(*term.coefficient);
-		} else {
+		} else if (term.factors.empty()) {
 			term.coefficient = calc.Out(calc.If(valid, calc.Num(1), calc.Num(0)));
 		}
 		for (auto &inner : term.inner) {
