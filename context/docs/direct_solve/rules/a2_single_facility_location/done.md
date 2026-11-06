@@ -1,7 +1,7 @@
 # A2 (single-facility location) — what works today
 
-Verified on 2026-11-07, on top of `e863cbcc1a`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off, serializer, highs)
-6,593 passed; C++ `build/release/test/unittest "[decidb]"` 4,531 assertions in 86 cases.
+Verified on 2026-11-07, on top of `e4035614a5`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 7,523 passed; C++ `build/release/test/unittest "[decidb]"` 4,766 assertions in 86 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/a2_single_facility_location_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -18,48 +18,69 @@ One `REAL` decision shared by many rows, query-wide (`per ():`) or keyed (`per k
   constant upper bound) tightened by every bound clause: `MAX` of each clause's lower ends and `MIN` of its upper ends
   over the rows of the class it keeps (`DirectTightestBound`). Constant and data bounds are one reading; a constant
   folds. As on the solver path, a NULL bound is skipped, an infinite bound in the open direction is no bound, an
-  infinite upper bound of `-inf` is infeasible, and a data lower bound does not lift the default floor of 0. A constant
-  lower bound under a `when` lifts the floor for the whole class when some row of the class keeps it
-  (`DirectStaticFloor` over a per-class `bool_or`).
-- **The objective.** One plain `SUM` of one square `K * (w*c + t)^2`, where `w` folds to a nonzero constant
-  (`DirectFoldConstantSum`), `t` is a value of the source row, and `K` is positive once the objective's sense, the
-  part's sign and its constant factor are applied. `POWER(c - v, 2)`, `POWER(v - c, 2)`, `POWER(2 * c - v, 2)`,
-  `3 * SUM(...) / 2`, `MAXIMIZE -SUM(...)` and an objective constant (`+ 5`) all read this way, with no case list. An
-  objective `when` and the sum's own `when` choose the rows the square reads.
+  upper bound of `-inf` is infeasible, and a data lower bound does not lift the default floor of 0. A constant lower
+  bound under a `when` lifts the floor for the whole class when some row of the class keeps it (`DirectStaticFloor`
+  over a per-class `bool_or`).
+- **The objective.** One part holding one loss of `w*c + t`, where the slope `w` folds to a nonzero constant
+  (`DirectFoldConstantSum`) and `t` is a value of the source row; an objective `when` and the reducer's own `when`
+  choose the rows the loss reads. `POWER(c - v, 2)`, `POWER(v - c, 2)`, `POWER(2 * c - v, 2)`, `3 * SUM(...) / 2`,
+  `MAXIMIZE -SUM(...)` and an objective constant (`+ 5`) all read through one formula, with no case list.
+  - **Squared:** `SUM(k * POWER(w*c + t, 2))`, where the weight `k` is a constant or a value of the source row, of
+    any sign.
+  - **Absolute:** `SUM(k * ABS(w*c + t))` and `norm(c - v, 1)`, where `k` is a constant, positive once the sense is
+    applied.
+  - **Maximum absolute:** `MINIMIZE MAX(k * ABS(w*c + t))` and `MINIMIZE norm(c - v, 'inf')`, where `k` is a positive
+    constant.
 
-**The answer.** The objective is `a*c^2 + b*c` with `a = SUM(K*w^2)` and `b = SUM(2*K*w*t)` over the rows the
-objective keeps, the same fold A1 and N1 use (`DirectLayoutQuadraticPart`, `DirectFoldQuadratic`). Its minimum on the
-interval is the turning point `-b / (2a)`, the mean of the values for `POWER(c - v, 2)`, clamped into the interval and
-repeated on every row of the class. When the objective keeps no row of a class, `a = 0` and every value is optimal; the
-answer is then the point of the class's interval nearest 0 (owner ruling, 2026-11-06), the same clamp applied to 0. It adds no branch, stays
-finite when the lower end is open, and equals A1's lowest value in the box whenever the lower bound is 0 or above.
+**The answer.** Each loss gives a target per class; the plan clamps it into the class's interval and repeats it on
+every row of the class. When several points are optimal, A2 returns the one nearest 0 (owner rulings, 2026-11-06 and
+2026-11-07). The clamp of 0 gives that point with no branch of its own, and it stays finite when an end is open.
 
-A NULL value reads as no term on its row, as on the solver path. An empty interval raises the solver's infeasible
-error on every row that has a class; over constant bounds the check is two constants, which DuckDB folds. An empty
-source returns no rows, whatever the interval says. A NaN or infinite value on a row the objective keeps raises the
-solver's error, and so does a NaN bound on a row its clause keeps, whether or not the row has a class. A sum
-`a` or `b` past a DOUBLE raises the solver's "computes a number too large for a DOUBLE" with the objective as written.
-Nothing is computed on a row a `when` drops.
+| Loss | Target |
+|---|---|
+| Squared, total weight `a = SUM(k*w^2)` above 0 | The turning point `-b / (2a)` with `b = SUM(2*k*w*t)`: the weighted mean of the values for `POWER(c - v, 2)` |
+| Squared, `a` of 0 or less | An end of the interval: the upper one when `a*(L+U) + b < 0` (as `f(U) - f(L) = (U-L)*(a*(U+L) + b)`, so no large end is squared; `b` alone when `a = 0`), the lower one when it is above 0; on a tie the end nearest 0, the lower one between `-U` and `U`, and 0 when `a = b = 0` |
+| Absolute | The point nearest 0 between the lower and the upper weighted median of the centers `v = -t/w`, each weighted by `k*|w|` |
+| Maximum absolute | The midpoint of the least and the greatest center, as `lo/2 + hi/2` so the sum of the ends cannot pass a DOUBLE |
+| No kept row in the class | None: every point is optimal, and the answer is the point nearest 0 |
+
+A keyed maximum is one maximum over every row of every class; each class's own midpoint is optimal for it, and the
+tie rule applies within each class's own problem.
+
+**Errors and warnings, as on the solver path.** A NULL value or weight reads as no term on its row. A NaN or infinite
+value or weight on a row the objective keeps raises the solver's error, and so does a NaN bound on a row its clause
+keeps, whether or not the row has a class. An empty interval raises the infeasible error on every row that has a
+class; over constant bounds the check is two constants, which DuckDB folds. A concave or linear squared loss whose
+chosen end is infinite raises the unbounded error. A sum past a DOUBLE (the square's `a` or `b`, or an absolute loss's
+total weight) raises "computes a number too large for a DOUBLE" with the objective as written, and so does a convex
+turning point past a DOUBLE at an open end. An empty source returns no rows, whatever the interval says. Nothing is
+computed on a row a `when` drops. The precision warning fires where a divisor is below the normal range: the square's
+`a` in `-b / (2a)` (`DirectTurningPoint`), or a center's slope or a nonzero constant beside it.
 
 ## How it works
 
-One read of the source, four projections and one window, no join. `PlanBuilder` has one method per stage:
+One read of the source, no join. `PlanBuilder` is the skeleton of a Template Method with one method per stage, and
+each loss is a Strategy (`Loss`: `SquareLoss`, and `AbsoluteLoss` and `MaxAbsoluteLoss` over `CenteredLoss`) that
+fills in its columns at each stage and its target. The shared tail (the clamp of 0 for no target, the clamp into the
+interval, NULL on a row with no class, the infeasible error) is in one place.
 
 1. Scope (`DirectProjectScope`, keyed decisions only): the row's class, whether it has one, and its key.
-2. P1, raw values (`LayoutRawValues`): the rows the objective keeps, the slope `w` and constant `t` of the square on
-   each (`DirectLayoutQuadraticPart`), and each bound clause's values on the rows it keeps
-   (`DirectLayoutBoundClauses`, shared with A1), with the check of every value that can fail.
-3. P2 (`ComputeCoefficients`): the row's `a` and `b`, zero on a row the objective drops, oriented as a minimum; each
-   clause's ends on the row (`DirectClauseBounds`); and the row's checks.
-4. W (`AggregateClasses`): one window partitioned by the key (none for a query-wide decision) holding the sums of `a`
-   and `b`, each clause's tightest ends through `DirectWindowSink`, and the `bool_or` of each floor-lifting `when`. It is
-   the aggregate of aggregate-then-repeat: the row's own columns are what the class's values repeat on, so the source
-   is read once. The window holds every row before it releases one, so each row's check has run on all of them first,
-   as the solver reads every row before it answers.
+2. P1 (`LayoutRawValues`): the loss's raw values on the rows the objective keeps (`DirectLayoutQuadraticPart`: weight,
+   slope and constant) and each bound clause's values on the rows it keeps (`DirectLayoutBoundClauses`, shared with
+   A1), with the check of every value that can fail.
+3. P2 (`ComputeRows`): the loss's row values (a square's `a` and `b`; a center and its weight), each clause's ends on
+   the row (`DirectClauseBounds`), and the row's checks.
+4. W (`AggregateClasses`): one window partitioned by the key (none for a query-wide decision) holding the loss's
+   aggregates (the sums of `a` and `b`; the least and greatest center), each clause's tightest ends through
+   `DirectWindowSink`, and the `bool_or` of each floor-lifting `when`. The absolute loss first puts its own window
+   under it, on one sort of the centers per class: the class's total weight `M` and the running sum `R` of the weights
+   (`DirectRunningSum`); the class window then takes the lower median as `MIN` of the centers where `2R >= M` and the
+   upper one as `MAX` of the centers where `2(M - R + m) >= M`. This is aggregate-then-repeat: the row's own columns are
+   what the class's values repeat on, so the source is read once, and the windows hold every row before they release
+   one, so each row's check has run on all of them first, as the solver reads every row before it answers.
 5. P3 (`ComputeInterval`): the class's interval as columns, with the floor.
-6. P4 (`ComputeAnswer`): the clamped turning point on every row of the class (`DirectRowBox`; `+ 0.0` turns `-0.0` into
-   `0.0`), NULL on a row with no class, and the column that keeps the checks live: the row checks, the infeasible
-   check, the two too-large checks and the warning.
+6. P4 (`ComputeAnswer`): the target clamped into the interval (`DirectRowBox`; `+ 0.0` turns `-0.0` into `0.0`), NULL
+   on a row with no class, and the column that keeps the checks live.
 
 ## What it does not admit (falls back to the solver)
 
@@ -68,20 +89,25 @@ on these shapes is in [todo.md](todo.md).
 
 | Shape | Why |
 |---|---|
-| `SUM(w * POWER(c - v, 2))`, `POWER(w * c - v, 2)` with `w` a column | A weight or slope read from the data. |
-| `ABS`, `MAX(ABS(...))`, norms | Other losses. |
-| A linear term or a per-row constant beside the square, a second square, a second part | Not one square. |
-| `MINIMIZE -SUM(...)`, `MAXIMIZE SUM(...)` of the square | Concave in the sense. |
-| `AVG(...)` objective, no objective, a slope of 0, a square whose slope passes a DOUBLE | Not one plain `SUM` of one square. |
+| `SUM(w * ABS(c - v))` with `w` read from the data | The median is optimal only for nonnegative weights, and the plan is chosen before any weight is read. |
+| `norm(c - v, 0)` | The L0 loss: its proof is long for a rare loss, and the IR marks it not proved. |
+| `MAXIMIZE` of an `ABS` maximum, `MAX(w * ABS(...))` with a weight read from the data or not positive | Not the midpoint. |
+| A linear term or a per-row constant beside the loss, a second loss term, a second part | Not one loss. |
+| `MINIMIZE -SUM(ABS(...))` and other concave absolute losses | Not convex, and not the median. |
+| `AVG(...)` objective, no objective, a slope of 0 or read from the data, a slope past a DOUBLE | Not one plain loss of `w*c + t`. |
 | A bound below the built-in floor of 0 (`c <= -1` with no lower bound) | The bound reader declines it so the solver reports it, as in A1. |
 | `INT`, `BOOL`, a decision per row, two decisions | Not one shared `REAL`. |
 
 ## Where it differs from the solver
 
-- **Its own warning.** The divisor is the summed square factor `a` in `-b / (2a)`, through `DirectTurningPoint`; the rule
-  is the framework's [Number-range warning](../../framework/done.md).
-- **Ties.** With no kept row in a class, the solver may return any value of the interval; A2 returns the point nearest
-  0.
+- **Its own warning.** The divisors are the square's `a` and each center's slope; the rule is the framework's
+  [Number-range warning](../../framework/done.md).
+- **Ties.** Where several points are optimal, the solver may return any of them; A2 returns the one nearest 0.
+- **HiGHS and a weight read from the data.** The solver path refuses a data weight on a square under HiGHS (its sign is
+  known only when the query runs); A2 answers it, as Gurobi does.
+- **A bad value under `ABS`.** The solver path words a NaN value under `ABS` as a bound on `-v` and an infinite one as
+  infeasible, and raises for a NaN on a row a sum's own `when` drops ([bugs.md](../../../issues/bugs.md) BUG-51,
+  BUG-52); A2 raises the value error as written, and answers the second.
 - **A square's constant past a DOUBLE** (`v = 1e200`): the solver path expands the square and refuses once its
   constant `k*t^2` passes a DOUBLE; A2 answers the true center, which never reads that constant
   (`../../architecture/rules.md` § What every rule must match from the solver).
@@ -89,14 +115,16 @@ on these shapes is in [todo.md](todo.md).
 ## Tests
 
 - Conformance: the `A2` fixture in `test/decide/tests/_direct_rule_fixtures.py` (the worked example; near misses that
-  decline and forms that apply, keyed and with data bounds among them; late NaN values and bounds, query-wide and
-  keyed, and a too-large error, on the last of 5,000 rows).
-- Differential oracle: `test/decide/tests/test_direct_a2_single_facility_location.py`: query-wide, keyed and
-  data-bound case tables (several keys, a NULL key, a multi-column and a relation key, a class with no kept row, data
-  upper and lower bounds, both under a `when`, a lifted floor, an empty interval), the no-row-kept ruling per class,
-  parent contexts, random problems, error and boundary tables, the infeasible text on both backends, the warning.
-- Error text: `test_a2_errors_are_the_solvers_word_for_word`, `test_a2_keyed_errors_are_the_solvers_word_for_word` and
-  `test_a2_a_nan_data_bound_is_the_solvers_word_for_word` in `test_direct_user_facing.py`.
+  decline, L0 among them, and forms that apply, keyed, with data bounds, a data weight and an `ABS` among them; late
+  NaN values and bounds, query-wide and keyed, and a too-large error, on the last of 5,000 rows).
+- Differential oracle: `test/decide/tests/test_direct_a2_single_facility_location.py`: query-wide, keyed, data-bound,
+  weighted, absolute and maximum-absolute case tables against the oracle; each ruled tie point derived by enumeration
+  (`test_a2_a_weighted_class_answers_the_ruled_point`, `test_a2_an_absolute_class_answers_the_ruled_point`, the
+  no-kept-row tests); parent contexts; random problems; error and boundary tables, a turning point past a DOUBLE
+  among them (`test_a2_a_turning_point_past_a_double_*`: a finite end answers it, an open end is too large); the
+  infeasible and unbounded texts on both backends; the warnings; HiGHS's refusal of a data weight.
+- Error text: `test_a2_*_word_for_word` in `test_direct_user_facing.py` (values, keyed values, NaN data bounds, NaN
+  weights, the unbounded error).
 - C++: `A2AppliesShapes` and `A2DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
-  `CheckCondition` branch, and the partition test against every other rule; the keyed scope's key in
-  `test_decidb_direct_ir.cpp`.
+  `CheckCondition` branch, and the partition test against every other rule; the keyed scope's key and the guarded
+  square weight in `test_decidb_direct_ir.cpp`.

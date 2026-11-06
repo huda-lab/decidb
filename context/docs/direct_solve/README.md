@@ -9,7 +9,8 @@ Five problem classes work: **S1**, "choose K rows by score" (count bounds on one
 gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions with a linear or one-square
 objective), **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions), and **N1**, "stay inside
 one sum of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows), and **A2**,
-"one shared value closest to every row" (one query-wide or keyed `REAL` decision under a squared loss). On 5M-row sources S1 is
+"one shared value closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or
+maximum absolute loss). On 5M-row sources S1 is
 about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. S1 and R1 also read a reducer's `by` key and a `per K:` clause, one group each; their per-group
 plans measured 50 to 98 and 15 to 16 times faster. N1 is 15 to 68 times faster at up to 800,000 rows, and needs no
 Gurobi license, where the solver path refuses a quadratic limit without one. The other 14 classes in the catalogue are not started.
@@ -40,7 +41,7 @@ Gurobi license, where the solver path refuses a quadratic limit without one. The
 | Class | Name | Catalogue status | Direct solve |
 |---|---|---|---|
 | [A1](rules/a1_separable_box/) | Separable box-constrained problem | Exact | **Works**, on by default |
-| [A2](rules/a2_single_facility_location/) | Single-facility location (1-D) | Exact | **Works** for one query-wide or keyed `REAL` decision under a squared loss, with constant or data bounds |
+| [A2](rules/a2_single_facility_location/) | Single-facility location (1-D) | Exact | **Works** for one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute loss, with constant or data bounds |
 | [A3](rules/a3_multilinear_box/) | Multilinear optimization over a box | Exact | Not started |
 | [A4](rules/a4_bounded_least_squares/) | Bounded-variable least squares | Prototype | Not started |
 | [A5](rules/a5_monotone/) | Monotone optimization | Exact | Not started |

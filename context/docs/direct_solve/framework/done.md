@@ -54,15 +54,17 @@ assertions in 82 cases.
   child. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
-  - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan order.
-    `DirectLayoutQuadraticPart` (P1) lays out a `DirectQuadraticPart` in the rule's first projection: its mask, the
-    sum of its linear coefficients per decision, and for each square the slope `w` and constant `t` of
-    `k*(w*x + t)^2`, each computed on the rows the part reads. It appends the check of each value that can fail to the
-    rule's list, and reads a constant one term at a time, never summed. `DirectFoldQuadratic` (P2) folds one decision's
-    `a` and `b` over the parts, each scaled by its sign and factor, and returns the part of `b` the linear terms make,
-    which the rule tests for a number past a DOUBLE; the rule applies the objective's sense. `DirectTurningPoint`
-    returns the turning point `-b / (2a)`, or for a whole-numbered decision the first integer whose next step no longer
-    improves (the smaller one on a tie), with its precision flag (Number-range warning, below).
+  - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan
+    order. `DirectLayoutQuadraticPart` (P1) lays out a `DirectQuadraticPart` in the rule's first projection: its mask,
+    the sum of its linear coefficients per decision, and for each square its weight `k`, slope `w` and constant `t` of
+    `k*(w*x + t)^2`, each computed on the rows the part reads; a weight read from the data is checked as the solver
+    checks it (NaN and infinity raise, NULL skips the row), and a constant one has no check. It appends the check of
+    each value that can fail to the rule's list, and reads a constant one term at a time, never summed.
+    `DirectFoldQuadratic` (P2) folds one decision's `a` and `b` over the parts, each scaled by its sign and factor, and
+    returns the part of `b` the linear terms make, which the rule tests for a number past a DOUBLE; the rule applies the
+    objective's sense. `DirectTurningPoint` returns the turning point `-b / (2a)`, or for a whole-numbered decision the
+    first integer whose next step no longer improves (the smaller one on a tie), with its precision flag (Number-range
+    warning, below).
   - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
     aggregate becomes a window over the whole partition, with the rule's group as the partition (S1 and N1). R1's own
     sink adds each aggregate to its hash aggregate with `DirectAggregateOf`, which the bound side tables use too.
@@ -114,19 +116,25 @@ assertions in 82 cases.
     satisfies.
   - **Terms of an objective part or a budget.** `DirectReadLinearPart` reads one linear part into a `DirectLinearPart`:
     its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
-    kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadSquareTerm` reads a linear form in one decision
-    squared under a constant coefficient, and declines a data coefficient, a zero or non-finite one, and a form in
-    two decisions. `DirectFoldConstantSum` folds a square's slope (its `inner_linear`) to the one constant every row
-    shares, reading through a NULL guard, and fails on a value that is not a finite constant. `DirectObjectivePartKept` returns the rows a part reads, those that the objective's `when` and the
-    part's own both keep. `DirectReadQuadraticPart` composes the four into a `DirectQuadraticPart` (linear terms, the
-    rows kept, constants and squares); how many squares a rule admits, and with which signs, is the rule's to check.
-    The header also holds `DirectNamesOf` and `DirectIsFiniteWhereKept`, described under Number messages.
+    kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadLinearForm` reads a linear form `w*x + t` in
+    one decision (its `inner.linear` and `inner.constant`, with their names) and declines a form in two decisions.
+    `DirectReadSquareTerm` reads a square of such a form under a weight, constant or read from the data, as signed
+    values (`DirectSquareTerm::weight`); `DirectReadAbsTerm` reads `ABS` of such a form the same way (`DirectAbsTerm`).
+    Neither judges the weight: a rule that needs a constant folds it. `DirectFoldConstantSum` folds signed values (a
+    square's weight or slope) to the one constant every row shares, reading through a NULL guard, and fails on a value
+    that is not a finite constant. `DirectObjectivePartKept` returns the rows a part reads, those that the objective's
+    `when` and the part's own both keep. `DirectReadQuadraticPart` composes the four into a `DirectQuadraticPart`
+    (linear terms, the rows kept, constants and squares); how many squares a rule admits, with which signs and weights,
+    is the rule's to check. An `ABS` term stays out of it, so a rule that calls it sees an `ABS` as a term it does not
+    read. The header also holds `DirectNamesOf` and `DirectIsFiniteWhereKept`, described under Number messages.
   - **Who calls what.** Each rule keeps its own policy around the readers. S1 and R1 call `DirectReadLinearPart` and
     `DirectObjectivePartKept`; S1 declines a filtered part, a non-linear term, a second decision and a coefficient that
     may raise beside other terms, and flattens the part per term. A1, N1 and A2 call `DirectReadQuadraticPart`, and N1
     reads the ball's square in its limit clause with `DirectReadSquareTerm`. N1 and A2 fold the objective square's slope
-    with `DirectFoldConstantSum`. A1, N1 and A2 sum a part's linear terms per decision in `DirectLayoutQuadraticPart`
-    and apply the part's sign and scale in `DirectFoldQuadratic` (Plan fragments, above). No rule keeps a copy of a reader.
+    with `DirectFoldConstantSum`; A1 and N1 fold its weight the same way and so decline one read from the data, which A2
+    takes. A2 reads an `ABS` term with `DirectReadAbsTerm`. A1, N1 and A2 sum a part's linear terms per decision in
+    `DirectLayoutQuadraticPart` and apply the part's sign and scale in `DirectFoldQuadratic` (Plan fragments, above). No
+    rule keeps a copy of a reader.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
   build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
@@ -142,7 +150,8 @@ assertions in 82 cases.
   scope projection (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`, and
   `DirectRowBoundMessage` for the same check as a per-row message) and `DirectWindowExtremum` are shared in
   `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a group key, or whose bound comes from
-  the data, needs them. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
+  the data, needs them. `DirectRunningSum` (R1 and A2) is a window sum over the rows up to the current one in a given
+  order, per partition. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
   projection: its coefficient, right side and ends, each computed only on the rows the clause keeps, and the checks of
   the coefficient and the right side, which pass on a dropped row because both values are NULL there.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
@@ -231,12 +240,13 @@ assertions in 82 cases.
     with the source row id, one block of the read. A side table leaves a recomputable source recomputed. Output row order and the
     choice among equal optima are not guaranteed. Tests: `test_rhs_aggregate_window.py`, `test_bound_side_tables.py`.
 - **NULL values.** A NULL is skipped where it is read, as on the solver path (deck p. 50). A reducer's NULL summand
-  arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of
-  `part.filter` into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM
-  adds nothing for it. A NULL limit or per-row bound is open: S1's `SourceLimit` reads it as no limit, R1's limits pass
-  over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and `DirectCheckRowBounds` and the singleton-row box
-  (`AdmittedInterval`) give the instance no bound. The driver strips every tag from the operators above the source
-  (`StripTagsAbove`), so EXPLAIN never prints one.
+  arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of `part.filter`
+  into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM adds nothing
+  for it: every coefficient, a square's weight and the implicit 1 of a term with no coefficient among them, each tagged
+  as a guard so a rule that needs the constant reads through it (`DecideUnguarded`). A NULL limit or per-row bound is
+  open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and
+  `DirectCheckRowBounds` and the singleton-row box (`AdmittedInterval`) give the instance no bound. The driver strips
+  every tag from the operators above the source (`StripTagsAbove`), so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
   (`NULL_GUARD_TAG` keeps a NULL guard out of the text). It names no row: a row's place in the input depends on the

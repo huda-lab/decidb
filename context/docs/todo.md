@@ -7,19 +7,17 @@ Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/a2_single_facility_location/definition.md`. Checks: `direct_solve/framework/todo.md` § How to work
 any task.
 
-Each batch finishes completely. Lanes: G3; G4 after G3.
+Each batch finishes completely. Lanes: B1 and G4 side by side.
 
 ## Owner decisions
 
 - [ ] A2-9 Data weights on the absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-9
 
-## G3. Weights and other losses
+## B1. Solver-path bugs found on the way (independent of A2)
 
-- [ ] A2-4 Data weights on the square — direct_solve/rules/a2_single_facility_location/todo.md § A2-4
-- [ ] A2-5 Absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-5
-- [ ] A2-6 Maximum absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-6
-- [ ] A2-7 L0 loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-7
+- [ ] BUG-51 A bad value under ABS worded as a bound — issues/bugs.md § BUG-51
+- [ ] BUG-52 A sum's own when and ABS on a dropped row — issues/bugs.md § BUG-52
 
-## G4. Measurement (the orchestrator, after G3)
+## G4. Measurement (the orchestrator)
 
 - [ ] A2-8 Benchmark — direct_solve/rules/a2_single_facility_location/todo.md § A2-8
