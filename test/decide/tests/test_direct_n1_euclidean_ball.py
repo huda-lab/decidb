@@ -138,6 +138,17 @@ def tightest_of_all(members, rows):
     return min(limits) if limits else None
 
 
+def sum_of_group(members, rows):
+    """The sum of the group's limits; a NULL is skipped, and a group of NULLs has no limit."""
+    limits = [row["l"] for row in members if row["l"] is not None]
+    return sum(limits) if limits else None
+
+
+def half_of_all(members, rows):
+    limits = [row["l"] for row in rows if row["l"] is not None]
+    return 0.5 * sum(limits) if limits else None
+
+
 def any_key(rows):
     return any(row["k"] is not None for row in rows)
 
@@ -185,6 +196,9 @@ BALLS = {
     "column_when": Ball("when f: SUM(POWER(x, 2)) <= l", group=where_f(everyone), limit=tightest_of_group),
     "column_sum_when": Ball("SUM(when f: POWER(x, 2)) <= l", group=where_f(everyone), limit=tightest_of_all),
     "column_expression": Ball("SUM(POWER(x, 2)) <= 25.0 + 0 * id"),
+    # A limit that is an aggregate of the group's rows, or of all rows, which the plan computes beside the ball's group.
+    "sum_by": Ball("SUM(POWER(x, 2)) by (k) <= SUM(l) by (k)", group=by_k, limit=sum_of_group),
+    "half_sum": Ball("SUM(POWER(x, 2)) <= 0.5 * SUM(l)", limit=half_of_all),
     # An aggregate over a sum with its own `when` is computed before the rule and read as a column.
     "aggregate_sum_when": Ball(
         "SUM(when f: POWER(x, 2)) <= 0.25 * SUM(l)",
@@ -382,6 +396,13 @@ add("column_limit_under_clause_when", MIXED, "column_when", "square")
 add("column_limit_under_sum_when", MIXED, "column_sum_when", "square")
 add("limit_expression_over_a_column", MIXED, "column_expression", "max")
 add("limit_aggregate_under_sum_when", MIXED, "aggregate_sum_when", "square")
+add("aggregate_limit_per_group", MIXED, "sum_by", "max")
+add("aggregate_limit_per_group_square", MIXED, "sum_by", "square")
+add("aggregate_limit_of_a_group_of_nulls_is_no_limit", NULL_LIMITS, "sum_by", "square")
+add("aggregate_limit_negative_in_one_group", NEGATIVE_IN_ONE_GROUP, "sum_by", "max")
+add("aggregate_limit_null_key_square", NULL_KEY_IMPROVING, "sum_by", "square")
+add("aggregate_limit_of_all_rows", MIXED, "half_sum", "max")
+add("aggregate_limit_of_all_rows_square", MIXED, "half_sum", "square")
 
 
 def _sql_body(case_):
@@ -548,7 +569,7 @@ ERROR_CASES = {
         "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x + y)",
     ),
     # A limit of one value is checked by the driver's row check; one that differs between rows is left as its group's
-    # tightest value, with a check of its own (`limit_invalid`).
+    # tightest value, with the check of what its aggregates read. A sum of limits that is NaN is the group's own check.
     "limit_nan_one_row": ("null_bound", "1.0", "2.0", "'NaN'", "'a'", "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"),
     "limit_nan_tightest": (
         "null_bound",
@@ -557,6 +578,14 @@ ERROR_CASES = {
         "CASE WHEN i = 1 THEN 'NaN' ELSE '4.0' END",
         "'a'",
         "SUM(POWER(x, 2)) by (k) <= l MAXIMIZE SUM(s * x)",
+    ),
+    "limit_nan_sum": (
+        "null_bound",
+        "1.0",
+        "2.0",
+        "CASE WHEN i = 0 THEN '-Infinity' ELSE 'Infinity' END",
+        "'a'",
+        "SUM(POWER(x, 2)) <= SUM(l) MAXIMIZE SUM(s * x)",
     ),
     "limit_minus_infinite": (
         "infeasible",

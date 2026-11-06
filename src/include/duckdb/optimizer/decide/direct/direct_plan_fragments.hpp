@@ -16,6 +16,7 @@ namespace duckdb {
 class Binder;
 class ClientContext;
 class LogicalAggregate;
+class LogicalWindow;
 class ExpressionBuilder;
 class Optimizer;
 
@@ -155,6 +156,22 @@ public:
 	//! on the rows where `reads` holds (null for every row), and returns the column that holds its result per group.
 	virtual ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
 	                          unique_ptr<Expression> reads) = 0;
+};
+
+//! The window form of a DirectGroupSink: each aggregate becomes a window over the whole partition
+//! (DirectWindowOfAggregate) added to `window`, and its column is the window's. `partition` gives each window the
+//! rule's group (the partition and nothing else, so every row of the group reads the same value).
+class DirectWindowSink final : public DirectGroupSink {
+public:
+	DirectWindowSink(LogicalWindow &window_p, std::function<void(BoundWindowExpression &)> partition_p)
+	    : window(window_p), partition(std::move(partition_p)) {
+	}
+	ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
+	                  unique_ptr<Expression> reads) override;
+
+private:
+	LogicalWindow &window;
+	std::function<void(BoundWindowExpression &)> partition;
 };
 
 //! What the rule reads of the bound once its group is computed, over the results: the limit as an upper and as a lower

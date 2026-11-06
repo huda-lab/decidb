@@ -881,6 +881,8 @@ duckdb::vector<Shape> N1AppliesShapes() {
 	    N1("a limit over a small factor that passes a DOUBLE as B / q", "SUM(1e-300 * POWER(x, 2)) <= 1e19"));
 	shapes.push_back(N1("a column limit", "SUM(POWER(x, 2)) <= cap"));
 	shapes.push_back(N1("a column limit per a column", "SUM(POWER(x, 2)) by (name) <= cap"));
+	shapes.push_back(N1("a limit left as an aggregate of the rows", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)"));
+	shapes.push_back(N1("a limit left as an aggregate of the group", "SUM(POWER(x, 2)) by (name) <= SUM(w) by (name)"));
 	// Scope.
 	shapes.push_back(N1("a key", "SUM(POWER(x, 2)) by (name) <= 25"));
 	shapes.push_back(N1("a class", "per flag: SUM(POWER(x, 2)) <= 25"));
@@ -952,8 +954,9 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a limit of minus 1e20", "SUM(POWER(x, 2)) <= -1e20"));
 	shapes.push_back(N1("an infinite limit", "SUM(POWER(x, 2)) <= 'inf'::DOUBLE"));
 	shapes.push_back(N1("a limit fixed only within the query", "SUM(POWER(x, 2)) <= txid_current()"));
-	shapes.push_back(N1("a limit left as an aggregate of the rows", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)"));
-	shapes.push_back(N1("a limit left as an aggregate of the group", "SUM(POWER(x, 2)) by (name) <= SUM(w) by (name)"));
+	shapes.push_back(
+	    N1("a limit left as an aggregate that is not a number", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)",
+	       [](DirectIR &ir) { ir.constraints[0].group_bound->upper->return_type = LogicalType::BOOLEAN; }));
 	// ProveBox.
 	shapes.push_back(N1("an upper bound", "x <= 2 AND SUM(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("an upper bound that would not bind", "x <= 50 AND SUM(POWER(x, 2)) <= 25"));

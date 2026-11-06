@@ -393,6 +393,14 @@ bool DirectGroupBoundIsReadable(const DirectIR &ir, const DecideGroupBound &boun
 	return true;
 }
 
+ColumnBinding DirectWindowSink::Add(const Expression &function, unique_ptr<Expression> argument,
+                                    unique_ptr<Expression> reads) {
+	auto aggregate = DirectWindowOfAggregate(function, std::move(argument), std::move(reads));
+	partition(*aggregate);
+	window.expressions.push_back(std::move(aggregate));
+	return ColumnBinding(window.window_index, window.expressions.size() - 1);
+}
+
 DirectGroupInputLayout DirectGroupLayout(const DecideGroupBound::Input &input, bool scoped) {
 	return {scoped || input.filter, input.argument != nullptr, input.invalid != nullptr};
 }

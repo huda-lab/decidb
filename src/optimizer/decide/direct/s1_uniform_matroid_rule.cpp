@@ -898,25 +898,8 @@ private:
 	}
 
 	//! Takes the aggregates of the group bounds into `window`, which is partitioned like the rank.
-	class RankWindowSink final : public DirectGroupSink {
-	public:
-		RankWindowSink(const PlanBuilder &builder_p, LogicalWindow &window_p) : builder(builder_p), window(window_p) {
-		}
-		ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
-		                  unique_ptr<Expression> reads) override {
-			auto aggregate = DirectWindowOfAggregate(function, std::move(argument), std::move(reads));
-			builder.AddScope(*aggregate);
-			window.expressions.push_back(std::move(aggregate));
-			return ColumnBinding(builder.window_index, window.expressions.size() - 1);
-		}
-
-	private:
-		const PlanBuilder &builder;
-		LogicalWindow &window;
-	};
-
 	void AddGroupBounds(LogicalWindow &window) const {
-		RankWindowSink sink(*this, window);
+		DirectWindowSink sink(window, [&](BoundWindowExpression &aggregate) { AddScope(aggregate); });
 		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, eligible_binding) : nullptr;
 		group_values.assign(condition.source_bounds.size(), DirectGroupValues());
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {

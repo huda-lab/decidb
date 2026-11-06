@@ -295,8 +295,7 @@ N1 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_n1_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: an INT decision, a limit whose coefficient reads the row, a ball
-    # off center, a box the projection onto the ball does not hold for, a limit from below, and a limit left as an
-    # aggregate of the rows.
+    # off center, a box the projection onto the ball does not hold for, and a limit from below.
     near_misses=(
         ("x(INT)", "SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "SUM(POWER(w*x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
@@ -304,12 +303,12 @@ N1 = RuleFixture(
         ("x(REAL)", "x <= 50 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(POWER(x, 2))"),
         ("x(REAL)", "x >= 1 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(p*x)"),
         ("x(REAL)", "SUM(POWER(x, 2)) >= 1 AND SUM(POWER(x, 2)) <= 25", "MINIMIZE SUM(p*x)"),
-        ("x(REAL)", "SUM(x*x) <= 0.5 * SUM(cap)", "MAXIMIZE SUM(p*x)"),
     ),
-    # Forms that look like near misses and apply: a limit read from the data, a box written out, a free domain, and a `by`
-    # key with a square.
+    # Forms that look like near misses and apply: a limit read from the data or left as an aggregate of the rows, a box
+    # written out, a free domain, and a `by` key with a square.
     near_miss_applies=(
         ("x(REAL)", "SUM(POWER(x, 2)) <= lim", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "SUM(x*x) <= 0.5 * SUM(cap)", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "x >= 0 AND SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "x >= -1e30 AND SUM(POWER(x, 2)) <= 25", "MAXIMIZE SUM(p*x)"),
         ("x(REAL)", "SUM(POWER(x, 2)) by (id) <= 25", "MINIMIZE SUM(POWER(x - w, 2))"),
