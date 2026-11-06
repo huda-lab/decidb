@@ -639,10 +639,10 @@ private:
 		auto a = Double(coefficients.a);
 		auto b = Double(coefficients.b);
 		auto zero = calc.Num(0.0);
-		// With a square the target -b / (2*K), and a row with no square has no objective at all. Without one the
-		// direction -b.
+		// With a square the target -b / (2*K), computed as (-0.5*b) / K: 2*K passes a DOUBLE for |K| above 9e307. A row
+		// with no square has no objective at all. Without one the direction -b.
 		auto target = condition.has_square ? calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero),
-		                                             calc.Div(calc.Neg(b), calc.Mul(calc.Num(2.0), a)), zero)
+		                                             calc.Div(calc.Mul(calc.Num(-0.5), b), a), zero)
 		                                   : calc.Neg(b);
 		auto value = condition.nonnegative ? calc.Max({target, zero}) : target;
 		// A row is in a ball when the clause keeps it and the group has a limit.

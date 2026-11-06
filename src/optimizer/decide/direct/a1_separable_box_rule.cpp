@@ -726,8 +726,10 @@ private:
 
 			// Convex: the turning point, clamped into the box (for whole numbers, the first integer whose next step
 			// no longer improves, which keeps the smaller one on a tie).
-			ExprPtr turning = whole ? calc.Fn("ceil", calc.Div(calc.Sub(calc.Neg(b), a), calc.Mul(calc.Num(2.0), a)))
-			                        : calc.Div(calc.Neg(b), calc.Mul(calc.Num(2.0), a));
+			// The halves are taken before the division: 2*a passes a DOUBLE for |a| above 9e307, and -0.5*b cannot.
+			auto half_down = calc.Mul(calc.Num(-0.5), b);
+			ExprPtr turning = whole ? calc.Fn("ceil", calc.Div(calc.Sub(half_down, calc.Mul(calc.Num(0.5), a)), a))
+			                        : calc.Div(half_down, a);
 			auto convex = calc.Min({calc.Max({turning, lower}), upper});
 			// Concave: the better endpoint, from the sign of f(upper) - f(lower) = (upper - lower) * s.
 			auto s = calc.Add(calc.Mul(a, calc.Add(upper, lower)), b);
