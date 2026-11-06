@@ -877,6 +877,8 @@ duckdb::vector<Shape> N1AppliesShapes() {
 	shapes.push_back(N1("a free domain", "x >= -1e30 AND SUM(POWER(x, 2)) <= 25"));
 	// The limit.
 	shapes.push_back(N1("a negative limit", "SUM(POWER(x, 2)) <= -1"));
+	shapes.push_back(
+	    N1("a limit over a small factor that passes a DOUBLE as B / q", "SUM(1e-300 * POWER(x, 2)) <= 1e19"));
 	shapes.push_back(N1("a column limit", "SUM(POWER(x, 2)) <= cap"));
 	shapes.push_back(N1("a column limit per a column", "SUM(POWER(x, 2)) by (name) <= cap"));
 	// Scope.
@@ -949,7 +951,6 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a limit of 1e20", "SUM(POWER(x, 2)) <= 1e20"));
 	shapes.push_back(N1("a limit of minus 1e20", "SUM(POWER(x, 2)) <= -1e20"));
 	shapes.push_back(N1("an infinite limit", "SUM(POWER(x, 2)) <= 'inf'::DOUBLE"));
-	shapes.push_back(N1("a radius past a DOUBLE", "SUM(1e-300 * POWER(x, 2)) <= 1e19"));
 	shapes.push_back(N1("a limit fixed only within the query", "SUM(POWER(x, 2)) <= txid_current()"));
 	shapes.push_back(N1("a limit left as an aggregate of the rows", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)"));
 	shapes.push_back(N1("a limit left as an aggregate of the group", "SUM(POWER(x, 2)) by (name) <= SUM(w) by (name)"));

@@ -167,14 +167,12 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 }
 
 //! A constant the solver reads as a number, or a value of the source row. A limit of magnitude 1e20 or more is where
-//! the solver stops reading a right side as a number, so those stay with the solver, and so does a ball whose radius
-//! leaves the DOUBLE range. A bound of its group's reducers (`<= sum(budget) by (k)`) reads their placeholders, not the
-//! source.
+//! the solver stops reading a right side as a number, so those stay with the solver. A bound of its group's reducers
+//! (`<= sum(budget) by (k)`) reads their placeholders, not the source.
 bool Rule::ProveLimitValue(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause,
                            Condition &condition) const {
 	if (TryEvaluateFoldableDouble(context, *clause.rhs, condition.limit, DIRECT_FINITE_CONSTANT)) {
-		return std::fabs(condition.limit) < DECIDE_EFFECTIVE_INFINITY &&
-		       std::isfinite(condition.limit / condition.square_factor);
+		return std::fabs(condition.limit) < DECIDE_EFFECTIVE_INFINITY;
 	}
 	if (!DirectIsSourceOnlyNumericMayRaise(*clause.rhs, ir.decide_index, ir.source_bindings)) {
 		return false;
@@ -432,7 +430,6 @@ private:
 	//! Columns of P3.
 	struct Targets {
 		Carried carried;
-		ColumnBinding raw_limit;
 		ColumnBinding limit;
 		ColumnBinding target;
 		ColumnBinding value;
@@ -655,8 +652,7 @@ private:
 			limit = Double(coefficients.raw_limit);
 			in_ball = And(in_ball, Not(calc.IsNull(limit)));
 		}
-		result.raw_limit = p3.Add(calc.Out(limit));
-		result.limit = p3.Add(calc.Out(calc.Div(limit, calc.Num(condition.square_factor))));
+		result.limit = p3.Add(calc.Out(limit));
 		result.target = p3.Add(calc.Out(target));
 		result.value = p3.Add(calc.Out(value));
 		result.in_ball = p3.Add(calc.Out(in_ball));
@@ -685,10 +681,11 @@ private:
 		checks.push_back(calc.Out(Boolean(targets.valid)));
 		checks.push_back(TooLarge(Double(targets.target)));
 		checks.push_back(TooLarge(squared_length));
-		auto negative = And(in_ball, calc.Cmp(ExpressionType::COMPARE_LESSTHAN, Double(targets.raw_limit), zero));
+		auto negative = And(in_ball, calc.Cmp(ExpressionType::COMPARE_LESSTHAN, limit, zero));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(negative), DirectInfeasibleErrorPredicate(optimizer)));
 		if (!condition.has_square) {
-			// A direction with no limit improves without end: outside every ball, or in a ball of infinite radius.
+			// A direction with no limit improves without end: outside every ball, or in a ball whose limit B the user
+			// wrote as infinite. B itself is tested: B / q can pass a DOUBLE where B does not.
 			auto no_limit = calc.If(
 			    in_ball, calc.Cmp(ExpressionType::COMPARE_EQUAL, limit, calc.Num(POSITIVE_INFINITY)), calc.Bool(true));
 			auto moves = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, value, zero);
@@ -703,9 +700,15 @@ private:
 	// P5: the answer
 	//===------------------------------------------------------------------===//
 
-	//! The radius over the length is sqrt(B / h). It is computed as sqrt(B) / sqrt(h), which stays in range where B / h
-	//! does not. A row outside every ball keeps its target, and with no square its direction is 0 (P4 raised
-	//! otherwise).
+	//! The ball's radius is sqrt(B / q), computed as sqrt(B) / sqrt(q): B / q passes a DOUBLE where B does not when q is
+	//! below 1. B is negative only on a row that P4 has raised for, so no square root is taken of a negative number.
+	ExprPtr Radius(const ExprPtr &limit) const {
+		return calc.Div(calc.Fn("sqrt", limit), calc.Num(std::sqrt(condition.square_factor)));
+	}
+
+	//! The scale is the radius over the length sqrt(h), computed as (value / sqrt(h)) * radius: the first factor is at
+	//! most 1, where sqrt(B) / sqrt(h) passes a DOUBLE when h is subnormal. A row outside every ball keeps its target,
+	//! and with no square its direction is 0 (P4 raised otherwise).
 	//! h below the normal range of a DOUBLE has lost precision, so a row that reads it through the scale, or finds it 0
 	//! with a value of its own, warns. A row with a square inside the ball returns its own value and reads no scale.
 	unique_ptr<Expression> LosesPrecision(const Lengths &lengths, const ExprPtr &total) const {
@@ -713,7 +716,8 @@ private:
 		auto has_value = Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, calc.Num(0.0)));
 		auto unstable = And(Boolean(lengths.in_ball), And(has_value, DirectBelowNormalRange(calc, total)));
 		if (condition.has_square) {
-			unstable = And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total, Double(lengths.limit)));
+			unstable = And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Fn("sqrt", total),
+			                                  Radius(Double(lengths.limit))));
 		}
 		return DirectWarnIf(calc, calc.Out(unstable));
 	}
@@ -723,10 +727,12 @@ private:
 		auto in_ball = Boolean(lengths.in_ball);
 		auto limit = Double(lengths.limit);
 		auto zero = calc.Num(0.0);
-		auto scaled = calc.Mul(value, calc.Div(calc.Fn("sqrt", limit), calc.Fn("sqrt", total)));
+		auto radius = Radius(limit);
+		auto length = calc.Fn("sqrt", total);
+		auto scaled = calc.Mul(calc.Div(value, length), radius);
 		ExprPtr answer;
 		if (condition.has_square) {
-			auto outside = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total, limit);
+			auto outside = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, length, radius);
 			answer = calc.If(And(in_ball, outside), scaled, value);
 		} else {
 			auto still = calc.Cmp(ExpressionType::COMPARE_EQUAL, total, zero);

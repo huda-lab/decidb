@@ -686,6 +686,37 @@ def test_n1_a_zero_answer_has_no_sign(decidb_cli, sign):
     assert math.copysign(1.0, _direct_values(decidb_cli, sql)[0]) == 1.0
 
 
+def _on_the_ball(values, q, limit):
+    """Whether sqrt(q) * |x| is the radius sqrt(limit), to rounding. `hypot` stays in range where the squares do not."""
+    return math.sqrt(q) * math.hypot(*values) == pytest.approx(math.sqrt(limit), rel=1e-12)
+
+
+@pytest.mark.correctness
+def test_n1_a_data_limit_over_a_small_factor_has_a_ball_though_b_over_q_passes_a_double(decidb_cli):
+    # The oracle's Gurobi reads a right side of 1e20 or more as infinite (status INF_OR_UNBD at B = 1e100), so this
+    # case is checked as a property: the maximum of positive scores lies on the ball. B / q = 1e310 is infinite.
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, 3.0::DOUBLE, 1e300::DOUBLE), (2, 4.0::DOUBLE, 1e300::DOUBLE)) t(id, s, l) "
+        "DECIDE x(REAL) SUCH THAT SUM(1e-10 * POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
+    )
+    values = _direct_values(decidb_cli, sql)
+    assert _on_the_ball(values, 1e-10, 1e300), values
+
+
+@pytest.mark.correctness
+def test_n1_a_subnormal_h_under_a_huge_limit_stays_inside_the_ball(decidb_cli):
+    # Scores 2^-537 and 2^-536 square to 2^-1074 and 2^-1072, so h = 5 * 2^-1074 is subnormal and exact: only the
+    # scale is under test. sqrt(B) / sqrt(h) passes a DOUBLE for B = 1e300, but (value / sqrt(h)) * sqrt(B) does not.
+    # A property check, for the oracle's reason above. The plan warns that h is below the normal range.
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, POWER(2.0::DOUBLE, -537), 1e300::DOUBLE), "
+        "(2, POWER(2.0::DOUBLE, -536), 1e300::DOUBLE)) t(id, s, l) "
+        "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
+    )
+    values = _direct_values(decidb_cli, sql, large_numbers=True)
+    assert _on_the_ball(values, 1.0, 1e300), values
+
+
 @pytest.mark.correctness
 def test_n1_scores_whose_squares_vanish_stay_at_zero(decidb_cli):
     # h underflows to 0 from nonzero scores: the formula's case h = 0 is x = 0, the point the solver also returns. Both
