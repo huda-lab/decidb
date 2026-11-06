@@ -415,6 +415,8 @@ A2 = RuleFixture(
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE SUM(ABS(c - p))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE MAX(w * ABS(c - p))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE MAX(ABS(c - p))"),
+        # The L0 norm is declined (the IR marks it not proved), so the solver keeps it.
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE norm(c - p, 0)"),
         # A weight fixed only within the query is no value of the source row.
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(txid_current() * POWER(c - p, 2))"),
         # An objective `when` that is not a source predicate: on the objective and on its sum.
