@@ -46,6 +46,34 @@ unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Express
 	return calc.Out(term);
 }
 
+ColumnBinding DirectProjectionStage::Add(unique_ptr<Expression> expression) {
+	ColumnBinding binding(index, expressions.size());
+	expressions.push_back(std::move(expression));
+	return binding;
+}
+
+ColumnBinding DirectProjectionStage::Add(const ExprPtr &expression) {
+	return Add(expression->Copy());
+}
+
+unique_ptr<LogicalOperator> DirectProjectionStage::Finish(unique_ptr<LogicalOperator> child) {
+	auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
+	projection->children.push_back(std::move(child));
+	return std::move(projection);
+}
+
+unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSignedValue> &values,
+                                   const std::function<unique_ptr<Expression>(const Expression &)> &over) {
+	ExpressionBuilder calc(optimizer.context);
+	unique_ptr<Expression> total;
+	for (auto &value : values) {
+		auto term =
+		    DirectScaledTerm(optimizer, over ? over(*value.expr) : value.expr->Copy(), value.sign, false, 1.0, false);
+		total = total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
+	}
+	return total;
+}
+
 unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_ptr<LogicalOperator> child,
                                                  const vector<ExprPtr> &groups,
                                                  vector<unique_ptr<Expression>> aggregates) {

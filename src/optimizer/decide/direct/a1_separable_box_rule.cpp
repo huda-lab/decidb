@@ -256,25 +256,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 // Plan
 //===--------------------------------------------------------------------===//
 
-//! One projection being assembled.
-struct Stage {
-	explicit Stage(idx_t index_p) : index(index_p) {
-	}
-	idx_t index;
-	vector<unique_ptr<Expression>> expressions;
-
-	ColumnBinding Add(unique_ptr<Expression> expression) {
-		ColumnBinding binding(index, expressions.size());
-		expressions.push_back(std::move(expression));
-		return binding;
-	}
-	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child) {
-		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
-		projection->children.push_back(std::move(child));
-		return std::move(projection);
-	}
-};
-
 //! Builds the relational plan for one A1 problem whose condition holds, stage by stage. Each stage is one projection
 //! that reads only the columns of the stage before it:
 //!
@@ -313,7 +294,7 @@ public:
 		for (idx_t i = 0; i < source_bindings.size() + condition.decisions.size(); i++) {
 			substitute.slot_map.push_back(i);
 		}
-		Stage p5(binder.GenerateTableIndex());
+		DirectProjectionStage p5(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			p5.Add(calc.Out(calc.Col(source_types[i], stages.passthrough[i])));
 		}
@@ -391,26 +372,26 @@ private:
 	};
 
 	Stages RunStages(unique_ptr<LogicalOperator> source) const {
-		Stage p1(binder.GenerateTableIndex());
+		DirectProjectionStage p1(binder.GenerateTableIndex());
 		vector<unique_ptr<Expression>> checks;
 		Raw raw;
 		LayoutRawValues(p1, checks, raw);
 		Stages stages;
 		stages.plan = p1.Finish(std::move(source));
 
-		Stage p2(binder.GenerateTableIndex());
+		DirectProjectionStage p2(binder.GenerateTableIndex());
 		Bounds bounds;
 		auto passthrough2 = Passthrough(p2, raw.source);
 		ComputeBounds(p2, raw, checks, bounds);
 		stages.plan = p2.Finish(std::move(stages.plan));
 
-		Stage p3(binder.GenerateTableIndex());
+		DirectProjectionStage p3(binder.GenerateTableIndex());
 		auto passthrough3 = Passthrough(p3, passthrough2);
 		Box box;
 		ComputeBox(p3, bounds, box);
 		stages.plan = p3.Finish(std::move(stages.plan));
 
-		Stage p4(binder.GenerateTableIndex());
+		DirectProjectionStage p4(binder.GenerateTableIndex());
 		stages.passthrough = Passthrough(p4, passthrough3);
 		ComputeAnswers(p4, box, stages.answers);
 		stages.plan = p4.Finish(std::move(stages.plan));
@@ -424,7 +405,7 @@ private:
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
 
-	vector<ColumnBinding> Passthrough(Stage &stage, const vector<ColumnBinding> &columns) const {
+	vector<ColumnBinding> Passthrough(DirectProjectionStage &stage, const vector<ColumnBinding> &columns) const {
 		vector<ColumnBinding> result;
 		for (idx_t i = 0; i < columns.size(); i++) {
 			result.push_back(stage.Add(calc.Out(calc.Col(source_types[i], columns[i]))));
@@ -432,46 +413,11 @@ private:
 		return result;
 	}
 
-	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none.
-	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values) const {
-		unique_ptr<Expression> total;
-		for (auto &value : values) {
-			auto term = DirectScaledTerm(optimizer, value.expr->Copy(), value.sign, false, 1.0, false);
-			total =
-			    total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
-		}
-		return total;
-	}
-
-	//! The check of a raw value of P1, evaluated over P1: it raises what DirectNumberMessage names, reading the values
-	//! the number is computed from in the source columns P1 carries first. `values` are what the number is made of
-	//! (with the part's factor, when `scaled`); null when they are finite constants, which no row can fail
-	//! (DirectIsFiniteWhereKept).
-	unique_ptr<Expression> ValidNumber(const Stage &p1, ColumnBinding number, const DirectNumberNames &names,
-	                                   const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
-	                                   bool divides = false) const {
-		if (DirectIsFiniteWhereKept(optimizer, values, scaled, scale, divides)) {
-			return nullptr;
-		}
-		auto message =
-		    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), names, [&](const Expression &input) {
-			    return calc.Wrap(DirectOverProjection(input, source_bindings, p1.index));
-		    });
-		return DirectRaiseMessage(optimizer, calc, message);
-	}
-
-	//! The check of a number computed from values checked before it: past a DOUBLE it names the objective.
-	unique_ptr<Expression> TooLarge(ColumnBinding number) const {
-		return DirectRaiseMessage(
-		    optimizer, calc,
-		    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), condition.objective_written));
-	}
-
 	//===------------------------------------------------------------------===//
 	// P1: raw values
 	//===------------------------------------------------------------------===//
 
-	void LayoutRawValues(Stage &p1, vector<unique_ptr<Expression>> &checks, Raw &raw) const {
+	void LayoutRawValues(DirectProjectionStage &p1, vector<unique_ptr<Expression>> &checks, Raw &raw) const {
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			raw.source.push_back(p1.Add(calc.Out(calc.Col(source_types[i], source_bindings[i]))));
 		}
@@ -482,7 +428,7 @@ private:
 				return clause.when ? DirectOnKeptRows(calc, calc.Wrap(DirectActiveWhen(calc, clause.when.get())), value)
 				                   : value;
 			};
-			auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(clause.coefficient)))));
+			auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient)))));
 			auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Of(*clause.rhs), LogicalType::DOUBLE))));
 			columns.lower = p1.Add(calc.Out(on_kept(calc.Of(*clause.lower))));
 			columns.upper = p1.Add(calc.Out(on_kept(calc.Of(*clause.upper))));
@@ -496,7 +442,8 @@ private:
 				                                   std::move(check))
 				           : std::move(check);
 			};
-			if (auto check = ValidNumber(p1, coefficient, clause.coefficient_names, clause.coefficient)) {
+			if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient,
+			                                   source_bindings, p1.index)) {
 				checks.push_back(read_on(std::move(check)));
 			}
 			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
@@ -529,7 +476,7 @@ private:
 		}
 	}
 
-	void AddObjectiveValues(Stage &p1, vector<unique_ptr<Expression>> &all_checks, const Part &part,
+	void AddObjectiveValues(DirectProjectionStage &p1, vector<unique_ptr<Expression>> &all_checks, const Part &part,
 	                        Raw::PartColumns &columns, const ExprPtr &kept) const {
 		// A value is computed and checked only on the rows the part keeps.
 		vector<unique_ptr<Expression>> checks;
@@ -555,8 +502,9 @@ private:
 				                                        part.linear.scaled, part.linear.scale, part.linear.divides));
 				vector<DirectSignedValue> read;
 				read.push_back({constant.sign, constant.value->Copy()});
-				if (auto check = ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), constant.value_names, read,
-				                             part.linear.scaled, part.linear.scale, part.linear.divides)) {
+				if (auto check = DirectCheckNumber(optimizer, p1.Add(calc.Out(on_kept(value))), constant.value_names,
+				                                   read, source_bindings, p1.index, part.linear.scaled,
+				                                   part.linear.scale, part.linear.divides)) {
 					constant_checks.push_back(std::move(check));
 				}
 			} else {
@@ -564,13 +512,15 @@ private:
 				Raw::SquareColumns square;
 				square.decision = read.decision;
 				square.scale = read.sign * read.scale;
-				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(read.inner_linear)))));
-				if (auto check = ValidNumber(p1, square.linear, read.inner_linear_names, read.inner_linear)) {
+				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, read.inner_linear)))));
+				if (auto check = DirectCheckNumber(optimizer, square.linear, read.inner_linear_names, read.inner_linear,
+				                                   source_bindings, p1.index)) {
 					checks.push_back(std::move(check));
 				}
 				if (!read.inner_constant.empty()) {
-					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(read.inner_constant)))));
-					if (auto check = ValidNumber(p1, square.constant, read.inner_constant_names, read.inner_constant)) {
+					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, read.inner_constant)))));
+					if (auto check = DirectCheckNumber(optimizer, square.constant, read.inner_constant_names,
+					                                   read.inner_constant, source_bindings, p1.index)) {
 						checks.push_back(std::move(check));
 					}
 				} else {
@@ -584,7 +534,8 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(calc.Out(on_kept(linear_sums[d])));
-			if (auto check = ValidNumber(p1, binding, part.linear.names[d], linear_values[d])) {
+			if (auto check = DirectCheckNumber(optimizer, binding, part.linear.names[d], linear_values[d],
+			                                   source_bindings, p1.index)) {
 				checks.push_back(std::move(check));
 			}
 			columns.linear_decision.push_back(d);
@@ -605,7 +556,8 @@ private:
 	// P2: per-clause bounds, objective coefficients, raw-value checks
 	//===------------------------------------------------------------------===//
 
-	void ComputeBounds(Stage &p2, const Raw &raw, vector<unique_ptr<Expression>> &checks, Bounds &bounds) const {
+	void ComputeBounds(DirectProjectionStage &p2, const Raw &raw, vector<unique_ptr<Expression>> &checks,
+	                   Bounds &bounds) const {
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			ExprPtr lower, upper;
 			DirectClauseBounds(calc, raw.clauses[j], lower, upper);
@@ -674,8 +626,7 @@ private:
 				linear_total = calc.Add(linear_total, linear_scaled);
 			}
 			if (has_linear) {
-				checks.push_back(DirectRaiseMessage(
-				    optimizer, calc, DirectNumberMessage(calc, linear_total, condition.objective_written)));
+				checks.push_back(DirectRaiseTooLarge(optimizer, linear_total, condition.objective_written));
 			}
 			bounds.a.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), a_total))));
 			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), b_total))));
@@ -688,7 +639,7 @@ private:
 	// P3: each decision's box
 	//===------------------------------------------------------------------===//
 
-	void ComputeBox(Stage &p3, const Bounds &bounds, Box &box) const {
+	void ComputeBox(DirectProjectionStage &p3, const Bounds &bounds, Box &box) const {
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			vector<ColumnBinding> clause_lowers, clause_uppers;
 			for (idx_t j = 0; j < condition.clauses.size(); j++) {
@@ -712,7 +663,7 @@ private:
 	// P4: each decision's answer
 	//===------------------------------------------------------------------===//
 
-	void ComputeAnswers(Stage &p4, const Box &box, Answers &answers) const {
+	void ComputeAnswers(DirectProjectionStage &p4, const Box &box, Answers &answers) const {
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto lower = calc.Col(LogicalType::DOUBLE, box.lower[d]);
 			auto upper = calc.Col(LogicalType::DOUBLE, box.upper[d]);
@@ -786,8 +737,10 @@ private:
 			auto value = [&]() {
 				return calc.Col(LogicalType::DOUBLE, answers.value[d]);
 			};
-			checks.push_back(TooLarge(answers.a[d]));
-			checks.push_back(TooLarge(answers.b[d]));
+			checks.push_back(DirectRaiseTooLarge(optimizer, calc.Col(LogicalType::DOUBLE, answers.a[d]),
+			                                     condition.objective_written));
+			checks.push_back(DirectRaiseTooLarge(optimizer, calc.Col(LogicalType::DOUBLE, answers.b[d]),
+			                                     condition.objective_written));
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
 			                               DirectInfeasibleErrorPredicate(optimizer)));
 			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),

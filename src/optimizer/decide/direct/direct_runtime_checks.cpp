@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "duckdb/common/decide_value_messages.hpp"
+#include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -82,6 +83,26 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
 	return DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
 	                     DirectErrorPredicate(optimizer, calc.Out(message)));
+}
+
+unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const string &clause) {
+	ExpressionBuilder calc(optimizer.context);
+	return DirectRaiseMessage(optimizer, calc, DirectNumberMessage(calc, number, clause));
+}
+
+unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
+                                         const vector<DirectSignedValue> &values,
+                                         const vector<ColumnBinding> &source_bindings, idx_t projection_index,
+                                         bool scaled, double scale, bool divides) {
+	if (DirectIsFiniteWhereKept(optimizer, values, scaled, scale, divides)) {
+		return nullptr;
+	}
+	ExpressionBuilder calc(optimizer.context);
+	auto message =
+	    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), names, [&](const Expression &input) {
+		    return calc.Wrap(DirectOverProjection(input, source_bindings, projection_index));
+	    });
+	return DirectRaiseMessage(optimizer, calc, message);
 }
 
 unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,

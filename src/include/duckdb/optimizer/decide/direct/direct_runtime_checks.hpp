@@ -12,6 +12,7 @@ namespace duckdb {
 
 class ExpressionBuilder;
 class Optimizer;
+struct DirectSignedValue;
 
 //! Runtime checks of direct-solve plans and the messages they raise: BOOLEAN expressions that evaluate to true for an
 //! acceptable value and raise the solver's error otherwise, and the text of those errors. None of them knows which
@@ -62,6 +63,19 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 //! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
 //! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause);
+
+//! The check of a number the plan computes from values checked before it: it raises TOO_LARGE naming `clause` when
+//! `number` (a DOUBLE) is past the DOUBLE range, and passes a NULL.
+unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const string &clause);
+
+//! The check of a raw value of a projection: `number`, a DOUBLE column of the projection `projection_index`, which
+//! carries the source first (`source_bindings`). It raises what DirectNumberMessage names, reading the values the
+//! number is made of in those source columns. `values` are what the number is made of (with the part's factor, when
+//! `scaled`). Null when they are finite constants, which no row can fail (DirectIsFiniteWhereKept).
+unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
+                                         const vector<DirectSignedValue> &values,
+                                         const vector<ColumnBinding> &source_bindings, idx_t projection_index,
+                                         bool scaled = false, double scale = 1.0, bool divides = false);
 
 //! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
 //! nothing there, as on the solver path.

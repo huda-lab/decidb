@@ -247,6 +247,12 @@ ExprPtr ExpressionBuilder::Min(const vector<ExprPtr> &values) const {
 ExprPtr ExpressionBuilder::Max(const vector<ExprPtr> &values) const {
 	return Extremum("greatest", values);
 }
+ExprPtr ExpressionBuilder::And(const ExprPtr &a, const ExprPtr &b) const {
+	return If(a, b, Bool(false));
+}
+ExprPtr ExpressionBuilder::Not(const ExprPtr &a) const {
+	return If(a, Bool(false), Bool(true));
+}
 ExprPtr ExpressionBuilder::Any(const vector<ExprPtr> &conditions) const {
 	ExprPtr result = Bool(false);
 	for (idx_t i = conditions.size(); i > 0; i--) {

@@ -131,6 +131,11 @@ public:
 	ExprPtr If(const ExprPtr &condition, const ExprPtr &then_value, const ExprPtr &else_value) const;
 	ExprPtr Min(const vector<ExprPtr> &values) const;
 	ExprPtr Max(const vector<ExprPtr> &values) const;
+	//! `b` where `a` is true, and false elsewhere (a NULL `a` is false), as a CASE: `b` is evaluated only where `a`
+	//! holds.
+	ExprPtr And(const ExprPtr &a, const ExprPtr &b) const;
+	//! True unless `a` is true (a NULL `a` gives true).
+	ExprPtr Not(const ExprPtr &a) const;
 	//! True when any condition is true; false for none.
 	ExprPtr Any(const vector<ExprPtr> &conditions) const;
 

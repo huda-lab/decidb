@@ -32,6 +32,29 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
 unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
                                         double scale, bool divides);
 
+//! One projection under construction: each column is added as an expression and gets its binding at once, and the
+//! stage becomes a LogicalProjection over a child.
+class DirectProjectionStage {
+public:
+	explicit DirectProjectionStage(idx_t index_p) : index(index_p) {
+	}
+	//! The projection's table index.
+	const idx_t index;
+
+	ColumnBinding Add(unique_ptr<Expression> expression);
+	//! The same, for a value of the ExpressionBuilder; the stage keeps a copy.
+	ColumnBinding Add(const ExprPtr &expression);
+	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child);
+
+private:
+	vector<unique_ptr<Expression>> expressions;
+};
+
+//! `sum(sign * value)` over proved values, each read as DOUBLE (DirectScaledTerm); null for none. `over` re-points a
+//! value before it is read (null: the value as it is).
+unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSignedValue> &values,
+                                   const std::function<unique_ptr<Expression>(const Expression &)> &over = nullptr);
+
 //! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for an
 //! operator above that projection to read it.
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,

@@ -279,25 +279,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 // Plan
 //===--------------------------------------------------------------------===//
 
-//! One projection being assembled.
-struct Stage {
-	explicit Stage(idx_t index_p) : index(index_p) {
-	}
-	idx_t index;
-	vector<unique_ptr<Expression>> expressions;
-
-	ColumnBinding Add(unique_ptr<Expression> expression) {
-		ColumnBinding binding(index, expressions.size());
-		expressions.push_back(std::move(expression));
-		return binding;
-	}
-	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child) {
-		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
-		projection->children.push_back(std::move(child));
-		return std::move(projection);
-	}
-};
-
 //! Builds the relational plan for one N1 problem whose condition holds, over one read of the source. Each stage reads
 //! only the columns of the stage before it; a window passes its child's columns on as they are.
 //!
@@ -341,11 +322,11 @@ public:
 		from_scope.keys = state.keys;
 		from_scope.key_types = state.key_types;
 
-		Stage p1(binder.GenerateTableIndex());
+		DirectProjectionStage p1(binder.GenerateTableIndex());
 		auto raw = LayoutRawValues(p1, from_scope, state.state_index);
 		auto plan = p1.Finish(std::move(state.plan));
 
-		Stage p2(binder.GenerateTableIndex());
+		DirectProjectionStage p2(binder.GenerateTableIndex());
 		auto coefficients = ComputeCoefficients(p2, raw);
 		plan = p2.Finish(std::move(plan));
 		auto carried = coefficients.carried;
@@ -361,11 +342,11 @@ public:
 			coefficients.raw_limit = ColumnBinding(window_index, 0);
 		}
 
-		Stage p3(binder.GenerateTableIndex());
+		DirectProjectionStage p3(binder.GenerateTableIndex());
 		auto targets = ComputeTargets(p3, coefficients);
 		plan = p3.Finish(std::move(plan));
 
-		Stage p4(binder.GenerateTableIndex());
+		DirectProjectionStage p4(binder.GenerateTableIndex());
 		auto lengths = ComputeLengths(p4, targets);
 		plan = p4.Finish(std::move(plan));
 
@@ -376,7 +357,7 @@ public:
 		    DirectWindowExtremum(optimizer, "sum", calc.Out(calc.Col(LogicalType::DOUBLE, lengths.squared_length)))));
 		window->children.push_back(std::move(plan));
 
-		Stage p5(binder.GenerateTableIndex());
+		DirectProjectionStage p5(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			p5.Add(calc.Out(calc.Col(source_types[i], lengths.carried.source[i])));
 		}
@@ -384,7 +365,7 @@ public:
 		p5.Add(Answer(lengths, total));
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, lengths.valid)));
-		checks.push_back(TooLarge(total));
+		checks.push_back(DirectRaiseTooLarge(optimizer, total, condition.objective_written));
 		checks.push_back(LosesPrecision(lengths, total));
 		p5.Add(DirectAllHold(calc, std::move(checks)));
 
@@ -465,14 +446,8 @@ private:
 	ExprPtr Boolean(ColumnBinding binding) const {
 		return calc.Col(LogicalType::BOOLEAN, binding);
 	}
-	ExprPtr And(const ExprPtr &a, const ExprPtr &b) const {
-		return calc.If(a, b, calc.Bool(false));
-	}
-	ExprPtr Not(const ExprPtr &a) const {
-		return calc.If(a, calc.Bool(false), calc.Bool(true));
-	}
 
-	Carried Forward(Stage &stage, const Carried &from) const {
+	Carried Forward(DirectProjectionStage &stage, const Carried &from) const {
 		Carried to;
 		for (idx_t i = 0; i < from.source.size(); i++) {
 			to.source.push_back(stage.Add(calc.Out(calc.Col(source_types[i], from.source[i]))));
@@ -502,40 +477,11 @@ private:
 		return index == DConstants::INVALID_INDEX ? expr.Copy() : DirectOverProjection(expr, source_bindings, index);
 	}
 
-	//! `sum(sign * value)` over the proved values, read as DOUBLE.
-	ExprPtr SumOf(const vector<DirectSignedValue> &values, idx_t index) const {
-		ExprPtr total;
-		for (auto &value : values) {
-			auto term = calc.Wrap(DirectScaledTerm(optimizer, Over(*value.expr, index), value.sign, false, 1.0, false));
-			total = total ? calc.Add(total, term) : term;
-		}
-		return total;
-	}
-
-	//! The check of a raw value of P1, over P1: null when the values it is made of are finite constants, which no row
-	//! can fail (DirectIsFiniteWhereKept).
-	void CheckNumber(const Stage &p1, Raw &raw, ColumnBinding number, const DirectNumberNames &names,
-	                 const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
-	                 bool divides = false) const {
-		if (DirectIsFiniteWhereKept(optimizer, values, scaled, scale, divides)) {
-			return;
-		}
-		auto message = DirectNumberMessage(calc, Double(number), names, [&](const Expression &input) {
-			return calc.Wrap(DirectOverProjection(input, source_bindings, p1.index));
-		});
-		raw.checks.push_back(DirectRaiseMessage(optimizer, calc, message));
-	}
-
-	//! The check of a number computed from values checked before it: past a DOUBLE it names the objective.
-	unique_ptr<Expression> TooLarge(const ExprPtr &number) const {
-		return DirectRaiseMessage(optimizer, calc, DirectNumberMessage(calc, number, condition.objective_written));
-	}
-
 	//===------------------------------------------------------------------===//
 	// P1: raw values
 	//===------------------------------------------------------------------===//
 
-	Raw LayoutRawValues(Stage &p1, const Carried &from_scope, idx_t state_index) const {
+	Raw LayoutRawValues(DirectProjectionStage &p1, const Carried &from_scope, idx_t state_index) const {
 		Raw raw;
 		raw.carried = Forward(p1, from_scope);
 		if (condition.limit_value) {
@@ -553,7 +499,7 @@ private:
 		return raw;
 	}
 
-	RawPart LayoutPart(Stage &p1, Raw &raw, const Part &part, idx_t state_index) const {
+	RawPart LayoutPart(DirectProjectionStage &p1, Raw &raw, const Part &part, idx_t state_index) const {
 		RawPart columns;
 		// A value is computed and checked only on the rows the part keeps.
 		ExprPtr kept;
@@ -565,21 +511,33 @@ private:
 		auto on_kept = [&](const ExprPtr &value) {
 			return p1.Add(calc.Out(DirectOnKeptRows(calc, kept, value)));
 		};
+		auto over_state = [&](const Expression &value) {
+			return Over(value, state_index);
+		};
+		auto check_number = [&](ColumnBinding number, const DirectNumberNames &names,
+		                        const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
+		                        bool divides = false) {
+			if (auto check = DirectCheckNumber(optimizer, number, names, values, source_bindings, p1.index, scaled,
+			                                   scale, divides)) {
+				raw.checks.push_back(std::move(check));
+			}
+		};
 		vector<DirectSignedValue> linear;
 		for (auto &term : part.linear.terms) {
 			linear.push_back({term.sign, term.coefficient->Copy()});
 		}
 		if (!linear.empty()) {
 			columns.has_linear = true;
-			columns.linear = on_kept(SumOf(linear, state_index));
-			CheckNumber(p1, raw, columns.linear, part.linear.names[0], linear);
+			columns.linear = on_kept(calc.Wrap(DirectSumOf(optimizer, linear, over_state)));
+			check_number(columns.linear, part.linear.names[0], linear);
 		}
 		if (part.has_square) {
-			columns.w = on_kept(SumOf(part.square.inner_linear, state_index));
+			columns.w = on_kept(calc.Wrap(DirectSumOf(optimizer, part.square.inner_linear, over_state)));
 			auto &constant = part.square.inner_constant;
-			columns.t = on_kept(constant.empty() ? calc.Num(0.0) : SumOf(constant, state_index));
+			columns.t =
+			    on_kept(constant.empty() ? calc.Num(0.0) : calc.Wrap(DirectSumOf(optimizer, constant, over_state)));
 			if (!constant.empty()) {
-				CheckNumber(p1, raw, columns.t, part.square.inner_constant_names, constant);
+				check_number(columns.t, part.square.inner_constant_names, constant);
 			}
 		}
 		// A constant adds nothing to the answer, so like the solver path it is read one term at a time, with the part's
@@ -589,8 +547,8 @@ private:
 			                                        part.linear.scaled, part.linear.scale, part.linear.divides));
 			vector<DirectSignedValue> read;
 			read.push_back({term.sign, term.value->Copy()});
-			CheckNumber(p1, raw, on_kept(value), term.value_names, read, part.linear.scaled, part.linear.scale,
-			            part.linear.divides);
+			check_number(on_kept(value), term.value_names, read, part.linear.scaled, part.linear.scale,
+			             part.linear.divides);
 		}
 		return columns;
 	}
@@ -599,7 +557,7 @@ private:
 	// P2: K and b of the row, oriented as a minimum
 	//===------------------------------------------------------------------===//
 
-	Coefficients ComputeCoefficients(Stage &p2, Raw &raw) const {
+	Coefficients ComputeCoefficients(DirectProjectionStage &p2, Raw &raw) const {
 		Coefficients result;
 		result.carried = Forward(p2, raw.carried);
 		if (condition.limit_value) {
@@ -639,7 +597,7 @@ private:
 	// P3: the row's target or direction, and its ball
 	//===------------------------------------------------------------------===//
 
-	Targets ComputeTargets(Stage &p3, const Coefficients &coefficients) const {
+	Targets ComputeTargets(DirectProjectionStage &p3, const Coefficients &coefficients) const {
 		Targets result;
 		result.carried = Forward(p3, coefficients.carried);
 		auto a = Double(coefficients.a);
@@ -656,7 +614,7 @@ private:
 		ExprPtr limit = calc.Num(condition.limit);
 		if (condition.limit_value) {
 			limit = Double(coefficients.raw_limit);
-			in_ball = And(in_ball, Not(calc.IsNull(limit)));
+			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
 		}
 		result.limit = p3.Add(calc.Out(limit));
 		result.target = p3.Add(calc.Out(target));
@@ -670,7 +628,7 @@ private:
 	// P4: the squared length, and the checks of a row
 	//===------------------------------------------------------------------===//
 
-	Lengths ComputeLengths(Stage &p4, const Targets &targets) const {
+	Lengths ComputeLengths(DirectProjectionStage &p4, const Targets &targets) const {
 		Lengths result;
 		result.carried = Forward(p4, targets.carried);
 		auto value = Double(targets.value);
@@ -685,9 +643,9 @@ private:
 
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(targets.valid)));
-		checks.push_back(TooLarge(Double(targets.target)));
-		checks.push_back(TooLarge(squared_length));
-		auto negative = And(in_ball, calc.Cmp(ExpressionType::COMPARE_LESSTHAN, limit, zero));
+		checks.push_back(DirectRaiseTooLarge(optimizer, Double(targets.target), condition.objective_written));
+		checks.push_back(DirectRaiseTooLarge(optimizer, squared_length, condition.objective_written));
+		auto negative = calc.And(in_ball, calc.Cmp(ExpressionType::COMPARE_LESSTHAN, limit, zero));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(negative), DirectInfeasibleErrorPredicate(optimizer)));
 		if (!condition.has_square) {
 			// A direction with no limit improves without end: outside every ball, or in a ball whose limit B the user
@@ -696,7 +654,7 @@ private:
 			    in_ball, calc.Cmp(ExpressionType::COMPARE_EQUAL, limit, calc.Num(POSITIVE_INFINITY)), calc.Bool(true));
 			auto moves = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, value, zero);
 			checks.push_back(
-			    DirectRaiseIf(calc, calc.Out(And(no_limit, moves)), DirectUnboundedErrorPredicate(optimizer)));
+			    DirectRaiseIf(calc, calc.Out(calc.And(no_limit, moves)), DirectUnboundedErrorPredicate(optimizer)));
 		}
 		result.valid = p4.Add(DirectAllHold(calc, std::move(checks)));
 		return result;
@@ -719,11 +677,11 @@ private:
 	//! with a value of its own, warns. A row with a square inside the ball returns its own value and reads no scale.
 	unique_ptr<Expression> LosesPrecision(const Lengths &lengths, const ExprPtr &total) const {
 		auto value = Double(lengths.value);
-		auto has_value = Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, calc.Num(0.0)));
-		auto unstable = And(Boolean(lengths.in_ball), And(has_value, DirectBelowNormalRange(calc, total)));
+		auto has_value = calc.Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, calc.Num(0.0)));
+		auto unstable = calc.And(Boolean(lengths.in_ball), calc.And(has_value, DirectBelowNormalRange(calc, total)));
 		if (condition.has_square) {
-			unstable = And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Fn("sqrt", total),
-			                                  Radius(Double(lengths.limit))));
+			unstable = calc.And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Fn("sqrt", total),
+			                                       Radius(Double(lengths.limit))));
 		}
 		return DirectWarnIf(calc, calc.Out(unstable));
 	}
@@ -739,10 +697,10 @@ private:
 		ExprPtr answer;
 		if (condition.has_square) {
 			auto outside = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, length, radius);
-			answer = calc.If(And(in_ball, outside), scaled, value);
+			answer = calc.If(calc.And(in_ball, outside), scaled, value);
 		} else {
 			auto still = calc.Cmp(ExpressionType::COMPARE_EQUAL, total, zero);
-			answer = calc.If(And(in_ball, Not(still)), scaled, zero);
+			answer = calc.If(calc.And(in_ball, calc.Not(still)), scaled, zero);
 		}
 		// Adding 0.0 turns -0.0 into 0.0.
 		return calc.Out(calc.Add(answer, zero));

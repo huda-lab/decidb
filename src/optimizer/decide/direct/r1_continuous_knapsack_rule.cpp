@@ -398,12 +398,6 @@ protected:
 	ExprPtr NullDouble() const {
 		return calc.Constant(Value(LogicalType::DOUBLE));
 	}
-	ExprPtr And(const ExprPtr &a, const ExprPtr &b) const {
-		return calc.If(a, b, calc.Bool(false));
-	}
-	ExprPtr Not(const ExprPtr &a) const {
-		return calc.If(a, calc.Bool(false), calc.Bool(true));
-	}
 	ExprPtr Greater(const ExprPtr &a, const ExprPtr &b) const {
 		return calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, b);
 	}
@@ -442,8 +436,8 @@ protected:
 		inputs[TOTAL_HI] = calc.If(item.down_inf, t, NullDouble());
 		inputs[TOTAL_ZUP] = WhenHolds(Greater(t, Zero()), item.up_fin);
 		inputs[TOTAL_ZDN] = WhenHolds(Less(t, Zero()), item.down_fin);
-		inputs[TOTAL_CZI] = Flag(And(Greater(t, Zero()), item.up_inf));
-		inputs[TOTAL_CZD] = Flag(And(Less(t, Zero()), item.down_inf));
+		inputs[TOTAL_CZI] = Flag(calc.And(Greater(t, Zero()), item.up_inf));
+		inputs[TOTAL_CZD] = Flag(calc.And(Less(t, Zero()), item.down_inf));
 		return inputs;
 	}
 	//! The aggregate that reduces TotalInputs(...)[slot] over a group.
@@ -497,18 +491,19 @@ protected:
 	Verdict VerdictOf(const vector<ExprPtr> &totals, const ExprPtr &lower, const ExprPtr &upper,
 	                  const ExprPtr &eligible) const {
 		auto within = [&](const ExprPtr &holds) {
-			return eligible ? And(eligible, holds) : holds;
+			return eligible ? calc.And(eligible, holds) : holds;
 		};
 		// Limits that cross are infeasible, and so is a lower limit of +infinity or an upper one of -infinity.
 		auto limits_unmet =
 		    calc.Any({Greater(lower, upper), Equal(lower, PositiveInfinity()), Equal(upper, NegativeInfinity())});
 		Verdict verdict;
-		verdict.infeasible = calc.Any(
-		    {Greater(totals[TOTAL_EMPTY], Zero()),
-		     within(calc.Any(
-		         {limits_unmet,
-		          And(Equal(totals[TOTAL_CDN], Zero()), Greater(calc.Sub(totals[TOTAL_S], totals[TOTAL_SDN]), upper)),
-		          And(Equal(totals[TOTAL_CUP], Zero()), Less(calc.Add(totals[TOTAL_S], totals[TOTAL_SUP]), lower))}))});
+		verdict.infeasible =
+		    calc.Any({Greater(totals[TOTAL_EMPTY], Zero()),
+		              within(calc.Any({limits_unmet,
+		                               calc.And(Equal(totals[TOTAL_CDN], Zero()),
+		                                        Greater(calc.Sub(totals[TOTAL_S], totals[TOTAL_SDN]), upper)),
+		                               calc.And(Equal(totals[TOTAL_CUP], Zero()),
+		                                        Less(calc.Add(totals[TOTAL_S], totals[TOTAL_SUP]), lower))}))});
 		verdict.highest_open_up = calc.Coalesce({totals[TOTAL_LO], NegativeInfinity()});
 		verdict.lowest_open_down = calc.Coalesce({totals[TOTAL_HI], PositiveInfinity()});
 		auto lo_effective = calc.If(Equal(lower, NegativeInfinity()), calc.Max({verdict.highest_open_up, Zero()}),
@@ -519,9 +514,9 @@ protected:
 		auto zero_price_spend = calc.Sub(calc.Add(totals[TOTAL_S], totals[TOTAL_ZUP]), totals[TOTAL_ZDN]);
 		// An open room at a price on the wrong side of zero makes the zero-price spend infinite.
 		verdict.over = calc.Any({Greater(totals[TOTAL_CZI], Zero()),
-		                         And(Equal(totals[TOTAL_CZD], Zero()), Greater(zero_price_spend, upper))});
-		verdict.under = calc.Any(
-		    {Greater(totals[TOTAL_CZD], Zero()), And(Equal(totals[TOTAL_CZI], Zero()), Less(zero_price_spend, lower))});
+		                         calc.And(Equal(totals[TOTAL_CZD], Zero()), Greater(zero_price_spend, upper))});
+		verdict.under = calc.Any({Greater(totals[TOTAL_CZD], Zero()),
+		                          calc.And(Equal(totals[TOTAL_CZI], Zero()), Less(zero_price_spend, lower))});
 		return verdict;
 	}
 
@@ -581,8 +576,8 @@ protected:
 		inputs[SUM_BELOW] = WhenHolds(Less(item.t, price), item.down_fin);
 		inputs[SUM_UP] = WhenHolds(at_price, item.up_fin);
 		inputs[SUM_DOWN] = WhenHolds(at_price, item.down_fin);
-		inputs[SUM_UP_OPEN] = Flag(And(at_price, item.up_inf));
-		inputs[SUM_DOWN_OPEN] = Flag(And(at_price, item.down_inf));
+		inputs[SUM_UP_OPEN] = Flag(calc.And(at_price, item.up_inf));
+		inputs[SUM_DOWN_OPEN] = Flag(calc.And(at_price, item.down_inf));
 		return inputs;
 	}
 
@@ -886,17 +881,6 @@ private:
 		return index;
 	}
 
-	//! `sum(sign * value)` over the proved values, read as DOUBLE.
-	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values) const {
-		unique_ptr<Expression> total;
-		for (auto &value : values) {
-			auto term = DirectScaledTerm(optimizer, OverState(*value.expr), value.sign, false, 1.0, false);
-			total =
-			    total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
-		}
-		return total;
-	}
-
 	//! The terms of a part that name the decision.
 	static vector<DirectSignedValue> SignedValues(const DirectLinearPart &part, idx_t decision) {
 		vector<DirectSignedValue> values;
@@ -942,6 +926,9 @@ private:
 	//! objective part has a raw value for each decision it names. A limit's group aggregates are stage 2's.
 	vector<ExprPtr> LayoutRawValues() {
 		Named added;
+		auto over_state = [&](const Expression &value) {
+			return OverState(value);
+		};
 		AddLimitValues(added);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
@@ -950,7 +937,8 @@ private:
 				                         calc, calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())), value)
 				                   : value;
 			};
-			added.emplace_back("c" + std::to_string(j), on_kept(calc.Wrap(SumOf(clause.coefficient))));
+			added.emplace_back("c" + std::to_string(j),
+			                   on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over_state))));
 			added.emplace_back("r" + std::to_string(j),
 			                   on_kept(calc.Cast(calc.Of(*OverState(*clause.rhs)), LogicalType::DOUBLE)));
 			added.emplace_back("lo_raw" + std::to_string(j), on_kept(calc.Of(*OverState(*clause.lower))));
@@ -962,14 +950,14 @@ private:
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
-			auto weight = weights.empty() ? Zero() : calc.Wrap(SumOf(weights));
+			auto weight = weights.empty() ? Zero() : calc.Wrap(DirectSumOf(optimizer, weights, over_state));
 			added.emplace_back(Dec("w", k), condition.scoped ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (values.empty()) {
 					continue;
 				}
-				auto value = calc.Wrap(SumOf(values));
+				auto value = calc.Wrap(DirectSumOf(optimizer, values, over_state));
 				// A row the part drops reads no value, so nothing in it can raise, and its value in the part is 0.
 				if (auto &kept = condition.objective_kept[p]) {
 					value = calc.If(calc.Wrap(DirectActiveWhen(calc, OverState(*kept).get())), value, Zero());
@@ -1105,7 +1093,7 @@ private:
 			auto anchor = calc.If(empty, Zero(), calc.Min({calc.Max({Zero(), l}), u}));
 			auto free_of_budget = Equal(w, Zero());
 			if (condition.scoped) {
-				free_of_budget = calc.Any({free_of_budget, Not(C(ELIGIBLE))});
+				free_of_budget = calc.Any({free_of_budget, calc.Not(C(ELIGIBLE))});
 			}
 			// Adding 0.0 turns -0.0 into 0.0, so prices that are equal sort and compare as equal.
 			auto price = calc.If(free_of_budget, NegativeInfinity(), calc.Add(calc.Div(v, w), Zero()));
@@ -1117,7 +1105,8 @@ private:
 			added.emplace_back(Dec("pos", k), Greater(w, Zero()));
 			added.emplace_back(Dec("t", k), price);
 			// The -infinity of an item outside the ranking is not below the normal range.
-			added.emplace_back(Dec("imprecise", k), And(Not(Equal(v, Zero())), DirectBelowNormalRange(calc, price)));
+			added.emplace_back(Dec("imprecise", k),
+			                   calc.And(calc.Not(Equal(v, Zero())), DirectBelowNormalRange(calc, price)));
 		}
 		Project(added);
 	}
@@ -1133,45 +1122,25 @@ private:
 			auto inert = calc.Any({empty, wz});
 			auto high = calc.If(pos, u, l);
 			auto low = calc.If(pos, l, u);
-			auto up_open = And(Not(inert), calc.If(pos, Equal(u, PositiveInfinity()), Equal(l, NegativeInfinity())));
-			auto down_open = And(Not(inert), calc.If(pos, Equal(l, NegativeInfinity()), Equal(u, PositiveInfinity())));
+			auto up_open =
+			    calc.And(calc.Not(inert), calc.If(pos, Equal(u, PositiveInfinity()), Equal(l, NegativeInfinity())));
+			auto down_open =
+			    calc.And(calc.Not(inert), calc.If(pos, Equal(l, NegativeInfinity()), Equal(u, PositiveInfinity())));
 			auto up_room = calc.If(calc.Any({inert, up_open}), Zero(), calc.Mul(w, calc.Sub(high, a)));
 			auto down_room = calc.If(calc.Any({inert, down_open}), Zero(), calc.Mul(w, calc.Sub(a, low)));
 			auto best_end = calc.If(Greater(v, Zero()), u, calc.If(Less(v, Zero()), l, a));
-			auto unbounded_end = calc.Any({And(Greater(v, Zero()), Equal(u, PositiveInfinity())),
-			                               And(Less(v, Zero()), Equal(l, NegativeInfinity()))});
+			auto unbounded_end = calc.Any({calc.And(Greater(v, Zero()), Equal(u, PositiveInfinity())),
+			                               calc.And(Less(v, Zero()), Equal(l, NegativeInfinity()))});
 			added.emplace_back(Dec("up_inf", k), up_open);
 			added.emplace_back(Dec("down_inf", k), down_open);
 			added.emplace_back(Dec("up_fin", k), up_room);
 			added.emplace_back(Dec("down_fin", k), down_room);
 			added.emplace_back(Dec("sterm", k), calc.Mul(w, a));
 			added.emplace_back(Dec("best", k), best_end);
-			added.emplace_back(Dec("u1", k), Flag(And(And(wz, Not(empty)), unbounded_end)));
+			added.emplace_back(Dec("u1", k), Flag(calc.And(calc.And(wz, calc.Not(empty)), unbounded_end)));
 		}
 		Project(added);
 	}
-};
-
-//! One projection under construction: each column is added as an expression and gets its binding at once.
-class ProjectionStage {
-public:
-	ProjectionStage(Binder &binder, const ExpressionBuilder &calc_p)
-	    : calc(calc_p), index(binder.GenerateTableIndex()) {
-	}
-	ColumnBinding Add(const ExprPtr &expression) {
-		expressions.push_back(calc.Out(expression));
-		return ColumnBinding(index, expressions.size() - 1);
-	}
-	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child) {
-		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
-		projection->children.push_back(std::move(child));
-		return std::move(projection);
-	}
-
-private:
-	const ExpressionBuilder &calc;
-	idx_t index;
-	vector<unique_ptr<Expression>> expressions;
 };
 
 //! One hash aggregate under construction: the groups, then the aggregates, each with the binding it gets in the output.
@@ -1470,17 +1439,16 @@ private:
 		// a DOUBLE makes its sum so. The sums of the rooms at price zero are parts of these, and the running sums of
 		// stage 3 parts of the rooms.
 		for (auto slot : {TOTAL_S, TOTAL_SUP, TOTAL_SDN}) {
-			checks.push_back(
-			    DirectRaiseMessage(optimizer, calc, DirectNumberMessage(calc, totals[slot], condition.budget_written)));
+			checks.push_back(DirectRaiseTooLarge(optimizer, totals[slot], condition.budget_written));
 		}
-		checks.push_back(DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.infeasible)),
+		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_rows, verdict.infeasible)),
 		                               DirectInfeasibleErrorPredicate(optimizer)));
-		checks.push_back(
-		    DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.unbounded)), DirectUnboundedErrorPredicate(optimizer)));
+		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_rows, verdict.unbounded)),
+		                               DirectUnboundedErrorPredicate(optimizer)));
 		// A group that raises nothing warns when an item's price lost precision.
 		checks.push_back(DirectWarnIf(calc, calc.Out(BoolColumn(imprecise))));
 
-		ProjectionStage out(binder, calc);
+		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<TotalColumns> stage;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			stage.columns.key.push_back(out.Add(KeyColumn(i, key)));
@@ -1520,7 +1488,7 @@ private:
 			rooms.push_back(calc.Add(item.up_fin, item.down_fin));
 		}
 		Narrow narrow;
-		ProjectionStage narrowed(binder, calc);
+		DirectProjectionStage narrowed(binder.GenerateTableIndex());
 		vector<ColumnBinding> item_key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			item_key.push_back(narrowed.Add(KeyColumn(i, columns.keys)));
@@ -1558,7 +1526,7 @@ private:
 			}
 			return chosen;
 		};
-		ProjectionStage out(binder, calc);
+		DirectProjectionStage out(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			narrow.key.push_back(out.Add(KeyColumn(i, item_key)));
 		}
@@ -1612,7 +1580,7 @@ private:
 		             spend_at_most,
 		             calc.Sub(spend_at_most, DoubleColumn(narrow_rooms))};
 		auto candidate = CandidatePrice(verdict, reach, t, LowerOf(group.limits), UpperOf(group.limits));
-		ProjectionStage candidates(binder, calc);
+		DirectProjectionStage candidates(binder.GenerateTableIndex());
 		vector<ColumnBinding> candidate_key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			candidate_key.push_back(candidates.Add(KeyColumn(i, narrow_key)));
@@ -1644,7 +1612,7 @@ private:
 		}
 		auto reduced = aggregate.Finish(candidates.Finish(std::move(joined)));
 
-		ProjectionStage out(binder, calc);
+		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<PriceColumns> stage;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			stage.columns.key.push_back(out.Add(KeyColumn(i, price_key)));
@@ -1703,7 +1671,7 @@ private:
 		auto open_rooms = calc.If(up, sums[SUM_UP_OPEN], sums[SUM_DOWN_OPEN]);
 		auto moved = calc.Min({distance, finite_room});
 
-		ProjectionStage out(binder, calc);
+		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<ShareColumns> stage;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			stage.columns.key.push_back(out.Add(KeyColumn(i, key)));
@@ -1728,7 +1696,7 @@ private:
 		auto sources = items.columns.sources.size();
 		auto decisions = items.columns.decisions.size();
 
-		ProjectionStage out(binder, calc);
+		DirectProjectionStage out(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < sources; i++) {
 			out.Add(calc.Col(reader.SourceTypes()[i], items.columns.sources[i]));
 		}
