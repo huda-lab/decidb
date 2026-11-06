@@ -128,3 +128,39 @@ on these shapes is in [todo.md](todo.md).
 - C++: `A2AppliesShapes` and `A2DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
   `CheckCondition` branch, and the partition test against every other rule; the keyed scope's key and the guarded
   square weight in `test_decidb_direct_ir.cpp`.
+
+## Performance
+
+Measured with `benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs` (Gurobi) and
+the same with `--modes direct highs` on 2026-11-07 at `09f510c7e9` (median of 3 runs, load about 4 to 6). Every size
+agreed with both solvers on the objective within 1e-6, and no solver run failed. All three queries choose a price over
+`partsupp`'s `ps_supplycost` in `[0, 2000]`: `a2` one query-wide center under the squared loss, `a2_keyed` one per
+supplier (10,000 classes at `sf=1`), `a2_abs` one median per supplier under the absolute loss. Each speedup divides
+the solver's median by direct's median from the same sweep.
+
+| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `a2` | 100,000 | 0.034 s | 0.033 s | 38 MiB | 0.032 s | 38 MiB | 0.028 s | 28 MiB | 0.9x, 0.8x |
+| `a2` | 200,000 | 0.042 s | 0.042 s | 42 MiB | 0.037 s | 43 MiB | 0.033 s | 34 MiB | 0.9x, 0.8x |
+| `a2` | 400,000 | 0.061 s | 0.060 s | 49 MiB | 0.050 s | 54 MiB | 0.046 s | 45 MiB | 0.8x, 0.7x |
+| `a2` | 800,000 | 0.094 s | 0.094 s | 64 MiB | 0.075 s | 76 MiB | 0.071 s | 66 MiB | 0.8x, 0.8x |
+| `a2_keyed` | 100,000 | 0.034 s | 0.043 s | 79 MiB | 0.036 s | 42 MiB | 0.034 s | 44 MiB | 1.1x, 1.0x |
+| `a2_keyed` | 200,000 | 0.037 s | 0.059 s | 92 MiB | 0.048 s | 50 MiB | 0.056 s | 88 MiB | 1.3x, 1.5x |
+| `a2_keyed` | 400,000 | 0.044 s | 0.093 s | 124 MiB | 0.072 s | 67 MiB | 0.133 s | 247 MiB | 1.6x, 2.9x |
+| `a2_keyed` | 800,000 | 0.059 s | 0.161 s | 184 MiB | 0.127 s | 99 MiB | 0.391 s | 851 MiB | 2.2x, 6.5x |
+| `a2_abs` | 100,000 | 0.058 s | 0.063 s | 76 MiB | 0.863 s | 593 MiB | 2.985 s | 381 MiB | 14.9x, 63.1x |
+| `a2_abs` | 200,000 | 0.059 s | 0.099 s | 94 MiB | 2.058 s | 1,378 MiB | 8.072 s | 746 MiB | 34.6x, 133.0x |
+| `a2_abs` | 400,000 | 0.084 s | 0.173 s | 136 MiB | 4.769 s | 2,639 MiB | 22.009 s | 1,455 MiB | 56.7x, 254.2x |
+| `a2_abs` | 800,000 | 0.139 s | 0.324 s | 251 MiB | 11.964 s | 4,416 MiB | 62.359 s | 2,782 MiB | 86.1x, 461.2x |
+
+Times include process start and database open, about 20 ms, which is most of the direct time at the small sizes.
+
+The query-wide squared loss is slower than both solvers, at 0.7 to 0.9 times their speed. The solver path folds a
+query-wide decision into one variable whose coefficients are the same two sums, so it does A2's arithmetic too; A2's
+plan computes the answer and its checks once per row, and its window, with no key to partition by, hands every row
+above it to one thread (`direct` and `direct, 1 thread` time the same). Framework task H-48 holds the fix
+(`../../framework/todo.md`). The keyed squared loss is ahead (1.0 to 6.5 times), as the same per-row work runs in
+parallel. The absolute loss is 15 to 86 times faster than Gurobi and 63 to 461 times faster than HiGHS, which solve
+one helper decision per row, and needs a tenth (HiGHS) to a seventeenth (Gurobi) of their peak memory at `sf=1`. The
+keyed squared loss takes more memory than Gurobi (184 MiB against 99 MiB at `sf=1`): its window holds every row,
+where the solver keeps one variable per class.

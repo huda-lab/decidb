@@ -13,7 +13,9 @@ one sum of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per gro
 maximum absolute loss). On 5M-row sources S1 is
 about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. S1 and R1 also read a reducer's `by` key and a `per K:` clause, one group each; their per-group
 plans measured 50 to 98 and 15 to 16 times faster. N1 is 15 to 68 times faster at up to 800,000 rows, and needs no
-Gurobi license, where the solver path refuses a quadratic limit without one. The other 14 classes in the catalogue are not started.
+Gurobi license, where the solver path refuses a quadratic limit without one. A2's absolute loss is 15 to 86 times faster than
+Gurobi at up to 800,000 rows and its keyed squared loss 1.1 to 2.2 times; its query-wide squared loss is 0.8 to 0.9
+times Gurobi's speed (framework task H-48). The other 14 classes in the catalogue are not started.
 
 ## Where to look
 

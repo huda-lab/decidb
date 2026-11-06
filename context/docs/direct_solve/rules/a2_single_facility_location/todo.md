@@ -4,14 +4,6 @@ A2 picks one shared value for many rows: one `per ():` or `per K:` decision plac
 observations. The class is in [definition.md](definition.md). How to work and the checks are in
 `../../framework/todo.md` § How to work any task; a new rule follows `../../architecture/rules.md` § Adding a rule.
 
-## A2-8 — Benchmark
-
-- **Problem.** A2 has no measurement against Gurobi and HiGHS.
-- **Change.** Add `a2.sql` (query-wide) and `a2_keyed.sql` to `benchmark/decide/direct_solve/queries/`. Run
-  `run.py --queries a2 a2_keyed` at the small sizes, up to `sf=1`, and record the results in A2's `done.md`
-  § Performance.
-- **Done when.** Every size agrees with the solvers, and the table is in `done.md`.
-
 ## A2-9 — Data weights on the absolute loss
 
 - **Decision needed.** Whether A2 takes `SUM(w * ABS(c - v))` with `w` read from the data.
