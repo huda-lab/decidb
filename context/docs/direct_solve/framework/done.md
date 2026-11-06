@@ -210,6 +210,12 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
     path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks and R1's checks of each
     price and each group's anchor spend and rooms raise the same text.
+  - A number a rule computes that falls below the normal range of a DOUBLE (`DirectBelowNormalRange`, 0 included) from
+    a value that is not 0 has lost precision. The rule passes that condition to `DirectWarnIf`, which prints the
+    solver path's number-range warning through `decide_warn_numbers()`, once per query, and lets the row through. Each
+    rule tests the number its answer divides or ranks by: N1 the sum of squares `h`, A1 a decision's coefficients `a`
+    and `b` beside a square, and R1 each item's price `v / w`. The solver path's thresholds read a model, which a direct
+    plan does not build.
   - A source value read as a coefficient must be finite; one read as a bound (a count limit, a fixed value, a per-row
     lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
     NaN raises in every slot.

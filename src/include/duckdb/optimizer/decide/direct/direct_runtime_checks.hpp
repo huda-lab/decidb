@@ -34,6 +34,11 @@ unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<E
 //! A check that prints the number-range warning when `unstable` is true, once per query, and is always true.
 unique_ptr<Expression> DirectWarnIf(const ExpressionBuilder &calc, unique_ptr<Expression> unstable);
 
+//! True where the DOUBLE's magnitude is below the normal range (`std::numeric_limits<double>::min()`), 0 included. A
+//! nonzero number there holds fewer significant bits, and a product or quotient taken below it may have become 0, so a
+//! rule that computed it from a nonzero value has lost precision and passes that to DirectWarnIf.
+ExprPtr DirectBelowNormalRange(const ExpressionBuilder &calc, const ExprPtr &value);
+
 //! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
 

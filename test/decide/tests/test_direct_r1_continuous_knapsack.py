@@ -3299,3 +3299,41 @@ def test_r1_raises_the_checks_of_two_clauses_in_the_solvers_order(decidb_cli, li
         direct = _run_all(decidb_cli, sql, "require")
         assert direct != ("error", "direct_not_applied"), sql
         assert direct == ("error", first) == _run_all(decidb_cli, sql, "off"), sql
+
+
+# ---------------------------------------------------------------------------
+# The number-range warning a direct plan prints where its own arithmetic loses precision: an item's price v / w below
+# the normal range of a DOUBLE, where the ranking has lost precision. The solver path warns on every objective
+# coefficient at or under 1e-6 and answers 0 on these, so the tests read the direct path alone. Scaling the objective or
+# the budget row does not move the optimum, so a silent case's answer is the answer of its unscaled problem.
+# ---------------------------------------------------------------------------
+
+
+def _two_items(v1, w1, v2, w2, budget):
+    return (
+        f"SELECT id, x FROM (FROM (VALUES (1, {v1}::DOUBLE, {w1}::DOUBLE), (2, {v2}::DOUBLE, {w2}::DOUBLE)) "
+        f"t(id, v, w) DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 1 AND SUM(w * x) <= {budget} "
+        "MAXIMIZE SUM(v * x)) q ORDER BY id"
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+def test_r1_prices_in_the_normal_range_are_silent(decidb_cli):
+    # The prices are 2.5e-299 and 3.3e-300.
+    scaled = _run(decidb_cli, _two_items("5e-280", "2e19", "1e-280", "3e19", "3e19"), "require")[0]
+    assert scaled == _run(decidb_cli, _two_items("5", "2", "1", "3", "3"), "require")[0]
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+def test_r1_warns_when_a_price_leaves_the_normal_range(decidb_cli):
+    _run(decidb_cli, _two_items("5e-310", "2e19", "1e-310", "3e19", "3e19"), "require", expect_large_numbers=True)
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+def test_r1_a_value_of_zero_has_no_price_to_lose_and_is_silent(decidb_cli):
+    # Item 1's price is 0, below the normal range, but computed from no value.
+    sql = _two_items("0", "2", "1", "3", "3")
+    assert _run_all(decidb_cli, sql, "require") == _run_all(decidb_cli, sql, "off")

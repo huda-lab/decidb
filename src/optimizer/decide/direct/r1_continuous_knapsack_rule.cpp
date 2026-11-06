@@ -331,6 +331,9 @@ struct ItemExprs {
 	ExprPtr sterm, empty, u1;
 	//! Outside the ranking (w = 0 or no budget), the sign of w, the item's best end, its anchor, weight and box.
 	ExprPtr wz, pos, best, a, w, l, u;
+	//! True when an item's price v / w, with v not 0, is below the normal range of a DOUBLE: the ranking has lost
+	//! precision there.
+	ExprPtr imprecise;
 };
 
 //! The algebra of definition.md § Relational construction over expressions alone, which the two classes below share:
@@ -757,6 +760,7 @@ public:
 			item.down_fin = column("down_fin");
 			item.sterm = column("sterm");
 			item.u1 = column("u1");
+			item.imprecise = column("imprecise");
 			items.decisions.push_back(item);
 		}
 		return items;
@@ -1112,6 +1116,8 @@ private:
 			added.emplace_back(Dec("wz", k), free_of_budget);
 			added.emplace_back(Dec("pos", k), Greater(w, Zero()));
 			added.emplace_back(Dec("t", k), price);
+			// The -infinity of an item outside the ranking is not below the normal range.
+			added.emplace_back(Dec("imprecise", k), And(Not(Equal(v, Zero())), DirectBelowNormalRange(calc, price)));
 		}
 		Project(added);
 	}
@@ -1418,6 +1424,11 @@ private:
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
 			sums.push_back(aggregate.Add(Aggregate(TotalFunction(slot), inputs[slot])));
 		}
+		vector<ExprPtr> imprecise_items;
+		for (auto &item : items.columns.decisions) {
+			imprecise_items.push_back(item.imprecise);
+		}
+		auto imprecise = aggregate.Add(Aggregate("bool_or", calc.Any(imprecise_items)));
 		AggregateSink sink(aggregate);
 		auto limit_eligible = condition.scoped ? BoolColumn(key[0]) : nullptr;
 		vector<DirectGroupValues> limits;
@@ -1466,6 +1477,8 @@ private:
 		                               DirectInfeasibleErrorPredicate(optimizer)));
 		checks.push_back(
 		    DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.unbounded)), DirectUnboundedErrorPredicate(optimizer)));
+		// A group that raises nothing warns when an item's price lost precision.
+		checks.push_back(DirectWarnIf(calc, calc.Out(BoolColumn(imprecise))));
 
 		ProjectionStage out(binder, calc);
 		Stage<TotalColumns> stage;

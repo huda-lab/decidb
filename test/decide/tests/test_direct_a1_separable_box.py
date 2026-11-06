@@ -1337,3 +1337,62 @@ def test_a1_written_lower_bound_of_no_bound_matches_the_solver(decidb_cli, name)
     )
     for mode in ("off", "require"):
         assert _run_all(decidb_cli, sql, mode) == expected, mode
+
+
+# ---------------------------------------------------------------------------
+# The number-range warning a direct plan prints where its own arithmetic loses precision: on a decision with a square,
+# a square or linear coefficient below the normal range of a DOUBLE. The solver path warns on every objective coefficient
+# at or under 1e-6 and answers 0 on these, so the tests read the direct path alone. Scaling an objective does not move
+# its optimum, so a silent case's answer is the answer of its unscaled objective.
+# ---------------------------------------------------------------------------
+
+
+def _one_decision(objective):
+    return f"SELECT x FROM (FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 10 {objective}) q"
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective, unscaled",
+    [
+        # a = 1e-300 and b = -6.7e-301 are in the normal range: the turning point holds its precision.
+        pytest.param(
+            "MINIMIZE SUM(1e-300 * POWER(x - 0.3333333333333333, 2))",
+            "MINIMIZE SUM(POWER(x - 0.3333333333333333, 2))",
+            id="square-in-range",
+        ),
+        # b = 0 beside a square holds no value to lose.
+        pytest.param("MINIMIZE SUM(1e-300 * POWER(x, 2))", "MINIMIZE SUM(POWER(x, 2))", id="square-without-linear"),
+        # With no square the answer reads only the sign of b.
+        pytest.param("MAXIMIZE SUM(1e-310 * x)", "MAXIMIZE SUM(x)", id="linear-alone"),
+    ],
+)
+def test_a1_coefficients_that_keep_their_precision_are_silent(decidb_cli, objective, unscaled):
+    direct = _run(decidb_cli, _one_decision(objective), "require")[0]
+    assert direct == _run(decidb_cli, _one_decision(unscaled), "require")[0]
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective",
+    [
+        # a = 2e-308 is below the normal range and b = -2.3e-308 in it.
+        pytest.param("MINIMIZE SUM(2e-308 * POWER(x, 2) - 2.3e-308 * x)", id="square-below-range"),
+        # a = 1 and b = -1e-310.
+        pytest.param("MINIMIZE SUM(POWER(x, 2) - 1e-310 * x)", id="linear-below-range-beside-a-square"),
+    ],
+)
+def test_a1_warns_when_a_coefficient_beside_a_square_leaves_the_normal_range(decidb_cli, objective):
+    _run(decidb_cli, _one_decision(objective), "require", expect_large_numbers=True)
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+def test_a1_warns_when_only_a_later_decision_loses_precision(decidb_cli):
+    sql = (
+        "SELECT x, y FROM (FROM (VALUES (1)) t(id) DECIDE x(REAL), y(REAL) SUCH THAT x <= 10 AND y <= 10 "
+        "MAXIMIZE SUM(x) - SUM(1e-310 * POWER(y - 0.3333333333333333, 2))) q"
+    )
+    _run(decidb_cli, sql, "require", expect_large_numbers=True)

@@ -711,9 +711,7 @@ private:
 	unique_ptr<Expression> LosesPrecision(const Lengths &lengths, const ExprPtr &total) const {
 		auto value = Double(lengths.value);
 		auto has_value = Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, calc.Num(0.0)));
-		auto subnormal =
-		    calc.Cmp(ExpressionType::COMPARE_LESSTHAN, total, calc.Num(std::numeric_limits<double>::min()));
-		auto unstable = And(Boolean(lengths.in_ball), And(has_value, subnormal));
+		auto unstable = And(Boolean(lengths.in_ball), And(has_value, DirectBelowNormalRange(calc, total)));
 		if (condition.has_square) {
 			unstable = And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total, Double(lengths.limit)));
 		}

@@ -345,7 +345,7 @@ order:
    prints at most once; the operator also passes it the DIAGNOSE repair model. A
    direct-solved query builds no model, so these thresholds do not apply; a rule prints the
    same line through `DirectWarnIf` and `decide_warn_numbers()` where its own arithmetic
-   loses precision, once per query (a `ClientContextState`, cleared in `QueryBegin`).
+   loses precision (N1, A1 and R1; `direct_solve/framework/done.md`), once per query (a `ClientContextState`, cleared in `QueryBegin`).
 5. Record `model_constraint_rows` before anything moves the model.
 6. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
    say so. That is a coefficient-free row against a bound it cannot meet

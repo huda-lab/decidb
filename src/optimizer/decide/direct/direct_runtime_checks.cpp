@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 
 #include <algorithm>
+#include <limits>
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
@@ -33,6 +34,11 @@ unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<E
 unique_ptr<Expression> DirectWarnIf(const ExpressionBuilder &calc, unique_ptr<Expression> unstable) {
 	return calc.Out(
 	    calc.If(calc.Wrap(std::move(unstable)), calc.Fn("decide_warn_numbers", vector<ExprPtr> {}), calc.Bool(true)));
+}
+
+ExprPtr DirectBelowNormalRange(const ExpressionBuilder &calc, const ExprPtr &value) {
+	return calc.Cmp(ExpressionType::COMPARE_LESSTHAN, calc.Fn("abs", value),
+	                calc.Num(std::numeric_limits<double>::min()));
 }
 
 unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<unique_ptr<Expression>> checks) {
