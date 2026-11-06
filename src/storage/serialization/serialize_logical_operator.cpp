@@ -389,6 +389,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", scope_checks);
 	/* [Deleted] (bool) "scoped_objective" */
 	serializer.WritePropertyWithDefault<vector<DecideKey>>(220, "keys", keys);
+	serializer.WritePropertyWithDefault<bool>(221, "objective_canonical_differs", objective_canonical_differs);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -413,6 +414,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", result->scope_checks);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");
 	deserializer.ReadPropertyWithDefault<vector<DecideKey>>(220, "keys", result->keys);
+	deserializer.ReadPropertyWithDefault<bool>(221, "objective_canonical_differs", result->objective_canonical_differs);
 	return std::move(result);
 }
 

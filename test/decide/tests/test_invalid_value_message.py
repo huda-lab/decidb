@@ -137,13 +137,13 @@ DIRECT_OVERFLOW = [
     (
         "a1_square_overflows",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))",
-        _too_large("MINIMIZE sum(power(b * x, 2))"),
+        _too_large("MINIMIZE SUM(POWER(b * x, 2))"),
         "1e200",
     ),
     (
         "a1_square_and_linear_overflow",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2) + a * x)",
-        _too_large("MINIMIZE sum(power(b * x, 2) + a * x)"),
+        _too_large("MINIMIZE SUM(POWER(b * x, 2) + a * x)"),
         "1e200",
     ),
     # Like terms on one row merge into that row's coefficient, `b + b`. Each value is finite, so DeciDB's own sum left
@@ -151,13 +151,13 @@ DIRECT_OVERFLOW = [
     (
         "s1_score_overflows",
         "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x) + SUM(b * x)",
-        _too_large("MAXIMIZE sum(b * x) + sum(b * x)"),
+        _too_large("MAXIMIZE SUM(b * x) + SUM(b * x)"),
         "1e308",
     ),
     (
         "a1_coefficient_overflows",
         "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) + SUM(b * x)",
-        _too_large("MAXIMIZE sum(b * x) + sum(b * x)"),
+        _too_large("MAXIMIZE SUM(b * x) + SUM(b * x)"),
         "1e308",
     ),
 ]
@@ -198,13 +198,13 @@ TOO_LARGE = [
     (
         "objective_on_a_query_wide_decision",
         "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 5 MAXIMIZE SUM(a * x + b * y)",
-        "MAXIMIZE sum(a * x + b * y)",
+        "MAXIMIZE SUM(a * x + b * y)",
         "1e308",
     ),
     (
         "square_in_the_objective",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))",
-        "MINIMIZE sum(power(b * x, 2))",
+        "MINIMIZE SUM(POWER(b * x, 2))",
         "1e200",
     ),
     (
@@ -229,7 +229,7 @@ TOO_LARGE = [
     (
         "member_of_an_extremum_in_the_objective",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(x) + MAX(x + b + b)",
-        "MINIMIZE sum(x) + max(x + b + b)",
+        "MINIMIZE SUM(x) + MAX(x + b + b)",
         "1e308",
     ),
     (
@@ -316,7 +316,7 @@ DERIVED_TOO_LARGE = [
     (
         "reciprocal_on_an_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(y) / (SELECT 1e-310)",
-        "MINIMIZE max(y) / (SELECT 1e-310)",
+        "MINIMIZE MAX(y) / (SELECT 1e-310)",
     ),
 ]
 
@@ -345,13 +345,13 @@ def test_a_literal_past_a_double_on_one_decision_names_its_clause_on_both_paths(
 def test_a_literal_past_a_double_in_the_objective_names_it_on_the_solver_path(decidb_cli_highs, mode):
     # HiGHS: the solver path either way.
     stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(2e308 * y)"), mode)
-    assert _too_large("MAXIMIZE sum(1e1000 * y)") in stderr
+    assert _too_large("MAXIMIZE SUM(2e308 * y)") in stderr
 
 
 # HiGHS only: Gurobi states MIN/MAX and ABS natively, so their Big-M rewrites never run there. Every member's box is
 # finite, so the refusal names the clause, not a decision to bound.
 HIGHS_BIG_M_TOO_LARGE = [
-    ("abs_in_the_objective", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))", "MAXIMIZE sum(abs(b * y))"),
+    ("abs_in_the_objective", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))", "MAXIMIZE SUM(ABS(b * y))"),
     ("extremum_bounded_below", "y(REAL) SUCH THAT y <= 5 AND MAX(b * y) >= 1 MINIMIZE SUM(y)", "MAX(b * y) >= 1"),
 ]
 
@@ -418,35 +418,35 @@ DERIVED_BOTH_PATHS = [
     (
         "a1_like_terms_in_a_reducer",
         "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(b * y + b * y)",
-        "MAXIMIZE sum(b * y + b * y)",
+        "MAXIMIZE SUM(b * y + b * y)",
     ),
     # Solver: the objective's factor applied. A1: the parts' sum, scaled, after each part's values were checked.
-    ("a1_factor_on_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y)", "MAXIMIZE 2 * sum(b * y)"),
+    ("a1_factor_on_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y)", "MAXIMIZE 2 * SUM(b * y)"),
     # Solver: a scaled coefficient merged with a like term, whose values it already holds.
     (
         "a1_factor_then_like_terms",
         "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y) + SUM(b * y)",
-        "MAXIMIZE 2 * sum(b * y) + sum(b * y)",
+        "MAXIMIZE 2 * SUM(b * y) + SUM(b * y)",
     ),
     # Solver: the objective's factor or divisor applied to a constant term. A1: each constant term, scaled.
-    ("a1_factor_on_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(y + b)", "MAXIMIZE 2 * sum(y + b)"),
-    ("a1_divisor_of_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(y + b) / 0.5", "MAXIMIZE sum(y + b) / 0.5"),
+    ("a1_factor_on_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(y + b)", "MAXIMIZE 2 * SUM(y + b)"),
+    ("a1_divisor_of_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(y + b) / 0.5", "MAXIMIZE SUM(y + b) / 0.5"),
     # A1: the sums inside a square, of its decision's terms and of its constants.
     (
         "a1_square_of_like_terms",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(b * y + b * y, 2))",
-        "MINIMIZE sum(power(b * y + b * y, 2))",
+        "MINIMIZE SUM(POWER(b * y + b * y, 2))",
     ),
     (
         "a1_square_of_constants",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(y - b - b, 2))",
-        "MINIMIZE sum(power(y - b - b, 2))",
+        "MINIMIZE SUM(POWER(y - b - b, 2))",
     ),
     # S1: one reducer's share of the score.
     (
         "s1_like_terms_in_a_reducer",
         "y(BOOL) SUCH THAT SUM(y) <= 1 MAXIMIZE SUM(b * y + b * y)",
-        "MAXIMIZE sum(b * y + b * y)",
+        "MAXIMIZE SUM(b * y + b * y)",
     ),
     # R1: a per-row clause's coefficient, the budget's weight, an objective part's value, and the item's value.
     (
@@ -462,12 +462,12 @@ DERIVED_BOTH_PATHS = [
     (
         "r1_like_terms_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 AND SUM(a * y) <= 9 MAXIMIZE SUM(b * y + b * y)",
-        "MAXIMIZE sum(b * y + b * y)",
+        "MAXIMIZE SUM(b * y + b * y)",
     ),
     (
         "r1_factor_on_the_objective",
         "y(REAL) SUCH THAT y <= 5 AND SUM(a * y) <= 9 MAXIMIZE 2 * SUM(b * y)",
-        "MAXIMIZE 2 * sum(b * y)",
+        "MAXIMIZE 2 * SUM(b * y)",
     ),
 ]
 
@@ -488,7 +488,7 @@ DERIVED_SOLVER = [
     (
         "composed_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(y) + MAX(b * y + b * y)",
-        "MINIMIZE sum(y) + max(b * y + b * y)",
+        "MINIMIZE SUM(y) + MAX(b * y + b * y)",
     ),
     # Like terms merged in a reducer a row-varying factor scales, which a helper decision holds: it names the reducer.
     (
@@ -504,7 +504,7 @@ DERIVED_PRODUCT = [
     (
         "factor_on_a_product_in_the_objective",
         "x(REAL), y(REAL) SUCH THAT x <= 4 AND y <= 4 MAXIMIZE 2 * SUM(b * x * y)",
-        "MAXIMIZE 2 * sum(b * x * y)",
+        "MAXIMIZE 2 * SUM(b * x * y)",
     ),
     (
         "factor_on_a_product_in_a_constraint",

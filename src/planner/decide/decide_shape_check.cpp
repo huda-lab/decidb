@@ -19,7 +19,7 @@ DecideShapeCheck::DecideShapeCheck(ClientContext &context, idx_t decide_index, c
 }
 
 void DecideShapeCheck::Refuse(const Expression &term, const string &problem, const string &clause) const {
-	throw BinderException(term, "%s In %s.", problem, clause);
+	throw InvalidInputException(term, "%s In %s.", problem, clause);
 }
 
 //! An operator as SQL writes it: `COALESCE`, `IS NULL`, `%`.
@@ -75,21 +75,15 @@ void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &cla
 			}
 		} else if (name == "/") {
 			if (func.children.size() == 2 && BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
-				Refuse(expr,
-				       "Division by a DECIDE variable is not supported: it would make the model non-linear. The "
-				       "divisor must not reference a decision variable.",
-				       clause);
+				Refuse(expr, "DECIDE: cannot divide by a DECIDE variable.", clause);
 			}
 		} else if (name != "+" && name != "-" && name != "*" && name != "abs" &&
 		           !(StringUtil::StartsWith(name, "__") && StringUtil::EndsWith(name, "__"))) {
 			// The vocabulary of the model; DeciDB's own markers are `__`-delimited.
 			Refuse(expr,
-			       func.is_operator
-			           ? StringUtil::Format("DECIDE: operator '%s' cannot take a DECIDE variable.", OperatorName(expr))
-			           : StringUtil::Format("Scalar function '%s' over a DECIDE variable is not supported: it would "
-			                                "make the model non-linear. Only ABS() and POWER(..., 2) can wrap a "
-			                                "decision variable.",
-			                                func.function.name),
+			       StringUtil::Format("DECIDE: %s '%s' cannot take a DECIDE variable.",
+			                          func.is_operator ? "operator" : "function",
+			                          func.is_operator ? OperatorName(expr) : func.function.name),
 			       clause);
 		}
 		break;

@@ -818,7 +818,7 @@ def test_objective_layers_render_too(decidb_cli):
     """
     out = _explain(decidb_cli, sql)
     packed = _packed(out)
-    assert "MAXIMIZEavg(" in packed, _plan_text(out)
+    assert "MAXIMIZEAVG(" in packed, _plan_text(out)
     assert _REWRITTEN_MARK in packed, _plan_text(out)
 
 

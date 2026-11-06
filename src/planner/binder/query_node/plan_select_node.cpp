@@ -161,6 +161,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // LogicalDecide::AddConstraint. Those two are the only call sites.
         string written_objective;
         string canonical_objective;
+        bool objective_canonical_differs = false;
 		// The run-time checks of the clauses, built by the
 		// canonicalizer from each clause as bound, before it is canonicalized.
 		DecideScopeChecks scope_checks {statement.decide_keys, statement.keyed_scopes,
@@ -197,16 +198,21 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // exactly one objective, so these are two strings rather than a registry.
 				DecideSourceNames objective_names {statement.decide_source_fragments, statement.keyed_scopes,
 				                                   statement.decide_keys};
-				written_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
+				// As for a clause: the text the user wrote, cut at the parser's OBJECTIVE span, and DeciDB's
+				// renderings before and after canonicalization to tell whether it changed. The rendering stands in
+				// for the text only for a statement built without the parser's text.
+				auto rendered_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
+				if (!statement.decide_text.Cut(statement.decide_text.tail_start, DecideSpanRole::OBJECTIVE,
+				                               written_objective)) {
+					written_objective = rendered_objective;
+				}
 				canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
 				statement.decide_objective = canonicalizer.CanonicalizeObjective(*statement.decide_objective,
 				                                                                 statement.objective_constant_offset);
 				canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
 				canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
 				shape_check.CheckObjective(*statement.decide_objective, written_objective);
-				if (canonical_objective == written_objective) {
-					canonical_objective.clear();
-				}
+				objective_canonical_differs = canonical_objective != rendered_objective;
 				canonicalizer.SkipNullData(*statement.decide_objective, statement.keyed_scopes, statement.decide_keys);
 			}
 		}
@@ -223,6 +229,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
         decide_op->written_objective = std::move(written_objective);
         decide_op->canonical_objective = std::move(canonical_objective);
+        decide_op->objective_canonical_differs = objective_canonical_differs;
         decide_op->source_fragments = std::move(statement.decide_source_fragments);
         // Capture the user's column names off the BindContext, which is still live here
         // and is the authority name resolution itself used. Every source kind is covered

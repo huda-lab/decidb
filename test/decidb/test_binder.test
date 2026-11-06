@@ -81,7 +81,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x+x) <= 5 MAXIMIZE S
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(sin(x)) <= 5 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: Scalar function 'sin' over a DECIDE variable is not supported.*
+<REGEX>:Invalid Input Error: DECIDE: function 'sin' cannot take a DECIDE variable\..*
 
 # Bind strict comparison on integer expression
 statement ok

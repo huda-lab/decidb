@@ -1050,6 +1050,11 @@
         "id": 220,
         "name": "keys",
         "type": "vector<DecideKey>"
+      },
+      {
+        "id": 221,
+        "name": "objective_canonical_differs",
+        "type": "bool"
       }
     ]
   },

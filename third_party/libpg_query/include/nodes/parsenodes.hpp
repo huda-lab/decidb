@@ -1267,7 +1267,8 @@ typedef enum PGDecideSpanRole {
 	PG_DECIDE_SPAN_PER,     /* a `per` key */
 	PG_DECIDE_SPAN_BY,      /* a reducer's `by` key */
 	PG_DECIDE_SPAN_COLUMN,  /* a column reference, as written (`S.cap`) */
-	PG_DECIDE_SPAN_TERM     /* a product, a power or a function call, as written */
+	PG_DECIDE_SPAN_TERM,    /* a product, a power or a function call, as written */
+	PG_DECIDE_SPAN_OBJECTIVE /* the objective, anchored at the start of the tail */
 } PGDecideSpanRole;
 
 typedef struct PGDecideSpan {

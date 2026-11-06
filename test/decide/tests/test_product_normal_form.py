@@ -182,6 +182,32 @@ class TestEverySpellingIsOnePolynomial:
         xs = _values(rows, cols, "x")
         assert sum(c * x for (_, _, c), x in zip(_ROWS, xs)) == pytest.approx(result.objective_value, rel=1e-6)
 
+    @pytest.mark.parametrize("rows", [3, 5, 6], ids=["fewer rows", "as many rows", "more rows"])
+    def test_power_zero_in_a_reducer_counts_rows(self, decidb_cli, oracle_solver, rows):
+        """SUM(POWER(x, 0)) is the row count: the clause holds with 5 rows or fewer and is infeasible with more.
+
+        The product keeps x at coefficient 0, so the reducer still reads a decision (ruling H)."""
+        sql = f"""
+            SELECT id, x FROM range(1, {rows + 1}) t(id) DECIDE x(REAL)
+            SUCH THAT x <= {_UB} AND SUM(POWER(x, 0)) <= 5
+            MAXIMIZE SUM(x)
+        """
+        oracle_solver.create_model(f"power_0_rows_{rows}")
+        names = [f"x_{i}" for i in range(rows)]
+        for name in names:
+            oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=_UB)
+        oracle_solver.add_constraint({name: 0.0 for name in names}, "<=", 5.0 - rows, name="row_count")
+        oracle_solver.set_objective({name: 1.0 for name in names}, ObjSense.MAXIMIZE)
+        result = oracle_solver.solve()
+        if result.status == SolverStatus.INFEASIBLE:
+            refused = decidb_cli.execute_raw(sql)
+            assert "infeasible" in refused.stderr, refused.stderr
+            return
+        assert result.status == SolverStatus.OPTIMAL
+        out, cols = decidb_cli.execute(sql)
+        xi = cols.index("x")
+        assert sum(float(r[xi]) for r in out) == pytest.approx(result.objective_value, rel=1e-6)
+
 
 @pytest.mark.correctness
 class TestBooleanProducts:
@@ -238,8 +264,8 @@ class TestShapeCheckRefusals:
                 r"POWER over a DECIDE variable needs an exponent that is a whole number known "
                 r"before the query runs, found '0\.5'",
             ),
-            ("SUM(EXP(x)) <= 10", r"Scalar function 'exp' over a DECIDE variable is not supported"),
-            ("SUM(x / y) <= 10", r"Division by a DECIDE variable is not supported"),
+            ("SUM(EXP(x)) <= 10", r"DECIDE: function 'exp' cannot take a DECIDE variable\."),
+            ("SUM(x / y) <= 10", r"DECIDE: cannot divide by a DECIDE variable\."),
             ("SUM(x % 2) <= 10", r"DECIDE: operator '%' cannot take a DECIDE variable\."),
             ("SUM(CASE WHEN w > 1 THEN x ELSE y END) <= 10", r"CASE over a DECIDE variable is not supported"),
         ],
@@ -258,13 +284,14 @@ class TestShapeCheckRefusals:
         assert f"In the SUCH THAT clause `{constraint}`" in result.stderr or "has a term of degree" in result.stderr
         assert "LINE " in result.stderr and "^" in result.stderr, result.stderr
 
-    def test_objective_refusal_names_the_objective(self, decidb_cli):
+    def test_objective_refusal_quotes_the_objective_as_written(self, decidb_cli):
+        """The objective is quoted from the parser's OBJECTIVE span, spacing and case as typed."""
         result = decidb_cli.execute_raw(
             f"""
             SELECT id, x FROM {_TABLE} DECIDE x(REAL)
             SUCH THAT x <= {_UB}
-            MINIMIZE SUM(POWER(x, 3))
+            MINIMIZE SUM(POWER(x,3))
         """
         )
-        assert "DECIDE: the objective `" in result.stderr and "has a term of degree 3" in result.stderr, result.stderr
+        assert "DECIDE: the objective `SUM(POWER(x,3))` has a term of degree 3" in result.stderr, result.stderr
         assert "^" in result.stderr, result.stderr

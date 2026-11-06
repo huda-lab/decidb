@@ -1197,7 +1197,7 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 }
 
 string RenderDecideObjectiveLayers(const string &sense_prefix, const string &written, const string &canonical,
-                                   const vector<string> &rewritten, const vector<string> &accounts,
+                                   bool canonical_differs, const vector<string> &rewritten, const vector<string> &accounts,
                                    const vector<string> &derived_rows) {
 	string result;
 	auto append_line = [&](const string &line) {
@@ -1216,10 +1216,10 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 		return result;
 	}
 	append_line(sense_prefix + top);
-	const string *above = &top;
-	if (!canonical.empty()) {
+	// A rewrite row is DeciDB's rendering, so it is compared with the canonical rendering, never with the text.
+	const string &above = canonical.empty() ? top : canonical;
+	if (canonical_differs) {
 		append_line(LAYER_CANONICAL_PREFIX + canonical);
-		above = &canonical;
 	}
 	// What the rewrites made of it, then the objective as the solver receives it where it
 	// reads differently, then the rows the rewrites added for it (an ABS envelope, a
@@ -1228,7 +1228,7 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 		append_line(LAYER_REWRITTEN_PREFIX + account);
 	}
 	for (auto &row : rewritten) {
-		if (row != *above) {
+		if (row != above) {
 			append_line(LAYER_REWRITTEN_PREFIX + row);
 		}
 	}

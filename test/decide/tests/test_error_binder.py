@@ -347,7 +347,7 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT {fn}(x) <= 2
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"over a DECIDE variable is not supported")
+            """, match=r"DECIDE: function '[a-z]+' cannot take a DECIDE variable\.")
 
     @pytest.mark.parametrize("fn", ["sqrt", "exp", "log", "floor"])
     def test_nonlinear_scalar_inside_sum(self, decidb_cli, fn):
@@ -358,7 +358,7 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MAXIMIZE SUM({fn}(x)) LIMIT 1
-            """, match=r"over a DECIDE variable is not supported")
+            """, match=r"DECIDE: function '[a-z]+' cannot take a DECIDE variable\.")
 
     def test_nonlinear_scalar_inside_abs(self, decidb_cli):
         """ABS(f(x)) — ABS passes its child through opaquely, so sqrt inside
@@ -368,7 +368,7 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MAXIMIZE SUM(ABS(sqrt(x) - 1)) LIMIT 1
-            """, match=r"'sqrt' over a DECIDE variable is not supported")
+            """, match=r"DECIDE: function 'sqrt' cannot take a DECIDE variable\.")
 
     # --- POWER over a decision ---
     # The shape check judges POWER on the canonical tree: a whole exponent is a product of
@@ -632,7 +632,7 @@ class TestBinderErrors:
                     AND x <= 10
                     AND y <= 10
                 MAXIMIZE SUM(x)
-            """, match=r"Division by a DECIDE variable is not supported")
+            """, match=r"DECIDE: cannot divide by a DECIDE variable\.")
 
     def test_sum_division_by_decide_var_rejected(self, decidb_cli):
         """`SUM(x / y) <= K` with both DECIDE variables — must reject cleanly
@@ -645,7 +645,7 @@ class TestBinderErrors:
                     AND x <= 10
                     AND y <= 10
                 MAXIMIZE SUM(x)
-            """, match=r"Division by a DECIDE variable is not supported")
+            """, match=r"DECIDE: cannot divide by a DECIDE variable\.")
 
     def test_objective_division_by_decide_var_rejected(self, decidb_cli):
         """Same rejection from the objective path."""
@@ -655,7 +655,7 @@ class TestBinderErrors:
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 10 AND y <= 10
                 MAXIMIZE SUM(x / y)
-            """, match=r"Division by a DECIDE variable is not supported")
+            """, match=r"DECIDE: cannot divide by a DECIDE variable\.")
 
     def test_not_equal_still_accepted(self, decidb_cli):
         """`<>` is rewritten into an OR only after binding, so the OR check never sees it."""

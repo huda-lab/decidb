@@ -681,7 +681,7 @@ def test_n1_scores_past_the_range_of_their_squares_raise_rather_than_answer_zero
     # h is past a DOUBLE from finite inputs: the direct path raises, where Gurobi returns x = 0 with a warning.
     sql = _two_rows("3e154", "4e154", _MAX_25)
     direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "MAXIMIZE sum(s * x) computes a number too large for a DOUBLE" in direct
+    assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
     assert _solver_values(decidb_cli, sql, number_range=True) == [0.0, 0.0]
 
 
@@ -690,7 +690,7 @@ def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range
     # Each square is 1.44e308; only h is past a DOUBLE, a check above the window.
     sql = _two_rows("1.2e154", "1.2e154", _MAX_25)
     direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
-    assert "MAXIMIZE sum(s * x) computes a number too large for a DOUBLE" in direct
+    assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
 
 
 @pytest.mark.correctness

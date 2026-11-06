@@ -466,6 +466,8 @@ decide_tail:
 			| SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
+                    /* DeciDB: the objective as written, anchored at the tail it ends */
+                    noteDecideSpan(yyscanner, @$.start, PG_DECIDE_SPAN_OBJECTIVE, @5);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->tail_start = @$.start;
@@ -479,6 +481,8 @@ decide_tail:
 			| SUCH THAT decide_constraint_list MINIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
+                    /* DeciDB: the objective as written, anchored at the tail it ends */
+                    noteDecideSpan(yyscanner, @$.start, PG_DECIDE_SPAN_OBJECTIVE, @5);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->tail_start = @$.start;

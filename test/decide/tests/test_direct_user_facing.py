@@ -369,7 +369,7 @@ def test_r1_objective_factor_that_overflows_names_the_objective_like_the_solvers
     direct = _raw(decidb_cli, sql, mode="require").stderr
     solver = _raw(decidb_cli, sql, mode="off").stderr
     assert (
-        "DECIDE: MAXIMIZE 1e+308 * sum(v * x) computes a number too large for a DOUBLE. Scale its data down." in direct
+        "DECIDE: MAXIMIZE 1e308 * SUM(v * x) computes a number too large for a DOUBLE. Scale its data down." in direct
     )
     assert solver == direct
 
@@ -434,7 +434,7 @@ def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(dec
         DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) q
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "DECIDE: MAXIMIZE sum(s * x) computes a number too large for a DOUBLE. Scale its data down." in direct
+    assert "DECIDE: MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE. Scale its data down." in direct
 
 
 def _s1_source_bound_error(decidb_cli, cap_type, cap):

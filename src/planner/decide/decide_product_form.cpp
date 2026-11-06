@@ -225,11 +225,32 @@ struct ProductReader {
 			Read(base, power * exponent);
 			return;
 		}
-		// A decision raised to 0 is 1: a decision is never NULL. Data keeps its POWER(w, 0), which SQL makes NULL
-		// on a NULL.
-		if (power != 0) {
-			AddFactor(form.factors, node, power, nullptr);
+		if (power == 0) {
+			// A decision raised to 0 is 1: a decision is never NULL. Data keeps its POWER(w, 0), which SQL makes NULL
+			// on a NULL.
+			AddZeroDecisions(node);
+			return;
 		}
+		AddFactor(form.factors, node, power, nullptr);
+	}
+
+	//! The decisions of a term raised to 0, which the product keeps at coefficient 0, as the merge keeps `x - x`.
+	//! A reducer is one decision-bearing value, so it is kept whole.
+	void AddZeroDecisions(const Expression &expr) {
+		if (!BoundExpressionReferencesDecide(expr, decide_index)) {
+			return;
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+		    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			for (auto *seen : form.zero_terms) {
+				if (DecideTermsEqual(*seen, expr, decide_index)) {
+					return;
+				}
+			}
+			form.zero_terms.push_back(&expr);
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AddZeroDecisions(child); });
 	}
 };
 
@@ -300,6 +321,10 @@ unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const Deci
 		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(result));
 		result = Bind(context, "-", std::move(children));
+	}
+	for (auto *term : form.zero_terms) {
+		auto zero = Bind(context, "*", make_uniq<BoundConstantExpression>(Value::INTEGER(0)), term->Copy());
+		result = Bind(context, "+", std::move(result), std::move(zero));
 	}
 	return result;
 }

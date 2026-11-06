@@ -1686,7 +1686,7 @@ R1_ERROR_CASES = {
         _late(
             "amount >= 0 AND amount <= cap AND SUM(w*amount) <= {limit} MAXIMIZE 1e308 * SUM(v*amount)", v_sql="10.0"
         ),
-        "other:DeciDB CLI error: Invalid Input Error: DECIDE: MAXIMIZE 1e+308 * sum(v * amount)",
+        "other:DeciDB CLI error: Invalid Input Error: DECIDE: MAXIMIZE 1e308 * SUM(v*amount) co",
     ),
     "infeasible_before_unbounded": (
         _late(

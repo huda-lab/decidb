@@ -15,6 +15,7 @@
 //   (x-t)*(x-t)    ->  POWER(x - t, 2)
 //   (x+y)*(y+x)    ->  POWER(x + y, 2)
 //   (b*x)*(b*x)    ->  (b * b) * POWER(x, 2)
+//   w*POWER(x, 0)  ->  w + 0 * x
 //
 // NormalizeProducts is a bottom-up rewrite rule over every decision-bearing `*` and
 // whole-exponent POWER node, as DuckDB's ArithmeticSimplificationRule is over constant
@@ -70,6 +71,9 @@ struct DecideProductForm {
 	vector<DecideProductFactor> coefficient;
 	//! Decision-bearing factors, in first-seen order, equal ones merged.
 	vector<DecideProductFactor> factors;
+	//! The decisions of factors raised to 0 (a column, or a reducer kept whole): the product adds each at coefficient
+	//! 0, so a clause keeps the decisions it was written over, as the merge keeps `x - x` as `0 * x`.
+	vector<const Expression *> zero_terms;
 };
 
 //! The degree of an expression in the decisions bound to `decide_index`. `polynomial` is false when a decision stands
@@ -113,7 +117,7 @@ bool DecideFactorListsEqual(const vector<DecideProductFactor> &left, const vecto
                             idx_t decide_index);
 
 //! `form` written as the spelling: a left-deep chain of the coefficient's factors, then the decision-bearing ones,
-//! under a unary minus for a negative sign.
+//! under a unary minus for a negative sign, plus `0 * t` for each of its zero terms.
 unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const DecideProductForm &form);
 
 //! A copy of `expr` with every decision-bearing product written in the one spelling. With `written`, each respelled

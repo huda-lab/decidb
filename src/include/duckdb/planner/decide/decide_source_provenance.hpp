@@ -183,12 +183,12 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account);
 string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
                                 const vector<string> &unattributed);
 
-//! Format the objective's layers the same way. `written` and `canonical` come from
+//! Format the objective's layers the same way. `written`, `canonical` and `canonical_differs` come from
 //! LogicalDecide's two objective snapshots; `accounts` are what its rewrites made of it;
 //! `rewritten` is the post-optimizer render; `derived_rows` are the rows its rewrites
 //! added (CollectDecideClauseLayers' `objective_rows`).
 string RenderDecideObjectiveLayers(const string &sense_prefix, const string &written, const string &canonical,
-                                   const vector<string> &rewritten, const vector<string> &accounts = {},
-                                   const vector<string> &derived_rows = {});
+                                   bool canonical_differs, const vector<string> &rewritten,
+                                   const vector<string> &accounts = {}, const vector<string> &derived_rows = {});
 
 } // namespace duckdb

@@ -93,6 +93,7 @@ public:
     //! physical plan renders the same layers the logical one does.
     string written_objective;
     string canonical_objective;
+    bool objective_canonical_differs = false;
 
     //! The user's written spelling of every cast and scalar subquery in the DECIDE
     //! clause, copied from LogicalDecide. RenderDecideSource replays it so EXPLAIN

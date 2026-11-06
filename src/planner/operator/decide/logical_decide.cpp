@@ -402,7 +402,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 		    per_inner_agg == ObjectiveAggregateType::MIN_AGG || per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
 			objective_strs.clear();
 		}
-		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
+		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective, objective_canonical_differs,
 		                                                  objective_strs, objective_accounts, objective_rows);
 	} else {
 		result["Objective"] = "FEASIBILITY";
