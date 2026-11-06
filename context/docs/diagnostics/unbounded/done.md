@@ -31,7 +31,9 @@ the model's columns:
 
 ```
 maximize    σ · cᵀd            σ = +1 if the model maximizes, −1 if it minimizes
-subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j (its sense preserved, RHS homogenized to 0)
+subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j, and the linear part of every quadratic row
+                                 (its sense preserved, RHS homogenized to 0)
+            dᵢ = 0               where column i appears in a non-linear part
             0 ≤ dᵢ ≤ 1          where the upper bound is open (uᵢ ≥ EFFECTIVE_INFINITY)
             −1 ≤ dᵢ ≤ 0         where the lower bound is open (lᵢ ≤ −EFFECTIVE_INFINITY)
             −1 ≤ dᵢ ≤ 1         where both are open
@@ -45,7 +47,15 @@ the feasible region; the unit box on each open side (the recession cone of the c
 it bounded so the LP terminates, and a column with both bounds finite is fixed to `0`. A column
 falling toward −∞ is named as one rising toward +∞ is, and its remedy is a floor
 (`buy >= <floor>`) where a rising one's is a cap.
-Quadratic objectives/constraints are declined (the builder returns no model).
+
+A model with a non-linear part gets the same LP, with every column in one held still at `0`: a square
+or product in the objective or a row, a general constraint a backend states natively (its result and
+arguments), and an indicator constraint (its binary and its row). Along such a ray every non-linear
+part keeps its value, so a feasible point moved along it stays feasible and the objective changes by
+its linear part alone. The ray is a direction of the recession cone, never one a relaxation invents.
+It can miss an escape that runs through a non-linear part: a runaway inside a square finds no ray.
+When a model escapes both ways (`MAXIMIZE SUM(POWER(x, 2) + y)` with `x` and `y` open), the finding
+names only the linear runaway (`y`); a bound on it leaves the other.
 
 A recession ray exists iff this LP is `OPTIMAL` with objective > `DIAGNOSTIC_RAY_EPSILON`;
 then `d` is the ray and its nonzero entries are exactly the escaping columns. The ray
@@ -55,9 +65,8 @@ in `decidb/diagnostic_constants.hpp` so the builder, solver, and engine that sha
 the box-LP "free suspect filter" invariant agree by construction (see
 `../foundations/done.md`). Ray extraction is gated (`SolveModelOptions::
 extract_unbounded_ray`) and armed only by the statement's `DIAGNOSE` prefix. An
-unprefixed query skips it, so its failure path pays nothing. Quadratic
-objectives/constraints are out of scope (no ray extracted). When the ray names no
-variable — a quadratic model, or a ray in which only internal auxiliaries escaped —
+unprefixed query skips it, so its failure path pays nothing. When the ray names no
+variable — a runaway inside a non-linear part, or a ray in which only internal auxiliaries escaped —
 the operator returns one `edit_source='undiagnosed'` finding that explains why; the
 relation is never empty and never points the user at a second statement.
 
@@ -164,14 +173,14 @@ lives in the opt-in relation, not the error.
   bound and a flipped-sign constraint share a recession direction) — it lives in this
   doc (see "Load-bearing limit"), not in the user's error.
 - **"Unavailable" reason, not the re-run advert, when diagnosis ran but came up
-  empty.** A content-free unbounded solve (a quadratic model, or a ray that escaped
+  empty.** A content-free unbounded solve (a runaway inside a non-linear part, or a ray that escaped
   only via internal auxiliaries) still needs a result even though no variable was
   named. It must not come back empty and it must not point at the prefix the user already used, so the
   engine reports one `edit_source = 'undiagnosed'` finding carrying the reason in
   `suggested_change` (`BuildUndiagnosedDiagnostic`, `decide_diagnostic.cpp`).
   `physical_decide.cpp` picks the reason from the retained
   model and helper status: a helper timeout reports that diagnosis ran out of time; an
-  empty ray plus a quadratic objective/constraint reports that a non-linear term prevents
+  empty ray on a model with a non-linear part reports that a non-linear term prevents
   naming the variable; an empty ray on a purely linear model uses the neutral *"the runaway
   variable could not be identified"* fallback; and a present ray that only names internal
   auxiliaries reports *"the runaway is an internal helper variable."*

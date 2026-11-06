@@ -6,15 +6,16 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: Q1 and U1 side by side; C4 after Q1; C5 after C4; C6 last.
+Each batch finishes completely. Lanes: Q1 and D1 side by side; C4 after Q1; C5 after C4; C6 last.
 
 ## Q1. Polynomial form (one lane; architect review first)
 
-- [ ] CAN-1 One polynomial form for decision products — pipeline/04_canonicalizer/todo.md § CAN-1
+- [ ] CAN-1 One polynomial form and one shape check after it — pipeline/04_canonicalizer/todo.md § CAN-1
 
-## U1. Unbounded diagnosis (one lane)
+## D1. Diagnosis bugs (one lane)
 
-- [ ] UNB-1 Name the runaway decision of a model with a non-linear part — diagnostics/unbounded/todo.md § UNB-1
+- [ ] BUG-48 DIAGNOSE's `group` column writes a NULL key as `'NULL'` — issues/bugs.md § BUG-48
+- [ ] BUG-49 DIAGNOSE of a non-convex unbounded model answers `feasible` — issues/bugs.md § BUG-49
 
 ## C4. Shared code before N2 (one lane; needs: Q1)
 

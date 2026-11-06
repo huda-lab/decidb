@@ -8,6 +8,15 @@ Open work in the backends and their limits. Finished work is in [done.md](done.m
   decided by the same solver-support check `DIAGNOSE` goes through (`decide_solver_gate.cpp`), so it is one yes or no
   and both paths word the error alike. Where `DIAGNOSE` runs but names no variable, the error keeps the advice; that gap
   is `diagnostics/unbounded/todo.md` § UNB-1.
+- **Reviewed design (architect, 2026-11-06).**
+  - One message source: `DecideInfeasibleMessage(bool diagnose_runs)` and `DecideUnboundedMessage(bool diagnose_runs)`
+    in `decide_value_messages.hpp`.
+  - A non-throwing `FindDecideSolverGap(needed, backend)` and `DecideSolverRuns(needed)` sit beside the throwing gate.
+  - The direct driver builds `DirectStateErrors {infeasible, unbounded}` once, after a rule is selected, from
+    `DecideSolverRuns(ClassifyDecideModel(ir.model_shape))`, and passes it to `Apply`. The texts reach run time as the
+    constants inside `error(...)`.
+  - The direct reader reports less when unsure, which keeps the advice.
+  - The classifier and the shape readers are built by CAN-1 (`04_canonicalizer/todo.md` § CAN-1, ruling f).
 - **Problem.** `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.` and its
   unbounded twin are raised by both paths (`ilp_solver.cpp`, `direct_runtime_checks.cpp`). With no Gurobi, `DIAGNOSE`
   on a query with a quadratic limit is refused ("which needs Gurobi"). With Gurobi, an unbounded quadratic model
