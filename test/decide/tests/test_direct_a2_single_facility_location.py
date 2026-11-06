@@ -1,7 +1,7 @@
 """A2 (single-facility location), checked three ways: the independent oracle, the solver path, the direct path.
 
-Every case is one DECIDE query with a query-wide decision `c` shared by every row, under constant bounds, minimizing
-the squared distance to one value per row. The oracle builds its own model from the raw rows, from the interval and the
+Every case is one DECIDE query with a decision `c` shared by many rows (one for the whole query, or one per class of a
+key), under constant bounds, minimizing the squared distance to one value per row. The oracle builds its own model from the raw rows, from the interval and the
 objective coefficients each case states in Python (never from DeciDB's reading of the SQL). DeciDB then runs the query
 with `decide_direct_solve='off'` (the solver) and `'require'` (direct solve; a query the rule does not apply to fails
 instead of quietly using the solver). The case passes when all three agree: both DeciDB runs return one value for every
@@ -53,8 +53,17 @@ COLUMNS = (
 NAMES = [name for name, _ in COLUMNS]
 
 
+#: The type of every column a case table uses.
+TYPES = dict(COLUMNS, k="VARCHAR", j="INTEGER")
+
+
 def _row(id, v, f):
     return dict(id=id, v=v, f=f)
+
+
+def _krow(id, k, j, v, f):
+    """A row of a keyed case: `k` and `j` are the key columns."""
+    return dict(id=id, k=k, j=j, v=v, f=f)
 
 
 ROWS = (
@@ -76,8 +85,12 @@ ZERO_ROWS = (_row(1, 0.0, True), _row(2, 0.0, True))
 DUPLICATE_ROWS = (_row(1, 2.0, True), _row(1, 2.0, True), _row(1, 4.0, True))
 
 
+def _names(rows):
+    return list(rows[0])
+
+
 def _values(rows):
-    return values_clause(rows, NAMES, dict(COLUMNS), sql_literal)
+    return values_clause(rows, _names(rows), TYPES, sql_literal)
 
 
 # ---------------------------------------------------------------------------
@@ -176,16 +189,33 @@ class Case:
     box: Box
     objective: Objective
     rows: tuple = ROWS
+    #: The key columns of `DECIDE per k:`; empty for the query-wide `per ():`.
+    keys: tuple = ()
+    #: The key is the whole relation (`per t:`): a NULL in a column is a value of its own, not a missing class.
+    relation: bool = False
 
 
-def case(box, objective, rows=ROWS):
-    return Case(BOXES[box], OBJECTIVES[objective], rows)
+def case(box, objective, rows=ROWS, keys=(), relation=False):
+    return Case(BOXES[box], OBJECTIVES[objective], rows, keys, relation)
 
 
-def _totals(case_):
-    """The objective's `A*c^2 + B*c` summed over the rows, as the sense reads it (not negated for a maximum)."""
-    a = b = 0.0
+def _classes(case_):
+    """key -> the rows of that class, derived here in Python. A row with a NULL in a key column is in no class, unless
+    the key is a relation, where NULL is a value."""
+    classes = {}
     for row in case_.rows:
+        key = tuple(row[name] for name in (_names(case_.rows) if case_.relation else case_.keys))
+        if not case_.relation and any(part is None for part in key):
+            continue
+        classes.setdefault(key, []).append(row)
+    return classes
+
+
+def _totals(case_, rows=None):
+    """The objective's `A*c^2 + B*c` summed over the rows (of one class), as the sense reads it (not negated for a
+    maximum)."""
+    a = b = 0.0
+    for row in case_.rows if rows is None else rows:
         ra, rb = case_.objective.coefficients(row)
         a, b = a + ra, b + rb
     return a, b
@@ -197,12 +227,13 @@ def _totals(case_):
 
 
 def _decide(case_):
-    return f"DECIDE per (): c(REAL) SUCH THAT {case_.box.sql} {case_.objective.sql}"
+    key = "t" if case_.relation else ", ".join(case_.keys) or "()"
+    return f"DECIDE per {key}: c(REAL) SUCH THAT {case_.box.sql} {case_.objective.sql}"
 
 
 def _sql(case_, wrap="plain"):
     decide = _decide(case_)
-    source = f"(VALUES {_values(case_.rows)}) t({', '.join(NAMES)})"
+    source = f"(VALUES {_values(case_.rows)}) t({', '.join(_names(case_.rows))})"
     select = "SELECT id, c"
     ids = ", ".join(f"({row['id']})" for row in case_.rows)
     middle = case_.rows[len(case_.rows) // 2]["id"]
@@ -235,29 +266,46 @@ def _sql(case_, wrap="plain"):
 
 def _solve_with_oracle(oracle_solver, case_):
     oracle_solver.create_model("direct_a2_single_facility_location")
-    oracle_solver.add_variable("c", VarType.CONTINUOUS, max(case_.box.lower, -BIG), min(case_.box.upper, BIG))
-    a, b = _totals(case_)
+    linear, quadratic = {}, {}
+    for index, rows in enumerate(_classes(case_).values()):
+        name = f"c{index}"
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, max(case_.box.lower, -BIG), min(case_.box.upper, BIG))
+        a, b = _totals(case_, rows)
+        linear[name] = b
+        if a:
+            quadratic[(name, name)] = a
     sense = ObjSense.MAXIMIZE if case_.objective.maximize else ObjSense.MINIMIZE
-    if a:
-        oracle_solver.set_quadratic_objective({"c": b} if b else {}, {("c", "c"): a}, sense)
+    if quadratic:
+        oracle_solver.set_quadratic_objective({name: b for name, b in linear.items() if b}, quadratic, sense)
     else:
         # No row is kept, or every kept value is NULL: the objective is the constant 0.
-        oracle_solver.set_objective({"c": b}, sense)
+        oracle_solver.set_objective(linear, sense)
     return oracle_solver.solve()
 
 
 def _check_assignment(case_, rows, columns, oracle, mode):
     assert columns == ["id", "c"], mode
     assert [row[0] for row in rows] == [row["id"] for row in case_.rows], mode
-    assert all(isinstance(row[1], float) for row in rows), (mode, rows)
-    centers = {row[1] for row in rows}
-    assert len(centers) == 1, (mode, "every row carries the one shared center", centers)
-    center = centers.pop()
-    assert case_.box.lower - 1e-9 <= center <= case_.box.upper + 1e-9, (mode, center, case_.box)
-    a, b = _totals(case_)
-    total = a * center * center + b * center
+    classes = _classes(case_)
+    in_class = {id(row): key for key, members in classes.items() for row in members}
+    centers = {key: set() for key in classes}
+    for source_row, row in zip(case_.rows, rows):
+        key = in_class.get(id(source_row))
+        if key is None:
+            # A row in no class has no decision (D5): it shows NULL.
+            assert row[1] is None, (mode, "a row with no class shows NULL", row)
+            continue
+        assert isinstance(row[1], float), (mode, rows)
+        centers[key].add(row[1])
+    total = 0.0
+    for key, members in classes.items():
+        assert len(centers[key]) == 1, (mode, "every row of a class carries its one shared center", key, centers[key])
+        center = next(iter(centers[key]))
+        assert case_.box.lower - 1e-9 <= center <= case_.box.upper + 1e-9, (mode, center, case_.box)
+        a, b = _totals(case_, members)
+        total += a * center * center + b * center
     expected = oracle.objective_value
-    assert abs(total - expected) <= 1e-5 * max(1.0, abs(expected)), (mode, center, total, expected)
+    assert abs(total - expected) <= 1e-5 * max(1.0, abs(expected)), (mode, total, expected)
 
 
 def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "require")):
@@ -364,6 +412,145 @@ def test_a2_an_objective_that_keeps_no_row_answers_the_point_nearest_zero(decidb
         assert interval.lower <= row[1] <= interval.upper
 
 
+# ---------------------------------------------------------------------------
+# A keyed decision: `DECIDE per k: c(REAL)` gives one center per class of the key
+# ---------------------------------------------------------------------------
+
+KEYED_ROWS = (
+    _krow(1, "a", 1, 2.0, True),
+    _krow(2, "a", 1, 4.0, False),
+    _krow(3, "b", 1, 9.0, True),
+    _krow(4, "b", 2, -1.5, False),
+    _krow(5, "a", 2, 6.25, True),
+    _krow(6, "c", 1, 3.0, True),
+)
+# A NULL in a key column puts the row in no class (D5); its value is never read. Row 9 has a class by `k` alone.
+KEYED_NULL_ROWS = KEYED_ROWS + (
+    _krow(7, None, 1, 100.0, True),
+    _krow(8, None, 2, -50.0, False),
+    _krow(9, "a", None, 40.0, True),
+)
+# The objective's `when` drops every row of class "d"; every value of class "e" is NULL.
+KEYED_NO_KEPT_ROWS = KEYED_ROWS + (_krow(10, "d", 1, 5.0, False), _krow(11, "d", 2, 7.0, False))
+KEYED_ALL_NULL_ROWS = KEYED_ROWS + (_krow(10, "e", 1, None, True), _krow(11, "e", 2, None, False))
+# A NaN and an infinity on rows the `when` drops, and on rows with no class: nothing is computed on either.
+KEYED_DROPPED_BAD_ROWS = KEYED_ROWS + (_krow(12, "a", 1, math.nan, False), _krow(13, "b", 1, -INF, False))
+KEYED_NO_CLASS_BAD_ROWS = KEYED_ROWS + (_krow(12, None, 1, math.nan, True), _krow(13, None, 2, INF, True))
+ONE_CLASS_ROWS = tuple(_krow(row["id"], "a", 1, row["v"], row["f"]) for row in ROWS)
+DUPLICATE_KEYED_ROWS = (_krow(1, "a", 1, 2.0, True), _krow(1, "a", 1, 2.0, True), _krow(2, "b", 1, 4.0, True))
+# `per t:` keys on the whole row: each distinct row is a class, and a NULL in it is a value.
+RELATION_ROWS = (
+    _krow(1, None, 1, 2.0, True),
+    _krow(1, None, 1, 2.0, True),
+    _krow(2, "a", 1, 4.0, True),
+    _krow(3, None, None, 6.0, True),
+    _krow(4, None, None, 6.0, False),
+)
+# Three classes whose means (4.08, 3.75 and 3) fall inside, above and below the interval.
+KEYED_SPLIT_BOX = Box("c BETWEEN 3.9 AND 4.1", 3.9, 4.1)
+
+
+def keyed(box, objective, rows, keys=("k",), relation=False):
+    return Case(box if isinstance(box, Box) else BOXES[box], OBJECTIVES[objective], rows, keys, relation)
+
+
+KEYED_CASES = {
+    "several_keys": keyed("interior", "sq", KEYED_ROWS),
+    "multi_column_key": keyed("interior", "sq", KEYED_ROWS, ("k", "j")),
+    "null_key": keyed("interior", "sq", KEYED_NULL_ROWS),
+    "null_in_one_column_of_a_multi_column_key": keyed("interior", "sq", KEYED_NULL_ROWS, ("k", "j")),
+    "class_with_no_kept_row": keyed("interior", "sq_when", KEYED_NO_KEPT_ROWS),
+    "class_with_no_kept_row_negative_interval": keyed("negative_interval", "sq_when", KEYED_NO_KEPT_ROWS),
+    "class_with_no_kept_row_clamped_up": keyed("clamped_up", "sq_when", KEYED_NO_KEPT_ROWS),
+    "class_with_every_value_null": keyed("interior", "sq", KEYED_ALL_NULL_ROWS),
+    "centers_clamped_per_class": keyed(KEYED_SPLIT_BOX, "sq", KEYED_ROWS),
+    "maximized": keyed("clamped_down", "sq_max_negated", KEYED_ROWS),
+    "slope": keyed("interior", "sq_slope", KEYED_ROWS),
+    "one_class": keyed("interior", "sq", ONE_CLASS_ROWS),
+    "duplicate_rows": keyed("interior", "sq", DUPLICATE_KEYED_ROWS),
+    "bad_values_on_rows_a_when_drops": keyed("interior", "sq_when", KEYED_DROPPED_BAD_ROWS),
+    "bad_values_on_rows_with_no_class": keyed("interior", "sq", KEYED_NO_CLASS_BAD_ROWS),
+    "relation_key_reads_null_as_a_value": keyed("interior", "sq", RELATION_ROWS, relation=True),
+    "relation_key_with_a_when": keyed("interior", "sq_when", RELATION_ROWS, relation=True),
+}
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(KEYED_CASES))
+def test_a2_keyed_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, KEYED_CASES[name])
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("box", sorted(NO_ROW_BOXES))
+def test_a2_a_class_with_no_kept_row_answers_the_point_nearest_zero(decidb_cli, box):
+    # The ruling for the query-wide form holds per class: class "d" has no kept row, and the other classes keep theirs.
+    interval = BOXES[box]
+    nearest = min(max(0.0, interval.lower), interval.upper)
+    assert nearest == NO_ROW_BOXES[box]
+    case_ = keyed(box, "sq_when", KEYED_NO_KEPT_ROWS)
+    rows, _ = _run(decidb_cli, _sql(case_), "require")
+    assert [row[1] for row in rows if row[0] in (10, 11)] == [nearest, nearest]
+    for row in _run(decidb_cli, _sql(case_), "off")[0]:
+        if row[0] in (10, 11):
+            assert interval.lower <= row[1] <= interval.upper
+
+
+KEYED_CONTEXT_CASES = [
+    (base, wrap)
+    for base in ("null_key", "class_with_no_kept_row", "multi_column_key")
+    for wrap in ("cte_materialized", "cte_inlined", "wide_source", "parent_join", "recombined_filters")
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("base,wrap", KEYED_CONTEXT_CASES)
+def test_a2_keyed_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
+    _agree(decidb_cli, oracle_solver, KEYED_CASES[base], wrap=wrap)
+
+
+@pytest.mark.correctness
+def test_a2_keyed_every_row_with_no_class_has_no_instance(decidb_cli):
+    # No row has a class, so there is no decision: every row shows NULL, and the empty interval raises nothing because
+    # there is no instance for it to empty.
+    rows = tuple(_krow(i, None, 1, float(i), True) for i in range(1, 4))
+    for bounds in ("c BETWEEN 0 AND 10", "c >= 5 AND c <= 3"):
+        sql = (
+            f"SELECT id, c FROM (FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))}) "
+            f"DECIDE per k: c(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(c - v, 2))) q ORDER BY id"
+        )
+        for mode in ("off", "require"):
+            assert _run(decidb_cli, sql, mode)[0] == [(1, None), (2, None), (3, None)], mode
+
+
+@pytest.mark.correctness
+def test_a2_keyed_empty_source_returns_no_rows_whatever_the_bounds_say(decidb_cli):
+    for bounds in ("c BETWEEN 0 AND 10", "c >= 5 AND c <= 3"):
+        sql = (
+            "SELECT id, c FROM (SELECT 1 AS id, 'a' AS k, 1.0 AS v WHERE false) "
+            f"DECIDE per k: c(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(c - v, 2))"
+        )
+        for mode in ("off", "require"):
+            assert _run(decidb_cli, sql, mode)[0] == []
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a2_keyed_an_empty_interval_raises_the_solvers_infeasible_error(decidb_cli, decidb_cli_highs):
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES {_values(KEYED_ROWS)}) t({', '.join(_names(KEYED_ROWS))}) "
+        "DECIDE per k: c(REAL) SUCH THAT c >= 5 AND c <= 3 MINIMIZE SUM(POWER(c - v, 2))) q"
+    )
+    with pytest.raises(DeciDBCliError, match="(?i)infeasible") as direct:
+        _run(decidb_cli, sql, "require")
+    for cli in (decidb_cli, decidb_cli_highs):
+        with pytest.raises(DeciDBCliError) as solver:
+            _run(cli, sql, "off")
+        assert str(solver.value) == str(direct.value)
+
+
 CONTEXTS = (
     "cte_materialized",
     "cte_inlined",
@@ -403,7 +590,7 @@ def test_a2_an_answer_of_zero_is_positive_zero(decidb_cli, value, objective):
 def test_a2_a_filter_on_the_result_does_not_shrink_the_problem(decidb_cli):
     # The center is the mean of every row; a parent that keeps two rows still reads the mean of all five.
     case_ = A2_CASES["box_interior"]
-    source = f"(VALUES {_values(case_.rows)}) t({', '.join(NAMES)})"
+    source = f"(VALUES {_values(case_.rows)}) t({', '.join(_names(case_.rows))})"
     filtered = f"SELECT id, c FROM (FROM {source} {_decide(case_)}) q WHERE id <= 2 ORDER BY id"
     full = _run(decidb_cli, _sql(case_), "require")[0]
     for mode in ("off", "require"):
@@ -432,7 +619,7 @@ def test_a2_an_empty_interval_raises_the_solvers_infeasible_error(decidb_cli, de
     # The plan raises on any row. The full text is compared with the solver's on both backends, never with a
     # hand-written string alone.
     sql = (
-        f"SELECT id, c FROM (FROM (VALUES {_values(ROWS)}) t({', '.join(NAMES)}) "
+        f"SELECT id, c FROM (FROM (VALUES {_values(ROWS)}) t({', '.join(_names(ROWS))}) "
         f"DECIDE per (): c(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(c - v, 2))) q"
     )
     with pytest.raises(DeciDBCliError, match="(?i)infeasible") as direct:
@@ -473,7 +660,7 @@ def test_a2_random_problems_agree_with_the_oracle(decidb_cli, oracle_solver, see
 
 def _problem(rows, bounds="c BETWEEN 0 AND 10", obj="MINIMIZE SUM(POWER(c - v, 2))", tail="ORDER BY id"):
     return (
-        f"SELECT id, c FROM (SELECT * FROM (VALUES {_values(rows)}) t({', '.join(NAMES)})) "
+        f"SELECT id, c FROM (SELECT * FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))})) "
         f"DECIDE per (): c(REAL) SUCH THAT {bounds} {obj} {tail}"
     )
 

@@ -52,23 +52,6 @@ struct DirectIRDecision {
 	idx_t keyed_scope = DConstants::INVALID_INDEX;
 };
 
-//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
-//! (`SUM(D: e)`).
-struct DirectIRKeyedScope {
-	vector<idx_t> relations;
-	//! Source slots of the identity key columns.
-	vector<idx_t> key_slots;
-};
-
-enum class DirectReducer : uint8_t {
-	//! A row-level part: per-row constraint algebra, or a query-wide decision beside reducers.
-	NONE,
-	SUM,
-	AVG,
-	MIN,
-	MAX
-};
-
 //! One element of a grouping key: the expression rows group on (`DecideKeyElement::Grouping()`, the collated one) and
 //! the expression a message quotes (`DecideKeyElement::expression`).
 struct DirectKeyElement {
@@ -79,6 +62,23 @@ struct DirectKeyElement {
 	//! A row whose element is NULL is in no group (D5), unless the element is a column of a relation, where NULL is a
 	//! value of its own.
 	bool no_group = true;
+};
+
+//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
+//! (`SUM(D: e)`).
+struct DirectIRKeyedScope {
+	//! The identity key, one element per column: a column element has no class on a NULL, a column a relation element
+	//! stands for takes NULL as a value (`DirectKeyElement::no_group`).
+	vector<DirectKeyElement> key;
+};
+
+enum class DirectReducer : uint8_t {
+	//! A row-level part: per-row constraint algebra, or a query-wide decision beside reducers.
+	NONE,
+	SUM,
+	AVG,
+	MIN,
+	MAX
 };
 
 //! Whether two keys group the same rows the same way: the same expressions in the same order. The binder keeps one

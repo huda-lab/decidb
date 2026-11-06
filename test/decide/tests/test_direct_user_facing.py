@@ -471,6 +471,37 @@ def test_a2_errors_are_the_solvers_word_for_word(decidb_cli, v, decide, message)
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows,message",
+    [
+        # A NaN on a row with a class raises the query-wide form's text.
+        (
+            "(1, 'a', 2.0), (2, 'a', 'NaN'::DOUBLE), (3, 'b', 3.0)",
+            "DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.",
+        ),
+        # A row with a NULL key has no decision, so its value is not read: no error on either path.
+        (
+            "(1, 'a', 2.0), (2, NULL, 'NaN'::DOUBLE), (3, 'b', 3.0), (4, NULL, 1e308), (5, NULL, 'Infinity'::DOUBLE)",
+            None,
+        ),
+    ],
+)
+def test_a2_keyed_errors_are_the_solvers_word_for_word(decidb_cli, rows, message):
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES {rows}) t(id, k, v) "
+        "DECIDE per k: c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))) q ORDER BY id"
+    )
+    direct = _raw(decidb_cli, sql, mode="require")
+    solver = _raw(decidb_cli, sql, mode="off")
+    if message is None:
+        assert direct.returncode == 0 and solver.returncode == 0, (direct.stderr, solver.stderr)
+        assert direct.stdout == solver.stdout
+    else:
+        assert message in direct.stderr, direct.stderr
+        assert direct.stderr == solver.stderr
+
+
 # The infeasible and unbounded errors advise prefixing the query with DIAGNOSE only where DIAGNOSE runs. The rule driver
 # asks the solver-support check DIAGNOSE goes through (DecideSolverRuns) once per query. On a machine with no Gurobi,
 # HiGHS takes a linear model and a convex quadratic objective over continuous decisions, and refuses the rest.

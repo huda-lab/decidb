@@ -301,10 +301,34 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	REQUIRE(ir.decisions[4].scope == DecideVarScope::KEYED);
 	REQUIRE(ir.decisions[4].keyed_scope == 0);
 	REQUIRE(ir.keyed_scopes.size() == 1);
-	REQUIRE(!ir.keyed_scopes[0].key_slots.empty());
+	// `per t` is a relation element: it stands for every column t stores, and a NULL in one is a value of its own.
+	auto &relation_key = ir.keyed_scopes[0].key;
+	REQUIRE(relation_key.size() == 4);
+	for (auto &element : relation_key) {
+		REQUIRE(!element.no_group);
+		REQUIRE(element.grouping);
+	}
 	// The query-wide decision is a row-level part beside the reducers.
 	REQUIRE(ir.objective.parts.size() == 5);
 	REQUIRE(ir.objective.parts[3].reducer == DirectReducer::NONE);
+}
+
+TEST_CASE("Direct-solve IR reads a keyed decision's key", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	// A column element is in no class on a NULL (D5), and a key of two columns keeps both.
+	QueryIR query(con, IRQuery("per cap, flag: e(BOOL)", "e <= 1", "MAXIMIZE SUM(w*e)"));
+	REQUIRE(query.ir.decisions[0].scope == DecideVarScope::KEYED);
+	REQUIRE(query.ir.keyed_scopes.size() == 1);
+	auto &key = query.ir.keyed_scopes[0].key;
+	REQUIRE(key.size() == 2);
+	for (auto &element : key) {
+		REQUIRE(element.no_group);
+		REQUIRE(element.label);
+	}
+	// The binder keeps a key in one order, whichever order wrote it.
+	REQUIRE((key[0].name == "cap") != (key[1].name == "cap"));
+	REQUIRE((key[0].name == "flag") != (key[1].name == "flag"));
 }
 
 TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides", "[decidb]") {

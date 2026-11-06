@@ -1105,6 +1105,14 @@ duckdb::vector<Shape> A2AppliesShapes() {
 	    A2("a WHEN on the sum", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(when flag: POWER(c - w, 2))"));
 	shapes.push_back(A2("an objective constant", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2)) + 5"));
 	shapes.push_back(A2("a slope other than one", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(2 * c - w, 2))"));
+	// A keyed decision: a column element has no class on a NULL, and so does each column of a key of two.
+	shapes.push_back(
+	    A2("a decision keyed by a column", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "per name: c(REAL)"));
+	shapes.push_back(
+	    A2("a decision keyed by two columns", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "per name, flag: c(REAL)"));
+	// A relation element takes a NULL as a value of its own.
+	shapes.push_back(
+	    A2("a decision keyed by a relation", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "per t: c(REAL)"));
 	return shapes;
 }
 

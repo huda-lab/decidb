@@ -237,17 +237,11 @@ private:
 			DirectIRKeyedScope ir_node;
 			// The IR is read before the value rewrite makes its helper scopes; a binder scope's key is columns.
 			D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
-			for (auto &element : DecideKeyElements(decide.keys, scope.key)) {
-				auto &binding = element.expression->Cast<BoundColumnRefExpression>().binding;
-				if (std::find(ir_node.relations.begin(), ir_node.relations.end(), binding.table_index) ==
-				    ir_node.relations.end()) {
-					ir_node.relations.push_back(binding.table_index);
-				}
-				auto found = std::find(source_bindings.begin(), source_bindings.end(), binding);
-				// The binder keeps every keyed decision's key live in the source.
-				D_ASSERT(found != source_bindings.end());
-				ir_node.key_slots.push_back(NumericCast<idx_t>(found - source_bindings.begin()));
-			}
+			// A binder scope's key is columns of the source (the binder keeps every keyed decision's key live in it),
+			// which a row check can evaluate, so reading it cannot decline.
+			bool read = ReadKey(scope.key, ir_node.key);
+			D_ASSERT(read);
+			(void)read;
 			ir.keyed_scopes.push_back(std::move(ir_node));
 		}
 	}

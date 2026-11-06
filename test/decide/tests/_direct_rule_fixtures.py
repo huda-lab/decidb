@@ -365,9 +365,9 @@ N1 = RuleFixture(
 
 
 def _a2_late_error(decision_sql, v_sql="1.0"):
-    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary. `g` is a key of seven classes."""
     return f"""
-        FROM (SELECT i, {v_sql} AS v FROM range(5000) t(i)) s
+        FROM (SELECT i, i % 7 AS g, {v_sql} AS v FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
@@ -427,6 +427,8 @@ A2 = RuleFixture(
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE when cap > 3: SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c >= -1e30 AND c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
+        # A keyed decision: one center per class of cap.
+        ("per cap: c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2))"),
     ),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 5, 2.0::DOUBLE), (2, 10.0::DOUBLE, 3, 4.0::DOUBLE)) t(id,p,cap,w)",
     near_miss_column="id",
@@ -445,6 +447,14 @@ A2 = RuleFixture(
                 v_sql="CASE WHEN i=4999 THEN 1e308 ELSE 1.0 END",
             ),
             "too large for a DOUBLE",
+        ),
+        # The same on a keyed decision: the last row belongs to one of seven classes.
+        (
+            _a2_late_error(
+                "per g: c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))",
+                v_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "v is NaN or infinite on some rows",
         ),
     ),
     late_column="i",
