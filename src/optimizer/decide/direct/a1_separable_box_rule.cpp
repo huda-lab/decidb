@@ -44,7 +44,9 @@ struct Term {
 struct Part {
 	//! The part's sign and constant factor, and its linear terms.
 	DirectLinearPart linear;
-	unique_ptr<Expression> filter;
+	//! The rows the part reads (DirectObjectivePartKept): the objective's `when` and the part's own filter. Null for
+	//! every row.
+	unique_ptr<Expression> kept;
 	//! The constant and square terms, in the order they came.
 	vector<Term> terms;
 };
@@ -68,7 +70,6 @@ struct Condition final : DirectApplicabilityCondition {
 	string objective_written;
 	vector<Decision> decisions;
 	vector<DirectBoundClause> clauses;
-	unique_ptr<Expression> objective_when;
 	vector<Part> parts;
 	bool has_square = false;
 	//! Every value is a constant and nothing is conditional, so a check that fails on one row fails on all of them.
@@ -88,16 +89,13 @@ bool IsConstantProblem(const Condition &condition) {
 		}
 		return true;
 	};
-	if (condition.objective_when) {
-		return false;
-	}
 	for (auto &clause : condition.clauses) {
 		if (clause.when || !constant(*clause.rhs) || !constant_values(clause.coefficient)) {
 			return false;
 		}
 	}
 	for (auto &part : condition.parts) {
-		if (part.filter) {
+		if (part.kept) {
 			return false;
 		}
 		for (auto &term : part.linear.terms) {
@@ -146,8 +144,7 @@ public:
 			}
 		}
 		for (auto &part : ir.objective.parts) {
-			if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
-			    !part.by.empty()) {
+			if (!part.IsPlainSum()) {
 				return nullptr;
 			}
 			for (auto &term : part.terms) {
@@ -205,28 +202,17 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	auto &objective = ir.objective;
-	if (objective.scope.when) {
-		if (!DirectIsSourceOnlyPredicate(*objective.scope.when, ir.decide_index, ir.source_bindings)) {
-			return false;
-		}
-		condition.objective_when = objective.scope.when->Copy();
-	}
 	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
 		Part prepared;
-		if (!DirectReadLinearPart(ir, context, part, objective.written, prepared.linear)) {
+		if (!DirectReadLinearPart(ir, context, part, objective.written, prepared.linear) ||
+		    !DirectObjectivePartKept(ir, part, prepared.kept)) {
 			return false;
 		}
 		for (auto &term : prepared.linear.terms) {
 			if (term.decision >= decision_count) {
 				return false;
 			}
-		}
-		if (part.filter) {
-			if (!DirectIsSourceOnlyPredicate(*part.filter, ir.decide_index, ir.source_bindings)) {
-				return false;
-			}
-			prepared.filter = part.filter->Copy();
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == DecideTermKind::LINEAR) {
@@ -449,27 +435,14 @@ private:
 			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
 			raw.clauses.push_back(columns);
 		}
-		bool has_shared_mask = false;
-		ColumnBinding shared_mask;
 		for (auto &part : condition.parts) {
 			Raw::PartColumns columns;
 			// The rows the part reads, as an expression over the source; null for every row.
 			ExprPtr kept;
-			if (condition.objective_when || part.filter) {
+			if (part.kept) {
 				columns.has_mask = true;
-				kept = calc.Wrap(DirectActiveWhen(calc, condition.objective_when.get()));
-				if (part.filter) {
-					kept = calc.If(kept, calc.Wrap(DirectActiveWhen(calc, part.filter.get())), calc.Bool(false));
-				}
-				if (!part.filter && has_shared_mask) {
-					columns.mask = shared_mask;
-				} else {
-					columns.mask = p1.Add(calc.Out(kept));
-					if (!part.filter) {
-						has_shared_mask = true;
-						shared_mask = columns.mask;
-					}
-				}
+				kept = calc.Wrap(DirectActiveWhen(calc, part.kept.get()));
+				columns.mask = p1.Add(calc.Out(kept));
 			}
 			AddObjectiveValues(p1, checks, part, columns, kept);
 			raw.parts.push_back(std::move(columns));

@@ -299,8 +299,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 //! The objective: signed, scaled `SUM(v*x)` parts, or none. Each coefficient must be a value of the source row.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &part : ir.objective.parts) {
-		if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
-		    !part.by.empty() || !OnlyLinearTerms(part.terms, ir.decisions.size())) {
+		if (!part.IsPlainSum() || !OnlyLinearTerms(part.terms, ir.decisions.size())) {
 			return false;
 		}
 		DirectLinearPart read;

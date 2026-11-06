@@ -255,8 +255,7 @@ static bool SquareCoversEveryLinearTerm(const vector<Part> &parts) {
 //! No objective, or `SUM` parts of linear terms, per-row constants and at most one square, convex in the sense.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &part : ir.objective.parts) {
-		if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
-		    !part.by.empty()) {
+		if (!part.IsPlainSum()) {
 			return false;
 		}
 		Part read;

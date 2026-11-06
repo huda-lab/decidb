@@ -112,6 +112,12 @@ struct DirectPart {
 	//! `outer(per k: inner(e) by (k))`, which the front end declines today).
 	vector<DecideSplitTerm> terms;
 	unique_ptr<DirectPart> inner;
+
+	//! Whether the part is a plain `SUM(...)`: the SUM reducer, not nested, not qualified by a keyed scope, with no
+	//! `by` key. Its sign, factor and filter are the rule's to read.
+	bool IsPlainSum() const {
+		return reducer == DirectReducer::SUM && !inner && qualifier == DConstants::INVALID_INDEX && by.empty();
+	}
 };
 
 //! Which rows a constraint or objective applies to: a row whose `when` is false or NULL does not join.

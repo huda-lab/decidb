@@ -542,8 +542,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t term_count = 0;
 	condition.objective_written = ir.objective.written;
 	for (auto &part : parts) {
-		if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
-		    !part.by.empty()) {
+		if (!part.IsPlainSum()) {
 			return false;
 		}
 		for (auto &term : part.terms) {
