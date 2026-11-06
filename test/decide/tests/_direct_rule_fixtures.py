@@ -266,7 +266,7 @@ def _n1_late_error(decision_sql, s_sql="1.0", k_sql="'a'", l_sql="9.0"):
 
 N1 = RuleFixture(
     rule="N1_EUCLIDEAN_BALL",
-    condition="min/max SUM(c*x), SUM(x^2) <= B",
+    condition="SUM(x^2) <= B: linear objective or nearest point to a target",
     # Scores 3 and 4 under a limit of 25: x = 3, 4. The solver stops at its barrier tolerance (3.0005, 3.9996), so the
     # query rounds its output to two places, which makes its rows equal on both paths.
     applies="""

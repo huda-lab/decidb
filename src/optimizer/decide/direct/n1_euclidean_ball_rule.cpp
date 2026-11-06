@@ -108,7 +108,7 @@ public:
 	}
 
 	string Summary() const override {
-		return "min/max SUM(c*x), SUM(x^2) <= B";
+		return "SUM(x^2) <= B: linear objective or nearest point to a target";
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
