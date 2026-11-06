@@ -502,6 +502,26 @@ def test_a2_keyed_errors_are_the_solvers_word_for_word(decidb_cli, rows, message
         assert direct.stderr == solver.stderr
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "declaration,rows",
+    [
+        ("per ()", "(1, 'a', 2.0, 5.0), (2, 'a', 3.0, 'NaN'::DOUBLE)"),
+        ("per k", "(1, 'a', 2.0, 5.0), (2, 'b', 3.0, 'NaN'::DOUBLE)"),
+        # The bound of a row with no class is still read: a NaN there raises.
+        ("per k", "(1, 'a', 2.0, 5.0), (2, NULL, 3.0, 'NaN'::DOUBLE)"),
+    ],
+)
+def test_a2_a_nan_data_bound_is_the_solvers_word_for_word(decidb_cli, declaration, rows):
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES {rows}) t(id, k, v, cap) "
+        f"DECIDE {declaration}: c(REAL) SUCH THAT c <= cap MINIMIZE SUM(POWER(c - v, 2))) q"
+    )
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "the bound cap is NaN on some rows" in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
 # The infeasible and unbounded errors advise prefixing the query with DIAGNOSE only where DIAGNOSE runs. The rule driver
 # asks the solver-support check DIAGNOSE goes through (DecideSolverRuns) once per query. On a machine with no Gurobi,
 # HiGHS takes a linear model and a convex quadratic objective over continuous decisions, and refuses the rest.

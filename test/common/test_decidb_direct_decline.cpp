@@ -1105,6 +1105,11 @@ duckdb::vector<Shape> A2AppliesShapes() {
 	    A2("a WHEN on the sum", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(when flag: POWER(c - w, 2))"));
 	shapes.push_back(A2("an objective constant", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2)) + 5"));
 	shapes.push_back(A2("a slope other than one", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(2 * c - w, 2))"));
+	// Bounds read from the data, or under a WHEN, are clauses the plan intersects per class.
+	shapes.push_back(A2("a bound read from the data", "c <= cap"));
+	shapes.push_back(A2("a lower bound read from the data", "c >= w - 4"));
+	shapes.push_back(A2("a bound under a WHEN", "when flag: c BETWEEN 1 AND w"));
+	shapes.push_back(A2("a floor lowered under a WHEN", "when flag: c >= -4"));
 	// A keyed decision: a column element has no class on a NULL, and so does each column of a key of two.
 	shapes.push_back(
 	    A2("a decision keyed by a column", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "per name: c(REAL)"));
@@ -1126,7 +1131,6 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	shapes.push_back(A2("a constraint that is not a bound", "c BETWEEN 0 AND 10",
 	                    [](DirectIR &ir) { ir.constraints[0].singleton_row = false; }));
 	shapes.push_back(A2("a bound below the built-in domain", "c <= -1"));
-	shapes.push_back(A2("a bound read from the data", "c <= cap"));
 	// ProveObjective.
 	shapes.push_back(A2("no objective", "c BETWEEN 0 AND 10", nullptr, ""));
 	shapes.push_back(A2("an average objective", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE AVG(POWER(c - w, 2))"));

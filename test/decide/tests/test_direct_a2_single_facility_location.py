@@ -1,7 +1,7 @@
 """A2 (single-facility location), checked three ways: the independent oracle, the solver path, the direct path.
 
 Every case is one DECIDE query with a decision `c` shared by many rows (one for the whole query, or one per class of a
-key), under constant bounds, minimizing the squared distance to one value per row. The oracle builds its own model from the raw rows, from the interval and the
+key), under bounds that are constants or read from the data, minimizing the squared distance to one value per row. The oracle builds its own model from the raw rows, from the interval and the
 objective coefficients each case states in Python (never from DeciDB's reading of the SQL). DeciDB then runs the query
 with `decide_direct_solve='off'` (the solver) and `'require'` (direct solve; a query the rule does not apply to fails
 instead of quietly using the solver). The case passes when all three agree: both DeciDB runs return one value for every
@@ -54,7 +54,7 @@ NAMES = [name for name, _ in COLUMNS]
 
 
 #: The type of every column a case table uses.
-TYPES = dict(COLUMNS, k="VARCHAR", j="INTEGER")
+TYPES = dict(COLUMNS, k="VARCHAR", j="INTEGER", lo="DOUBLE", cap="DOUBLE")
 
 
 def _row(id, v, f):
@@ -105,6 +105,9 @@ class Box:
     #: The interval they allow `c`, derived here in Python and not read from DeciDB.
     lower: float
     upper: float
+    #: For a bound read from the data, the interval of a class derived from its rows: `rows -> (lower, upper)`. Without
+    #: it every class has [lower, upper].
+    interval: object = None
 
 
 @dataclass(frozen=True)
@@ -211,6 +214,10 @@ def _classes(case_):
     return classes
 
 
+def _interval(case_, rows):
+    return case_.box.interval(rows) if case_.box.interval else (case_.box.lower, case_.box.upper)
+
+
 def _totals(case_, rows=None):
     """The objective's `A*c^2 + B*c` summed over the rows (of one class), as the sense reads it (not negated for a
     maximum)."""
@@ -269,7 +276,8 @@ def _solve_with_oracle(oracle_solver, case_):
     linear, quadratic = {}, {}
     for index, rows in enumerate(_classes(case_).values()):
         name = f"c{index}"
-        oracle_solver.add_variable(name, VarType.CONTINUOUS, max(case_.box.lower, -BIG), min(case_.box.upper, BIG))
+        lower, upper = _interval(case_, rows)
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, max(lower, -BIG), min(upper, BIG))
         a, b = _totals(case_, rows)
         linear[name] = b
         if a:
@@ -301,7 +309,8 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     for key, members in classes.items():
         assert len(centers[key]) == 1, (mode, "every row of a class carries its one shared center", key, centers[key])
         center = next(iter(centers[key]))
-        assert case_.box.lower - 1e-9 <= center <= case_.box.upper + 1e-9, (mode, center, case_.box)
+        lower, upper = _interval(case_, members)
+        assert lower - 1e-9 <= center <= upper + 1e-9, (mode, center, lower, upper)
         a, b = _totals(case_, members)
         total += a * center * center + b * center
     expected = oracle.objective_value
@@ -551,6 +560,148 @@ def test_a2_keyed_an_empty_interval_raises_the_solvers_infeasible_error(decidb_c
         assert str(solver.value) == str(direct.value)
 
 
+# ---------------------------------------------------------------------------
+# Bounds read from the data: each row's `c <= cap` binds the same decision, so a class's interval is the tightest of
+# them (the MAX of the lower ends and the MIN of the upper ends, over the rows each clause keeps)
+# ---------------------------------------------------------------------------
+
+
+def _drow(id, k, v, f, lo, cap):
+    """A row of a data-bound case: `lo` and `cap` are the columns the bounds read."""
+    return dict(id=id, k=k, v=v, f=f, lo=lo, cap=cap)
+
+
+def _data_box(sql, lower=None, upper=None, when=None, lifted=None, floor=0.0, ceiling=INF):
+    """A box whose ends come from the rows of each class, derived here in Python.
+
+    `lower` and `upper` name the column each bound reads, `when(row)` is the clause's `when`, and `lifted` is the
+    constant lower bound under that `when`, which replaces the default floor of 0 when some row of the class keeps it.
+    `floor` and `ceiling` are the constant bounds beside them. A NULL bound is skipped and an infinite one is no bound;
+    a data lower bound never replaces the default floor.
+    """
+
+    def interval(rows):
+        kept = [row for row in rows if when is None or when(row)]
+        start = lifted if lifted is not None and kept else floor
+        low = max([start] + [row[lower] for row in kept if lower and row[lower] is not None])
+        high = min([ceiling] + [row[upper] for row in kept if upper and row[upper] is not None])
+        return low, high
+
+    return Box(sql, floor, ceiling, interval)
+
+
+TIGHT_ROWS = (
+    _drow(1, "a", 2.0, True, -4.0, 7.0),
+    _drow(2, "a", 4.0, False, -1.0, 3.0),
+    _drow(3, "b", 9.0, True, 4.5, 8.0),
+    _drow(4, "b", -1.5, False, 2.0, None),
+    _drow(5, "a", 6.25, True, None, 5.5),
+    _drow(6, "c", 3.0, True, 0.5, 12.0),
+)
+# Class "d" has no row that `f` keeps. A row with no class holds a bound that would empty every interval it reached.
+TIGHT_D_ROWS = TIGHT_ROWS + (_drow(7, "d", 5.0, False, 2.0, 9.0),)
+TIGHT_NULL_KEY_ROWS = TIGHT_ROWS + (_drow(8, None, 5.0, True, 100.0, -100.0),)
+# Class "a" holds a lower bound above its tightest upper bound.
+TIGHT_EMPTY_CLASS_ROWS = TIGHT_ROWS + (_drow(9, "a", 1.0, True, 6.0, 20.0),)
+# A NaN bound on a row a `when` drops is never read.
+TIGHT_DROPPED_NAN_ROWS = TIGHT_ROWS + (_drow(10, "a", 1.0, False, math.nan, math.nan),)
+
+DATA_BOXES = {
+    "upper": _data_box("c <= cap", upper="cap"),
+    "lower": _data_box("c >= lo", lower="lo"),
+    "both": _data_box("c >= lo AND c <= cap", lower="lo", upper="cap"),
+    "between": _data_box("c BETWEEN lo AND cap", lower="lo", upper="cap"),
+    "upper_under_when": _data_box("when f: c <= cap", upper="cap", when=lambda r: r["f"]),
+    "lower_under_when": _data_box("when f: c >= lo", lower="lo", when=lambda r: r["f"]),
+    "both_under_when": _data_box("when f: c BETWEEN lo AND cap", lower="lo", upper="cap", when=lambda r: r["f"]),
+    # A constant lower bound under a `when` replaces the floor for the whole class when some row of it keeps the bound.
+    "lifted_floor": _data_box("when f: c >= -4", when=lambda r: r["f"], lifted=-4.0),
+    "lifted_floor_and_data_upper": _data_box(
+        "when f: c BETWEEN -4 AND cap", upper="cap", when=lambda r: r["f"], lifted=-4.0
+    ),
+    # A coefficient read from the data: `(2 + f) * c <= cap` admits `c <= cap / (2 + f)`.
+    "data_coefficient": Box(
+        "(2 + f::INT) * c <= cap",
+        0.0,
+        INF,
+        lambda rows: (0.0, min([INF] + [r["cap"] / (2 + int(r["f"])) for r in rows if r["cap"] is not None])),
+    ),
+    # Constant bounds and a data bound tighten the same interval.
+    "constant_and_data": _data_box("c >= 1 AND c <= 6 AND c <= cap", upper="cap", floor=1.0, ceiling=6.0),
+}
+
+
+def tight(box, objective, rows, keys=()):
+    return Case(DATA_BOXES[box], OBJECTIVES[objective], rows, keys)
+
+
+DATA_CASES = {}
+for _name in DATA_BOXES:
+    DATA_CASES[f"query_wide_{_name}"] = tight(_name, "sq", TIGHT_ROWS)
+    DATA_CASES[f"keyed_{_name}"] = tight(_name, "sq", TIGHT_D_ROWS, ("k",))
+# A negative optimum meets the default floor of 0, which a data lower bound does not lower and a constant lower bound
+# under a `when` does.
+DATA_CASES["query_wide_lower_keeps_the_floor"] = tight("lower", "sq_plus", TIGHT_ROWS)
+DATA_CASES["keyed_lower_keeps_the_floor"] = tight("lower", "sq_plus", TIGHT_D_ROWS, ("k",))
+DATA_CASES["query_wide_lifted_floor_is_reached"] = tight("lifted_floor", "sq_plus", TIGHT_ROWS)
+DATA_CASES["keyed_lifted_floor_per_class"] = tight("lifted_floor", "sq_plus", TIGHT_D_ROWS, ("k",))
+DATA_CASES["keyed_bound_of_a_row_with_no_class_binds_nothing"] = tight("both", "sq", TIGHT_NULL_KEY_ROWS, ("k",))
+DATA_CASES["keyed_data_bound_beside_an_objective_when"] = tight("both", "sq_when", TIGHT_D_ROWS, ("k",))
+DATA_CASES["keyed_empty_interval_in_one_class"] = tight("both", "sq", TIGHT_EMPTY_CLASS_ROWS, ("k",))
+DATA_CASES["query_wide_maximized"] = tight("upper", "sq_max_negated", TIGHT_ROWS)
+DATA_CASES["query_wide_nan_bound_on_a_row_a_when_drops"] = tight("upper_under_when", "sq", TIGHT_DROPPED_NAN_ROWS)
+DATA_CASES["keyed_nan_bound_on_a_row_a_when_drops"] = tight("both_under_when", "sq", TIGHT_DROPPED_NAN_ROWS, ("k",))
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(DATA_CASES))
+def test_a2_data_bounds_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, DATA_CASES[name])
+
+
+DATA_CONTEXT_CASES = [
+    (base, wrap)
+    for base in ("keyed_both_under_when", "query_wide_lifted_floor_is_reached")
+    for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("base,wrap", DATA_CONTEXT_CASES)
+def test_a2_data_bounds_agree_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
+    _agree(decidb_cli, oracle_solver, DATA_CASES[base], wrap=wrap)
+
+
+NEAREST_ROWS = (
+    # Each class's objective keeps no row (`v > 100` is never true), so each answers the point of its interval nearest 0.
+    (
+        "c BETWEEN lo AND cap",
+        (_drow(1, "x", 5.0, False, 2.0, 9.0), _drow(2, "y", 5.0, True, -1.0, 4.0), _drow(3, "z", 5.0, True, 1.0, 4.0)),
+        {1: 2.0, 2: 0.0, 3: 1.0},
+    ),
+    (
+        # "x" has no row the `when` keeps, so its floor stays 0; "y" and "z" lower it to -4.
+        "when f: c BETWEEN -4 AND cap",
+        (_drow(1, "x", 5.0, False, 0.0, 9.0), _drow(2, "y", 5.0, True, 0.0, -2.0), _drow(3, "z", 5.0, True, 0.0, 4.0)),
+        {1: 0.0, 2: -2.0, 3: 0.0},
+    ),
+)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("bounds,rows,expected", NEAREST_ROWS)
+def test_a2_a_class_with_no_kept_row_answers_the_nearest_point_of_its_data_interval(decidb_cli, bounds, rows, expected):
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))}) "
+        f"DECIDE per k: c(REAL) SUCH THAT {bounds} MINIMIZE when v > 100: SUM(POWER(c - v, 2))) q ORDER BY id"
+    )
+    assert dict(_run(decidb_cli, sql, "require")[0]) == expected
+    # The solver may answer any other point of the interval, and every one is optimal.
+    assert all(row[1] is not None for row in _run(decidb_cli, sql, "off")[0])
+
+
 CONTEXTS = (
     "cte_materialized",
     "cte_inlined",
@@ -658,11 +809,17 @@ def test_a2_random_problems_agree_with_the_oracle(decidb_cli, oracle_solver, see
 # ---------------------------------------------------------------------------
 
 
-def _problem(rows, bounds="c BETWEEN 0 AND 10", obj="MINIMIZE SUM(POWER(c - v, 2))", tail="ORDER BY id"):
+def _problem(rows, bounds="c BETWEEN 0 AND 10", obj="MINIMIZE SUM(POWER(c - v, 2))", tail="ORDER BY id", key="()"):
     return (
         f"SELECT id, c FROM (SELECT * FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))})) "
-        f"DECIDE per (): c(REAL) SUCH THAT {bounds} {obj} {tail}"
+        f"DECIDE per {key}: c(REAL) SUCH THAT {bounds} {obj} {tail}"
     )
+
+
+def _with_bound(index, rows=TIGHT_ROWS, **changes):
+    rows = [dict(row) for row in rows]
+    rows[index].update(changes)
+    return rows
 
 
 def _with(index, **changes):
@@ -688,6 +845,20 @@ A2_ERROR_CASES = {
         _problem(_with(1, v=math.nan), obj="MINIMIZE when id > 0: SUM(POWER(c - v, 2))"),
         "invalid_value",
     ),
+    # A NaN bound raises on the rows its clause keeps, whether or not the row has a class; a NULL one is skipped.
+    "nan_data_upper_bound": (_problem(_with_bound(1, cap=math.nan), "c <= cap"), "null_bound"),
+    "nan_data_lower_bound": (_problem(_with_bound(1, lo=math.nan), "c >= lo"), "null_bound"),
+    "nan_data_bound_of_a_keyed_row": (_problem(_with_bound(1, cap=math.nan), "c <= cap", key="k"), "null_bound"),
+    "nan_data_bound_of_a_row_with_no_class": (
+        _problem(_with_bound(1, k=None, cap=math.nan), "c <= cap", key="k"),
+        "null_bound",
+    ),
+    "nan_data_bound_under_a_when_that_keeps_it": (
+        _problem(_with_bound(0, cap=math.nan), "when f: c <= cap"),
+        "null_bound",
+    ),
+    # A bound's coefficient read from the data must be a number too.
+    "nan_data_coefficient_of_a_bound": (_problem(_with_bound(1, lo=math.nan), "lo * c <= cap"), "invalid_value"),
     "linear_coefficient_too_large": (_problem(_with(1, v=1e308)), "computes a number too large for a DOUBLE"),
     # Only the sum of the squares' coefficients overflows: every value is 0, so the linear coefficient is 0.
     "quadratic_coefficient_too_large": (
@@ -741,7 +912,25 @@ def _typed(value_sql, bounds="c BETWEEN 0 AND 10", obj="MINIMIZE SUM(POWER(c - v
     )
 
 
+def _capped(cap_sql, bounds="c <= cap", lo_sql="CAST(NULL AS DOUBLE)"):
+    """Three rows whose bound columns are `lo_sql` and `cap_sql`, to be read as the solver reads a data bound."""
+    rows = ", ".join(f"({i}, {i + 1.5}, {cap_sql}, {lo_sql})" for i in range(1, 4))
+    return (
+        f"SELECT id, c FROM (SELECT * FROM (VALUES {rows}) t(id, v, cap, lo)) "
+        f"DECIDE per (): c(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(c - v, 2))"
+    )
+
+
 BOUNDARY_CASES = {
+    # An infinite data bound is no bound on its side, a NULL one is skipped, and the opposite infinity empties the
+    # interval, as for a bound written in the query.
+    "data_upper_infinite_is_no_bound": _capped("CAST('Infinity' AS DOUBLE)"),
+    "data_upper_minus_infinite_is_infeasible": _capped("CAST('-Infinity' AS DOUBLE)"),
+    "data_lower_minus_infinite_is_no_bound": _capped("CAST(NULL AS DOUBLE)", "c >= lo", "CAST('-Infinity' AS DOUBLE)"),
+    "data_lower_infinite_is_infeasible": _capped("CAST(NULL AS DOUBLE)", "c >= lo", "CAST('Infinity' AS DOUBLE)"),
+    "data_upper_every_row_null": _capped("CAST(NULL AS DOUBLE)"),
+    "data_upper_1e25_is_no_bound": (_capped("1e25"), False),
+    "data_upper_minus_1e25": (_capped("-1e25"), True),
     "decimal_source": (
         "SELECT id, c FROM (SELECT * FROM (VALUES (1, 2.50::DECIMAL(9,2)), (2, 4.25::DECIMAL(9,2))) t(id, v)) "
         "DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))"

@@ -22,15 +22,20 @@ namespace direct_a2_single_facility_location {
 
 constexpr const char *RULE_NAME = "A2_SINGLE_FACILITY_LOCATION";
 
-//! What CheckCondition proved: one query-wide or keyed REAL decision `c` in a constant interval [lower, upper], and an
-//! objective that is one square `K * (w*c + t)^2` of a linear form of `c` and a source value, with `w` a nonzero
-//! constant and `K` positive once the sense is applied. The square is summed over the rows the objective keeps, so the
-//! objective is `a*c^2 + b*c` with `a` the sum of `K*w^2` and `b` the sum of `2*K*w*t`, and its minimum over the
-//! interval is the turning point `-b / (2*a)` clamped into it. A keyed decision has one such problem per class of its
-//! key.
+//! What CheckCondition proved: one query-wide or keyed REAL decision `c`, bounded by constants and by per-row bounds
+//! that each class of the key intersects, and an objective that is one square `K * (w*c + t)^2` of a linear form of `c`
+//! and a source value, with `w` a nonzero constant and `K` positive once the sense is applied. The square is summed
+//! over the rows the objective keeps, so the objective is `a*c^2 + b*c` with `a` the sum of `K*w^2` and `b` the sum of
+//! `2*K*w*t`, and its minimum over the interval is the turning point `-b / (2*a)` clamped into it. A keyed decision has
+//! one such problem per class of its key.
 struct Condition final : DirectApplicabilityCondition {
+	//! The box before any per-row bound (DirectDecisionBox): the default floor of 0 or the written lower bound, and the
+	//! written upper bound.
 	double lower = 0.0;
 	double upper = POSITIVE_INFINITY;
+	//! The bounds the plan evaluates per row: read from the data, or under a `when`. A class's interval is the box
+	//! tightened by the tightest end of each clause over the rows of the class.
+	vector<DirectBoundClause> clauses;
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
 	string objective_written;
@@ -88,9 +93,9 @@ private:
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
-//! Every constraint is a bound on `c` known before the query runs, so the solver folds them into one interval (the
-//! reader's static box). A bound read from the data, or under a `when`, is a clause the plan evaluates per row, which
-//! this class does not take. An empty interval is not declined: the plan raises the solver's infeasible error.
+//! Every constraint is a bound on `c`. The solver folds the ones known before the query runs into the decision's box,
+//! and the rest, read from the data or under a `when`, bind the same decision on each row they keep, so a class's
+//! interval is their intersection. An empty interval is not declined: the plan raises the solver's infeasible error.
 bool Rule::ProveInterval(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &ir_node : ir.constraints) {
 		if (!DirectIsSingletonRow(ir, ir_node)) {
@@ -98,11 +103,12 @@ bool Rule::ProveInterval(const DirectIR &ir, ClientContext &context, Condition &
 		}
 	}
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading) || !reading.clauses.empty()) {
+	if (!DirectReadBounds(ir, context, reading)) {
 		return false;
 	}
 	condition.lower = reading.boxes[0].lower;
 	condition.upper = reading.boxes[0].upper;
+	condition.clauses = std::move(reading.clauses);
 	return true;
 }
 
@@ -144,12 +150,15 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! only the columns of the stage before it:
 //!
 //!   scope the row's class: whether it has one, and its key (DirectProjectScope), for a keyed decision
-//!   P1    raw values: the rows the objective keeps, and the slope `w` and constant `t` of the square on each, with the
-//!         check of every value that can fail
-//!   P2    the row's `a` and `b` (zero on a row the objective drops), oriented as a minimum, and the row's checks
-//!   W     the sums of `a` and `b` over every row of the row's class (one window partitioned by the key)
-//!   P3    the answer: the turning point `-b / (2*a)` clamped into the interval, repeated on every row of the class,
-//!         and the column that keeps the checks live
+//!   P1    raw values: the rows the objective keeps, and the slope `w` and constant `t` of the square on each; each
+//!         bound clause's ends on the rows it keeps; the check of every value that can fail
+//!   P2    the row's `a` and `b` (zero on a row the objective drops), oriented as a minimum, each clause's lower and
+//!         upper end on the row (no bound where its `when` drops the row), and the row's checks
+//!   W     over the rows of the row's class (one window partitioned by the key): the sums of `a` and `b`, the MAX of
+//!         each clause's lower ends and the MIN of its upper ends, and whether a floor-lifting clause keeps some row
+//!   P3    the class's interval as columns: each clause's tightest ends, and the floor
+//!   P4    the answer: the turning point `-b / (2*a)` clamped into the interval (the box of DirectRowBox over the
+//!         columns of P3), repeated on every row of the class, and the column that keeps the checks live
 //!
 //! Aggregate-then-repeat: the window is the aggregate and the row's own columns are what it repeats on, so the source
 //! is read once. A query-wide decision is the partition with no key. The window holds every row before it releases one,
@@ -180,12 +189,25 @@ public:
 			           ? value.Copy()
 			           : DirectOverProjection(value, source_bindings, state.state_index);
 		};
+		auto clause_columns = LayoutClauses(p1, over_state, checks);
 		auto laid =
 		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.parts[0], 1, source_bindings, over_state, checks);
 		auto plan = p1.Finish(std::move(state.plan));
 
 		DirectProjectionStage p2(binder.GenerateTableIndex());
 		auto carried2 = Forward(p2, carried1);
+		vector<ClauseEnds> ends;
+		for (auto &columns : clause_columns) {
+			ExprPtr lower, upper;
+			DirectClauseBounds(calc, columns, lower, upper);
+			ClauseEnds end;
+			end.lower = p2.Add(calc.Out(lower));
+			end.upper = p2.Add(calc.Out(upper));
+			if (columns.has_when) {
+				end.when = p2.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, columns.when)));
+			}
+			ends.push_back(end);
+		}
 		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, {laid}, 0);
 		auto sense = calc.Num(condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0);
 		auto a = p2.Add(calc.Out(calc.Mul(sense, sum.a)));
@@ -194,47 +216,92 @@ public:
 		auto valid = p2.Add(DirectAllHold(calc, std::move(checks)));
 		plan = p2.Finish(std::move(plan));
 
+		// W: every aggregate of a class, over the rows of its partition.
 		auto window_index = binder.GenerateTableIndex();
 		auto window = make_uniq<LogicalWindow>(window_index);
-		for (auto column : {a, b}) {
-			auto total = DirectWindowExtremum(optimizer, "sum", calc.Out(calc.Col(LogicalType::DOUBLE, column)));
+		auto partition = [&](BoundWindowExpression &aggregate) {
 			for (idx_t i = 0; i < carried2.keys.size(); i++) {
-				total->partitions.push_back(calc.Out(calc.Col(carried2.key_types[i], carried2.keys[i])));
+				aggregate.partitions.push_back(calc.Out(calc.Col(carried2.key_types[i], carried2.keys[i])));
 			}
-			window->expressions.push_back(std::move(total));
+		};
+		auto add_window = [&](const char *function, ColumnBinding column, LogicalType type) {
+			auto aggregate = DirectWindowExtremum(optimizer, function, calc.Out(calc.Col(type, column)));
+			partition(*aggregate);
+			window->expressions.push_back(std::move(aggregate));
+			return ColumnBinding(window_index, window->expressions.size() - 1);
+		};
+		auto sum_a = add_window("sum", a, LogicalType::DOUBLE);
+		auto sum_b = add_window("sum", b, LogicalType::DOUBLE);
+		// The class's interval: the tightest end of each clause, MAX of its lower ends and MIN of its upper ends
+		// (DirectTightestBound), and whether some row a floor-lifting clause keeps exists. A row with no class sits in
+		// a partition of its own, and its answer is NULL whatever the partition holds.
+		DirectWindowSink sink(*window, partition);
+		vector<DirectGroupValues> lowers, uppers;
+		vector<ColumnBinding> lowering_whens;
+		for (idx_t j = 0; j < condition.clauses.size(); j++) {
+			auto &clause = condition.clauses[j];
+			vector<DirectGroupInputColumns> lower_input(1), upper_input(1);
+			lower_input[0].argument = ends[j].lower;
+			upper_input[0].argument = ends[j].upper;
+			auto largest = DirectTightestBound(optimizer, ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                   clause.lower->Copy(), string(), nullptr);
+			auto smallest = DirectTightestBound(optimizer, ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                    clause.upper->Copy(), string(), nullptr);
+			lowers.push_back(DirectAddGroupBound(calc, *largest, lower_input, sink, nullptr));
+			uppers.push_back(DirectAddGroupBound(calc, *smallest, upper_input, sink, nullptr));
+			if (clause.lifts_floor) {
+				lowering_whens.push_back(add_window("bool_or", ends[j].when, LogicalType::BOOLEAN));
+			}
 		}
 		window->children.push_back(std::move(plan));
 
-		// A row the objective drops has `a = b = 0`, never NULL, so every row carries a sum.
-		auto total_a = calc.Col(LogicalType::DOUBLE, ColumnBinding(window_index, 0));
-		auto total_b = calc.Col(LogicalType::DOUBLE, ColumnBinding(window_index, 1));
+		// P3: the class's interval pieces as columns: each clause's tightest ends, and the static floor, lowered when a
+		// row a floor-lifting clause keeps exists.
+		DirectProjectionStage p3(binder.GenerateTableIndex());
+		auto carried3 = Forward(p3, carried2);
+		auto valid3 = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, valid)));
+		auto total_a3 = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, sum_a)));
+		auto total_b3 = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, sum_b)));
+		vector<ColumnBinding> clause_lowers, clause_uppers;
+		for (idx_t j = 0; j < condition.clauses.size(); j++) {
+			clause_lowers.push_back(p3.Add(calc.Out(calc.Cast(lowers[j].lower, LogicalType::DOUBLE))));
+			clause_uppers.push_back(p3.Add(calc.Out(calc.Cast(uppers[j].upper, LogicalType::DOUBLE))));
+		}
+		auto floor = p3.Add(calc.Out(DirectStaticFloor(calc, condition.lower, lowering_whens)));
+		auto plan3 = p3.Finish(std::move(window));
+
+		// P4: the answer. A row the objective drops has `a = b = 0`, never NULL, so every row carries a sum.
+		DirectProjectionStage p4(binder.GenerateTableIndex());
+		auto total_a = calc.Col(LogicalType::DOUBLE, total_a3);
+		auto total_b = calc.Col(LogicalType::DOUBLE, total_b3);
 		auto zero = calc.Num(0.0);
+		ExprPtr lower, upper;
+		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, floor), condition.upper, clause_lowers, clause_uppers, lower,
+		             upper);
 		// Convex: the turning point, clamped into the interval. With no square on any row of the class every value is
 		// optimal, and the point of the interval nearest 0 is the answer.
 		auto turning = DirectTurningPoint(calc, total_a, total_b, false);
 		auto target = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total_a, zero), turning.target, zero);
-		auto clamped = calc.Min({calc.Max({target, calc.Num(condition.lower)}), calc.Num(condition.upper)});
+		auto clamped = calc.Min({calc.Max({target, lower}), upper});
 		// A row with no class has no decision and shows NULL.
-		auto has_class = keyed ? calc.Col(LogicalType::BOOLEAN, carried2.eligible) : calc.Bool(true);
+		auto has_class = keyed ? calc.Col(LogicalType::BOOLEAN, carried3.eligible) : calc.Bool(true);
 
-		DirectProjectionStage p3(binder.GenerateTableIndex());
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p3.Add(calc.Out(calc.Col(source_types[i], carried2.source[i])));
+			p4.Add(calc.Out(calc.Col(source_types[i], carried3.source[i])));
 		}
 		// Adding 0.0 turns -0.0 into 0.0.
 		auto answer = calc.Add(clamped, zero);
-		p3.Add(calc.Out(keyed ? calc.If(has_class, answer, calc.Constant(Value(LogicalType::DOUBLE))) : answer));
+		p4.Add(calc.Out(keyed ? calc.If(has_class, answer, calc.Constant(Value(LogicalType::DOUBLE))) : answer));
 		vector<unique_ptr<Expression>> answer_checks;
-		answer_checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, valid)));
-		// The interval is two constants, so a query-wide decision's check is folded by DuckDB: it is true, or raises on
-		// every row. A keyed decision raises on the rows that have a class.
-		auto empty = DirectBoxIsEmpty(calc, calc.Num(condition.lower), calc.Num(condition.upper));
-		answer_checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, empty)),
+		answer_checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, valid3)));
+		// An empty interval raises on every row that has a class. The interval of a class is the same on every row of
+		// it, so a query whose only bounds are constants has two constants here, which DuckDB folds.
+		answer_checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
 		                                      DirectInfeasibleErrorPredicate(optimizer, errors)));
 		answer_checks.push_back(DirectRaiseTooLarge(optimizer, total_a, condition.objective_written));
 		answer_checks.push_back(DirectRaiseTooLarge(optimizer, total_b, condition.objective_written));
 		answer_checks.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
-		p3.Add(DirectAllHold(calc, std::move(answer_checks)));
+		p4.Add(DirectAllHold(calc, std::move(answer_checks)));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
@@ -243,7 +310,7 @@ public:
 			substitute.slot_map.push_back(i);
 		}
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		substitute.child = p3.Finish(std::move(window));
+		substitute.child = p4.Finish(std::move(plan3));
 		return substitute;
 	}
 
@@ -256,6 +323,14 @@ private:
 		vector<ColumnBinding> keys;
 		//! The types of `keys`.
 		vector<LogicalType> key_types;
+	};
+
+	//! The columns of one clause in P2: its lower and upper end on the row (DirectClauseBounds), and the row's `when`
+	//! for a clause that lifts the floor.
+	struct ClauseEnds {
+		ColumnBinding lower;
+		ColumnBinding upper;
+		ColumnBinding when;
 	};
 
 	Carried Forward(DirectProjectionStage &stage, const Carried &from) const {
@@ -271,6 +346,40 @@ private:
 		}
 		to.key_types = from.key_types;
 		return to;
+	}
+
+	//! P1 columns of every clause, each value computed only on the rows its clause keeps (NULL elsewhere), with the
+	//! check of each: the coefficient is a number, and the right side is not NaN (a NULL one skips the row).
+	vector<DirectBoundColumns> LayoutClauses(DirectProjectionStage &p1,
+	                                         const std::function<unique_ptr<Expression>(const Expression &)> &over,
+	                                         vector<unique_ptr<Expression>> &checks) const {
+		vector<DirectBoundColumns> result;
+		for (auto &clause : condition.clauses) {
+			DirectBoundColumns columns;
+			ExprPtr active;
+			if (clause.when) {
+				active = calc.Wrap(DirectActiveWhen(calc, over(*clause.when).get()));
+			}
+			auto on_kept = [&](ExprPtr value) {
+				return active ? DirectOnKeptRows(calc, active, value) : value;
+			};
+			auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over)))));
+			auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Wrap(over(*clause.rhs)), LogicalType::DOUBLE))));
+			columns.lower = p1.Add(calc.Out(on_kept(calc.Wrap(over(*clause.lower)))));
+			columns.upper = p1.Add(calc.Out(on_kept(calc.Wrap(over(*clause.upper)))));
+			if (clause.when) {
+				columns.has_when = true;
+				columns.when = p1.Add(calc.Out(active));
+			}
+			// Both values are NULL on a row the clause drops, and a NULL passes (it skips the row).
+			if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient,
+			                                   source_bindings, p1.index)) {
+				checks.push_back(std::move(check));
+			}
+			checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text));
+			result.push_back(columns);
+		}
+		return result;
 	}
 
 	const Condition &condition;

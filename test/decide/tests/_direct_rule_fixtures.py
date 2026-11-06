@@ -364,10 +364,10 @@ N1 = RuleFixture(
 )
 
 
-def _a2_late_error(decision_sql, v_sql="1.0"):
+def _a2_late_error(decision_sql, v_sql="1.0", cap_sql="5.0"):
     """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary. `g` is a key of seven classes."""
     return f"""
-        FROM (SELECT i, i % 7 AS g, {v_sql} AS v FROM range(5000) t(i)) s
+        FROM (SELECT i, i % 7 AS g, {v_sql} AS v, {cap_sql} AS cap FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
@@ -405,11 +405,9 @@ A2 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_a2_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: a whole-numbered decision (the mean is not a whole number), a
-    # bound read from the data (the interval differs per row), a linear term beside the square, a loss that is not a
-    # square, and a weight read from the data.
+    # linear term beside the square, a loss that is not a square, and a weight read from the data.
     near_misses=(
         ("per (): c(INT)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2))"),
-        ("per (): c(REAL)", "c BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2) + w * c)"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(ABS(c - p))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(w * POWER(c - p, 2))"),
@@ -418,7 +416,8 @@ A2 = RuleFixture(
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(when txid_current() >= 0: POWER(c - p, 2))"),
     ),
     # Forms that look like near misses and apply: the square written the other way round, a slope on the decision, a
-    # factor, a maximized negative square, a `when`, and an interval open on one side.
+    # factor, a maximized negative square, a `when`, an interval open on one side, a bound read from the data (the
+    # interval of a class is the tightest of its rows'), and a floor lowered under a `when`.
     near_miss_applies=(
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(p - c, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(2 * c - p, 2))"),
@@ -429,6 +428,9 @@ A2 = RuleFixture(
         ("per (): c(REAL)", "c >= -1e30 AND c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
         # A keyed decision: one center per class of cap.
         ("per cap: c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(c - p, 2))"),
+        ("per cap: c(REAL)", "when p > 9: c >= w - 4 AND c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "when p > 9: c >= -4", "MINIMIZE SUM(POWER(c - p, 2))"),
     ),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 5, 2.0::DOUBLE), (2, 10.0::DOUBLE, 3, 4.0::DOUBLE)) t(id,p,cap,w)",
     near_miss_column="id",
@@ -447,6 +449,21 @@ A2 = RuleFixture(
                 v_sql="CASE WHEN i=4999 THEN 1e308 ELSE 1.0 END",
             ),
             "too large for a DOUBLE",
+        ),
+        # A NaN bound on the last row, for a query-wide and for a keyed decision.
+        (
+            _a2_late_error(
+                "per (): c(REAL) SUCH THAT c <= cap MINIMIZE SUM(POWER(c - v, 2))",
+                cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 5.0 END",
+            ),
+            "the bound cap is NaN on some rows",
+        ),
+        (
+            _a2_late_error(
+                "per g: c(REAL) SUCH THAT c <= cap MINIMIZE SUM(POWER(c - v, 2))",
+                cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 5.0 END",
+            ),
+            "the bound cap is NaN on some rows",
         ),
         # The same on a keyed decision: the last row belongs to one of seven classes.
         (
