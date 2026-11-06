@@ -1,31 +1,30 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/function/scalar/generic_functions.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/main/client_context_state.hpp"
+#include "duckdb/main/decide_number_warning.hpp"
 
-#include <atomic>
 #include <cstdio>
 
 namespace duckdb {
 
-namespace {
+DecideNumberWarningState &DecideNumberWarningState::Of(ClientContext &context) {
+	return *context.registered_state->GetOrCreate<DecideNumberWarningState>(DECIDE_NUMBER_WARNING_STATE_KEY);
+}
 
-//! Whether the current query has said the warning. A direct plan builds no model, so it has no NumberRangeWarning to
-//! hold this for it, and its rows run on several threads.
-struct DecideNumberWarningState : public ClientContextState {
-	std::atomic<bool> said {false};
-
-	void QueryBegin(ClientContext &context) override {
-		said = false;
-	}
-};
-
-void DecideWarnNumbersFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto warning =
-	    state.GetContext().registered_state->GetOrCreate<DecideNumberWarningState>("decide_number_warning_state");
-	if (!warning->said.exchange(true)) {
+void DecideNumberWarningState::Say() {
+	if (!said.exchange(true)) {
 		fprintf(stderr, "%s\n", DECIDE_NUMBER_RANGE_WARNING);
 	}
+}
+
+void DecideNumberWarningState::QueryBegin(ClientContext &context) {
+	said = false;
+}
+
+namespace {
+
+void DecideWarnNumbersFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	DecideNumberWarningState::Of(state.GetContext()).Say();
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	ConstantVector::GetData<bool>(result)[0] = true;
 }

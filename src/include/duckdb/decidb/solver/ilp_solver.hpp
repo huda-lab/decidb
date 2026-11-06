@@ -19,21 +19,13 @@
 
 namespace duckdb {
 
-//! Says once per query that the model handed to a solver holds a number out of range. It reads finished numbers only: a
-//! constraint, quadratic, indicator or objective coefficient of |v| >= DECIDE_LARGE_COEFFICIENT, a nonzero objective
-//! coefficient of |v| <= DECIDE_SMALL_OBJECTIVE_COEFFICIENT, and a right-hand side or a bound that is not open of
+//! Whether the model handed to a solver holds a number out of range. It reads finished numbers only: a constraint,
+//! quadratic, indicator or objective coefficient of |v| >= DECIDE_LARGE_COEFFICIENT, a nonzero objective coefficient of
+//! |v| <= DECIDE_SMALL_OBJECTIVE_COEFFICIENT, and a right-hand side or a bound that is not open of
 //! |v| >= DECIDE_LARGE_TOTAL (an open bound, DECIDE_SOLVER_INFINITY or any bound DecideIsOpenAbove/Below reads as
-//! infinite, is no number). The model and the answer are untouched.
-//!
-//! One instance lives for one query. Every solver-neutral model of the query is passed to Check: the solved model and,
-//! under DIAGNOSE, the repair model. The first model that holds such a number prints the line; later calls are silent.
-struct NumberRangeWarning {
-	//! Prints the warning to stderr if `model` holds such a number and none was said yet for this query.
-	void Check(const SolverModel &model);
-
-private:
-	bool said = false;
-};
+//! infinite, is no number). The caller says the warning (DecideNumberWarningState); the model and the answer are
+//! untouched.
+bool ModelHoldsNumberOutOfRange(const SolverModel &model);
 
 //! Internal solver toggles for diagnostic-only follow-up solves. The default
 //! preserves today's user-facing path: non-optimal solves return a status and
@@ -53,9 +45,9 @@ struct SolveModelOptions {
 	//! boundary-only (no mid-solve interrupt). Gurobi honors it via a watcher thread;
 	//! HiGHS (no thread-safe terminate) ignores it.
 	std::function<bool()> interrupt_poll;
-	//! The query's large-number warning, checked on the model once it is built. Null = no check (diagnostic
-	//! follow-up solves, which hold no model of the query's own).
-	NumberRangeWarning *number_range_warning = nullptr;
+	//! Says the query's number-range warning (DecideNumberWarningState::Say) when the model, once built, holds a number
+	//! out of range. Empty = no check (diagnostic follow-up solves, which hold no model of the query's own).
+	std::function<void()> say_number_warning;
 };
 
 //! The backend the test override DECIDB_FORCE_SOLVER pins; empty when it is unset or empty. Every reader of the

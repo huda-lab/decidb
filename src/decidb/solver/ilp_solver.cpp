@@ -152,33 +152,6 @@ bool AnyObjectiveNumberOutOfRange(const vector<double> &values) {
 	return AnyLargeCoefficient(values) || std::any_of(values.begin(), values.end(), IsSmallObjectiveCoefficient);
 }
 
-bool ModelHoldsNumberOutOfRange(const SolverModel &model) {
-	if (AnyObjectiveNumberOutOfRange(model.obj_coeffs) || AnyObjectiveNumberOutOfRange(model.q_vals)) {
-		return true;
-	}
-	if (std::any_of(model.col_lower.begin(), model.col_lower.end(), IsLargeLowerBound) ||
-	    std::any_of(model.col_upper.begin(), model.col_upper.end(), IsLargeUpperBound)) {
-		return true;
-	}
-	for (auto &row : model.constraints) {
-		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.coefficients)) {
-			return true;
-		}
-	}
-	for (auto &row : model.quadratic_constraints) {
-		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.linear_coefficients) ||
-		    AnyLargeCoefficient(row.q_coefficients)) {
-			return true;
-		}
-	}
-	for (auto &row : model.indicator_constraints) {
-		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.coefficients)) {
-			return true;
-		}
-	}
-	return false;
-}
-
 void DumpSolverModel(const SolverModel &model) {
 	const char *dest = std::getenv("DECIDB_DUMP_MODEL");
 	if (!dest || !*dest) {
@@ -292,12 +265,31 @@ void DumpSolverModel(const SolverModel &model) {
 
 } // namespace
 
-void NumberRangeWarning::Check(const SolverModel &model) {
-	if (said || !ModelHoldsNumberOutOfRange(model)) {
-		return;
+bool ModelHoldsNumberOutOfRange(const SolverModel &model) {
+	if (AnyObjectiveNumberOutOfRange(model.obj_coeffs) || AnyObjectiveNumberOutOfRange(model.q_vals)) {
+		return true;
 	}
-	said = true;
-	fprintf(stderr, "%s\n", DECIDE_NUMBER_RANGE_WARNING);
+	if (std::any_of(model.col_lower.begin(), model.col_lower.end(), IsLargeLowerBound) ||
+	    std::any_of(model.col_upper.begin(), model.col_upper.end(), IsLargeUpperBound)) {
+		return true;
+	}
+	for (auto &row : model.constraints) {
+		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.coefficients)) {
+			return true;
+		}
+	}
+	for (auto &row : model.quadratic_constraints) {
+		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.linear_coefficients) ||
+		    AnyLargeCoefficient(row.q_coefficients)) {
+			return true;
+		}
+	}
+	for (auto &row : model.indicator_constraints) {
+		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.coefficients)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 string ForcedSolverName() {
@@ -503,8 +495,8 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
 	// models built later) never pollute the dump.
 	DumpSolverModel(model);
-	if (options.number_range_warning) {
-		options.number_range_warning->Check(model);
+	if (options.say_number_warning && ModelHoldsNumberOutOfRange(model)) {
+		options.say_number_warning();
 	}
 	// Rows as actually handed to the backend, for the benchmark's model-size metric. Read
 	// off the built model because the pre-expansion inputs are not a row count at all: one

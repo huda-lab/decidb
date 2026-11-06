@@ -1,6 +1,7 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
+#include "duckdb/main/decide_number_warning.hpp"
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
@@ -4241,11 +4242,12 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     // engine. An unprefixed query pays for neither, and both failure terminals are
     // prefix-only anyway (RouteSolveResult).
     bool diagnosis_armed = diagnose;
-    // One warning slot for the whole query: the solved model and, under DIAGNOSE, the repair model share it.
-    NumberRangeWarning number_range_warning;
+    // One warning latch for the whole query: every DECIDE node, direct plans included, and under DIAGNOSE the repair
+    // model share it.
+    auto &number_warning = DecideNumberWarningState::Of(context);
     SolveModelOptions solve_options;
     solve_options.extract_unbounded_ray = diagnosis_armed;
-    solve_options.number_range_warning = &number_range_warning;
+    solve_options.say_number_warning = [&number_warning]() { number_warning.Say(); };
     // Keep an inverted column box (col_lower > col_upper) alive through Build under
     // diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
     // diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
@@ -4618,7 +4620,9 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         }
         // The repair model is a solver-neutral model of this query too. The warning is said once, so this only speaks
         // for a number the solved model did not hold (a one-decision row it folded into a bound).
-        number_range_warning.Check(elastic_model);
+        if (ModelHoldsNumberOutOfRange(elastic_model)) {
+            number_warning.Say();
+        }
         InfeasibleDiagnosisInput diag_input {
             elastic_model, elastic_indexer,        var_labels, var_is_aux, elastic_global_labels,
             diag_params,   solve_diagnostic_model,

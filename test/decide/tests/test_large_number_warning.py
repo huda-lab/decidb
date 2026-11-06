@@ -33,6 +33,7 @@ Covers (one test per branch of the check):
   - test_a_number_just_under_each_threshold_is_silent: 999999 and 4503599627, everywhere a number sits
   - test_open_bounds_are_silent: the default bounds, and written bounds at the solver's infinity
   - test_many_large_numbers_print_one_line: one line per query, however many numbers qualify
+  - test_two_decide_nodes_that_both_warn_print_one_line: a direct plan and a solver model of one query share the line
   - test_diagnose_prints_once_when_the_solved_model_is_large: the repair model's re-solve does not repeat it
   - test_diagnose_prints_once_for_a_number_only_the_repair_model_holds: the repair model is checked too
   - test_a_direct_solved_query_prints_nothing: no model is built; the same query on the solver path warns
@@ -340,6 +341,34 @@ def test_many_large_numbers_print_one_line(request, cli_fixture):
         MAXIMIZE SUM(4000000 * x)
     """
     _values(_cli(request, cli_fixture), sql, expect_large_numbers=True)
+
+
+@pytest.mark.correctness
+def test_two_decide_nodes_that_both_warn_print_one_line(decidb_cli, oracle_solver):
+    """The inner DECIDE is an N1 problem whose scores make h leave the normal range, so a direct plan warns from its own
+    arithmetic (the solver path warns on the same query too, with DECIDB_TEST_DIRECT_SOLVE=off or a forced backend). The
+    outer holds the coefficient 2000000, so its solver model warns. Both go through one per-query state: one line.
+    The inner's value (7) leaves the outer's bound non-binding, so the oracle solves the outer without it."""
+    inner = (
+        "SELECT SUM(y) FROM (VALUES (1, 3e-155::DOUBLE), (2, 4e-155::DOUBLE)) u(id, s) "
+        "DECIDE y(REAL) SUCH THAT SUM(POWER(y, 2)) <= 25 MAXIMIZE SUM(s * y)"
+    )
+    sql = f"""
+        SELECT id, x FROM {_TWO_ROWS}
+        DECIDE x(INT) SUCH THAT x >= 0 AND x <= ({inner}) AND SUM(2000000 * x) <= 7000000
+        MAXIMIZE SUM(x)
+    """
+    xs = _values(decidb_cli, sql, expect_large_numbers=True)
+
+    oracle_solver.create_model("two_decide_nodes")
+    for i in range(2):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=100.0)
+    oracle_solver.add_constraint({f"x_{i}": 2000000.0 for i in range(2)}, "<=", 7000000.0, name="cap")
+    oracle_solver.set_objective({f"x_{i}": 1.0 for i in range(2)}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+
+    assert result.status == SolverStatus.OPTIMAL
+    assert sum(xs) == pytest.approx(result.objective_value, abs=0.5)
 
 
 @pytest.mark.query_diagnostics
