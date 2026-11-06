@@ -10,24 +10,10 @@
   with `DECIDE x(REAL) ... MAXIMIZE SUM(s * x)`. Found 2026-11-06 (N1 review). Fix: `pipeline/04_canonicalizer/todo.md`
   § CAN-1.
 
-- **BUG-48 — DIAGNOSE's `group` column writes a NULL key as the string `'NULL'`.** The finding's `group` reads
-  `k = 'NULL'` while its `suggested_change` correctly says `when k IS NULL: ...`. Repro, with
-  `DECIDB_FORCE_SOLVER=gurobi`: `DIAGNOSE` of a linear model with `when k IS NOT NULL: x <= 5`, `MAXIMIZE SUM(x)`, over
-  rows `(1, 1.0), (1, 2.0), (NULL, 3.0)`. Found 2026-11-06 (UNB-1 lane).
-
-- **BUG-49 — DIAGNOSE of a non-convex unbounded model answers `feasible`.** `DIAGNOSE` of
-  `SUM(POWER(x, 2)) BY (k) <= 25 AND x >= 0 MAXIMIZE SUM(POWER(x, 2))`, over rows `(k, s)` where one `k` is NULL (that
-  row's `x` has no upper limit), returns `feasible` and prints a "could not prove it is the best" line on stderr. Not
-  yet investigated: it may be how Gurobi reports a non-convex model, or how the router reads it. Found 2026-11-06
-  (UNB-1 lane).
-  - **Cause.** Gurobi answers `INF_OR_UNBD`. The adapter's `DualReductions=0` retry (`gurobi_solver.cpp`) sends a
-    non-convex model to spatial branching, which ends `SUBOPTIMAL` with incumbents near 1e19. The router reads
-    `SUBOPTIMAL` as solved. A plain solve returns that value too.
-  - **Ruling (owner, 2026-11-06).** On a non-convex model the adapter skips the retry and returns `INF_OR_UNBD`. The
-    facade's zero-objective probe settles it.
-
 ## Limitations (not bugs)
 
+- **Gurobi's non-convex tolerance.** On `SUM(POWER(x, 2)) BY (k) <= 25 MAXIMIZE SUM(POWER(x, 2))`, with optimum 50,
+  Gurobi returns 50.0000001 and reports it optimal at tolerance 0. Inside Gurobi's spatial branching.
 - **A repair exactly at the tolerance on HiGHS's QP path.** An edit whose rows miss a summed bound by exactly the
   feasibility tolerance (1e-6) passes the certificate's LP on both backends, and Gurobi solves the edited query; HiGHS's
   QP path rejects it. HiGHS judges the same violation differently in its LP and QP paths.

@@ -56,10 +56,10 @@ the classifier.
 
 ## Terminals: inf/unb (check ray)
 
-Existing concrete-status probes stay in place: Gurobi may run its native
-`DualReductions=0` retry, and the facade's `DisambiguateInfOrUnbd` still runs the
-zero-objective feasibility probe. The router only sees `INF_OR_UNBD` when that
-status survives those attempts.
+The facade's `DisambiguateInfOrUnbd` runs the zero-objective feasibility probe on every
+`INF_OR_UNBD` (`../../pipeline/07_solver/done.md`). The router only sees `INF_OR_UNBD`
+when that status survives the probe. A `SUBOPTIMAL` result is solved: it carries a
+feasible incumbent, with or without the prefix.
 
 Under `DIAGNOSE`, `SolveModel` asks the same portable box-LP ray
 fallback used by the unbounded engine to attach a ray for `UNBOUNDED` **or**

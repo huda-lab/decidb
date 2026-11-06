@@ -376,9 +376,10 @@ non-empty, so the original was `UNBOUNDED`; `INFEASIBLE` means it was
 the ambiguous status stands — so the operator can say diagnosis ran out of time
 rather than fall back to a misleading static error.
 
-Gurobi additionally applies its documented recipe first (set `DualReductions=0` on
-the model's env and re-optimize), since presolve dual reductions are what blur the
-two.
+The probe is the only place the status is settled. No backend re-solves on its own:
+Gurobi's recipe (`DualReductions=0`, then re-optimize) switches a non-convex model to
+spatial branching, where an unbounded model ends `SUBOPTIMAL` with an arbitrary
+incumbent.
 
 ### Rejecting an optimum found against the integer ceiling
 

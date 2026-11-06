@@ -129,7 +129,8 @@ A column prints as SQL, quoted only where SQL requires it (`"my col"`, a reserve
 `zone` stays bare); a key column keeps its key's spelling (`t."my col"`). The NULL slice
 prints `when g IS NULL: ...`: the slice records which group holds the NULLs
 (`ColumnGrouping::null_group`), so a real string `'NULL'` still prints `g = 'NULL'`. The
-`group` column still labels the NULL slice `g = 'NULL'` (`../infeasible/todo.md` § INF-2).
+`group` column prints the slice through the same predicate (`SlicePredicate`,
+`decide_diagnostic.cpp`): `g IS NULL` for the NULL slice, `g = 'EU'` otherwise.
 
 Two conditions gate it, both decided in `CharacterizeEscape` and carried to the formatter
 on `EscapeRule::covers_scope` (the flattened finding fields cannot recover them):

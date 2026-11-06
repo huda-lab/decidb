@@ -117,8 +117,9 @@ rely on these.
 - **Zero-objective disambiguation.** Re-solving with the objective replaced by `0`
   (`MakeZeroObjectiveProbeModel`) cleanly separates the ambiguous case on both
   backends: feasible ⇒ the original was unbounded, infeasible ⇒ infeasible (verified
-  on LP and MILP, both backends). This is the portable analogue of Gurobi's
-  `DualReductions=0`, and is what `DisambiguateInfOrUnbd` runs.
+  on LP and MILP, both backends). This is what `DisambiguateInfOrUnbd` runs, for every
+  backend; Gurobi's `DualReductions=0` re-solve is not used, because on a non-convex
+  model it switches to spatial branching and does not settle the status.
 - **Native ray APIs (optional accelerators, not the default).** Gurobi `UnbdRay`
   (needs `InfUnbdInfo=1`) returns a ray for continuous models only — it errors on a
   MIP. HiGHS `getPrimalRay` returns a ray for LP and MIP (even under the ambiguous
