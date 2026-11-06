@@ -62,6 +62,15 @@ struct DirectKeyElement {
 	//! A row whose element is NULL is in no group (D5), unless the element is a column of a relation, where NULL is a
 	//! value of its own.
 	bool no_group = true;
+
+	DirectKeyElement Copy() const {
+		DirectKeyElement copy;
+		copy.grouping = grouping->Copy();
+		copy.label = label ? label->Copy() : nullptr;
+		copy.name = name;
+		copy.no_group = no_group;
+		return copy;
+	}
 };
 
 //! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier

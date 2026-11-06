@@ -374,7 +374,7 @@ def _a2_late_error(decision_sql, v_sql="1.0", cap_sql="5.0"):
 
 A2 = RuleFixture(
     rule="A2_SINGLE_FACILITY_LOCATION",
-    condition="min SUM((c - v)^2), lo <= c <= hi, one shared c",
+    condition="min SUM((c - v)^2), MAX(lo) <= c <= MIN(hi), one shared c for each class",
     # The worked example of the rule's definition: the mean of 2, 4 and 9 is 5, inside the interval, and every row
     # carries it. Forced HiGHS stops at its own tolerance (4.9999999), so the query rounds its output to two places,
     # which makes its rows equal on every path.

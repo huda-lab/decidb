@@ -77,11 +77,6 @@ unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding num
                                          const vector<ColumnBinding> &source_bindings, idx_t projection_index,
                                          bool scaled = false, double scale = 1.0, bool divides = false);
 
-//! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
-//! nothing there, as on the solver path.
-unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
-                                             unique_ptr<Expression> check);
-
 //! Joins checks into one BOOLEAN expression that is true when every check is. The checks run in the order given, as a
 //! CASE chain, so an earlier check guards the later ones: a row raises the error of the first check it fails. A check
 //! that is false or NULL, not an error, makes the whole false. No checks join to true.

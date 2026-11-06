@@ -349,34 +349,7 @@ private:
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			raw.source.push_back(p1.Add(calc.Out(calc.Col(source_types[i], source_bindings[i]))));
 		}
-		for (auto &clause : condition.clauses) {
-			DirectBoundColumns columns;
-			// A value is computed only on the rows the clause keeps.
-			auto on_kept = [&](ExprPtr value) {
-				return clause.when ? DirectOnKeptRows(calc, calc.Wrap(DirectActiveWhen(calc, clause.when.get())), value)
-				                   : value;
-			};
-			auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient)))));
-			auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Of(*clause.rhs), LogicalType::DOUBLE))));
-			columns.lower = p1.Add(calc.Out(on_kept(calc.Of(*clause.lower))));
-			columns.upper = p1.Add(calc.Out(on_kept(calc.Of(*clause.upper))));
-			if (clause.when) {
-				columns.has_when = true;
-				columns.when = p1.Add(DirectActiveWhen(calc, clause.when.get()));
-			}
-			auto read_on = [&](unique_ptr<Expression> check) {
-				return columns.has_when
-				           ? DirectCheckOnKeptRows(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, columns.when)),
-				                                   std::move(check))
-				           : std::move(check);
-			};
-			if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient,
-			                                   source_bindings, p1.index)) {
-				checks.push_back(read_on(std::move(check)));
-			}
-			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
-			raw.clauses.push_back(columns);
-		}
+		raw.clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, nullptr, checks);
 		for (auto &part : condition.parts) {
 			raw.parts.push_back(DirectLayoutQuadraticPart(optimizer, calc, p1, part, condition.decisions.size(),
 			                                              source_bindings, nullptr, checks));

@@ -103,11 +103,6 @@ unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding num
 	return DirectRaiseMessage(optimizer, calc, message);
 }
 
-unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
-                                             unique_ptr<Expression> check) {
-	return calc.Out(calc.If(calc.Wrap(std::move(kept)), calc.Wrap(std::move(check)), calc.Bool(true)));
-}
-
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
                                                  const string &written) {
 	ExpressionBuilder calc(optimizer.context);

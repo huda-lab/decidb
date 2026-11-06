@@ -61,7 +61,10 @@ public:
 		condition->sense = ir.objective.sense;
 		condition->objective_written = ir.objective.written;
 		if (ir.decisions[0].scope == DecideVarScope::KEYED) {
-			CopyKey(ir.keyed_scopes[ir.decisions[0].keyed_scope].key, condition->keys);
+			// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it takes.
+			for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
+				condition->keys.push_back(element.Copy());
+			}
 		}
 		if (!ProveInterval(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
@@ -70,7 +73,7 @@ public:
 	}
 
 	string Summary() const override {
-		return "min SUM((c - v)^2), lo <= c <= hi, one shared c";
+		return "min SUM((c - v)^2), MAX(lo) <= c <= MIN(hi), one shared c for each class";
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,
@@ -78,17 +81,6 @@ public:
 	                       const DirectStateErrors &errors) const override;
 
 private:
-	//! A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it takes.
-	static void CopyKey(const vector<DirectKeyElement> &from, vector<DirectKeyElement> &to) {
-		for (auto &element : from) {
-			DirectKeyElement copy;
-			copy.grouping = element.grouping->Copy();
-			copy.label = element.label->Copy();
-			copy.name = element.name;
-			copy.no_group = element.no_group;
-			to.push_back(std::move(copy));
-		}
-	}
 	bool ProveInterval(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
@@ -173,135 +165,30 @@ public:
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> rows) const {
-		bool keyed = !condition.keys.empty();
-		auto state = DirectProjectScope(binder, std::move(rows), keyed, nullptr, condition.keys, {});
+		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
 		Carried from_scope;
 		from_scope.source = state.input_bindings;
 		from_scope.eligible = state.eligible;
 		from_scope.keys = state.keys;
 		from_scope.key_types = state.key_types;
 
-		vector<unique_ptr<Expression>> checks;
 		DirectProjectionStage p1(binder.GenerateTableIndex());
-		auto carried1 = Forward(p1, from_scope);
-		auto over_state = [&](const Expression &value) {
-			return state.state_index == DConstants::INVALID_INDEX
-			           ? value.Copy()
-			           : DirectOverProjection(value, source_bindings, state.state_index);
-		};
-		auto clause_columns = LayoutClauses(p1, over_state, checks);
-		auto laid =
-		    DirectLayoutQuadraticPart(optimizer, calc, p1, condition.parts[0], 1, source_bindings, over_state, checks);
+		auto raw = LayoutRawValues(p1, from_scope, state.state_index);
 		auto plan = p1.Finish(std::move(state.plan));
 
 		DirectProjectionStage p2(binder.GenerateTableIndex());
-		auto carried2 = Forward(p2, carried1);
-		vector<ClauseEnds> ends;
-		for (auto &columns : clause_columns) {
-			ExprPtr lower, upper;
-			DirectClauseBounds(calc, columns, lower, upper);
-			ClauseEnds end;
-			end.lower = p2.Add(calc.Out(lower));
-			end.upper = p2.Add(calc.Out(upper));
-			if (columns.has_when) {
-				end.when = p2.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, columns.when)));
-			}
-			ends.push_back(end);
-		}
-		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, {laid}, 0);
-		auto sense = calc.Num(condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0);
-		auto a = p2.Add(calc.Out(calc.Mul(sense, sum.a)));
-		auto b = p2.Add(calc.Out(calc.Mul(sense, sum.b)));
-		// Every check is true or raises; a row passes when all of them do.
-		auto valid = p2.Add(DirectAllHold(calc, std::move(checks)));
+		auto coefficients = ComputeCoefficients(p2, raw);
 		plan = p2.Finish(std::move(plan));
 
-		// W: every aggregate of a class, over the rows of its partition.
-		auto window_index = binder.GenerateTableIndex();
-		auto window = make_uniq<LogicalWindow>(window_index);
-		auto partition = [&](BoundWindowExpression &aggregate) {
-			for (idx_t i = 0; i < carried2.keys.size(); i++) {
-				aggregate.partitions.push_back(calc.Out(calc.Col(carried2.key_types[i], carried2.keys[i])));
-			}
-		};
-		auto add_window = [&](const char *function, ColumnBinding column, LogicalType type) {
-			auto aggregate = DirectWindowExtremum(optimizer, function, calc.Out(calc.Col(type, column)));
-			partition(*aggregate);
-			window->expressions.push_back(std::move(aggregate));
-			return ColumnBinding(window_index, window->expressions.size() - 1);
-		};
-		auto sum_a = add_window("sum", a, LogicalType::DOUBLE);
-		auto sum_b = add_window("sum", b, LogicalType::DOUBLE);
-		// The class's interval: the tightest end of each clause, MAX of its lower ends and MIN of its upper ends
-		// (DirectTightestBound), and whether some row a floor-lifting clause keeps exists. A row with no class sits in
-		// a partition of its own, and its answer is NULL whatever the partition holds.
-		DirectWindowSink sink(*window, partition);
-		vector<DirectGroupValues> lowers, uppers;
-		vector<ColumnBinding> lowering_whens;
-		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			auto &clause = condition.clauses[j];
-			vector<DirectGroupInputColumns> lower_input(1), upper_input(1);
-			lower_input[0].argument = ends[j].lower;
-			upper_input[0].argument = ends[j].upper;
-			auto largest = DirectTightestBound(optimizer, ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                                   clause.lower->Copy(), string(), nullptr);
-			auto smallest = DirectTightestBound(optimizer, ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                    clause.upper->Copy(), string(), nullptr);
-			lowers.push_back(DirectAddGroupBound(calc, *largest, lower_input, sink, nullptr));
-			uppers.push_back(DirectAddGroupBound(calc, *smallest, upper_input, sink, nullptr));
-			if (clause.lifts_floor) {
-				lowering_whens.push_back(add_window("bool_or", ends[j].when, LogicalType::BOOLEAN));
-			}
-		}
-		window->children.push_back(std::move(plan));
+		auto aggregates = AggregateClasses(coefficients, plan);
 
-		// P3: the class's interval pieces as columns: each clause's tightest ends, and the static floor, lowered when a
-		// row a floor-lifting clause keeps exists.
 		DirectProjectionStage p3(binder.GenerateTableIndex());
-		auto carried3 = Forward(p3, carried2);
-		auto valid3 = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, valid)));
-		auto total_a3 = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, sum_a)));
-		auto total_b3 = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, sum_b)));
-		vector<ColumnBinding> clause_lowers, clause_uppers;
-		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			clause_lowers.push_back(p3.Add(calc.Out(calc.Cast(lowers[j].lower, LogicalType::DOUBLE))));
-			clause_uppers.push_back(p3.Add(calc.Out(calc.Cast(uppers[j].upper, LogicalType::DOUBLE))));
-		}
-		auto floor = p3.Add(calc.Out(DirectStaticFloor(calc, condition.lower, lowering_whens)));
-		auto plan3 = p3.Finish(std::move(window));
+		auto interval = ComputeInterval(p3, aggregates);
+		plan = p3.Finish(std::move(plan));
 
-		// P4: the answer. A row the objective drops has `a = b = 0`, never NULL, so every row carries a sum.
 		DirectProjectionStage p4(binder.GenerateTableIndex());
-		auto total_a = calc.Col(LogicalType::DOUBLE, total_a3);
-		auto total_b = calc.Col(LogicalType::DOUBLE, total_b3);
-		auto zero = calc.Num(0.0);
-		ExprPtr lower, upper;
-		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, floor), condition.upper, clause_lowers, clause_uppers, lower,
-		             upper);
-		// Convex: the turning point, clamped into the interval. With no square on any row of the class every value is
-		// optimal, and the point of the interval nearest 0 is the answer.
-		auto turning = DirectTurningPoint(calc, total_a, total_b, false);
-		auto target = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total_a, zero), turning.target, zero);
-		auto clamped = calc.Min({calc.Max({target, lower}), upper});
-		// A row with no class has no decision and shows NULL.
-		auto has_class = keyed ? calc.Col(LogicalType::BOOLEAN, carried3.eligible) : calc.Bool(true);
-
-		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p4.Add(calc.Out(calc.Col(source_types[i], carried3.source[i])));
-		}
-		// Adding 0.0 turns -0.0 into 0.0.
-		auto answer = calc.Add(clamped, zero);
-		p4.Add(calc.Out(keyed ? calc.If(has_class, answer, calc.Constant(Value(LogicalType::DOUBLE))) : answer));
-		vector<unique_ptr<Expression>> answer_checks;
-		answer_checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, valid3)));
-		// An empty interval raises on every row that has a class. The interval of a class is the same on every row of
-		// it, so a query whose only bounds are constants has two constants here, which DuckDB folds.
-		answer_checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
-		                                      DirectInfeasibleErrorPredicate(optimizer, errors)));
-		answer_checks.push_back(DirectRaiseTooLarge(optimizer, total_a, condition.objective_written));
-		answer_checks.push_back(DirectRaiseTooLarge(optimizer, total_b, condition.objective_written));
-		answer_checks.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
-		p4.Add(DirectAllHold(calc, std::move(answer_checks)));
+		ComputeAnswer(p4, interval);
+		plan = p4.Finish(std::move(plan));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
@@ -310,7 +197,7 @@ public:
 			substitute.slot_map.push_back(i);
 		}
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		substitute.child = p4.Finish(std::move(plan3));
+		substitute.child = std::move(plan);
 		return substitute;
 	}
 
@@ -324,21 +211,68 @@ private:
 		//! The types of `keys`.
 		vector<LogicalType> key_types;
 	};
-
-	//! The columns of one clause in P2: its lower and upper end on the row (DirectClauseBounds), and the row's `when`
-	//! for a clause that lifts the floor.
+	//! Columns of P1.
+	struct Raw {
+		Carried carried;
+		vector<DirectBoundColumns> clauses;
+		DirectQuadraticColumns part;
+		vector<unique_ptr<Expression>> checks;
+	};
+	//! A clause's lower and upper end on the row (DirectClauseBounds), and the row's `when` for a clause that lifts the
+	//! floor.
 	struct ClauseEnds {
 		ColumnBinding lower;
 		ColumnBinding upper;
 		ColumnBinding when;
 	};
+	//! Columns of P2.
+	struct Coefficients {
+		Carried carried;
+		vector<ClauseEnds> ends;
+		ColumnBinding a;
+		ColumnBinding b;
+		ColumnBinding valid;
+	};
+	//! Columns of W: the class's sums and the aggregates of its clauses, over the results.
+	struct Aggregates {
+		Carried carried;
+		ColumnBinding valid;
+		ColumnBinding sum_a;
+		ColumnBinding sum_b;
+		vector<DirectGroupValues> lowers;
+		vector<DirectGroupValues> uppers;
+		//! Whether some row of a floor-lifting clause is kept, one per such clause.
+		vector<ColumnBinding> lowering_whens;
+	};
+	//! Columns of P3.
+	struct Interval {
+		Carried carried;
+		ColumnBinding valid;
+		ColumnBinding total_a;
+		ColumnBinding total_b;
+		vector<ColumnBinding> clause_lowers;
+		vector<ColumnBinding> clause_uppers;
+		ColumnBinding floor;
+	};
+
+	const Condition &condition;
+	Optimizer &optimizer;
+	Binder &binder;
+	ExpressionBuilder calc;
+	vector<ColumnBinding> source_bindings;
+	vector<LogicalType> source_types;
+	const DirectStateErrors &errors;
+
+	bool IsKeyed() const {
+		return !condition.keys.empty();
+	}
 
 	Carried Forward(DirectProjectionStage &stage, const Carried &from) const {
 		Carried to;
 		for (idx_t i = 0; i < from.source.size(); i++) {
 			to.source.push_back(stage.Add(calc.Out(calc.Col(source_types[i], from.source[i]))));
 		}
-		if (!condition.keys.empty()) {
+		if (IsKeyed()) {
 			to.eligible = stage.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, from.eligible)));
 		}
 		for (idx_t i = 0; i < from.keys.size(); i++) {
@@ -348,47 +282,164 @@ private:
 		return to;
 	}
 
-	//! P1 columns of every clause, each value computed only on the rows its clause keeps (NULL elsewhere), with the
-	//! check of each: the coefficient is a number, and the right side is not NaN (a NULL one skips the row).
-	vector<DirectBoundColumns> LayoutClauses(DirectProjectionStage &p1,
-	                                         const std::function<unique_ptr<Expression>(const Expression &)> &over,
-	                                         vector<unique_ptr<Expression>> &checks) const {
-		vector<DirectBoundColumns> result;
-		for (auto &clause : condition.clauses) {
-			DirectBoundColumns columns;
-			ExprPtr active;
-			if (clause.when) {
-				active = calc.Wrap(DirectActiveWhen(calc, over(*clause.when).get()));
-			}
-			auto on_kept = [&](ExprPtr value) {
-				return active ? DirectOnKeptRows(calc, active, value) : value;
-			};
-			auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over)))));
-			auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Wrap(over(*clause.rhs)), LogicalType::DOUBLE))));
-			columns.lower = p1.Add(calc.Out(on_kept(calc.Wrap(over(*clause.lower)))));
-			columns.upper = p1.Add(calc.Out(on_kept(calc.Wrap(over(*clause.upper)))));
-			if (clause.when) {
-				columns.has_when = true;
-				columns.when = p1.Add(calc.Out(active));
-			}
-			// Both values are NULL on a row the clause drops, and a NULL passes (it skips the row).
-			if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient,
-			                                   source_bindings, p1.index)) {
-				checks.push_back(std::move(check));
-			}
-			checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text));
-			result.push_back(columns);
+	//! Makes `window` run over the rows of the row's class.
+	void PartitionByKey(const Carried &carried, BoundWindowExpression &window) const {
+		for (idx_t i = 0; i < carried.keys.size(); i++) {
+			window.partitions.push_back(calc.Out(calc.Col(carried.key_types[i], carried.keys[i])));
 		}
+	}
+
+	//! The aggregate `function` of a column over the rows of the class; its column is the window's.
+	ColumnBinding AddWindow(LogicalWindow &window, const Carried &carried, const char *function, ColumnBinding column,
+	                        const LogicalType &type) const {
+		auto aggregate = DirectWindowExtremum(optimizer, function, calc.Out(calc.Col(type, column)));
+		PartitionByKey(carried, *aggregate);
+		window.expressions.push_back(std::move(aggregate));
+		return ColumnBinding(window.window_index, window.expressions.size() - 1);
+	}
+
+	//===------------------------------------------------------------------===//
+	// P1: raw values
+	//===------------------------------------------------------------------===//
+
+	Raw LayoutRawValues(DirectProjectionStage &p1, const Carried &from_scope, idx_t state_index) const {
+		Raw raw;
+		raw.carried = Forward(p1, from_scope);
+		auto over_state = [&](const Expression &value) {
+			return state_index == DConstants::INVALID_INDEX ? value.Copy()
+			                                                : DirectOverProjection(value, source_bindings, state_index);
+		};
+		raw.clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over_state,
+		                                       raw.checks);
+		raw.part = DirectLayoutQuadraticPart(optimizer, calc, p1, condition.parts[0], 1, source_bindings, over_state,
+		                                     raw.checks);
+		return raw;
+	}
+
+	//===------------------------------------------------------------------===//
+	// P2: the row's `a` and `b`, each clause's ends, and the checks
+	//===------------------------------------------------------------------===//
+
+	Coefficients ComputeCoefficients(DirectProjectionStage &p2, Raw &raw) const {
+		Coefficients result;
+		result.carried = Forward(p2, raw.carried);
+		for (auto &columns : raw.clauses) {
+			ExprPtr lower, upper;
+			DirectClauseBounds(calc, columns, lower, upper);
+			ClauseEnds ends;
+			ends.lower = p2.Add(calc.Out(lower));
+			ends.upper = p2.Add(calc.Out(upper));
+			if (columns.has_when) {
+				ends.when = p2.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, columns.when)));
+			}
+			result.ends.push_back(ends);
+		}
+		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, {raw.part}, 0);
+		auto sense = calc.Num(condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0);
+		result.a = p2.Add(calc.Out(calc.Mul(sense, sum.a)));
+		result.b = p2.Add(calc.Out(calc.Mul(sense, sum.b)));
+		// Every check is true or raises; a row passes when all of them do.
+		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;
 	}
 
-	const Condition &condition;
-	Optimizer &optimizer;
-	Binder &binder;
-	ExpressionBuilder calc;
-	vector<ColumnBinding> source_bindings;
-	vector<LogicalType> source_types;
-	const DirectStateErrors &errors;
+	//===------------------------------------------------------------------===//
+	// W: the aggregates of a class
+	//===------------------------------------------------------------------===//
+
+	//! Puts one window over `plan`: the sums of `a` and `b`, and for each clause the MAX of its lower ends and the MIN of
+	//! its upper ends (DirectTightestBound), and whether some row a floor-lifting clause keeps exists. A row with no
+	//! class sits in a partition of its own, and its answer is NULL whatever the partition holds.
+	Aggregates AggregateClasses(const Coefficients &coefficients, unique_ptr<LogicalOperator> &plan) const {
+		auto window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
+		auto &carried = coefficients.carried;
+		Aggregates result;
+		result.carried = carried;
+		result.valid = coefficients.valid;
+		result.sum_a = AddWindow(*window, carried, "sum", coefficients.a, LogicalType::DOUBLE);
+		result.sum_b = AddWindow(*window, carried, "sum", coefficients.b, LogicalType::DOUBLE);
+		DirectWindowSink sink(*window, [&](BoundWindowExpression &aggregate) { PartitionByKey(carried, aggregate); });
+		for (idx_t j = 0; j < condition.clauses.size(); j++) {
+			auto &clause = condition.clauses[j];
+			auto &ends = coefficients.ends[j];
+			result.lowers.push_back(
+			    TightestEnd(sink, ExpressionType::COMPARE_GREATERTHANOREQUALTO, *clause.lower, ends.lower));
+			result.uppers.push_back(TightestEnd(sink, ExpressionType::COMPARE_LESSTHANOREQUALTO, *clause.upper, ends.upper));
+			if (clause.lifts_floor) {
+				result.lowering_whens.push_back(
+				    AddWindow(*window, carried, "bool_or", ends.when, LogicalType::BOOLEAN));
+			}
+		}
+		window->children.push_back(std::move(plan));
+		plan = std::move(window);
+		return result;
+	}
+
+	//! The tightest value of a clause's end `column` (of the admitted end `end`) over the class: the MAX of lower ends
+	//! for `>=`, the MIN of upper ends for `<=`.
+	DirectGroupValues TightestEnd(DirectGroupSink &sink, ExpressionType comparison, const Expression &end,
+	                              ColumnBinding column) const {
+		auto bound = DirectTightestBound(optimizer, comparison, end.Copy(), string(), nullptr);
+		vector<DirectGroupInputColumns> input(1);
+		input[0].argument = column;
+		return DirectAddGroupBound(calc, *bound, input, sink, nullptr);
+	}
+
+	//===------------------------------------------------------------------===//
+	// P3: the class's interval as columns
+	//===------------------------------------------------------------------===//
+
+	//! Each clause's tightest ends, and the static floor, lowered when a row a floor-lifting clause keeps exists.
+	Interval ComputeInterval(DirectProjectionStage &p3, const Aggregates &aggregates) const {
+		Interval result;
+		result.carried = Forward(p3, aggregates.carried);
+		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
+		result.total_a = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, aggregates.sum_a)));
+		result.total_b = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, aggregates.sum_b)));
+		for (idx_t j = 0; j < condition.clauses.size(); j++) {
+			result.clause_lowers.push_back(p3.Add(calc.Out(calc.Cast(aggregates.lowers[j].lower, LogicalType::DOUBLE))));
+			result.clause_uppers.push_back(p3.Add(calc.Out(calc.Cast(aggregates.uppers[j].upper, LogicalType::DOUBLE))));
+		}
+		result.floor = p3.Add(calc.Out(DirectStaticFloor(calc, condition.lower, aggregates.lowering_whens)));
+		return result;
+	}
+
+	//===------------------------------------------------------------------===//
+	// P4: the answer
+	//===------------------------------------------------------------------===//
+
+	void ComputeAnswer(DirectProjectionStage &p4, const Interval &interval) const {
+		for (idx_t i = 0; i < source_bindings.size(); i++) {
+			p4.Add(calc.Out(calc.Col(source_types[i], interval.carried.source[i])));
+		}
+		auto total_a = calc.Col(LogicalType::DOUBLE, interval.total_a);
+		auto total_b = calc.Col(LogicalType::DOUBLE, interval.total_b);
+		auto zero = calc.Num(0.0);
+		ExprPtr lower, upper;
+		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, interval.floor), condition.upper, interval.clause_lowers,
+		             interval.clause_uppers, lower, upper);
+		// Convex: the turning point, clamped into the interval. With no square on any row of the class every value is
+		// optimal, and the point of the interval nearest 0 is the answer. A row the objective drops has `a = b = 0`,
+		// never NULL, so every row carries a sum.
+		auto turning = DirectTurningPoint(calc, total_a, total_b, false);
+		auto target = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, total_a, zero), turning.target, zero);
+		// Adding 0.0 turns -0.0 into 0.0.
+		auto answer = calc.Add(calc.Min({calc.Max({target, lower}), upper}), zero);
+		// A row with no class has no decision and shows NULL.
+		auto has_class = IsKeyed() ? calc.Col(LogicalType::BOOLEAN, interval.carried.eligible) : calc.Bool(true);
+		p4.Add(calc.Out(calc.If(has_class, answer, calc.Constant(Value(LogicalType::DOUBLE)))));
+
+		vector<unique_ptr<Expression>> checks;
+		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, interval.valid)));
+		// An empty interval raises on every row that has a class. The interval of a class is the same on every row of
+		// it, so a query whose only bounds are constants has two constants here, which DuckDB folds.
+		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
+		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
+		checks.push_back(DirectRaiseTooLarge(optimizer, total_a, condition.objective_written));
+		checks.push_back(DirectRaiseTooLarge(optimizer, total_b, condition.objective_written));
+		checks.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
+		p4.Add(DirectAllHold(calc, std::move(checks)));
+	}
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,

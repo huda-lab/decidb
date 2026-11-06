@@ -139,6 +139,42 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	return columns;
 }
 
+vector<DirectBoundColumns> DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                                    DirectProjectionStage &p1, const vector<DirectBoundClause> &clauses,
+                                                    const vector<ColumnBinding> &source_bindings,
+                                                    const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                                                    vector<unique_ptr<Expression>> &checks) {
+	auto into = [&](const Expression &value) {
+		return calc.Wrap(over ? over(value) : value.Copy());
+	};
+	vector<DirectBoundColumns> result;
+	for (auto &clause : clauses) {
+		DirectBoundColumns columns;
+		ExprPtr kept;
+		if (clause.when) {
+			kept = calc.Wrap(DirectActiveWhen(calc, over ? over(*clause.when).get() : clause.when.get()));
+		}
+		auto on_kept = [&](const ExprPtr &value) {
+			return DirectOnKeptRows(calc, kept, value);
+		};
+		auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(DirectSumOf(optimizer, clause.coefficient, over)))));
+		auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(into(*clause.rhs), LogicalType::DOUBLE))));
+		columns.lower = p1.Add(calc.Out(on_kept(into(*clause.lower))));
+		columns.upper = p1.Add(calc.Out(on_kept(into(*clause.upper))));
+		if (clause.when) {
+			columns.has_when = true;
+			columns.when = p1.Add(calc.Out(kept));
+		}
+		if (auto check = DirectCheckNumber(optimizer, coefficient, clause.coefficient_names, clause.coefficient,
+		                                   source_bindings, p1.index)) {
+			checks.push_back(std::move(check));
+		}
+		checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text));
+		result.push_back(columns);
+	}
+	return result;
+}
+
 DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBuilder &calc,
                                        const vector<DirectQuadraticPart> &parts,
                                        const vector<DirectQuadraticColumns> &columns, idx_t decision) {
@@ -336,10 +372,7 @@ bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConst
 			if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
 				return false;
 			}
-			DirectKeyElement element;
-			element.grouping = key.grouping->Copy();
-			element.no_group = key.no_group;
-			to.push_back(std::move(element));
+			to.push_back(key.Copy());
 		}
 		return true;
 	};

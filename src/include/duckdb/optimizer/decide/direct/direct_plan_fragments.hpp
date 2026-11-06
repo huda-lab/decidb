@@ -89,6 +89,17 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
                                                  const std::function<unique_ptr<Expression>(const Expression &)> &over,
                                                  vector<unique_ptr<Expression>> &checks);
 
+//! The columns of each bound clause (DirectBoundClause) in the projection `p1`: its coefficient, right side and
+//! admitted ends, each computed only on the rows the clause keeps (NULL elsewhere), and the row's `when`. The check of
+//! the coefficient (a number, DirectCheckNumber) and of the right side (not NaN; a NULL one skips the row) is appended
+//! to `checks`; both values are NULL on a row the clause drops, and a NULL passes. `over` re-points a value of the
+//! source before it is read (null: as it is), and `source_bindings` are the source columns `p1` carries first.
+vector<DirectBoundColumns>
+DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc, DirectProjectionStage &p1,
+                         const vector<DirectBoundClause> &clauses, const vector<ColumnBinding> &source_bindings,
+                         const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                         vector<unique_ptr<Expression>> &checks);
+
 //! One decision's objective as `a*x^2 + b*x`, summed over the parts, each scaled by its sign and factor. A part that
 //! has neither a linear term nor a square on the decision adds nothing. `linear` is the part of `b` the linear terms
 //! make, which a rule tests for a number past a DOUBLE; it is null when no part has one. The rule applies the
