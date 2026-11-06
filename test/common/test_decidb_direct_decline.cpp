@@ -967,6 +967,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a ball off center by a constant", "SUM(POWER(x - 1, 2)) <= 25"));
 	shapes.push_back(N1("a ball off center by a column", "SUM(POWER(x - w, 2)) <= 25"));
 	shapes.push_back(N1("a row-valued slope in the limit", "SUM(POWER(w * x, 2)) <= 25"));
+	shapes.push_back(N1("a row-valued weight on the square in the limit", "SUM(w * POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("a slope in the limit fixed only within the query", "SUM(POWER(txid_current() * x, 2)) <= 25"));
 	// The read of the square stops at this term, with the slope already read: only the read's own answer declines it.
 	shapes.push_back(

@@ -60,20 +60,32 @@ struct DecideTerm {
 	}
 };
 
-//! A bilinear term in a constraint: `sign * coefficient * var_a * var_b`.
-struct BilinearConstraintTerm {
-	idx_t var_a;
-	idx_t var_b;
-	unique_ptr<Expression> coefficient; // Data coefficient (or nullptr for 1.0)
+//! A term of degree 2: `sign * weight * l * r` on each row its reducer reads, where `l` and `r` are linear forms in
+//! the row's decisions. The model builder adds it to Q as the rank-one update `weight * l * rᵀ`, symmetrized, and its
+//! cross terms with a form's constant to the linear part (ilp_model_builder.cpp, AddProductGroup).
+//!
+//! A square `w * POWER(f, 2)` is `l = f, r = f`, flagged `square` with `right` empty: Q gets `w * f * fᵀ`, which is
+//! positive semi-definite when `w` is positive. `w * x * y` is `l = x, r = y`. One struct carries both, in a
+//! constraint and in the objective, so every stage reads one shape of degree 2 (CAN-1).
+struct DecideProductGroup {
+	//! The coefficient the two forms are multiplied by, never a decision; null for 1. A reducer's factor
+	//! (`2 * SUM(POWER(x, 2))`) is multiplied in like a linear term's (ApplyScaleToExtracted).
+	unique_ptr<Expression> weight;
 	int sign = 1;
-	unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
-	bool avg_scale = false;        // True when this term came from AVG and needs 1/N scaling
-	//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
-	//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
-	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
-	//! of that relation and zeroes the duplicates the join introduced.
+	vector<DecideTerm> left;
+	//! The second form; empty for a square, which multiplies `left` by itself.
+	vector<DecideTerm> right;
+	bool square = false;
+	//! The sign of `sign * weight` when the plan knows it (ScaleSignAtPlanTime): +1 or -1, and 0 for a weight known
+	//! only when the query runs. Whether the group is convex is read from it (IsNonconvexProductGroup).
+	int weight_sign = 1;
+	unique_ptr<Expression> filter; // the reducer's own `when`
+	bool avg_scale = false;        // the group came from AVG and needs 1/N scaling
+	//! Keyed scope the group's reducer is qualified by (`sum(D: ...)`), or INVALID_INDEX, as for DecideTerm.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-	//! The values `coefficient` is computed from (DecideTerm::inputs).
+	//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm. Read by the objective only.
+	LinearTermReduction reduction = LinearTermReduction::NONE;
+	//! The values `weight` is computed from (DecideTerm::inputs).
 	vector<unique_ptr<Expression>> inputs;
 };
 
@@ -150,39 +162,13 @@ struct DecideConstraint {
 	idx_t lifted_floor = DConstants::INVALID_INDEX;
 	double lifted_floor_k = 0.0;
 
-	// Bilinear terms in constraint (non-Boolean pairs left by optimizer)
-	vector<BilinearConstraintTerm> bilinear_terms;
-	bool has_bilinear = false;
-
-	// Quadratic groups in constraint: each POWER(expr, 2) or (expr)*(expr) self-product
-	// becomes a separate group. The model builder computes an outer-product Q for each
-	// group independently, then accumulates all into the same QuadraticConstraint.
-	// This is necessary because POWER(x-t,2) + POWER(y-s,2) != POWER(x-t+y-s, 2).
-	struct QuadraticGroup {
-		vector<DecideTerm> inner_terms; // Inner linear expression of POWER(inner, 2)
-		double sign = 1.0;              // +1, -1, or scalar (from negation/scaling)
-		//! Query-wide reducer scale not known until the relational input runs.
-		unique_ptr<Expression> scale;
-		bool scale_divides = false;
-		unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
-		bool avg_scale = false;        // True when this group came from AVG and needs 1/N scaling
-		//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
-		//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
-		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
-		//! of that relation and zeroes the duplicates the join introduced.
-		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-
-		QuadraticGroup() = default;
-	};
-	vector<QuadraticGroup> quadratic_groups;
-	bool has_quadratic = false;
+	//! The terms of degree 2, one group per product the left side holds: a constraint with any is a quadratic row.
+	vector<DecideProductGroup> product_groups;
 
 	DecideConstraint() = default;
 };
 
-//! The objective, flattened into terms. Supports both linear objectives (terms
-//! only) and quadratic objectives of the form MINIMIZE SUM((linear_expr)^2) +
-//! linear_terms.
+//! The objective, flattened into terms: linear terms and product groups.
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
@@ -192,35 +178,8 @@ struct DecideObjective {
 	//! a row whose written key is NULL in no class, and a term beside its reducers counts once, read on the first
 	//! kept row.
 
-	//! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
-	//! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
-	//! sign = +1.0 for SUM(POWER(expr, 2)), sign = -1.0 for SUM(-POWER(expr, 2)).
-	vector<DecideTerm> squared_terms;
-	bool has_quadratic = false;
-	double quadratic_sign = 1.0;
-
-	//! Bilinear objective terms: x_a * x_b with data coefficient.
-	//! These are products of two different DECIDE variables where neither is Boolean
-	//! (Boolean cases are linearized by the optimizer into McCormick auxiliary variables).
-	struct BilinearTerm {
-		idx_t var_a;                        // First DECIDE variable index
-		idx_t var_b;                        // Second DECIDE variable index
-		unique_ptr<Expression> coefficient; // Data coefficient expression (or nullptr for 1.0)
-		int sign = 1;                       // +1 or -1
-		unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
-		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
-		//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
-		//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
-		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
-		//! of that relation and zeroes the duplicates the join introduced.
-		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-		//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm.
-		LinearTermReduction reduction = LinearTermReduction::NONE;
-		//! The values `coefficient` is computed from (DecideTerm::inputs).
-		vector<unique_ptr<Expression>> inputs;
-	};
-	vector<BilinearTerm> bilinear_terms;
-	bool has_bilinear = false;
+	//! The objective's terms of degree 2 (DecideProductGroup), summed into one Q.
+	vector<DecideProductGroup> product_groups;
 
 	DecideObjective() = default;
 };

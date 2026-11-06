@@ -262,7 +262,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
             new_constraints.push_back(std::move(ec));
             continue;
         }
-        if (!ec.bilinear_terms.empty() || !ec.quadratic_groups.empty()) {
+        if (!ec.product_groups.empty()) {
             throw InternalException("DECIDE: a '<>' over a product or a power of decisions reached the model builder. "
                                     "Its rows hold the linear terms only, so building it would drop the rest; stage 05 "
                                     "refuses it (FindNotEqualConstraints).");
@@ -420,7 +420,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             // reused for every value in `distinct_rhs`.
             // A term beside the reducers enters the group's row once: execution kept its coefficient on one row of
             // the group (CountOnce), so the per-row ranges count it once too.
-            const bool has_linear_range = ec.bilinear_terms.empty() && ec.quadratic_groups.empty();
+            const bool has_linear_range = ec.product_groups.empty();
             double grp_lo = 0.0;
             double grp_hi = 0.0;
             if (has_linear_range) {

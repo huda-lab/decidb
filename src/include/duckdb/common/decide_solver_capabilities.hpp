@@ -123,16 +123,16 @@ struct SolverModelClass {
 	bool singular_quadratic = false;
 };
 
-//! Is a quadratic objective non-convex under this sense? Non-convex exactly when the
-//! sign of Q fights the direction of optimization: MAXIMIZE of a positive-semi-definite
-//! Q, or MINIMIZE of a negative-semi-definite one.
+//! Is one product group of the objective (DecideProductGroup) non-convex under this sense? A product of two forms is
+//! indefinite whatever its weight. A square `w * f * fᵀ` is semi-definite with the sign of `w`, so it is non-convex
+//! when that sign fights the direction of optimization (MAXIMIZE of a positive weight, MINIMIZE of a negative one) or
+//! is not known until the query runs (`weight_sign` 0).
 //!
-//! Shared on purpose. Stage 05 asks it of the prepared objective's `quadratic_sign` to
-//! PREDICT the model class, and stage 06 asks it again of the built model's `q_sign` to
-//! record the FACT. Those two answers must agree for the plan-time refusal to be
-//! honest, so they read one predicate rather than two copies of one expression.
-inline bool IsNonconvexQuadraticObjective(double quadratic_sign, DecideSense sense) {
-	return (quadratic_sign > 0.0) == (sense == DecideSense::MAXIMIZE);
+//! Shared on purpose. Stage 05 asks it of the prepared groups to PREDICT the model class, and stage 06 asks it again
+//! of the evaluated groups to record the FACT. Those two answers must agree for the plan-time refusal to be honest, so
+//! they read one predicate rather than two copies of one expression.
+inline bool IsNonconvexProductGroup(bool square, int weight_sign, DecideSense sense) {
+	return !square || weight_sign == 0 || (weight_sign > 0) == (sense == DecideSense::MAXIMIZE);
 }
 
 //! Which demand a backend fails to meet. NONE means it can take the model. The order

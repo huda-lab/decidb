@@ -57,37 +57,50 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	return is_minmax(op.flat_objective_agg) || is_minmax(op.per_inner_agg) || is_minmax(op.per_outer_agg);
 }
 
-//! Does the objective's quadratic part couple two decision variables, making Q
+//! Does a product group of the objective couple two decision variables, making Q
 //! rank-deficient? Squaring a linear form over k >= 2 decisions always does: expanding
 //! `(p*x + q*y + r)^2` fills an off-diagonal Q entry, and the resulting 2x2 block is
-//! singular for any p and q. One decision variable per squared expression keeps Q
-//! diagonal, whatever the row count, which is the ordinary `POWER(x - target, 2)` shape.
+//! singular for any p and q. One decision variable per squared form keeps that group's Q
+//! diagonal, whatever the row count, which is the ordinary `POWER(x - target, 2)` shape. A
+//! product of two forms couples its decisions by construction.
 //!
-//! Read off `squared_terms`, the flattened inner expression stage 05 already built, so
-//! this needs no data — which is what lets the refusal land before a row is read.
-//! Constant terms carry INVALID_INDEX and are skipped. A bilinear objective counts too:
-//! a product of two decisions is off-diagonal by construction. That keeps this
-//! prediction at least as demanding as what `SolverModel::ModelClass()` later reads off
-//! the built matrix, which is the direction the contract requires — over-reporting costs
-//! a refused query, under-reporting hands a backend a model it answers wrong.
+//! Read off the groups stage 05 already built, so this needs no data — which is what lets
+//! the refusal land before a row is read. Constant terms carry INVALID_INDEX and are
+//! skipped. That keeps this prediction at least as demanding as what
+//! `SolverModel::ModelClass()` later reads off the built matrix, which is the direction the
+//! contract requires — over-reporting costs a refused query, under-reporting hands a backend
+//! a model it answers wrong.
 bool HasCoupledQuadraticTerms(const DecideObjective &objective) {
-	if (objective.has_bilinear) {
-		return true;
-	}
-	vector<idx_t> seen;
-	for (auto &term : objective.squared_terms) {
-		if (term.variable_index == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		if (std::find(seen.begin(), seen.end(), term.variable_index) != seen.end()) {
-			continue;
-		}
-		seen.push_back(term.variable_index);
-		if (seen.size() >= 2) {
+	for (auto &group : objective.product_groups) {
+		if (!group.square) {
 			return true;
+		}
+		vector<idx_t> seen;
+		for (auto &term : group.left) {
+			if (term.variable_index == DConstants::INVALID_INDEX ||
+			    std::find(seen.begin(), seen.end(), term.variable_index) != seen.end()) {
+				continue;
+			}
+			seen.push_back(term.variable_index);
+			if (seen.size() >= 2) {
+				return true;
+			}
 		}
 	}
 	return false;
+}
+
+//! The objective's first product group that is non-convex under the sense (IsNonconvexProductGroup), or null.
+const DecideProductGroup *FirstNonconvexGroup(const LogicalDecide &op) {
+	if (!op.prepared.objective) {
+		return nullptr;
+	}
+	for (auto &group : op.prepared.objective->product_groups) {
+		if (IsNonconvexProductGroup(group.square, group.weight_sign, op.decide_sense)) {
+			return &group;
+		}
+	}
+	return nullptr;
 }
 
 //! One line naming what the query does, in the user's own vocabulary, plus the
@@ -103,7 +116,7 @@ struct RefusalText {
 //! non-linear body held by a helper) records the clause that reads the helper.
 string FirstQuadraticClause(const LogicalDecide &op) {
 	for (auto &constraint : op.prepared.constraints) {
-		if (constraint->has_quadratic || constraint->has_bilinear) {
+		if (!constraint->product_groups.empty()) {
 			// A quadratic row without a source clause is an engine bug, not a query to refuse.
 			D_ASSERT(constraint->source_clause_id < op.constraint_sources.size());
 			return QuoteWrittenClause(op.constraint_sources[constraint->source_clause_id]);
@@ -117,10 +130,17 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
 		return {"the SUCH THAT clause `" + FirstQuadraticClause(op) + "` squares or multiplies decision variables",
 		        "rewrite that constraint so each term holds at most one decision variable"};
-	case SolverModelClassGap::NONCONVEX_QUADRATIC:
-		if (op.prepared.objective && op.prepared.objective->has_bilinear) {
+	case SolverModelClassGap::NONCONVEX_QUADRATIC: {
+		auto *group = FirstNonconvexGroup(op);
+		D_ASSERT(group);
+		if (!group->square) {
 			return {"the objective multiplies two decision variables",
 			        "use an objective that is linear in the decisions"};
+		}
+		if (group->weight_sign == 0) {
+			return {"the objective multiplies a squared decision term by a value whose sign is known only when the "
+			        "query runs",
+			        "multiply the square by a constant, or use a linear objective"};
 		}
 		return {op.decide_sense == DecideSense::MAXIMIZE
 		            ? "the objective MAXIMIZEs squared decision terms"
@@ -128,13 +148,11 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 		        op.decide_sense == DecideSense::MAXIMIZE
 		            ? "MINIMIZE the squared terms instead, or use a linear objective"
 		            : "MINIMIZE the squared terms without negating them, or use a linear objective"};
+	}
 	case SolverModelClassGap::MIQP:
 		return {"the objective squares decision variables that are not continuous",
 		        "declare those variables REAL, as in x(REAL), or use a linear objective"};
 	case SolverModelClassGap::SINGULAR_QUADRATIC:
-		// The remedy deliberately does not offer "square each variable separately":
-		// stage 05 allows only one quadratic group per objective, so
-		// `POWER(x, 2) + POWER(y, 2)` trades this refusal for a different one.
 		return {"the objective squares an expression containing more than one decision variable",
 		        "keep at most one decision variable inside the POWER, as in "
 		        "SUM(POWER(x - target, 2)), or use a linear objective"};
@@ -162,27 +180,19 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	// model builder emits one per data row or per group, and never folds it back
 	// into the linear matrix.
 	for (auto &constraint : op.prepared.constraints) {
-		if (constraint->has_quadratic || constraint->has_bilinear) {
+		if (!constraint->product_groups.empty()) {
 			needed.quadratic_constraints = true;
 			break;
 		}
 	}
 
 	auto &objective = op.prepared.objective;
-	if (objective && (objective->has_quadratic || objective->has_bilinear)) {
-		// A product of two decisions is indefinite whatever the sense, so a bilinear
-		// objective is unconditionally non-convex. A sum of squares is non-convex only
-		// when its sign fights the sense, which is IsNonconvexQuadraticObjective — the
-		// same predicate the model builder later applies to the built Q, so the
-		// prediction and the fact cannot drift. `quadratic_sign` is a plan-time constant
-		// (stage 05 already refuses a scale factor it cannot fold), which is what makes
-		// the test available this early.
-		if (objective->has_bilinear) {
-			needed.nonconvex_quadratic = true;
-		} else {
-			needed.nonconvex_quadratic =
-			    IsNonconvexQuadraticObjective(objective->quadratic_sign, op.decide_sense);
-		}
+	if (objective && !objective->product_groups.empty()) {
+		// Convexity is per group (IsNonconvexProductGroup), the same predicate the model
+		// builder later applies to the built model, so the prediction and the fact cannot
+		// drift. A group's weight sign is what the plan knows of it (0 when only the query
+		// knows it), which is what makes the test available this early.
+		needed.nonconvex_quadratic = FirstNonconvexGroup(op) != nullptr;
 		needed.miqp = MayHaveIntegralColumn(op);
 		needed.singular_quadratic = HasCoupledQuadraticTerms(*objective);
 	}

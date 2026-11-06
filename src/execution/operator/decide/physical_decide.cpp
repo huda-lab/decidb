@@ -1166,109 +1166,111 @@ static void VerifyCountedOnce(const vector<DecideTerm> &terms, const vector<Coef
 }
 #endif
 
-// Evaluate every bilinear term's coefficient expression (constraint or objective side:
-// the two are the same shape, differing only in which prepared-model term type feeds
-// in and which struct the caller stages results into — both of which are field-
-// identical, so this returns the one shared EvaluatedConstraint::BilinearTerm either
-// way). Batches every term's coefficient expression into a single ExpressionExecutor
-// and scans `data` once, then zeroes rows `filters[i]` excludes (a clause's `when` is
-// folded into every term's filter upstream).
-// A NULL coefficient marks its row in `null_rows` (a constraint skips that instance); with no
-// `null_rows` it is an internal error (the objective has none, DropNullObjectiveTerms).
-// AVG scaling is deliberately left to the caller: the constraint side applies it
-// immediately per-constraint, the objective side defers it until its two-level grouping is
-// resolved in Phase 3 — a real difference in control flow, not something to collapse.
-template <class BilinearTermSource>
-static vector<EvaluatedConstraint::BilinearTerm>
-EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<TermFilterState> &filters,
-                      ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
-                      idx_t num_rows, const DecideSourceNames &names, const string &clause,
-                      const vector<bool> &read_rows, vector<bool> *null_rows) {
-	const idx_t num_bl = terms.size();
-	// A term is computed on the rows the clause keeps that the term's own `when` keeps,
-	// and nowhere else; its messages quote the query's `fragments`.
-	vector<vector<bool>> term_reads(num_bl);
-	for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-		term_reads[term_idx] = read_rows;
-		if (filters[term_idx].has_filter) {
+// Evaluate every product group of a clause or of the objective: each group's weight, its sign applied, and the
+// coefficients of the forms it multiplies, batched into one ExpressionExecutor over one scan of `data`. A group is
+// computed on the rows `read_rows` keeps that its own `when` keeps (a clause's `when` is folded into every filter
+// upstream), and its weight is 0 on every other row, so such a row adds nothing to the model.
+// A NULL marks its row in `null_rows` (a constraint skips that instance); with no `null_rows` it is an internal
+// error (the objective has none, DropNullObjectiveTerms). AVG scaling is left to the caller: the constraint side
+// applies it at once, the objective side once its two-level grouping is resolved in Phase 3.
+static vector<EvaluatedProductGroup> EvaluateProductGroups(const vector<DecideProductGroup> &groups,
+                                                           const vector<TermFilterState> &filters,
+                                                           ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                           ColumnDataCollection &data, idx_t num_rows,
+                                                           const DecideSourceNames &names, const string &clause,
+                                                           const vector<bool> &read_rows, vector<bool> *null_rows) {
+	vector<EvaluatedProductGroup> evaluated(groups.size());
+	vector<vector<bool>> group_reads(groups.size(), read_rows);
+	//! One value computed per row: a group's weight or one coefficient of one of its forms.
+	struct Slot {
+		const Expression &expr;
+		int sign;
+		const vector<unique_ptr<Expression>> &inputs;
+		CoefficientColumn &out;
+		const vector<bool> &reads;
+	};
+	vector<Slot> slots;
+	for (idx_t g = 0; g < groups.size(); g++) {
+		auto &group = groups[g];
+		auto &out = evaluated[g];
+		out.square = group.square;
+		out.weight_sign = group.weight_sign;
+		if (filters[g].has_filter) {
 			for (idx_t row = 0; row < num_rows; row++) {
-				term_reads[term_idx][row] = term_reads[term_idx][row] && filters[term_idx].mask[row];
+				group_reads[g][row] = group_reads[g][row] && filters[g].mask[row];
 			}
 		}
+		out.left_coefficients.resize(group.left.size());
+		out.right_coefficients.resize(group.right.size());
 	}
-	vector<EvaluatedConstraint::BilinearTerm> ebts(num_bl);
-	for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-		auto &bt = terms[term_idx];
-        ebts[term_idx].var_a = bt.var_a;
-        ebts[term_idx].var_b = bt.var_b;
+	for (idx_t g = 0; g < groups.size(); g++) {
+		auto &group = groups[g];
+		auto &out = evaluated[g];
+		if (group.weight) {
+			slots.push_back({*group.weight, group.sign, group.inputs, out.weight, group_reads[g]});
+		} else {
+			out.weight.AssignScalar(num_rows, static_cast<double>(group.sign));
+		}
+		for (idx_t i = 0; i < group.left.size(); i++) {
+			auto &term = group.left[i];
+			out.left_variables.push_back(term.variable_index);
+			slots.push_back({*term.coefficient, term.sign, term.inputs, out.left_coefficients[i], group_reads[g]});
+		}
+		for (idx_t i = 0; i < group.right.size(); i++) {
+			auto &term = group.right[i];
+			out.right_variables.push_back(term.variable_index);
+			slots.push_back({*term.coefficient, term.sign, term.inputs, out.right_coefficients[i], group_reads[g]});
+		}
 	}
 
-	vector<idx_t> bl_route; // result column index → term index
-    vector<LogicalType> bl_types;
-    ExpressionExecutor bl_executor(context);
-    for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-        auto &bt = terms[term_idx];
-        if (!bt.coefficient) {
-            ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
-            continue;
-        }
-        const Expression &cached =
-            CachedTransformToChunkExpression(chunk_expr_cache, *bt.coefficient, context);
-        bl_types.push_back(cached.return_type);
-        bl_executor.AddExpression(cached);
-        bl_route.push_back(term_idx);
-        ebts[term_idx].row_coefficients.Reserve(num_rows);
-    }
-
-	vector<const vector<bool> *> bl_reads;
-	for (idx_t term_idx : bl_route) {
-		bl_reads.push_back(&term_reads[term_idx]);
+	vector<LogicalType> types;
+	vector<const vector<bool> *> reads;
+	ExpressionExecutor executor(context);
+	for (auto &slot : slots) {
+		const Expression &cached = CachedTransformToChunkExpression(chunk_expr_cache, slot.expr, context);
+		types.push_back(cached.return_type);
+		executor.AddExpression(cached);
+		reads.push_back(&slot.reads);
+		slot.out.Reserve(num_rows);
 	}
-	if (!bl_route.empty()) {
-		ColumnDataScanState bl_scan;
-		data.InitializeScan(bl_scan);
-        DataChunk bl_chunk;
-        bl_chunk.Initialize(context, data.Types());
-        DataChunk bl_results;
-        bl_results.Initialize(context, bl_types);
+	if (!slots.empty()) {
+		ColumnDataScanState scan;
+		data.InitializeScan(scan);
+		DataChunk chunk;
+		chunk.Initialize(context, data.Types());
+		DataChunk results;
+		results.Initialize(context, types);
 		idx_t row_offset = 0;
-		while (data.Scan(bl_scan, bl_chunk)) {
-			bl_results.Reset();
-			ExecuteOnReadRows(bl_executor, bl_chunk, row_offset, bl_reads, bl_results);
-			for (idx_t j = 0; j < bl_route.size(); j++) {
-				idx_t term_idx = bl_route[j];
-				auto &col = ebts[term_idx].row_coefficients.MutableDense();
-				ValueInputs inputs {terms[term_idx].inputs, bl_chunk, context};
-				ExtractDoubleColumn(
-				    bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
-				    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names, clause, &inputs}, null_rows,
-				    &term_reads[term_idx], row_offset);
-				ebts[term_idx].row_coefficients.SyncSize();
+		while (data.Scan(scan, chunk)) {
+			results.Reset();
+			ExecuteOnReadRows(executor, chunk, row_offset, reads, results);
+			for (idx_t j = 0; j < slots.size(); j++) {
+				auto &slot = slots[j];
+				ValueInputs inputs {slot.inputs, chunk, context};
+				ExtractDoubleColumn(results.data[j], chunk.size(), slot.sign, slot.out.MutableDense(),
+				                    {DecideValueRole::COEFFICIENT, slot.expr, names, clause, &inputs}, null_rows,
+				                    &slot.reads, row_offset);
+				slot.out.SyncSize();
 			}
-			row_offset += bl_chunk.size();
+			row_offset += chunk.size();
 		}
 	}
 
-	for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-		auto &ebt = ebts[term_idx];
-        if (filters[term_idx].has_filter) {
-            auto &mask = filters[term_idx].mask;
-            auto &col = ebt.row_coefficients.MutableDense();
-            for (idx_t row = 0; row < col.size(); row++) {
-                if (!mask[row]) {
-                    col[row] = 0.0;
-                }
-            }
-        }
+	for (idx_t g = 0; g < groups.size(); g++) {
+		auto &weight = evaluated[g].weight.MutableDense();
+		for (idx_t row = 0; row < weight.size(); row++) {
+			if (!group_reads[g][row]) {
+				weight[row] = 0.0;
+			}
+		}
 	}
-	return ebts;
+	return evaluated;
 }
 
-// AVG denominator scaling, shared by the constraint and objective sides and by the
-// linear/bilinear (single-column) and quadratic-inner (sqrt-scaled) cases. The rows a
-// term reads are its filter: a clause's `when` is folded into it upstream.
-static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, bool quadratic_inner,
-                         idx_t num_rows, const vector<idx_t> &row_group_ids, idx_t num_groups) {
+// AVG denominator scaling, shared by the constraint and objective sides, for a linear term's coefficient and a
+// product group's weight. The rows a term reads are its filter: a clause's `when` is folded into it upstream.
+static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, idx_t num_rows,
+                         const vector<idx_t> &row_group_ids, idx_t num_groups) {
 	auto &coefficients = col.MutableDense();
 	if (row_group_ids.empty()) {
 		idx_t denominator = 0;
@@ -1281,9 +1283,8 @@ static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<b
             std::fill(coefficients.begin(), coefficients.end(), 0.0);
             return;
         }
-        double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(denominator))
-                                       : 1.0 / static_cast<double>(denominator);
-        for (auto &coefficient : coefficients) {
+		double scale = 1.0 / static_cast<double>(denominator);
+		for (auto &coefficient : coefficients) {
             coefficient *= scale;
         }
         return;
@@ -1305,9 +1306,8 @@ static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<b
             coefficients[row] = 0.0;
             continue;
         }
-        double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(group_counts[gid]))
-                                       : 1.0 / static_cast<double>(group_counts[gid]);
-        coefficients[row] *= scale;
+		double scale = 1.0 / static_cast<double>(group_counts[gid]);
+		coefficients[row] *= scale;
     }
 }
 
@@ -1565,19 +1565,10 @@ public:
     vector<ReducerValueLinkSpec> evaluated_value_links;
     vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
     vector<idx_t> objective_variable_indices;
+	//! The objective's product groups, evaluated (EvaluateProductGroups).
+	vector<EvaluatedProductGroup> evaluated_objective_groups;
 
-    // Quadratic objective: evaluated inner linear expression coefficients
-    vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]
-    vector<idx_t> quadratic_variable_indices;
-    bool has_quadratic_objective = false;
-    double quadratic_sign = 1.0;
-
-    // Bilinear objective: pairs of different decide variables with data coefficients.
-    // Reuses EvaluatedConstraint::BilinearTerm (solver_input.hpp) rather than declaring
-    // a field-identical duplicate — the two are populated by the same shared evaluator.
-    vector<EvaluatedConstraint::BilinearTerm> evaluated_bilinear_terms;
-
-    vector<double> ilp_solution;
+	vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
 
     //! Set when the solve failed under DIAGNOSE: the findings were handed off instead of
@@ -2321,9 +2312,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         }
 
         vector<TermFilterState> term_filters(constraint->lhs_terms.size());
-        vector<TermFilterState> bilinear_filters(constraint->bilinear_terms.size());
-        vector<TermFilterState> quadratic_filters(constraint->quadratic_groups.size());
-        vector<bool> local_row_active(num_rows, false);
+		vector<TermFilterState> group_filters(constraint->product_groups.size());
+		vector<bool> local_row_active(num_rows, false);
         bool has_local_filters = false;
         bool has_unfiltered_aggregate_part = false;
 		// A clause reads only the rows its `when` keeps, and a term only those its own
@@ -2346,26 +2336,17 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                     has_unfiltered_aggregate_part = true;
                 }
             }
-            for (idx_t i = 0; i < constraint->bilinear_terms.size(); i++) {
-                auto &term = constraint->bilinear_terms[i];
-                bilinear_filters[i].avg_scale = term.avg_scale;
-                if (term.filter) {
-                    filter_slots.push_back({term.filter.get(), &bilinear_filters[i]});
-                } else {
+			for (idx_t i = 0; i < constraint->product_groups.size(); i++) {
+				auto &group = constraint->product_groups[i];
+				group_filters[i].avg_scale = group.avg_scale;
+				if (group.filter) {
+					filter_slots.push_back({group.filter.get(), &group_filters[i]});
+				} else {
                     has_unfiltered_aggregate_part = true;
                 }
-            }
-            for (idx_t i = 0; i < constraint->quadratic_groups.size(); i++) {
-                auto &group = constraint->quadratic_groups[i];
-                quadratic_filters[i].avg_scale = group.avg_scale;
-                if (group.filter) {
-                    filter_slots.push_back({group.filter.get(), &quadratic_filters[i]});
-                } else {
-                    has_unfiltered_aggregate_part = true;
-                }
-            }
+			}
 
-            ReadTermFilters(filter_slots, &scoped_kept, chunk_expr_cache, context, gstate.data, num_rows);
+			ReadTermFilters(filter_slots, &scoped_kept, chunk_expr_cache, context, gstate.data, num_rows);
             for (auto &slot : filter_slots) {
                 if (!slot.state->has_filter) {
                     has_unfiltered_aggregate_part = true;
@@ -2569,18 +2550,14 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                                    term_filters[term_idx]);
             MaskCoefficientColumn(eval_const.row_coefficients[term_idx], term_filters[term_idx].mask);
 		}
-		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
-			idx_t scope_idx = constraint->bilinear_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
-                                   bilinear_filters[term_idx]);
+		for (idx_t group_idx = 0; group_idx < constraint->product_groups.size(); group_idx++) {
+			idx_t scope_idx = constraint->product_groups[group_idx].qualifier_scope_idx;
+			if (scope_idx == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+			                       group_filters[group_idx]);
 		}
-		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
-            idx_t scope_idx = constraint->quadratic_groups[group_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
-                                   quadratic_filters[group_idx]);
-        }
 		// A MIN/MAX reads the rows of its group as members, so a row the de-duplication
 		// drops leaves the group: left in with zero coefficients, it would be a member
 		// pinned at 0. (A SUM or AVG row is unchanged by a zero member.)
@@ -2602,7 +2579,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		}
 		if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
 			vector<const TermFilterState *> filters;
-			for (auto *each : {&term_filters, &bilinear_filters, &quadratic_filters}) {
+			for (auto *each : {&term_filters, &group_filters}) {
 				for (auto &filter : *each) {
 					filters.push_back(&filter);
 				}
@@ -2781,18 +2758,17 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // in the deferred NE expansion. Mixed AVG/non-AVG terms or bilinear/quadratic
         // LHS fall through to the existing path (which may still reject).
         bool ne_avg_hoist = false;
-        if (constraint->ne_clause_idx != DConstants::INVALID_INDEX &&
-            constraint->lhs_is_aggregate && !constraint->has_bilinear && !constraint->has_quadratic &&
-            !constraint->lhs_terms.empty()) {
-            ne_avg_hoist = true;
+		if (constraint->ne_clause_idx != DConstants::INVALID_INDEX && constraint->lhs_is_aggregate &&
+		    constraint->product_groups.empty() && !constraint->lhs_terms.empty()) {
+			ne_avg_hoist = true;
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
                 if (!term_filters[term_idx].avg_scale) {
                     ne_avg_hoist = false;
                     break;
                 }
             }
-        }
-        if (ne_avg_hoist) {
+		}
+		if (ne_avg_hoist) {
             eval_const.ne_avg_rhs_scale = true;
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
                 term_filters[term_idx].avg_scale = false;
@@ -2803,169 +2779,40 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // model builder can tag the row provenance and infeasible diagnosis renders
         // it as `AVG(...)`. Mixed AVG/non-AVG or bilinear/quadratic LHS stays false
         // (it has no clean AVG re-quote). I2.d.
-        bool all_avg = !constraint->lhs_terms.empty() && !constraint->has_bilinear &&
-                       !constraint->has_quadratic;
-        for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+		bool all_avg = !constraint->lhs_terms.empty() && constraint->product_groups.empty();
+		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             if (term_filters[term_idx].avg_scale) {
-                ScaleAvgRows(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
-                            term_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                            eval_const.row_group_ids, eval_const.num_groups);
-            } else {
+				ScaleAvgRows(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
+				             term_filters[term_idx].mask, num_rows, eval_const.row_group_ids, eval_const.num_groups);
+			} else {
                 all_avg = false;
             }
         }
         eval_const.avg_scaled = all_avg;
 
-        // Evaluate bilinear terms in constraint (if any).
-        if (constraint->has_bilinear) {
-			auto ebts = EvaluateBilinearTerms(constraint->bilinear_terms, bilinear_filters, chunk_expr_cache, context,
-			                                  gstate.data, num_rows, Names(),
-			                                  WrittenClause(constraint->source_clause_id), scoped_kept, &null_rows);
-			for (idx_t term_idx = 0; term_idx < ebts.size(); term_idx++) {
-                auto &ebt = ebts[term_idx];
-                if (bilinear_filters[term_idx].avg_scale) {
-                    ScaleAvgRows(ebt.row_coefficients, bilinear_filters[term_idx].has_filter,
-                                bilinear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                                eval_const.row_group_ids, eval_const.num_groups);
-                }
-                eval_const.bilinear_terms.push_back(std::move(ebt));
+		// Evaluate the clause's product groups (if any), each group's AVG scaling its weight.
+		clause_phase.Next("extraction.quadratic_coefficients");
+		eval_const.product_groups = EvaluateProductGroups(
+		    constraint->product_groups, group_filters, chunk_expr_cache, context, gstate.data, num_rows, Names(),
+		    WrittenClause(constraint->source_clause_id), scoped_kept, &null_rows);
+		for (idx_t group_idx = 0; group_idx < eval_const.product_groups.size(); group_idx++) {
+			if (group_filters[group_idx].avg_scale) {
+				ScaleAvgRows(eval_const.product_groups[group_idx].weight, group_filters[group_idx].has_filter,
+				             group_filters[group_idx].mask, num_rows, eval_const.row_group_ids, eval_const.num_groups);
 			}
 		}
-
-		// Evaluate quadratic groups in constraint (POWER(expr, 2) / self-products).
-        // Per group, batch all inner_terms into a single ExpressionExecutor.
-        clause_phase.Next("extraction.quadratic_coefficients");
-        if (constraint->has_quadratic) {
-            eval_const.has_quadratic = true;
-            for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
-                auto &qg = constraint->quadratic_groups[group_idx];
-                EvaluatedConstraint::QuadraticGroup eqg;
-                eqg.sign = qg.sign;
-
-                if (qg.scale) {
-                    const Expression &transformed =
-                        CachedTransformToChunkExpression(chunk_expr_cache, *qg.scale, context);
-                    ExpressionExecutor scale_executor(context);
-                    scale_executor.AddExpression(transformed);
-                    ColumnDataScanState scale_scan;
-                    gstate.data.InitializeScan(scale_scan);
-                    DataChunk scale_chunk;
-                    scale_chunk.Initialize(context, gstate.data.Types());
-                    bool got_scale = false;
-                    while (!got_scale && gstate.data.Scan(scale_scan, scale_chunk)) {
-                        if (scale_chunk.size() == 0) {
-                            continue;
-                        }
-                        DataChunk scale_result;
-                        scale_result.Initialize(context, {transformed.return_type});
-                        scale_executor.Execute(scale_chunk, scale_result);
-                        Value value = scale_result.data[0].GetValue(0);
-						got_scale = true;
-						if (value.IsNull()) {
-							// A NULL factor makes every instance of the clause NULL.
-							for (idx_t row = 0; row < num_rows; row++) {
-								null_rows[row] = null_rows[row] || scoped_kept[row];
-							}
-							continue;
-						}
-                        double factor = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                        if (!std::isfinite(factor)) {
-							ThrowInvalidValue({DecideValueRole::COEFFICIENT, *qg.scale, names, clause});
-						}
-                        if (qg.scale_divides && factor == 0.0) {
-                            throw InvalidInputException(
-                                "DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.");
-                        }
-                        eqg.sign *= qg.scale_divides ? 1.0 / factor : factor;
-                        // The reciprocal of a finite factor is a number DeciDB computes: past a DOUBLE it names the
-                        // clause.
-                        if (!std::isfinite(eqg.sign)) {
-                            throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, clause));
-                        }
-                    }
-                }
-
-                vector<LogicalType> q_types;
-                ExpressionExecutor q_executor(context);
-                eqg.row_coefficients.resize(qg.inner_terms.size());
-                for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
-                    auto &term = qg.inner_terms[inner_idx];
-                    eqg.variable_indices.push_back(term.variable_index);
-                    const Expression &cached =
-                        CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
-                    q_types.push_back(cached.return_type);
-                    q_executor.AddExpression(cached);
-                    eqg.row_coefficients[inner_idx].Reserve(num_rows);
-                }
-
-				// The group's terms are read on the rows the clause keeps that the group's
-				// own `when` keeps too.
-				vector<bool> q_reads = scoped_kept;
-				if (quadratic_filters[group_idx].has_filter) {
-					for (idx_t row = 0; row < num_rows; row++) {
-						q_reads[row] = q_reads[row] && quadratic_filters[group_idx].mask[row];
-					}
-				}
-				if (!qg.inner_terms.empty()) {
-					ColumnDataScanState qscan;
-					gstate.data.InitializeScan(qscan);
-                    DataChunk qchunk;
-                    qchunk.Initialize(context, gstate.data.Types());
-                    DataChunk q_results;
-                    q_results.Initialize(context, q_types);
-					idx_t q_offset = 0;
-					while (gstate.data.Scan(qscan, qchunk)) {
-						q_results.Reset();
-						ExecuteOnReadRows(q_executor, qchunk, q_offset, &q_reads, q_results);
-						for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
-							auto &col = eqg.row_coefficients[inner_idx].MutableDense();
-							auto &term = qg.inner_terms[inner_idx];
-							ValueInputs inputs {term.inputs, qchunk, context};
-							ExtractDoubleColumn(
-							    q_results.data[inner_idx], qchunk.size(), term.sign, col,
-							    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs}, &null_rows,
-							    &q_reads, q_offset);
-							eqg.row_coefficients[inner_idx].SyncSize();
-						}
-						q_offset += qchunk.size();
-					}
-				}
-				if (quadratic_filters[group_idx].has_filter) {
-					auto &mask = quadratic_filters[group_idx].mask;
-                    for (auto &qcol : eqg.row_coefficients) {
-                        auto &coefficients = qcol.MutableDense();
-                        for (idx_t row = 0; row < coefficients.size(); row++) {
-                            if (!mask[row]) {
-                                coefficients[row] = 0.0;
-                            }
-                        }
-                    }
-				}
-				if (quadratic_filters[group_idx].avg_scale) {
-                    for (auto &qcol : eqg.row_coefficients) {
-                        ScaleAvgRows(qcol, quadratic_filters[group_idx].has_filter,
-                                    quadratic_filters[group_idx].mask, /*quadratic_inner=*/true, num_rows,
-                                    eval_const.row_group_ids, eval_const.num_groups);
-                    }
-                }
-                eval_const.quadratic_groups.push_back(std::move(eqg));
-            }
-        }
 
 		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 			MarkAbsentDecisionReads(variable_scopes, keyed_mappings, constraint->lhs_terms[term_idx].variable_index,
 			                        scoped_kept, term_filters[term_idx], null_rows);
 		}
-		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
-			for (auto var : {constraint->bilinear_terms[term_idx].var_a, constraint->bilinear_terms[term_idx].var_b}) {
-				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, var, scoped_kept, bilinear_filters[term_idx],
-				                        null_rows);
-			}
-		}
-		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
-			for (auto &term : constraint->quadratic_groups[group_idx].inner_terms) {
-				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
-				                        quadratic_filters[group_idx], null_rows);
+		for (idx_t group_idx = 0; group_idx < constraint->product_groups.size(); group_idx++) {
+			auto &group = constraint->product_groups[group_idx];
+			for (auto *form : {&group.left, &group.right}) {
+				for (auto &term : *form) {
+					MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
+					                        group_filters[group_idx], null_rows);
+				}
 			}
 		}
 		SkipNullInstances(null_rows, constraint->lhs_is_aggregate || constraint->was_minmax_easy, num_rows,
@@ -2983,9 +2830,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                                                                    const vector<KeyedMapping> &keyed_mappings) const {
     // 2. Evaluate objective
     vector<TermFilterState> obj_linear_term_filters;
-    vector<TermFilterState> obj_quadratic_term_filters;
-    vector<TermFilterState> obj_bilinear_filters;
-    vector<bool> objective_when_mask;
+	vector<TermFilterState> obj_group_filters;
+	vector<bool> objective_when_mask;
     bool objective_has_when = false;
 	// The objective's `when` joins every term's own, only the rows a term keeps are read,
 	// and a decision outside its reducers counts once (language/guide.md §4).
@@ -3006,29 +2852,20 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 	};
 
 	if (gstate.objective) {
-		if (gstate.objective->has_quadratic) {
-			gstate.has_quadratic_objective = true;
-            gstate.quadratic_sign = gstate.objective->quadratic_sign;
-		}
-
 		objective_has_when = (gstate.objective->when_condition != nullptr);
         if (objective_has_when) {
 			objective_when_mask =
 			    KeptRows(*gstate.objective->when_condition, chunk_expr_cache, context, gstate.data, num_rows);
 		}
 
-		// DeciDB: evaluate both the linear and quadratic-inner term lists so that
-        // mixed objectives (e.g. SUM(POWER(x-t, 2) + penalty * x)) emit coefficients
-        // into both solver-input arrays. The two buckets are processed together
-        // inside a single scan over gstate.data — doubling coefficient evaluators
-        // was cheap, but doubling the ColumnDataCollection scan was not.
-        struct ObjBucket {
+		// The linear terms, in one scan over gstate.data; the product groups follow.
+		struct ObjBucket {
             vector<DecideTerm> *src_terms;
             vector<CoefficientColumn> *out_coeffs;
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
-            //! The linear bucket: a term outside the reducers counts once. Every squared term sits in a reducer.
-            bool counts_once = false;
+			//! A term outside the reducers counts once.
+			bool counts_once = false;
         };
         vector<ObjBucket> buckets;
         if (!gstate.objective->terms.empty()) {
@@ -3037,12 +2874,6 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                                &gstate.objective_variable_indices,
                                &obj_linear_term_filters,
                                true});
-        }
-        if (gstate.objective->has_quadratic) {
-            buckets.push_back({&gstate.objective->squared_terms,
-                               &gstate.evaluated_quadratic_coefficients,
-                               &gstate.quadratic_variable_indices,
-                               &obj_quadratic_term_filters});
         }
 
         if (!buckets.empty()) {
@@ -3154,32 +2985,30 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			}
 		}
 
-		obj_bilinear_filters.resize(gstate.objective->bilinear_terms.size());
-        {
-            vector<TermFilterSlot> bil_slots;
-            for (idx_t i = 0; i < gstate.objective->bilinear_terms.size(); i++) {
-                auto &term = gstate.objective->bilinear_terms[i];
-                obj_bilinear_filters[i].avg_scale = term.avg_scale;
-                if (term.filter) {
-                    bil_slots.push_back({term.filter.get(), &obj_bilinear_filters[i]});
-                }
-            }
-            ReadTermFilters(bil_slots, objective_has_when ? &objective_when_mask : nullptr, chunk_expr_cache, context,
-                            gstate.data, num_rows);
-			for (auto &state : obj_bilinear_filters) {
+		obj_group_filters.resize(gstate.objective->product_groups.size());
+		{
+			vector<TermFilterSlot> group_slots;
+			for (idx_t i = 0; i < gstate.objective->product_groups.size(); i++) {
+				auto &group = gstate.objective->product_groups[i];
+				obj_group_filters[i].avg_scale = group.avg_scale;
+				if (group.filter) {
+					group_slots.push_back({group.filter.get(), &obj_group_filters[i]});
+				}
+			}
+			ReadTermFilters(group_slots, objective_has_when ? &objective_when_mask : nullptr, chunk_expr_cache, context,
+			                gstate.data, num_rows);
+			for (auto &state : obj_group_filters) {
 				fold_objective_when(state);
 			}
 		}
 
-		// No extra debug here; solver output will show timings/objective
-
-		// Evaluate bilinear term coefficients (non-Boolean pairs left by optimizer).
-        if (gstate.objective->has_bilinear) {
+		// Evaluate the product groups.
+		if (!gstate.objective->product_groups.empty()) {
 			vector<bool> every_row(num_rows, true);
-			// A NULL product was read as 0 before the model was built (DropNullObjectiveTerms).
-			gstate.evaluated_bilinear_terms = EvaluateBilinearTerms(
-			    gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context, gstate.data,
-			    num_rows, Names(), WrittenClause(DConstants::INVALID_INDEX), every_row, nullptr);
+			// A NULL weight was read as 0 before the model was built (DropNullObjectiveTerms).
+			gstate.evaluated_objective_groups = EvaluateProductGroups(
+			    gstate.objective->product_groups, obj_group_filters, chunk_expr_cache, context, gstate.data, num_rows,
+			    Names(), WrittenClause(DConstants::INVALID_INDEX), every_row, nullptr);
 			// A product outside every reducer (`MAXIMIZE sum(x) + s * u`) counts once, as a
 			// linear term there does; one inside a reducer sums over its rows.
 			idx_t first_kept = FirstKeptRow(objective_has_when ? &objective_when_mask : nullptr, num_rows);
@@ -3187,9 +3016,9 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			if (first_kept != DConstants::INVALID_INDEX) {
 				counted.push_back(first_kept);
 			}
-			for (idx_t i = 0; i < gstate.evaluated_bilinear_terms.size(); i++) {
-				if (gstate.objective->bilinear_terms[i].reduction == LinearTermReduction::NONE) {
-					CountOnce(gstate.evaluated_bilinear_terms[i].row_coefficients, counted);
+			for (idx_t i = 0; i < gstate.evaluated_objective_groups.size(); i++) {
+				if (gstate.objective->product_groups[i].reduction == LinearTermReduction::NONE) {
+					CountOnce(gstate.evaluated_objective_groups[i].weight, counted);
 				}
 			}
 		}
@@ -3197,10 +3026,9 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 
 	EvaluatedClauses result;
 	result.linear_filters = std::move(obj_linear_term_filters);
-    result.quadratic_filters = std::move(obj_quadratic_term_filters);
-    result.bilinear_filters = std::move(obj_bilinear_filters);
+	result.group_filters = std::move(obj_group_filters);
 
-    // The two-level objective's grouping. It is a read of the data (its key columns), so it
+	// The two-level objective's grouping. It is a read of the data (its key columns), so it
     // belongs to this phase and not to the formulation pass — the grouping a widened
     // variable bound produces is the same grouping. It runs last here because the
     // "does this row carry a term at all" test below reads the filter masks settled above.
@@ -3211,16 +3039,12 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
             objective_has_local_filters |= f.has_filter;
             objective_has_unfiltered_part |= !f.has_filter;
         }
-        for (auto &f : result.quadratic_filters) {
-            objective_has_local_filters |= f.has_filter;
+		for (auto &f : result.group_filters) {
+			objective_has_local_filters |= f.has_filter;
             objective_has_unfiltered_part |= !f.has_filter;
-        }
-        for (auto &f : result.bilinear_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
+		}
 
-        auto objective_row_has_local_term = [&](idx_t row) {
+		auto objective_row_has_local_term = [&](idx_t row) {
             if (!objective_has_local_filters || objective_has_unfiltered_part) {
                 return true;
             }
@@ -3229,17 +3053,12 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     return true;
                 }
             }
-            for (auto &f : result.quadratic_filters) {
-                if (f.has_filter && f.mask[row]) {
+			for (auto &f : result.group_filters) {
+				if (f.has_filter && f.mask[row]) {
                     return true;
                 }
-            }
-            for (auto &f : result.bilinear_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            return false;
+			}
+			return false;
         };
 
 		auto obj_row_is_included = [&](idx_t row) -> bool {
@@ -3552,8 +3371,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		for (auto &column : ec.row_coefficients) {
 			MaskCoefficientColumn(column, members.mask);
 			if (is_avg) {
-				ScaleAvgRows(column, true, members.mask, /*quadratic_inner=*/false, num_rows, ec.row_group_ids,
-				             ec.num_groups);
+				ScaleAvgRows(column, true, members.mask, num_rows, ec.row_group_ids, ec.num_groups);
 			}
 		}
 		ec.avg_scaled = is_avg;
@@ -3690,28 +3508,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.sense = decide_sense;
     solver_input.objective_constant = objective_constant_offset;
 
-    // Quadratic objective (if present)
-    if (gstate.has_quadratic_objective) {
-        solver_input.has_quadratic_objective = true;
-        solver_input.quadratic_sign = gstate.quadratic_sign;
-        solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
-        solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
-        for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
-            solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
-        }
-    }
-
-    // Bilinear objective terms (non-Boolean pairs, for Q matrix off-diagonal entries)
-    if (!gstate.evaluated_bilinear_terms.empty()) {
-        for (auto &ebt : gstate.evaluated_bilinear_terms) {
-            SolverInput::BilinearObjectiveTerm bot;
-            bot.var_a = ebt.var_a;
-            bot.var_b = ebt.var_b;
-            bot.row_coefficients = std::move(ebt.row_coefficients);
-            solver_input.bilinear_objective_terms.push_back(std::move(bot));
-        }
-    }
-    // The two-level objective's grouping, settled by PHASE 2 off the data. It is copied onto
+	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
+	// The two-level objective's grouping, settled by PHASE 2 off the data. It is copied onto
     // `SolverInput` here because every consumer below reads it there: the qualifier
     // de-duplication, AVG scaling, and the MIN/MAX objective encoding.
     solver_input.objective_row_group_ids = evaluated.objective_row_group_ids;
@@ -3731,28 +3529,18 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
                                   evaluated.linear_filters[term_idx].mask);
 		}
-		for (idx_t term_idx = 0; term_idx < gstate.objective->squared_terms.size() &&
-                                 term_idx < evaluated.quadratic_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
-                                   evaluated.quadratic_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
-                                  evaluated.quadratic_filters[term_idx].mask);
-        }
-        for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size() &&
-                                 term_idx < evaluated.bilinear_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
-                                   evaluated.bilinear_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-                                  evaluated.bilinear_filters[term_idx].mask);
-        }
+		for (idx_t group_idx = 0;
+		     group_idx < gstate.objective->product_groups.size() && group_idx < evaluated.group_filters.size();
+		     group_idx++) {
+			idx_t scope_idx = gstate.objective->product_groups[group_idx].qualifier_scope_idx;
+			if (scope_idx == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx, solver_input.objective_row_group_ids,
+			                       num_rows, evaluated.group_filters[group_idx]);
+			MaskCoefficientColumn(solver_input.objective_product_groups[group_idx].weight,
+			                      evaluated.group_filters[group_idx].mask);
+		}
 	}
 
 	for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
@@ -3760,29 +3548,17 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             continue;
         }
 		ScaleAvgRows(solver_input.objective_coefficients[term_idx], evaluated.linear_filters[term_idx].has_filter,
-		             evaluated.linear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-		             solver_input.objective_row_group_ids, solver_input.objective_num_groups);
-	}
-	for (idx_t term_idx = 0; term_idx < evaluated.quadratic_filters.size(); term_idx++) {
-		if (!evaluated.quadratic_filters[term_idx].avg_scale) {
-            continue;
-        }
-		ScaleAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
-		             evaluated.quadratic_filters[term_idx].has_filter, evaluated.quadratic_filters[term_idx].mask,
-		             /*quadratic_inner=*/true, num_rows, solver_input.objective_row_group_ids,
+		             evaluated.linear_filters[term_idx].mask, num_rows, solver_input.objective_row_group_ids,
 		             solver_input.objective_num_groups);
 	}
-
-	for (idx_t term_idx = 0; term_idx < evaluated.bilinear_filters.size(); term_idx++) {
-		if (!evaluated.bilinear_filters[term_idx].avg_scale) {
-            continue;
-        }
-		ScaleAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-		             evaluated.bilinear_filters[term_idx].has_filter, evaluated.bilinear_filters[term_idx].mask,
-		             /*quadratic_inner=*/false, num_rows, solver_input.objective_row_group_ids,
-		             solver_input.objective_num_groups);
+	for (idx_t group_idx = 0; group_idx < evaluated.group_filters.size(); group_idx++) {
+		auto &filter = evaluated.group_filters[group_idx];
+		if (filter.avg_scale) {
+			ScaleAvgRows(solver_input.objective_product_groups[group_idx].weight, filter.has_filter, filter.mask,
+			             num_rows, solver_input.objective_row_group_ids, solver_input.objective_num_groups);
+		}
 	}
-    return solver_input;
+	return solver_input;
 }
 
 //===--------------------------------------------------------------------===//

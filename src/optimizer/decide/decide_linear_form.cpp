@@ -3,7 +3,6 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
@@ -44,91 +43,6 @@ static void EnumerateChildrenConst(const Expression &expr,
 	throw InternalException("DECIDE term '%s' reached term extraction unopened", term.opaque->ToString());
 }
 
-//! The coefficient of a term multiplied by another's, keeping a bare decision's literal 1 out of the product.
-static unique_ptr<Expression> TimesCoefficient(ClientContext &context, unique_ptr<Expression> left,
-                                               const unique_ptr<Expression> &right) {
-	auto is_one = [](const unique_ptr<Expression> &coefficient) {
-		return !coefficient || (coefficient->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-		                        coefficient->Cast<BoundConstantExpression>().value == Value::INTEGER(1));
-	};
-	if (is_one(right)) {
-		return left;
-	}
-	if (is_one(left)) {
-		return right->Copy();
-	}
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(left));
-	children.push_back(right->Copy());
-	return DecideRebindOperator(context, "*", std::move(children));
-}
-
-//! A term of degree 2 in the shapes stage 05 carries: squares with a constant scale, and the pairwise products of two
-//! linear forms, each a bilinear pair, a linear term or a constant. A pair of one decision is a square of it.
-struct DegreeTwoParts {
-	//! Each square: its signed constant scale and the linear form it squares.
-	vector<pair<double, vector<DecideSplitTerm>>> squares;
-	//! Pairwise products: degree 1 or 0 go in `linear`, degree 2 (two different decisions) in `bilinear`.
-	vector<DecideSplitTerm> linear;
-	vector<DecideSplitTerm> bilinear;
-};
-
-//! The constant scale of a square; stage 05 has no slot for a data one (BUG-46).
-static double SquareScale(ClientContext &context, const DecideSplitTerm &term) {
-	double scale = 1.0;
-	if (term.coefficient && !TryEvaluateFoldableDouble(context, *term.coefficient, scale, FOLD_PLAIN)) {
-		throw InvalidInputException(
-		    "DECIDE expression contains an unsupported product factor that still references decision variables "
-		    "after normalization (total degree > 2 or unexpanded nonlinear product). Products must be data "
-		    "factors times one DECIDE variable, or data factors times two different DECIDE variables.");
-	}
-	return static_cast<double>(term.sign) * scale;
-}
-
-static DegreeTwoParts LowerDegreeTwo(ClientContext &context, DecideSplitTerm &term) {
-	DegreeTwoParts parts;
-	if (term.IsSquare()) {
-		parts.squares.emplace_back(SquareScale(context, term), std::move(term.factors[0].form));
-		return parts;
-	}
-	D_ASSERT(term.IsProduct());
-	for (auto &left : term.factors[0].form) {
-		for (auto &right : term.factors[1].form) {
-			if (left.opaque || right.opaque) {
-				ThrowOpaqueTerm(left.opaque ? left : right);
-			}
-			DecideSplitTerm piece;
-			piece.sign = term.sign * left.sign * right.sign;
-			piece.coefficient = term.coefficient ? term.coefficient->Copy() : nullptr;
-			piece.coefficient = TimesCoefficient(context, std::move(piece.coefficient), left.coefficient);
-			piece.coefficient = TimesCoefficient(context, std::move(piece.coefficient), right.coefficient);
-			piece.degree = left.degree + right.degree;
-			if (piece.degree == 2 && left.var_a == right.var_a) {
-				vector<DecideSplitTerm> form(1);
-				form[0].degree = 1;
-				form[0].var_a = left.var_a;
-				form[0].coefficient = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
-				parts.squares.emplace_back(SquareScale(context, piece), std::move(form));
-				continue;
-			}
-			if (piece.degree == 2) {
-				piece.var_a = left.var_a;
-				piece.factors.resize(1);
-				piece.factors[0].form.resize(1);
-				piece.factors[0].form[0].var_a = right.var_a;
-				parts.bilinear.push_back(std::move(piece));
-				continue;
-			}
-			piece.var_a = left.degree == 1 ? left.var_a : right.var_a;
-			if (!piece.coefficient) {
-				piece.coefficient = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
-			}
-			parts.linear.push_back(std::move(piece));
-		}
-	}
-	return parts;
-}
-
 //! Takes what a coefficient is computed from out of its term (DecideTerm::inputs): the values recorded when DeciDB
 //! computed it, else the coefficient itself, as written.
 static vector<unique_ptr<Expression>> TakeInputs(vector<unique_ptr<Expression>> &inputs,
@@ -155,6 +69,21 @@ static void AppendLinearTerms(vector<DecideSplitTerm> &split, vector<DecideTerm>
 		}
 		out.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
 	}
+}
+
+//! A term of degree 2 as the group stages 06 and 08 read: its coefficient is the group's weight, and its one squared
+//! factor, or its two factors, are the group's forms.
+static DecideProductGroup ReadProductGroup(DecideSplitTerm &term) {
+	D_ASSERT(term.IsSquare() || term.IsProduct());
+	DecideProductGroup group;
+	group.weight = std::move(term.coefficient);
+	group.sign = term.sign;
+	group.square = term.IsSquare();
+	AppendLinearTerms(term.factors[0].form, group.left);
+	if (!group.square) {
+		AppendLinearTerms(term.factors[1].form, group.right);
+	}
+	return group;
 }
 
 //! Collect DECIDE variable references from a bound expression, tracking sign
@@ -208,10 +137,12 @@ public:
 		// Group like terms, once, over every list that becomes a linear solver row.
 		for (auto &constraint : op.prepared.constraints) {
 			CollectLikeTerms(constraint->lhs_terms);
+			SettleWeightSigns(constraint->product_groups);
 		}
 		if (op.prepared.objective) {
 			DropNullObjectiveTerms(*op.prepared.objective);
 			CollectLikeTerms(op.prepared.objective->terms);
+			SettleWeightSigns(op.prepared.objective->product_groups);
 		}
 		for (auto &spec : op.composed_minmax_constraints) {
 			for (auto &term : spec.terms) {
@@ -345,7 +276,8 @@ private:
 	//! a term read once outside every reducer (`c * u`); a NULL inside a reducer is
 	//! already out of its filter (DecideCanonicalizer::SkipNullData). It runs before like
 	//! terms merge, which would let one NULL term drop another on the same decision. A
-	//! squared term is not a sum of its coefficients, so its NULL is not read as 0.
+	//! product group's weight is guarded the same way; a form the group multiplies is not a
+	//! sum of terms, so a NULL inside it is not read as 0.
 	void DropNullObjectiveTerms(DecideObjective &objective) const {
 		auto zero_if_null = [&](unique_ptr<Expression> &coefficient) {
 			if (!coefficient || coefficient->IsFoldable()) {
@@ -361,8 +293,8 @@ private:
 		for (auto &term : objective.terms) {
 			zero_if_null(term.coefficient);
 		}
-		for (auto &term : objective.bilinear_terms) {
-			zero_if_null(term.coefficient);
+		for (auto &group : objective.product_groups) {
+			zero_if_null(group.weight);
 		}
 	}
 
@@ -441,24 +373,41 @@ private:
 	}
 
 	//! Attach a reducer's own `when` to every term extracted from its body since the given
-	//! marks: linear terms, bilinear terms and quadratic groups alike. It is done here, once,
+	//! marks: linear terms and product groups alike. It is done here, once,
 	//! after extraction, rather than threaded through every extraction branch: a branch that
 	//! forgot it -- the decision-free cast arm once did -- left one term unfiltered, and the
 	//! executor then read every kept row as a member of an easy MIN/MAX, so the rows the
 	//! reducer dropped reached the model with the body's constant as their whole left side.
-	static void AttachReducerFilter(DecideConstraint &constraint, idx_t linear_before, idx_t bilinear_before,
-	                                idx_t quadratic_before, const Expression *filter) {
+	static void AttachReducerFilter(DecideConstraint &constraint, idx_t linear_before, idx_t group_before,
+	                                const Expression *filter) {
 		if (!filter) {
 			return;
 		}
 		for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
 			constraint.lhs_terms[i].filter = filter->Copy();
 		}
-		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-			constraint.bilinear_terms[i].filter = filter->Copy();
+		for (idx_t i = group_before; i < constraint.product_groups.size(); i++) {
+			constraint.product_groups[i].filter = filter->Copy();
 		}
-		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-			constraint.quadratic_groups[i].filter = filter->Copy();
+	}
+
+	//! A reducer's AVG tag, qualifier and reduction on every group extracted from its body since `begin`, as
+	//! ApplyAggregateMetadata does for its linear terms.
+	static void ApplyAggregateMetadata(vector<DecideProductGroup> &groups, idx_t begin,
+	                                   const BoundAggregateExpression &agg) {
+		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+		idx_t qualifier_scope = QualifierScopeOf(agg);
+		for (idx_t i = begin; i < groups.size(); i++) {
+			groups[i].avg_scale = is_avg;
+			groups[i].qualifier_scope_idx = qualifier_scope;
+			groups[i].reduction = LinearTermReduction::SUM;
+		}
+	}
+
+	//! What the plan knows of each group's weight sign, read once its reducer's factor is in (IsNonconvexProductGroup).
+	void SettleWeightSigns(vector<DecideProductGroup> &groups) const {
+		for (auto &group : groups) {
+			group.weight_sign = group.sign * ScaleSignAtPlanTime(context, group.weight.get(), false);
 		}
 	}
 
@@ -512,66 +461,28 @@ private:
 	//! optimizer has already rewritten every MIN/MAX to SUM (asserted below), and a
 	//! sum distributes over any factor regardless of sign.
 	void ApplyScaleToExtracted(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
-	                           DecideConstraint &constraint, idx_t linear_before, idx_t bilinear_before,
-	                           idx_t quadratic_before) {
+	                           DecideConstraint &constraint, idx_t linear_before, idx_t group_before) {
 		for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
 			auto &term = constraint.lhs_terms[i];
 			ScaleCoefficient(scale_func, scale, divides, term.coefficient, term.inputs);
 		}
-		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-			// A null coefficient means 1.0; the scale becomes the whole coefficient.
-			auto &bt = constraint.bilinear_terms[i];
-			ScaleCoefficient(scale_func, scale, divides, bt.coefficient, bt.inputs);
-		}
-		if (quadratic_before == constraint.quadratic_groups.size()) {
-			return;
-		}
-		// Fold a literal immediately. A query-wide subquery scale cannot be evaluated
-		// until the relational input has run, so retain it on the quadratic group.
-		if (!scale.IsFoldable()) {
-			for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-				constraint.quadratic_groups[i].scale = scale.Copy();
-				constraint.quadratic_groups[i].scale_divides = divides;
-			}
-			return;
-		}
-		double factor =
-		    ExpressionExecutor::EvaluateScalar(context, scale).DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		if (divides && factor == 0.0) {
-			throw InvalidInputException("DECIDE constraint: division by zero in a squared term.");
-		}
-		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-			constraint.quadratic_groups[i].sign *= divides ? 1.0 / factor : factor;
+		for (idx_t i = group_before; i < constraint.product_groups.size(); i++) {
+			auto &group = constraint.product_groups[i];
+			ScaleCoefficient(scale_func, scale, divides, group.weight, group.inputs);
 		}
 	}
 
 	//! Objective twin of ApplyScaleToExtracted: multiply a factor that stayed outside a
-	//! reducer into everything the reducer produced. `quadratic_sign` is a number
-	//! rather than an expression, so a squared term needs the factor's value here.
+	//! reducer into everything the reducer produced.
 	void ApplyScaleToObjective(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
-	                           DecideObjective &obj, idx_t linear_before, idx_t bilinear_before, idx_t squared_before) {
+	                           DecideObjective &obj, idx_t linear_before, idx_t group_before) {
 		for (idx_t i = linear_before; i < obj.terms.size(); i++) {
 			ScaleCoefficient(scale_func, scale, divides, obj.terms[i].coefficient, obj.terms[i].inputs);
 		}
-		for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
-			auto &bt = obj.bilinear_terms[i];
-			ScaleCoefficient(scale_func, scale, divides, bt.coefficient, bt.inputs);
+		for (idx_t i = group_before; i < obj.product_groups.size(); i++) {
+			auto &group = obj.product_groups[i];
+			ScaleCoefficient(scale_func, scale, divides, group.weight, group.inputs);
 		}
-		if (squared_before == obj.squared_terms.size()) {
-			return;
-		}
-		double factor;
-		if (!TryEvaluateFoldableDouble(context, scale, factor, FOLD_PLAIN)) {
-			throw InvalidInputException(
-			    "DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
-			    "not known until the query runs. Use a constant factor, or move it inside the "
-			    "aggregate as SUM(%s * POWER(...)).",
-			    scale.GetName(), scale.GetName());
-		}
-		if (divides && factor == 0.0) {
-			throw InvalidInputException("DECIDE objective: division by zero in a squared term.");
-		}
-		obj.quadratic_sign *= divides ? 1.0 / factor : factor;
 	}
 
 	//! Every decision `expr` reads is query-wide: one column each, whichever row reads it.
@@ -608,11 +519,10 @@ private:
 					                        ScaleUserName(*scale));
 				}
 				idx_t linear_before = constraint.lhs_terms.size();
-				idx_t bilinear_before = constraint.bilinear_terms.size();
-				idx_t quadratic_before = constraint.quadratic_groups.size();
+				idx_t group_before = constraint.product_groups.size();
 				ExtractReducerConstraintTerms(*atom.scale.aggregate, constraint, atom.sign);
 				ApplyScaleToExtracted(*atom.scale.function, *scale, atom.scale.divides, constraint, linear_before,
-				                      bilinear_before, quadratic_before);
+				                      group_before);
 				continue;
 			}
 			// A tuple term beside the reducers: the canonicalizer admitted it as one value per group
@@ -632,23 +542,12 @@ private:
 			throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
 			                        agg.function.name);
 		}
-		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-		idx_t qualifier_scope = QualifierScopeOf(agg);
-
 		idx_t linear_before = constraint.lhs_terms.size();
-		idx_t bilinear_before = constraint.bilinear_terms.size();
-		idx_t quadratic_before = constraint.quadratic_groups.size();
+		idx_t group_before = constraint.product_groups.size();
 		ExtractConstraintTerms(*agg.children[0], constraint, sign);
-		AttachReducerFilter(constraint, linear_before, bilinear_before, quadratic_before, agg.filter.get());
+		AttachReducerFilter(constraint, linear_before, group_before, agg.filter.get());
 		ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
-		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-			constraint.bilinear_terms[i].avg_scale = is_avg;
-			constraint.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
-		}
-		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-			constraint.quadratic_groups[i].avg_scale = is_avg;
-			constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
-		}
+		ApplyAggregateMetadata(constraint.product_groups, group_before, agg);
 
 		string minmax_payload;
 		if (ExtractDecideTagPayload(agg.alias, MINMAX_CLAUSE_TAG_PREFIX, minmax_payload)) {
@@ -678,17 +577,16 @@ private:
 			throw InternalException("DECIDE scoped MIN/MAX reached term extraction without its reducer: %s",
 			                        lhs.ToString());
 		}
-		D_ASSERT(constraint.lhs_terms.empty() && constraint.bilinear_terms.empty() &&
-		         constraint.quadratic_groups.empty());
+		D_ASSERT(constraint.lhs_terms.empty() && constraint.product_groups.empty());
 		ExtractConstraintTerms(*agg->children[0], constraint, 1);
-		AttachReducerFilter(constraint, 0, 0, 0, agg->filter.get());
+		AttachReducerFilter(constraint, 0, 0, agg->filter.get());
 		if (scale_match.aggregate) {
-			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint, 0, 0, 0);
+			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint, 0, 0);
 		}
 	}
 
-	//! A reducer body or a per-row left side, split by the shared splitter into the constraint's linear terms,
-	//! bilinear terms, and one quadratic group per square.
+	//! A reducer body or a per-row left side, split by the shared splitter into the constraint's linear terms and one
+	//! product group per term of degree 2.
 	void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign) {
 		vector<DecideSplitTerm> split;
 		splitter.Split(expr, sign, split);
@@ -700,26 +598,7 @@ private:
 				constr.lhs_terms.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
 				continue;
 			}
-			auto parts = LowerDegreeTwo(context, term);
-			for (auto &square : parts.squares) {
-				DecideConstraint::QuadraticGroup qg;
-				qg.sign = square.first;
-				AppendLinearTerms(square.second, qg.inner_terms);
-				constr.quadratic_groups.push_back(std::move(qg));
-				constr.has_quadratic = true;
-			}
-			for (auto &piece : parts.linear) {
-				constr.lhs_terms.push_back(DecideTerm {piece.var_a, std::move(piece.coefficient), piece.sign});
-			}
-			for (auto &piece : parts.bilinear) {
-				BilinearConstraintTerm bt;
-				bt.var_a = piece.var_a;
-				bt.var_b = piece.factors[0].form[0].var_a;
-				bt.coefficient = std::move(piece.coefficient);
-				bt.sign = piece.sign;
-				constr.bilinear_terms.push_back(std::move(bt));
-				constr.has_bilinear = true;
-			}
+			constr.product_groups.push_back(ReadProductGroup(term));
 		}
 	}
 
@@ -883,60 +762,28 @@ private:
 	// Objective
 	//===------------------------------------------------------------------===//
 
-	//! A SUM argument, split by the shared splitter into the objective's linear, bilinear and squared terms. The
-	//! objective supports exactly one quadratic group (one Q matrix with one sign); a second is refused.
-	void ExtractLinearAndBilinearTerms(const Expression &expr, DecideObjective &obj, int sign,
-	                                   const Expression *filter = nullptr) {
+	//! A SUM argument, split by the shared splitter into the objective's linear terms and one product group per term of
+	//! degree 2.
+	void ExtractObjectiveBodyTerms(const Expression &expr, DecideObjective &obj, int sign,
+	                               const Expression *filter = nullptr) {
 		vector<DecideSplitTerm> split;
 		splitter.Split(expr, sign, split);
-		auto add_linear = [&](DecideSplitTerm &term) {
+		for (auto &term : split) {
+			if (term.opaque) {
+				ThrowOpaqueTerm(term);
+			}
+			if (term.degree > 1) {
+				obj.product_groups.push_back(ReadProductGroup(term));
+				if (filter) {
+					obj.product_groups.back().filter = filter->Copy();
+				}
+				continue;
+			}
 			DecideTerm linear {term.var_a, std::move(term.coefficient), term.sign};
 			if (filter) {
 				linear.filter = filter->Copy();
 			}
 			obj.terms.push_back(std::move(linear));
-		};
-		for (auto &term : split) {
-			if (term.opaque) {
-				ThrowOpaqueTerm(term);
-			}
-			if (term.degree <= 1) {
-				add_linear(term);
-				continue;
-			}
-			auto parts = LowerDegreeTwo(context, term);
-			for (auto &square : parts.squares) {
-				if (obj.has_quadratic) {
-					throw InvalidInputException(
-					    "DECIDE objective contains multiple quadratic (POWER / (expr)*(expr)) "
-					    "groups. Only a single quadratic group plus linear terms is supported; "
-					    "combine them mathematically or rewrite the objective.");
-				}
-				obj.has_quadratic = true;
-				obj.quadratic_sign = square.first;
-				idx_t before = obj.squared_terms.size();
-				AppendLinearTerms(square.second, obj.squared_terms);
-				if (filter) {
-					for (idx_t i = before; i < obj.squared_terms.size(); i++) {
-						obj.squared_terms[i].filter = filter->Copy();
-					}
-				}
-			}
-			for (auto &piece : parts.linear) {
-				add_linear(piece);
-			}
-			for (auto &piece : parts.bilinear) {
-				DecideObjective::BilinearTerm bt;
-				bt.var_a = piece.var_a;
-				bt.var_b = piece.factors[0].form[0].var_a;
-				bt.coefficient = std::move(piece.coefficient);
-				bt.sign = piece.sign;
-				if (filter) {
-					bt.filter = filter->Copy();
-				}
-				obj.bilinear_terms.push_back(std::move(bt));
-				obj.has_bilinear = true;
-			}
 		}
 	}
 
@@ -958,16 +805,15 @@ private:
 					                            ScaleUserName(*obj_scale));
 				}
 				idx_t linear_before = obj.terms.size();
-				idx_t bilinear_before = obj.bilinear_terms.size();
-				idx_t squared_before = obj.squared_terms.size();
+				idx_t group_before = obj.product_groups.size();
 				ExtractReducerObjectiveTerms(*atom.scale.aggregate, obj, atom.sign);
 				ApplyScaleToObjective(*atom.scale.function, *obj_scale, atom.scale.divides, obj, linear_before,
-				                      bilinear_before, squared_before);
+				                      group_before);
 				continue;
 			}
 			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
 			    FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
-				ExtractLinearAndBilinearTerms(expr, obj, atom.sign);
+				ExtractObjectiveBodyTerms(expr, obj, atom.sign);
 				continue;
 			}
 			// The objective reads a decision outside its reducers once, on the first kept row
@@ -977,11 +823,13 @@ private:
 			// (CountOnce in physical_decide.cpp).
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE &&
 			    !BoundExpressionContainsAggregate(expr) && FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
-				idx_t bilinear_before = obj.bilinear_terms.size();
-				idx_t squared_before = obj.squared_terms.size();
-				ExtractLinearAndBilinearTerms(expr, obj, atom.sign, nullptr);
-				if (obj.squared_terms.size() != squared_before ||
-				    (obj.bilinear_terms.size() != bilinear_before && !ReadsOnlyQueryWideDecisions(expr))) {
+				idx_t group_before = obj.product_groups.size();
+				ExtractObjectiveBodyTerms(expr, obj, atom.sign, nullptr);
+				bool square = false;
+				for (idx_t i = group_before; i < obj.product_groups.size(); i++) {
+					square = square || obj.product_groups[i].square;
+				}
+				if (square || (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
 					throw InvalidInputException(
 					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
 					    RenderDecideSource(expr, op.source_fragments, op.keyed_scopes, &op.keys));
@@ -1007,27 +855,11 @@ private:
 			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
 			    agg.function.name);
 		}
-		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-		idx_t qualifier_scope = QualifierScopeOf(agg);
-
 		idx_t before = obj.terms.size();
-		idx_t bilinear_before = obj.bilinear_terms.size();
-		idx_t squared_before = obj.squared_terms.size();
-		ExtractLinearAndBilinearTerms(*agg.children[0], obj, sign, agg.filter.get());
-		for (idx_t i = before; i < obj.terms.size(); i++) {
-			obj.terms[i].avg_scale = is_avg;
-			obj.terms[i].qualifier_scope_idx = qualifier_scope;
-			obj.terms[i].reduction = LinearTermReduction::SUM;
-		}
-		for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
-			obj.bilinear_terms[i].avg_scale = is_avg;
-			obj.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
-			obj.bilinear_terms[i].reduction = LinearTermReduction::SUM;
-		}
-		for (idx_t i = squared_before; i < obj.squared_terms.size(); i++) {
-			obj.squared_terms[i].avg_scale = is_avg;
-			obj.squared_terms[i].qualifier_scope_idx = qualifier_scope;
-		}
+		idx_t group_before = obj.product_groups.size();
+		ExtractObjectiveBodyTerms(*agg.children[0], obj, sign, agg.filter.get());
+		ApplyAggregateMetadata(obj.terms, before, agg);
+		ApplyAggregateMetadata(obj.product_groups, group_before, agg);
 	}
 
 	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr) {
@@ -1061,31 +893,11 @@ private:
 
 			objective = make_uniq<DecideObjective>();
 
-			// Walk the SUM argument. ExtractLinearAndBilinearTerms recognises
-			// quadratic patterns (POWER/(expr)*(expr)/negated/K*POWER) at any
-			// position in `+`/`-` trees and routes them into squared_terms, so
-			// the same walker handles pure QP, pure linear+bilinear, and the
-			// mixed forms (e.g. SUM(POWER(x-t, 2) + penalty*x)) uniformly.
-			idx_t before = objective->terms.size();
-			idx_t bilinear_before = objective->bilinear_terms.size();
-			idx_t squared_before = objective->squared_terms.size();
-			ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1, agg.filter.get());
-			bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-			idx_t qualifier_scope = QualifierScopeOf(agg);
-			for (idx_t i = before; i < objective->terms.size(); i++) {
-				objective->terms[i].avg_scale = is_avg;
-				objective->terms[i].qualifier_scope_idx = qualifier_scope;
-				objective->terms[i].reduction = LinearTermReduction::SUM;
-			}
-			for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
-				objective->bilinear_terms[i].avg_scale = is_avg;
-				objective->bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
-				objective->bilinear_terms[i].reduction = LinearTermReduction::SUM;
-			}
-			for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
-				objective->squared_terms[i].avg_scale = is_avg;
-				objective->squared_terms[i].qualifier_scope_idx = qualifier_scope;
-			}
+			// Walk the SUM argument: its linear terms and its product groups, a mixed body
+			// (SUM(POWER(x-t, 2) + penalty*x)) included.
+			ExtractObjectiveBodyTerms(*agg.children[0], *objective, 1, agg.filter.get());
+			ApplyAggregateMetadata(objective->terms, 0, agg);
+			ApplyAggregateMetadata(objective->product_groups, 0, agg);
 
 			objective->when_condition = std::move(when_cond);
 			objective->two_level_key = two_level_key;

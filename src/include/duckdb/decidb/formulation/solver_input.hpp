@@ -242,6 +242,20 @@ struct EmittedRows {
     EmittedRows &operator=(EmittedRows &&) = default;
 };
 
+//! A product group (DecideProductGroup) evaluated on every row: `weight[row] * l(row) * r(row)`, where `l` and `r` are
+//! linear forms in that row's decisions. A square has no right form and multiplies `left` by itself.
+struct EvaluatedProductGroup {
+    //! The group's sign times its weight, 0 on a row the group does not read.
+    CoefficientColumn weight;
+    vector<idx_t> left_variables;                // [term_idx], INVALID_INDEX for a constant
+    vector<CoefficientColumn> left_coefficients; // [term_idx]
+    vector<idx_t> right_variables;
+    vector<CoefficientColumn> right_coefficients;
+    bool square = false;
+    //! DecideProductGroup::weight_sign: what the plan knew of the weight's sign, for convexity.
+    int weight_sign = 1;
+};
+
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
     vector<idx_t> variable_indices;           // Which variable for each term
@@ -290,25 +304,8 @@ struct EvaluatedConstraint {
     idx_t abs_aux_idx = DConstants::INVALID_INDEX;
     bool abs_is_pos_bound = false;
 
-    //! Bilinear terms in this constraint (var_a * var_b with per-row coefficients)
-    struct BilinearTerm {
-        idx_t var_a;
-        idx_t var_b;
-        CoefficientColumn row_coefficients;  // logical size = num_rows
-    };
-    vector<BilinearTerm> bilinear_terms;
-
-    //! Quadratic groups in this constraint. Each POWER(expr, 2) or self-product
-    //! becomes a separate group with its own sign and inner coefficients.
-    //! The model builder computes outer-product Q = sign * A^T A for each group
-    //! and accumulates all groups into the same QuadraticConstraint.
-    struct QuadraticGroup {
-        double sign = 1.0;
-        vector<idx_t> variable_indices;             // [term_idx]
-        vector<CoefficientColumn> row_coefficients; // [term_idx]
-    };
-    vector<QuadraticGroup> quadratic_groups;
-    bool has_quadratic = false;
+    //! The terms of degree 2. A constraint with any is built as a quadratic row, every group added to its Q.
+    vector<EvaluatedProductGroup> product_groups;
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 
     //! Stable user-clause identity retained when one cast comparison expands to
@@ -638,25 +635,8 @@ struct SolverInput {
     //! builder adds the constants it meets in the terms to it (SolverModel::obj_constant).
     double objective_constant = 0.0;
 
-    // Quadratic objective: inner linear expression of SUM(sign * POWER(expr, 2)).
-    // When has_quadratic_objective is true, the objective includes a quadratic
-    // component. The inner expression coefficients are stored per-term and per-row,
-    // just like the linear objective. The model builder expands these into the
-    // Q matrix via outer products: Q = sign * A^T A.
-    // sign = +1.0 → PSD Q (convex), sign = -1.0 → NSD Q (concave).
-    bool has_quadratic_objective = false;
-    double quadratic_sign = 1.0;
-    vector<CoefficientColumn> quadratic_inner_coefficients; // [term_idx]
-    vector<idx_t> quadratic_inner_variable_indices;          // [term_idx]
-
-    // Bilinear objective terms: products of two different DECIDE variables.
-    // Only used for non-Boolean pairs (Boolean×anything is McCormick-linearized).
-    struct BilinearObjectiveTerm {
-        idx_t var_a;                       // First DECIDE variable index
-        idx_t var_b;                       // Second DECIDE variable index
-        CoefficientColumn row_coefficients; // logical size = num_rows
-    };
-    vector<BilinearObjectiveTerm> bilinear_objective_terms;
+    //! The objective's terms of degree 2, summed into the objective's Q.
+    vector<EvaluatedProductGroup> objective_product_groups;
 
     // The two-level objective's grouping (mirrors constraint row_group_ids pattern)
     vector<idx_t> objective_row_group_ids; // per-row group assignment

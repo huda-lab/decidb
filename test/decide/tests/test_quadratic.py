@@ -1118,18 +1118,42 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x - target, exp))
         """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
-    def test_qp_multiple_quadratic_groups_rejected(self, decidb_cli):
-        decidb_cli.assert_error("""
+    def test_qp_two_quadratic_groups_answer(self, decidb_cli, oracle_solver):
+        """Two squared groups in one objective are two product groups summed into one Q (CAN-1)."""
+        rows, cols = decidb_cli.execute(
+            """
             WITH data AS (
                 SELECT 1 AS id, 1.0 AS a, 2.0 AS b UNION ALL
                 SELECT 2, 3.0, 4.0
             )
-            SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
+            SELECT id, a, b, x, y
             FROM data
             DECIDE x(REAL), y(REAL)
-            SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
+            SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100 AND SUM(x + y) <= 6
             MINIMIZE SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))
-        """, match=r"multiple quadratic")
+        """
+        )
+        data = [(1.0, 2.0), (3.0, 4.0)]
+        oracle_solver.create_model("qp_two_groups")
+        linear, quadratic = {}, {}
+        for i, (a, b) in enumerate(data):
+            for name, target in ((f"x_{i}", a), (f"y_{i}", b)):
+                oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+                linear[name] = -2.0 * target
+                quadratic[(name, name)] = 1.0
+        oracle_solver.add_constraint({name: 1.0 for name in linear}, "<=", 6.0, name="total")
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        result = oracle_solver.solve()
+        assert result.status == SolverStatus.OPTIMAL
+        ci = {c: i for i, c in enumerate(cols)}
+        actual = sum(
+            (float(r[ci["x"]]) - float(r[ci["a"]])) ** 2
+            - float(r[ci["a"]]) ** 2
+            + (float(r[ci["y"]]) - float(r[ci["b"]])) ** 2
+            - float(r[ci["b"]]) ** 2
+            for r in rows
+        )
+        assert actual == pytest.approx(result.objective_value, abs=1e-3)
 
     def test_qp_self_product_of_power_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(x, 2) = x^4 — identical-children self-product with

@@ -258,7 +258,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
             ec.comparison_type != ExpressionType::COMPARE_EQUAL) {
             continue;
         }
-        if (!ec.bilinear_terms.empty() || ec.has_quadratic) {
+        if (!ec.product_groups.empty()) {
             continue;
         }
         // A row that means something other than what its terms say: a hard MIN/MAX

@@ -45,7 +45,13 @@ _SQUARES = {
         lambda i, w: {("x", "x"): 1.0, ("x", "y"): 2.0, ("y", "y"): 1.0},
         lambda w, x, y: (x + y) ** 2,
     ),
+    # A data weight on a square is the product group's weight (BUG-46): Gurobi solves it, as it does x*y.
+    "data weight times a power": ("w*POWER(x, 2)", lambda i, w: {("x", "x"): w}, lambda w, x, y: w * x * x),
+    "data weight times a product": ("w*x*x", lambda i, w: {("x", "x"): w}, lambda w, x, y: w * x * x),
+    "power times a data weight": ("POWER(x, 2)*w", lambda i, w: {("x", "x"): w}, lambda w, x, y: w * x * x),
 }
+
+_DATA_WEIGHTS = ["data weight times a power", "data weight times a product", "power times a data weight"]
 
 
 def _uses_y(term):
@@ -88,7 +94,7 @@ class TestEverySpellingIsOnePolynomial:
         actual = sum(value(w, x, y) - c * x for (_, w, c), x, y in zip(_ROWS, xs, ys))
         assert actual == pytest.approx(result.objective_value, rel=1e-4, abs=1e-4)
 
-    @pytest.mark.parametrize("spelling", ["coefficient first", "coefficient between", "cast exponent"])
+    @pytest.mark.parametrize("spelling", ["coefficient first", "coefficient between", "cast exponent"] + _DATA_WEIGHTS)
     def test_square_under_a_limit(self, decidb_cli_gurobi, oracle_solver, spelling):
         term, q_of, value = _SQUARES[spelling]
         rows, cols = decidb_cli_gurobi.execute(
@@ -135,6 +141,29 @@ class TestEverySpellingIsOnePolynomial:
         assert result.status == SolverStatus.OPTIMAL
         xs = _values(rows, cols, "x")
         actual = sum(weight(w) * x * x - c * x for (_, w, c), x in zip(_ROWS, xs))
+        assert actual == pytest.approx(result.objective_value, rel=1e-4, abs=1e-4)
+
+    def test_square_under_a_query_wide_factor(self, decidb_cli_gurobi, oracle_solver):
+        """A factor on the reducer known only when the query runs is multiplied into the square's weight. Its sign is
+        not known before then, so the square is solved as a data weight is, by Gurobi."""
+        rows, cols = decidb_cli_gurobi.execute(
+            f"""
+            SELECT id, x FROM {_TABLE} DECIDE x(REAL)
+            SUCH THAT x <= {_UB}
+            MINIMIZE SUM(POWER(x, 2)) * (SELECT 0.5) - SUM(c * x)
+        """
+        )
+        oracle_solver.create_model("square_query_wide_factor")
+        _variables(oracle_solver, ["x"])
+        oracle_solver.set_quadratic_objective(
+            {f"x_{i}": -c for i, (_, _, c) in enumerate(_ROWS)},
+            {(f"x_{i}", f"x_{i}"): 0.5 for i in range(len(_ROWS))},
+            ObjSense.MINIMIZE,
+        )
+        result = oracle_solver.solve()
+        assert result.status == SolverStatus.OPTIMAL
+        xs = _values(rows, cols, "x")
+        actual = sum(0.5 * x * x - c * x for (_, _, c), x in zip(_ROWS, xs))
         assert actual == pytest.approx(result.objective_value, rel=1e-4, abs=1e-4)
 
     def test_power_one_is_the_decision(self, decidb_cli, oracle_solver):
@@ -283,6 +312,22 @@ class TestShapeCheckRefusals:
         assert re.search(message, result.stderr), result.stderr
         assert f"In the SUCH THAT clause `{constraint}`" in result.stderr or "has a term of degree" in result.stderr
         assert "LINE " in result.stderr and "^" in result.stderr, result.stderr
+
+    def test_data_weight_on_a_square_is_refused_on_highs(self, decidb_cli_highs):
+        """A data weight's sign is known only when the query runs, so the square may be non-convex: HiGHS cannot
+        take it, and the gate says so before a row is read."""
+        result = decidb_cli_highs.execute_raw(
+            f"""
+            SELECT id, x FROM {_TABLE} DECIDE x(REAL)
+            SUCH THAT x <= {_UB}
+            MINIMIZE SUM(w * POWER(x, 2) - c * x)
+        """
+        )
+        assert result.returncode != 0
+        assert (
+            "the objective multiplies a squared decision term by a value whose sign is known only when the query runs"
+            in result.stderr
+        ), result.stderr
 
     def test_objective_refusal_quotes_the_objective_as_written(self, decidb_cli):
         """The objective is quoted from the parser's OBJECTIVE span, spacing and case as typed."""

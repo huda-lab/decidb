@@ -41,6 +41,102 @@ string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
     return DecideWrittenClause(input.constraint_sources, input.objective_written, source_clause_id);
 }
 
+static uint64_t PackQKey(int row, int col) {
+    return (static_cast<uint64_t>(row) << 32) | static_cast<uint32_t>(col);
+}
+
+//! A linear form on one row: its decisions, as flat columns with their nonzero coefficients, and its constant.
+struct FormRow {
+    vector<std::pair<int, double>> terms;
+    double constant = 0.0;
+};
+
+static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t row,
+                           const VarIndexer &indexer, const string &written) {
+    FormRow form;
+    for (idx_t t = 0; t < variables.size() && t < columns.size(); t++) {
+        double a = row < columns[t].Size() ? columns[t].Get(row) : 0.0;
+        if (a == 0.0) {
+            continue;
+        }
+        if (variables[t] == DConstants::INVALID_INDEX) {
+            AddCoefficient(form.constant, a, written);
+            continue;
+        }
+        form.terms.emplace_back(static_cast<int>(indexer.Get(variables[t], row)), a);
+    }
+    return form;
+}
+
+//! Q's entry for the monomial `x_a * x_b`, which `x_b * x_a` shares: the lower triangle (ilp_model.hpp).
+static double &QEntry(std::unordered_map<uint64_t, double> &q, int a, int b) {
+    return q[PackQKey(std::max(a, b), std::min(a, b))];
+}
+
+//! A square `w * (a·x + c)^2` on one row: the symmetric rank-one update `w * a * aᵀ` (BLAS SYR), its triangle computed
+//! once and an off-diagonal pair doubled; `2wc·a` to the linear part and `wc^2` to the constant.
+template <class ADD_LINEAR>
+static void AddSquareRow(const FormRow &form, double w, std::unordered_map<uint64_t, double> &q,
+                         ADD_LINEAR &add_linear, double &constant, const string &written) {
+    for (idx_t i = 0; i < form.terms.size(); i++) {
+        for (idx_t j = 0; j <= i; j++) {
+            double val = w * form.terms[i].second * form.terms[j].second;
+            if (i != j) {
+                val *= 2.0;
+            }
+            AddCoefficient(QEntry(q, form.terms[i].first, form.terms[j].first), val, written);
+        }
+    }
+    if (form.constant != 0.0) {
+        for (auto &term : form.terms) {
+            add_linear(term.first, w * 2.0 * form.constant * term.second);
+        }
+        AddCoefficient(constant, w * form.constant * form.constant, written);
+    }
+}
+
+//! A product `w * (a·x + c) * (b·x + d)` on one row: the rank-one update `w * a * bᵀ`, each pair added to the monomial
+//! it is; `wd·a + wc·b` to the linear part and `wcd` to the constant.
+template <class ADD_LINEAR>
+static void AddProductRow(const FormRow &left, const FormRow &right, double w, std::unordered_map<uint64_t, double> &q,
+                          ADD_LINEAR &add_linear, double &constant, const string &written) {
+    for (auto &l : left.terms) {
+        for (auto &r : right.terms) {
+            AddCoefficient(QEntry(q, l.first, r.first), w * l.second * r.second, written);
+        }
+    }
+    if (right.constant != 0.0) {
+        for (auto &l : left.terms) {
+            add_linear(l.first, w * l.second * right.constant);
+        }
+    }
+    if (left.constant != 0.0) {
+        for (auto &r : right.terms) {
+            add_linear(r.first, w * left.constant * r.second);
+        }
+    }
+    AddCoefficient(constant, w * left.constant * right.constant, written);
+}
+
+//! One product group (EvaluatedProductGroup) on one row: Q gets `w * l * rᵀ` in the monomial convention, the cross
+//! terms with a form's constant go to `add_linear`, and the product of the constants to `constant`.
+template <class ADD_LINEAR>
+static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t row, const VarIndexer &indexer,
+                               std::unordered_map<uint64_t, double> &q, ADD_LINEAR &&add_linear, double &constant,
+                               const string &written) {
+    double w = row < group.weight.Size() ? group.weight.Get(row) : 0.0;
+    if (w == 0.0) {
+        return;
+    }
+    auto left = ReadFormRow(group.left_variables, group.left_coefficients, row, indexer, written);
+    if (group.square) {
+        AddSquareRow(left, w, q, add_linear, constant, written);
+        return;
+    }
+    auto right = ReadFormRow(group.right_variables, group.right_coefficients, row, indexer, written);
+    AddProductRow(left, right, w, q, add_linear, constant, written);
+}
+
 static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     idx.num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
@@ -570,104 +666,22 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     //===--------------------------------------------------------------------===//
 
     phase.Next("model.quadratic_objective");
-    bool has_power_quadratic = input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty();
-    bool has_bilinear = !input.bilinear_objective_terms.empty();
-
-    auto pack_q_key = [](int r, int c) -> uint64_t {
-        return (static_cast<uint64_t>(r) << 32) | static_cast<uint32_t>(c);
-    };
-
-    if (has_power_quadratic || has_bilinear) {
-        // Accumulate Q in a map: (var_i, var_j) -> value (lower triangle only, var_i >= var_j)
+    if (!input.objective_product_groups.empty()) {
+        // Q accumulates in a map: (var_i, var_j) -> value, lower triangle only (var_i >= var_j).
         std::unordered_map<uint64_t, double> q_map;
-
-        // POWER(expr, 2) contributions: outer product A^T A
-        if (has_power_quadratic) {
-            model.has_quadratic_obj = true;
-            double q_sign = input.quadratic_sign;  // +1.0 or -1.0
-
-            // Non-convex when sign and sense conflict: MAXIMIZE + PSD (sign>0), or
-            // MINIMIZE + NSD (sign<0). Shared with stage 05's plan-time prediction so
-            // the refusal there and the fact recorded here cannot disagree.
-            model.nonconvex_quadratic = IsNonconvexQuadraticObjective(q_sign, input.sense);
-
-            idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
-
-            struct VarCoeff { int flat_idx; double coeff; };
-            vector<VarCoeff> row_terms;
+        model.has_quadratic_obj = true;
+        for (auto &group : input.objective_product_groups) {
+            // Shared with stage 05's plan-time prediction, so the refusal there and the fact recorded here cannot
+            // disagree.
+            model.nonconvex_quadratic = model.nonconvex_quadratic ||
+                                        IsNonconvexProductGroup(group.square, group.weight_sign, input.sense);
             for (idx_t row = 0; row < num_rows; row++) {
-                row_terms.clear();
-
-                for (idx_t t = 0; t < num_q_terms; t++) {
-                    if (t >= input.quadratic_inner_coefficients.size() ||
-                        row >= input.quadratic_inner_coefficients[t].Size()) {
-                        continue;
-                    }
-                    idx_t decide_var_idx = input.quadratic_inner_variable_indices[t];
-                    double a = input.quadratic_inner_coefficients[t].Get(row);
-                    if (a == 0.0) continue;
-
-                    if (decide_var_idx == DConstants::INVALID_INDEX) {
-                        continue;
-                    }
-
-                    int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                    row_terms.push_back({flat_idx, a});
-                }
-
-                for (idx_t i = 0; i < row_terms.size(); i++) {
-                    for (idx_t j = 0; j <= i; j++) {
-                        int ri = row_terms[i].flat_idx;
-                        int rj = row_terms[j].flat_idx;
-                        int q_row = std::max(ri, rj);
-                        int q_col = std::min(ri, rj);
-                        // Q holds the plain coefficient of each monomial (ilp_model.hpp),
-                        // so store what expanding the square actually produces:
-                        // diagonal coeff_i^2, off-diagonal 2*coeff_i*coeff_j (the pair
-                        // appears twice in the expansion, and we keep one triangle).
-                        double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
-                        if (i != j) val *= 2.0;
-                        AddCoefficient(q_map[pack_q_key(q_row, q_col)], val, input.objective_written);
-                    }
-                }
-
-                // The square's constant c: sign * (a·x + c)^2 adds 2c·a to the linear part and c^2 to the constant.
-                double c_row = 0.0;
-                for (idx_t t = 0; t < num_q_terms; t++) {
-                    if (t < input.quadratic_inner_coefficients.size() &&
-                        row < input.quadratic_inner_coefficients[t].Size() &&
-                        input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
-                        AddCoefficient(c_row, input.quadratic_inner_coefficients[t].Get(row), input.objective_written);
-                    }
-                }
-                if (c_row != 0.0) {
-                    for (auto &vt : row_terms) {
-                        AddCoefficient(model.obj_coeffs[vt.flat_idx], q_sign * 2.0 * c_row * vt.coeff,
-                                       input.objective_written);
-                    }
-                    model.obj_constant += q_sign * c_row * c_row;
-                }
-            }
-        }
-
-        // Bilinear objective terms: off-diagonal Q entries for x_a * x_b.
-        // For SUM(c * x_a * x_b): Q[max(a,b), min(a,b)] += c -- c is already the plain
-        // monomial coefficient the convention asks for, so it is stored as-is.
-        if (has_bilinear) {
-            model.has_quadratic_obj = true;
-            model.nonconvex_quadratic = true; // Bilinear → always indefinite
-
-            for (auto &bt : input.bilinear_objective_terms) {
-                for (idx_t row = 0; row < num_rows; row++) {
-                    double coeff = bt.row_coefficients[row];
-                    if (coeff == 0.0) continue;
-
-                    int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
-                    int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
-                    int q_row = std::max(flat_a, flat_b);
-                    int q_col = std::min(flat_a, flat_b);
-                    AddCoefficient(q_map[pack_q_key(q_row, q_col)], coeff, input.objective_written);
-                }
+                AddProductGroupRow(
+                    group, row, indexer, q_map,
+                    [&](int flat_idx, double value) {
+                        AddCoefficient(model.obj_coeffs[flat_idx], value, input.objective_written);
+                    },
+                    model.obj_constant, input.objective_written);
             }
         }
 
@@ -699,9 +713,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     //
     // A term is integer-valued when every referenced DECIDE variable is
     // INTEGER/BOOLEAN (i.e., not `LogicalType::DOUBLE` or `LogicalType::FLOAT`)
-    // and every coefficient is integral. For bilinear terms, both factors must
-    // be integer-typed. For POWER(expr, 2) groups, the inner expression must be
-    // integer-valued (integer-valued expressions squared remain integer-valued).
+    // and every coefficient is integral. A product group is integer-valued when its
+    // weight is integral on every row and each form it multiplies is integer-valued.
     //
     // Used to gate the strict-inequality rewrite (`< K → <= K-1`, `> K → >= K+1`),
     // which is semantically exact iff the LHS is confined to integer points.
@@ -725,18 +738,21 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             if (IsRealType(input.variable_types[vi])) return LhsIntegrality::REAL_VARIABLE;
             if (!ec.row_coefficients[i].AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
         }
-        for (const auto &bt : ec.bilinear_terms) {
-            if (IsRealType(input.variable_types[bt.var_a])) return LhsIntegrality::REAL_VARIABLE;
-            if (IsRealType(input.variable_types[bt.var_b])) return LhsIntegrality::REAL_VARIABLE;
-            if (!bt.row_coefficients.AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
-        }
-        for (const auto &qg : ec.quadratic_groups) {
-            for (idx_t i = 0; i < qg.variable_indices.size(); i++) {
-                idx_t vi = qg.variable_indices[i];
-                if (vi == DConstants::INVALID_INDEX) continue;
-                if (IsRealType(input.variable_types[vi])) return LhsIntegrality::REAL_VARIABLE;
-                if (!qg.row_coefficients[i].AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
+        auto form_integrality = [&](const vector<idx_t> &variables, const vector<CoefficientColumn> &columns) {
+            for (idx_t i = 0; i < variables.size(); i++) {
+                if (variables[i] != DConstants::INVALID_INDEX && IsRealType(input.variable_types[variables[i]])) {
+                    return LhsIntegrality::REAL_VARIABLE;
+                }
+                if (!columns[i].AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
             }
+            return LhsIntegrality::INTEGER;
+        };
+        for (const auto &group : ec.product_groups) {
+            for (auto integrality : {form_integrality(group.left_variables, group.left_coefficients),
+                                     form_integrality(group.right_variables, group.right_coefficients)}) {
+                if (integrality != LhsIntegrality::INTEGER) return integrality;
+            }
+            if (!group.weight.AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
         }
         return LhsIntegrality::INTEGER;
     };
@@ -857,7 +873,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     {
         idx_t est_rows = input.global_constraints.size();
         for (auto &ec : input.constraints) {
-            if (ec.has_quadratic || !ec.bilinear_terms.empty()) continue;
+            if (!ec.product_groups.empty()) continue;
             if (ec.lhs_is_aggregate) {
                 bool ec_has_groups = !ec.row_group_ids.empty();
                 est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
@@ -869,8 +885,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
 
     for (auto &eval_const : input.constraints) {
-        // Skip constraints with quadratic/bilinear terms — handled in quadratic section below
-        if (!eval_const.bilinear_terms.empty() || eval_const.has_quadratic) {
+        // Skip constraints with product groups — handled in quadratic section below
+        if (!eval_const.product_groups.empty()) {
             continue;
         }
 
@@ -1060,10 +1076,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
-    // Build quadratic constraints from bilinear terms and/or POWER(expr, 2) groups.
-    // These constraints were skipped in the linear loop above.
-    // A single QuadraticConstraint can contain linear terms, bilinear Q entries,
-    // and POWER outer-product Q entries — all accumulated together.
+    // Build quadratic constraints from product groups. These constraints were skipped in
+    // the linear loop above. A single QuadraticConstraint holds linear terms and every
+    // group's Q entries, all accumulated together.
 
     // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
     // lhs_integrality: precomputed from the user's EvaluatedConstraint; gates the
@@ -1094,69 +1109,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         }
 
-        // Bilinear terms: x_a * x_b → off-diagonal Q entries
-        for (auto &bt : ec.bilinear_terms) {
+        // Product groups: each adds its rank-one update to Q, its cross terms to the linear part,
+        // and its constant to the RHS (AddProductGroupRow). GRBaddqconstr reads x^T Q x with no
+        // 1/2 factor, which is the monomial convention Q is held in.
+        for (auto &group : ec.product_groups) {
             for (idx_t row : row_set) {
-                double coeff = bt.row_coefficients[row];
-                if (coeff == 0.0) continue;
-                int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
-                int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
-                int q_row = std::max(flat_a, flat_b);
-                int q_col = std::min(flat_a, flat_b);
-                AddCoefficient(q_accum[pack_q_key(q_row, q_col)], coeff, written);
-            }
-        }
-
-        // POWER groups: outer product Q = sign * A^T A for each group
-        // GRBaddqconstr uses x^T Q x directly (no 1/2 factor),
-        // so diagonal entries use factor 1.0 and off-diagonal use factor 2.0.
-        for (auto &qg : ec.quadratic_groups) {
-            double q_sign = qg.sign;
-            idx_t num_q_terms = qg.variable_indices.size();
-
-            struct VarCoeff { int flat_idx; double coeff; };
-            vector<VarCoeff> row_terms;
-            for (idx_t row : row_set) {
-                row_terms.clear();
-                double c_row = 0.0;  // Constant term contribution for this row
-
-                for (idx_t t = 0; t < num_q_terms; t++) {
-                    if (t >= qg.row_coefficients.size() || row >= qg.row_coefficients[t].Size()) {
-                        continue;
-                    }
-                    double a = qg.row_coefficients[t].Get(row);
-                    if (a == 0.0) continue;
-                    idx_t decide_var_idx = qg.variable_indices[t];
-                    if (decide_var_idx == DConstants::INVALID_INDEX) {
-                        AddCoefficient(c_row, a, written);
-                        continue;
-                    }
-                    int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                    row_terms.push_back({flat_idx, a});
-                }
-
-                // Variable × variable → Q entries (outer product)
-                for (idx_t i = 0; i < row_terms.size(); i++) {
-                    for (idx_t j = 0; j <= i; j++) {
-                        int ri = row_terms[i].flat_idx;
-                        int rj = row_terms[j].flat_idx;
-                        int q_r = std::max(ri, rj);
-                        int q_c = std::min(ri, rj);
-                        double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
-                        if (i != j) val *= 2.0;  // Off-diagonal: 2*a_i*a_j
-                        AddCoefficient(q_accum[pack_q_key(q_r, q_c)], val, written);
-                    }
-                }
-
-                // Variable × constant → linear terms (cross-product from expansion)
-                if (c_row != 0.0) {
-                    for (auto &vt : row_terms) {
-                        AddCoefficient(linear_accum[vt.flat_idx], q_sign * 2.0 * c_row * vt.coeff, written);
-                    }
-                }
-
-                // Constant × constant → adjusts RHS
-                AddCoefficient(rhs_adjustment, q_sign * c_row * c_row, written);
+                AddProductGroupRow(
+                    group, row, indexer, q_accum,
+                    [&](int flat_idx, double value) { AddCoefficient(linear_accum[flat_idx], value, written); },
+                    rhs_adjustment, written);
             }
         }
 
@@ -1216,7 +1177,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
     phase.Next("model.quadratic_constraints");
     for (auto &eval_const : input.constraints) {
-        if (eval_const.bilinear_terms.empty() && !eval_const.has_quadratic) {
+        if (eval_const.product_groups.empty()) {
             continue;  // Already handled as linear above
         }
 

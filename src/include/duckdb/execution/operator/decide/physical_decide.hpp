@@ -318,8 +318,8 @@ private:
     //! on a variable bound, which is what lets the formulation pass run twice against
     //! two different boxes from the same evaluated clauses.
     struct EvaluatedClauses {
-        //! Per-term filter state for the objective's linear / squared / bilinear terms.
-        vector<TermFilterState> linear_filters, quadratic_filters, bilinear_filters;
+        //! Filter state for the objective's linear terms and its product groups.
+        vector<TermFilterState> linear_filters, group_filters;
         //! The two-level objective's grouping, keyed by the filters above. Copied into
         //! `SolverInput` during assembly.
         vector<idx_t> objective_row_group_ids;
