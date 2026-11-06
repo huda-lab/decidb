@@ -5,13 +5,14 @@ replaces the DECIDE node with ordinary DuckDB operators (sort, rank, filter) tha
 problem takes the existing solver path, unchanged. It is **on by default** (`decide_direct_solve = 'auto'`); `off` forces
 the solver and `require` raises an error when no rule applies.
 
-Four problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable), **A1**, "each row
+Five problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable), **A1**, "each row
 gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions with a linear or one-square
 objective), **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions), and **N1**, "stay inside
-one sum of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows). On 5M-row sources S1 is
+one sum of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows), and **A2**,
+"one shared value closest to every row" (one query-wide `REAL` decision under a squared loss). On 5M-row sources S1 is
 about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. S1 and R1 also read a reducer's `by` key and a `per K:` clause, one group each; their per-group
 plans measured 50 to 98 and 15 to 16 times faster. N1 is 15 to 68 times faster at up to 800,000 rows, and needs no
-Gurobi license, where the solver path refuses a quadratic limit without one. The other 15 classes in the catalogue are not started.
+Gurobi license, where the solver path refuses a quadratic limit without one. The other 14 classes in the catalogue are not started.
 
 ## Where to look
 
@@ -24,7 +25,8 @@ Gurobi license, where the solver path refuses a quadratic limit without one. The
 | See what A1 covers, where it differs from the solver, how fast it is | [rules/a1_separable_box/done.md](rules/a1_separable_box/done.md) |
 | See what R1 covers, where it differs from the solver, how fast it is | [rules/r1_continuous_knapsack/done.md](rules/r1_continuous_knapsack/done.md) |
 | See what N1 covers, where it differs from the solver, how fast it is | [rules/n1_euclidean_ball/done.md](rules/n1_euclidean_ball/done.md) |
-| See what is open for S1, A1, R1 or N1 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md), [rules/r1_continuous_knapsack/todo.md](rules/r1_continuous_knapsack/todo.md), [rules/n1_euclidean_ball/todo.md](rules/n1_euclidean_ball/todo.md) |
+| See what A2 covers and where it differs from the solver | [rules/a2_single_facility_location/done.md](rules/a2_single_facility_location/done.md) |
+| See what is open for S1, A1, R1, N1 or A2 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md), [rules/r1_continuous_knapsack/todo.md](rules/r1_continuous_knapsack/todo.md), [rules/n1_euclidean_ball/todo.md](rules/n1_euclidean_ball/todo.md), [rules/a2_single_facility_location/todo.md](rules/a2_single_facility_location/todo.md) |
 | Work on the shared engine, a third rule, error wording | [framework/](framework/) |
 | See a class that is not built yet, or start one | [todo.md](todo.md) |
 | Time direct solve against Gurobi and HiGHS on TPC-H | [../performance/benchmarking/direct_solve.md](../performance/benchmarking/direct_solve.md) |
@@ -38,7 +40,7 @@ Gurobi license, where the solver path refuses a quadratic limit without one. The
 | Class | Name | Catalogue status | Direct solve |
 |---|---|---|---|
 | [A1](rules/a1_separable_box/) | Separable box-constrained problem | Exact | **Works**, on by default |
-| [A2](rules/a2_single_facility_location/) | Single-facility location (1-D) | Exact | Not started |
+| [A2](rules/a2_single_facility_location/) | Single-facility location (1-D) | Exact | **Works** for one query-wide `REAL` decision under a squared loss |
 | [A3](rules/a3_multilinear_box/) | Multilinear optimization over a box | Exact | Not started |
 | [A4](rules/a4_bounded_least_squares/) | Bounded-variable least squares | Prototype | Not started |
 | [A5](rules/a5_monotone/) | Monotone optimization | Exact | Not started |

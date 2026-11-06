@@ -117,6 +117,6 @@ Bounds are handled by projecting the unconstrained answer onto the legal interva
 >
 > • The L0 variant uses DECIDE's exact tolerance and examines every tolerance-safe target and gap.
 >
-> • Values, weights, and bounds are finite and non-NULL.
+> • Values, weights, and bounds are finite. A NULL value reads as no term on its row, as on the solver path.
 >
 > • Empty input, infeasible bounds, ties, numeric behavior, decision identity, and output mapping preserve DECIDE semantics.

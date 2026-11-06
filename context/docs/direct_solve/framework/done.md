@@ -54,7 +54,7 @@ assertions in 82 cases.
   child. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
-  - **A separable quadratic objective** (A1 and N1: `a*x^2 + b*x` per decision) takes three fragments, in plan order.
+  - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan order.
     `DirectLayoutQuadraticPart` (P1) lays out a `DirectQuadraticPart` in the rule's first projection: its mask, the
     sum of its linear coefficients per decision, and for each square the slope `w` and constant `t` of
     `k*(w*x + t)^2`, each computed on the rows the part reads. It appends the check of each value that can fail to the
@@ -115,16 +115,17 @@ assertions in 82 cases.
     its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
     kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadSquareTerm` reads a linear form in one decision
     squared under a constant coefficient, and declines a data coefficient, a zero or non-finite one, and a form in
-    two decisions. `DirectObjectivePartKept` returns the rows a part reads, those that the objective's `when` and the
+    two decisions. `DirectFoldConstantSum` folds a square's slope (its `inner_linear`) to the one constant every row
+    shares, reading through a NULL guard, and fails on a value that is not a finite constant. `DirectObjectivePartKept` returns the rows a part reads, those that the objective's `when` and the
     part's own both keep. `DirectReadQuadraticPart` composes the four into a `DirectQuadraticPart` (linear terms, the
     rows kept, constants and squares); how many squares a rule admits, and with which signs, is the rule's to check.
     The header also holds `DirectNamesOf` and `DirectIsFiniteWhereKept`, described under Number messages.
   - **Who calls what.** Each rule keeps its own policy around the readers. S1 and R1 call `DirectReadLinearPart` and
     `DirectObjectivePartKept`; S1 declines a filtered part, a non-linear term, a second decision and a coefficient that
-    may raise beside other terms, and flattens the part per term. A1 and N1 call `DirectReadQuadraticPart`, and N1
-    reads the ball's square in its limit clause with `DirectReadSquareTerm`. A1 and N1 sum a part's linear terms per
-    decision in `DirectLayoutQuadraticPart` and apply the part's sign and scale in `DirectFoldQuadratic` (Plan
-    fragments, above). No rule keeps a copy of a reader.
+    may raise beside other terms, and flattens the part per term. A1, N1 and A2 call `DirectReadQuadraticPart`, and N1
+    reads the ball's square in its limit clause with `DirectReadSquareTerm`. N1 and A2 fold the objective square's slope
+    with `DirectFoldConstantSum`. A1, N1 and A2 sum a part's linear terms per decision in `DirectLayoutQuadraticPart`
+    and apply the part's sign and scale in `DirectFoldQuadratic` (Plan fragments, above). No rule keeps a copy of a reader.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
   build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
@@ -273,7 +274,7 @@ assertions in 82 cases.
   `__internal_decide_warn_numbers()`, once per query for every path (`DecideNumberWarningState`), and lets the row
   through. A square's turning point is one shared expression, `DirectTurningPoint`: it divides `-b` by `2a`, and its
   flag is set where the square factor `a` is not 0 and either `a` or a nonzero linear sum `b` is below the normal
-  range. A1 and N1 both warn from it, so a tiny square factor warns alike under either. N1's scale divides a row's
+  range. A1, N1 and A2 all warn from it, so a tiny square factor warns alike under each. N1's scale divides a row's
   value by `sqrt(h)`, the group's sum of squares, and warns where `h` is below the normal range on a row that reads the
   scale with a nonzero value. R1 has no turning point and warns on its own ratio, an item's price `v / w` with `v` not
   0.
@@ -338,7 +339,7 @@ asks the solver's own question about which values a bound admits and which bound
   fit, each way a substitute can misfit the adapter (no child, a missing prunable flag, a slot,
   validated column or row id slot beyond the child), a pipelined check and a gated verdict under `LIMIT 1` and
   `COUNT(*)`),
-  `test_decidb_direct_decline.cpp` (each decline branch of the four rules' `CheckCondition` and of `DirectIRIsReadable`,
+  `test_decidb_direct_decline.cpp` (each decline branch of the five rules' `CheckCondition` and of `DirectIRIsReadable`,
   tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
   small query that is only planned, edits it for the few shapes SQL cannot write, and asks the rule whether it
   applies; each case reaches an arm no other case of its rule reaches, and each rule has forms that apply). The IR comes
