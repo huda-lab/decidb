@@ -1,7 +1,8 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-06, on top of `116edc98f5`: `test/decide/run_direct_matrix.sh`, each of its four suites 6,230 passed;
-C++ `build/release/test/unittest "[decidb]"` (3,817 assertions in 81 cases).
+Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
+its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
+assertions in 82 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -70,9 +71,10 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 ## Where it differs from the solver
 
-- **Its own warning.** A direct plan builds no model, so a number of 1e6 or more, or an objective coefficient of 1e-6 or
-  less, prints nothing, where `off` warns. N1 prints the same line when `h` is below the normal range of a DOUBLE (about
-  scores of 1e-154 and below) on a row that reads it, and a row whose answer is its own target reads no scale and is silent.
+- **Its own warning.** The divisors are the sum of squares `h`, which the scale divides by, and the objective's square
+  factor, which the target `-b / 2K` divides by (`DirectTurningPoint`); the rule is the framework's
+  [Number-range warning](../../framework/done.md). `h` is below the normal range at scores of about 1e-154 and below.
+  A row whose answer is its own target reads no scale and is silent.
 - **More exact row by row.** The formula gives 3 and 4 where Gurobi's barrier stops at 3.0005 and 3.9996, and 0 where it
   stops at 0.001. The objectives agree to within 1e-6 of each other, as the benchmark's agreement check requires.
 - **The true answer at any scale.** Multiplying every score by one positive number does not move the maximum, so with a
@@ -107,15 +109,16 @@ One read of the source, and one pipeline breaker for a limit that is a constant:
 5. `[W1]`, for a limit from the data: the tightest limit of the group.
 6. `P3`: the target or direction in the domain, whether the row is in a ball, and the ball's limit.
 7. `P4`: the row's squared length, masked to NULL outside a ball, and the checks: the target and its square past a DOUBLE,
-   infeasible, unbounded.
+   infeasible, unbounded, and with a square the target's precision warning.
 8. `W2`: `SUM(squared length) OVER (PARTITION BY key)`, `h`. It holds every row before it releases one.
 9. `P5`: the source columns, the answer, and the validation column that keeps the checks and the warning live.
 
-Each check on a row stands below the last breaker, so a bad last row raises under `LIMIT 1`. The one check above it is `h`
-past a DOUBLE with every square in range: only this plan computes that number, the solver has no such error, and a parent
-that reads no row of that group sees no error. A row outside every ball reads NULL in the windows' input, so the windows
-need not partition on membership; the answer reads what they return only for a row in a ball. The warning stands above the
-last breaker too, so under `LIMIT` it reads only the rows the parent reads.
+Each check on a row stands below the last breaker, so a bad last row raises under `LIMIT 1`; the target's precision
+warning is one of them. Two checks stand above it: `h` past a DOUBLE with every square in range, and the scale warning
+from `h`. Only this plan computes `h`, and a parent that reads no row of that group sees neither. The solver has no
+such error, and the framework's [Number-range warning](../../framework/done.md) gives the rule for the warning. A row
+outside every ball reads NULL in the windows' input, so the windows need not partition on membership; the answer reads
+what they return only for a row in a ball.
 
 A stored column the parent reads and the rule does not use comes from a second read of the table, joined on the row id
 (`direct_late_materialization.cpp`), so `W2` does not hold it.

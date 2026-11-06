@@ -683,19 +683,34 @@ Tests: `test/decide/tests/test_explain.py`, `test_scope_explain_diagnose.py`. In
 Some queries have a closed-form answer DuckDB computes with ordinary operators. DeciDB answers those directly instead
 of calling a solver; a query it cannot prove takes the solver path unchanged. No syntax change is involved.
 
-- **Choose rows by score**: one per-row `BOOL` under count limits (`sum(x) <= k`, `<`, `>=`, `>`, `=`, constants or
-  columns), over all rows or a `when`, a linear score, optional pins (`when id = 7: x = 1`).
-- **Independent decisions in a range**: per-row `BOOL`, `INT` or `REAL` decisions with per-row bounds and nothing
-  linking rows; a linear objective or one square (`sum(power(x - target, 2))`).
-- **Fill one budget by value per unit**: per-row `REAL` decisions with their own bounds and one budget
-  `sum(w * x) <= B` (or `>=`, `=`, `BETWEEN`), with a linear objective.
-- **Stay inside one sum of squares**: per-row `REAL` decisions with no bound but `x >= 0` or `x >= -1e30`, and one limit
-  `sum(power(x, 2)) <= B` (a constant or a column), with a linear objective or one square. Answered with no solver, so
-  no Gurobi license is needed.
+- **Choose rows by score** (`S1_UNIFORM_MATROID`): one per-row `BOOL` under count limits (`sum(x) <= k`, `<`, `>=`,
+  `>`, `=`, constants or columns), over all rows or a `when`, a linear score, optional pins (`when id = 7: x = 1`).
+- **Independent decisions in a range** (`A1_SEPARABLE_BOX`): per-row `BOOL`, `INT` or `REAL` decisions with per-row
+  bounds and nothing linking rows; a linear objective or one square (`sum(power(x - target, 2))`).
+- **Fill one budget by value per unit** (`R1_CONTINUOUS_KNAPSACK`): per-row `REAL` decisions with their own bounds and
+  one budget `sum(w * x) <= B` (or `>=`, `=`, `BETWEEN`), with a linear objective.
+- **Stay inside one sum of squares** (`N1_EUCLIDEAN_BALL`): one per-row `REAL` decision and one limit
+  `sum(power(x, 2)) <= B`, where `B` is a constant, a column or an aggregate (`<= sum(budget) by (team)`). A constant
+  factor (`sum(2 * power(x, 2)) <= 50`) and `norm(x, 2) <= 25` read the same way. The only bound beside it may be
+  `x >= 0` or `x >= -1e30`; any other bound loses the rule even when it never binds. The objective is linear, or one
+  square under `MINIMIZE` (`minimize sum(power(x - target, 2))`); a square under `MAXIMIZE` takes the solver. Answered
+  with no solver, so no Gurobi license is needed.
 
-A count limit or budget may also have a `by` key or a `per K:` (`per K: sum(x) by (K) <= k` gives each group its own
-limit). When several assignments are optimal you may get a different one than the solver; the objective is the same.
-`EXPLAIN` shows `Direct solve` rows naming the rule.
+  With scores 3 and 4, this query keeps the rule and answers 3 and 4:
+
+  ```sql
+  SELECT name, x FROM players
+  DECIDE x(REAL)
+  SUCH THAT sum(power(x, 2)) <= 25
+  MAXIMIZE sum(score * x);
+  ```
+
+  Adding `x <= 50 AND` before the limit loses it: `require` raises an error, and `auto` answers on the solver. A direct
+  answer is exact, where the solver's carries its tolerance (3.0005 and 3.9996 here).
+
+A count limit, budget or sum of squares may also have a `by` key or a `per K:` (`per K: sum(x) by (K) <= k` gives each
+group its own limit). When several assignments are optimal you may get a different one than the solver; the objective is
+the same. `EXPLAIN` shows `Direct solve` rows naming the rule.
 
 | setting | effect |
 |---|---|

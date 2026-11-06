@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 5,194 passed; C++
-`build/release/test/unittest "[decidb]"` 2,869 assertions in 69 cases.
+Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
+its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
+assertions in 82 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Design: `../architecture/`.
 
 ## What it does
@@ -48,20 +48,39 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
   form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
   `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient),
-  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE) and `DirectOnKeptRows`. A rule assembles each
-  projection of its plan in a `DirectProjectionStage`, which gives every column its binding as it is added. S1 and R1
-  also share `DirectProveSharedScope` (the clauses read together have
+  `DirectSumOf` (the signed sum of proved values, each read as DOUBLE), `DirectOnKeptRows` and `DirectOverProjection`
+  (a copy of a value re-pointed at a projection over the source). A rule assembles each projection of its plan in a
+  `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
+  child. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
+  - **A separable quadratic objective** (A1 and N1: `a*x^2 + b*x` per decision) takes three fragments, in plan order.
+    `DirectLayoutQuadraticPart` (P1) lays out a `DirectQuadraticPart` in the rule's first projection: its mask, the
+    sum of its linear coefficients per decision, and for each square the slope `w` and constant `t` of
+    `k*(w*x + t)^2`, each computed on the rows the part reads. It appends the check of each value that can fail to the
+    rule's list, and reads a constant one term at a time, never summed. `DirectFoldQuadratic` (P2) folds one decision's
+    `a` and `b` over the parts, each scaled by its sign and factor, and returns the part of `b` the linear terms make,
+    which the rule tests for a number past a DOUBLE; the rule applies the objective's sense. `DirectTurningPoint`
+    returns the turning point `-b / (2a)`, or for a whole-numbered decision the first integer whose next step no longer
+    improves (the smaller one on a tie), with its precision flag (Number-range warning, below).
+  - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
+    aggregate becomes a window over the whole partition, with the rule's group as the partition (S1 and N1). R1's own
+    sink adds each aggregate to its hash aggregate with `DirectAggregateOf`, which the bound side tables use too.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
-  their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
-  and `DirectNumberMessage`. `DirectCheckNumber` checks a raw value a projection computes, naming the values it is made
-  of, and is null when they are finite constants; `DirectRaiseTooLarge` checks a number computed from values checked
-  before it. Every check that raises is built with `DirectRaiseUnless(ok,
-  error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
-  `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
-  the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
-  differ.
+  their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),
+  `DirectValidBoundPredicate` and `DirectNumberMessage`. The two state errors come from `DirectStateErrors {infeasible,
+  unbounded}`, which the rule driver builds once per query from `DecideSolverRuns(ClassifyDecideModel(ir.model_shape))`
+  and hands to every rule's `Apply`; `DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate` take it. Their
+  texts are `DecideInfeasibleMessage` and `DecideUnboundedMessage` (`decide_value_messages.hpp`, given `diagnose_runs`),
+  which advise prefixing the query with `DIAGNOSE` only where `DIAGNOSE` would run. `DirectCheckNumber` checks a raw
+  value a projection computes, naming the values it is made of, and is null when they are finite constants;
+  `DirectRaiseTooLarge` checks a number computed from values checked before it. Every check that raises is built with
+  `DirectRaiseUnless(ok, error)`, `DirectRaiseIf(bad, error)` (both return true or raise), `DirectRaiseMessage` (raises
+  a per-row message where it is not NULL) or `DirectCheckOnKeptRows` (runs a check only where the clause keeps the row).
+  A list of checks is joined by `DirectAllHold`, a `CASE` chain in the order given, so an earlier check guards the later
+  ones. `DirectWarnIf` and `DirectBelowNormalRange` build the warning, which is always true (Number-range warning,
+  below). A rule raises in the solver's order within a group (scope checks, the bound's NaN, an `=` bound's
+  disagreement, then the least row message); across failing groups the order may differ.
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
   One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
@@ -78,21 +97,34 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   with one read plus the side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps
   only an entity-scoped decision's determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over
   its only read with `DirectBuildOverOneRead`.
-- **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
-  two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
-  every direct-solve file. A per-row bound is read by the solver path's own classifier
-  (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
-  values the solver admits, as DuckDB evaluates the comparison (D64). `DirectIsSingletonRow` is the shape a
-  per-row bound must have to be read: the classifier read it, on a declared decision. `DirectReadBounds` folds
-  `variable_bound`s into each decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude
-  1e20 or more infinite): the written `(sense, k)` into a box the domain check reads, the admitted ends into the box the
-  answer reads. Every other bound is a per-row clause carrying the classifier's admitted `lower` and `upper`
-  expressions. `DirectClauseBounds` reads one clause's two ends on a row (no bound on a row its `when` drops), and
-  `DirectRowBox` intersects them with the box. `DirectBoxIsEmpty` is true on a row whose box no value satisfies. `DirectReadLinearPart` reads one linear part (an objective part or a budget) into a `DirectLinearPart`: its sign and
-  constant factor, and each linear term's decision, sign and proved coefficient; it skips other term kinds. Each rule keeps
-  its own policy around it: S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may
-  raise beside other terms, and flattens the part per term; A1 reads constants and squares itself and sums a part's
-  linear terms per decision before applying the part's sign and scale.
+- **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads two things,
+  and reads each once, so that no two rules read a bound or an objective term differently. Its header defines
+  `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
+  - **Per-row bounds on a decision.** A per-row bound is read by the solver path's own classifier
+    (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
+    values the solver admits, as DuckDB evaluates the comparison (D64). `DirectIsSingletonRow` is the shape a
+    per-row bound must have to be read: the classifier read it, on a declared decision. `DirectReadBounds` folds
+    `variable_bound`s into each decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude
+    1e20 or more infinite): the written `(sense, k)` into a box the domain check reads, the admitted ends into the box
+    the answer reads. Every other bound is a per-row clause carrying the classifier's admitted `lower` and `upper`
+    expressions. `DirectStaticFloor` lowers a decision's static floor on the rows where a lower bound under a `when`
+    replaces the default of 0. `DirectClauseBounds` reads one clause's two ends on a row (no bound on a row its `when`
+    drops), and `DirectRowBox` intersects them with the box. `DirectBoxIsEmpty` is true on a row whose box no value
+    satisfies.
+  - **Terms of an objective part or a budget.** `DirectReadLinearPart` reads one linear part into a `DirectLinearPart`:
+    its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
+    kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadSquareTerm` reads a linear form in one decision
+    squared under a constant coefficient, and declines a data coefficient, a zero or non-finite one, and a form in
+    two decisions. `DirectObjectivePartKept` returns the rows a part reads, those that the objective's `when` and the
+    part's own both keep. `DirectReadQuadraticPart` composes the four into a `DirectQuadraticPart` (linear terms, the
+    rows kept, constants and squares); how many squares a rule admits, and with which signs, is the rule's to check.
+    The header also holds `DirectNamesOf` and `DirectIsFiniteWhereKept`, described under Number messages.
+  - **Who calls what.** Each rule keeps its own policy around the readers. S1 and R1 call `DirectReadLinearPart` and
+    `DirectObjectivePartKept`; S1 declines a filtered part, a non-linear term, a second decision and a coefficient that
+    may raise beside other terms, and flattens the part per term. A1 and N1 call `DirectReadQuadraticPart`, and N1
+    reads the ball's square in its limit clause with `DirectReadSquareTerm`. A1 and N1 sum a part's linear terms per
+    decision in `DirectLayoutQuadraticPart` and apply the part's sign and scale in `DirectFoldQuadratic` (Plan
+    fragments, above). No rule keeps a copy of a reader.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
   build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
@@ -105,9 +137,10 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   filter reverse their lists to test the last first.
 - **Rule-local helpers.** A helper only one rule uses stays in that rule's files, in its namespace, and moves to the
   shared files when a second rule needs it. Inside a rule's namespace, names drop the `Direct` and class prefixes. The
-  scope projection (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`) and
-  `DirectWindowExtremum` are shared in `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a
-  group key, or whose bound comes from the data, needs them.
+  scope projection (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`, and
+  `DirectRowBoundMessage` for the same check as a per-row message) and `DirectWindowExtremum` are shared in
+  `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a group key, or whose bound comes from
+  the data, needs them.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It holds:
@@ -132,7 +165,11 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5
   cases).
 - **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectIsSourceOnlyNumeric`,
-  `DirectIsSourceOnlyNumericMayRaise`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
+  `DirectIsSourceOnlyNumericMayRaise`, `DirectIsSourceOnlyValue` (which admits a value that can raise),
+  `DirectIsSourceOnlyPredicate` (a deterministic, nonthrowing BOOLEAN over source columns: a `when` the plan evaluates
+  on every row), `DirectHasColumnReference`, `DirectRemapSourceReferences` (re-points source columns at a projection
+  over the source), `DirectIsWholeNumbered` (an `INT` or `BOOL` decision), `DirectIsLowerBound` and
+  `DirectIsUpperBound` (which comparisons bound a count from below and from above), `DirectPartScale`,
   `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and `DirectPart::IsPlainSum` answer "may a rule use this value"
   once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's own
   `when` or the clause's `when`; with both, the rules decline (the solver reads both).
@@ -167,9 +204,11 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     `DecideReducedBound`): the group's aggregates over per-row inputs, an upper and a lower limit over their results,
     and the checks of what they read and give. A raw bound that varies in its group is the MIN and MAX of its value
     (`DirectTightestBound`); a bound that reads data only through reducers of exactly the clause's group
-    (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule adds the aggregates to
-    the group aggregate it already runs, with no branch per bound (`DirectAddGroupBound` and a rule's
-    `DirectGroupSink`: S1 and N1 a window through `DirectWindowSink`, R1 its hash aggregate), so a direct plan has no side table for them. Only the
+    (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule proves it can compute
+    the bound (`DirectGroupBoundIsReadable`), lays out the columns of each input (`DirectGroupLayout`,
+    `DirectGroupInputs`) and adds the aggregates to the group aggregate it already runs, with no branch per bound
+    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: S1 and N1 a window through `DirectWindowSink`, R1 its hash
+    aggregate), so a direct plan has no side table for them. Only the
     solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
     in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
     reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` are
@@ -205,23 +244,16 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     literal left the DOUBLE range, and the clause is named (TOO_LARGE). Only the first failing row is classified.
   - A number no answer reads is not computed: an objective's per-row constants are checked one term at a time, as the
     solver path reads them, and never summed.
-  - A number that cannot fail gets no check: `DirectIsFiniteWhereKept` (A1, R1 and S1) evaluates a coefficient's
-    signed, scaled sum at plan time, reading each value through its NULL guard (`DecideUnguarded`), and a finite
-    constant plans no `isfinite`. A guard reads a column, so asking the guard instead would treat a literal (the `1` of
-    `x` inside `POWER(x - c, 2)`, the `2` of `2 * x + p * y`) as data. A constant that is not finite keeps its runtime
-    check, so a query over no rows still returns none, and `DirectNamesOf` names the clause (TOO_LARGE), as the solver
-    path does.
+  - A number that cannot fail gets no check: `DirectIsFiniteWhereKept` (S1 and R1, and `DirectCheckNumber` for A1 and
+    N1) evaluates a coefficient's signed, scaled sum at plan time, reading each value through its NULL guard
+    (`DecideUnguarded`), and a finite constant plans no `isfinite`. A guard reads a column, so asking the guard instead
+    would treat a literal (the `1` of `x` inside `POWER(x - c, 2)`, the `2` of `2 * x + p * y`) as data. A constant that
+    is not finite keeps its runtime check, so a query over no rows still returns none, and `DirectNamesOf` names the
+    clause (TOO_LARGE), as the solver path does.
   - A number the model computes from finite ones (like coefficients merged across rows, a square, fixed terms moved to
     the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
     path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks and R1's checks of each
     price and each group's anchor spend and rooms raise the same text.
-  - A number a rule computes that falls below the normal range of a DOUBLE (`DirectBelowNormalRange`, 0 included) from
-    a value that is not 0 has lost precision. The rule passes that condition to `DirectWarnIf`, which prints the
-    solver path's number-range warning through `__internal_decide_warn_numbers()`, once per query for every path
-    (`DecideNumberWarningState`), and lets the row through. Each
-    rule tests the number its answer divides or ranks by: N1 the sum of squares `h`, A1 a decision's coefficients `a`
-    and `b` beside a square, and R1 each item's price `v / w`. The solver path's thresholds read a model, which a direct
-    plan does not build.
   - A source value read as a coefficient must be finite; one read as a bound (a count limit, a fixed value, a per-row
     lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
     NaN raises in every slot.
@@ -233,6 +265,28 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     `test_a1_invalid_coefficient_names_the_value_the_user_wrote` and
     `test_r1_invalid_number_names_the_value_the_user_wrote` compare `require` with `off`. The cost on clean data is
     not measured.
+- **Number-range warning.** A direct plan builds no model, so a coefficient of 1e6 or more, or an objective
+  coefficient of 1e-6 or less, prints nothing, where `off` warns; the solver path's thresholds read a model. A rule that
+  divides by a number it computes warns instead when that divisor, or a nonzero numerator beside it, is below the normal
+  range of a DOUBLE (about 2.2e-308, 0 included: `DirectBelowNormalRange`), since a quotient taken there has lost
+  precision. `DirectWarnIf` takes that condition, prints the solver path's number-range warning through
+  `__internal_decide_warn_numbers()`, once per query for every path (`DecideNumberWarningState`), and lets the row
+  through. A square's turning point is one shared expression, `DirectTurningPoint`: it divides `-b` by `2a`, and its
+  flag is set where the square factor `a` is not 0 and either `a` or a nonzero linear sum `b` is below the normal
+  range. A1 and N1 both warn from it, so a tiny square factor warns alike under either. N1's scale divides a row's
+  value by `sqrt(h)`, the group's sum of squares, and warns where `h` is below the normal range on a row that reads the
+  scale with a nonzero value. R1 has no turning point and warns on its own ratio, an item's price `v / w` with `v` not
+  0.
+
+  A warning reads the rows the rule's error checks read: every row the clause keeps, before any row is released (A1's
+  verdict over all rows, R1's group aggregate, N1's target flag, which stands below N1's window). It does not depend on
+  a `LIMIT` or a filter above the query, as the solver path's warning from the whole model does not. N1's scale warning
+  from `h` is the one exception. `h` is a window over the ball's group, so that check stands above the window and reads
+  only the rows a parent releases, as N1's own error for an `h` past a DOUBLE does. The flag reads the group's `h` and
+  the row's own value, so a group is missed only when a parent releases none of its rows that have a nonzero value.
+  Meeting the whole row set there would take a second pass over the rows. The precision rule forbids it: a plan warns
+  and solves, and mitigates only through free reorderings or the architecture, with DuckDB's own DOUBLE handling as the
+  bar.
 - **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
   <= u, each row independent`. There is no number from the query. `require` explains why no rule applied; under `auto`
@@ -284,13 +338,13 @@ asks the solver's own question about which values a bound admits and which bound
   fit, each way a substitute can misfit the adapter (no child, a missing prunable flag, a slot,
   validated column or row id slot beyond the child), a pipelined check and a gated verdict under `LIMIT 1` and
   `COUNT(*)`),
-  `test_decidb_direct_decline.cpp` (each decline branch of S1's and A1's `CheckCondition` and of `DirectIRIsReadable`,
+  `test_decidb_direct_decline.cpp` (each decline branch of the four rules' `CheckCondition` and of `DirectIRIsReadable`,
   tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
-  small query that is only planned, edits it for the few shapes SQL cannot write, and asks S1 or A1 whether it
+  small query that is only planned, edits it for the few shapes SQL cannot write, and asks the rule whether it
   applies; each case reaches an arm no other case of its rule reaches, and each rule has forms that apply). The IR comes
   from a query rather than from a hand-built struct because a hand-built IR has no resolved source columns, so the
   source-column checks would pass without checking anything.
-- Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
+- Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1, A1, R1 and N1: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE` and an empty source) and the
   parent-context rows of `test_direct_s1_uniform_matroid.py`. With A1's domain check disabled,
   `test_bool_bound_outside_domain.py` (a bound against the domain over an empty source) and two cases of

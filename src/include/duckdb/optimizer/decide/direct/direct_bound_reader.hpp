@@ -14,6 +14,12 @@ namespace duckdb {
 
 class ClientContext;
 
+// The shared reader of what a direct rule takes from the IR. The file is named for its first half, the per-row bounds
+// on a decision. It also reads the terms of an objective part or a budget: linear terms (DirectReadLinearPart),
+// per-row constants (DirectReadConstantTerm), squares (DirectReadSquareTerm) and the rows a part reads
+// (DirectObjectivePartKept), composed into DirectReadQuadraticPart. DirectNamesOf and DirectIsFiniteWhereKept, which
+// name and test a value those readers produce, stand here too.
+
 //! The solver's infinite ends of a box, written once for every rule that builds or reads one.
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();

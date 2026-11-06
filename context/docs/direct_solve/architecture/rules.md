@@ -41,14 +41,24 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    rule does not re-check the IR's statuses, offset or sense; any other not-proved node is a decline. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
-   (`DirectProveValue`). Take the all-rows verdict (`DirectAllRowsValid`), the scope projection
-   (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`) and
-   `DirectWindowExtremum` from `direct_plan_fragments.cpp`, the
-   number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
-   (`DirectIsSingletonRow`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
-   linear terms of an objective part or a budget (`DirectReadLinearPart`) from `direct_bound_reader.cpp`. Build
-   every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the builder
-   has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
+   (`DirectProveValue`). Take these from the shared files; `../framework/done.md` lists every shared helper and what it
+   does.
+   - `direct_plan_fragments.cpp`: the all-rows verdict (`DirectAllRowsValid`), the scope projection
+     (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`),
+     `DirectWindowExtremum`, the projection under construction (`DirectProjectionStage`), the signed sum of values
+     (`DirectSumOf`) and, for a separable quadratic objective, `DirectLayoutQuadraticPart`, `DirectFoldQuadratic` and
+     `DirectTurningPoint`.
+   - `direct_runtime_checks.cpp`: the number checks (`DirectCheckNumber`, `DirectRaiseTooLarge`), the checks joined by
+     `DirectAllHold`, the error predicates (`DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate`, which
+     take the `DirectStateErrors` the rule driver hands to `Apply`) and the warning (`DirectWarnIf` over
+     `DirectBelowNormalRange`; when a rule warns is the framework's Number-range warning).
+   - `direct_bound_reader.cpp`: the per-row bounds on a decision (`DirectIsSingletonRow`, `DirectReadBounds`,
+     `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the terms of an objective part or a budget
+     (`DirectReadLinearPart`, `DirectReadConstantTerm`, `DirectReadSquareTerm`, `DirectObjectivePartKept`, and
+     `DirectReadQuadraticPart`, which composes them).
+
+   Build every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the
+   builder has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
    your rule's own files until a second rule needs it. Inside the rule's namespace, names carry no `Direct` or class
    prefix (`Condition`,
    `PlanBuilder`); names in `namespace duckdb` keep `Direct`.

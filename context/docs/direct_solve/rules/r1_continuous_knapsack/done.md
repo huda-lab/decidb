@@ -1,8 +1,8 @@
 # R1 (continuous knapsack) — what works today
 
-Verified on 2026-11-05 at `a9ae210a3c`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each
-5,962 passed; C++ `build/release/test/unittest "[decidb]"` 3,045 assertions in 78 cases. The rule's simplification after that commit
-reran `make decide-test` (5,962 passed) and the C++ tests (the same count).
+Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
+its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
+assertions in 82 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp`; its per-row bounds and the linear terms of the
 budget and the objective come from the shared reader in `direct_bound_reader.cpp`. Class definition and correctness
@@ -75,12 +75,11 @@ from S1, which counts `BOOL` decisions.
   direct solve returns the finite optimum the limit allows. The problem is bounded, so this is Gurobi's numerics, not
   a different reading. A data-valued upper limit of −infinity beside a floorless row is infeasible here and a status
   error on the solver.
-- **Its own warning.** A direct plan builds no model, so a number of 1e6 or more, or an objective coefficient of 1e-6
-  or less, prints nothing, where `off` warns. R1 prints the same line when an item's price `v / w`, with `v` not 0, is
-  below the normal range of a DOUBLE (about 2.2e-308). The ranking reads the prices, and there it loses precision:
-  values of 5e-310 and 1e-310 over weights of 2e19 and 3e19 answer 0 and 0 where the true answer is 1 and 1/3. Values of
-  5e-280 and 1e-280 keep their prices in range, answer 1 and 1/3 and are silent, where `off` warns and returns 0 and 0
-  (Gurobi) or 0 and 1 (HiGHS).
+- **Its own warning.** The divisor is an item's weight `w`: R1 warns on its own ratio, the price `v / w` with `v` not 0
+  (the framework's [Number-range warning](../../framework/done.md)). The ranking reads the prices, and there it loses
+  precision: values of 5e-310 and 1e-310 over weights of 2e19 and 3e19 answer 0 and 0 where the true answer is 1 and
+  1/3. Values of 5e-280 and 1e-280 keep their prices in range, answer 1 and 1/3 and are silent, where `off` warns and
+  returns 0 and 0 (Gurobi) or 0 and 1 (HiGHS).
 - **Ties at the price.** The solver returns a vertex: one tied item partly filled, the others at an end. The aggregate
   plan moves every tied item by the same fraction of its room, so the answer is the same on every run. The objective is the
   same.

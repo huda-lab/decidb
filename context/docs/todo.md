@@ -6,13 +6,8 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: C5; C6 after C5.
+Each batch finishes completely. Lanes: C6.
 
-## C5. Docs (the orchestrator)
-
-- [ ] H-45 Framework docs describe the shared code as it is — direct_solve/framework/todo.md § H-45
-- [ ] N1-5 Guide §10 teaches N1's shape — direct_solve/rules/n1_euclidean_ball/todo.md § N1-5
-
-## C6. Measurement (the orchestrator, after C5)
+## C6. Measurement (the orchestrator)
 
 - [ ] N1-6 Benchmark sizes past `sf=1` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-6

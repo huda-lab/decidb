@@ -1,11 +1,11 @@
 # A1 (separable box-constrained problem) — what works today
 
-Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 5,194 passed; C++
-`build/release/test/unittest "[decidb]"` 2,869 assertions in 69 cases.
+Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
+its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
+assertions in 82 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
-Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds come from the shared reader in
-`direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
+Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds and the terms of its objective come
+from the shared reader in `direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 
@@ -85,12 +85,10 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
   `BOOL` too (`x >= 2 cannot hold for a BOOL variable.`). A NULL coefficient, target, weight or bound names the columns that are NULL
   on the failing row, in the solver's text, and a NaN value reads as the solver's message; both are built by the
   functions the solver calls (`decide_value_messages.hpp`). The "at row N" suffix is left out.
-- **Its own warning.** A direct plan builds no model, so a coefficient of 1e6 or more, or an objective coefficient of
-  1e-6 or less, prints nothing, where `off` warns. A1 prints the same line when a decision with a square has its square
-  coefficient `a` or a nonzero linear one `b` below the normal range of a DOUBLE (about 2.2e-308): the turning point
-  `-b / 2a` and the better end both read them. `MINIMIZE SUM(1e-322 * POWER(x - 1/3, 2))` answers 0.35 and warns. At
-  1e-300 it answers 1/3 and is silent, where `off` warns and returns 0 (Gurobi) or 0.33333333331 (HiGHS). With no
-  square the answer reads only the sign of `b`, so A1 is silent there.
+- **Its own warning.** The divisor is a decision's square factor `a`, which the turning point `-b / 2a` divides by; the
+  rule is the framework's [Number-range warning](../../framework/done.md). `MINIMIZE SUM(1e-322 * POWER(x - 1/3, 2))`
+  answers 0.35 and warns. At 1e-300 it answers 1/3 and is silent, where `off` warns and returns 0 (Gurobi) or
+  0.33333333331 (HiGHS). With no square the answer reads only the sign of `b`, so A1 is silent there.
 - **Ties.** The smaller value, which matches the solver in every case checked, but nothing promises it.
 - **A decision that appears in no objective term** takes the lowest value its box allows.
 
