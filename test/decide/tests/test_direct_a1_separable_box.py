@@ -32,7 +32,7 @@ import itertools
 import json
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 import pytest
@@ -349,6 +349,7 @@ T, X = "t", "x"
 le, lt, ge, gt, eq = "<=", "<", ">=", ">", "="
 
 A1_CASES = {}
+
 
 def add(name, domain, bounds, objective_name):
     A1_CASES[name] = case(domain, bounds, objective_name)
@@ -841,6 +842,38 @@ CONTEXT_CASES = [
 @pytest.mark.parametrize("base,wrap", CONTEXT_CASES)
 def test_a1_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
     _agree(decidb_cli, oracle_solver, A1_CASES[base], wrap=wrap)
+
+
+# Targets under 0.89, so that b = -2 * 1e308 * t is finite: 2 * 1e308 passes a DOUBLE. Both signs, and a tie-free
+# rounding for a whole number (0.75 -> 1, -0.75 -> -1, 0.25 -> 0).
+HUGE_FACTOR_ROWS = (
+    _row(1, 0.75, 9.0, -3.0, 1.0, True, 0.0),
+    _row(2, -0.75, 9.0, -3.0, 1.0, True, 0.0),
+    _row(3, 0.25, 9.0, -3.0, 1.0, True, 0.0),
+)
+
+
+@pytest.mark.var_real
+@pytest.mark.var_integer
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("domain", ["REAL", "INT"])
+def test_a1_a_square_factor_of_1e308_has_the_turning_point_of_the_factor_one_problem(decidb_cli, oracle_solver, domain):
+    # Multiplying the objective by a positive constant leaves its minimizer where it was, so the oracle solves the
+    # factor-1 problem. 2 * a passes a DOUBLE for a = 1e308; the turning point is (-0.5 * b) / a, and for a whole number
+    # ceil((-0.5 * b - 0.5 * a) / a), neither of which does.
+    unit = case(
+        domain,
+        [clause("x >= -3", ge, const(-3.0), replaces=True), clause("x <= cap", le, col("cap"))],
+        "sq",
+        rows=HUGE_FACTOR_ROWS,
+    )
+    oracle = _solve_with_oracle(oracle_solver, unit)
+    huge = replace(
+        unit, objective=Objective("MINIMIZE SUM(1e308 * POWER(x - t, 2))", False, unit.objective.coefficients)
+    )
+    rows, columns = _run(decidb_cli, _sql(huge), "require")
+    _check_assignment(unit, rows, columns, oracle, "require")
 
 
 @pytest.mark.correctness

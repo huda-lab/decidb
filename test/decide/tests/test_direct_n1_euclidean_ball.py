@@ -159,6 +159,7 @@ BALLS = {
     "b25": Ball("SUM(POWER(x, 2)) <= 25"),
     "b4": Ball("SUM(POWER(x, 2)) <= 4", limit=constant(4.0)),
     "b100": Ball("SUM(POWER(x, 2)) <= 100", limit=constant(100.0)),
+    "b1": Ball("SUM(POWER(x, 2)) <= 1", limit=constant(1.0)),
     "b0": Ball("SUM(POWER(x, 2)) <= 0", limit=constant(0.0)),
     "negative": Ball("SUM(POWER(x, 2)) <= -1", limit=constant(-1.0)),
     # The spellings of one limit: each rule read the same way.
@@ -715,6 +716,64 @@ def test_n1_a_subnormal_h_under_a_huge_limit_stays_inside_the_ball(decidb_cli):
     )
     values = _direct_values(decidb_cli, sql, large_numbers=True)
     assert _on_the_ball(values, 1.0, 1e300), values
+
+
+def _objective(scores, values):
+    return sum(score * value for score, value in zip(scores, values))
+
+
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_n1_a_huge_limit_over_a_small_factor_is_the_unit_ball_scaled(decidb_cli, oracle_solver):
+    # The oracle solves the same scores on the unit ball (B = 1, q = 1). Scaling every x by sqrt(B / q) maps its answer
+    # onto the ball of limit 1e300 and factor 1e-10, so the direct objective divided by that radius equals the oracle's.
+    # B / q = 1e310 passes a DOUBLE, so the radius is written sqrt(B) / sqrt(q).
+    unit = Case((_row(1, 3.0), _row(2, 4.0)), "b1", "max")
+    oracle = _solve_with_oracle(oracle_solver, unit)
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, 3.0::DOUBLE, 1e300::DOUBLE), (2, 4.0::DOUBLE, 1e300::DOUBLE)) t(id, s, l) "
+        "DECIDE x(REAL) SUCH THAT SUM(1e-10 * POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
+    )
+    values = _direct_values(decidb_cli, sql)
+    radius = math.sqrt(1e300) / math.sqrt(1e-10)
+    objective = _objective((3.0, 4.0), values) / radius
+    assert abs(objective - oracle.objective_value) <= _OBJECTIVE_TOLERANCE * max(1.0, abs(oracle.objective_value))
+    assert _on_the_ball(values, 1e-10, 1e300), values
+
+
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_n1_a_subnormal_h_under_a_huge_limit_is_the_unit_ball_scaled(decidb_cli, oracle_solver):
+    # The oracle solves scores 1 and 2 on the unit ball. Scores 2^-537 and 2^-536 are those times 2^-537, and their
+    # squares sum to the subnormal h = 5 * 2^-1074. The answer on B = 1e300 is the oracle's times sqrt(B), so the direct
+    # objective divided by 2^-537 * sqrt(B) equals the oracle's. The plan warns that h is below the normal range.
+    unit = Case((_row(1, 1.0), _row(2, 2.0)), "b1", "max")
+    oracle = _solve_with_oracle(oracle_solver, unit)
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, POWER(2.0::DOUBLE, -537), 1e300::DOUBLE), "
+        "(2, POWER(2.0::DOUBLE, -536), 1e300::DOUBLE)) t(id, s, l) "
+        "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
+    )
+    values = _direct_values(decidb_cli, sql, large_numbers=True)
+    score_scale = 2.0**-537
+    objective = _objective((score_scale, 2 * score_scale), values) / (score_scale * math.sqrt(1e300))
+    assert abs(objective - oracle.objective_value) <= _OBJECTIVE_TOLERANCE * max(1.0, abs(oracle.objective_value))
+
+
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_n1_a_square_factor_of_1e308_has_the_target_of_the_factor_one_problem(decidb_cli, oracle_solver):
+    # Multiplying the objective by a positive constant leaves its minimizer where it was, so the oracle solves the
+    # factor-1 problem. Targets stay under 0.89 so that b = -2 * 1e308 * y is finite; 2 * 1e308 passes a DOUBLE.
+    rows = (_row(1, y=0.5, k="a"), _row(2, y=0.25, k="b"), _row(3, y=0.75, k="b"), _row(4, y=-0.5, k="c"))
+    unit = Case(rows, "b25", "square")
+    oracle = _solve_with_oracle(oracle_solver, unit)
+    sql = (
+        f"SELECT id, x FROM (FROM {_source(unit)} DECIDE x(REAL) SUCH THAT {BALLS['b25'].sql} "
+        "MINIMIZE SUM(1e308 * POWER(x - y, 2))) q ORDER BY id"
+    )
+    result, columns = run(decidb_cli, sql, "require")
+    _check_assignment(unit, result, columns, oracle, "require")
 
 
 @pytest.mark.correctness
