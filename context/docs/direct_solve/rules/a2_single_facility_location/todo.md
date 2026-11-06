@@ -12,8 +12,11 @@ observations. The class is in [definition.md](definition.md). How to work and th
   constant bounds, and a `MINIMIZE` objective of one square of `c` minus a source value under a constant positive
   coefficient, with an optional `when`. The plan aggregates `AVG(v)` over the rows the objective keeps, clamps it to the
   interval, and repeats it on every source row. The aggregate-then-repeat fragment stays in the rule's files until a
-  second rule needs it. Settle and test what the plan returns when the objective keeps no row (every value in the
-  interval is optimal) and how NULL, NaN or infinite values raise, as the solver does.
+  second rule needs it. Test what the plan returns when the objective keeps no row (every value in the interval is
+  optimal) and how NULL, NaN or infinite values raise, as the solver does.
+- **Ruling (owner, 2026-11-06).** When the objective keeps no row, the answer is the point of the interval nearest 0:
+  `COALESCE(AVG(v), 0)` goes through the same clamp. It adds no branch and stays finite when the lower end is open,
+  and it equals A1's lowest value in the box whenever the lower bound is 0 or above.
 - **Done when.** The three standard test sets of `rules.md` exist for A2: a conformance fixture, a differential oracle
   file `test_direct_a2_single_facility_location.py`, and C++ decline cases for each `CheckCondition` branch. The worked
   example returns 5.0 under `require`. The other rules decline every query A2 takes.
