@@ -13,15 +13,19 @@
 // decision-bearing term lives in L. Canonicalization decides that shape once;
 // nothing downstream re-decides it.
 //
-// THE RULE THAT MAKES THE TRANSFORM WORK: canonicalization NEVER opens a term
-// algebraically. It decomposes each side additively and asks one question of each
-// resulting term -- "does it reference a decision variable?" -- then moves terms
-// across the relation accordingly. It does not expand a product of terms or fold
-// constants. Two steps give a bound one spelling: a factor known before the query
-// runs distributes over an additive spine (`2 * (x - 1)` is `2 * x - 2`), and like
-// terms under such factors merge (`x + x` is `2 * x`). Validation subsequently
-// inspects reducer placement, variable scope, and query-wide provenance without
-// rewriting the term.
+// THE CONTRACT. Every rule is an identity for every input. There are five:
+//   - additive decomposition of each side;
+//   - moving a term across the relation by whether it references a decision;
+//   - distributing a factor known before the query runs over an additive spine
+//     (`2 * (x - 1)` is `2 * x - 2`);
+//   - merging like terms under such factors, over products as over atoms (`x + x` is
+//     `2 * x`, `x*x + x*x` is `2 * POWER(x, 2)`);
+//   - writing each product of decisions as a coefficient on the left times powers of
+//     its decision factors (NormalizeProducts, decide_product_form.hpp).
+// The pass never multiplies out a power or a product of sums, never folds constants,
+// and never opens ABS, MIN/MAX or a subquery. It is total, pure, one spelling per
+// meaning, and a fixed point. Validation of the algebra runs once, right after it
+// (DecideShapeCheck), over that spelling.
 //
 // ONE SPELLING PER MEANING. Two inputs that mean the same thing leave this pass
 // spelled the same way, so no consumer has to know both. A reducer factor is always
@@ -34,15 +38,16 @@
 // variables, which are formulation rather than meaning, so its marker stays for
 // DecideOptimizer::RewriteNorm.
 //
-// That restriction is the whole design. A quadratic `POWER(x-t,2)`, a composed
-// `MAX(x*v)`, and a filtered `sum(when c: x)` are all simply decision-bearing
-// terms here, indistinguishable from `x`. The symbolic layer this replaced had to
-// carve out structural bypasses -- quadratic bodies, nested aggregates, opaque
-// placeholders for ABS/MIN/MAX/subqueries -- precisely because it opened terms to
-// do its algebra. A pass that never opens a term has nothing to bypass, and can
-// therefore be TOTAL. Totality is what lets this be the single home: a pass that
-// may decline forces every consumer downstream to handle the declined case, which
-// is precisely how canonicalization came to be spread across five sites.
+// What the contract leaves out is the whole design. A quadratic `POWER(x-t,2)`, a
+// composed `MAX(x*v)`, and a filtered `sum(when c: x)` are decision-bearing terms
+// here, moved and merged as `x` is; the product rule respells a product's factors
+// and opens none of them. The symbolic layer this replaced had to carve out
+// structural bypasses -- quadratic bodies, nested aggregates, opaque placeholders for
+// ABS/MIN/MAX/subqueries -- precisely because it expanded terms to do its algebra. A
+// pass that never expands a term has nothing to bypass, and can therefore be TOTAL.
+// Totality is what lets this be the single home: a pass that may decline forces
+// every consumer downstream to handle the declined case, which is precisely how
+// canonicalization came to be spread across five sites.
 //
 // PURITY: Canonicalize* take their input by const reference and return a new
 // tree, leaving the input untouched. This is deliberate and load-bearing for a
