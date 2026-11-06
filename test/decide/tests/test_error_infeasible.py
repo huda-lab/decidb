@@ -326,8 +326,9 @@ class TestDegenerateConstraintRows:
 class TestUnboundedModels:
     """DeciDB should detect unbounded models (as opposed to infeasible ones).
     The oracle cross-verifies by independently returning UNBOUNDED. Gurobi's
-    ambiguous INF_OR_UNBD status is disambiguated on both sides via a
-    DualReductions=0 re-solve, so exact statuses are asserted here."""
+    ambiguous INF_OR_UNBD status is disambiguated on both sides (DeciDB by its
+    zero-objective probe, the oracle by a DualReductions=0 re-solve), so exact
+    statuses are asserted here."""
 
     def test_unbounded_integer_maximize(
         self, decidb_cli, duckdb_conn, oracle_solver

@@ -375,3 +375,60 @@ class TestUnboundedWithNonLinearParts:
         flat = _flat(_diagnose(decidb_cli_gurobi, sql))
         assert [(f["state"], f["edit_source"]) for f in flat] == [("unbounded", "undiagnosed")]
         assert flat[0]["suggested_change"] == "a non-linear term prevents naming the variable."
+
+
+# The NULL-key row is in no `by (k)` ball, so its `x` has no limit and the squares in the objective grow without bound.
+_NONCONVEX_UNBOUNDED_SQL = (
+    "SELECT k, s, x FROM (VALUES (1, 3.0), (1, 4.0), (NULL, 5.0)) t(k, s) "
+    "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) BY (k) <= 25 AND x >= 0 MAXIMIZE SUM(POWER(x, 2))"
+)
+
+
+@pytest.mark.query_diagnostics
+class TestNonConvexInfOrUnbd:
+    """BUG-49: the Gurobi adapter does not retry an INF_OR_UNBD with dual reductions off. On a non-convex model that
+    retry switched Gurobi to spatial branching, where it ended SUBOPTIMAL with an arbitrary incumbent and the query
+    answered `feasible`. The facade's zero-objective probe settles the status instead. Gurobi only: HiGHS takes no
+    non-convex model."""
+
+    def _assert_model_is_unbounded_unless_capped(self, oracle_solver):
+        """The oracle states the same model: it cannot call it solved as written, and solves it once the NULL row's
+        `x` has a cap. Gurobi's nonconvex search cannot split "infeasible or unbounded" here, so either status is the
+        same finding; the capped model is feasible, so the free one is not infeasible."""
+
+        def status(name, x3_cap):
+            variables = {
+                "x1": (_REAL, 0.0, None),
+                "x2": (_REAL, 0.0, None),
+                "x3": (_REAL, 0.0, x3_cap),
+            }
+            ball = [({}, {("x1", "x1"): 1.0, ("x2", "x2"): 1.0}, "<=", 25.0)]
+            oracle_solver.create_model(name)
+            for var, (var_type, lb, ub) in variables.items():
+                oracle_solver.add_variable(var, var_type, lb=lb, ub=ub)
+            for i, (linear, quadratic, sense, rhs) in enumerate(ball):
+                oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs, name=f"ball_{i}")
+            oracle_solver.set_quadratic_objective(
+                {}, {("x1", "x1"): 1.0, ("x2", "x2"): 1.0, ("x3", "x3"): 1.0}, ObjSense.MAXIMIZE
+            )
+            return oracle_solver.solve().status
+
+        assert status("nonconvex_free_row", None) in (SolverStatus.UNBOUNDED, SolverStatus.INF_OR_UNBD)
+        assert status("nonconvex_capped_row", 10.0) == SolverStatus.OPTIMAL
+
+    def test_diagnose_names_unbounded_when_the_retry_is_skipped(self, decidb_cli_gurobi, oracle_solver):
+        """Branch: a non-convex model that reaches INF_OR_UNBD keeps that status past the adapter, the zero-objective
+        probe finds it feasible, and DIAGNOSE answers `unbounded`, not `feasible`. A runaway inside a square has no
+        ray, so the finding is `undiagnosed` with the non-linear reason."""
+        self._assert_model_is_unbounded_unless_capped(oracle_solver)
+        flat = _flat(_diagnose(decidb_cli_gurobi, _NONCONVEX_UNBOUNDED_SQL))
+        assert [(f["state"], f["edit_source"]) for f in flat] == [("unbounded", "undiagnosed")]
+        assert flat[0]["suggested_change"] == "a non-linear term prevents naming the variable."
+
+    def test_without_the_prefix_the_query_raises_unbounded(self, decidb_cli_gurobi, oracle_solver):
+        """Branch: the same query without DIAGNOSE raises the unbounded error and returns no rows, not an arbitrary
+        incumbent with a caveat."""
+        self._assert_model_is_unbounded_unless_capped(oracle_solver)
+        result = decidb_cli_gurobi.execute_script(f".mode csv\n{_NONCONVEX_UNBOUNDED_SQL};\n")
+        assert "decide optimization is unbounded" in result.stderr.lower()
+        assert "k,s,x" not in result.stdout

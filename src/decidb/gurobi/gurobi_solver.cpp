@@ -395,8 +395,7 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
 
     // Apply the per-chunk wall-clock cap on the live model's env. Setting it here
     // (rather than on the base env at Load) is what lets a warm Continue() extend
-    // the budget without rebuilding — the same live-model param path the
-    // DualReductions disambiguation below uses.
+    // the budget without rebuilding.
     void *model_env = api.getenv_model(guard.model);
     if (model_env) {
         api.setdblparam(model_env, "TimeLimit", time_limit_seconds);
@@ -481,23 +480,11 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
                                 api.geterrormsg(guard.env));
     }
 
-    // Presolve's dual reductions are only valid for feasible, bounded models;
-    // when they fire on a model that is neither, Gurobi can only report the
-    // ambiguous INF_OR_UNBD. Gurobi's documented recipe: disable dual
-    // reductions and re-solve, which yields a definitive INFEASIBLE or
-    // UNBOUNDED. The extra solve only happens in this rare ambiguous case.
-    if (status == GRB_INF_OR_UNBD) {
-        if (model_env && api.setintparam(model_env, "DualReductions", 0) == 0 &&
-            api.optimize(guard.model) == 0) {
-            error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
-            if (error) {
-                throw InternalException("Failed to get Gurobi status: %s",
-                                        api.geterrormsg(guard.env));
-            }
-        }
-        // If disambiguation itself failed, fall through with the original
-        // INF_OR_UNBD status; the branch below reports both possibilities.
-    }
+    // Presolve's dual reductions can leave Gurobi unable to tell infeasible from unbounded, and it reports
+    // GRB_INF_OR_UNBD. The adapter does not re-solve with DualReductions=0: on a non-convex model that re-solve
+    // switches Gurobi to spatial branching, which does not settle the status (an unbounded model ended SUBOPTIMAL
+    // with an arbitrary incumbent). The status goes out as INF_OR_UNBD and the facade's DisambiguateInfOrUnbd settles
+    // it for every backend.
 
     // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
     // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
@@ -515,8 +502,7 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             result.status = SolverStatus::UNBOUNDED;
             break;
         case GRB_INF_OR_UNBD:
-            // Only reachable if the DualReductions=0 re-solve above failed to
-            // disambiguate.
+            // Settled by the facade's DisambiguateInfOrUnbd.
             result.status = SolverStatus::INF_OR_UNBD;
             break;
         case GRB_INTERRUPTED: // mid-solve Ctrl-C (terminate): a stop-with-best-so-far, exactly

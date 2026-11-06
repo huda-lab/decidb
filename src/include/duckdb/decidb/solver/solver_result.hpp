@@ -22,8 +22,8 @@ namespace duckdb {
 
 //! Outcome of a solve, normalized across backends (Gurobi / HiGHS).
 //! INF_OR_UNBD is the ambiguous "infeasible or unbounded" terminal status:
-//! Gurobi's GRB_INF_OR_UNBD (after the DualReductions=0 re-solve fails to
-//! disambiguate) and HiGHS's kUnboundedOrInfeasible (status 9) both map here.
+//! Gurobi's GRB_INF_OR_UNBD and HiGHS's kUnboundedOrInfeasible (status 9) both map here; the facade's
+//! DisambiguateInfOrUnbd turns it into INFEASIBLE or UNBOUNDED.
 enum class SolverStatus {
 	OPTIMAL,
 	INFEASIBLE,
