@@ -6,7 +6,7 @@ rounding of the number in a double reaches the tolerance), can lose precision in
 constraint, quadratic, indicator and objective coefficients, including the constants DeciDB derives, such as a Big-M.
 DeciDB says so once on stderr, solves the model as it is, and returns the answer the solver gives:
 
-    very large or very small number detected - numerical precision may make the solution unstable
+    DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1.
 
 The check reads the finished solver-neutral model, the one DECIDB_DUMP_MODEL dumps, so it knows nothing of where a
 number came from. A nonzero objective coefficient of 1e-6 or less warns too (the optimality tolerance: moving its decision

@@ -58,7 +58,7 @@ constexpr double DECIDE_SMALL_OBJECTIVE_COEFFICIENT = DECIDE_OPTIMALITY_TOLERANC
 //! The one line the solver path and a direct plan print, once per query (DecideNumberWarningState), when a number may
 //! make the answer unstable.
 constexpr const char *DECIDE_NUMBER_RANGE_WARNING =
-    "very large or very small number detected - numerical precision may make the solution unstable";
+    "DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1.";
 
 //! A finite bound at or beyond this magnitude is read as infinite (the variable is unbounded in that direction). It is
 //! the solver sentinel with a margin, so a bound that arithmetic pushed near the sentinel is still recognised.

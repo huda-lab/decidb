@@ -32,7 +32,7 @@ from tests._output_helpers import assert_no_internal_leak
 _STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 
 #: The stderr line DeciDB prints once per query when a number may make the answer unstable (DECIDE_NUMBER_RANGE_WARNING).
-_LARGE_NUMBER_WARNING = "very large or very small number detected - numerical precision may make the solution unstable"
+_LARGE_NUMBER_WARNING = "DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1."
 
 
 class LargeNumberWarningMismatch(Exception):

@@ -837,7 +837,7 @@ def test_n1_warns_again_on_each_query(decidb_exe_path):
     sql = _two_rows("3e-162", "4e-162", _MAX_25)
     script = f"SET decide_direct_solve='require'; {sql}; {sql}; PREPARE p AS {sql}; EXECUTE p; EXECUTE p;"
     done = subprocess.run([decidb_exe_path, "-noheader", "-list", "-c", script], capture_output=True, text=True)
-    assert done.stderr.count("very large or very small number detected") == 4, done.stderr
+    assert done.stderr.count("a very large or very small number may make this answer inaccurate") == 4, done.stderr
 
 
 @pytest.mark.correctness
