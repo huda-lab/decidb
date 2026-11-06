@@ -46,6 +46,14 @@ which only this stage decides (`done.md` §3.7, §3.10).
   - (F) When a query has two refusals, the one the pipeline reaches first is reported.
   - (G) An operator outside the vocabulary over a decision reads "DECIDE: operator '%s' cannot take a DECIDE
     variable."
+- **Ruling (orchestrator, for the owner while away, 2026-11-06), at the step-2 checkpoint.** For the owner to confirm.
+  - (H) `POWER(e, 0)` over a decision is 1, and the product form keeps the decisions of `e` at coefficient 0, as `0 * x`
+    and `x - x` keep theirs. A reducer stays decision-bearing, so `SUM(POWER(x, 0)) <= 5` answers as `COUNT(*) <= 5`.
+  - (I) The objective gets a source span, as each SUCH THAT clause has one, so its messages quote the written text.
+  - (J) A bound operator carries its parsed operator's source location, where the binder makes it in one place; if it
+    cannot, the missing caret is filed.
+  - (K) The integer-step checks and the comparison-in-a-reducer refusal stay in the binder: moving them would change
+    which queries are refused.
 - **Problem.**
   - Each algebra refusal has two to four recognizers, across the parsed tree, the bound tree, the optimizer and
     physical planning. Their gaps refuse legal queries:
