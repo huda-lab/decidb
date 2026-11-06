@@ -285,6 +285,8 @@ private:
 		vector<ColumnBinding> infeasible;
 		vector<ColumnBinding> a;
 		vector<ColumnBinding> b;
+		//! Whether the decision's turning point lost precision (DirectTurningPoint).
+		vector<ColumnBinding> loses_precision;
 		ColumnBinding valid_data;
 	};
 
@@ -460,11 +462,8 @@ private:
 
 			// Convex: the turning point, clamped into the box (for whole numbers, the first integer whose next step
 			// no longer improves, which keeps the smaller one on a tie).
-			// The halves are taken before the division: 2*a passes a DOUBLE for |a| above 9e307, and -0.5*b cannot.
-			auto half_down = calc.Mul(calc.Num(-0.5), b);
-			ExprPtr turning = whole ? calc.Fn("ceil", calc.Div(calc.Sub(half_down, calc.Mul(calc.Num(0.5), a)), a))
-			                        : calc.Div(half_down, a);
-			auto convex = calc.Min({calc.Max({turning, lower}), upper});
+			auto turning = DirectTurningPoint(calc, a, b, whole);
+			auto convex = calc.Min({calc.Max({turning.target, lower}), upper});
 			// Concave: the better endpoint, from the sign of f(upper) - f(lower) = (upper - lower) * s.
 			auto s = calc.Add(calc.Mul(a, calc.Add(upper, lower)), b);
 			auto concave = calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, s, zero), upper, lower);
@@ -482,6 +481,7 @@ private:
 			answers.a.push_back(p4.Add(calc.Out(calc.Col(LogicalType::DOUBLE, box.a[d]))));
 			answers.b.push_back(p4.Add(calc.Out(calc.Col(LogicalType::DOUBLE, box.b[d]))));
 			answers.value.push_back(p4.Add(calc.Out(value)));
+			answers.loses_precision.push_back(p4.Add(calc.Out(turning.loses_precision)));
 		}
 		answers.valid_data = p4.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, box.valid_data)));
 	}
@@ -511,7 +511,7 @@ private:
 	//! The condition every row must meet. It is true, or the row raises the error that applies: a coefficient the
 	//! arithmetic made non-finite, an empty box, an improvement without limit, or a whole number the answer cannot hold
 	//! exactly. Every raw value was checked in P2 and arrives as `valid_data`. A row that passes them all may warn
-	//! (LosesPrecision).
+	//! (DirectTurningPoint).
 	unique_ptr<Expression> ValidAnswers(const Answers &answers) const {
 		vector<unique_ptr<Expression>> checks;
 		// The raw values come first: P2 folded their checks into one flag that is true or false, never an error.
@@ -533,26 +533,12 @@ private:
 				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));
 			}
 		}
-		checks.push_back(LosesPrecision(answers));
-		return DirectAllHold(calc, std::move(checks));
-	}
-
-	//! A decision with a square divides its linear coefficient by its square one (the turning point) or weighs the two
-	//! against each other (the better end), so either one below the normal range of a DOUBLE has lost precision there,
-	//! and the row warns. With no square the answer reads only the sign of the linear coefficient, which holds.
-	unique_ptr<Expression> LosesPrecision(const Answers &answers) const {
-		vector<ExprPtr> unstable;
-		auto zero = calc.Num(0.0);
-		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			auto a = calc.Col(LogicalType::DOUBLE, answers.a[d]);
-			auto b = calc.Col(LogicalType::DOUBLE, answers.b[d]);
-			auto has_square = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, a, zero);
-			auto has_linear = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, b, zero);
-			auto small_linear = calc.If(has_linear, DirectBelowNormalRange(calc, b), calc.Bool(false));
-			unstable.push_back(
-			    calc.If(has_square, calc.Any({DirectBelowNormalRange(calc, a), small_linear}), calc.Bool(false)));
+		vector<ExprPtr> imprecise;
+		for (auto &binding : answers.loses_precision) {
+			imprecise.push_back(calc.Col(LogicalType::BOOLEAN, binding));
 		}
-		return DirectWarnIf(calc, calc.Out(calc.Any(unstable)));
+		checks.push_back(DirectWarnIf(calc, calc.Out(calc.Any(imprecise))));
+		return DirectAllHold(calc, std::move(checks));
 	}
 
 	//! The answer in the decision's own output type. The verdict has already raised for anything that is not finite or

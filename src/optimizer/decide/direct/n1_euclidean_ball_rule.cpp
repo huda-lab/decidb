@@ -255,14 +255,16 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!   P1    raw values: every coefficient, constant and limit, each on the rows that read it
 //!   P2    K and b of the row, and the check on every raw value
 //!   [W1]  the group's tightest limit, for a limit read from the data
-//!   P3    the row's target (or direction) in the domain, whether it is in a ball, and the ball's limit
-//!   P4    the row's squared length in the ball, and every other check a row can raise
+//!   P3    the row's target (or direction) in the domain, whether it lost precision, whether it is in a ball, and the
+//!         ball's limit
+//!   P4    the row's squared length in the ball, every other check a row can raise, and the target's warning
 //!   W2    h, the sum of the squared lengths of the row's group
-//!   P5    the answer, the warning, and the column that keeps the checks live
+//!   P5    the answer, the warning of the scale, and the column that keeps the checks live
 //!
 //! The solver reads every row before it returns, so a bad value on the last row raises even under an outer LIMIT 1. W2
-//! holds every row before it releases one, and each check on a row stands below it. The one check above it is h past a
-//! DOUBLE, which only the plan computes: the solver has no such number, and every row that would read h raises.
+//! holds every row before it releases one, and each check on a row stands below it. The two checks above it read h,
+//! which only the plan computes: h past a DOUBLE (the solver has no such number, and every row that would read h
+//! raises), and the warning that h has lost precision, which a row that reads the scale prints.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -339,11 +341,12 @@ public:
 			p5.Add(calc.Out(calc.Col(source_types[i], lengths.carried.source[i])));
 		}
 		auto total = calc.Coalesce({calc.Col(LogicalType::DOUBLE, ColumnBinding(window_index, 0)), calc.Num(0.0)});
-		p5.Add(Answer(lengths, total));
+		auto scale = Scale(lengths, total);
+		p5.Add(scale.answer);
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, lengths.valid)));
 		checks.push_back(DirectRaiseTooLarge(optimizer, total, condition.objective_written));
-		checks.push_back(LosesPrecision(lengths, total));
+		checks.push_back(DirectWarnIf(calc, calc.Out(scale.loses_precision)));
 		p5.Add(DirectAllHold(calc, std::move(checks)));
 
 		DirectSubstitute substitute;
@@ -389,6 +392,8 @@ private:
 		ColumnBinding target;
 		ColumnBinding value;
 		ColumnBinding in_ball;
+		//! Whether the target lost precision (DirectTurningPoint): false on a row with no square.
+		ColumnBinding loses_precision;
 		ColumnBinding valid;
 	};
 	//! Columns of P4.
@@ -520,11 +525,12 @@ private:
 		auto a = Double(coefficients.a);
 		auto b = Double(coefficients.b);
 		auto zero = calc.Num(0.0);
-		// With a square the target -b / (2*K), computed as (-0.5*b) / K: 2*K passes a DOUBLE for |K| above 9e307. A row
-		// with no square has no objective at all. Without one the direction -b.
-		auto target = condition.has_square ? calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero),
-		                                             calc.Div(calc.Mul(calc.Num(-0.5), b), a), zero)
-		                                   : calc.Neg(b);
+		// With a square the target -b / (2*K) (DirectTurningPoint). A row with no square has no objective at all.
+		// Without one the direction -b.
+		auto turning = DirectTurningPoint(calc, a, b, false);
+		auto target = condition.has_square
+		                  ? calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero), turning.target, zero)
+		                  : calc.Neg(b);
 		auto value = condition.nonnegative ? calc.Max({target, zero}) : target;
 		// A row is in a ball when the clause keeps it and the group has a limit.
 		auto in_ball = condition.scoped ? Boolean(coefficients.carried.eligible) : calc.Bool(true);
@@ -537,6 +543,7 @@ private:
 		result.target = p3.Add(calc.Out(target));
 		result.value = p3.Add(calc.Out(value));
 		result.in_ball = p3.Add(calc.Out(in_ball));
+		result.loses_precision = p3.Add(calc.Out(turning.loses_precision));
 		// The checks of the row's values hold first, then what the limit gives: a group's NaN limit.
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(Boolean(coefficients.valid)));
@@ -578,6 +585,9 @@ private:
 			auto moves = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, value, zero);
 			checks.push_back(
 			    DirectRaiseIf(calc, calc.Out(calc.And(no_limit, moves)), DirectUnboundedErrorPredicate(optimizer)));
+		} else {
+			// A warning reads every row the clause keeps, before any is released, as the checks above do.
+			checks.push_back(DirectWarnIf(calc, calc.Out(Boolean(targets.loses_precision))));
 		}
 		result.valid = p4.Add(DirectAllHold(calc, std::move(checks)));
 		return result;
@@ -593,40 +603,40 @@ private:
 		return calc.Div(calc.Fn("sqrt", limit), calc.Num(std::sqrt(condition.square_factor)));
 	}
 
+	//! A row's answer and whether it lost precision (DirectWarnIf).
+	struct Scaled {
+		ExprPtr answer;
+		ExprPtr loses_precision;
+	};
+
 	//! The scale is the radius over the length sqrt(h), computed as (value / sqrt(h)) * radius: the first factor is at
 	//! most 1, where sqrt(B) / sqrt(h) passes a DOUBLE when h is subnormal. A row outside every ball keeps its target,
 	//! and with no square its direction is 0 (P4 raised otherwise).
-	//! h below the normal range of a DOUBLE has lost precision, so a row that reads it through the scale, or finds it 0
-	//! with a value of its own, warns. A row with a square inside the ball returns its own value and reads no scale.
-	unique_ptr<Expression> LosesPrecision(const Lengths &lengths, const ExprPtr &total) const {
+	//!
+	//! A row reads the scale when a ball holds it and, with a square, its target lies outside that ball. A row with a
+	//! square inside the ball returns its own value and reads no scale. h below the normal range of a DOUBLE has lost
+	//! precision, so a row that reads the scale with a value of its own, or finds h 0 with one, warns.
+	Scaled Scale(const Lengths &lengths, const ExprPtr &total) const {
 		auto value = Double(lengths.value);
-		auto has_value = calc.Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, calc.Num(0.0)));
-		auto unstable = calc.And(Boolean(lengths.in_ball), calc.And(has_value, DirectBelowNormalRange(calc, total)));
-		if (condition.has_square) {
-			unstable = calc.And(unstable, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Fn("sqrt", total),
-			                                       Radius(Double(lengths.limit))));
-		}
-		return DirectWarnIf(calc, calc.Out(unstable));
-	}
-
-	unique_ptr<Expression> Answer(const Lengths &lengths, const ExprPtr &total) const {
-		auto value = Double(lengths.value);
-		auto in_ball = Boolean(lengths.in_ball);
-		auto limit = Double(lengths.limit);
 		auto zero = calc.Num(0.0);
-		auto radius = Radius(limit);
+		auto radius = Radius(Double(lengths.limit));
 		auto length = calc.Fn("sqrt", total);
 		auto scaled = calc.Mul(calc.Div(value, length), radius);
+		auto reads = Boolean(lengths.in_ball);
 		ExprPtr answer;
 		if (condition.has_square) {
-			auto outside = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, length, radius);
-			answer = calc.If(calc.And(in_ball, outside), scaled, value);
+			reads = calc.And(reads, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, length, radius));
+			answer = calc.If(reads, scaled, value);
 		} else {
 			auto still = calc.Cmp(ExpressionType::COMPARE_EQUAL, total, zero);
-			answer = calc.If(calc.And(in_ball, calc.Not(still)), scaled, zero);
+			answer = calc.If(calc.And(reads, calc.Not(still)), scaled, zero);
 		}
+		auto has_value = calc.Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, zero));
+		Scaled result;
 		// Adding 0.0 turns -0.0 into 0.0.
-		return calc.Out(calc.Add(answer, zero));
+		result.answer = calc.Out(calc.Add(answer, zero));
+		result.loses_precision = calc.Out(calc.And(reads, calc.And(has_value, DirectBelowNormalRange(calc, total))));
+		return result;
 	}
 };
 

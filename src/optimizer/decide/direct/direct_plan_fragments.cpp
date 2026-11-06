@@ -192,6 +192,21 @@ DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBui
 	return sum;
 }
 
+DirectSquareTarget DirectTurningPoint(const ExpressionBuilder &calc, const ExprPtr &a, const ExprPtr &b, bool whole) {
+	// The halves are taken before the division: 2*a passes a DOUBLE for |a| above 9e307, and -0.5*b cannot.
+	auto half_down = calc.Mul(calc.Num(-0.5), b);
+	DirectSquareTarget result;
+	result.target =
+	    whole ? calc.Fn("ceil", calc.Div(calc.Sub(half_down, calc.Mul(calc.Num(0.5), a)), a)) : calc.Div(half_down, a);
+	auto zero = calc.Num(0.0);
+	auto has_square = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, a, zero);
+	auto has_linear = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, b, zero);
+	auto small_linear = calc.If(has_linear, DirectBelowNormalRange(calc, b), calc.Bool(false));
+	result.loses_precision =
+	    calc.If(has_square, calc.Any({DirectBelowNormalRange(calc, a), small_linear}), calc.Bool(false));
+	return result;
+}
+
 unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_ptr<LogicalOperator> child,
                                                  const vector<ExprPtr> &groups,
                                                  vector<unique_ptr<Expression>> aggregates) {

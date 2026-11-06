@@ -102,6 +102,19 @@ DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBui
                                        const vector<DirectQuadraticPart> &parts,
                                        const vector<DirectQuadraticColumns> &columns, idx_t decision);
 
+//! The turning point of `a*x^2 + b*x` and whether computing it lost precision. Every rule that finds a square's
+//! minimum, or weighs its ends, warns from this one expression: the point divides `b` by `a`, so a factor `a` or a
+//! nonzero `b` below the normal range of a DOUBLE (DirectBelowNormalRange) has lost bits there. `target` is
+//! `-b / (2*a)`, and for a whole-numbered decision (`whole`) the first integer whose next step no longer improves,
+//! which keeps the smaller one on a tie. `loses_precision` is false where `a` is 0, since a row with no square divides
+//! by nothing. `target` is read for `a` positive; the flag holds for either sign, since a concave square weighs its two
+//! ends against each other by the same coefficients.
+struct DirectSquareTarget {
+	ExprPtr target;
+	ExprPtr loses_precision;
+};
+DirectSquareTarget DirectTurningPoint(const ExpressionBuilder &calc, const ExprPtr &a, const ExprPtr &b, bool whole);
+
 //! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for an
 //! operator above that projection to read it.
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,

@@ -841,6 +841,47 @@ def test_n1_a_target_outside_a_tiny_ball_reads_the_scale_and_warns(decidb_cli):
     _direct_values(decidb_cli, _two_rows("3e-160", "4e-160", _TINY_LIMIT), number_range=True)
 
 
+# A square's turning point warns from one expression under every rule (DirectTurningPoint): a square factor, or a nonzero
+# linear coefficient beside it, below the normal range of a DOUBLE. A1 and N1 take the same objective in a box and in a
+# ball, so each pair must warn alike. In the ball the target stays inside, so the scale (h) is never read: the warning
+# is the target's alone.
+_SQUARE_SETTINGS = {
+    "a1": "x >= 0 AND x <= 10",
+    "n1": "SUM(POWER(x, 2)) <= 100",
+}
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("rule", ["a1", "n1"])
+@pytest.mark.parametrize(
+    "objective,warns",
+    [
+        # a = 2e-308 is below the normal range and b = -2.3e-308 in it.
+        ("MINIMIZE SUM(2e-308 * POWER(x, 2) - 2.3e-308 * x)", True),
+        # a = 1 and b = -1e-310.
+        ("MINIMIZE SUM(POWER(x, 2) - 1e-310 * x)", True),
+        # a = 1e-300 and b = -6.7e-301 are in the normal range.
+        ("MINIMIZE SUM(1e-300 * POWER(x - 0.3333333333333333, 2))", False),
+        # b = 0 beside a square holds no value to lose.
+        ("MINIMIZE SUM(1e-300 * POWER(x, 2))", False),
+    ],
+)
+def test_a_tiny_square_factor_warns_under_a1_and_n1_alike(decidb_cli, rule, objective, warns):
+    sql = f"SELECT x FROM (FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT {_SQUARE_SETTINGS[rule]} {objective}) q"
+    run(decidb_cli, sql, "require", expect_number_range=warns)
+
+
+@pytest.mark.correctness
+def test_n1_the_target_warning_reads_every_row_though_a_limit_releases_one(decidb_cli):
+    # Row 2's linear coefficient -2e-310 is below the normal range; row 1's is not. The warning reads every row before
+    # the window releases one, as the checks of a row's values do, so `LIMIT 1` does not hide it.
+    sql = (
+        "SELECT x FROM (FROM (VALUES (1, 1.0::DOUBLE), (2, 1e-310::DOUBLE)) t(id, s) DECIDE x(REAL) "
+        "SUCH THAT SUM(POWER(x, 2)) <= 100 MINIMIZE SUM(POWER(x - s, 2))) q LIMIT 1"
+    )
+    run(decidb_cli, sql, "require", expect_number_range=True)
+
+
 @pytest.mark.correctness
 def test_n1_a_row_outside_every_ball_reads_no_h_and_is_silent(decidb_cli):
     # h reads 0 and is greater than the limit, but no ball holds the row, so its answer is its own target.
