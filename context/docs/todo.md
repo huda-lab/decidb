@@ -14,7 +14,7 @@ Each batch finishes completely. Lanes: Q1 and U1 side by side; C4 after Q1; C5 a
 
 ## U1. Unbounded diagnosis (one lane)
 
-- [ ] UNB-1 Name the runaway decision of a model with a quadratic row — diagnostics/unbounded/todo.md § UNB-1
+- [ ] UNB-1 Name the runaway decision of a model with a non-linear part — diagnostics/unbounded/todo.md § UNB-1
 
 ## C4. Shared code before N2 (one lane; needs: Q1)
 
