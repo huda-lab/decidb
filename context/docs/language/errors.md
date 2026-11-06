@@ -59,7 +59,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 
 Each refusal of the shape check (stage 04, the six rows from the function row to the degree row) quotes the clause as
 written, in an ending `In the SUCH THAT clause ...` or `In the objective ...` (the degree message names it in its first
-sentence), and points a caret at the term. A `COALESCE` over a decision is refused without a caret (BUG-50). When a
+sentence), and points a caret at the term. When a
 query has two refusals, the one the pipeline reaches first is reported: the binder's, then the shape check's.
 
 DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the number-range

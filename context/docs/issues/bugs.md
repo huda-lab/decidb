@@ -2,14 +2,7 @@
 
 ## Open
 
-- **BUG-50 — A COALESCE over a decision is refused without a caret.** `SUM(COALESCE(x, 0)) <= 5` is refused by the
-  shape check (`DECIDE: operator 'COALESCE' cannot take a DECIDE variable. In the SUCH THAT clause ...`), and the
-  message underlines no term. The transformer gives a parsed COALESCE no source location (`transform_coalesce.cpp` and
-  the two-argument form in `transform_function.cpp` build the operator without one), so the bound node has none for
-  the refusal to point at, and the gap spans several transformer sites. Every other shape-check refusal carries a
-  caret. Repro: that clause over `t(id)` with
-  `DECIDE x(REAL) ... MAXIMIZE SUM(x)`. Found 2026-11-06 (CAN-1). Fix: set the location on each parsed special form in
-  the transformer.
+None.
 
 ## Limitations (not bugs)
 

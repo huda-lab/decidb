@@ -251,8 +251,8 @@ decision-bearing factors are like terms.
 source location. The grammar records a `TERM` span for each product, `**` or `^` power and function call, and an
 `OBJECTIVE` span for the objective, as Clang underlines a source range and does not reprint its syntax tree. A message
 or a `DIAGNOSE` repair quotes the clause as written and never searches for canonical text. EXPLAIN's `≡` line prints the canonical spelling, so a clause written `x * w` prints a second line,
-`w * x`. A parsed `COALESCE` gets no source location from the transformer, so a refusal over one has no caret
-(BUG-50).
+`w * x`. The transformer gives each parsed expression its token's location; a call it rewrites into another
+expression (`IF`, `IFNULL`) keeps the call's, so a refusal over a `COALESCE` or `IFNULL` points at it too.
 
 ### 3.4 Placement
 

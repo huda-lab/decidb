@@ -168,7 +168,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   any other function reads *"DECIDE: function 'sqrt' cannot take a DECIDE variable."*, any other operator (`%`,
   `COALESCE`) *"DECIDE: operator '%' cannot take a DECIDE variable."*, a `POWER` with another exponent asks for a whole
   number known before the query runs, and a `CASE` over a decision gets its own message with the alternatives. Each
-  quotes the clause as written and points at the term (a `COALESCE` has no caret, BUG-50). Without the check, such a
+  quotes the clause as written and points at the term. Without the check, such a
   function would be dropped or reach execution unmodelled. `POWER(x, 1)` is `x` and `POWER(x, 0)` is 1. Tests:
   `test_error_binder.py`, `test_product_normal_form.py`, `test_error_case_expression.py`.
 - **Functions and operators over data only** (`%`, bitwise, `mod()`, `floor()`, `POWER(qty, 3)`, `COALESCE`, `CASE`) are

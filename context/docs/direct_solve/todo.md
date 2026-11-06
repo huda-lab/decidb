@@ -7,7 +7,6 @@ checklist and the standard tests). Remove its row here when its `todo.md` exists
 
 | Class | Definition |
 |---|---|
-| A2 | [Single-facility location (1-D)](rules/a2_single_facility_location/definition.md) |
 | A3 | [Multilinear optimization over a box](rules/a3_multilinear_box/definition.md) |
 | A4 | [Bounded-variable least squares](rules/a4_bounded_least_squares/definition.md) |
 | A5 | [Monotone optimization](rules/a5_monotone/definition.md) |
