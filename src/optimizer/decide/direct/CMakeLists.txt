@@ -2,6 +2,7 @@ add_library_unity(
   duckdb_optimizer_decide_direct
   OBJECT
   a1_separable_box_rule.cpp
+  a2_single_facility_location_rule.cpp
   direct_bound_reader.cpp
   direct_bound_tables.cpp
   direct_plan_fragments.cpp

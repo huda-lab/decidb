@@ -364,7 +364,94 @@ N1 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, A1, R1, N1)
+def _a2_late_error(decision_sql, v_sql="1.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {v_sql} AS v FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
+A2 = RuleFixture(
+    rule="A2_SINGLE_FACILITY_LOCATION",
+    condition="min SUM((c - v)^2), lo <= c <= hi, one shared c",
+    # The worked example of the rule's definition: the mean of 2, 4 and 9 is 5, inside the interval, and every row
+    # carries it. Forced HiGHS stops at its own tolerance (4.9999999), so the query rounds its output to two places,
+    # which makes its rows equal on every path.
+    applies="""
+        SELECT id, v, ROUND(c, 2) AS c FROM (
+            FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('4.0' AS DOUBLE)), (2, CAST('9.0' AS DOUBLE))) t(id, v)
+            DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10
+            MINIMIZE SUM(POWER(c - v, 2))
+        ) q ORDER BY id
+    """,
+    empty_applies="""
+        SELECT id, v, c FROM (
+            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('4.0' AS DOUBLE))) t(id, v)
+                  WHERE false) t
+            DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10
+            MINIMIZE SUM(POWER(c - v, 2))
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_a2_life(id INTEGER, v DOUBLE);
+        INSERT INTO direct_a2_life VALUES (1,2),(2,4);
+    """,
+    table_applies="""
+        SELECT id,c FROM (
+            FROM direct_a2_life DECIDE per (): c(REAL)
+            SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))
+        ) q
+    """,
+    table_change="ALTER TABLE direct_a2_life ADD COLUMN extra INTEGER;",
+    # Each is the plain form with one condition changed: a whole-numbered decision (the mean is not a whole number), a
+    # bound read from the data (the interval differs per row), a linear term beside the square, a loss that is not a
+    # square, and a weight read from the data.
+    near_misses=(
+        ("per (): c(INT)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2) + w * c)"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(ABS(c - p))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(w * POWER(c - p, 2))"),
+        # An objective `when` that is not a source predicate: on the objective and on its sum.
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE when txid_current() >= 0: SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(when txid_current() >= 0: POWER(c - p, 2))"),
+    ),
+    # Forms that look like near misses and apply: the square written the other way round, a slope on the decision, a
+    # factor, a maximized negative square, a `when`, and an interval open on one side.
+    near_miss_applies=(
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(p - c, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(2 * c - p, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE 3 * SUM(POWER(c - p, 2)) / 2"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE -SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE when cap > 3: SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
+        ("per (): c(REAL)", "c >= -1e30 AND c <= 10", "MINIMIZE SUM(POWER(c - p, 2))"),
+    ),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 5, 2.0::DOUBLE), (2, 10.0::DOUBLE, 3, 4.0::DOUBLE)) t(id,p,cap,w)",
+    near_miss_column="id",
+    late_errors=(
+        # Errors A2 raises, on the last of 5,000 rows: a NaN value and a value too large for its objective coefficient.
+        (
+            _a2_late_error(
+                "per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))",
+                v_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "v is NaN or infinite on some rows",
+        ),
+        (
+            _a2_late_error(
+                "per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - v, 2))",
+                v_sql="CASE WHEN i=4999 THEN 1e308 ELSE 1.0 END",
+            ),
+            "too large for a DOUBLE",
+        ),
+    ),
+    late_column="i",
+)
+
+
+RULE_FIXTURES = (S1, A1, R1, N1, A2)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source

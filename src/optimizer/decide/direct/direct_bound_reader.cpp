@@ -279,6 +279,18 @@ bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const Deci
 	return true;
 }
 
+bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total) {
+	total = 0.0;
+	for (auto &value : values) {
+		double constant;
+		if (!TryEvaluateFoldableDouble(context, DecideUnguarded(*value.expr), constant, DIRECT_FINITE_CONSTANT)) {
+			return false;
+		}
+		total += value.sign * constant;
+	}
+	return true;
+}
+
 bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept) {
 	for (auto when : {ir.objective.scope.when.get(), part.filter.get()}) {
 		if (!when) {

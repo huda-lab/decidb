@@ -198,6 +198,11 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, const string &clause,
                           DirectSquareTerm &out);
 
+//! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient
+//! 0), so a square's slope `DirectSquareTerm::inner_linear` folds to the number every row shares. False when a value is
+//! not a finite constant.
+bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total);
+
 //! One part of an objective that holds linear terms, per-row constants and squares: its sign and factor with its linear
 //! terms (`linear`), the rows it reads (`kept`), and its constants and squares in the order they came.
 struct DirectQuadraticPart {

@@ -427,6 +427,50 @@ def test_n1_errors_are_the_solvers_word_for_word(decidb_cli, s, y, l, k, decide,
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "v,decide,message",
+    [
+        (
+            "'NaN'",
+            "MINIMIZE SUM(POWER(c - v, 2))",
+            "DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.",
+        ),
+        (
+            "'Infinity'",
+            "MINIMIZE SUM(POWER(v - c, 2))",
+            "DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.",
+        ),
+        (
+            "'NaN'",
+            "MINIMIZE SUM(POWER(c - 2 * v, 2))",
+            "DECIDE: 2 * v is NaN or infinite on some rows. Skip those rows with 'when isfinite(2 * v):'.",
+        ),
+        (
+            "1e308",
+            "MINIMIZE SUM(POWER(c - v, 2))",
+            "DECIDE: MINIMIZE SUM(POWER(c - v, 2)) computes a number too large for a DOUBLE.",
+        ),
+        (
+            "0.0",
+            "MINIMIZE 1e308 * SUM(POWER(c - v, 2))",
+            "DECIDE: MINIMIZE 1e308 * SUM(POWER(c - v, 2)) computes a number too large for a DOUBLE. Scale its data down.",
+        ),
+    ],
+)
+def test_a2_errors_are_the_solvers_word_for_word(decidb_cli, v, decide, message):
+    # The full text is compared across `require` and `off`, never against a hand-written string alone: the value is
+    # named as the user wrote it, and a number computed past a DOUBLE names the objective as written. The solver adds no
+    # row number to these.
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES (1, 2.0), (2, {v}::DOUBLE), (3, {v}::DOUBLE)) t(id, v) "
+        f"DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 {decide}) q"
+    )
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert message in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
 # The infeasible and unbounded errors advise prefixing the query with DIAGNOSE only where DIAGNOSE runs. The rule driver
 # asks the solver-support check DIAGNOSE goes through (DecideSolverRuns) once per query. On a machine with no Gurobi,
 # HiGHS takes a linear model and a convex quadratic objective over continuous decisions, and refuses the rest.

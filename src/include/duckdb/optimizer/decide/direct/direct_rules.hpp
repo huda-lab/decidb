@@ -21,4 +21,9 @@ unique_ptr<DirectSolveRule> MakeR1ContinuousKnapsackRule();
 //! `SUM(POWER(x, 2)) <= B`, with a linear objective or one square (N1, the Euclidean ball).
 unique_ptr<DirectSolveRule> MakeN1EuclideanBallRule();
 
+//! The fifth direct-solve rule: one query-wide REAL decision in a constant interval under one square of the decision
+//! minus a source value, whose answer is the mean of the values clamped into the interval (A2, single-facility
+//! location).
+unique_ptr<DirectSolveRule> MakeA2SingleFacilityLocationRule();
+
 } // namespace duckdb

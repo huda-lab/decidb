@@ -51,24 +51,10 @@ struct Condition final : DirectApplicabilityCondition {
 	bool has_square = false;
 };
 
-//! The sum of `values` as a constant, where a NULL guard keeps its row (a skipped row reads 0, as coefficient 0). False
-//! when one is not a finite constant.
-bool FoldSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total) {
-	total = 0.0;
-	for (auto &value : values) {
-		double constant;
-		if (!TryEvaluateFoldableDouble(context, DecideUnguarded(*value.expr), constant, DIRECT_FINITE_CONSTANT)) {
-			return false;
-		}
-		total += value.sign * constant;
-	}
-	return true;
-}
-
 //! `sign * scale * w^2` of a square, where its inner slope `w` folds to a constant; false otherwise.
 bool FoldSquareFactor(ClientContext &context, const DirectSquareTerm &square, double &factor) {
 	double slope;
-	if (!FoldSum(context, square.inner_linear, slope)) {
+	if (!DirectFoldConstantSum(context, square.inner_linear, slope)) {
 		return false;
 	}
 	factor = square.sign * square.scale * (slope * slope);

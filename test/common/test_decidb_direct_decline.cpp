@@ -1076,6 +1076,103 @@ TEST_CASE("N1 and every other rule never apply to the same query", "[decidb]") {
 }
 
 //===--------------------------------------------------------------------===//
+// A2
+//===--------------------------------------------------------------------===//
+
+const char *A2_OBJECTIVE = "MINIMIZE SUM(POWER(c - w, 2))";
+
+Shape A2(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = A2_OBJECTIVE,
+         const string &declaration = "per (): c(REAL)") {
+	return {branch, declaration, constraints, objective, std::move(edit)};
+}
+
+duckdb::vector<Shape> A2AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	shapes.push_back(
+	    A2("plain form: constant bounds and the square of the decision minus a column", "c BETWEEN 0 AND 10"));
+	shapes.push_back(A2("one bound, the other the default", "c <= 10"));
+	shapes.push_back(A2("an interval with an open lower end", "c >= -1e30 AND c <= 4"));
+	shapes.push_back(A2("an empty interval", "c >= 5 AND c <= 3"));
+	shapes.push_back(
+	    A2("the column minus the decision", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(w - c, 2))"));
+	shapes.push_back(
+	    A2("a factor on the square", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE 3 * SUM(POWER(c - w, 2)) / 2"));
+	shapes.push_back(
+	    A2("a maximized negative square", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE -SUM(POWER(c - w, 2))"));
+	shapes.push_back(
+	    A2("an objective WHEN", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE when flag: SUM(POWER(c - w, 2))"));
+	shapes.push_back(
+	    A2("a WHEN on the sum", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(when flag: POWER(c - w, 2))"));
+	shapes.push_back(A2("an objective constant", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2)) + 5"));
+	shapes.push_back(A2("a slope other than one", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(2 * c - w, 2))"));
+	return shapes;
+}
+
+duckdb::vector<Shape> A2DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// CheckCondition: the decision.
+	shapes.push_back(A2("two decisions", "c <= 5 AND d <= 5", nullptr, A2_OBJECTIVE, "per (): c(REAL), d(REAL)"));
+	shapes.push_back(A2("a whole-numbered decision", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "per (): c(INT)"));
+	shapes.push_back(A2("a decision of each row", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "c(REAL)"));
+	// ProveInterval.
+	shapes.push_back(A2("a constraint that is not a bound", "c BETWEEN 0 AND 10",
+	                    [](DirectIR &ir) { ir.constraints[0].singleton_row = false; }));
+	shapes.push_back(A2("a bound below the built-in domain", "c <= -1"));
+	shapes.push_back(A2("a bound read from the data", "c <= cap"));
+	// ProveObjective.
+	shapes.push_back(A2("no objective", "c BETWEEN 0 AND 10", nullptr, ""));
+	shapes.push_back(A2("an average objective", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE AVG(POWER(c - w, 2))"));
+	shapes.push_back(A2("a square fixed only within the query", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE SUM(POWER(c - w * txid_current(), 2))"));
+	shapes.push_back(A2("a linear objective", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(w * c)"));
+	shapes.push_back(
+	    A2("a second square", "c BETWEEN 0 AND 10", [](DirectIR &ir) { AddSquare(ir.objective.parts[0].terms); }));
+	shapes.push_back(
+	    A2("a linear term beside the square", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2) + w * c)"));
+	shapes.push_back(A2("a per-row constant beside the square", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE SUM(POWER(c - w, 2) + cap)"));
+	shapes.push_back(
+	    A2("a square weighted by a column", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(w * POWER(c - f, 2))"));
+	shapes.push_back(
+	    A2("a slope read from the data", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(w * c - f, 2))"));
+	shapes.push_back(A2("a square of slope zero", "c BETWEEN 0 AND 10", [](DirectIR &ir) {
+		SquareForm(ir.objective.parts[0].terms[0])[0].coefficient =
+		    make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	}));
+	shapes.push_back(
+	    A2("a square past a DOUBLE", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(1e200 * c - w, 2))"));
+	shapes.push_back(A2("a minimized negated part", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE -SUM(POWER(c - w, 2))"));
+	shapes.push_back(A2("a maximized convex square", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE SUM(POWER(c - w, 2))"));
+	return shapes;
+}
+
+TEST_CASE("A2 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectApplies(MakeA2SingleFacilityLocationRule, con, A2AppliesShapes());
+}
+
+TEST_CASE("A2 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, A2DeclineShapes());
+}
+
+// The rules partition the problems they apply to: no two rules apply to one IR.
+TEST_CASE("A2 and every other rule never apply to the same query", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeS1UniformMatroidRule, con, A2AppliesShapes());
+	ExpectDeclines(MakeA1SeparableBoxRule, con, A2AppliesShapes());
+	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, A2AppliesShapes());
+	ExpectDeclines(MakeN1EuclideanBallRule, con, A2AppliesShapes());
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, S1AppliesShapes());
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, A1AppliesShapes());
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, R1AppliesShapes());
+	ExpectDeclines(MakeA2SingleFacilityLocationRule, con, N1AppliesShapes());
+}
+
+//===--------------------------------------------------------------------===//
 // The rule driver's check that the front end read the whole IR
 //===--------------------------------------------------------------------===//
 
