@@ -1957,16 +1957,18 @@ class TestHighsRejection:
         assert "which needs Gurobi — not available on this machine. Install Gurobi, or" in refused.stderr, refused.stderr
         assert "DECIDB_FORCE_SOLVER selects" not in refused.stderr
 
-    def test_highs_refusal_names_no_clause_for_a_row_a_rewrite_defines(self, decidb_cli_highs):
-        """`sum(x * x)` is held by a helper decision whose defining row is quadratic. The row is no clause's own and
-        the clause that reads the helper is linear, so there is no clause to quote."""
+    def test_highs_refusal_quotes_the_clause_that_reads_a_helper(self, decidb_cli_highs):
+        """`SUM(x * x)` is held by a helper decision whose defining row is quadratic. The row records the clause that
+        reads the helper, and the refusal quotes that clause as written."""
         sql = """
             SELECT x FROM (VALUES (1), (2)) t(id)
             DECIDE x(REAL)
             SUCH THAT x <= 4 AND x <= 0.5 * SUM(x * x)
             MAXIMIZE SUM(x)
         """
-        decidb_cli_highs.assert_error(sql, match=r"DECIDE: a SUCH THAT clause squares or multiplies decision variables")
+        decidb_cli_highs.assert_error(
+            sql, match=r"the SUCH THAT clause `x <= 0\.5 \* SUM\(x \* x\)` squares or multiplies decision variables"
+        )
 
     def test_highs_refusal_happens_before_any_row_is_read(self, decidb_cli_highs):
         """The gate is at plan time, so a refused query never builds a model.

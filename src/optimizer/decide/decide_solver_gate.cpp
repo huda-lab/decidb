@@ -98,27 +98,23 @@ struct RefusalText {
 	string remedy;
 };
 
-//! The first SUCH THAT clause that squares or multiplies decisions, as the user wrote it; empty when none of the
-//! quadratic rows came from one clause. A row a rewrite defines (a reducer's non-linear body held by a helper) belongs
-//! to no clause of its own, and the clause that reads the helper is linear.
+//! The first SUCH THAT clause that squares or multiplies decisions, as the user wrote it. DeriveDecideModelClass reads
+//! the same constraints, so a query refused for quadratic constraints has one. A row a rewrite defines (a reducer's
+//! non-linear body held by a helper) records the clause that reads the helper.
 string FirstQuadraticClause(const LogicalDecide &op) {
 	for (auto &constraint : op.prepared.constraints) {
-		if ((constraint->has_quadratic || constraint->has_bilinear) &&
-		    constraint->source_clause_id < op.constraint_sources.size()) {
+		if (constraint->has_quadratic || constraint->has_bilinear) {
 			return QuoteWrittenClause(op.constraint_sources[constraint->source_clause_id]);
 		}
 	}
-	return string();
+	throw InternalException("DECIDE solver gate found no quadratic clause to name");
 }
 
 RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 	switch (gap) {
-	case SolverModelClassGap::QUADRATIC_CONSTRAINTS: {
-		auto clause = FirstQuadraticClause(op);
-		return {(clause.empty() ? string("a SUCH THAT clause") : "the SUCH THAT clause `" + clause + "`") +
-		            " squares or multiplies decision variables",
+	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
+		return {"the SUCH THAT clause `" + FirstQuadraticClause(op) + "` squares or multiplies decision variables",
 		        "rewrite that constraint so each term holds at most one decision variable"};
-	}
 	case SolverModelClassGap::NONCONVEX_QUADRATIC:
 		if (op.prepared.objective && op.prepared.objective->has_bilinear) {
 			return {"the objective multiplies two decision variables",

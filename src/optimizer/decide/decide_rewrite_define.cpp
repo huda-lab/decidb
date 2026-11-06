@@ -359,7 +359,8 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		auto row = make_uniq<BoundComparisonExpression>(
 		    relation, BoundCastExpression::AddCastToType(context, MakeDecisionRef(decide, helper), body->return_type),
 		    body->Copy());
-		MarkFormulationConstraint(*row, string());
+		// The row belongs to the first clause that reads the helper, so a message about it quotes that clause.
+		MarkFormulationConstraint(*row, first.source_alias);
 		auto alias = row->GetAlias();
 		AddDecideTag(alias, BODY_DEFINITION_TAG);
 		row->SetAlias(std::move(alias));
