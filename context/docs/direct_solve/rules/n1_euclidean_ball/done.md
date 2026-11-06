@@ -161,9 +161,21 @@ run failed. `n1` has one limit over every row; `n1_groups` has one per supplier.
 | `n1` | 200,000 | 0.034 s | 0.033 s | 33 MiB | 0.857 s | 202 MiB | 25x |
 | `n1` | 400,000 | 0.047 s | 0.047 s | 42 MiB | 1.656 s | 363 MiB | 35x |
 | `n1` | 800,000 | 0.080 s | 0.079 s | 60 MiB | 3.483 s | 722 MiB | 44x |
+| `n1` | 1,600,000 | 0.147 s | 0.147 s | 104 MiB | 6.234 s | 1,409 MiB | 43x |
+| `n1` | 3,200,000 | 0.270 s | 0.271 s | 175 MiB | 13.212 s | 2,808 MiB | 49x |
+| `n1` | 6,400,000 | 0.513 s | 0.511 s | 316 MiB | 25.699 s | 4,732 MiB | 50x |
 | `n1_groups` | 100,000 | 0.027 s | 0.032 s | 52 MiB | 0.447 s | 120 MiB | 16x |
 | `n1_groups` | 200,000 | 0.032 s | 0.045 s | 67 MiB | 1.001 s | 210 MiB | 32x |
 | `n1_groups` | 400,000 | 0.038 s | 0.070 s | 100 MiB | 1.767 s | 415 MiB | 47x |
 | `n1_groups` | 800,000 | 0.049 s | 0.122 s | 185 MiB | 3.349 s | 789 MiB | 68x |
+| `n1_groups` | 1,600,000 | 0.078 s | 0.242 s | 349 MiB | 6.712 s | 1,575 MiB | 87x |
+| `n1_groups` | 3,200,000 | 0.127 s | 0.461 s | 541 MiB | 60.338 s | 3,104 MiB | 474x |
+| `n1_groups` | 6,400,000 | 0.207 s | 0.907 s | 909 MiB | 32.837 s | 4,817 MiB | 159x |
 
 Times include process start and database open, about 20 ms, which is most of the direct time at the small sizes.
+
+The sizes from 1,600,000 decisions up (`--sf 2 4 8`) were measured on 2026-11-06 at `f39828c659`, load about 3 to 4,
+with the same agreement check; every size agreed. Direct time grows linearly with the rows and stays under a second at
+6,400,000 decisions, with a fifteenth (`n1`) to a fifth (`n1_groups`) of Gurobi's peak memory. Gurobi's time on
+`n1_groups` at 3,200,000 decisions spread from 17.3 s to 89.6 s over its three runs, with model build steady at 0.26 s,
+so the spread is the solver's; its median is above its time at 6,400,000.
