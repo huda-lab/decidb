@@ -1107,7 +1107,7 @@ duckdb::vector<Shape> A2AppliesShapes() {
 	    A2("a WHEN on the sum", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(when flag: POWER(c - w, 2))"));
 	shapes.push_back(A2("an objective constant", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2)) + 5"));
 	shapes.push_back(A2("a slope other than one", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(2 * c - w, 2))"));
-	// The absolute loss.
+	// The absolute loss and the maximum absolute loss.
 	shapes.push_back(A2("an absolute value", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(ABS(c - w))"));
 	shapes.push_back(
 	    A2("an absolute value written as the L1 norm", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE norm(c - w, 1)"));
@@ -1117,8 +1117,13 @@ duckdb::vector<Shape> A2AppliesShapes() {
 	    A2("a maximized negated absolute value", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE -SUM(ABS(c - w))"));
 	shapes.push_back(
 	    A2("an absolute value under a WHEN", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE when flag: SUM(ABS(c - w))"));
-	shapes.push_back(A2("an absolute value of a keyed decision", "c BETWEEN 0 AND 10", nullptr,
-	                    "MINIMIZE SUM(ABS(c - w))", "per name: c(REAL)"));
+	shapes.push_back(A2("a maximum absolute value", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE MAX(ABS(c - w))"));
+	shapes.push_back(A2("a maximum absolute value written as the infinity norm", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE norm(c - w, 'inf')"));
+	shapes.push_back(A2("a factor and a weight on a maximum absolute value", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE 2 * MAX(3 * ABS(c - w))"));
+	shapes.push_back(A2("a maximum absolute value of a keyed decision", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE MAX(ABS(c - w))", "per name: c(REAL)"));
 	// A weight read from the data has no sign before the rows: the plan reads the sign of the total.
 	shapes.push_back(
 	    A2("a square weighted by a column", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(cap * POWER(c - w, 2))"));
@@ -1172,11 +1177,17 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	}));
 	shapes.push_back(
 	    A2("a square past a DOUBLE", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(1e200 * c - w, 2))"));
-	// ProveObjective: the absolute loss.
+	// ProveObjective: the absolute loss and the maximum absolute loss.
 	shapes.push_back(
 	    A2("an absolute value weighted by a column", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(cap * ABS(c - w))"));
+	shapes.push_back(A2("a maximum of absolute values weighted by a column", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE MAX(cap * ABS(c - w))"));
 	shapes.push_back(A2("a maximized absolute value", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE SUM(ABS(c - w))"));
 	shapes.push_back(A2("a negated absolute value", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(-ABS(c - w))"));
+	shapes.push_back(
+	    A2("a maximized maximum absolute value", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE MAX(ABS(c - w))"));
+	shapes.push_back(
+	    A2("a negated maximum absolute value", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE -MAX(ABS(c - w))"));
 	shapes.push_back(
 	    A2("a second absolute value", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(ABS(c - w) + ABS(c - cap))"));
 	shapes.push_back(
@@ -1207,6 +1218,15 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	shapes.push_back(A2(
 	    "a qualified absolute value", "c BETWEEN 0 AND 10", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; },
 	    "MINIMIZE SUM(ABS(c - w))"));
+	shapes.push_back(A2(
+	    "a nested maximum absolute value", "c BETWEEN 0 AND 10",
+	    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }, "MINIMIZE MAX(ABS(c - w))"));
+	shapes.push_back(A2(
+	    "a qualified maximum absolute value", "c BETWEEN 0 AND 10",
+	    [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }, "MINIMIZE MAX(ABS(c - w))"));
+	shapes.push_back(A2(
+	    "a grouped maximum absolute value", "c BETWEEN 0 AND 10",
+	    [](DirectIR &ir) { ir.objective.parts[0].by.emplace_back(); }, "MINIMIZE MAX(ABS(c - w))"));
 	shapes.push_back(A2("a minimized negated part", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE -SUM(POWER(c - w, 2))"));
 	shapes.push_back(A2("a maximized convex square", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE SUM(POWER(c - w, 2))"));
 	return shapes;

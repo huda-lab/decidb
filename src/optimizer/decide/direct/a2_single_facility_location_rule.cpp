@@ -325,6 +325,28 @@ private:
 	string written;
 };
 
+//! `MAX(K * ABS(s*c + t))`: the minimum is at the midpoint of the least and the greatest center `v = -t/s`, the same
+//! for every `K`. With no center in the class the target is NULL: every point is optimal.
+class MaxAbsoluteLoss final : public CenteredLoss {
+public:
+	using CenteredLoss::CenteredLoss;
+
+	vector<ColumnBinding> Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
+	                                const vector<ColumnBinding> &row) const override {
+		return {window.Add("min", row[0], LogicalType::DOUBLE), window.Add("max", row[0], LogicalType::DOUBLE)};
+	}
+
+	Answer Finish(const PlanTools &tools, const vector<ExprPtr> &classes, const ExprPtr &, const ExprPtr &,
+	              const ExprPtr &) const override {
+		auto &calc = tools.calc;
+		Answer answer;
+		// Each half is taken before the sum: the sum of the ends can pass a DOUBLE.
+		auto two = calc.Num(2.0);
+		answer.target = calc.Add(calc.Div(classes[0], two), calc.Div(classes[1], two));
+		return answer;
+	}
+};
+
 //===--------------------------------------------------------------------===//
 // Condition
 //===--------------------------------------------------------------------===//
@@ -477,8 +499,21 @@ static unique_ptr<Loss> ProveAbsolute(const DirectIR &ir, ClientContext &context
 	return make_uniq<AbsoluteLoss>(std::move(part), weight, ir.objective.written);
 }
 
-//! The objective is one part holding one loss: a square or an `ABS` summed. The part holds nothing beside its loss, and
-//! its rows are the ones the objective's `when` and the part's own keep.
+//! One plain `MAX` of one `ABS`, minimized. The midpoint of the extreme centers is the same for every positive `K`.
+static unique_ptr<Loss> ProveMaxAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir) {
+	DirectQuadraticPart part;
+	double weight, slope;
+	// The reducer is a MAX (ProveObjective): a plain one is not nested, qualified by a keyed scope or grouped by a key.
+	bool plain = !part_ir.inner && part_ir.qualifier == DConstants::INVALID_INDEX && part_ir.by.empty();
+	if (!plain || ir.objective.sense != DecideSense::MINIMIZE ||
+	    !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
+		return nullptr;
+	}
+	return make_uniq<MaxAbsoluteLoss>(std::move(part), weight);
+}
+
+//! The objective is one part holding one loss: a square, an `ABS` summed, or an `ABS` maximized. The part holds
+//! nothing beside its loss, and its rows are the ones the objective's `when` and the part's own keep.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	if (ir.objective.parts.size() != 1) {
 		return false;
@@ -486,6 +521,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	auto &part = ir.objective.parts[0];
 	if (part.terms.size() != 1 || !part.terms[0].IsAbs()) {
 		condition.loss = ProveSquare(ir, context, part);
+	} else if (part.reducer == DirectReducer::MAX) {
+		condition.loss = ProveMaxAbsolute(ir, context, part);
 	} else {
 		condition.loss = ProveAbsolute(ir, context, part);
 	}
