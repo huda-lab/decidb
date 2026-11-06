@@ -46,7 +46,9 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   constant changes no answer: as on the solver path, each is checked on its own, with the part's factor applied, and
   none is added up.
 - **Per row, the optimum** is an endpoint or the clamped turning point. For whole numbers the turning point is replaced
-  by the first integer whose next step no longer improves, so a tie goes to the smaller value (as on the solver).
+  by the first integer whose next step no longer improves, so a tie goes to the smaller value (as on the solver). Both
+  are computed with the halves taken first (`(-0.5 * b) / a`, `ceil((-0.5 * b - 0.5 * a) / a)`), so a square factor up to
+  the top of a DOUBLE keeps its turning point, where `2 * a` would pass one: at 1e308 the answer is the factor-1 query's.
   Maximizing a convex square and minimizing a concave one compare the two endpoints.
 
 A NULL coefficient or bound skips its instance, as on the solver. It raises an error wherever the solver does: NaN or

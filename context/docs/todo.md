@@ -6,14 +6,7 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 and C2; C5 after C4; C6 last.
-
-## C1. N1 bugs and small fixes (one lane)
-
-- [ ] N1-1 The radius is `sqrt(B) / sqrt(q)` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-1
-- [ ] H-36 The square's target cannot overflow on `2 * a` — direct_solve/framework/todo.md § H-36
-- [ ] N1-3 `EXPLAIN` names both forms N1 answers — direct_solve/rules/n1_euclidean_ball/todo.md § N1-3
-- [ ] N1-4 Two smells in `PlanBuilder` — direct_solve/rules/n1_euclidean_ball/todo.md § N1-4
+Each batch finishes completely. Lanes: C2 and C3 side by side; C4 after C2 and C3; C5 after C4; C6 last.
 
 ## C2. Warning plumbing (one lane)
 
@@ -29,11 +22,11 @@ Each batch finishes completely. Lanes: C1, C2 and C3 side by side; C4 after C1 a
 - [ ] BUG-47 A forced HiGHS says Gurobi is not available — issues/bugs.md § BUG-47
 - [ ] BUG-46 A data weight on a square says degree above 2 — issues/bugs.md § BUG-46
 
-## C4. Shared code before N2 (one lane; needs: C1, C2)
+## C4. Shared code before N2 (one lane; needs: C2, C3)
 
 - [ ] H-38 The plan helpers A1, N1 and R1 each copy — direct_solve/framework/todo.md § H-38
 - [ ] H-40 `DirectPart::IsPlainSum()` — direct_solve/framework/todo.md § H-40
-- [ ] H-39 One fragment for the separable square objective — direct_solve/framework/todo.md § H-39 (needs: H-36, H-38)
+- [ ] H-39 One fragment for the separable square objective — direct_solve/framework/todo.md § H-39 (needs: H-38)
 - [ ] H-41 The precision warning comes from the shared arithmetic — direct_solve/framework/todo.md § H-41 (needs: H-39)
 - [ ] N1-2 A data limit through the shared group-bound path — direct_solve/rules/n1_euclidean_ball/todo.md § N1-2
 - [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4

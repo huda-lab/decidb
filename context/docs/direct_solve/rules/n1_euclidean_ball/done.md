@@ -1,7 +1,7 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-06, on top of `ae8ed8352d`: `test/decide/run_direct_matrix.sh`, each of its four suites 6,200 passed;
-C++ `build/release/test/unittest "[decidb]"` (3,795 assertions in 81 cases).
+Verified on 2026-11-06, on top of `0c7ca74627`: `test/decide/run_direct_matrix.sh`, each of its four suites 6,207 passed;
+C++ `build/release/test/unittest "[decidb]"` (3,804 assertions in 81 cases).
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -28,12 +28,13 @@ One row-scoped `REAL` decision, with:
   part: K is then one constant on every row with a linear term.
 
 **The answer.** Each row orients as minimize `K*x^2 + b*x`. Let the row's value be `y = -b / (2*K)` with a square and
-`d = -b` without one, after `GREATEST(., 0)` in `[0, inf)`, and let `h` be the sum of the squared values over the ball.
+`d = -b` without one, after `GREATEST(., 0)` in `[0, inf)`, let `h` be the sum of the squared values over the ball, and
+let `r = SQRT(B) / SQRT(q)` be its radius.
 
 | Row | Answer |
 |---|---|
-| Linear objective | 0 when `h` = 0, otherwise `SQRT(B/q) / SQRT(h) * d` |
-| A square | `y` when `h <= B/q`, otherwise `SQRT(B/q) / SQRT(h) * y` |
+| Linear objective | 0 when `h` = 0, otherwise `(d / SQRT(h)) * r` |
+| A square | `y` when `SQRT(h) <= r`, otherwise `(y / SQRT(h)) * r` |
 | No objective | 0 |
 | Outside every ball, with a square | `y` |
 | Outside every ball, without one | 0 when `d` = 0, otherwise unbounded |
@@ -61,7 +62,7 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 | `=`, `>=`, `BETWEEN`, two limit clauses, `2 * SUM(...)`, `-SUM(...) >= -25`, `AVG(...)` | Not one plain `<=`. |
 | A per-row `POWER(x, 2) <= 9` | Not a sum. |
 | `<= SUM(budget) by (k)`, `<= 0.5 * SUM(l)` | The limit is a value of the group's aggregate, left to the plan. |
-| A constant limit of magnitude 1e20 or more, or one whose `B / q` leaves the DOUBLE range | The solver stops reading such a right side as a number. |
+| A constant limit of magnitude 1e20 or more | The solver stops reading such a right side as a number. |
 | `MAXIMIZE` of a convex square, `MINIMIZE` of a concave one, a row-valued slope in the objective's square | Not one K, or not convex. |
 | A square on some rows with a linear term elsewhere (`SUM(when f: POWER(x, 2)) + SUM(s * x)`, `SUM(POWER(x - t, 2)) + SUM(s * x)` over a nullable `t`) | K differs between rows with a linear term. |
 | `INT`, `BOOL`, a query-wide or entity-scoped decision, two decisions | Not one `REAL` per row. |
@@ -90,6 +91,9 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
   stops with "Gurobi could not solve this model (numerical trouble)".
 - **A target from about 1e30.** Gurobi stops with numerical trouble. N1 answers up to the range of the squares, then
   raises the too-large error above.
+- **A subnormal factor under a huge limit.** A constant `q` below the normal range of a DOUBLE with a limit near the top
+  of one gives a radius past a DOUBLE, and the answer reads `inf` or NaN, as DuckDB's own arithmetic does. Every
+  realistic factor keeps the radius in range.
 - **Ties.** With every direction 0, any point in the ball is optimal: N1 returns 0. So does no objective.
 
 ## How it works
@@ -117,18 +121,22 @@ A stored column the parent reads and the rule does not use comes from a second r
 (`direct_late_materialization.cpp`), so `W2` does not hold it.
 
 This departs from the standard construction in two ways. A limit read from the data adds `W1`, so that an all-NULL group's
-checks can stand below the last breaker, where one window would have to read its own output. The scale is
-`SQRT(B) / SQRT(h)` and not `SQRT(B / h)`, which stays in range where `B / h` does not.
+checks can stand below the last breaker, where one window would have to read its own output. The answer is
+`(value / SQRT(h)) * (SQRT(B) / SQRT(q))` and not `SQRT(B / (q * h)) * value`: the first factor is at most 1 and the
+radius stays in range where `B / q` or `B / h` passes a DOUBLE (a limit of 1e300 over a factor of 1e-10, or a subnormal
+`h`). The unbounded check reads the user's `B`, so a finite `B` over a small `q` is a ball. The radius is taken in `P5`
+only, where every row with `B < 0` has raised. A square's target is `(-0.5 * b) / K`, which stays finite where `2 * K`
+does not.
 
 ## Verified by
 
 | Check | What it covers |
 |---|---|
-| `test_direct_n1_euclidean_ball.py` (149 tests) | The answers. 95 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. Without Gurobi, in a subprocess with an invalid license. |
+| `test_direct_n1_euclidean_ball.py` (154 tests) | The answers. 95 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. Past the scales the solver answers (a limit of 1e300 over a factor of 1e-10, a subnormal `h`, a square factor of 1e308), the oracle solves the same scores at scale 1 and the direct answer, scaled back, must match it. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. Without Gurobi, in a subprocess with an invalid license. |
 | `test_direct_rule_conformance.py` | The checks every rule owes, with N1's fixture: schema and rows, all-rows read for 5 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, a forced backend (Gurobi, since HiGHS has no quadratic limit), `DIAGNOSE`, 7 near misses that must decline under `require` and answer under `auto` as under `off`, and 4 forms that apply |
 | `test_direct_user_facing.py` | Every infeasible, unbounded, NaN and infinity error compared in full with the solver's, on 9 shapes; the too-large text |
 | `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |
-| C++ `[decidb]` | N1's applicability condition: 27 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
+| C++ `[decidb]` | N1's applicability condition: 28 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
 
 Every decision point of the rule was checked by mutation: with its branch removed, at least one test above fails. No
 existing test is pinned to `off`, and none needs to be: logging the rule's `Apply` over the suite, none of the 5,962

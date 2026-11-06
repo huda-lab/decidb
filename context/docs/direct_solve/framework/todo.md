@@ -49,15 +49,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
 
-## H-36 — The square's target cannot overflow on `2 * a`
-
-- **Problem.** A1 (`a1_separable_box_rule.cpp`, `calc.Div(calc.Neg(b), calc.Mul(calc.Num(2.0), a))`) and N1
-  (`ComputeTargets`, the same expression) compute the target `-b / (2*a)`. When `|a|` is above about 9e307, `2*a` is
-  infinite and the target becomes 0 with no error. `ProveSquare` checks only that the oriented factor is finite.
-- **Change.** Compute `(-0.5 * b) / a` in both rules: the same cost, and it cannot overflow where `a` and `b` are finite.
-- **Done when.** One case per rule with a square factor of 1e308 answers the oracle's target under `require`; that case
-  fails on the old expression.
-
 ## H-37 — Undo two unrelated formatting changes
 
 - **Problem.** `src/function/function_list.cpp` is generated (`scripts/generate_functions.py`) and skipped by
