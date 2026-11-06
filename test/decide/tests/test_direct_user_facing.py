@@ -6,6 +6,8 @@ the conformance suite, `test_direct_rule_conformance.py`.
 
 import re
 import math
+from pathlib import Path
+
 import pytest
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -155,12 +157,24 @@ _TAGGED_BOUNDS = {
 }
 
 
+def _pipeline_tags():
+    """Every tag spelling DECIDE stamps on an expression alias (`__source_fragment_`, `__null_guard__`, ...), read from
+    the constants in `enums/decide.hpp` so a tag added there is checked without a change here. A prefix tag matches the
+    spelling before its payload."""
+    header = Path(__file__).resolve().parents[3] / "src/include/duckdb/common/enums/decide.hpp"
+    tags = re.findall(r'const char \*\w*TAG\w* = "(__\w+)"', header.read_text())
+    assert len(tags) > 20, tags
+    return tags
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("shape", sorted(_TAGGED_BOUNDS))
 def test_explain_of_a_direct_plan_shows_no_pipeline_tag(decidb_cli, shape):
     sql = "SELECT id, x FROM (VALUES (1, 2.0, 1.0), (2, 3.0, 2.0)) t(id, c, s) " f"DECIDE {_TAGGED_BOUNDS[shape]}"
     plan = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
-    assert "Direct solve" in plan and "__" not in plan, plan
+    assert "Direct solve" in plan, plan
+    leaked = [tag for tag in _pipeline_tags() if tag in plan]
+    assert not leaked, (leaked, plan)
 
 
 def _wide_decide(shape, width):
