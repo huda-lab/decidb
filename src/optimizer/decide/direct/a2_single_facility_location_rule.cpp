@@ -177,16 +177,23 @@ public:
 		auto &b = classes[1];
 		auto turning = DirectTurningPoint(calc, a, b, false);
 		Answer answer;
-		answer.target = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, calc.Num(0.0)), turning.target,
-		                        EndOfInterval(calc, a, b, lower, upper));
+		auto convex = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, calc.Num(0.0));
+		auto end = EndOfInterval(calc, a, b, lower, upper);
+		answer.target = calc.If(convex, turning.target, end);
 		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, a, written));
 		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, b, written));
-		// An infinite target is a best end that is infinite: the objective improves without limit. It follows the
-		// checks of the sums, which can themselves be infinite.
-		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, answer.target, calc.Num(POSITIVE_INFINITY)),
-		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, answer.target, calc.Num(NEGATIVE_INFINITY))});
-		answer.checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, infinite)),
+		// A concave or linear objective whose best end is infinite improves without limit. It follows the checks of the
+		// sums, which can themselves be infinite.
+		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, end, calc.Num(POSITIVE_INFINITY)),
+		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, end, calc.Num(NEGATIVE_INFINITY))});
+		answer.checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, calc.And(calc.Not(convex), infinite))),
 		                                      DirectUnboundedErrorPredicate(tools.optimizer, tools.errors)));
+		// A turning point past a DOUBLE (a total weight that cancels toward 0 beside a large `b`) clamps to a finite
+		// end of the interval; with that end open the answer is past a DOUBLE.
+		auto clamped = calc.Min({calc.Max({turning.target, lower}), upper});
+		answer.checks.push_back(DirectRaiseTooLarge(
+		    tools.optimizer, calc.If(calc.And(has_class, convex), clamped, calc.Constant(Value(LogicalType::DOUBLE))),
+		    written));
 		answer.checks.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
 		return answer;
 	}
@@ -394,7 +401,8 @@ public:
 	}
 
 	string Summary() const override {
-		return "min SUM((c - v)^2), MAX(lo) <= c <= MIN(hi), one shared c for each class";
+		return "min SUM((c - v)^2), SUM(ABS(c - v)) or MAX(ABS(c - v)), one shared c for each class, MAX(lo) <= c <= "
+		       "MIN(hi)";
 	}
 
 	DirectSubstitute Apply(DirectSourceReader &reader, Optimizer &optimizer,

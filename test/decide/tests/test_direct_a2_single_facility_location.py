@@ -1345,6 +1345,37 @@ def test_a2_weighted_error_cases_fail_on_both_paths(decidb_cli, name):
     assert error_class(str(direct_error.value)) == error_class(str(solver_error.value)) == expected
 
 
+# A total weight that cancels to 1.1e-16 beside a `b` of 4e300: the turning point -b / (2a) passes a DOUBLE. The problem
+# is bounded, so a finite end of the interval is the answer (the solver path refuses it as a constant k*t^2 past a
+# DOUBLE, which A2 never reads, as `rules.md` says), and an open end is an answer past a DOUBLE.
+CANCELLING_WEIGHT = -0.9999999999999998
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_a2_a_turning_point_past_a_double_answers_the_finite_end(decidb_cli, sign):
+    triples = ((sign * 1e300, 1.0), (-sign * 1e300, CANCELLING_WEIGHT))
+    a = sum(w for _, w in triples)
+    b = sum(-2.0 * w * v for v, w in triples)
+    assert a > 0 and abs(b) < 1e301 and abs(b / (2.0 * a)) == INF, "the turning point overflows"
+    expected = 10.0 if b < 0 else 0.0
+    case_ = _weighted_case("interior", "w_sq", _query_wide_rows(triples))
+    assert [row[1] for row in _run(decidb_cli, _sql(case_), "require")[0]] == [expected, expected]
+    with pytest.raises(DeciDBCliError, match="computes a number too large"):
+        _run(decidb_cli, _sql(case_), "off")
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("bounds", ["c >= 0", "c >= -1e30 AND c <= 1e30"])
+def test_a2_a_turning_point_past_a_double_with_an_open_end_is_too_large(decidb_cli, bounds):
+    sql = _problem(
+        _query_wide_rows(((1e300, 1.0), (-1e300, CANCELLING_WEIGHT))), bounds, WEIGHTED_OBJECTIVES["w_sq"].sql
+    )
+    with pytest.raises(DeciDBCliError, match=r"MINIMIZE SUM\(w \* POWER\(c - v, 2\)\) computes a number too large"):
+        _run(decidb_cli, sql, "require")
+
+
 # ---------------------------------------------------------------------------
 # The absolute loss `SUM(ABS(c - v))` and the maximum absolute loss `MAX(ABS(c - v))`
 # ---------------------------------------------------------------------------
@@ -1384,9 +1415,7 @@ ABS_OBJECTIVES = {
     "abs_computed": AbsObjective("MINIMIZE SUM(ABS(c - (v + 1)))", "sum", _abs_terms(1.0, 1.0, lambda v: -(v + 1.0))),
     "abs_offset": AbsObjective("MINIMIZE SUM(ABS(c - v)) + 5", "sum", _abs_terms(1.0, 1.0, _minus)),
     "abs_maximized_negated": AbsObjective("MAXIMIZE -SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus)),
-    "abs_when": AbsObjective(
-        "MINIMIZE when f: SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])
-    ),
+    "abs_when": AbsObjective("MINIMIZE when f: SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])),
     "abs_filter": AbsObjective(
         "MINIMIZE SUM(when f: ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])
     ),
@@ -1400,9 +1429,7 @@ ABS_OBJECTIVES = {
     "max_scaled": AbsObjective("MINIMIZE 2 * MAX(ABS(c - v))", "max", _abs_terms(2.0, 1.0, _minus)),
     "max_slope": AbsObjective("MINIMIZE MAX(ABS(2*c - v))", "max", _abs_terms(1.0, 2.0, _minus)),
     "max_offset": AbsObjective("MINIMIZE MAX(ABS(c - v)) + 5", "max", _abs_terms(1.0, 1.0, _minus)),
-    "max_when": AbsObjective(
-        "MINIMIZE when f: MAX(ABS(c - v))", "max", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])
-    ),
+    "max_when": AbsObjective("MINIMIZE when f: MAX(ABS(c - v))", "max", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])),
     "max_filter": AbsObjective(
         "MINIMIZE MAX(when f: ABS(c - v))", "max", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])
     ),
@@ -1567,7 +1594,9 @@ for _name in ("abs_when", "max_when"):
     )
 # Classes whose medians and midpoints fall inside, above and below the interval.
 for _objective in ("abs", "max"):
-    ABS_KEYED_CASES[f"{_objective}_answers_clamped_per_class"] = _abs_case(KEYED_SPLIT_BOX, _objective, ABS_KEYED_ROWS, ("k",))
+    ABS_KEYED_CASES[f"{_objective}_answers_clamped_per_class"] = _abs_case(
+        KEYED_SPLIT_BOX, _objective, ABS_KEYED_ROWS, ("k",)
+    )
 
 # Bounds read from the data.
 ABS_DATA_CASES = {}
@@ -1607,7 +1636,12 @@ def test_a2_absolute_data_bounds_oracle_solver_and_direct_agree(decidb_cli, orac
 
 ABS_CONTEXT_CASES = [
     (base, wrap)
-    for base in ("abs_odd_in_clamped_up", "max_even_in_interior", "abs_null_key_in_interior", "max_several_keys_in_interior")
+    for base in (
+        "abs_odd_in_clamped_up",
+        "max_even_in_interior",
+        "abs_null_key_in_interior",
+        "max_several_keys_in_interior",
+    )
     for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
 ]
 
@@ -1658,7 +1692,9 @@ def test_a2_a_class_weight_past_a_double_raises_too_large(decidb_cli):
     ],
 )
 def test_a2_centers_that_keep_their_precision_are_silent(decidb_cli, objective):
-    assert _run(decidb_cli, _one_row(objective), "require")[0][0][0] == pytest.approx(0.3333333333333333e-200, abs=1e-215)
+    assert _run(decidb_cli, _one_row(objective), "require")[0][0][0] == pytest.approx(
+        0.3333333333333333e-200, abs=1e-215
+    )
 
 
 @pytest.mark.var_real
