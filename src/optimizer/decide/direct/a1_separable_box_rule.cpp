@@ -84,7 +84,7 @@ bool IsConstantProblem(const Condition &condition) {
 			}
 		}
 		for (auto &square : part.squares) {
-			if (!constant_values(square.inner_linear) || !constant_values(square.inner_constant)) {
+			if (!constant_values(square.inner.linear) || !constant_values(square.inner.constant)) {
 				return false;
 			}
 		}

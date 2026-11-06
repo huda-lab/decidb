@@ -56,7 +56,7 @@ struct Condition final : DirectApplicabilityCondition {
 bool FoldSquareFactor(ClientContext &context, const DirectSquareTerm &square, double &factor) {
 	double weight, slope;
 	if (!DirectFoldConstantSum(context, square.weight, weight) ||
-	    !DirectFoldConstantSum(context, square.inner_linear, slope)) {
+	    !DirectFoldConstantSum(context, square.inner.linear, slope)) {
 		return false;
 	}
 	factor = weight * (slope * slope);
@@ -134,7 +134,7 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 		return false;
 	}
 	DirectSquareTerm square;
-	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner_constant.empty() ||
+	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner.constant.empty() ||
 	    !FoldSquareFactor(context, square, condition.square_factor) || condition.square_factor <= 0.0) {
 		return false;
 	}
@@ -201,7 +201,7 @@ static bool SquareCoversEveryLinearTerm(const vector<DirectQuadraticPart> &parts
 	for (auto &square : parts) {
 		bool on_some_rows = !square.squares.empty() && square.kept;
 		for (auto &term : square.squares) {
-			for (auto &inner : term.inner_linear) {
+			for (auto &inner : term.inner.linear) {
 				on_some_rows = on_some_rows || DecideIsGuarded(*inner.expr);
 			}
 		}

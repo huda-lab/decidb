@@ -543,20 +543,6 @@ protected:
 		               calc.If(verdict.under, calc.If(reach_low, price, NullDouble()), NullDouble()));
 	}
 
-	//! The inclusive running sum of a value in order of the price, highest first, ties in any order, within a
-	//! partition. A window hand-built from the whole-partition aggregate: the same node with a frame that ends at the
-	//! current row, and the sort that gives the frame its meaning.
-	unique_ptr<BoundWindowExpression> RunningSum(const ExprPtr &value, const ExprPtr &price,
-	                                             const vector<ExprPtr> &partitions) const {
-		auto sum = DirectWindowExtremum(optimizer, "sum", calc.Out(value));
-		sum->end = WindowBoundary::CURRENT_ROW_ROWS;
-		for (auto &partition : partitions) {
-			sum->partitions.push_back(calc.Out(partition));
-		}
-		sum->orders.emplace_back(OrderType::DESCENDING, OrderByNullType::NULLS_LAST, calc.Out(price));
-		return sum;
-	}
-
 	//! The price of a group: over U, the highest t of the items whose high end reaches it; none reaches it only when U
 	//! is the top of the range up to rounding, and then every item is at its high end: a price below every t. Under L,
 	//! the lowest t of the items whose low end does not pass it; none does only when L is the bottom of the range up to
@@ -1563,7 +1549,9 @@ private:
 		// Both reach tests read the finite rooms through one running sum. With U the rooms up of the items so far and V
 		// their rooms down, the most the group can spend is S + U - (down - V) = (S - down) + (U + V), so one running
 		// sum of both rooms serves where a sum of each would be two columns through the sort.
-		window->expressions.push_back(RunningSum(DoubleColumn(narrow_rooms), DoubleColumn(narrow_price), partitions));
+		// The running sum of the rooms in order of the price, highest first.
+		window->expressions.push_back(DirectRunningSum(optimizer, calc, DoubleColumn(narrow_rooms),
+		                                               DoubleColumn(narrow_price), OrderType::DESCENDING, partitions));
 		auto run = DoubleColumn(ColumnBinding(window_index, 0));
 		window->children.push_back(std::move(narrow.plan));
 

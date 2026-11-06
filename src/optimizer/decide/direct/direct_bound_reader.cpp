@@ -238,31 +238,42 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 	return true;
 }
 
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
-                          DirectSquareTerm &out) {
-	if (!term.IsSquare() || (term.coefficient && !DirectProveValue(ir, *term.coefficient))) {
+//! The weight of a square or an absolute value: the term's sign and its coefficient (1 when it has none), which a rule
+//! that needs it constant folds (DirectFoldConstantSum).
+static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+                             vector<DirectSignedValue> &weight, DirectNumberNames &names) {
+	if (term.coefficient && !DirectProveValue(ir, *term.coefficient)) {
 		return false;
 	}
-	auto &form = term.factors[0].form;
-	// The weight is the term's sign and coefficient (1 when it has none); a rule that needs it constant folds it.
-	DirectSignedValue weight;
-	weight.sign = term.sign;
-	weight.expr = term.coefficient ? term.coefficient->Copy() : make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
-	out.weight.push_back(std::move(weight));
-	out.weight_names = DirectNamesOf(ir, out.weight, clause);
+	DirectSignedValue value;
+	value.sign = term.sign;
+	value.expr = term.coefficient ? term.coefficient->Copy() : make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
+	weight.push_back(std::move(value));
+	names = DirectNamesOf(ir, weight, clause);
+	return true;
+}
+
+//! The one decision a form's linear terms name; false when they name two, an undeclared one, none, or a term is neither
+//! linear nor constant.
+static bool DirectReadFormDecision(const DirectIR &ir, const vector<DecideSplitTerm> &form, idx_t &decision) {
 	bool has_decision = false;
 	for (auto &inner : form) {
 		if (inner.IsLinear()) {
-			if (inner.var_a >= ir.decisions.size() || (has_decision && out.decision != inner.var_a)) {
+			if (inner.var_a >= ir.decisions.size() || (has_decision && decision != inner.var_a)) {
 				return false;
 			}
-			out.decision = inner.var_a;
+			decision = inner.var_a;
 			has_decision = true;
 		} else if (!inner.IsConstant()) {
 			return false;
 		}
 	}
-	if (!has_decision) {
+	return has_decision;
+}
+
+bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const string &clause,
+                          DirectLinearForm &out) {
+	if (!DirectReadFormDecision(ir, form, out.decision)) {
 		return false;
 	}
 	for (auto &inner : form) {
@@ -272,11 +283,22 @@ bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const
 		DirectSignedValue value;
 		value.sign = inner.sign;
 		value.expr = inner.coefficient->Copy();
-		(inner.IsLinear() ? out.inner_linear : out.inner_constant).push_back(std::move(value));
+		(inner.IsLinear() ? out.linear : out.constant).push_back(std::move(value));
 	}
-	out.inner_linear_names = DirectNamesOf(ir, out.inner_linear, clause);
-	out.inner_constant_names = DirectNamesOf(ir, out.inner_constant, clause);
+	out.linear_names = DirectNamesOf(ir, out.linear, clause);
+	out.constant_names = DirectNamesOf(ir, out.constant, clause);
 	return true;
+}
+
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+                          DirectSquareTerm &out) {
+	return term.IsSquare() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
+	       DirectReadLinearForm(ir, term.factors[0].form, clause, out.inner);
+}
+
+bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectAbsTerm &out) {
+	return term.IsAbs() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
+	       DirectReadLinearForm(ir, term.inner, clause, out.inner);
 }
 
 bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total) {

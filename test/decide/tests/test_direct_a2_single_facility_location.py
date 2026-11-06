@@ -1343,3 +1343,412 @@ def test_a2_weighted_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == error_class(str(solver_error.value)) == expected
+
+
+# ---------------------------------------------------------------------------
+# The absolute loss `SUM(ABS(c - v))`
+# ---------------------------------------------------------------------------
+# The oracle builds each class's problem as a linear program over auxiliary variables, from the terms each case states
+# in Python (never from DeciDB's reading of the SQL). The absolute loss is minimized at a weighted median of the
+# centers `-t/s`: every point between the lower and the upper median is optimal, and the answer is the one nearest 0
+# (the A2 tie rule). The maximum absolute loss is minimized at the midpoint of the extreme centers, clamped into the
+# interval, per class.
+
+
+@dataclass(frozen=True)
+class AbsObjective:
+    sql: str
+    #: "sum" for `SUM(ABS(...))`, "max" for `MAX(ABS(...))`.
+    kind: str
+    #: row -> (weight, slope, t): the row's `weight * |slope*c + t|`; None when the row contributes nothing.
+    terms: object
+
+
+def _abs_terms(weight, slope, t_of, mask=None):
+    def terms(row):
+        if row["v"] is None or (mask is not None and not mask(row)):
+            return None
+        return (weight, slope, t_of(row["v"]))
+
+    return terms
+
+
+ABS_OBJECTIVES = {
+    "abs": AbsObjective("MINIMIZE SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus)),
+    "abs_reversed": AbsObjective("MINIMIZE SUM(ABS(v - c))", "sum", _abs_terms(1.0, -1.0, _plain)),
+    "abs_norm": AbsObjective("MINIMIZE norm(c - v, 1)", "sum", _abs_terms(1.0, 1.0, _minus)),
+    "abs_weight": AbsObjective("MINIMIZE SUM(3 * ABS(c - v))", "sum", _abs_terms(3.0, 1.0, _minus)),
+    "abs_scaled": AbsObjective("MINIMIZE 3 * SUM(ABS(c - v)) / 2", "sum", _abs_terms(1.5, 1.0, _minus)),
+    "abs_slope": AbsObjective("MINIMIZE SUM(ABS(2*c - v))", "sum", _abs_terms(1.0, 2.0, _minus)),
+    "abs_slope_negative": AbsObjective("MINIMIZE SUM(ABS(v - 2*c))", "sum", _abs_terms(1.0, -2.0, _plain)),
+    "abs_computed": AbsObjective("MINIMIZE SUM(ABS(c - (v + 1)))", "sum", _abs_terms(1.0, 1.0, lambda v: -(v + 1.0))),
+    "abs_offset": AbsObjective("MINIMIZE SUM(ABS(c - v)) + 5", "sum", _abs_terms(1.0, 1.0, _minus)),
+    "abs_maximized_negated": AbsObjective("MAXIMIZE -SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus)),
+    "abs_when": AbsObjective(
+        "MINIMIZE when f: SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])
+    ),
+    "abs_filter": AbsObjective(
+        "MINIMIZE SUM(when f: ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus, lambda r: r["f"])
+    ),
+    "abs_when_none": AbsObjective(
+        "MINIMIZE when v > 100: SUM(ABS(c - v))", "sum", _abs_terms(1.0, 1.0, _minus, lambda r: False)
+    ),
+}
+
+
+def _abs_terms_of(case_, members):
+    return [t for t in (case_.objective.terms(row) for row in members) if t is not None]
+
+
+def _abs_values(case_, members, center):
+    return [w * abs(s * center + t) for w, s, t in _abs_terms_of(case_, members)]
+
+
+def _solve_abs_with_oracle(oracle_solver, case_):
+    """Each class is a variable in its interval; a term is an auxiliary variable above `±(s*c + t)`, summed, or one
+    shared auxiliary variable above every term for the maximum."""
+    oracle_solver.create_model("direct_a2_absolute")
+    objective, shared = {}, None
+    if case_.objective.kind == "max":
+        oracle_solver.add_variable("z", VarType.CONTINUOUS, 0.0, None)
+        objective["z"] = 1.0
+        shared = "z"
+    for index, rows in enumerate(_classes(case_).values()):
+        name = f"c{index}"
+        lower, upper = _interval(case_, rows)
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, max(lower, -BIG), min(upper, BIG))
+        for term_index, (weight, slope, t) in enumerate(_abs_terms_of(case_, rows)):
+            if shared is None:
+                aux = f"u{index}_{term_index}"
+                oracle_solver.add_variable(aux, VarType.CONTINUOUS, 0.0, None)
+                objective[aux] = weight
+                scale = 1.0
+            else:
+                aux, scale = shared, weight
+            oracle_solver.add_constraint({aux: 1.0, name: -scale * slope}, ">=", scale * t)
+            oracle_solver.add_constraint({aux: 1.0, name: scale * slope}, ">=", -scale * t)
+    if not objective:
+        # No row contributes: the objective is the constant 0.
+        oracle_solver.add_variable("unused", VarType.CONTINUOUS, 0.0, 0.0)
+        objective["unused"] = 0.0
+    oracle_solver.set_objective(objective, ObjSense.MINIMIZE)
+    return oracle_solver.solve()
+
+
+def _abs_objective_at(case_, centers):
+    """The objective at one center per class (key -> center): the sum of the terms, or their maximum."""
+    values = []
+    for key, members in _classes(case_).items():
+        values.extend(_abs_values(case_, members, centers[key]))
+    if case_.objective.kind == "max":
+        return max(values, default=0.0)
+    return sum(values)
+
+
+def _check_abs_assignment(case_, rows, columns, oracle, mode):
+    assert columns == ["id", "c"], mode
+    assert [row[0] for row in rows] == [row["id"] for row in case_.rows], mode
+    classes = _classes(case_)
+    in_class = {id(row): key for key, members in classes.items() for row in members}
+    centers = {}
+    for source_row, row in zip(case_.rows, rows):
+        key = in_class.get(id(source_row))
+        if key is None:
+            assert row[1] is None, (mode, "a row with no class shows NULL", row)
+            continue
+        assert isinstance(row[1], float), (mode, rows)
+        assert centers.setdefault(key, row[1]) == row[1], (mode, "every row of a class carries its one center", key)
+    for key, members in classes.items():
+        lower, upper = _interval(case_, members)
+        assert lower - 1e-9 <= centers[key] <= upper + 1e-9, (mode, centers[key], lower, upper)
+    total = _abs_objective_at(case_, centers)
+    expected = oracle.objective_value
+    assert abs(total - expected) <= 1e-5 * max(1.0, abs(expected)), (mode, total, expected)
+
+
+def _agree_abs(decidb_cli, oracle_solver, case_, wrap="plain"):
+    sql = _sql(case_, wrap)
+    oracle = _solve_abs_with_oracle(oracle_solver, case_)
+
+    def check_assignment(rows, columns, mode):
+        _check_abs_assignment(case_, rows, columns, oracle, mode)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, ("off", "require"))
+
+
+def _abs_case(box, objective, rows=ROWS, keys=(), relation=False):
+    return Case(box if isinstance(box, Box) else BOXES[box], ABS_OBJECTIVES[objective], rows, keys, relation)
+
+
+# An odd count (the median is a value), an even count (every point between the middle two is optimal), ties, a flat
+# optimum that holds 0, one row, NULL values, no value at all, and a NaN and an infinity on rows a `when` drops.
+EVEN_ROWS = (_row(1, 2.0, True), _row(2, 4.0, False), _row(3, 9.0, True), _row(4, -1.5, False))
+TIED_ROWS = (_row(1, 3.0, True), _row(2, 3.0, False), _row(3, 3.0, True), _row(4, 7.0, True), _row(5, 7.0, False))
+EVEN_BELOW_ZERO_ROWS = (_row(1, -9.0, True), _row(2, -4.0, False), _row(3, -2.0, True), _row(4, 1.5, False))
+FLAT_AROUND_ZERO_ROWS = (_row(1, -3.0, True), _row(2, 5.0, False))
+FLAT_BELOW_ZERO_ROWS = (_row(1, -6.0, True), _row(2, -2.0, False))
+ABS_ROW_SETS = {
+    "odd": ROWS,
+    "even": EVEN_ROWS,
+    "even_below_zero": EVEN_BELOW_ZERO_ROWS,
+    "ties": TIED_ROWS,
+    "flat_around_zero": FLAT_AROUND_ZERO_ROWS,
+    "flat_below_zero": FLAT_BELOW_ZERO_ROWS,
+    "one_row": ONE_ROW,
+    "null_values": NULL_ROWS,
+    "every_value_null": ALL_NULL_ROWS,
+    "duplicate_rows": DUPLICATE_ROWS,
+}
+ABS_BOXES = ("interior", "clamped_up", "clamped_down", "negative_interval", "negative_lower_replaces_default", "point")
+
+ABS_CASES = {}
+for _objective in ("abs",):
+    for _set, _rows in ABS_ROW_SETS.items():
+        for _box in ABS_BOXES:
+            ABS_CASES[f"{_objective}_{_set}_in_{_box}"] = _abs_case(_box, _objective, _rows)
+    # Every interval, the median of ROWS clamped into it.
+    for _box in BOXES:
+        ABS_CASES[f"{_objective}_in_every_box_{_box}"] = _abs_case(_box, _objective)
+# Every spelling of the objective. The `when`s need the rows that `f` keeps.
+for _name in ABS_OBJECTIVES:
+    if not _name.endswith("when_none"):
+        ABS_CASES[f"spelling_{_name}"] = _abs_case("interior", _name, ROWS)
+        ABS_CASES[f"spelling_{_name}_on_an_even_count"] = _abs_case("interior", _name, EVEN_ROWS)
+        ABS_CASES[f"spelling_{_name}_clamped"] = _abs_case("clamped_up", _name, ROWS)
+for _name in ("abs_when_none",):
+    for _box in ABS_BOXES:
+        ABS_CASES[f"{_name}_in_{_box}"] = _abs_case(_box, _name)
+# A NaN and an infinity on rows a `when` drops are never read.
+for _name in ("abs_when",):
+    ABS_CASES[f"{_name}_bad_values_on_dropped_rows"] = _abs_case("interior", _name, DROPPED_BAD_ROWS)
+# The solver path reads them when the `when` is the reducer's own (it raises "the bound -v is NaN" on the dropped row),
+# so these are answered by direct solve alone and checked against the rulings below.
+ABS_DIRECT_ONLY_CASES = {
+    f"{_name}_bad_values_on_dropped_rows": _abs_case("interior", _name, DROPPED_BAD_ROWS) for _name in ("abs_filter",)
+}
+
+# A decision per class of a key.
+ABS_KEYED_ROWS = KEYED_ROWS + (_krow(7, "c", 2, 8.0, True), _krow(8, "c", 1, -4.0, False))
+ABS_KEYED_CASES = {}
+for _objective in ("abs",):
+    for _box in ABS_BOXES:
+        ABS_KEYED_CASES[f"{_objective}_several_keys_in_{_box}"] = _abs_case(_box, _objective, ABS_KEYED_ROWS, ("k",))
+        ABS_KEYED_CASES[f"{_objective}_null_key_in_{_box}"] = _abs_case(_box, _objective, KEYED_NULL_ROWS, ("k",))
+    ABS_KEYED_CASES[f"{_objective}_multi_column_key"] = _abs_case("interior", _objective, ABS_KEYED_ROWS, ("k", "j"))
+    ABS_KEYED_CASES[f"{_objective}_one_class"] = _abs_case("interior", _objective, ONE_CLASS_ROWS, ("k",))
+    ABS_KEYED_CASES[f"{_objective}_relation_key"] = _abs_case("interior", _objective, RELATION_ROWS, (), True)
+    ABS_KEYED_CASES[f"{_objective}_class_with_every_value_null"] = _abs_case(
+        "interior", _objective, KEYED_ALL_NULL_ROWS, ("k",)
+    )
+    ABS_KEYED_CASES[f"{_objective}_bad_values_on_dropped_rows"] = _abs_case(
+        "interior", f"{_objective}_when", KEYED_DROPPED_BAD_ROWS, ("k",)
+    )
+for _name in ("abs_when",):
+    ABS_KEYED_CASES[f"{_name}_class_with_no_kept_row"] = _abs_case("interior", _name, KEYED_NO_KEPT_ROWS, ("k",))
+    ABS_KEYED_CASES[f"{_name}_class_with_no_kept_row_in_a_negative_interval"] = _abs_case(
+        "negative_interval", _name, KEYED_NO_KEPT_ROWS, ("k",)
+    )
+# Classes whose medians fall inside, above and below the interval.
+for _objective in ("abs",):
+    ABS_KEYED_CASES[f"{_objective}_answers_clamped_per_class"] = _abs_case(
+        KEYED_SPLIT_BOX, _objective, ABS_KEYED_ROWS, ("k",)
+    )
+
+# Bounds read from the data.
+ABS_DATA_CASES = {}
+for _objective in ("abs",):
+    for _name in ("upper", "both", "both_under_when", "lifted_floor", "data_coefficient", "constant_and_data"):
+        ABS_DATA_CASES[f"{_objective}_keyed_{_name}"] = Case(
+            DATA_BOXES[_name], ABS_OBJECTIVES[_objective], TIGHT_D_ROWS, ("k",)
+        )
+        ABS_DATA_CASES[f"{_objective}_query_wide_{_name}"] = Case(
+            DATA_BOXES[_name], ABS_OBJECTIVES[_objective], TIGHT_ROWS
+        )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(ABS_CASES))
+def test_a2_absolute_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree_abs(decidb_cli, oracle_solver, ABS_CASES[name])
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(ABS_KEYED_CASES))
+def test_a2_absolute_keyed_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree_abs(decidb_cli, oracle_solver, ABS_KEYED_CASES[name])
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(ABS_DATA_CASES))
+def test_a2_absolute_data_bounds_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree_abs(decidb_cli, oracle_solver, ABS_DATA_CASES[name])
+
+
+ABS_CONTEXT_CASES = [
+    (base, wrap)
+    for base in ("abs_odd_in_clamped_up", "abs_even_in_interior", "abs_null_key_in_interior", "abs_several_keys_in_interior")
+    for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("base,wrap", ABS_CONTEXT_CASES)
+def test_a2_absolute_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
+    _agree_abs(decidb_cli, oracle_solver, {**ABS_CASES, **ABS_KEYED_CASES}[base], wrap=wrap)
+
+
+def _ruled_absolute(case_, members, lower, upper):
+    """The point the rulings name for the absolute loss, derived by enumeration: the objective is piecewise linear, so
+    its optimal points are a segment whose ends are among the centers and the ends of the interval. Among the
+    candidates that reach the least value, the one nearest 0 (the lower of two as near)."""
+    candidates = {min(max(0.0, lower), upper), lower, upper}
+    for weight, slope, t in _abs_terms_of(case_, members):
+        candidates.add(min(max(-t / slope, lower), upper))
+    candidates = [c for c in candidates if lower <= c <= upper]
+    value = {c: sum(_abs_values(case_, members, c)) for c in candidates}
+    best = min(value.values())
+    return min((c for c in candidates if value[c] <= best + 1e-9 * max(1.0, abs(best))), key=lambda c: (abs(c), c))
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a2_a_class_weight_past_a_double_raises_too_large(decidb_cli):
+    # Each term weighs 1e308, which is a number; the class's total weight does not fit a DOUBLE.
+    sql = _problem(ROWS[:3], obj="MINIMIZE SUM(1e308 * ABS(c - v))")
+    with pytest.raises(DeciDBCliError, match="MINIMIZE SUM\\(1e308 \\* ABS\\(c - v\\)\\) computes a number too large"):
+        _run(decidb_cli, sql, "require")
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective",
+    [
+        # t = -1e-200 * v is in the normal range: the division holds its precision.
+        pytest.param("MINIMIZE SUM(ABS(c - 1e-200 * v))", id="sum-in-range"),
+    ],
+)
+def test_a2_centers_that_keep_their_precision_are_silent(decidb_cli, objective):
+    assert _run(decidb_cli, _one_row(objective), "require")[0][0][0] == pytest.approx(0.3333333333333333e-200, abs=1e-215)
+
+
+@pytest.mark.var_real
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective",
+    [
+        # The constant of the form, -3.3e-311, is nonzero and below the normal range, and so is the center it makes.
+        pytest.param("MINIMIZE SUM(ABS(c - 1e-310 * v))", id="sum-constant-below-range"),
+        # The weight 1e300 * 1e-310 of the center is a normal number, but its slope 1e-310 is not.
+        pytest.param("MINIMIZE SUM(1e300 * ABS(1e-310 * c - v))", id="sum-slope-below-range"),
+    ],
+)
+def test_a2_warns_when_a_center_leaves_the_normal_range(decidb_cli, objective):
+    _run(decidb_cli, _one_row(objective), "require", expect_number_range=True)
+
+
+@pytest.mark.correctness
+def test_a2_centers_near_the_double_limit_have_no_overflow(decidb_cli):
+    # The class's weights add up to 3 whatever the centers are; the solver path builds a model from these numbers and
+    # warns that its answer may be inaccurate, so only direct solve is compared, with the median derived here.
+    values = (1.7e308, 1.6e308, 1.65e308)
+    rows = ", ".join(f"({i}, {v!r})" for i, v in enumerate(values, start=1))
+    sql = (
+        f"SELECT id, c FROM (FROM (VALUES {rows}) t(id, v) DECIDE per (): c(REAL) "
+        "SUCH THAT c >= -1e30 AND c <= 1e30 MINIMIZE SUM(ABS(c - v))) q ORDER BY id"
+    )
+    answers = [row[1] for row in _run(decidb_cli, sql, "require")[0]]
+    assert answers == [pytest.approx(sorted(values)[1], rel=1e-12)] * 3
+
+
+# name -> (sql, error class of direct solve, error class of the solver). Both raise. For a NaN or infinite value the
+# wording differs: the solver turns `ABS(c - v)` into bounds and words the NaN as "the bound -v is NaN on some rows" and
+# an infinite one as infeasible, where direct solve words both as the value ("v is NaN or infinite on some rows").
+# Reported to the owner as a decision (the solver names the negated constant term, which the IR does not render).
+ABS_ERROR_CASES = {
+    "nan_value": (_problem(_with(1, v=math.nan), obj="MINIMIZE SUM(ABS(c - v))"), "invalid_value", "null_bound"),
+    "infinite_value": (_problem(_with(1, v=INF), obj="MINIMIZE SUM(ABS(c - v))"), "invalid_value", "infeasible"),
+    "nan_value_in_a_computed_value": (
+        _problem(_with(1, v=math.nan), obj="MINIMIZE SUM(ABS(c - 2*v))"),
+        "invalid_value",
+        "null_bound",
+    ),
+    "nan_value_of_a_keyed_row": (
+        _problem(KEYED_ROWS[:1] + (_krow(9, "a", 1, math.nan, True),), obj="MINIMIZE SUM(ABS(c - v))", key="k"),
+        "invalid_value",
+        "null_bound",
+    ),
+    "empty_interval": (
+        _problem(ROWS, "c >= 5 AND c <= 3", "MINIMIZE SUM(ABS(c - v))"),
+        "infeasible",
+        "infeasible",
+    ),
+    "nan_data_bound": (
+        _problem(_with_bound(1, cap=math.nan), "c <= cap", "MINIMIZE SUM(ABS(c - v))"),
+        "null_bound",
+        "null_bound",
+    ),
+}
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(ABS_ERROR_CASES))
+def test_a2_absolute_error_cases_fail_on_both_paths(decidb_cli, name):
+    sql, direct_class, solver_class = ABS_ERROR_CASES[name]
+    with pytest.raises(DeciDBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DeciDBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert error_class(str(direct_error.value)) == direct_class
+    assert error_class(str(solver_error.value)) == solver_class
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a2_a_bad_value_on_the_last_row_raises_under_an_absolute_loss(decidb_cli):
+    inner = (
+        "SELECT i, c FROM (SELECT i, CASE WHEN i = 4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS v FROM range(5000) r(i)) "
+        "DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(ABS(c - v))"
+    )
+    for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
+        with pytest.raises(DeciDBCliError, match=r"v is NaN or infinite on some rows"):
+            _run(decidb_cli, outer, "require")
+
+
+ABS_ALL_CASES = {**ABS_CASES, **ABS_KEYED_CASES, **ABS_DATA_CASES, **ABS_DIRECT_ONLY_CASES}
+#: Every case whose classes all have a non-empty interval (an empty one raises, which the cases above compare).
+ABS_PINNED = sorted(
+    name
+    for name, case_ in ABS_ALL_CASES.items()
+    if all(_interval(case_, members)[0] <= _interval(case_, members)[1] for members in _classes(case_).values())
+)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", ABS_PINNED)
+def test_a2_an_absolute_class_answers_the_ruled_point(decidb_cli, name):
+    # The oracle accepts any optimal point; the rulings pick one, and this derives it in Python for every class.
+    case_ = ABS_ALL_CASES[name]
+    rows, _ = _run(decidb_cli, _sql(case_), "require")
+    classes = _classes(case_)
+    in_class = {id(row): key for key, members in classes.items() for row in members}
+    ruled = _ruled_absolute
+    answers = {}
+    for source_row, row in zip(case_.rows, rows):
+        key = in_class.get(id(source_row))
+        if key is None:
+            assert row[1] is None
+            continue
+        if key not in answers:
+            lower, upper = _interval(case_, classes[key])
+            answers[key] = ruled(case_, classes[key], lower, upper)
+        assert row[1] == pytest.approx(answers[key], abs=1e-9, rel=1e-9), (key, row, answers[key])
+        assert row[1] != 0.0 or math.copysign(1.0, row[1]) == 1.0, "-0.0 must print as 0.0"

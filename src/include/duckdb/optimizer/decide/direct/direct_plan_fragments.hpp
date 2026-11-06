@@ -171,6 +171,13 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
                                                        unique_ptr<Expression> value);
 
+//! The inclusive running sum of `value` within each partition, in order of `order` (`direction`, NULLs last), ties in
+//! any order: DirectWindowExtremum's `sum` with a frame that ends at the current row, and the sort that gives the frame
+//! its meaning. Rows of one partition and one order share a sort with any other window of the same partition and order.
+unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                                   const ExprPtr &value, const ExprPtr &order, OrderType direction,
+                                                   const vector<ExprPtr> &partitions);
+
 //===--------------------------------------------------------------------===//
 // Group bounds (DecideGroupBound): a bound computed from the aggregates of its group
 //===--------------------------------------------------------------------===//

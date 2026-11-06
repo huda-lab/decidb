@@ -105,16 +105,17 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	}
 	for (auto &square : part.squares) {
 		DirectQuadraticColumns::Square laid;
-		laid.decision = square.decision;
+		auto &inner = square.inner;
+		laid.decision = inner.decision;
 		laid.k = on_kept(calc.Wrap(DirectSumOf(optimizer, square.weight, over)));
 		check_number(laid.k, square.weight_names, square.weight);
-		laid.w = on_kept(calc.Wrap(DirectSumOf(optimizer, square.inner_linear, over)));
-		check_number(laid.w, square.inner_linear_names, square.inner_linear);
-		if (square.inner_constant.empty()) {
+		laid.w = on_kept(calc.Wrap(DirectSumOf(optimizer, inner.linear, over)));
+		check_number(laid.w, inner.linear_names, inner.linear);
+		if (inner.constant.empty()) {
 			laid.t = p1.Add(calc.Out(calc.Num(0.0)));
 		} else {
-			laid.t = on_kept(calc.Wrap(DirectSumOf(optimizer, square.inner_constant, over)));
-			check_number(laid.t, square.inner_constant_names, square.inner_constant);
+			laid.t = on_kept(calc.Wrap(DirectSumOf(optimizer, inner.constant, over)));
+			check_number(laid.t, inner.constant_names, inner.constant);
 		}
 		columns.squares.push_back(laid);
 	}
@@ -342,6 +343,18 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 	result->start = WindowBoundary::UNBOUNDED_PRECEDING;
 	result->end = WindowBoundary::UNBOUNDED_FOLLOWING;
 	return result;
+}
+
+unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                                   const ExprPtr &value, const ExprPtr &order, OrderType direction,
+                                                   const vector<ExprPtr> &partitions) {
+	auto sum = DirectWindowExtremum(optimizer, "sum", calc.Out(value));
+	sum->end = WindowBoundary::CURRENT_ROW_ROWS;
+	for (auto &partition : partitions) {
+		sum->partitions.push_back(calc.Out(partition));
+	}
+	sum->orders.emplace_back(direction, OrderByNullType::NULLS_LAST, calc.Out(order));
+	return sum;
 }
 
 bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,

@@ -301,7 +301,8 @@ private:
 		if (term.coefficient) {
 			term.coefficient = guard(*term.coefficient);
 		} else if (term.factors.empty()) {
-			term.coefficient = calc.Out(calc.If(valid, calc.Num(1), calc.Num(0)));
+			// A term with no coefficient is 1 where the row is read, guarded like one that has a coefficient.
+			term.coefficient = guard(*calc.Num(1));
 		}
 		for (auto &inner : term.inner) {
 			if (inner.coefficient) {

@@ -405,11 +405,14 @@ A2 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_a2_life ADD COLUMN extra INTEGER;",
     # Each is the plain form with one condition changed: a whole-numbered decision (the mean is not a whole number), a
-    # linear term beside the square, a loss that is not a square, and a weight fixed only within the query.
+    # linear term beside the square, a weight fixed only within the query, and the losses A2 does not take.
     near_misses=(
         ("per (): c(INT)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(c - p, 2) + w * c)"),
-        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(ABS(c - p))"),
+        # An absolute value weighted by the data (the solver weighs it by the sign of each row's weight), and a maximized
+        # one.
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(w * ABS(c - p))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE SUM(ABS(c - p))"),
         # A weight fixed only within the query is no value of the source row.
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(txid_current() * POWER(c - p, 2))"),
         # An objective `when` that is not a source predicate: on the objective and on its sum.
@@ -424,6 +427,10 @@ A2 = RuleFixture(
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(POWER(2 * c - p, 2))"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE 3 * SUM(POWER(c - p, 2)) / 2"),
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE -SUM(POWER(c - p, 2))"),
+        # The absolute loss in two spellings, keyed or not.
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(ABS(c - p))"),
+        ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE norm(c - p, 1)"),
+        ("per cap: c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE 3 * SUM(2 * ABS(p - 2 * c))"),
         # A weight read from the data, of either sign once the sense is applied: the plan reads the sign of the total.
         ("per (): c(REAL)", "c BETWEEN 0 AND 10", "MINIMIZE SUM(w * POWER(c - p, 2))"),
         ("per cap: c(REAL)", "c BETWEEN 0 AND 10", "MAXIMIZE SUM(w * POWER(c - p, 2))"),
