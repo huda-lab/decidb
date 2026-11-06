@@ -48,3 +48,121 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Recommendation.** 1.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
+
+## H-36 — The square's target cannot overflow on `2 * a`
+
+- **Problem.** A1 (`a1_separable_box_rule.cpp`, `calc.Div(calc.Neg(b), calc.Mul(calc.Num(2.0), a))`) and N1
+  (`ComputeTargets`, the same expression) compute the target `-b / (2*a)`. When `|a|` is above about 9e307, `2*a` is
+  infinite and the target becomes 0 with no error. `ProveSquare` checks only that the oriented factor is finite.
+- **Change.** Compute `(-0.5 * b) / a` in both rules: the same cost, and it cannot overflow where `a` and `b` are finite.
+- **Done when.** One case per rule with a square factor of 1e308 answers the oracle's target under `require`; that case
+  fails on the old expression.
+
+## H-37 — Undo two unrelated formatting changes
+
+- **Problem.** `src/function/function_list.cpp` is generated (`scripts/generate_functions.py`) and skipped by
+  `scripts/format.py`, yet about 260 of its lines are reflowed where only the `DecideWarnNumbersFun` entry should differ.
+  `physical_decide.cpp` holds tab-indented lines inside a block indented with spaces, around `NumberRangeWarning
+  number_range_warning;` and `number_range_warning.Check(elastic_model);`.
+- **Change.** Regenerate `function_list.cpp` with the script; restore the spaces in `physical_decide.cpp`.
+- **Done when.** `git diff master -- src/function/function_list.cpp` shows only the function's entry;
+  `git diff --check` is clean; the build passes. No test run is needed beyond the build.
+
+## H-38 — The plan helpers A1, N1 and R1 each copy
+
+- **Problem.** `architecture/rules.md` § Keep the layer lean moves a helper to shared code once a second rule needs it.
+  A1 and N1 carry identical `Stage` structs (R1 has `ProjectionStage`), and each of A1, N1 and R1 has its own `SumOf`,
+  number check (`ValidNumber` in A1, `CheckNumber` in N1), `TooLarge`, and `And`/`Not` built from `calc.If`.
+- **Change.** One projection stage in `direct_plan_fragments`; `DirectSumOf`; one number check that returns a nullable
+  check (A1's shape) and `DirectRaiseTooLarge` in `direct_runtime_checks`; `ExpressionBuilder::And` and `::Not`. Each
+  rule calls the shared form and drops its copy.
+- **Done when.** No behavior change; `run_tests.sh -k "a1 or n1 or r1"` and C++ `[decidb]` pass; no rule file defines
+  a helper the shared files hold.
+
+## H-39 — One fragment for the separable square objective
+
+- **Problem.** A1 and N1 each lay out a square's `w` and `t` columns in P1 and fold `k*w*w` and `2*k*w*t` into the row's
+  `a` and `b` in P2, with the same mask-and-scale lambda (A1's per-decision fold, N1's `ComputeCoefficients`). N1's `Part`
+  and A1's `Part`/`Term` hold the same reading in two layouts.
+- **Change.** A shared reading of a part with linear terms, constants and squares (`DirectReadQuadraticPart`), a P1
+  layout and a P2 fold in `direct_plan_fragments`. A1 calls the fold per decision, N1 for its one decision.
+- **Needs.** H-36 and H-38.
+- **Done when.** No behavior change; `run_tests.sh -k "a1 or n1"` and C++ `[decidb]` pass; neither rule file expands a
+  square itself.
+
+## H-40 — `DirectPart::IsPlainSum()`
+
+- **Problem.** A1, N1, R1 and S1 each test a plain `SUM` objective part with the same four-way condition
+  (`reducer == SUM`, no `inner`, no qualifier, no `by`). `DirectIRConstraint` has `PlainSum()`; `DirectPart` has none. A1
+  alone reads the objective's `when` and the part filter itself instead of through `DirectObjectivePartKept`.
+- **Change.** Add `DirectPart::IsPlainSum()` and call it in the four rules; A1 reads the kept rows through
+  `DirectObjectivePartKept`.
+- **Done when.** No behavior change; `run_tests.sh -k "a1 or n1 or r1 or s1"` passes.
+
+## H-41 — The precision warning comes from the shared arithmetic
+
+- **Problem.** Each rule picks its own warning sites: A1 tests `a` and `b` of `-b / (2*a)`, R1 tests `v / w`, N1 tests
+  only `h`, so a tiny square factor warns under A1 and is silent under N1 on the same expression. N1's `LosesPrecision`
+  restates `Answer`'s branch conditions. N1's warning reads only the rows a parent reads; A1's and R1's read every row.
+  `architecture/rules.md` states neither the obligation nor which rows a warning reads.
+- **Change.** The shared square fragment (H-39) returns its target with its precision flag, and N1's scale returns its
+  answer with its flag, so a rule that reuses a closed form warns where it does. N1 computes "the row reads the scale"
+  once for both the answer and the warning. `architecture/rules.md` § What every rule must match states the obligation
+  and the row set. No new window or pass (owner's precision rule).
+- **Needs.** H-39.
+- **Done when.** A tiny square factor warns on A1 and N1 alike; the existing warning tests of A1, N1 and R1 pass.
+
+## H-42 — One warning state per query for both paths
+
+- **Problem.** The solver path says the warning once per `FinalizeSolveResult` (one `NumberRangeWarning` per DECIDE
+  operator, `physical_decide.cpp`), though `ilp_solver.hpp` says "one instance lives for one query". The direct path
+  says it once per query (`DecideNumberWarningState`, `decide_warn_numbers.cpp`). A query with two DECIDE nodes prints
+  the line twice. `decide_numeric_policy.hpp` says DeciDB sets its tolerances "on every backend", but
+  `DECIDE_OPTIMALITY_TOLERANCE` is set on Gurobi only; HiGHS keeps its tighter default.
+- **Change.** Declare `DecideNumberWarningState` with a `Say()` in a header; `SolveModel` calls it through
+  `SolveModelOptions` when the model holds such a number; delete `NumberRangeWarning`. Reword the tolerance comment to
+  say which backend reads the optimality tolerance.
+- **Done when.** A query with a solver DECIDE and a direct DECIDE that both warn prints one line; the warning tests pass
+  on `DECIDB_FORCE_SOLVER=highs make decide-test` and `make decide-test`.
+
+## H-43 — `decide_warn_numbers` is internal
+
+- **Problem.** `decide_warn_numbers()` is listed by `duckdb_functions()` and a user can call it
+  (`functions.json`, `generic_functions.hpp`). DuckDB names its plan-internal functions with `__internal_`
+  (`compressed_materialization/functions.json`).
+- **Change.** Rename it `__internal_decide_warn_numbers`; `DirectWarnIf` calls the new name.
+- **Done when.** The warning tests pass; `SELECT * FROM duckdb_functions() WHERE function_name LIKE 'decide_warn%'` is
+  empty.
+
+## H-44 — The warning's text
+
+- **Decision needed.** The words of `DECIDE_NUMBER_RANGE_WARNING`.
+- **Problem.** The line reads `very large or very small number detected - numerical precision may make the solution
+  unstable`. It has no `DECIDE:` prefix, unlike every other DECIDE message, so a script's stderr does not say where it
+  came from, and it gives no action. The too-large error ends "Scale its data down."
+- **Options.** 1. `DECIDE: a very large or very small number may make this answer inaccurate. Scale its data toward 1.`
+  (one string, both paths, every test that reads the line). 2. Keep the text.
+- **Recommendation.** 1.
+- **Change.** Replace the string in `decide_numeric_policy.hpp` and the tests' expected line (`decidb_cli.py`).
+- **Done when.** `make decide-test` passes with the new line on both paths.
+
+## H-45 — Framework docs describe the shared code as it is
+
+- **Problem.** `done.md` says "A1 is its only user until R1 is built on it" and "A1 reads constants and squares itself";
+  both are untrue. `architecture/rules.md` step 4 does not list `DirectReadConstantTerm`, `DirectReadSquareTerm`,
+  `DirectObjectivePartKept`, `DirectWarnIf` or `DirectBelowNormalRange`. The stamp predates the shared code. A1's, R1's
+  and N1's `done.md` each carry an "Its own warning" paragraph that restates one rule. `direct_bound_reader` holds
+  objective-term readers that its name does not cover.
+- **Change.** Correct both docs to the shared code after H-38 to H-41; one warning paragraph in the framework
+  `done.md`, linked from each rule; state the bound reader's wider scope in its header and `done.md`.
+- **Needs.** H-38, H-39, H-40, H-41.
+- **Done when.** Every helper the rules call is listed once; no rule `done.md` restates the warning rule; doc-only.
+
+## H-46 — Test helpers say "number range"
+
+- **Problem.** `decidb_cli.py` (`_LARGE_NUMBER_WARNING`, `LargeNumberWarningMismatch`, `_settle_large_number_warning`),
+  the `expect_large_numbers` and `large_numbers` arguments, and `_large_numbers.writes_large_number` also cover small
+  numbers.
+- **Change.** Rename them to the number-range wording. Do not rename any oracle test function (the cache keys on it).
+- **Done when.** `make decide-test` passes; `grep -rn large_number test/decide` finds only test function and file names, which keep
+  their names.

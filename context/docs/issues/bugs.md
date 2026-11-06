@@ -2,7 +2,17 @@
 
 ## Open
 
-None.
+- **BUG-46 — A data weight on a square gets a message that says its degree is above 2.** `SUM(w * POWER(x, 2)) <= 25`
+  is refused with `DECIDE expression contains an unsupported product factor that still references decision variables
+  after normalization (total degree > 2 or unexpanded nonlinear product). ...` (`decide_term_split.cpp`, the
+  "unsupported product factor" message). The expression has degree 2, and the text does not say that a constant factor
+  (`SUM(2 * POWER(x, 2))`) or `POWER(sqrt(w) * x, 2)` is accepted. Repro: that clause over `t(id, w DOUBLE, s DOUBLE)`
+  with `DECIDE x(REAL) ... MAXIMIZE SUM(s * x)`. Found 2026-11-06 (N1 review).
+
+- **BUG-47 — A forced HiGHS says Gurobi is not available on a machine that has it.** With `DECIDB_FORCE_SOLVER=highs`
+  and Gurobi installed, a quadratic limit is refused with `... which needs Gurobi — not available on this machine.
+  Install Gurobi, ...` (`decide_solver_gate.cpp`). Gurobi is available; the forced backend excludes it. Repro:
+  `DECIDB_FORCE_SOLVER=highs build/release/decidb -c "<any N1 query>"`. Found 2026-11-06 (N1 review).
 
 ## Limitations (not bugs)
 
