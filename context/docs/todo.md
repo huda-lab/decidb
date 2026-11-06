@@ -6,7 +6,7 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: Q1 and D1 side by side; C4 after Q1; C5 after C4; C6 last.
+Each batch finishes completely. Lanes: Q1, D1 and C4a side by side; C4b after Q1 and C4a; C5 after C4b; C6 last.
 
 ## Q1. Polynomial form (one lane; architect review first)
 
@@ -17,16 +17,19 @@ Each batch finishes completely. Lanes: Q1 and D1 side by side; C4 after Q1; C5 a
 - [ ] BUG-48 DIAGNOSE's `group` column writes a NULL key as `'NULL'` — issues/bugs.md § BUG-48
 - [ ] BUG-49 DIAGNOSE of a non-convex unbounded model answers `feasible` — issues/bugs.md § BUG-49
 
-## C4. Shared code before N2 (one lane; needs: Q1)
+## C4a. Shared code that reads no terms (one lane; beside Q1)
 
 - [ ] H-38 The plan helpers A1, N1 and R1 each copy — direct_solve/framework/todo.md § H-38
 - [ ] H-40 `DirectPart::IsPlainSum()` — direct_solve/framework/todo.md § H-40
-- [ ] H-39 One fragment for the separable square objective — direct_solve/framework/todo.md § H-39 (needs: H-38)
-- [ ] H-41 The precision warning comes from the shared arithmetic — direct_solve/framework/todo.md § H-41 (needs: H-39)
 - [ ] N1-2 A data limit through the shared group-bound path — direct_solve/rules/n1_euclidean_ball/todo.md § N1-2
+
+## C4b. Shared code that reads squares (one lane; needs: Q1, C4a)
+
+- [ ] H-39 One fragment for the separable square objective — direct_solve/framework/todo.md § H-39
+- [ ] H-41 The precision warning comes from the shared arithmetic — direct_solve/framework/todo.md § H-41 (needs: H-39)
 - [ ] SOL-4 Errors point to DIAGNOSE only where it runs — pipeline/07_solver/todo.md § SOL-4
 
-## C5. Docs (the orchestrator; needs: C4)
+## C5. Docs (the orchestrator; needs: C4b)
 
 - [ ] H-45 Framework docs describe the shared code as it is — direct_solve/framework/todo.md § H-45
 - [ ] N1-5 Guide §10 teaches N1's shape — direct_solve/rules/n1_euclidean_ball/todo.md § N1-5

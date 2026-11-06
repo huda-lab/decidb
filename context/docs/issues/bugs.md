@@ -20,6 +20,11 @@
   row's `x` has no upper limit), returns `feasible` and prints a "could not prove it is the best" line on stderr. Not
   yet investigated: it may be how Gurobi reports a non-convex model, or how the router reads it. Found 2026-11-06
   (UNB-1 lane).
+  - **Cause.** Gurobi answers `INF_OR_UNBD`. The adapter's `DualReductions=0` retry (`gurobi_solver.cpp`) sends a
+    non-convex model to spatial branching, which ends `SUBOPTIMAL` with incumbents near 1e19. The router reads
+    `SUBOPTIMAL` as solved. A plain solve returns that value too.
+  - **Ruling (owner, 2026-11-06).** On a non-convex model the adapter skips the retry and returns `INF_OR_UNBD`. The
+    facade's zero-objective probe settles it.
 
 ## Limitations (not bugs)
 
