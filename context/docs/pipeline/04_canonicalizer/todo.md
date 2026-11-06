@@ -46,7 +46,7 @@ which only this stage decides (`done.md` §3.7, §3.10).
   - (F) When a query has two refusals, the one the pipeline reaches first is reported.
   - (G) An operator outside the vocabulary over a decision reads "DECIDE: operator '%s' cannot take a DECIDE
     variable."
-- **Ruling (orchestrator, for the owner while away, 2026-11-06), at the step-2 checkpoint.** For the owner to confirm.
+- **Ruling (owner, 2026-11-06), at the step-2 checkpoint.**
   - (H) `POWER(e, 0)` over a decision is 1, and the product form keeps the decisions of `e` at coefficient 0, as `0 * x`
     and `x - x` keep theirs. A reducer stays decision-bearing, so `SUM(POWER(x, 0)) <= 5` answers as `COUNT(*) <= 5`.
   - (I) The objective gets a source span, as each SUCH THAT clause has one, so its messages quote the written text.
