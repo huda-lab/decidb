@@ -682,3 +682,23 @@ class TestRemedyIsPasteableSql:
         remedy = _remedy(rows, "x")
         assert remedy == "when t.\"my col\" = 'v': x <= <cap>"
         _assert_pasted_remedy_caps_rows_1_2(cli, oracle_solver, "relation_key_paste_back", query, remedy)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_null_slice_group_is_an_is_null_test(self, request, cli_fixture):
+        """The NULL key's finding names its slice `k IS NULL` in `group`, the same predicate
+        its `suggested_change` scopes by, not the text `k = 'NULL'`."""
+        cli = request.getfixturevalue(cli_fixture)
+        query = (
+            "SELECT k, x FROM (VALUES (1, 1.0), (1, 2.0), (NULL, 3.0)) t(k, s) "
+            "DECIDE x(REAL) SUCH THAT when k IS NOT NULL: x <= 5 MAXIMIZE SUM(x)"
+        )
+        rows = [r for r in _rows(_diagnose(cli, query)) if (r["edit_source"] or "").startswith("runaway_")]
+        assert [(r["group"], r["suggested_change"]) for r in rows] == [("k IS NULL", "when k IS NULL: x <= <cap>")]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_non_null_slice_group_is_an_equality(self, request, cli_fixture):
+        """A slice with a value keeps `column = 'value'` in `group`, quoted where the column needs it."""
+        cli = request.getfixturevalue(cli_fixture)
+        query = _sliced_query(_QUOTED_NAME_ROWS, "\"my col\" <> 'v'").format(extra="")
+        rows = [r for r in _rows(_diagnose(cli, query)) if (r["edit_source"] or "").startswith("runaway_")]
+        assert "\"my col\" = 'v'" in [r["group"] for r in rows]

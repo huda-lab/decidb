@@ -323,6 +323,12 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 	return sorted;
 }
 
+//! The SQL predicate that selects one categorical slice: `col = 'value'`, or `col IS NULL` for the column's NULL
+//! group. A finding's `group` and the scope of its `suggested_change` both print the slice through this.
+static string SlicePredicate(const EscapeRule &r) {
+	return r.column + (r.value_is_null ? " IS NULL" : " = " + KeywordHelper::WriteQuoted(r.value));
+}
+
 //! The prescribed remedy for a runaway variable: name what to add, never invent the
 //! bound. DeciDB knows the variable needs a ceiling (a floor, when it falls); only the
 //! user knows where.
@@ -343,7 +349,7 @@ static string PrescribeCap(const VarEscape &ve) {
 	vector<string> scope;
 	for (const auto &r : ve.rules) {
 		if (r.covers_scope) {
-			scope.push_back(r.column + (r.value_is_null ? " IS NULL" : " = " + KeywordHelper::WriteQuoted(r.value)));
+			scope.push_back(SlicePredicate(r));
 		}
 	}
 	if (scope.empty()) {
@@ -397,7 +403,7 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 			// answers "how many instances in it".
 			for (const auto &r : ve.rules) {
 				DiagnosticFinding f = base;
-				f.group = r.column + " = '" + r.value + "'";
+				f.group = SlicePredicate(r);
 				f.has_amount = true;
 				f.amount = static_cast<double>(r.escaping);
 				f.has_total = true;
