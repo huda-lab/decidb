@@ -76,6 +76,9 @@ struct RenderContext {
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
 	//! False when the caller writes the `by` itself.
 	bool print_by = true;
+	//! True quotes a term canonicalization respelled as written (WRITTEN_TERM_TAG_PREFIX), as a message and a
+	//! diagnosis do; false prints it as respelled, as a plan's canonical layer does.
+	bool written = false;
 };
 } // namespace
 
@@ -133,6 +136,17 @@ static string BinaryOperatorOf(const Expression &expr) {
 	return func.children.size() == 2 ? func.function.name : string();
 }
 
+//! How tightly a binary arithmetic operator binds; 0 for any other name.
+static int ArithmeticPrecedence(const string &name) {
+	if (name == "+" || name == "-") {
+		return 10;
+	}
+	if (name == "*" || name == "/" || name == "%") {
+		return 20;
+	}
+	return name == "**" ? 30 : 0;
+}
+
 static string RenderFunction(const BoundFunctionExpression &func, const RenderContext &ctx, int parent_precedence) {
 	auto name = func.function.name;
 	if (func.children.size() == 1 && name == "-") {
@@ -140,9 +154,8 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 		auto operand = RenderSource(*func.children[0], ctx, 40);
 		return operand.rfind('-', 0) == 0 ? "-(" + operand + ")" : "-" + operand;
 	}
-	if (func.children.size() == 2 &&
-	    (name == "+" || name == "-" || name == "*" || name == "/" || name == "%" || name == "**")) {
-		int precedence = (name == "+" || name == "-") ? 10 : ((name == "**") ? 30 : 20);
+	if (func.children.size() == 2 && ArithmeticPrecedence(name) != 0) {
+		int precedence = ArithmeticPrecedence(name);
 		// Every operator here groups left to right, so a right operand at the same level
 		// keeps its parentheses -- `a - (b + c)`, `a * (b % c)`, `a ** (b ** c)` -- except
 		// where regrouping cannot change the value: `a + (b + c)`, `a + (b - c)`,
@@ -358,8 +371,10 @@ const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer)
 //! An expression with the registries alone -- no relation names, no auxiliary labels: the form
 //! the clause renderers in this file use. `keys` prints each reducer's `per` and `by`.
 static string RenderSource(const Expression &expr, const vector<string> &fragments,
-                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr) {
+                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr,
+                           bool written = false) {
 	RenderContext ctx {fragments, keyed_scopes, keys};
+	ctx.written = written;
 	return RenderSource(expr, ctx);
 }
 
@@ -377,6 +392,12 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	idx_t fragment_id;
 	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
 		return ctx.fragments[fragment_id];
+	}
+	if (ctx.written && TryParseWrittenTermTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
+		// The text the parser cut excludes the parentheses around it, so it takes them where its operator needs them.
+		int precedence = ArithmeticPrecedence(BinaryOperatorOf(expr));
+		auto &text = ctx.fragments[fragment_id];
+		return precedence != 0 && precedence < parent_precedence ? "(" + text + ")" : text;
 	}
 	if (HasDecideTag(expr.GetAlias(), WRITTEN_VALUE_TAG)) {
 		return StripDecideTags(expr.GetAlias()); // a value as written: SQL, not an identifier
@@ -691,6 +712,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		in.SetAlias(std::move(alias));
 		ConstraintSourceInfo info;
 		info.canonical_lhs = RenderSource(in, fragments, keyed_scopes);
+		info.spelled_lhs = info.canonical_lhs;
 		info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
 		// Its scope in front, as a comparison's: the IN itself shows no scope word.
 		info.qualifier = ScopedInQualifier(constraints, in, fragments, keyed_scopes);
@@ -723,11 +745,13 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 			                       return;
 		                       }
 		                       auto &info = sources[source_id];
-		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys);
-		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys);
+		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys, true);
+		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys, true);
+		                       info.spelled_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys);
+		                       info.spelled_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys);
 		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		                       info.canonical_differs = info.rendered_lhs != info.canonical_lhs ||
-		                                                info.rendered_rhs != info.canonical_rhs ||
+		                       info.canonical_differs = info.rendered_lhs != info.spelled_lhs ||
+		                                                info.rendered_rhs != info.spelled_rhs ||
 		                                                info.written_cmp != info.canonical_cmp;
 		                       info.rendered_lhs.clear();
 		                       info.rendered_rhs.clear();
@@ -759,11 +783,13 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys) {
-	return RenderSource(expr, fragments, keyed_scopes, keys);
+	return RenderSource(expr, fragments, keyed_scopes, keys, true);
 }
 
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names) {
-	return RenderSource(expr, ContextOf(names));
+	auto ctx = ContextOf(names);
+	ctx.written = true;
+	return RenderSource(expr, ctx);
 }
 
 DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
@@ -778,6 +804,7 @@ DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
 	auto ctx = ContextOf(names);
 	ctx.print_by = false;
+	ctx.written = true;
 	return RenderSource(reducer, ctx);
 }
 
@@ -1033,9 +1060,9 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 		for (auto half : halves) {
 			printed[half] = true;
 			auto &info = sources[half];
-			string canonical = info.canonical_lhs;
+			string canonical = info.spelled_lhs;
 			if (!info.canonical_cmp.empty()) {
-				canonical += " " + info.canonical_cmp + " " + info.canonical_rhs;
+				canonical += " " + info.canonical_cmp + " " + info.spelled_rhs;
 			}
 			// The halves are the canonical reading of a BETWEEN, whether or not canonicalization moved anything.
 			if (between || info.canonical_differs) {

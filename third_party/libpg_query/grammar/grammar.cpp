@@ -730,6 +730,15 @@ noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTY
 	extra->decide_spans = lappend(extra->decide_spans, entry);
 }
 
+/* DeciDB: a product, a power or a function call, anchored at its location, so a term the canonicalizer respells is
+ * quoted as written. */
+static PGNode *
+noteDecideTerm(PGNode *term, YYLTYPE anchor, YYLTYPE span, core_yyscan_t yyscanner)
+{
+	noteDecideSpan(yyscanner, anchor.start, PG_DECIDE_SPAN_TERM, span);
+	return term;
+}
+
 /* DeciDB: the two sides of a comparison, anchored at its operator. */
 static PGNode *
 noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner)

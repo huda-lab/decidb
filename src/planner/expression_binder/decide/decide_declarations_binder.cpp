@@ -362,6 +362,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		    }
 	    }
 	    result.decide_source_fragments = decide_source_fragments;
+	    result.decide_text = statement.decide_text;
         result.decide_sense = statement.decide_sense;
         // Update types in bind context to reflect the determined types from DECIDE clause
         bind_context.GetBindingsList().back()->types = var_types;

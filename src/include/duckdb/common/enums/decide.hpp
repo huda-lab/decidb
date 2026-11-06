@@ -494,6 +494,29 @@ inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
 	return TryParseDecideIndexTag(alias, SOURCE_FRAGMENT_TAG_PREFIX, fragment_id);
 }
 
+//! A term the canonicalizer respelled (NormalizeProducts), naming the source fragment that holds its text as written.
+//! A message or a diagnosis quotes that text; a plan's canonical layer prints the term as respelled. Unlike a source
+//! fragment, it is not part of what the term is: two equal terms written apart are the same term.
+static constexpr const char *WRITTEN_TERM_TAG_PREFIX = "__written_term_";
+
+inline string MakeWrittenTermTag(idx_t fragment_id) {
+	return string(WRITTEN_TERM_TAG_PREFIX) + to_string(fragment_id) + "__";
+}
+
+inline bool TryParseWrittenTermTag(const string &alias, idx_t &fragment_id) {
+	return TryParseDecideIndexTag(alias, WRITTEN_TERM_TAG_PREFIX, fragment_id);
+}
+
+//! `alias` without its written-term tag.
+inline string StripWrittenTermTag(string alias) {
+	auto pos = alias.find(WRITTEN_TERM_TAG_PREFIX);
+	if (pos != string::npos) {
+		auto end = alias.find("__", pos + strlen(WRITTEN_TERM_TAG_PREFIX));
+		alias.erase(pos, end == string::npos ? string::npos : end + 2 - pos);
+	}
+	return alias;
+}
+
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
 	string payload;
 	if (!ExtractDecideTagPayload(alias, GROUP_KEY_TAG_PREFIX, payload)) {

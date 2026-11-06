@@ -710,13 +710,28 @@ def test_untouched_clause_stays_one_line(decidb_cli):
     sql = """
         SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100
+        SUCH THAT SUM(l_quantity * x) <= 100
         MAXIMIZE SUM(x)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
     packed = _packed(out)
     assert _CANONICAL_MARK not in packed, _plan_text(out)
+    assert _REWRITTEN_MARK not in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+def test_a_respelled_product_prints_its_canonical_line(decidb_cli):
+    """A product's coefficient goes first, so a clause written decision-first shows the spelling it took."""
+    sql = """
+        SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x * l_quantity) <= 100
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    assert "SUM(x*l_quantity)<=100" + _CANONICAL_MARK + "sum(l_quantity*x)<=100" in packed, _plan_text(out)
     assert _REWRITTEN_MARK not in packed, _plan_text(out)
 
 

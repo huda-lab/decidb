@@ -1349,6 +1349,16 @@
         "name": "source_rhs_reads_data",
         "type": "bool",
         "default": "false"
+      },
+      {
+        "id": 114,
+        "name": "spelled_lhs",
+        "type": "string"
+      },
+      {
+        "id": 115,
+        "name": "spelled_rhs",
+        "type": "string"
       }
     ],
     "pointer_type": "none"

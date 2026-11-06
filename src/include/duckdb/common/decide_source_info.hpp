@@ -16,7 +16,7 @@ class Serializer;
 class Deserializer;
 
 //! What a span of the DECIDE tail is. The values are the parser's PGDecideSpanRole.
-enum class DecideSpanRole : uint8_t { CMP_LHS = 0, CMP_RHS = 1, WHEN = 2, PER = 3, BY = 4, COLUMN = 5 };
+enum class DecideSpanRole : uint8_t { CMP_LHS = 0, CMP_RHS = 1, WHEN = 2, PER = 3, BY = 4, COLUMN = 5, TERM = 6 };
 
 //! The text of a DECIDE clause as the user wrote it (the Clang SourceManager / `CreateInfo::sql` pattern): the tail,
 //! `SUCH THAT` through the objective, and where the parser found each construct in it. A construct is named by the
@@ -59,9 +59,14 @@ enum class ConstraintSourceRhsKind : uint8_t {
 //! Stable, solver-neutral display provenance for one canonical source comparison.
 //! The vector that owns these entries is indexed by source_clause_id.
 struct ConstraintSourceInfo {
-	//! Canonical user-facing pieces after canonicalization.
+	//! Canonical user-facing pieces after canonicalization: the canonical clause, with each term canonicalization only
+	//! respelled quoted as written (`x * w` stays `x * w`), so a diagnosis edits text the user can find.
 	string canonical_lhs;
 	string canonical_rhs;
+	//! The two sides as canonicalization spells them, every product in the one spelling (`w * x`): the canonical layer
+	//! a plan shows. They differ from canonical_lhs/rhs only in the respelled terms.
+	string spelled_lhs;
+	string spelled_rhs;
 	//! The comparison operator after canonicalization. Stored beside the two sides
 	//! because canonicalization may flip it when it moves a term across the relation,
 	//! and a plan that shows the canonical layer has to show the flipped operator too.

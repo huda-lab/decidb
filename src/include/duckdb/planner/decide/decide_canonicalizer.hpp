@@ -115,6 +115,7 @@ class BoundAggregateExpression;
 class BoundComparisonExpression;
 class BoundConjunctionExpression;
 struct DecideSourceNames;
+struct DecideWrittenTerms;
 class BoundColumnRefExpression;
 class BoundFunctionExpression;
 
@@ -235,6 +236,11 @@ public:
 	//! which alone has them; `names` must outlive the canonicalizer.
 	void QuoteMessagesWith(const DecideSourceNames &names) {
 		message_names = &names;
+	}
+	//! Tag each product it respells with its text as written, cut from `written`. Set by the planner, which alone has
+	//! the query's text; `written` must outlive the canonicalizer.
+	void QuoteRespelledTermsFrom(DecideWrittenTerms &written) {
+		written_terms = &written;
 	}
 
 	//! True when `expr` evaluates to a single value for the entire query, so it may
@@ -504,6 +510,8 @@ private:
 	bool judge_column_refs = false;
 	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
 	optional_ptr<const DecideSourceNames> message_names;
+	//! See QuoteRespelledTermsFrom; null leaves respelled terms untagged.
+	optional_ptr<DecideWrittenTerms> written_terms;
 	//! Which decision columns are declared BOOL, indexed by decide-column index.
 	vector<bool> boolean_decisions;
 

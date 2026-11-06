@@ -1044,7 +1044,7 @@ void DecideCanonicalizer::FoldNegationIntoFactor(Atom &atom) const {
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
 	auto desugared = DesugarNorms(expr);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : expr);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : expr, written_terms);
 	return CanonicalizeComparisonInternal(*written);
 }
 
@@ -1174,7 +1174,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
                                                                   double &out_constant_offset) const {
 	auto desugared = DesugarNorms(objective);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective, written_terms);
 	return CanonicalizeObjectiveInternal(*written, out_constant_offset);
 }
 
@@ -1631,7 +1631,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints) const {
 	auto desugared = DesugarNorms(constraints);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints, written_terms);
 	auto result = CanonicalizeTreeInternal(*written);
 	ValidateCanonicalTree(*result);
 	return result;

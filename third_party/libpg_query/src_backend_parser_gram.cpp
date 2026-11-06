@@ -1341,6 +1341,7 @@ static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,
 static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
 static void noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTYPE span);
 static PGNode *noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner);
+static PGNode *noteDecideTerm(PGNode *term, YYLTYPE anchor, YYLTYPE span, core_yyscan_t yyscanner);
 static PGNode *noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYLTYPE upper,
 								 core_yyscan_t yyscanner);
 static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
@@ -1436,7 +1437,7 @@ typedef union YYSTYPE
 	PGTransactionStmtType transactiontype;
 }
 /* Line 193 of yacc.c.  */
-#line 1440 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 1441 "third_party/libpg_query/grammar/grammar_out.cpp"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
@@ -1461,7 +1462,7 @@ typedef struct YYLTYPE
 
 
 /* Line 216 of yacc.c.  */
-#line 1465 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 1466 "third_party/libpg_query/grammar/grammar_out.cpp"
 
 #ifdef short
 # undef short
@@ -28914,7 +28915,7 @@ yyreduce:
 
   case 1002:
 #line 2691 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
+    { (yyval.node) = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])), (yylsp[(2) - (3)]), (yyloc), yyscanner); ;}
     break;
 
   case 1003:
@@ -28934,12 +28935,12 @@ yyreduce:
 
   case 1006:
 #line 2699 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
+    { (yyval.node) = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])), (yylsp[(2) - (3)]), (yyloc), yyscanner); ;}
     break;
 
   case 1007:
 #line 2701 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
+    { (yyval.node) = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])), (yylsp[(2) - (3)]), (yyloc), yyscanner); ;}
     break;
 
   case 1008:
@@ -30036,7 +30037,7 @@ yyreduce:
 					n->agg_filter = (yyvsp[(3) - (5)].node);
 					n->export_state = (yyvsp[(4) - (5)].boolean);
 					n->over = (yyvsp[(5) - (5)].windef);
-					(yyval.node) = (PGNode *) n;
+					(yyval.node) = noteDecideTerm((PGNode *) n, (yylsp[(1) - (5)]), (yylsp[(1) - (5)]), yyscanner);
 				;}
     break;
 
@@ -33400,7 +33401,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 33404 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 33405 "third_party/libpg_query/grammar/grammar_out.cpp"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -34354,6 +34355,15 @@ noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTY
 	entry->start = span.start;
 	entry->end = span.end;
 	extra->decide_spans = lappend(extra->decide_spans, entry);
+}
+
+/* DeciDB: a product, a power or a function call, anchored at its location, so a term the canonicalizer respells is
+ * quoted as written. */
+static PGNode *
+noteDecideTerm(PGNode *term, YYLTYPE anchor, YYLTYPE span, core_yyscan_t yyscanner)
+{
+	noteDecideSpan(yyscanner, anchor.start, PG_DECIDE_SPAN_TERM, span);
+	return term;
 }
 
 /* DeciDB: the two sides of a comparison, anchored at its operator. */

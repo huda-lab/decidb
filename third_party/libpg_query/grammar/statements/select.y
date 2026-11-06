@@ -2688,7 +2688,7 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr '-' a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "-", $1, $3, @2); }
 			| a_expr '*' a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", $1, $3, @2); }
+				{ $$ = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", $1, $3, @2), @2, @$, yyscanner); }
 			| a_expr '/' a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "/", $1, $3, @2); }
 			| a_expr INTEGER_DIVISION a_expr
@@ -2696,9 +2696,9 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr '%' a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "%", $1, $3, @2); }
 			| a_expr '^' a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", $1, $3, @2); }
+				{ $$ = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", $1, $3, @2), @2, @$, yyscanner); }
 			| a_expr POWER_OF a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", $1, $3, @2); }
+				{ $$ = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", $1, $3, @2), @2, @$, yyscanner); }
 			| a_expr '<' a_expr
 				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2), @2, @1, @3, yyscanner); }
 			| a_expr '>' a_expr
@@ -3514,7 +3514,7 @@ func_expr: func_application within_group_clause filter_clause export_clause over
 					n->agg_filter = $3;
 					n->export_state = $4;
 					n->over = $5;
-					$$ = (PGNode *) n;
+					$$ = noteDecideTerm((PGNode *) n, @1, @1, yyscanner);
 				}
 			| func_expr_common_subexpr
 				{ $$ = $1; }

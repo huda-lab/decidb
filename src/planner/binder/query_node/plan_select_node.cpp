@@ -5,6 +5,7 @@
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -170,6 +171,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 			                                  std::move(query_wide_table_indexes),
 			                                  std::move(correlated_subquery_table_indexes));
 			canonicalizer.QuoteMessagesWith(message_names);
+			DecideWrittenTerms written_terms {statement.decide_text, statement.decide_source_fragments};
+			canonicalizer.QuoteRespelledTermsFrom(written_terms);
 			if (statement.decide_constraints) {
 				canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
 				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);

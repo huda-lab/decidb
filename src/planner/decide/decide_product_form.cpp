@@ -1,5 +1,7 @@
 #include "duckdb/planner/decide/decide_product_form.hpp"
 
+#include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/function_binder.hpp"
@@ -27,8 +29,8 @@ bool IsDecidePowerCall(const Expression &expr) {
 
 bool TryGetDecideWholeExponent(ClientContext &context, const Expression &exponent, idx_t &out) {
 	double value;
-	if (!TryEvaluateFoldableDouble(context, exponent, value, FOLD_CATCH_ALL) || !std::isfinite(value) ||
-	    value < 1.0 || value != std::floor(value) || value > 1e9) {
+	if (!TryEvaluateFoldableDouble(context, exponent, value, FOLD_CATCH_ALL) || !std::isfinite(value) || value < 1.0 ||
+	    value != std::floor(value) || value > 1e9) {
 		return false;
 	}
 	out = static_cast<idx_t>(value);
@@ -100,12 +102,13 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 }
 
 //! Equals ignores aliases. On a decision-bearing node they are structure (a reducer's `by` and `per`), so they must
-//! agree there; on data they are provenance (where a column was written), which two equal values may differ in.
+//! agree there; on data they are provenance (where a column was written), which two equal values may differ in. A
+//! respelled term's written text is provenance too.
 static bool DecisionAliasesEqual(const Expression &left, const Expression &right, idx_t decide_index) {
 	if (!BoundExpressionReferencesDecide(left, decide_index)) {
 		return true;
 	}
-	if (left.GetAlias() != right.GetAlias()) {
+	if (StripWrittenTermTag(left.GetAlias()) != StripWrittenTermTag(right.GetAlias())) {
 		return false;
 	}
 	vector<const Expression *> left_children;
@@ -247,7 +250,8 @@ DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &ex
 	return form;
 }
 
-static unique_ptr<Expression> Bind(ClientContext &context, const string &name, vector<unique_ptr<Expression>> children) {
+static unique_ptr<Expression> Bind(ClientContext &context, const string &name,
+                                   vector<unique_ptr<Expression>> children) {
 	FunctionBinder function_binder(context);
 	ErrorData error;
 	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
@@ -304,46 +308,68 @@ bool IsDecideProductNode(ClientContext &context, const Expression &expr, idx_t d
 	        TryGetDecideWholeExponent(context, *expr.Cast<BoundFunctionExpression>().children[1], exponent));
 }
 
-//! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is.
-static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node) {
+//! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is. With `written`, the
+//! rewritten node also names its text as written, cut at its location.
+static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node,
+                                             optional_ptr<DecideWrittenTerms> written) {
 	auto form = ReadDecideProduct(context, node, decide_index);
-	auto rebuilt = BuildDecideProductForm(context, form);
+	auto product = BuildDecideProductForm(context, form);
+	auto *spelled = product.get();
+	auto rebuilt = std::move(product);
 	if (rebuilt->return_type != node.return_type) {
 		rebuilt = BoundCastExpression::AddCastToType(context, std::move(rebuilt), node.return_type);
 	}
 	if (Expression::Equals(*rebuilt, node)) {
 		return nullptr;
 	}
-	rebuilt->SetAlias(node.GetAlias());
+	auto alias = node.GetAlias();
+	// The text goes on the product itself, below the cast back, which a reader looks through.
+	idx_t fragment_id;
+	string text;
+	if (written && !TryParseWrittenTermTag(alias, fragment_id) &&
+	    written->text.Cut(node.GetQueryLocation(), DecideSpanRole::TERM, text)) {
+		auto tag = MakeWrittenTermTag(written->fragments.size());
+		written->fragments.push_back(std::move(text));
+		if (spelled == rebuilt.get()) {
+			AddDecideTag(alias, tag);
+		} else {
+			auto spelled_alias = spelled->GetAlias();
+			AddDecideTag(spelled_alias, tag);
+			spelled->SetAlias(std::move(spelled_alias));
+		}
+	}
+	rebuilt->SetAlias(std::move(alias));
 	rebuilt->SetQueryLocation(node.GetQueryLocation());
 	return rebuilt;
 }
 
-void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr) {
+void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr,
+                              optional_ptr<DecideWrittenTerms> written) {
 	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(
-	    *expr, [&](unique_ptr<Expression> &child) { NormalizeProductsInPlace(context, decide_index, child); });
+	    *expr, [&](unique_ptr<Expression> &child) { NormalizeProductsInPlace(context, decide_index, child, written); });
 	if (!IsDecideProductNode(context, *expr, decide_index)) {
 		return;
 	}
-	auto rebuilt = RewriteProduct(context, decide_index, *expr);
+	auto rebuilt = RewriteProduct(context, decide_index, *expr, written);
 	if (rebuilt) {
 		expr = std::move(rebuilt);
 	}
 }
 
-unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr) {
+unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr,
+                                         optional_ptr<DecideWrittenTerms> written) {
 	auto result = expr.Copy();
-	NormalizeProductsInPlace(context, decide_index, result);
+	NormalizeProductsInPlace(context, decide_index, result, written);
 	return result;
 }
 
 unique_ptr<Expression> BuildDecideProduct(ClientContext &context, idx_t decide_index, unique_ptr<Expression> left,
                                           unique_ptr<Expression> right) {
 	auto product = Bind(context, "*", std::move(left), std::move(right));
-	auto rebuilt = RewriteProduct(context, decide_index, *product);
+	auto rebuilt = RewriteProduct(context, decide_index, *product, nullptr);
 	return rebuilt ? std::move(rebuilt) : std::move(product);
 }
 
