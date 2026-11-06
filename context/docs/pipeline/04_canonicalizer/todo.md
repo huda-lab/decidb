@@ -32,6 +32,20 @@ which only this stage decides (`done.md` §3.7, §3.10).
     coefficient, as COALESCE is.
   - (R-5) The `<>` rewrite (`decide_rewrite_notequal_avg.cpp`) reads degree from a small reader of the canonical form.
   - (R-6) The binder keeps its "not supported yet" refusals.
+- **Ruling (owner, 2026-11-06), at the step-1 checkpoint.**
+  - (A) Products are spelled coefficient first (`x * w` is `w * x`). Every message and DIAGNOSE quotes the written
+    clause through its source location, never by searching the written text for the canonical text. EXPLAIN's ≡ line
+    shows the canonical form, so a respelled clause prints one. The test that an untouched clause prints one line
+    writes its clause in canonical order; a new case shows a respelled clause printing its ≡ line.
+  - (B) The objective-term refusal quotes the written clause (`s * s`), as (A).
+  - (C) A product of BOOL decisions (`b * b`, `(b+d)*(d+b)`) goes through the McCormick rewrite like any other; an
+    oracle case checks it. (e) forbids only a special `POWER(b, k)` to `b` rewrite.
+  - (D) An exponent that folds to a whole number (`POWER(x, 1)`, `CAST(2 AS INTEGER)`) is accepted. `POWER(x, 0)` is 1,
+    as in SQL. The tests of the old refusal become oracle cases.
+  - (E) (R-4) applies: the CASE-over-data tests become oracle cases; CASE over a decision keeps a refusal test.
+  - (F) When a query has two refusals, the one the pipeline reaches first is reported.
+  - (G) An operator outside the vocabulary over a decision reads "DECIDE: operator '%s' cannot take a DECIDE
+    variable."
 - **Problem.**
   - Each algebra refusal has two to four recognizers, across the parsed tree, the bound tree, the optimizer and
     physical planning. Their gaps refuse legal queries:
