@@ -212,7 +212,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     price and each group's anchor spend and rooms raise the same text.
   - A number a rule computes that falls below the normal range of a DOUBLE (`DirectBelowNormalRange`, 0 included) from
     a value that is not 0 has lost precision. The rule passes that condition to `DirectWarnIf`, which prints the
-    solver path's number-range warning through `decide_warn_numbers()`, once per query, and lets the row through. Each
+    solver path's number-range warning through `__internal_decide_warn_numbers()`, once per query for every path
+    (`DecideNumberWarningState`), and lets the row through. Each
     rule tests the number its answer divides or ranks by: N1 the sum of squares `h`, A1 a decision's coefficients `a`
     and `b` beside a square, and R1 each item's price `v / w`. The solver path's thresholds read a model, which a direct
     plan does not build.

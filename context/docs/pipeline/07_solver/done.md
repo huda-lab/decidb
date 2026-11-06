@@ -314,8 +314,9 @@ order:
 3. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
-4. `options.number_range_warning->Check(model)`: stderr gets *very large or very small
-   number detected - numerical precision may make the solution unstable* when the model
+4. `options.say_number_warning()` when `ModelHoldsNumberOutOfRange(model)`: stderr gets
+   *DECIDE: a very large or very small number may make this answer inaccurate. Scale its
+   data toward 1.* when the model
    holds a number past the point where the solver's tolerance can show in the user's
    numbers. The model, the settings and the answer are unchanged. Numerical precision is
    the solver's limit: DeciDB does not rescale or analyse clauses to get around it, it
@@ -341,11 +342,14 @@ order:
      these apart.
 
    The check reads the finished model, so it sees the query's literals, the data and
-   DeciDB's own constants (a Big-M) alike. One `NumberRangeWarning` lives per query and
-   prints at most once; the operator also passes it the DIAGNOSE repair model. A
-   direct-solved query builds no model, so these thresholds do not apply; a rule prints the
-   same line through `DirectWarnIf` and `decide_warn_numbers()` where its own arithmetic
-   loses precision (N1, A1 and R1; `direct_solve/framework/done.md`), once per query (a `ClientContextState`, cleared in `QueryBegin`).
+   DeciDB's own constants (a Big-M) alike. The line is said at most once per query, however
+   many DECIDE nodes it holds: every path goes through one `DecideNumberWarningState`
+   (`main/decide_number_warning.hpp`, a `ClientContextState` cleared in `QueryBegin`). The
+   solver layer reaches it through a callback in `SolveModelOptions`, so it includes nothing
+   from the client; the operator passes the same callback with the DIAGNOSE repair model. A
+   direct-solved query builds no model, so these thresholds do not apply; a rule says the
+   same line through `DirectWarnIf` and `__internal_decide_warn_numbers()` where its own
+   arithmetic loses precision (N1, A1 and R1; `direct_solve/framework/done.md`).
 5. Record `model_constraint_rows` before anything moves the model.
 6. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
    say so. That is a coefficient-free row against a bound it cannot meet

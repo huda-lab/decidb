@@ -6,15 +6,7 @@ this file when it is empty.
 Read first: `direct_solve/README.md`, `direct_solve/architecture/rules.md`,
 `direct_solve/rules/n1_euclidean_ball/done.md`. Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: C2 and C3 side by side; C4 after C2 and C3; C5 after C4; C6 last.
-
-## C2. Warning plumbing (one lane)
-
-- [ ] H-37 Undo two unrelated formatting changes — direct_solve/framework/todo.md § H-37
-- [ ] H-43 `decide_warn_numbers` is internal — direct_solve/framework/todo.md § H-43
-- [ ] H-42 One warning state per query for both paths — direct_solve/framework/todo.md § H-42
-- [ ] H-44 The warning's text — direct_solve/framework/todo.md § H-44
-- [ ] H-46 Test helpers say "number range" — direct_solve/framework/todo.md § H-46
+Each batch finishes completely. Lanes: C3; C4 after C3; C5 after C4; C6 last.
 
 ## C3. Refusal messages (one lane)
 
@@ -22,7 +14,7 @@ Each batch finishes completely. Lanes: C2 and C3 side by side; C4 after C2 and C
 - [ ] BUG-47 A forced HiGHS says Gurobi is not available — issues/bugs.md § BUG-47
 - [ ] BUG-46 A data weight on a square says degree above 2 — issues/bugs.md § BUG-46
 
-## C4. Shared code before N2 (one lane; needs: C2, C3)
+## C4. Shared code before N2 (one lane; needs: C3)
 
 - [ ] H-38 The plan helpers A1, N1 and R1 each copy — direct_solve/framework/todo.md § H-38
 - [ ] H-40 `DirectPart::IsPlainSum()` — direct_solve/framework/todo.md § H-40

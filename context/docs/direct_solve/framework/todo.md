@@ -49,16 +49,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
 
-## H-37 — Undo two unrelated formatting changes
-
-- **Problem.** `src/function/function_list.cpp` is generated (`scripts/generate_functions.py`) and skipped by
-  `scripts/format.py`, yet about 260 of its lines are reflowed where only the `DecideWarnNumbersFun` entry should differ.
-  `physical_decide.cpp` holds tab-indented lines inside a block indented with spaces, around `NumberRangeWarning
-  number_range_warning;` and `number_range_warning.Check(elastic_model);`.
-- **Change.** Regenerate `function_list.cpp` with the script; restore the spaces in `physical_decide.cpp`.
-- **Done when.** `git diff master -- src/function/function_list.cpp` shows only the function's entry;
-  `git diff --check` is clean; the build passes. No test run is needed beyond the build.
-
 ## H-38 — The plan helpers A1, N1 and R1 each copy
 
 - **Problem.** `architecture/rules.md` § Keep the layer lean moves a helper to shared code once a second rule needs it.
@@ -103,38 +93,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Needs.** H-39.
 - **Done when.** A tiny square factor warns on A1 and N1 alike; the existing warning tests of A1, N1 and R1 pass.
 
-## H-42 — One warning state per query for both paths
-
-- **Problem.** The solver path says the warning once per `FinalizeSolveResult` (one `NumberRangeWarning` per DECIDE
-  operator, `physical_decide.cpp`), though `ilp_solver.hpp` says "one instance lives for one query". The direct path
-  says it once per query (`DecideNumberWarningState`, `decide_warn_numbers.cpp`). A query with two DECIDE nodes prints
-  the line twice. `decide_numeric_policy.hpp` says DeciDB sets its tolerances "on every backend", but
-  `DECIDE_OPTIMALITY_TOLERANCE` is set on Gurobi only; HiGHS keeps its tighter default.
-- **Change.** Declare `DecideNumberWarningState` with a `Say()` in a header; `SolveModel` calls it through
-  `SolveModelOptions` when the model holds such a number; delete `NumberRangeWarning`. Reword the tolerance comment to
-  say which backend reads the optimality tolerance.
-- **Done when.** A query with a solver DECIDE and a direct DECIDE that both warn prints one line; the warning tests pass
-  on `DECIDB_FORCE_SOLVER=highs make decide-test` and `make decide-test`.
-
-## H-43 — `decide_warn_numbers` is internal
-
-- **Problem.** `decide_warn_numbers()` is listed by `duckdb_functions()` and a user can call it
-  (`functions.json`, `generic_functions.hpp`). DuckDB names its plan-internal functions with `__internal_`
-  (`compressed_materialization/functions.json`).
-- **Change.** Rename it `__internal_decide_warn_numbers`; `DirectWarnIf` calls the new name.
-- **Done when.** The warning tests pass; `SELECT * FROM duckdb_functions() WHERE function_name LIKE 'decide_warn%'` is
-  empty.
-
-## H-44 — The warning's text
-
-- **Ruling (owner, 2026-11-06).** The line is `DECIDE: a very large or very small number may make this answer
-  inaccurate. Scale its data toward 1.` on both paths.
-- **Problem.** The line reads `very large or very small number detected - numerical precision may make the solution
-  unstable`. It has no `DECIDE:` prefix, unlike every other DECIDE message, so a script's stderr does not say where it
-  came from, and it gives no action. The too-large error ends "Scale its data down."
-- **Change.** Replace the string in `decide_numeric_policy.hpp` and the tests' expected line (`decidb_cli.py`).
-- **Done when.** `make decide-test` passes with the new line on both paths.
-
 ## H-45 — Framework docs describe the shared code as it is
 
 - **Problem.** `done.md` says "A1 is its only user until R1 is built on it" and "A1 reads constants and squares itself";
@@ -146,12 +104,3 @@ solver path answers those queries, so none of them is wrong, only slower.
   `done.md`, linked from each rule; state the bound reader's wider scope in its header and `done.md`.
 - **Needs.** H-38, H-39, H-40, H-41.
 - **Done when.** Every helper the rules call is listed once; no rule `done.md` restates the warning rule; doc-only.
-
-## H-46 — Test helpers say "number range"
-
-- **Problem.** `decidb_cli.py` (`_LARGE_NUMBER_WARNING`, `LargeNumberWarningMismatch`, `_settle_large_number_warning`),
-  the `expect_large_numbers` and `large_numbers` arguments, and `_large_numbers.writes_large_number` also cover small
-  numbers.
-- **Change.** Rename them to the number-range wording. Do not rename any oracle test function (the cache keys on it).
-- **Done when.** `make decide-test` passes; `grep -rn large_number test/decide` finds only test function and file names, which keep
-  their names.

@@ -259,8 +259,8 @@ backends take doubles, so every value ends up there.
   number, a row within 1e-6 of its limit, and an objective that improves by less than 1e-6 as optimal; numbers at these
   sizes can carry that slack into a visible error. When the model sent to a solver holds a coefficient of 1e6 or more, a
   limit or bound of about 4.5e9 or more (a constant DeciDB adds counts too), or a nonzero objective coefficient of 1e-6
-  or less (`AVG` over a million rows has one), stderr shows once: *very large or very small number detected - numerical
-  precision may make the solution unstable*. The query solves as usual. A query answered by direct solve (§10) uses no
+  or less (`AVG` over a million rows has one), stderr shows once per query: *DECIDE: a very large or very small number may
+  make this answer inaccurate. Scale its data toward 1.* The query solves as usual. A query answered by direct solve (§10) uses no
   solver, so these sizes do not apply to it; it prints the same line where its own arithmetic loses precision.
 
 ## 4. Objective
