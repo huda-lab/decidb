@@ -169,7 +169,7 @@ static bool IsOrderableWindowFunction(ExpressionType type) {
 	}
 }
 
-unique_ptr<ParsedExpression> Transformer::TransformFuncCall(duckdb_libpgquery::PGFuncCall &root) {
+unique_ptr<ParsedExpression> Transformer::TransformFuncCallInternal(duckdb_libpgquery::PGFuncCall &root) {
 	auto name = root.funcname;
 	string catalog, schema, function_name;
 	if (name->length == 3) {
@@ -417,6 +417,16 @@ unique_ptr<ParsedExpression> Transformer::TransformFuncCall(duckdb_libpgquery::P
 	SetQueryLocation(*function, root.location);
 
 	return std::move(function);
+}
+
+// The forms TransformFuncCallInternal rewrites into other expressions (IF, IFNULL, construct_array) leave without a
+// location; they take the call's, so a refusal can point at the call.
+unique_ptr<ParsedExpression> Transformer::TransformFuncCall(duckdb_libpgquery::PGFuncCall &root) {
+	auto result = TransformFuncCallInternal(root);
+	if (!result->query_location.IsValid()) {
+		SetQueryLocation(*result, root.location);
+	}
+	return result;
 }
 
 unique_ptr<ParsedExpression> Transformer::TransformSQLValueFunction(duckdb_libpgquery::PGSQLValueFunction &node) {

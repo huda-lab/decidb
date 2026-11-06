@@ -341,6 +341,23 @@ class TestShapeCheckRefusals:
         assert f"In the SUCH THAT clause `{constraint}`" in result.stderr or "has a term of degree" in result.stderr
         assert "LINE " in result.stderr and "^" in result.stderr, result.stderr
 
+    @pytest.mark.parametrize("term", ["COALESCE(x, 0)", "IFNULL(x, 0)"], ids=["coalesce", "ifnull"])
+    def test_null_replacement_refusal_underlines_its_term(self, decidb_cli, term):
+        """COALESCE is a parser node of its own and IFNULL a rewritten call; each carries its source location."""
+        result = decidb_cli.execute_raw(
+            f"""
+            SELECT id, x, y FROM {_TABLE} DECIDE x(REAL), y(REAL)
+            SUCH THAT SUM({term}) <= {_UB}
+            MAXIMIZE SUM(x + y)
+        """
+        )
+        assert result.returncode != 0
+        assert "cannot take a DECIDE variable" in result.stderr, result.stderr
+        lines = result.stderr.splitlines()
+        source = next(line for line in lines if line.startswith("LINE "))
+        caret = lines[lines.index(source) + 1]
+        assert caret.index("^") == source.index(term), result.stderr
+
     def test_data_weight_on_a_square_is_refused_on_highs(self, decidb_cli_highs):
         """A data weight's sign is known only when the query runs, so the square may be non-convex: HiGHS cannot
         take it, and the gate says so before a row is read."""

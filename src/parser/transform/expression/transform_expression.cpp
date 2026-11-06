@@ -53,7 +53,7 @@ unique_ptr<ParsedExpression> Transformer::TransformExpression(duckdb_libpgquery:
 	case duckdb_libpgquery::T_PGSubLink:
 		return TransformSubquery(PGCast<duckdb_libpgquery::PGSubLink>(node));
 	case duckdb_libpgquery::T_PGCoalesceExpr:
-		return TransformCoalesce(PGCast<duckdb_libpgquery::PGAExpr>(node));
+		return TransformCoalesce(PGCast<duckdb_libpgquery::PGCoalesceExpr>(node));
 	case duckdb_libpgquery::T_PGNullTest:
 		return TransformNullTest(PGCast<duckdb_libpgquery::PGNullTest>(node));
 	case duckdb_libpgquery::T_PGResTarget:

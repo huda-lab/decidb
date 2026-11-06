@@ -225,7 +225,7 @@ private:
 	//! Transform a Postgres type cast into an Expression
 	unique_ptr<ParsedExpression> TransformTypeCast(duckdb_libpgquery::PGTypeCast &root);
 	//! Transform a Postgres coalesce into an Expression
-	unique_ptr<ParsedExpression> TransformCoalesce(duckdb_libpgquery::PGAExpr &root);
+	unique_ptr<ParsedExpression> TransformCoalesce(duckdb_libpgquery::PGCoalesceExpr &root);
 	//! Transform a Postgres column reference into an Expression
 	unique_ptr<ParsedExpression> TransformColumnRef(duckdb_libpgquery::PGColumnRef &root);
 	//! Transform a Postgres constant value into an Expression
@@ -238,6 +238,7 @@ private:
 	unique_ptr<ParsedExpression> TransformExpression(duckdb_libpgquery::PGNode &node);
 	//! Transform a Postgres function call into an Expression
 	unique_ptr<ParsedExpression> TransformFuncCall(duckdb_libpgquery::PGFuncCall &root);
+	unique_ptr<ParsedExpression> TransformFuncCallInternal(duckdb_libpgquery::PGFuncCall &root);
 	//! Transform a Postgres boolean expression into an Expression
 	unique_ptr<ParsedExpression> TransformInterval(duckdb_libpgquery::PGIntervalConstant &root);
 	//! Transform a Postgres lambda node [e.g. (x, y) -> x + y] into a lambda expression
