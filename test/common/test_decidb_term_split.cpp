@@ -46,7 +46,8 @@ duckdb::vector<DecideSplitTerm> SplitObjectiveBody(Connection &con, CanonicalObj
 	auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
 	DecideTermSplitter splitter(*con.context, objective.decide->decide_index, objective.decide->decide_variables);
 	duckdb::vector<DecideSplitTerm> terms;
-	splitter.Split(*aggregate.children[0], atoms[0].sign, terms);
+	// The reader binds the products it builds, which reads the catalog, as the optimizer does inside its transaction.
+	con.context->RunFunctionInTransaction([&]() { splitter.Split(*aggregate.children[0], atoms[0].sign, terms); });
 	return terms;
 }
 
@@ -88,51 +89,58 @@ TEST_CASE("Canonical atoms carry the sign and the factor canonicalization left o
 	REQUIRE(atoms[1].scale.aggregate != nullptr);
 }
 
-TEST_CASE("The term splitter names every term kind and never reads ABS(x) as x", "[decidb]") {
+TEST_CASE("The term reader reads every degree and never reads ABS(x) as x", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SECTION("linear and constant") {
 		CanonicalObjective objective(con, "SUM(w * x + t)");
 		auto terms = SplitObjectiveBody(con, objective);
 		REQUIRE(terms.size() == 2);
-		REQUIRE(terms[0].kind == DecideTermKind::LINEAR);
+		REQUIRE(terms[0].IsLinear());
 		REQUIRE(terms[0].var_a == 0);
-		REQUIRE(terms[1].kind == DecideTermKind::CONSTANT);
+		REQUIRE(terms[1].IsConstant());
 	}
 	SECTION("product of two decisions") {
 		CanonicalObjective objective(con, "SUM(w * x * y)");
 		auto terms = SplitObjectiveBody(con, objective);
 		REQUIRE(terms.size() == 1);
-		REQUIRE(terms[0].kind == DecideTermKind::PRODUCT);
-		REQUIRE(terms[0].var_a != terms[0].var_b);
+		REQUIRE(terms[0].IsProduct());
+		REQUIRE(terms[0].coefficient != nullptr);
+		REQUIRE(terms[0].factors[0].form.size() == 1);
+		REQUIRE(terms[0].factors[1].form.size() == 1);
+		REQUIRE(terms[0].factors[0].form[0].var_a != terms[0].factors[1].form[0].var_a);
 	}
 	SECTION("square") {
 		CanonicalObjective objective(con, "SUM(POWER(x - t, 2))");
 		auto terms = SplitObjectiveBody(con, objective);
 		REQUIRE(terms.size() == 1);
-		REQUIRE(terms[0].kind == DecideTermKind::SQUARE);
-		REQUIRE(terms[0].inner.size() == 2);
-		REQUIRE(terms[0].inner[0].kind == DecideTermKind::LINEAR);
-		REQUIRE(terms[0].inner[1].kind == DecideTermKind::CONSTANT);
-		REQUIRE(terms[0].inner[1].sign == -1);
+		REQUIRE(terms[0].IsSquare());
+		REQUIRE(terms[0].coefficient == nullptr);
+		auto &form = terms[0].factors[0].form;
+		REQUIRE(form.size() == 2);
+		REQUIRE(form[0].IsLinear());
+		REQUIRE(form[1].IsConstant());
+		REQUIRE(form[1].sign == -1);
 	}
 	SECTION("absolute value, alone and with a data coefficient") {
 		for (auto &body : {"ABS(x - t)", "w * ABS(x - t)"}) {
 			CanonicalObjective objective(con, string("SUM(") + body + ")");
 			auto terms = SplitObjectiveBody(con, objective);
 			REQUIRE(terms.size() == 1);
-			REQUIRE(terms[0].kind == DecideTermKind::ABS);
+			REQUIRE(terms[0].IsAbs());
+			REQUIRE(terms[0].degree == 1);
 			REQUIRE(terms[0].inner.size() == 2);
-			REQUIRE(terms[0].inner[0].kind == DecideTermKind::LINEAR);
+			REQUIRE(terms[0].inner[0].IsLinear());
 		}
 	}
-	SECTION("a decision under ABS inside a linear expression is unknown") {
+	SECTION("a decision under ABS inside a square stays an ABS, not a linear term") {
 		CanonicalObjective objective(con, "SUM(POWER(ABS(x), 2))");
 		auto terms = SplitObjectiveBody(con, objective);
 		REQUIRE(terms.size() == 1);
-		REQUIRE(terms[0].kind == DecideTermKind::SQUARE);
-		REQUIRE(terms[0].inner.size() == 1);
-		REQUIRE(terms[0].inner[0].kind == DecideTermKind::UNKNOWN);
-		REQUIRE(!terms[0].inner[0].user_error);
+		REQUIRE(terms[0].IsSquare());
+		auto &form = terms[0].factors[0].form;
+		REQUIRE(form.size() == 1);
+		REQUIRE(form[0].IsAbs());
+		REQUIRE(!form[0].IsLinear());
 	}
 }

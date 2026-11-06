@@ -107,7 +107,7 @@ struct Condition final : DirectApplicabilityCondition {
 //! Every term is the decision times a coefficient.
 bool OnlyDecisionTerms(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
-		if (term.kind != DecideTermKind::LINEAR || term.var_a != 0) {
+		if (!term.IsLinear() || term.var_a != 0) {
 			return false;
 		}
 	}
@@ -157,7 +157,7 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 	double slope = 0;
 	for (auto &term : terms) {
 		double value;
-		if (term.kind != DecideTermKind::LINEAR || term.var_a != 0 || !term.coefficient ||
+		if (!term.IsLinear() || term.var_a != 0 || !term.coefficient ||
 		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
 			return false;
 		}
@@ -546,7 +546,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			return false;
 		}
 		for (auto &term : part.terms) {
-			if (term.kind != DecideTermKind::LINEAR || term.var_a != 0) {
+			if (!term.IsLinear() || term.var_a != 0) {
 				return false;
 			}
 		}

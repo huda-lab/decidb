@@ -116,6 +116,9 @@ bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t d
 bool DecideFactorListsEqual(const vector<DecideProductFactor> &left, const vector<DecideProductFactor> &right,
                             idx_t decide_index);
 
+//! The coefficient of `form` as a left-deep chain of its factors; null when it has none (the coefficient is 1).
+unique_ptr<Expression> BuildDecideProductCoefficient(ClientContext &context, const DecideProductForm &form);
+
 //! `form` written as the spelling: a left-deep chain of the coefficient's factors, then the decision-bearing ones,
 //! under a unary minus for a negative sign, plus `0 * t` for each of its zero terms.
 unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const DecideProductForm &form);

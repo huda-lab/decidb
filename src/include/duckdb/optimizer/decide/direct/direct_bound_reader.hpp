@@ -186,9 +186,11 @@ struct DirectSquareTerm {
 bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
                             DirectConstantTerm &out);
 
-//! Reads a SQUARE term of a part. False when its scale is zero or not finite, its inner expression is not linear in one
-//! decision, or a value in it is not a numeric value of the source row.
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectSquareTerm &out);
+//! Reads a square of a part: a linear form squared under a constant coefficient. False when the coefficient is data,
+//! zero or not finite, the form is not linear in one decision, or a value in it is not a numeric value of the source
+//! row.
+bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, const string &clause,
+                          DirectSquareTerm &out);
 
 //! The rows an objective part reads: those the objective's `when` and the part's own both keep, over the source, or
 //! null for every row. A row they drop (a false or NULL `when`) has no coefficient in the part, which a rule reads as

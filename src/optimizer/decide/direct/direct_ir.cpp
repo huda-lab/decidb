@@ -21,14 +21,18 @@ namespace duckdb {
 
 namespace {
 
-//! Whether any term is unknown, including terms nested in a square or an absolute value.
-bool HasUnknownTerm(const vector<DecideSplitTerm> &terms) {
+//! Whether any term holds algebra no rule reads. A part's own terms may be an ABS; what an ABS or a factor holds is
+//! linear algebra only, so an ABS or a product there is unknown.
+bool HasUnknownTerm(const vector<DecideSplitTerm> &terms, bool nested = false) {
 	for (auto &term : terms) {
-		if (term.kind == DecideTermKind::UNKNOWN) {
+		bool readable = nested ? !term.opaque && term.degree <= 1 : !term.opaque || term.IsAbs();
+		if (!readable || HasUnknownTerm(term.inner, true)) {
 			return true;
 		}
-		if (HasUnknownTerm(term.inner)) {
-			return true;
+		for (auto &factor : term.factors) {
+			if (HasUnknownTerm(factor.form, true)) {
+				return true;
+			}
 		}
 	}
 	return false;
@@ -236,7 +240,9 @@ private:
 		return filter;
 	}
 
-	//! Each coefficient of `term` read as 0 on a row `valid` fails: a SUM that skips a row adds nothing for it.
+	//! Each coefficient of `term` read as 0 on a row `valid` fails: a SUM that skips a row adds nothing for it. A term
+	//! of degree 2 is 0 when its factors are, so the forms it multiplies are guarded and its coefficient stays the
+	//! constant a rule reads.
 	void GuardCoefficients(const ExpressionBuilder &calc, const ExprPtr &valid, DecideSplitTerm &term) const {
 		auto zero = [&](const LogicalType &type) {
 			return calc.Constant(Value::INTEGER(0).DefaultCastAs(type));
@@ -248,6 +254,14 @@ private:
 			guarded->SetAlias(NULL_GUARD_TAG);
 			return guarded;
 		};
+		for (auto &factor : term.factors) {
+			for (auto &part : factor.form) {
+				GuardCoefficients(calc, valid, part);
+			}
+		}
+		if (!term.factors.empty()) {
+			return;
+		}
 		if (term.coefficient) {
 			term.coefficient = guard(*term.coefficient);
 		} else {

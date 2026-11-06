@@ -91,7 +91,7 @@ bool OnlyLinearTerms(const vector<DecideSplitTerm> &terms, idx_t decision_count)
 		return false;
 	}
 	for (auto &term : terms) {
-		if (term.kind != DecideTermKind::LINEAR || term.var_a >= decision_count || !term.coefficient) {
+		if (!term.IsLinear() || term.var_a >= decision_count || !term.coefficient) {
 			return false;
 		}
 	}

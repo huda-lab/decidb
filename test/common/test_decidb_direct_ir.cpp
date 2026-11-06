@@ -6,6 +6,7 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/planner.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -357,7 +358,7 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	// L1 reads as its definition: SUM of an absolute value.
 	REQUIRE(constraints[7].lhs[0].reducer == DirectReducer::SUM);
 	REQUIRE(constraints[7].lhs[0].terms.size() == 1);
-	REQUIRE(constraints[7].lhs[0].terms[0].kind == DecideTermKind::ABS);
+	REQUIRE(constraints[7].lhs[0].terms[0].IsAbs());
 }
 
 TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, never an exception", "[decidb]") {
@@ -384,8 +385,8 @@ TEST_CASE("Direct-solve IR models products and squares, and declines a two-level
 	                 IRQuery("x(INT), y(INT)", "SUM(x*y) <= 4 AND SUM(POWER(x - cap, 2)) <= 9", "MAXIMIZE SUM(w*x)"));
 	auto &constraints = products.ir.constraints;
 	REQUIRE(constraints.size() == 2);
-	REQUIRE(constraints[0].lhs[0].terms[0].kind == DecideTermKind::PRODUCT);
-	REQUIRE(constraints[1].lhs[0].terms[0].kind == DecideTermKind::SQUARE);
+	REQUIRE(constraints[0].lhs[0].terms[0].IsProduct());
+	REQUIRE(constraints[1].lhs[0].terms[0].IsSquare());
 
 	// No rule models `outer(per k: inner(e) by (k))` yet.
 	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
@@ -479,22 +480,26 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	DuckDB db(nullptr);
 	Connection con(db);
 
-	// A square carries its scale and its linear inner terms: x - w is [LINEAR x, CONSTANT w with sign -1].
+	// A square carries its coefficient (none is 1) and the linear form it squares: x - w is [x, w with sign -1].
 	QueryIR square(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2))"));
 	REQUIRE(square.ir.objective.status == DirectAnalysisStatus::PROVED);
 	REQUIRE(square.ir.objective.parts.size() == 1);
 	auto &terms = square.ir.objective.parts[0].terms;
 	REQUIRE(terms.size() == 1);
-	REQUIRE(terms[0].kind == DecideTermKind::SQUARE);
-	REQUIRE(terms[0].square_scale == 1.0);
-	REQUIRE(terms[0].inner.size() == 2);
-	REQUIRE(terms[0].inner[0].kind == DecideTermKind::LINEAR);
-	REQUIRE(terms[0].inner[1].kind == DecideTermKind::CONSTANT);
-	REQUIRE(terms[0].inner[1].sign == -1);
+	REQUIRE(terms[0].IsSquare());
+	REQUIRE(terms[0].coefficient == nullptr);
+	auto &form = terms[0].factors[0].form;
+	REQUIRE(form.size() == 2);
+	REQUIRE(form[0].IsLinear());
+	REQUIRE(form[1].IsConstant());
+	REQUIRE(form[1].sign == -1);
 
-	// A constant factor inside the SUM folds into the square's scale; one outside stays on the part.
+	// A constant factor inside the SUM is the square's coefficient; one outside stays on the part.
 	QueryIR inside(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(3*POWER(x - w, 2))"));
-	REQUIRE(inside.ir.objective.parts[0].terms[0].square_scale == 3.0);
+	auto &inside_square = inside.ir.objective.parts[0].terms[0];
+	REQUIRE(inside_square.IsSquare());
+	REQUIRE(inside_square.coefficient != nullptr);
+	REQUIRE(ExpressionExecutor::EvaluateScalar(*con.context, *inside_square.coefficient).GetValue<double>() == 3.0);
 	QueryIR outside(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE 2*SUM(POWER(x - w, 2))"));
 	REQUIRE(outside.ir.objective.parts[0].scale != nullptr);
 	REQUIRE(!outside.ir.objective.parts[0].scale_divides);
@@ -507,19 +512,23 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	QueryIR expanded(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(x*x - 2*w*x + 5)"));
 	auto &expanded_terms = expanded.ir.objective.parts[0].terms;
 	REQUIRE(expanded_terms.size() == 3);
-	REQUIRE(expanded_terms[0].kind == DecideTermKind::SQUARE);
-	REQUIRE(expanded_terms[1].kind == DecideTermKind::LINEAR);
+	REQUIRE(expanded_terms[0].IsSquare());
+	REQUIRE(expanded_terms[1].IsLinear());
 	REQUIRE(expanded_terms[1].sign == -1);
-	REQUIRE(expanded_terms[2].kind == DecideTermKind::CONSTANT);
+	REQUIRE(expanded_terms[2].IsConstant());
 
-	// A row-valued coefficient inside the square is allowed; one outside it, or x*x with a coefficient, is not
-	// modelled.
+	// A row-valued coefficient inside the square is in its form; one outside it, written either way, is the square's
+	// coefficient, which the IR reads and a rule's square reader declines (DirectReadSquareTerm).
 	QueryIR inner_weight(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2))"));
 	REQUIRE(inner_weight.ir.objective.status == DirectAnalysisStatus::PROVED);
-	QueryIR outer_weight(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(w*POWER(x - 1, 2))"));
-	REQUIRE(outer_weight.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
-	QueryIR cubic(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(w*x*x)"));
-	REQUIRE(cubic.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
+	for (auto objective : {"MINIMIZE SUM(w*POWER(x - 1, 2))", "MINIMIZE SUM(w*x*x)"}) {
+		QueryIR outer_weight(con, IRQuery("x(REAL)", "x <= cap", objective));
+		REQUIRE(outer_weight.ir.objective.status == DirectAnalysisStatus::PROVED);
+		auto &weighted = outer_weight.ir.objective.parts[0].terms[0];
+		REQUIRE(weighted.IsSquare());
+		REQUIRE(weighted.coefficient != nullptr);
+		REQUIRE(!weighted.coefficient->IsFoldable());
+	}
 
 	// An objective-level WHEN is a scope on the objective; no objective is no part at all.
 	QueryIR when(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE when flag: SUM(POWER(x - w, 2))"));
@@ -531,7 +540,7 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	// A per-row bound with a coefficient keeps the coefficient in the term; the constant moves to the right side.
 	QueryIR affine(con, IRQuery("x(REAL)", "2*x + 1 <= cap", "MAXIMIZE SUM(x)"));
 	REQUIRE(affine.ir.constraints[0].lhs[0].terms.size() == 1);
-	REQUIRE(affine.ir.constraints[0].lhs[0].terms[0].kind == DecideTermKind::LINEAR);
+	REQUIRE(affine.ir.constraints[0].lhs[0].terms[0].IsLinear());
 
 	// The output type follows the declared type.
 	QueryIR types(con, IRQuery("x(REAL), n(INT), b(BOOL)", "x <= cap AND n <= cap AND b <= 1", "MAXIMIZE SUM(x)"));

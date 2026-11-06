@@ -148,8 +148,7 @@ public:
 				return nullptr;
 			}
 			for (auto &term : part.terms) {
-				if (term.kind != DecideTermKind::LINEAR && term.kind != DecideTermKind::CONSTANT &&
-				    term.kind != DecideTermKind::SQUARE) {
+				if (!term.IsLinear() && !term.IsConstant() && !term.IsSquare()) {
 					return nullptr;
 				}
 			}
@@ -215,18 +214,18 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			}
 		}
 		for (auto &term : part.terms) {
-			if (term.kind == DecideTermKind::LINEAR) {
+			if (term.IsLinear()) {
 				continue;
 			}
 			Term built;
-			if (term.kind == DecideTermKind::CONSTANT) {
+			if (term.IsConstant()) {
 				built.kind = Term::Kind::CONSTANT;
 				if (!DirectReadConstantTerm(ir, term, objective.written, built.constant)) {
 					return false;
 				}
 			} else {
 				built.kind = Term::Kind::SQUARE;
-				if (condition.has_square || !DirectReadSquareTerm(ir, term, objective.written, built.square)) {
+				if (condition.has_square || !DirectReadSquareTerm(ir, context, term, objective.written, built.square)) {
 					return false;
 				}
 				condition.has_square = true;

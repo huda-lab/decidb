@@ -145,18 +145,32 @@ DirectPart &LeftPart(DirectIR &ir, idx_t constraint = 0) {
 
 DecideSplitTerm CopyTerm(const DecideSplitTerm &term) {
 	DecideSplitTerm copy;
-	copy.kind = term.kind;
 	copy.sign = term.sign;
 	if (term.coefficient) {
 		copy.coefficient = term.coefficient->Copy();
 	}
-	copy.square_scale = term.square_scale;
+	copy.degree = term.degree;
 	copy.var_a = term.var_a;
-	copy.var_b = term.var_b;
+	for (auto &factor : term.factors) {
+		DecideSplitFactor read;
+		read.power = factor.power;
+		for (auto &part : factor.form) {
+			read.form.push_back(CopyTerm(part));
+		}
+		copy.factors.push_back(std::move(read));
+	}
+	if (term.opaque) {
+		copy.opaque = term.opaque->Copy();
+	}
 	for (auto &inner : term.inner) {
 		copy.inner.push_back(CopyTerm(inner));
 	}
 	return copy;
+}
+
+//! The linear form a square term squares.
+duckdb::vector<DecideSplitTerm> &SquareForm(DecideSplitTerm &term) {
+	return term.factors[0].form;
 }
 
 //! A column of the given type that is not one of the query's source columns.
@@ -409,7 +423,7 @@ duckdb::vector<Shape> A1AppliesShapes() {
 	shapes.push_back(A1(
 	    "a square over two terms of one decision", "x <= cap",
 	    [](DirectIR &ir) {
-		    auto &inner = ir.objective.parts[0].terms[0].inner;
+		    auto &inner = SquareForm(ir.objective.parts[0].terms[0]);
 		    inner.push_back(CopyTerm(inner[0]));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
@@ -498,18 +512,24 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	    "an objective constant with no value", "x <= cap",
 	    [](DirectIR &ir) {
 		    for (auto &term : ir.objective.parts[0].terms) {
-			    if (term.kind == DecideTermKind::CONSTANT) {
+			    if (term.IsConstant()) {
 				    term.coefficient.reset();
 			    }
 		    }
 	    },
 	    "MAXIMIZE SUM(w*x + 1)"));
 	shapes.push_back(A1(
-	    "a square scaled by zero", "x <= cap", [](DirectIR &ir) { ir.objective.parts[0].terms[0].square_scale = 0.0; },
+	    "a square scaled by zero", "x <= cap",
+	    [](DirectIR &ir) {
+		    ir.objective.parts[0].terms[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1(
 	    "a square scaled by a number that is not finite", "x <= cap",
-	    [](DirectIR &ir) { ir.objective.parts[0].terms[0].square_scale = std::numeric_limits<double>::quiet_NaN(); },
+	    [](DirectIR &ir) {
+		    ir.objective.parts[0].terms[0].coefficient =
+		        make_uniq<BoundConstantExpression>(Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()));
+	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	// The binder rejects an objective with two quadratic groups, so the second square is added to the IR.
 	shapes.push_back(A1(
@@ -521,17 +541,21 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1(
 	    "a square over a decision that is not declared", "x <= cap",
-	    [](DirectIR &ir) { ir.objective.parts[0].terms[0].inner[0].var_a = 5; }, "MINIMIZE SUM(POWER(x - w, 2))"));
+	    [](DirectIR &ir) { SquareForm(ir.objective.parts[0].terms[0])[0].var_a = 5; },
+	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(
 	    A1("a square over two decisions", "x <= cap", nullptr, "MINIMIZE SUM(POWER(x + y, 2))", "x(REAL), y(REAL)"));
 	shapes.push_back(A1(
 	    "a square over a term that is neither linear nor constant", "x <= cap",
-	    [](DirectIR &ir) { ir.objective.parts[0].terms[0].inner[1].kind = DecideTermKind::ABS; },
+	    [](DirectIR &ir) {
+		    SquareForm(ir.objective.parts[0].terms[0])[1].opaque =
+		        make_uniq<BoundConstantExpression>(Value::INTEGER(0));
+	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1(
 	    "a square over no decision", "x <= cap",
 	    [](DirectIR &ir) {
-		    auto &inner = ir.objective.parts[0].terms[0].inner;
+		    auto &inner = SquareForm(ir.objective.parts[0].terms[0]);
 		    inner.erase(inner.begin());
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
@@ -539,7 +563,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	                    "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
 	shapes.push_back(A1(
 	    "a square term with no coefficient", "x <= cap",
-	    [](DirectIR &ir) { ir.objective.parts[0].terms[0].inner[1].coefficient.reset(); },
+	    [](DirectIR &ir) { SquareForm(ir.objective.parts[0].terms[0])[1].coefficient.reset(); },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	return shapes;
 }
@@ -848,13 +872,14 @@ Shape N1(const string &branch, const string &constraints, Edit edit = nullptr, c
 //! A second square, which the front end refuses to build from SQL: `x^2` on the IR's first decision.
 void AddSquare(duckdb::vector<DecideSplitTerm> &terms) {
 	DecideSplitTerm inner;
-	inner.kind = DecideTermKind::LINEAR;
+	inner.degree = 1;
 	inner.var_a = 0;
 	inner.coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
 	DecideSplitTerm square;
-	square.kind = DecideTermKind::SQUARE;
-	square.square_scale = 1.0;
-	square.inner.push_back(std::move(inner));
+	square.degree = 2;
+	square.factors.resize(1);
+	square.factors[0].power = 2;
+	square.factors[0].form.push_back(std::move(inner));
 	terms.push_back(std::move(square));
 }
 
@@ -933,8 +958,10 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a negated sum", "-SUM(POWER(x, 2)) >= -25"));
 	shapes.push_back(N1("an average", "AVG(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("a WHEN that reads more than the source", "when txid_current() >= 0: SUM(POWER(x, 2)) <= 25"));
-	shapes.push_back(
-	    N1("a linear limit", N1_LIMIT, [](DirectIR &ir) { LeftPart(ir).terms[0].kind = DecideTermKind::LINEAR; }));
+	shapes.push_back(N1("a linear limit", N1_LIMIT, [](DirectIR &ir) {
+		auto &term = LeftPart(ir).terms[0];
+		term = CopyTerm(SquareForm(term)[0]);
+	}));
 	shapes.push_back(N1("a square and a linear term in the limit", "SUM(POWER(x, 2) + w * x) <= 25"));
 	shapes.push_back(N1("a square and a constant term in the limit", "SUM(POWER(x, 2) + 1) <= 25"));
 	shapes.push_back(N1("a ball off center by a constant", "SUM(POWER(x - 1, 2)) <= 25"));
@@ -945,7 +972,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(
 	    N1("a center in the limit fixed only within the query", "SUM(POWER(x + txid_current(), 2)) <= 25"));
 	shapes.push_back(N1("a square of slope zero in the limit", N1_LIMIT, [](DirectIR &ir) {
-		LeftPart(ir).terms[0].inner[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+		SquareForm(LeftPart(ir).terms[0])[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 	}));
 	shapes.push_back(N1("a square past a DOUBLE", "SUM(POWER(1e200 * x, 2)) <= 25"));
 	shapes.push_back(N1("a negative square", "SUM(-POWER(x, 2)) <= 25"));
@@ -984,8 +1011,16 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	// ProveObjective: the terms.
 	shapes.push_back(
 	    N1Objective("an objective constant fixed only within the query", "MAXIMIZE SUM(w*x + txid_current())"));
-	shapes.push_back(N1Objective("a term that is neither linear, constant nor a square", N1_OBJECTIVE,
-	                             [](DirectIR &ir) { ir.objective.parts[0].terms[0].kind = DecideTermKind::PRODUCT; }));
+	shapes.push_back(
+	    N1Objective("a term that is neither linear, constant nor a square", N1_OBJECTIVE, [](DirectIR &ir) {
+		    auto &term = ir.objective.parts[0].terms[0];
+		    DecideSplitFactor factor;
+		    factor.form.push_back(CopyTerm(term));
+		    term.degree = 2;
+		    term.factors.push_back(std::move(factor));
+		    term.factors.push_back(DecideSplitFactor {});
+		    term.factors[1].form.push_back(CopyTerm(term.factors[0].form[0]));
+	    }));
 	shapes.push_back(N1Objective("two squares in one part", "MINIMIZE SUM(POWER(x - w, 2))",
 	                             [](DirectIR &ir) { AddSquare(ir.objective.parts[0].terms); }));
 	shapes.push_back(N1Objective("two squares in two parts", "MINIMIZE SUM(POWER(x, 2)) + SUM(w*x)",
@@ -997,7 +1032,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	                             "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
 	shapes.push_back(
 	    N1Objective("a square of slope zero in the objective", "MINIMIZE SUM(POWER(x, 2))", [](DirectIR &ir) {
-		    ir.objective.parts[0].terms[0].inner[0].coefficient =
+		    SquareForm(ir.objective.parts[0].terms[0])[0].coefficient =
 		        make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 	    }));
 	shapes.push_back(N1Objective("a square past a DOUBLE", "MINIMIZE SUM(POWER(1e200 * x, 2))"));

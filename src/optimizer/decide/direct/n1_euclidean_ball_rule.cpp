@@ -155,11 +155,11 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	condition.per_class_keys = std::move(scope.classes);
 	// DirectProveSharedScope has proved that the clause is a plain SUM.
 	auto &terms = clause->PlainSum()->terms;
-	if (terms.size() != 1 || terms[0].kind != DecideTermKind::SQUARE) {
+	if (terms.size() != 1 || !terms[0].IsSquare()) {
 		return false;
 	}
 	DirectSquareTerm square;
-	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner_constant.empty() ||
+	if (!DirectReadSquareTerm(ir, context, terms[0], clause->written, square) || !square.inner_constant.empty() ||
 	    !FoldSquareFactor(context, square, condition.square_factor) || condition.square_factor <= 0.0) {
 		return false;
 	}
@@ -206,7 +206,7 @@ bool Rule::ProveBox(const DirectIR &ir, ClientContext &context, Condition &condi
 //! The square of an objective part: its factor folds to one constant, and it is convex in the sense.
 bool Rule::ProveSquare(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, Part &read) const {
 	double factor;
-	if (!DirectReadSquareTerm(ir, term, ir.objective.written, read.square) ||
+	if (!DirectReadSquareTerm(ir, context, term, ir.objective.written, read.square) ||
 	    !FoldSquareFactor(context, read.square, factor)) {
 		return false;
 	}
@@ -221,17 +221,14 @@ bool Rule::ProveSquare(const DirectIR &ir, ClientContext &context, const DecideS
 //! A term of an objective part: linear (DirectReadLinearPart read it), a per-row constant, or the one square.
 bool Rule::ProveObjectiveTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term,
                               Condition &condition, Part &read) const {
-	switch (term.kind) {
-	case DecideTermKind::LINEAR:
+	if (term.IsLinear()) {
 		return true;
-	case DecideTermKind::CONSTANT:
+	}
+	if (term.IsConstant()) {
 		read.constants.emplace_back();
 		return DirectReadConstantTerm(ir, term, ir.objective.written, read.constants.back());
-	case DecideTermKind::SQUARE:
-		return !condition.has_square && !read.has_square && ProveSquare(ir, context, term, read);
-	default:
-		return false;
 	}
+	return term.IsSquare() && !condition.has_square && !read.has_square && ProveSquare(ir, context, term, read);
 }
 
 //! K is one constant on every row with a linear term. A `when`, or a NULL a guard skips, leaves a row with no square,

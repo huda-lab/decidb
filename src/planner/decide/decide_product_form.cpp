@@ -305,14 +305,21 @@ static unique_ptr<Expression> BuildFactor(ClientContext &context, const DecidePr
 	            make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(factor.power))));
 }
 
+unique_ptr<Expression> BuildDecideProductCoefficient(ClientContext &context, const DecideProductForm &form) {
+	unique_ptr<Expression> result;
+	for (auto &factor : form.coefficient) {
+		auto term = BuildFactor(context, factor);
+		result = result ? Bind(context, "*", std::move(result), std::move(term)) : std::move(term);
+	}
+	return result;
+}
+
 //! The form written as a left-deep chain: the coefficient's factors, then the decision-bearing ones.
 unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const DecideProductForm &form) {
-	unique_ptr<Expression> result;
-	for (auto *factors : {&form.coefficient, &form.factors}) {
-		for (auto &factor : *factors) {
-			auto term = BuildFactor(context, factor);
-			result = result ? Bind(context, "*", std::move(result), std::move(term)) : std::move(term);
-		}
+	auto result = BuildDecideProductCoefficient(context, form);
+	for (auto &factor : form.factors) {
+		auto term = BuildFactor(context, factor);
+		result = result ? Bind(context, "*", std::move(result), std::move(term)) : std::move(term);
 	}
 	if (!result) {
 		result = make_uniq<BoundConstantExpression>(Value::INTEGER(1));

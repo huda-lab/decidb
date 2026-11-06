@@ -174,8 +174,8 @@ static bool ReadAffine(const ExpressionBuilder &calc, const DecideTermSplitter &
 	splitter.Split(row, 1, terms);
 	var_idx = DConstants::INVALID_INDEX;
 	for (auto &term : terms) {
-		bool constant = term.kind == DecideTermKind::CONSTANT;
-		if ((!constant && term.kind != DecideTermKind::LINEAR) || !term.coefficient ||
+		bool constant = term.IsConstant();
+		if ((!constant && !term.IsLinear()) || !term.coefficient ||
 		    (!constant && var_idx != DConstants::INVALID_INDEX && term.var_a != var_idx)) {
 			return false;
 		}

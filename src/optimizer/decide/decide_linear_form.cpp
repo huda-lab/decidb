@@ -38,13 +38,95 @@ static void EnumerateChildrenConst(const Expression &expr,
 	ExpressionIterator::EnumerateChildren(const_cast<Expression &>(expr), callback);
 }
 
-//! The solver path reads what survives lowering: constant, linear, product and square terms. An unknown term is
-//! raised as the error the split recorded for it.
-[[noreturn]] static void ThrowUnknownTerm(const DecideSplitTerm &term) {
-	if (term.user_error) {
-		throw InvalidInputException(term.reason);
+//! The solver path reads what survives lowering: terms of degree 0, 1 and 2. The shape check refused every other
+//! node over a decision and RewriteAbs lowered every ABS, so an opaque term here was built by a rewrite.
+[[noreturn]] static void ThrowOpaqueTerm(const DecideSplitTerm &term) {
+	throw InternalException("DECIDE term '%s' reached term extraction unopened", term.opaque->ToString());
+}
+
+//! The coefficient of a term multiplied by another's, keeping a bare decision's literal 1 out of the product.
+static unique_ptr<Expression> TimesCoefficient(ClientContext &context, unique_ptr<Expression> left,
+                                               const unique_ptr<Expression> &right) {
+	auto is_one = [](const unique_ptr<Expression> &coefficient) {
+		return !coefficient || (coefficient->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+		                        coefficient->Cast<BoundConstantExpression>().value == Value::INTEGER(1));
+	};
+	if (is_one(right)) {
+		return left;
 	}
-	throw InternalException(term.reason);
+	if (is_one(left)) {
+		return right->Copy();
+	}
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(left));
+	children.push_back(right->Copy());
+	return DecideRebindOperator(context, "*", std::move(children));
+}
+
+//! A term of degree 2 in the shapes stage 05 carries: squares with a constant scale, and the pairwise products of two
+//! linear forms, each a bilinear pair, a linear term or a constant. A pair of one decision is a square of it.
+struct DegreeTwoParts {
+	//! Each square: its signed constant scale and the linear form it squares.
+	vector<pair<double, vector<DecideSplitTerm>>> squares;
+	//! Pairwise products: degree 1 or 0 go in `linear`, degree 2 (two different decisions) in `bilinear`.
+	vector<DecideSplitTerm> linear;
+	vector<DecideSplitTerm> bilinear;
+};
+
+//! The constant scale of a square; stage 05 has no slot for a data one (BUG-46).
+static double SquareScale(ClientContext &context, const DecideSplitTerm &term) {
+	double scale = 1.0;
+	if (term.coefficient && !TryEvaluateFoldableDouble(context, *term.coefficient, scale, FOLD_PLAIN)) {
+		throw InvalidInputException(
+		    "DECIDE expression contains an unsupported product factor that still references decision variables "
+		    "after normalization (total degree > 2 or unexpanded nonlinear product). Products must be data "
+		    "factors times one DECIDE variable, or data factors times two different DECIDE variables.");
+	}
+	return static_cast<double>(term.sign) * scale;
+}
+
+static DegreeTwoParts LowerDegreeTwo(ClientContext &context, DecideSplitTerm &term) {
+	DegreeTwoParts parts;
+	if (term.IsSquare()) {
+		parts.squares.emplace_back(SquareScale(context, term), std::move(term.factors[0].form));
+		return parts;
+	}
+	D_ASSERT(term.IsProduct());
+	for (auto &left : term.factors[0].form) {
+		for (auto &right : term.factors[1].form) {
+			if (left.opaque || right.opaque) {
+				ThrowOpaqueTerm(left.opaque ? left : right);
+			}
+			DecideSplitTerm piece;
+			piece.sign = term.sign * left.sign * right.sign;
+			piece.coefficient = term.coefficient ? term.coefficient->Copy() : nullptr;
+			piece.coefficient = TimesCoefficient(context, std::move(piece.coefficient), left.coefficient);
+			piece.coefficient = TimesCoefficient(context, std::move(piece.coefficient), right.coefficient);
+			piece.degree = left.degree + right.degree;
+			if (piece.degree == 2 && left.var_a == right.var_a) {
+				vector<DecideSplitTerm> form(1);
+				form[0].degree = 1;
+				form[0].var_a = left.var_a;
+				form[0].coefficient = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+				parts.squares.emplace_back(SquareScale(context, piece), std::move(form));
+				continue;
+			}
+			if (piece.degree == 2) {
+				piece.var_a = left.var_a;
+				piece.factors.resize(1);
+				piece.factors[0].form.resize(1);
+				piece.factors[0].form[0].var_a = right.var_a;
+				parts.bilinear.push_back(std::move(piece));
+				continue;
+			}
+			piece.var_a = left.degree == 1 ? left.var_a : right.var_a;
+			if (!piece.coefficient) {
+				piece.coefficient = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+			}
+			parts.linear.push_back(std::move(piece));
+		}
+	}
+	return parts;
 }
 
 //! Takes what a coefficient is computed from out of its term (DecideTerm::inputs): the values recorded when DeciDB
@@ -65,10 +147,10 @@ static vector<unique_ptr<Expression>> TakeInputs(vector<unique_ptr<Expression>> 
 //! Terms of an expression that must be linear, as prepared terms.
 static void AppendLinearTerms(vector<DecideSplitTerm> &split, vector<DecideTerm> &out) {
 	for (auto &term : split) {
-		if (term.kind == DecideTermKind::UNKNOWN) {
-			ThrowUnknownTerm(term);
+		if (term.opaque) {
+			ThrowOpaqueTerm(term);
 		}
-		if (term.kind != DecideTermKind::CONSTANT && term.kind != DecideTermKind::LINEAR) {
+		if (term.degree > 1) {
 			throw InternalException("DECIDE linear expression split into a non-linear term");
 		}
 		out.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
@@ -163,7 +245,7 @@ private:
 
 	void ExtractLinearTerms(const Expression &expr, vector<DecideTerm> &out) const {
 		vector<DecideSplitTerm> split;
-		splitter.SplitLinear(expr, split);
+		splitter.Split(expr, 1, split);
 		AppendLinearTerms(split, out);
 	}
 
@@ -611,33 +693,32 @@ private:
 		vector<DecideSplitTerm> split;
 		splitter.Split(expr, sign, split);
 		for (auto &term : split) {
-			switch (term.kind) {
-			case DecideTermKind::CONSTANT:
-			case DecideTermKind::LINEAR:
-				constr.lhs_terms.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
-				break;
-			case DecideTermKind::PRODUCT: {
-				BilinearConstraintTerm bt;
-				bt.var_a = term.var_a;
-				bt.var_b = term.var_b;
-				bt.coefficient = std::move(term.coefficient);
-				bt.sign = term.sign;
-				constr.bilinear_terms.push_back(std::move(bt));
-				constr.has_bilinear = true;
-				break;
+			if (term.opaque) {
+				ThrowOpaqueTerm(term);
 			}
-			case DecideTermKind::SQUARE: {
+			if (term.degree <= 1) {
+				constr.lhs_terms.push_back(DecideTerm {term.var_a, std::move(term.coefficient), term.sign});
+				continue;
+			}
+			auto parts = LowerDegreeTwo(context, term);
+			for (auto &square : parts.squares) {
 				DecideConstraint::QuadraticGroup qg;
-				qg.sign = static_cast<double>(term.sign) * term.square_scale;
-				AppendLinearTerms(term.inner, qg.inner_terms);
+				qg.sign = square.first;
+				AppendLinearTerms(square.second, qg.inner_terms);
 				constr.quadratic_groups.push_back(std::move(qg));
 				constr.has_quadratic = true;
-				break;
 			}
-			case DecideTermKind::ABS:
-				throw InternalException("DECIDE ABS reached term extraction; RewriteAbs lowers it first");
-			case DecideTermKind::UNKNOWN:
-				ThrowUnknownTerm(term);
+			for (auto &piece : parts.linear) {
+				constr.lhs_terms.push_back(DecideTerm {piece.var_a, std::move(piece.coefficient), piece.sign});
+			}
+			for (auto &piece : parts.bilinear) {
+				BilinearConstraintTerm bt;
+				bt.var_a = piece.var_a;
+				bt.var_b = piece.factors[0].form[0].var_a;
+				bt.coefficient = std::move(piece.coefficient);
+				bt.sign = piece.sign;
+				constr.bilinear_terms.push_back(std::move(bt));
+				constr.has_bilinear = true;
 			}
 		}
 	}
@@ -808,31 +889,23 @@ private:
 	                                   const Expression *filter = nullptr) {
 		vector<DecideSplitTerm> split;
 		splitter.Split(expr, sign, split);
+		auto add_linear = [&](DecideSplitTerm &term) {
+			DecideTerm linear {term.var_a, std::move(term.coefficient), term.sign};
+			if (filter) {
+				linear.filter = filter->Copy();
+			}
+			obj.terms.push_back(std::move(linear));
+		};
 		for (auto &term : split) {
-			switch (term.kind) {
-			case DecideTermKind::CONSTANT:
-			case DecideTermKind::LINEAR: {
-				DecideTerm linear {term.var_a, std::move(term.coefficient), term.sign};
-				if (filter) {
-					linear.filter = filter->Copy();
-				}
-				obj.terms.push_back(std::move(linear));
-				break;
+			if (term.opaque) {
+				ThrowOpaqueTerm(term);
 			}
-			case DecideTermKind::PRODUCT: {
-				DecideObjective::BilinearTerm bt;
-				bt.var_a = term.var_a;
-				bt.var_b = term.var_b;
-				bt.coefficient = std::move(term.coefficient);
-				bt.sign = term.sign;
-				if (filter) {
-					bt.filter = filter->Copy();
-				}
-				obj.bilinear_terms.push_back(std::move(bt));
-				obj.has_bilinear = true;
-				break;
+			if (term.degree <= 1) {
+				add_linear(term);
+				continue;
 			}
-			case DecideTermKind::SQUARE: {
+			auto parts = LowerDegreeTwo(context, term);
+			for (auto &square : parts.squares) {
 				if (obj.has_quadratic) {
 					throw InvalidInputException(
 					    "DECIDE objective contains multiple quadratic (POWER / (expr)*(expr)) "
@@ -840,20 +913,29 @@ private:
 					    "combine them mathematically or rewrite the objective.");
 				}
 				obj.has_quadratic = true;
-				obj.quadratic_sign = term.square_scale * static_cast<double>(term.sign);
+				obj.quadratic_sign = square.first;
 				idx_t before = obj.squared_terms.size();
-				AppendLinearTerms(term.inner, obj.squared_terms);
+				AppendLinearTerms(square.second, obj.squared_terms);
 				if (filter) {
 					for (idx_t i = before; i < obj.squared_terms.size(); i++) {
 						obj.squared_terms[i].filter = filter->Copy();
 					}
 				}
-				break;
 			}
-			case DecideTermKind::ABS:
-				throw InternalException("DECIDE ABS reached term extraction; RewriteAbs lowers it first");
-			case DecideTermKind::UNKNOWN:
-				ThrowUnknownTerm(term);
+			for (auto &piece : parts.linear) {
+				add_linear(piece);
+			}
+			for (auto &piece : parts.bilinear) {
+				DecideObjective::BilinearTerm bt;
+				bt.var_a = piece.var_a;
+				bt.var_b = piece.factors[0].form[0].var_a;
+				bt.coefficient = std::move(piece.coefficient);
+				bt.sign = piece.sign;
+				if (filter) {
+					bt.filter = filter->Copy();
+				}
+				obj.bilinear_terms.push_back(std::move(bt));
+				obj.has_bilinear = true;
 			}
 		}
 	}

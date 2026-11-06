@@ -6,22 +6,19 @@
 // The single answer to "what are the terms of this decision expression".
 //===----------------------------------------------------------------------===//
 //
-// WHY THIS IS NOT THE CANONICALIZER. Canonicalization never opens a term: it splits
-// a side additively, moves whole terms across the relation, and is total and pure
-// because of it. Splitting a reducer body or a row-level expression into
-// `coefficient * variable` pieces does open terms. It distributes `K * (1 - x)`,
-// recognises squares and products, rebuilds coefficients, and can fail. So it lives
-// beside the canonicalizer and reads what canonicalization produced: the additive
-// atoms come from ReadCanonicalAtoms, and this splits one atom's body.
+// A READER OF THE ONE SPELLING. Canonicalization writes every product of decisions as
+// a coefficient times decision factors raised to whole powers (decide_product_form.hpp),
+// and the shape check refuses whatever is outside that vocabulary or above degree 2.
+// This reads one atom's body back as terms. It opens no product of its own: a product
+// is read through ReadDecideProduct, and a coefficient on a single factor is
+// distributed over that factor's terms (`K * (1 - pick)` is `K - K * pick`), which is
+// an identity. It never refuses: a decision-bearing node it does not open (ABS, a
+// reducer, a marker a rewrite left) is an opaque term, which each reader takes or
+// declines.
 //
-// WHO READS IT. The solver path's prepared linear form (stage 05) and direct
-// solve's semantic facts. Both see the same terms, so a shape one of them admits
-// cannot mean something else to the other.
-//
-// FAILURE IS A TERM, NOT A GUESS. A decision under a node this does not recognise
-// becomes an UNKNOWN term carrying the reason. The solver path raises it as the
-// error it always raised; the facts report it as an unknown fact. Nothing is read as
-// a plain variable because a variable appears somewhere beneath it.
+// WHO READS IT. The solver path's prepared linear form (stage 05), singleton folding and
+// direct solve's semantic facts. All see the same terms, so a shape one of them admits
+// cannot mean something else to another.
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,35 +31,49 @@
 namespace duckdb {
 
 class ClientContext;
+class BoundFunctionExpression;
 
-enum class DecideTermKind : uint8_t {
-	//! A decision-free term: `coefficient` is the whole term.
-	CONSTANT,
-	//! `coefficient * var_a`.
-	LINEAR,
-	//! `coefficient * var_a * var_b`, two different decisions. A null coefficient means 1.
-	PRODUCT,
-	//! `square_scale * (inner)^2`, from POWER(e, 2), `e ** 2` or `(e) * (e)`. `inner` is linear.
-	SQUARE,
-	//! `coefficient * |inner|`. `inner` is linear; a null coefficient means 1. Only a tree that has not been
-	//! lowered holds one: RewriteAbs replaces every ABS before the solver path reads terms.
-	ABS,
-	//! Not one of the above. `reason` says why; `user_error` says whether the query or the engine is at fault.
-	UNKNOWN
-};
+struct DecideSplitFactor;
 
-//! One additive term, contributing `sign` times what its kind describes.
+//! One additive term: `sign * coefficient * ...`, where what follows the coefficient is its degree's part.
 struct DecideSplitTerm {
-	DecideTermKind kind = DecideTermKind::UNKNOWN;
 	int sign = 1;
+	//! Decision-free; null means 1. A term of degree 0 is its coefficient.
 	unique_ptr<Expression> coefficient;
-	double square_scale = 1.0;
+	//! The term's degree in the decisions. An opaque term has the degree of its node.
+	idx_t degree = 0;
+	//! Degree 1: the decision the term multiplies.
 	idx_t var_a = DConstants::INVALID_INDEX;
-	idx_t var_b = DConstants::INVALID_INDEX;
+	//! Degree 2: one linear form squared, or two linear forms multiplied.
+	vector<DecideSplitFactor> factors;
+	//! A decision-bearing node the reader does not open: `coefficient * opaque`. For ABS, `inner` holds its argument's
+	//! terms; only a tree RewriteAbs has not lowered holds one.
+	unique_ptr<Expression> opaque;
 	vector<DecideSplitTerm> inner;
-	string reason;
-	bool user_error = false;
+
+	bool IsConstant() const {
+		return degree == 0 && !opaque;
+	}
+	bool IsLinear() const {
+		return degree == 1 && !opaque;
+	}
+	bool IsAbs() const;
+	bool IsSquare() const;
+	bool IsProduct() const;
 };
+
+//! A factor of a degree-2 term: a linear form (terms of degree 0 and 1) raised to `power`.
+struct DecideSplitFactor {
+	vector<DecideSplitTerm> form;
+	idx_t power = 1;
+};
+
+inline bool DecideSplitTerm::IsSquare() const {
+	return !opaque && factors.size() == 1 && factors[0].power == 2;
+}
+inline bool DecideSplitTerm::IsProduct() const {
+	return !opaque && factors.size() == 2;
+}
 
 //! Bind `name` for exactly these children through FunctionBinder. Rebuilding a bound function by reusing another
 //! node's signature over different children silently reinterprets their physical types; this is the only rebuild
@@ -81,37 +92,16 @@ public:
 	DecideTermSplitter(ClientContext &context, idx_t decide_index,
 	                   const vector<unique_ptr<Expression>> &decide_variables);
 
-	//! Split a reducer body or a row-level decision expression into constant, linear, product, square and
-	//! absolute-value terms, appending to `out` in reading order with `sign` applied.
+	//! Read a reducer body or a row-level decision expression into terms, appending to `out` in reading order with
+	//! `sign` applied.
 	void Split(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const;
-	//! Split an expression that must be linear: every term is CONSTANT or LINEAR, or UNKNOWN when it is not.
-	void SplitLinear(const Expression &expr, vector<DecideSplitTerm> &out) const;
 	//! The index of the first decision variable referenced anywhere in `expr`, or INVALID_INDEX.
 	idx_t FindVariable(const Expression &expr) const;
 
 private:
-	struct QuadraticPattern {
-		const Expression *inner_linear_expr = nullptr;
-		double sign = 1.0;
-		//! Set when the squared expression is not linear; names the shape for the error.
-		const char *nonlinear_shape = nullptr;
-	};
-	struct ProductFactors {
-		vector<const Expression *> coefficient_factors;
-		vector<idx_t> decide_factors;
-		//! A factor `ABS(e)`, when the product is a data coefficient times one.
-		const Expression *abs_factor = nullptr;
-	};
-
-	bool ContainsVariable(const Expression &expr, idx_t var_idx) const;
-	bool TryGetBareDecideFactor(const Expression &expr, idx_t &var_idx) const;
-	//! False with `failure` filled when a factor cannot be classified.
-	bool ClassifyProduct(const Expression &expr, ProductFactors &result, DecideSplitTerm &failure) const;
-	unique_ptr<Expression> ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const;
-	QuadraticPattern DetectQuadraticPattern(const Expression &expr) const;
-	bool IsLinear(const Expression &expr) const;
-	void AddAbs(const Expression &abs_function, unique_ptr<Expression> coefficient, int sign,
-	            vector<DecideSplitTerm> &out) const;
+	void ReadProduct(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const;
+	void ReadQuotient(const BoundFunctionExpression &quotient, int sign, vector<DecideSplitTerm> &out) const;
+	void AddOpaque(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const;
 
 	ClientContext &context;
 	idx_t decide_index;

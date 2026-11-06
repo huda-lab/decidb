@@ -204,7 +204,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 		return false;
 	}
 	for (auto &term : part.terms) {
-		if (term.kind != DecideTermKind::LINEAR) {
+		if (!term.IsLinear()) {
 			continue;
 		}
 		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
@@ -238,36 +238,41 @@ bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, con
 	return true;
 }
 
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+bool DirectReadSquareTerm(const DirectIR &ir, ClientContext &context, const DecideSplitTerm &term, const string &clause,
                           DirectSquareTerm &out) {
-	if (!std::isfinite(term.square_scale) || term.square_scale == 0.0) {
+	// The scale is a constant the plan knows; a data coefficient on a square is the solver's (its sign is a row's).
+	double scale = 1.0;
+	if (!term.IsSquare() ||
+	    (term.coefficient && !TryEvaluateFoldableDouble(context, *term.coefficient, scale, FOLD_PLAIN)) ||
+	    !std::isfinite(scale) || scale == 0.0) {
 		return false;
 	}
+	auto &form = term.factors[0].form;
 	out.sign = term.sign;
-	out.scale = term.square_scale;
+	out.scale = scale;
 	bool has_decision = false;
-	for (auto &inner : term.inner) {
-		if (inner.kind == DecideTermKind::LINEAR) {
+	for (auto &inner : form) {
+		if (inner.IsLinear()) {
 			if (inner.var_a >= ir.decisions.size() || (has_decision && out.decision != inner.var_a)) {
 				return false;
 			}
 			out.decision = inner.var_a;
 			has_decision = true;
-		} else if (inner.kind != DecideTermKind::CONSTANT) {
+		} else if (!inner.IsConstant()) {
 			return false;
 		}
 	}
 	if (!has_decision) {
 		return false;
 	}
-	for (auto &inner : term.inner) {
+	for (auto &inner : form) {
 		if (!inner.coefficient || !DirectProveValue(ir, *inner.coefficient)) {
 			return false;
 		}
 		DirectSignedValue value;
 		value.sign = inner.sign;
 		value.expr = inner.coefficient->Copy();
-		(inner.kind == DecideTermKind::LINEAR ? out.inner_linear : out.inner_constant).push_back(std::move(value));
+		(inner.IsLinear() ? out.inner_linear : out.inner_constant).push_back(std::move(value));
 	}
 	out.inner_linear_names = DirectNamesOf(ir, out.inner_linear, clause);
 	out.inner_constant_names = DirectNamesOf(ir, out.inner_constant, clause);
