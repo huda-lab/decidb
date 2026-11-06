@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/main/client_context_state.hpp"
@@ -224,6 +225,10 @@ struct DirectIR {
 	//! A bound the bound-side rewrite left to the rule cannot be computed by it (its sum has a `when` of its own): the
 	//! driver records the aggregates of its group (RecordReducedBounds) and reads the IR again.
 	bool bounds_to_record = false;
+	//! What a backend would be asked to run for this query, read from the parts' split terms, for ClassifyDecideModel.
+	//! It reports less when unsure: a term under MIN or MAX becomes a rewrite's helper rows, whose shape the IR does
+	//! not know, so it is not read, and neither are the integral helpers those rows add.
+	DecideModelShape model_shape;
 	//! NOT_PROVED when the DECIDE operator owes the rows a scope check the plan cannot make: a determination of an
 	//! keyed decision.
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;

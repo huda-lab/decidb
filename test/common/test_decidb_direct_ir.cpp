@@ -378,6 +378,51 @@ TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, ne
 	}
 }
 
+TEST_CASE("Direct-solve IR reads the model class a backend would be asked to run", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto shape_of = [&](const string &declaration, const string &constraints, const string &objective) {
+		return QueryIR(con, IRQuery(declaration, constraints, objective)).ir.model_shape;
+	};
+	auto class_of = [&](const string &declaration, const string &constraints, const string &objective) {
+		return ClassifyDecideModel(shape_of(declaration, constraints, objective));
+	};
+
+	// A square in a limit is a quadratic row.
+	auto limit = class_of("x(REAL)", "SUM(POWER(x - cap, 2)) <= 9", "MINIMIZE SUM(w*x)");
+	REQUIRE(limit.quadratic_constraints);
+	REQUIRE(!limit.nonconvex_quadratic);
+
+	// A positive square of one decision, minimized, is a convex QP with a diagonal Q.
+	auto convex = class_of("x(REAL)", "x <= 3", "MINIMIZE SUM(POWER(x - cap, 2))");
+	REQUIRE(!convex.quadratic_constraints);
+	REQUIRE(!convex.nonconvex_quadratic);
+	REQUIRE(!convex.singular_quadratic);
+	REQUIRE(!convex.miqp);
+
+	// The sense, the part's sign, the term's sign, a data coefficient and a query-wide scale each decide convexity.
+	REQUIRE(class_of("x(REAL)", "x <= 3", "MAXIMIZE SUM(POWER(x - cap, 2))").nonconvex_quadratic);
+	REQUIRE(class_of("x(REAL)", "x <= 3", "MINIMIZE -SUM(POWER(x - cap, 2))").nonconvex_quadratic);
+	REQUIRE(class_of("x(REAL)", "x <= 3", "MINIMIZE SUM(-POWER(x - cap, 2))").nonconvex_quadratic);
+	REQUIRE(class_of("x(REAL)", "x <= 3", "MINIMIZE SUM(w * POWER(x, 2))").nonconvex_quadratic);
+	REQUIRE(class_of("x(REAL)", "x <= 3", "MINIMIZE SUM(POWER(x, 2)) * (SELECT 0.5)").nonconvex_quadratic);
+	REQUIRE(!class_of("x(REAL)", "x <= 3", "MINIMIZE SUM(3 * POWER(x, 2))").nonconvex_quadratic);
+
+	// A square over two decisions couples them; a product of two is indefinite and couples them.
+	auto coupled = class_of("x(REAL), y(REAL)", "x <= 3", "MINIMIZE SUM(POWER(x + y, 2))");
+	REQUIRE(coupled.singular_quadratic);
+	REQUIRE(!coupled.nonconvex_quadratic);
+	auto product = class_of("x(REAL), y(REAL)", "x <= 3", "MINIMIZE SUM(x * y)");
+	REQUIRE(product.singular_quadratic);
+	REQUIRE(product.nonconvex_quadratic);
+
+	// An integral decision beside a quadratic objective is MIQP.
+	REQUIRE(class_of("x(INT)", "x <= 3", "MINIMIZE SUM(POWER(x - cap, 2))").miqp);
+
+	// A square under MAX becomes a rewrite's helper rows, which the IR does not know: it reports less.
+	REQUIRE(!shape_of("x(REAL)", "x <= 3", "MINIMIZE MAX(POWER(x - cap, 2))").quadratic_objective);
+}
+
 TEST_CASE("Direct-solve IR models products and squares, and declines a two-level objective", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

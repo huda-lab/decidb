@@ -437,35 +437,30 @@ static void StampAggregateProvenance(ConstraintProvenance &provenance, const Eva
     provenance.is_aggregate = eval_const.lhs_is_aggregate;
 }
 
-//! The model class this built model demands, read straight off the facts the build
-//! settled. Its counterpart is the plan-time prediction in stage 05
-//! (DeriveDecideModelClass); SolveModel checks the two agree before handing the model
-//! to a backend.
+//! The model class this built model demands: the facts the build settled, in the shape the plan-time prediction
+//! (DeriveDecideModelClass) fills, classified by the same function. SolveModel checks the two agree before handing the
+//! model to a backend.
 SolverModelClass SolverModel::ModelClass() const {
-    SolverModelClass needed;
-    needed.quadratic_constraints = !quadratic_constraints.empty();
-    if (has_quadratic_obj) {
-        needed.nonconvex_quadratic = nonconvex_quadratic;
-        // MIQP is a quadratic objective over ANY integral column, auxiliaries
-        // included — a Big-M indicator makes the program mixed-integer just as a
-        // user's `x(INT)` does.
-        for (idx_t col = 0; col < num_vars && col < is_integer.size(); col++) {
-            if (is_integer[col]) {
-                needed.miqp = true;
-                break;
-            }
-        }
-        // An off-diagonal entry means two decision variables are coupled in the
-        // objective, which makes Q rank-deficient. Read as a fact here; stage 05
-        // predicts the same thing from the unexpanded squared terms.
-        for (idx_t k = 0; k < q_vals.size() && k < q_rows.size() && k < q_cols.size(); k++) {
-            if (q_rows[k] != q_cols[k] && q_vals[k] != 0.0) {
-                needed.singular_quadratic = true;
-                break;
-            }
+    DecideModelShape shape;
+    shape.quadratic_constraints = !quadratic_constraints.empty();
+    shape.quadratic_objective = has_quadratic_obj;
+    shape.nonconvex_objective = nonconvex_quadratic;
+    // Any integral column, auxiliaries included: a Big-M indicator makes the program mixed-integer just as a user's
+    // `x(INT)` does.
+    for (idx_t col = 0; col < num_vars && col < is_integer.size(); col++) {
+        if (is_integer[col]) {
+            shape.integral_column = true;
+            break;
         }
     }
-    return needed;
+    // An off-diagonal entry means two decision variables are coupled in the objective, which makes Q rank-deficient.
+    for (idx_t k = 0; k < q_vals.size() && k < q_rows.size() && k < q_cols.size(); k++) {
+        if (q_rows[k] != q_cols[k] && q_vals[k] != 0.0) {
+            shape.coupled_objective = true;
+            break;
+        }
+    }
+    return ClassifyDecideModel(shape);
 }
 
 bool SolverModel::ProvesInfeasible() const {

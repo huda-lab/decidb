@@ -135,6 +135,52 @@ inline bool IsNonconvexProductGroup(bool square, int weight_sign, DecideSense se
 	return !square || weight_sign == 0 || (weight_sign > 0) == (sense == DecideSense::MAXIMIZE);
 }
 
+//! What the model-class question reads of one query (ClassifyDecideModel), filled term by term with AddTerm by each
+//! reader of the query's terms: the solver gate from the prepared model's product groups (DeriveDecideModelClass), and
+//! direct solve from its IR's split terms (DirectIR::model_shape). The built model fills the same fields from its
+//! matrix (SolverModel::ModelClass), so the prediction and the fact are classified by one function.
+//!
+//! A reader that cannot tell what a term becomes in the built model says which way it errs: the gate demands more
+//! (SolverModelClass), direct solve reports less.
+struct DecideModelShape {
+	DecideSense sense = DecideSense::FEASIBILITY;
+	//! Some column of the model may be integral: a declared INT or BOOL, or a helper a rewrite adds as one.
+	bool integral_column = false;
+	bool quadratic_constraints = false;
+	bool quadratic_objective = false;
+	//! Some product of the objective is non-convex under `sense` (IsNonconvexProductGroup).
+	bool nonconvex_objective = false;
+	//! Some product of the objective couples two decisions, so its Q is rank-deficient (SolverModelClass).
+	bool coupled_objective = false;
+
+	//! One term of degree 2, in the objective or in a SUCH THAT clause: a square of one linear form or a product of
+	//! two, the sign of its weight as the plan knows it (0 when only the query does), and how many distinct decisions
+	//! its forms read. A square of a form over two or more decisions fills an off-diagonal entry of Q, as a product
+	//! always does.
+	void AddTerm(bool objective, bool square, int weight_sign, idx_t decisions) {
+		if (!objective) {
+			quadratic_constraints = true;
+			return;
+		}
+		quadratic_objective = true;
+		nonconvex_objective = nonconvex_objective || IsNonconvexProductGroup(square, weight_sign, sense);
+		coupled_objective = coupled_objective || !square || decisions >= 2;
+	}
+};
+
+//! The one classifier of a model's shape into the class a backend must take. An integral column and a coupled Q
+//! matter only beside a quadratic objective: a MILP with quadratic rows is QCQP, not MIQP.
+inline SolverModelClass ClassifyDecideModel(const DecideModelShape &shape) {
+	SolverModelClass needed;
+	needed.quadratic_constraints = shape.quadratic_constraints;
+	if (shape.quadratic_objective) {
+		needed.nonconvex_quadratic = shape.nonconvex_objective;
+		needed.miqp = shape.integral_column;
+		needed.singular_quadratic = shape.coupled_objective;
+	}
+	return needed;
+}
+
 //! Which demand a backend fails to meet. NONE means it can take the model. The order
 //! below is the reporting order, so one query always names the same reason rather than
 //! a different one per run.

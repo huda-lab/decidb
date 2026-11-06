@@ -57,40 +57,43 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	return is_minmax(op.flat_objective_agg) || is_minmax(op.per_inner_agg) || is_minmax(op.per_outer_agg);
 }
 
-//! Does a product group of the objective couple two decision variables, making Q
-//! rank-deficient? Squaring a linear form over k >= 2 decisions always does: expanding
-//! `(p*x + q*y + r)^2` fills an off-diagonal Q entry, and the resulting 2x2 block is
-//! singular for any p and q. One decision variable per squared form keeps that group's Q
-//! diagonal, whatever the row count, which is the ordinary `POWER(x - target, 2)` shape. A
-//! product of two forms couples its decisions by construction.
-//!
-//! Read off the groups stage 05 already built, so this needs no data — which is what lets
-//! the refusal land before a row is read. Constant terms carry INVALID_INDEX and are
-//! skipped. That keeps this prediction at least as demanding as what
-//! `SolverModel::ModelClass()` later reads off the built matrix, which is the direction the
-//! contract requires — over-reporting costs a refused query, under-reporting hands a backend
-//! a model it answers wrong.
-bool HasCoupledQuadraticTerms(const DecideObjective &objective) {
-	for (auto &group : objective.product_groups) {
-		if (!group.square) {
-			return true;
-		}
-		vector<idx_t> seen;
-		for (auto &term : group.left) {
-			if (term.variable_index == DConstants::INVALID_INDEX ||
-			    std::find(seen.begin(), seen.end(), term.variable_index) != seen.end()) {
-				continue;
-			}
-			seen.push_back(term.variable_index);
-			if (seen.size() >= 2) {
-				return true;
+//! How many distinct decisions a product group's forms read; a constant term carries INVALID_INDEX.
+idx_t CountGroupDecisions(const DecideProductGroup &group) {
+	vector<idx_t> seen;
+	for (auto *form : {&group.left, &group.right}) {
+		for (auto &term : *form) {
+			if (term.variable_index != DConstants::INVALID_INDEX &&
+			    std::find(seen.begin(), seen.end(), term.variable_index) == seen.end()) {
+				seen.push_back(term.variable_index);
 			}
 		}
 	}
-	return false;
+	return seen.size();
 }
 
-//! The objective's first product group that is non-convex under the sense (IsNonconvexProductGroup), or null.
+//! The prepared model's shape, one AddTerm per product group. Read off the groups stage 05 already built, so it needs
+//! no data, which is what lets the refusal land before a row is read. Each fact errs toward demanding more than the
+//! built model will (SolverModelClass): an integral column the rewrites may add counts, and a square of a form over
+//! two decisions counts as coupled whatever its coefficients turn out to be.
+DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
+	DecideModelShape shape;
+	shape.sense = op.decide_sense;
+	shape.integral_column = MayHaveIntegralColumn(op);
+	for (auto &constraint : op.prepared.constraints) {
+		for (auto &group : constraint->product_groups) {
+			shape.AddTerm(false, group.square, group.weight_sign, CountGroupDecisions(group));
+		}
+	}
+	if (op.prepared.objective) {
+		for (auto &group : op.prepared.objective->product_groups) {
+			shape.AddTerm(true, group.square, group.weight_sign, CountGroupDecisions(group));
+		}
+	}
+	return shape;
+}
+
+//! The objective's first product group that is non-convex under the sense (IsNonconvexProductGroup), which the
+//! refusal names; null for none.
 const DecideProductGroup *FirstNonconvexGroup(const LogicalDecide &op) {
 	if (!op.prepared.objective) {
 		return nullptr;
@@ -174,30 +177,7 @@ bool AnyAvailable(const SolverModelClass &needed) {
 } // namespace
 
 SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
-	SolverModelClass needed;
-
-	// A constraint carrying a squared or bilinear term becomes a quadratic row: the
-	// model builder emits one per data row or per group, and never folds it back
-	// into the linear matrix.
-	for (auto &constraint : op.prepared.constraints) {
-		if (!constraint->product_groups.empty()) {
-			needed.quadratic_constraints = true;
-			break;
-		}
-	}
-
-	auto &objective = op.prepared.objective;
-	if (objective && !objective->product_groups.empty()) {
-		// Convexity is per group (IsNonconvexProductGroup), the same predicate the model
-		// builder later applies to the built model, so the prediction and the fact cannot
-		// drift. A group's weight sign is what the plan knows of it (0 when only the query
-		// knows it), which is what makes the test available this early.
-		needed.nonconvex_quadratic = FirstNonconvexGroup(op) != nullptr;
-		needed.miqp = MayHaveIntegralColumn(op);
-		needed.singular_quadratic = HasCoupledQuadraticTerms(*objective);
-	}
-
-	return needed;
+	return ClassifyDecideModel(ReadPreparedModelShape(op));
 }
 
 void RequireDecideSolverSupport(const LogicalDecide &op) {

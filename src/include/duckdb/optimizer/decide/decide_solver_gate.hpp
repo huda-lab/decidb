@@ -16,9 +16,9 @@ namespace duckdb {
 
 class LogicalDecide;
 
-//! What model class this query will demand of its solver, read off the prepared
-//! linear form. A *prediction* of what `SolverModel::ModelClass()` will report once
-//! the rows are in, and it must never predict less — see SolverModelClass.
+//! What model class this query will demand of its solver: the prepared model's product groups, filled into a
+//! DecideModelShape and classified (ClassifyDecideModel). A *prediction* of what `SolverModel::ModelClass()` will
+//! report once the rows are in, and it must never predict less — see SolverModelClass.
 SolverModelClass DeriveDecideModelClass(const LogicalDecide &op);
 
 //! Throw if the backend chosen for this query cannot take the model class it needs.
