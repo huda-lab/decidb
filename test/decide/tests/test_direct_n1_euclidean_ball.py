@@ -714,7 +714,7 @@ def test_n1_a_subnormal_h_under_a_huge_limit_stays_inside_the_ball(decidb_cli):
         "(2, POWER(2.0::DOUBLE, -536), 1e300::DOUBLE)) t(id, s, l) "
         "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
     )
-    values = _direct_values(decidb_cli, sql, large_numbers=True)
+    values = _direct_values(decidb_cli, sql, number_range=True)
     assert _on_the_ball(values, 1.0, 1e300), values
 
 
@@ -754,7 +754,7 @@ def test_n1_a_subnormal_h_under_a_huge_limit_is_the_unit_ball_scaled(decidb_cli,
         "(2, POWER(2.0::DOUBLE, -536), 1e300::DOUBLE)) t(id, s, l) "
         "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)) q ORDER BY id"
     )
-    values = _direct_values(decidb_cli, sql, large_numbers=True)
+    values = _direct_values(decidb_cli, sql, number_range=True)
     score_scale = 2.0**-537
     objective = _objective((score_scale, 2 * score_scale), values) / (score_scale * math.sqrt(1e300))
     assert abs(objective - oracle.objective_value) <= _OBJECTIVE_TOLERANCE * max(1.0, abs(oracle.objective_value))
