@@ -32,8 +32,8 @@ unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<E
 }
 
 unique_ptr<Expression> DirectWarnIf(const ExpressionBuilder &calc, unique_ptr<Expression> unstable) {
-	return calc.Out(
-	    calc.If(calc.Wrap(std::move(unstable)), calc.Fn("decide_warn_numbers", vector<ExprPtr> {}), calc.Bool(true)));
+	return calc.Out(calc.If(calc.Wrap(std::move(unstable)),
+	                        calc.Fn("__internal_decide_warn_numbers", vector<ExprPtr> {}), calc.Bool(true)));
 }
 
 ExprPtr DirectBelowNormalRange(const ExpressionBuilder &calc, const ExprPtr &value) {

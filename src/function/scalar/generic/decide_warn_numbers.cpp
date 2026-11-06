@@ -32,8 +32,8 @@ void DecideWarnNumbersFunction(DataChunk &args, ExpressionState &state, Vector &
 
 } // namespace
 
-ScalarFunction DecideWarnNumbersFun::GetFunction() {
-	ScalarFunction fun("decide_warn_numbers", {}, LogicalType::BOOLEAN, DecideWarnNumbersFunction);
+ScalarFunction InternalDecideWarnNumbersFun::GetFunction() {
+	ScalarFunction fun("__internal_decide_warn_numbers", {}, LogicalType::BOOLEAN, DecideWarnNumbersFunction);
 	// It has a side effect, so no plan may fold it or share it between rows.
 	fun.stability = FunctionStability::VOLATILE;
 	return fun;
