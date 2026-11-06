@@ -601,6 +601,8 @@ The phrase `does not determine` is fixed; names and values come from the query a
 returning rows, as `EXPLAIN ANALYZE` does for an ordinary query. **It is the only thing that starts the diagnostics
 engine**, so a query without it never pays for a diagnostic solve. Without the prefix a failed query states its state
 and stops: *"DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change."*
+Where no solver on the machine can run the model (a quadratic limit with no Gurobi licence), `DIAGNOSE` is refused, so
+the error leaves the advice out.
 
 ```sql
 DIAGNOSE SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= 5 AND x >= 8 MAXIMIZE SUM(x);

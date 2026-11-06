@@ -49,32 +49,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
 
-## H-39 — One fragment for the separable square objective
-
-- **Problem.** A1 and N1 each lay out a square's `w` and `t` columns in P1 and fold `k*w*w` and `2*k*w*t` into the row's
-  `a` and `b` in P2, with the same mask-and-scale lambda (A1's per-decision fold, N1's `ComputeCoefficients`). N1's `Part`
-  and A1's `Part`/`Term` hold the same reading in two layouts.
-- **Change.** A shared reading of a part with linear terms, constants and squares (`DirectReadQuadraticPart`), a P1
-  layout and a P2 fold in `direct_plan_fragments`. A1 calls the fold per decision, N1 for its one decision.
-- **Done when.** No behavior change; `run_tests.sh -k "a1 or n1"` and C++ `[decidb]` pass; neither rule file expands a
-  square itself.
-
-## H-41 — The precision warning comes from the shared arithmetic
-
-- **Problem.** Each rule picks its own warning sites: A1 tests `a` and `b` of `-b / (2*a)`, R1 tests `v / w`, N1 tests
-  only `h`, so a tiny square factor warns under A1 and is silent under N1 on the same expression. N1's `LosesPrecision`
-  restates `Answer`'s branch conditions. N1's warning reads only the rows a parent reads; A1's and R1's read every row.
-  `architecture/rules.md` states neither the obligation nor which rows a warning reads.
-- **Change.** The shared square fragment (H-39) returns its target with its precision flag, and N1's scale returns its
-  answer with its flag, so a rule that reuses a closed form warns where it does. N1 computes "the row reads the scale"
-  once for both the answer and the warning. `architecture/rules.md` § What every rule must match states the obligation
-  and the row set. No new window or pass (owner's precision rule).
-- **Ruling (orchestrator, for the owner while away, 2026-11-06).** For the owner to confirm. A warning reads the rows
-  the rule's error checks read: every row the clause keeps, before any row is released, as A1 and R1 do. So a warning
-  does not depend on a `LIMIT` or filter above the query, as the solver path's warning, from the whole model, does not.
-- **Needs.** H-39.
-- **Done when.** A tiny square factor warns on A1 and N1 alike; the existing warning tests of A1, N1 and R1 pass.
-
 ## H-45 — Framework docs describe the shared code as it is
 
 - **Problem.** `done.md` says "A1 is its only user until R1 is built on it" and "A1 reads constants and squares itself";
@@ -82,7 +56,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   `DirectObjectivePartKept`, `DirectWarnIf` or `DirectBelowNormalRange`. The stamp predates the shared code. A1's, R1's
   and N1's `done.md` each carry an "Its own warning" paragraph that restates one rule. `direct_bound_reader` holds
   objective-term readers that its name does not cover.
-- **Change.** Correct both docs to the shared code after H-39 and H-41; one warning paragraph in the framework
+- **Change.** Correct both docs to the shared code; one warning paragraph in the framework
   `done.md`, linked from each rule; state the bound reader's wider scope in its header and `done.md`.
-- **Needs.** H-39, H-41.
 - **Done when.** Every helper the rules call is listed once; no rule `done.md` restates the warning rule; doc-only.

@@ -49,7 +49,8 @@ attribute read, or a solver infinity sentinel. Report writers must skip them whe
 `ThrowDecideSolveError` is the single home for the user-facing failure text. The
 operator calls it only on an **undiagnosed** terminal — the statement carried no
 `DIAGNOSE` prefix, or the status has no engine (`ITERATION_LIMIT` / `OTHER`). Its text
-names the state and points at the prefix; a diagnosed failure raises nothing at all and
+names the state and points at the prefix (`DecideInfeasibleMessage(true)`, `DecideUnboundedMessage(true)` in
+`decide_value_messages.hpp`, the texts both paths raise); a diagnosed failure raises nothing at all and
 returns its findings as rows. `OTHER`, a solve the backend could not finish, has no state to name: the text names the
 backend and quotes its own reason (`status_text`), never a status number: "DECIDE optimization failed: HiGHS could not
 solve this model (Solve error)." HiGHS fills `status_text` from `modelStatusToString`; Gurobi, which names a status only
@@ -58,6 +59,14 @@ empty, with the words of its log: "numerical trouble". A model HiGHS refuses to 
 (`passModel` or `passHessian` returns `kError`) is `OTHER` with no reason text. Gurobi's environment failures stay
 internal errors and quote Gurobi's message, not its error code. See
 [`../../diagnostics/`](../../diagnostics/).
+
+A direct-solve plan raises the same two states without a backend, so it advises the prefix only where `DIAGNOSE` would
+run. The rule driver decides once per query, after a rule is selected: `DecideSolverRuns(ClassifyDecideModel(
+ir.model_shape))` asks the solver-support check `DIAGNOSE` goes through (`FindDecideSolverGap`, beside the throwing
+gate in `decide_solver_gate.cpp`), and the driver hands the rule the matching texts (`DirectStateErrors`). With no
+Gurobi licence, a quadratic limit or an `INT` decision under a square objective has no backend, so its errors read
+`DECIDE optimization is infeasible.` and stop. The IR's model shape reports less when unsure, which keeps the advice.
+Where `DIAGNOSE` runs but cannot name a variable, the error keeps the advice.
 
 ---
 
