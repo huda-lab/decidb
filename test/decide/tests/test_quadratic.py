@@ -20,6 +20,7 @@ Covers:
 
 import os
 import re
+import subprocess
 import tempfile
 import time
 
@@ -1929,6 +1930,32 @@ class TestHighsRejection:
             MAXIMIZE SUM(x + y)
         """
         decidb_cli_highs.assert_error(sql, match=rf"the SUCH THAT clause `{re.escape(clause)}` squares or multiplies")
+
+    def test_highs_refusal_blames_the_override_when_gurobi_is_installed(self, decidb_cli_highs):
+        """Gurobi is installed here and DECIDB_FORCE_SOLVER keeps it out, so the refusal names the override and does
+        not tell the user to install a solver the machine has."""
+        sql = """
+            SELECT x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(REAL)
+            SUCH THAT POWER(x, 2) <= 4
+            MAXIMIZE SUM(x)
+        """
+        decidb_cli_highs.assert_error(
+            sql,
+            match=r"which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS\. "
+            r"Unset DECIDB_FORCE_SOLVER, or rewrite that constraint",
+        )
+        assert "not available" not in decidb_cli_highs.execute_raw(sql).stderr
+
+    def test_highs_refusal_asks_for_an_install_when_gurobi_is_missing(self, decidb_exe_path, tmp_path):
+        """With no Gurobi licence the override is not what keeps Gurobi out, so unsetting it would not help and the
+        refusal asks for an install."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
+        env.update(DECIDB_FORCE_SOLVER="highs", GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+        sql = "SELECT x FROM (VALUES (1), (2)) t(id) DECIDE x(REAL) SUCH THAT POWER(x, 2) <= 4 MAXIMIZE SUM(x)"
+        refused = subprocess.run([decidb_exe_path, "-c", sql], env=env, capture_output=True, text=True)
+        assert "which needs Gurobi — not available on this machine. Install Gurobi, or" in refused.stderr, refused.stderr
+        assert "DECIDB_FORCE_SOLVER selects" not in refused.stderr
 
     def test_highs_refusal_names_no_clause_for_a_row_a_rewrite_defines(self, decidb_cli_highs):
         """`sum(x * x)` is held by a helper decision whose defining row is quadratic. The row is no clause's own and

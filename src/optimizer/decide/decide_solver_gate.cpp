@@ -145,6 +145,16 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 	}
 }
 
+//! Is some backend that takes `needed` installed on this host?
+bool AnyAvailable(const SolverModelClass &needed) {
+	for (auto &backend : SolverRegistry::Backends()) {
+		if (backend.IsAvailable() && SupportsModelClass(needed, backend.Capabilities().model_classes)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 } // namespace
 
 SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
@@ -205,6 +215,14 @@ void ThrowDecideSolverGap(const SolverModelClass &needed, const string &cause, c
 	if (capable.empty()) {
 		throw InvalidInputException("DECIDE: %s, which no solver DeciDB supports can optimize. Instead, %s.", cause,
 		                            remedy);
+	}
+	// A solver the override excludes is not missing: the host has one that could run the query, and the override is
+	// what keeps it out. The sentence then names the override, not an install.
+	if (!ForcedSolverName().empty() && AnyAvailable(needed)) {
+		throw InvalidInputException("DECIDE: %s, which needs %s, and DECIDB_FORCE_SOLVER selects %s. Unset "
+		                            "DECIDB_FORCE_SOLVER, or %s.",
+		                            cause, StringUtil::Join(capable, " or "),
+		                            SolverRegistry::Find(ForcedSolverName()).DisplayName(), remedy);
 	}
 	throw InvalidInputException("DECIDE: %s, which needs %s — not available on this machine. Install %s, "
 	                            "or %s.",

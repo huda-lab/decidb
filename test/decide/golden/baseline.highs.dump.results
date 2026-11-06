@@ -304,7 +304,7 @@
 │     3 │    -5 │
 │     4 │    -5 │
 └───────┴───────┘
-Invalid Input Error: DECIDE: the SUCH THAT clause `SUM(POWER(x - 2, 2)) <= 4` squares or multiplies decision variables, which needs Gurobi — not available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision variable.
+Invalid Input Error: DECIDE: the SUCH THAT clause `SUM(POWER(x - 2, 2)) <= 4` squares or multiplies decision variables, which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset DECIDB_FORCE_SOLVER, or rewrite that constraint so each term holds at most one decision variable.
 ┌───────┬────────────────────┐
 │  id   │         x          │
 │ int32 │       double       │
