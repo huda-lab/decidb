@@ -54,6 +54,9 @@ which only this stage decides (`done.md` §3.7, §3.10).
     cannot, the missing caret is filed.
   - (K) The integer-step checks and the comparison-in-a-reducer refusal stay in the binder: moving them would change
     which queries are refused.
+  - (L) Every shape-check refusal raises an Invalid Input error, as the gate does; it is not a binding error.
+  - (M) As (G): a function over a decision reads "DECIDE: function '%s' cannot take a DECIDE variable.", and a division
+    "DECIDE: cannot divide by a DECIDE variable." The CASE message keeps its advice.
 - **Problem.**
   - Each algebra refusal has two to four recognizers, across the parsed tree, the bound tree, the optimizer and
     physical planning. Their gaps refuse legal queries:
