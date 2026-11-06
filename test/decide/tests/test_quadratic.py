@@ -1909,8 +1909,37 @@ class TestHighsRejection:
             MAXIMIZE SUM(x)
         """
         decidb_cli_highs.assert_error(
-            sql, match=r"SUCH THAT clause squares or multiplies decision variables.*Gurobi",
+            sql, match=r"the SUCH THAT clause `POWER\(x, 2\) <= 4` squares or multiplies decision variables.*Gurobi",
         )
+
+    @pytest.mark.parametrize(
+        "clause",
+        [
+            pytest.param("SUM(POWER(x, 2)) <= 25", id="square"),
+            pytest.param("SUM(x * y) <= 4", id="product"),
+        ],
+    )
+    def test_highs_refusal_quotes_the_quadratic_clause_not_the_linear_one(self, decidb_cli_highs, clause):
+        """The refusal names the clause that squares or multiplies decisions, as written, and passes the linear
+        clause that comes before it (the square and the product are the two kinds of quadratic row)."""
+        sql = f"""
+            SELECT x, y FROM (VALUES (1), (2)) t(id)
+            DECIDE x(REAL), y(REAL)
+            SUCH THAT SUM(x + y) <= 100 AND {clause}
+            MAXIMIZE SUM(x + y)
+        """
+        decidb_cli_highs.assert_error(sql, match=rf"the SUCH THAT clause `{re.escape(clause)}` squares or multiplies")
+
+    def test_highs_refusal_names_no_clause_for_a_row_a_rewrite_defines(self, decidb_cli_highs):
+        """`sum(x * x)` is held by a helper decision whose defining row is quadratic. The row is no clause's own and
+        the clause that reads the helper is linear, so there is no clause to quote."""
+        sql = """
+            SELECT x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(REAL)
+            SUCH THAT x <= 4 AND x <= 0.5 * SUM(x * x)
+            MAXIMIZE SUM(x)
+        """
+        decidb_cli_highs.assert_error(sql, match=r"DECIDE: a SUCH THAT clause squares or multiplies decision variables")
 
     def test_highs_refusal_happens_before_any_row_is_read(self, decidb_cli_highs):
         """The gate is at plan time, so a refused query never builds a model.
@@ -1930,7 +1959,7 @@ class TestHighsRejection:
         with tempfile.TemporaryDirectory() as tmp:
             dump_path = os.path.join(tmp, "model.dump")
             cli = decidb_cli_highs.with_env({"DECIDB_DUMP_MODEL": dump_path})
-            cli.assert_error(sql, match=r"SUCH THAT clause squares")
+            cli.assert_error(sql, match=r"SUCH THAT clause `POWER\(x, 2\) <= 4` squares")
             assert not os.path.exists(dump_path), (
                 "a plan-time refusal must not build a model, but a dump was written"
             )

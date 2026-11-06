@@ -911,3 +911,22 @@ def test_n1_answers_on_a_machine_with_no_gurobi(decidb_exe_path, tmp_path):
     assert answered.stdout.split() == ["1|3.0", "2|4.0"], answered.stderr
     refused = cli(f"SET decide_direct_solve='off'; {query}")
     assert "which needs Gurobi" in refused.stderr, refused.stderr
+
+
+@pytest.mark.error
+def test_a_refusal_with_no_gurobi_quotes_the_quadratic_clause(decidb_exe_path, tmp_path):
+    # An extra clause makes N1 decline, so the solver plan is built and refuses the quadratic limit. The refusal names
+    # that limit as written, and not the linear clause beside it.
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
+    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+    query = (
+        "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, s) "
+        "DECIDE x(REAL) SUCH THAT SUM(x) <= 50 AND SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
+    )
+    refused = subprocess.run(
+        [decidb_exe_path, "-noheader", "-list", "-c", query], env=env, capture_output=True, text=True
+    )
+    assert "the SUCH THAT clause `SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables" in refused.stderr, (
+        refused.stderr
+    )
+    assert "SUM(x) <= 50" not in refused.stderr, refused.stderr

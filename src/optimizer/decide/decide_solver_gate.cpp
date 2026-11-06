@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
@@ -97,11 +98,27 @@ struct RefusalText {
 	string remedy;
 };
 
+//! The first SUCH THAT clause that squares or multiplies decisions, as the user wrote it; empty when none of the
+//! quadratic rows came from one clause. A row a rewrite defines (a reducer's non-linear body held by a helper) belongs
+//! to no clause of its own, and the clause that reads the helper is linear.
+string FirstQuadraticClause(const LogicalDecide &op) {
+	for (auto &constraint : op.prepared.constraints) {
+		if ((constraint->has_quadratic || constraint->has_bilinear) &&
+		    constraint->source_clause_id < op.constraint_sources.size()) {
+			return QuoteWrittenClause(op.constraint_sources[constraint->source_clause_id]);
+		}
+	}
+	return string();
+}
+
 RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 	switch (gap) {
-	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
-		return {"a SUCH THAT clause squares or multiplies decision variables",
+	case SolverModelClassGap::QUADRATIC_CONSTRAINTS: {
+		auto clause = FirstQuadraticClause(op);
+		return {(clause.empty() ? string("a SUCH THAT clause") : "the SUCH THAT clause `" + clause + "`") +
+		            " squares or multiplies decision variables",
 		        "rewrite that constraint so each term holds at most one decision variable"};
+	}
 	case SolverModelClassGap::NONCONVEX_QUADRATIC:
 		if (op.prepared.objective && op.prepared.objective->has_bilinear) {
 			return {"the objective multiplies two decision variables",
