@@ -3898,14 +3898,28 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				vector<idx_t> class_of(num_variants, DConstants::INVALID_INDEX);
 				vector<idx_t> first_rows(num_variants, DConstants::INVALID_INDEX);
 				vector<idx_t> variants_per_class(num_classes, 0);
+				// An auxiliary has no value on a row whose reads have none (D88), so its definition stands on a row
+				// where it has one, if any: a row that comes first must not leave it undefined for the rest.
+				const auto defines_at_no_value = [&](idx_t row) {
+					const auto var = constraint->defined_var;
+					return var < gstate.absent_reads.size() && !gstate.absent_reads[var].empty() &&
+					       gstate.absent_reads[var][row];
+				};
 				for (idx_t row = 0; row < num_rows; row++) {
 					auto id = instance_ids[row];
-					if (id != DConstants::INVALID_INDEX && class_of[id] == DConstants::INVALID_INDEX) {
-						class_of[id] = class_ids[row];
-						first_rows[id] = row;
-						variants_per_class[class_ids[row]]++;
-						eval_const.row_group_ids[row] = id;
+					if (id == DConstants::INVALID_INDEX) {
+						continue;
 					}
+					if (class_of[id] == DConstants::INVALID_INDEX) {
+						class_of[id] = class_ids[row];
+						variants_per_class[class_ids[row]]++;
+					} else if (defines_at_no_value(first_rows[id]) && !defines_at_no_value(row)) {
+						eval_const.row_group_ids[first_rows[id]] = DConstants::INVALID_INDEX;
+					} else {
+						continue;
+					}
+					first_rows[id] = row;
+					eval_const.row_group_ids[row] = id;
 				}
 				eval_const.num_groups = num_variants;
 				eval_const.rows_stand_with_their_class = !has_when;

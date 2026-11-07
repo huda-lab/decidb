@@ -943,3 +943,28 @@ def test_explain_prints_the_clause_as_written(decidb_cli):
     assert "".join(f"sum(at(previous:x){TL})by(t.product)<=4".split()) in text, result.stdout
     assert "helper" not in text, result.stdout
     assert_no_internal_leak(result, "EXPLAIN of a reducer whose members a frame drops")
+
+
+WHEN_ROWS = ((1, False, "a"), (2, True, "a"), (3, False, "b"), (4, True, "b"))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("rows", [WHEN_ROWS, WHEN_ROWS[1:] + WHEN_ROWS[:1]], ids=["rejected-first", "kept-first"])
+class TestAnAbsUnderAWhen:
+    """`abs` of a reducer inside another reducer's `when`: the auxiliary has no value on a row the `when` rejects (D88),
+    so its definition stands on a row where it has one, whichever comes first. The sums are worked out by hand."""
+
+    @pytest.mark.parametrize(
+        "clause, total",
+        [
+            # |x2 + x4| counts once per kept row, twice: x2 + x4 <= 2, and the rejected rows hold 5 each.
+            pytest.param("sum(when t.p: abs(sum(x))) <= 4", 12, id="sum-of-abs-of-a-sum"),
+            # Each group's kept row reads its own sum: x2 + x4 <= 4.
+            pytest.param("sum(when t.p: abs(sum(x) by (t.g))) <= 4", 14, id="by-key"),
+            pytest.param("max(when t.p: abs(sum(x))) <= 4", 14, id="max-of-abs"),
+        ],
+    )
+    def test_the_definition_stands_whichever_row_comes_first(self, decidb_cli, rows, clause, total):
+        sql = f"""SELECT id, x {table('t', ('id', 'p', 'g'), rows)} DECIDE x(REAL)
+            SUCH THAT x <= 5 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
