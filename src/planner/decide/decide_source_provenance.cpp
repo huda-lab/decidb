@@ -490,8 +490,12 @@ string RenderDecidePerKey(const BoundConjunctionExpression &conj, const vector<s
 	return fragments[fragment_id];
 }
 
-//! `per K`, in front of its clause.
+//! `per K`, in front of its clause. The wrapper of a row a rewrite adds (ScopeRowPerInstance) was never written.
 static string PerClassQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments) {
+	idx_t fragment_id;
+	if (!TryParseSourceFragmentTag(conj.GetAlias(), fragment_id)) {
+		return string();
+	}
 	return "per " + RenderDecidePerKey(conj, fragments);
 }
 

@@ -968,3 +968,11 @@ class TestAnAbsUnderAWhen:
         sql = f"""SELECT id, x {table('t', ('id', 'p', 'g'), rows)} DECIDE x(REAL)
             SUCH THAT x <= 5 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
         assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
+
+    def test_explain_prints_a_row_a_rewrite_added(self, decidb_cli, rows):
+        """The definition's own `per` wrapper was never written, so it prints no key."""
+        sql = f"""EXPLAIN SELECT id, x {table('t', ('id', 'p', 'g'), rows)} DECIDE x(REAL)
+            SUCH THAT x <= 5 AND sum(when t.p: abs(sum(x))) <= 4 MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert_no_internal_leak(result, "EXPLAIN of a row a rewrite added")
+        assert result.returncode == 0, result.stderr
