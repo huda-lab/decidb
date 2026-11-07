@@ -4101,7 +4101,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		const bool tightest_frame_bound = rhs_per_row && constraint->tightest_frame_bound;
 		vector<bool> bound_null(tightest_frame_bound ? num_rows : 0, false);
 		// A row in no class of the `per` key has no instance, so no instance reads its bound (D5): as for a column
-		// (RhsBoundRewriter::InClassOnly), it is not computed there and bounds nothing.
+		// (RhsBoundRewriter::InClassOnly), the bound is not computed there and bounds nothing. What a frame in it reads
+		// is computed already, for every anchor, since one frame can have several readers.
 		vector<bool> rows_in_a_class;
 		if (tightest_frame_bound && constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
 			auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,

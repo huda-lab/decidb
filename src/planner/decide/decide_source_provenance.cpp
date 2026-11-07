@@ -95,6 +95,13 @@ static RenderContext ContextOf(const DecideSourceNames &names) {
 	return ctx;
 }
 
+//! How tightly each form binds, below the arithmetic RenderFunction ranks from 10 up: a child that binds looser than
+//! what holds it keeps its parentheses. OPERAND_PRECEDENCE is an operand of any other node (`NOT`, `IS NULL`).
+static constexpr int OR_PRECEDENCE = 2;
+static constexpr int AND_PRECEDENCE = 3;
+static constexpr int COMPARISON_PRECEDENCE = 4;
+static constexpr int OPERAND_PRECEDENCE = 5;
+
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence = 0);
 
 const Expression &DecideUnguarded(const Expression &expr) {
@@ -432,26 +439,23 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	}
 	case ExpressionClass::BOUND_COMPARISON: {
 		auto &cmp = expr.Cast<BoundComparisonExpression>();
-		return RenderSource(*cmp.left, ctx) + " " + DecideComparisonOperator(cmp.type) + " " +
-		       RenderSource(*cmp.right, ctx);
+		auto result = RenderSource(*cmp.left, ctx, COMPARISON_PRECEDENCE + 1) + " " +
+		              DecideComparisonOperator(cmp.type) + " " +
+		              RenderSource(*cmp.right, ctx, COMPARISON_PRECEDENCE + 1);
+		return COMPARISON_PRECEDENCE < parent_precedence ? "(" + result + ")" : result;
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		string op = conj.type == ExpressionType::CONJUNCTION_OR ? " OR " : " AND ";
+		const bool is_or = conj.type == ExpressionType::CONJUNCTION_OR;
+		const int precedence = is_or ? OR_PRECEDENCE : AND_PRECEDENCE;
 		string result;
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			if (i > 0) {
-				result += op;
+				result += is_or ? " OR " : " AND ";
 			}
-			// AND binds tighter than OR: an OR under an AND keeps its parentheses.
-			auto &child = *conj.children[i];
-			bool nested_or = conj.type == ExpressionType::CONJUNCTION_AND &&
-			                 child.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-			                 child.type == ExpressionType::CONJUNCTION_OR;
-			auto rendered = RenderSource(child, ctx);
-			result += nested_or ? "(" + rendered + ")" : rendered;
+			result += RenderSource(*conj.children[i], ctx, precedence);
 		}
-		return result;
+		return precedence < parent_precedence ? "(" + result + ")" : result;
 	}
 	case ExpressionClass::BOUND_OPERATOR: {
 		// A DECIDE-variable IN is an opaque marker rather than a comparison, so without
@@ -481,16 +485,25 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	default:
 		break;
 	}
-	// Any other node prints in its own syntax, over its children as written: ToString would print each child by its
-	// alias, which here may be nothing but tags. A subquery cannot be copied, and it prints by its fragment.
-	if (expr.HasSubquery()) {
-		return expr.ToString();
-	}
-	auto copy = expr.Copy();
-	ExpressionIterator::EnumerateChildren(*copy, [&](unique_ptr<Expression> &child) {
-		child = make_uniq<BoundReferenceExpression>(RenderSource(*child, ctx), child->return_type, 0U);
+	// Any other node prints in its own syntax over its children as written: its ToString would print a cast's child by
+	// its alias, which may be nothing but tags. Each child stands aside for its text while it prints, since a child
+	// holding a bound subquery cannot be copied. Rendered first, so nothing can throw with a child aside.
+	vector<string> written;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		written.push_back(RenderSource(child, ctx, OPERAND_PRECEDENCE));
 	});
-	return copy->ToString();
+	auto &node = const_cast<Expression &>(expr);
+	vector<unique_ptr<Expression>> aside;
+	ExpressionIterator::EnumerateChildren(node, [&](unique_ptr<Expression> &child) {
+		auto type = child->return_type;
+		aside.push_back(std::move(child));
+		child = make_uniq<BoundReferenceExpression>(written[aside.size() - 1], std::move(type), 0U);
+	});
+	auto result = node.ToString();
+	idx_t restored = 0;
+	ExpressionIterator::EnumerateChildren(node,
+	                                      [&](unique_ptr<Expression> &child) { child = std::move(aside[restored++]); });
+	return result;
 }
 
 static string AppendQualifier(string prefix, const string &suffix) {

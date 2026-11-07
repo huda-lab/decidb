@@ -865,16 +865,41 @@ class TestRefusalsInEverySpelling:
             pytest.param("coalesce(0.5 * norm(t.cap, 'inf'), 0)", "COALESCE(0.5 * norm(t.cap, 'inf'), 0)", id="coalesce"),
             pytest.param("coalesce((SELECT 5), 0)", "COALESCE((SELECT 5), 0)", id="a-subquery-inside"),
             pytest.param("abs(coalesce(sum(t.cap) by (t.id), 0))", "abs(COALESCE(sum(t.cap) by (t.id), 0))", id="nested"),
+            # Each reads as another expression without its parentheses: NOT binds tighter than AND.
+            pytest.param(
+                "sum(when NOT (t.p AND t.q): t.cap)", "sum(when (NOT (t.p AND t.q)): t.cap)", id="a-not-over-an-and"
+            ),
+            pytest.param(
+                "sum(when (t.p AND t.q) IS NULL: t.cap)", "sum(when ((t.p AND t.q) IS NULL): t.cap)", id="is-null-over-an-and"
+            ),
+            pytest.param(
+                "sum(when (t.p OR t.q) AND t.p: t.cap)", "sum(when (t.p OR t.q) AND t.p: t.cap)", id="an-or-under-an-and"
+            ),
         ],
     )
     def test_a_node_with_no_spelling_of_its_own_prints_over_its_written_children(self, decidb_cli, term, quoted):
         """COALESCE has no rendering of its own, so it prints in its own syntax, but each child prints as written: a
         cast's ToString prints its child by its alias, which held the tag."""
         result = decidb_cli.execute_raw(
-            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+            f"""SELECT id, x FROM (VALUES (1, 3, true, false), (2, 4, false, true)) t(id, cap, p, q)
+            DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"""
         )
         assert f"'{quoted}' does not reference a decision" in result.stderr, result.stderr
         assert_no_internal_leak(result, "a decision-free objective term")
+
+    @pytest.mark.parametrize(
+        "clause, quoted",
+        [
+            pytest.param("x * (1 / coalesce((SELECT 2), 1)) < 5", "1 / COALESCE((SELECT 2), 1)", id="a-subquery-at-bind"),
+        ],
+    )
+    def test_a_subquery_under_a_node_prints_its_text_at_bind(self, decidb_cli, clause, quoted):
+        """Binding renders before subqueries are planned, when one cannot be copied, so the node is not copied."""
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM (VALUES (1, 3)) t(id, cap) DECIDE x(INT) SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x)"
+        )
+        assert quoted in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a subquery under a node at bind")
 
     @pytest.mark.parametrize(
         "term",

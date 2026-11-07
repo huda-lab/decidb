@@ -2442,7 +2442,7 @@ class TestAFrameBoundReadsOnlyInstances:
         ],
     )
     def test_a_row_in_no_class_computes_no_bound(self, decidb_cli, bound, c, total):
-        """No instance reads the row's bound, so nothing is computed there, as for a column."""
+        """No instance reads the row's bound, so the bound is not computed there, as for a column."""
         rows = ", ".join(f"({i + 1}, 'a', {'NULL' if i == 1 else 1}, {i + 1}, '{v}'::DOUBLE)" for i, v in enumerate(c))
         sql = f"""SELECT id, x FROM (VALUES {rows}) t({', '.join(CLASSED)}) DECIDE x(REAL)
             SUCH THAT x <= 100 AND per t.k: sum(x) by (t.g) <= {bound.format(over=OVER_S)} MAXIMIZE sum(x) ORDER BY id"""
