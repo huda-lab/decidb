@@ -138,6 +138,9 @@ public:
 
 	//! Bind the given expression. Unlike Bind(), this does *not* mute the given ParsedExpression.
 	//! Exposed to be used from sub-binders that aren't subclasses of ExpressionBinder.
+	//! The alias a bound node takes when its parsed node had the alias `parsed`.
+	virtual string BoundAlias(const Expression &bound, const string &parsed);
+
 	virtual BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
 	                                  bool root_expression = false);
 

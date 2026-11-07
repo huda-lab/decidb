@@ -23,9 +23,6 @@ class BoundConjunctionExpression;
 //! selector records its own as it binds: DecideBinder::BindDecideFrame.)
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments);
 
-//! Preserve a source-fragment tag when a DECIDE binder replaces a parsed node.
-void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bound);
-
 //! Assign stable source ids to bound comparisons before planning rewrites them.
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.

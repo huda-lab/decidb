@@ -1,7 +1,6 @@
 #include "duckdb/planner/expression_binder.hpp"
 
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
-#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/list.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/binder.hpp"
@@ -380,9 +379,13 @@ ErrorData ExpressionBinder::Bind(unique_ptr<ParsedExpression> &expr, idx_t depth
 	auto &be = expr->Cast<BoundExpression>();
 	be.SetAlias(alias);
 	if (!alias.empty()) {
-		be.expr->SetAlias(BoundDecideAlias(be.expr->GetAlias(), alias));
+		be.expr->SetAlias(BoundAlias(*be.expr, alias));
 	}
 	return ErrorData();
+}
+
+string ExpressionBinder::BoundAlias(const Expression &bound, const string &parsed) {
+	return parsed;
 }
 
 BindResult ExpressionBinder::BindUnsupportedExpression(ParsedExpression &expr, idx_t depth, const string &message) {

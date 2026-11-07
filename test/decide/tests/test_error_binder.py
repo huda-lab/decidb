@@ -861,8 +861,22 @@ class TestRefusalsInEverySpelling:
 
     @pytest.mark.parametrize(
         "term",
-        ["0.5 * norm(t.cap, 'inf')", "norm(t.cap, 'inf') / 2", "0.5 * sum(t.cap)", "sum(t.cap) by (t.id)"],
-        ids=["a-norm-under-a-factor", "a-norm-under-a-divisor", "a-reducer-under-a-factor", "a-reducer-with-its-by"],
+        [
+            "0.5 * norm(t.cap, 'inf')",
+            "norm(t.cap, 'inf') / 2",
+            "0.5 * sum(t.cap)",
+            "sum(t.cap) by (t.id)",
+            "sum((SELECT 1))",
+            "norm(CAST(t.cap AS DOUBLE), 2)",
+        ],
+        ids=[
+            "a-norm-under-a-factor",
+            "a-norm-under-a-divisor",
+            "a-reducer-under-a-factor",
+            "a-reducer-with-its-by",
+            "a-subquery-as-a-reducers-argument",
+            "a-cast-as-a-norms-body",
+        ],
     )
     def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):
         """Binding casts a factor's operand, and a cast prints its child by its alias, so the bound name held the tag

@@ -1798,6 +1798,10 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
             return result;
         }
         auto &bound_child = result.expression;
+		// Bound directly, so it takes the text a cast or subquery recorded here rather than in ExpressionBinder::Bind.
+		if (!child_expr->GetAlias().empty()) {
+			bound_child->SetAlias(BoundAlias(*bound_child, child_expr->GetAlias()));
+		}
 		child_types.push_back(bound_child->return_type);
 		children.push_back(std::move(bound_child));
 	}
@@ -2242,6 +2246,10 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	AddDecideTag(aggregate->alias, MakeFrameTag(frames.size()));
 	frames.push_back(std::move(spec));
 	return BindResult(std::move(result));
+}
+
+string DecideBinder::BoundAlias(const Expression &bound, const string &parsed) {
+	return BoundDecideAlias(bound.GetAlias(), parsed);
 }
 
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {

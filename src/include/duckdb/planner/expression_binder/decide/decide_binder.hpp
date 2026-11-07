@@ -256,6 +256,9 @@ protected:
 	                                          const DecideFrameExpression &frame, const string &alias,
 	                                          ErrorData &error);
 	BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    //! A DECIDE clause carries its metadata in aliases, so a recorded text joins the tags a node holds (BoundDecideAlias).
+    string BoundAlias(const Expression &bound, const string &parsed) override;
+
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
                               bool root_expression = false) override;
     //! The dispatch itself. `BindExpression` wraps it so every bound node this binder

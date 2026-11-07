@@ -410,6 +410,39 @@ def test_a_side_tables_value_is_read_on_the_rescan_route(decidb_cli, rule, query
     assert rows[0][0] == pytest.approx(total)
 
 
+def test_a_cast_under_a_reducer_prints_as_written(decidb_cli):
+    """A reducer binds its argument directly, not through ExpressionBinder::Bind, and the outer cast's text wins there
+    too. The bound is 2.5, so the tightest repair adds 997.5 to reach row 2's 1000."""
+    bound = "sum(CAST(CAST(t.w AS DOUBLE) AS DOUBLE))"
+    rows, columns = decidb_cli.execute(
+        f"""SELECT clause, suggested_change FROM (DIAGNOSE SELECT id, x
+            FROM (VALUES (1, 1.0::DOUBLE, 0), (2, 1.5::DOUBLE, 1)) t(id, w, v) DECIDE x(REAL)
+            SUCH THAT x <= {bound} AND x >= t.v * 1000 MAXIMIZE sum(x)) LIMIT 1"""
+    )
+    assert rows[0] == (f"x <= {bound}", f"x <= {bound} + 997.5"), rows
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        pytest.param(
+            """SELECT d AS "__source_fragment_99999999999999999999__" FROM (VALUES (1.5)) t(d)""",
+            1.5,
+            id="too-long-for-a-tag",
+        ),
+        pytest.param(
+            """SELECT ({'e__source_fragment_1__': d, 'd__source_fragment_1__': e})."e__source_fragment_1__"
+            FROM (VALUES (1.0, 2.0)) t(d, e)""",
+            1.0,
+            id="a-struct-key",
+        ),
+    ],
+)
+def test_outside_decide_an_alias_is_only_a_name(decidb_cli, sql, expected):
+    """DECIDE's tags live in aliases, but plain SQL binds with no DECIDE binder: the same text there is a name."""
+    assert decidb_cli.execute(sql)[0][0][0] == pytest.approx(expected)
+
+
 def test_a_norm_of_a_decision_holds_a_subquery(decidb_cli):
     """The objective's least is x = 1 on every row."""
     sql = f"""SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL)

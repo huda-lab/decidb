@@ -50,18 +50,6 @@ void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments)
 	expr.SetAlias(std::move(alias));
 }
 
-void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bound) {
-	idx_t fragment_id;
-	if (!TryParseSourceFragmentTag(source.GetAlias(), fragment_id)) {
-		return;
-	}
-	auto alias = bound.GetAlias();
-	if (!TryParseSourceFragmentTag(alias, fragment_id)) {
-		AddDecideTag(alias, MakeSourceFragmentTag(fragment_id));
-		bound.SetAlias(std::move(alias));
-	}
-}
-
 namespace {
 //! What rendering a bound clause reads besides the tree.
 struct RenderContext {

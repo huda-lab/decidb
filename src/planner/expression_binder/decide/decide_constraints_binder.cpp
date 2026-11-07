@@ -436,9 +436,6 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
     auto location = expr_ptr->GetQueryLocation();
     auto result = TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression));
-    if (!result.HasError() && result.expression) {
-        PreserveDecideSourceFragment(*expr_ptr, *result.expression);
-    }
     return ThrowClauseError(PreserveQueryLocation(location, std::move(result)), root_expression);
 }
 
