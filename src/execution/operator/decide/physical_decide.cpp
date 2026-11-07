@@ -3964,11 +3964,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				if (num_variants > num_classes) {
 					RecordVariants(*signature, "constraints", num_variants, num_classes);
 					// A variant is named by its class, and by its own field values where its class has more than one.
-					eval_const.group_names =
-					    NameVariants(*signature, keys,
-					                 SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs},
-					                 first_rows, class_of, variants_per_class, class_ids, chunk_expr_cache, context,
-					                 per_group_cache);
+					eval_const.group_names = NameVariants(
+					    *signature, keys,
+					    SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs}, first_rows,
+					    class_of, variants_per_class, class_ids, chunk_expr_cache, context, per_group_cache);
 				} else {
 					auto class_names = GroupNames(per_group_cache, constraint->scope.class_key, classes);
 					for (idx_t id = 0; id < num_variants && !class_names.empty(); id++) {

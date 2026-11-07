@@ -126,7 +126,8 @@ struct DecideConstraint {
 	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
 	//! The bound reads a frame and may differ within a group, so each group's instance takes its tightest value (D85).
-	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare frame.
+	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare
+	//! frame.
 	bool tightest_frame_bound = false;
 	ExpressionType comparison_type;  // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
 	bool lhs_is_aggregate = false;   // True if original LHS was an aggregate (e.g., SUM(...))
@@ -270,8 +271,9 @@ struct DecideObjective {
 //! A reducer over data whose argument reads a frame (LogicalDecide::frame_aggregates) is one column of its own, after
 //! every frame's, computed once they are:
 //!   AGGREGATE — `value`, the reducer over the rows its filter keeps, its argument reading frame columns: on each row
-//!              its group's value of `key`, in the reducer's type, each class of `class_key` counted once per signature; NULL on
-//!              a row in no group, and where the group has none to reduce (`count`: 0). `frame` is INVALID_INDEX
+//!              its group's value of `key`, in the reducer's type, each class of `class_key` counted once per
+//!              signature; NULL on a row in no group, and where the group has none to reduce (`count`: 0). `frame` is
+//!              INVALID_INDEX
 struct DecideFrameColumn {
 	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED, AGGREGATE };
 	Kind kind = Kind::READ;
@@ -280,8 +282,8 @@ struct DecideFrameColumn {
 	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
-	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, the reducer as written, and the order of
-	//! the norm it was written as (LogicalDecide::FrameAggregate).
+	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, the reducer as written, and the order
+	//! of the norm it was written as (LogicalDecide::FrameAggregate).
 	idx_t key = DConstants::INVALID_INDEX;
 	idx_t class_key = DConstants::INVALID_INDEX;
 	string text;

@@ -317,7 +317,6 @@ def test_a_norm_reads_as_its_definition(decidb_cli, body, norm, value, plus):
         assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([expected] * 4), mode
 
 
-
 NORM_ROWS = "(VALUES (0, 3), (1, -4), (2, 5), (3, 0)) t(id, v)"
 
 

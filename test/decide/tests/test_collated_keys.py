@@ -296,7 +296,10 @@ class TestACollatedReducerOverData:
 
 
 ORDER_ROWS = ((1, "a", 10.0), (2, "A", 10.0), (3, "b", 30.0))
-TWO_VALUES_ROW_ORDERS = (((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0)), ((2, "A", 20.0), (1, "a", 10.0), (3, "b", 30.0)))
+TWO_VALUES_ROW_ORDERS = (
+    ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0)),
+    ((2, "A", 20.0), (1, "a", 10.0), (3, "b", 30.0)),
+)
 
 
 def _ordered(clause, rows=ORDER_ROWS, over="t.k", collation="COLLATE NOCASE"):
@@ -344,9 +347,7 @@ class TestACollatedOrderKey:
     def test_a_plan_round_trip_keeps_a_computed_keys_collation(self, decidb_cli):
         """A function's result loses its collated type in a round trip, so the plan holds the collation itself: 'az'
         and 'Az' stay one position, as `dense_rank` keeps them."""
-        counted = _ordered(
-            "count(from first to last: t.v) {over}", over="(t.k || 'z') COLLATE NOCASE", collation=""
-        )
+        counted = _ordered("count(from first to last: t.v) {over}", over="(t.k || 'z') COLLATE NOCASE", collation="")
         assert [row["x"] for row in answer(decidb_cli, f"PRAGMA verify_serializer; {counted}")] == [2, 2, 2]
 
     @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])

@@ -476,9 +476,9 @@ static bool HoldsNan(Vector &values, idx_t count) {
 }
 
 //! An aggregate run through its state functions over values of `sources`, one vector per argument, so the value has
-//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it. A NaN in what it reads (`read`, indexed
-//! as `sources`) is an error, except to COUNT, which counts it (language/guide.md §3, as a reducer's ArgumentMessage):
-//! checked on the values, since SQL's MIN passes over one. `written` names the reducer in that error.
+//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it. A NaN in what it reads (`read`,
+//! indexed as `sources`) is an error, except to COUNT, which counts it (language/guide.md §3, as a reducer's
+//! ArgumentMessage): checked on the values, since SQL's MIN passes over one. `written` names the reducer in that error.
 class AggregateFold {
 public:
 	AggregateFold(ClientContext &context, const BoundAggregateExpression &aggregate, vector<Vector> &sources_p,
@@ -548,8 +548,8 @@ private:
 	idx_t pending = 0;
 };
 
-//! Every row of `out` NULL, in each field of a nested type too: the parent's mask alone leaves a STRUCT's fields holding
-//! whatever the allocator did, which a copy of the row reads.
+//! Every row of `out` NULL, in each field of a nested type too: the parent's mask alone leaves a STRUCT's fields
+//! holding whatever the allocator did, which a copy of the row reads.
 static void SetEveryRowNull(Vector &out, idx_t num_rows) {
 	for (idx_t row = 0; row < num_rows; row++) {
 		FlatVector::SetNull(out, row, true);
