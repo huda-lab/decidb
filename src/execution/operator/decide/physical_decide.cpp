@@ -3498,15 +3498,25 @@ static idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups
 //! own `when`s drop included (a group's every kept row bounds it) -- the least under `<`
 //! and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a column's (paper
 //! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
-//! (`null_rows`). `row_group_ids` empty is every row in one group.
+//! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
+//! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
+//! holds has no instance, so no bound to read (D68).
 static void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
-                                   const vector<bool> &bound_null, const vector<idx_t> &row_group_ids, idx_t num_groups,
-                                   vector<double> &rhs, vector<bool> &null_rows) {
-	const bool one_group = row_group_ids.empty();
-	auto group_of = [&](idx_t row) {
-		return one_group ? idx_t(0) : row_group_ids[row];
-	};
+                                   const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
+                                   const vector<idx_t> &instances, idx_t num_groups, vector<double> &rhs,
+                                   vector<bool> &null_rows) {
+	const bool one_group = kept_groups.empty();
 	const idx_t groups = one_group ? 1 : num_groups;
+	vector<bool> held(groups, instances.empty());
+	for (auto group : instances) {
+		if (group != DConstants::INVALID_INDEX) {
+			held[one_group ? 0 : group] = true;
+		}
+	}
+	auto group_of = [&](idx_t row) {
+		const idx_t group = one_group ? 0 : kept_groups[row];
+		return group != DConstants::INVALID_INDEX && held[group] ? group : DConstants::INVALID_INDEX;
+	};
 	vector<double> least(groups, std::numeric_limits<double>::infinity());
 	vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
 	vector<bool> has_value(groups, false);
@@ -3859,6 +3869,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					}
 					if (!any_class) {
 						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+						kept_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 						eval_const.num_groups = 0;
 						grouped_instances = 0;
 					}
@@ -4174,9 +4185,19 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		if (tightest_frame_bound) {
 			// Only a clause in the aggregate shape is tagged (RhsBoundRewriter::RewriteBound).
 			D_ASSERT(constraint->lhs_is_aggregate || constraint->was_minmax_easy);
+			// A row in no class of the `per` key has no instance, so no instance reads its bound (D5), as for a column
+			// (RhsBoundRewriter::InClassOnly).
+			if (constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
+				auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,
+				                                context, num_rows, &scoped_kept);
+				for (idx_t row = 0; row < num_rows; row++) {
+					bound_null[row] =
+					    bound_null[row] || classes.unfiltered_row_group_ids[row] == DConstants::INVALID_INDEX;
+				}
+			}
 			TakeTightestFrameBound(constraint->comparison_type, eval_const.rhs_written, scoped_kept, bound_null,
-			                       kept_row_group_ids, eval_const.num_groups, eval_const.rhs_values.MutableDense(),
-			                       null_rows);
+			                       kept_row_group_ids, eval_const.row_group_ids, eval_const.num_groups,
+			                       eval_const.rhs_values.MutableDense(), null_rows);
 		}
 
 		// AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator

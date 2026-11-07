@@ -2292,3 +2292,66 @@ class TestATightestFrameBound:
         result = decidb_cli.execute_raw(sql)
         assert "takes more than one value here (4 and 9)" in result.stderr, result.stderr
         assert_no_internal_leak(result, "an = frame bound over a filtered anchor")
+
+
+CLASSED = ("id", "g", "k", "s", "c")
+
+
+@pytest.mark.correctness
+class TestAFrameBoundReadsOnlyInstances:
+    """A frame bound reads the kept rows of the groups its clause holds an instance of (D68), and of those the rows in
+    a class of its `per` key (D5), as a column's does. The answers are worked out by hand."""
+
+    @pytest.mark.parametrize(
+        "clause",
+        [
+            pytest.param("sum(x) by (t.g) <= {frame}", id="by-under-a-least"),
+            pytest.param("sum(x) by (t.g) = {frame}", id="by-under-equal"),
+            pytest.param("max(x) by (t.g) <= {frame}", id="easy-max"),
+            pytest.param("max(x) by (t.g) >= {frame}", id="hard-max"),
+            pytest.param("sum(x) = {frame}", id="no-by-under-equal"),
+        ],
+    )
+    def test_a_clause_with_no_class_holds_no_instance(self, decidb_cli, clause):
+        """Every `k` is NULL, so `per t.k` names no class and the clause constrains nothing: `x` is free, at 100 each.
+        `previous` reads 3 and 4 in group a, which is no error here."""
+        rows = tuple((r[0], r[1], None, r[2], r[3]) for r in TIGHT_ROWS)
+        frame = f"at(previous: t.c) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', CLASSED, rows)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND per t.k: {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(500)
+
+    @pytest.mark.parametrize(
+        "clause, total",
+        [
+            # `next` reads 4, 9, NULL in group a and 6, NULL in group b.
+            pytest.param("sum(when t.c > 100: x) = {frame}", 500, id="its-one-group-is-empty"),
+            pytest.param("sum(x) by (t.g) + sum(when t.c > 100: x) by (t.g) = {frame}", 500, id="every-group-is-empty"),
+            # Group a's reducer reads no row, so its two values are no error; group b reads 6, twice its `x`s' sum.
+            pytest.param("sum(x) by (t.g) + sum(when t.g = 'b': x) by (t.g) = {frame}", 303, id="one-group-is-empty"),
+        ],
+    )
+    def test_a_group_a_reducer_reads_no_row_of_is_no_check(self, decidb_cli, clause, total):
+        frame = f"at(next: t.c) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
+        warnings = 1 if total == 500 else ()
+        assert sum(row["x"] for row in answer(decidb_cli, sql, warnings=warnings)) == pytest.approx(total)
+
+    @pytest.mark.parametrize(
+        "clause, c, total",
+        [
+            # `previous` reads NULL, 2, 5, 7; row 2's `k` is NULL, so the least of the others, 5, holds.
+            pytest.param("sum(x) by (t.g) <= {frame}", (2, 5, 7, 8), 5, id="under-a-least"),
+            # Row 2 is free of the reducer's `when`, at 100, and the others share 5.
+            pytest.param("sum(when t.k > 0: x) by (t.g) <= {frame}", (2, 5, 7, 8), 105, id="under-a-reducers-when"),
+            # `previous` reads NULL, 2, 5, 5: one value among the rows in a class.
+            pytest.param("sum(x) by (t.g) = {frame}", (2, 5, 5, 5), 5, id="under-equal"),
+        ],
+    )
+    def test_a_row_in_no_class_bounds_nothing(self, decidb_cli, clause, c, total):
+        rows = tuple((i + 1, "a", None if i == 1 else 1, i + 1, value) for i, value in enumerate(c))
+        frame = f"at(previous: t.c) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', CLASSED, rows)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND per t.k: {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
