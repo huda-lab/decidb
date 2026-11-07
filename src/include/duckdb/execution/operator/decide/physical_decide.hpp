@@ -19,6 +19,7 @@ namespace duckdb {
 //! physical_decide.cpp. Finalize's private phase methods take it by reference.
 class DecideGlobalSinkState;
 
+class DecideEvaluationRecord;
 class DecideRowStore;
 
 //! Per-Finalize cache of TransformToChunkExpression results, keyed by the original
@@ -349,7 +350,7 @@ private:
     void RecordRunTimeAccount(idx_t source_clause_id, string subject) const;
     //! What the data left of each clause (deck pp. 50, 56): the instances it skipped for having no value, an EXPLAIN
     //! ANALYZE line under it, and a clause left with none, which constrains nothing, a warning on stderr.
-    void ReportSkippedInstances(const DecideGlobalSinkState &gstate) const;
+    void ReportSkippedInstances(const DecideGlobalSinkState &gstate, bool silent) const;
     //! An objective that is 0 whatever the decisions -- every term with no value or a zero factor on every row -- is
     //! a warning on stderr and an EXPLAIN ANALYZE line: any feasible answer is optimal.
     void ReportAnEmptyObjective(const SolverInput &input) const;
@@ -390,6 +391,21 @@ private:
         //! The composed MIN/MAX *objective*'s terms, evaluated.
         vector<ComposedMinMaxTermData> composed_objective_terms;
     };
+
+    //! PHASES 1.3 to 2: the evaluator, from the one pass to the helper decisions' members. It reads the rows, fills
+    //! gstate's evaluation fields and the arguments after `row_store`, and prints only when not `silent`.
+    void Evaluate(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows, DecideRowStore &row_store,
+                  ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                  vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
+    //! What Evaluate left, in the form two runs compare.
+    DecideEvaluationRecord RecordEvaluation(DecideGlobalSinkState &gstate, idx_t num_rows, const PerGroupCache &cache,
+                                            const vector<KeyedMapping> &keyed_mappings,
+                                            const EvaluatedClauses &evaluated) const;
+    //! `DECIDB_EVALUATOR=verify`: Evaluate as ever, then a second run in silence on fields of its own, the two compared
+    //! (CompareDecideEvaluations). What the first run raised, it raises last.
+    void VerifyEvaluation(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                          DecideRowStore &row_store, ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                          vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) const;
 
     //! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
     //! objective-evaluation fields.

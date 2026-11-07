@@ -14,6 +14,7 @@
 # it, so leaving it ambient would let `DECIDB_NATIVE_CONSTRUCTS=force` in the
 # caller's environment capture a different configuration and diff it against the
 # shipped baseline. A baseline records the model DeciDB ships, never an arm.
+# DECIDB_EVALUATOR is pinned to `flat` for the same reason.
 #
 #   ./capture.sh --solver gurobi          # write baseline.gurobi.dump
 #   ./capture.sh --solver highs           # write baseline.highs.dump
@@ -76,7 +77,7 @@ rm -f "$out" "$out.results"
 # baseline and the check see the same order.
 { echo "SET threads=1;"; cat "$here/corpus.sql"; } | \
     DECIDB_DUMP_MODEL="$out" DECIDB_FORCE_SOLVER="$solver" \
-    DECIDB_NATIVE_CONSTRUCTS=on \
+    DECIDB_NATIVE_CONSTRUCTS=on DECIDB_EVALUATOR=flat \
     "$decidb" > "$out.results" 2>&1 || true
 
 if grep -q "that solver is not available" "$out.results" 2>/dev/null; then

@@ -1,4 +1,5 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
+#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_row_store.hpp"
@@ -3042,8 +3043,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Evaluate coefficients and build the model (solver provides verbose output)
 
-    DecideInputScans() = 0;
-
     // Per-Finalize cache of TransformToChunkExpression results. Outlives every
     // ExpressionExecutor created below, so it's safe for executors to retain
     // references into cached entries.
@@ -3054,62 +3053,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // by every other call site that asks for the same expression set.
     PerGroupCache per_group_cache;
 
-	//===--------------------------------------------------------------------===//
-	// PHASE 1.3: The one pass (deck §3): every expression the evaluation reads on a row, evaluated in one scan of the
-	// input, which every loop below reads (decide_row_store.hpp)
-	//===--------------------------------------------------------------------===//
-
-	DecideProfileScope phase("execution.one_pass");
 	DecideRowStore row_store(context, gstate.data);
-	RegisterEvaluation(context, chunk_expr_cache, row_store);
-	row_store.Build();
-	chunk_expr_cache.store = &row_store;
-
-	//===--------------------------------------------------------------------===//
-	// PHASE 1.4: Frame selectors -- their timelines, and the values they read as columns
-	//===--------------------------------------------------------------------===//
-
-	phase.Next("execution.frames");
-	BuildFrames(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
-
-	//===--------------------------------------------------------------------===//
-    // PHASE 1.5: Build Keyed Mappings for Keyed Decisions
-    //===--------------------------------------------------------------------===//
-
-	phase.Next("execution.keyed_mapping");
-	vector<KeyedMapping> keyed_mappings =
-        BuildKeyedMappings(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
-
-    //===--------------------------------------------------------------------===//
-    // PHASE 1.6: Scope checks of the clauses
-    //===--------------------------------------------------------------------===//
-
-    phase.Next("execution.scope_checks");
-    RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, keyed_mappings);
-	// A frame's selected position must hold one payload (D73), read once the decisions' classes are known.
-	CheckFramePeers(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
-
-	//===--------------------------------------------------------------------===//
-    // PHASE 2: Evaluate Coefficient Expressions
-    //===--------------------------------------------------------------------===//
-
-    // 1. Evaluate constraints
-    phase.Next("execution.evaluate_constraints");
-    EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
-
-    // 2. Evaluate objective
-    phase.Next("execution.evaluate_objective");
-    EvaluatedClauses evaluated =
-        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
-
-    // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
-    phase.Next("execution.evaluate_composed");
-    EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings, evaluated);
-    ReportSkippedInstances(gstate);
-
-    // 4. Evaluate the value rewrite's helper decisions (their reducers' members)
-    phase.Next("execution.evaluate_value_links");
-    EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
+	vector<KeyedMapping> keyed_mappings;
+	EvaluatedClauses evaluated;
+	switch (SelectedDecideEvaluator()) {
+	case DecideEvaluator::FLAT:
+		Evaluate(context, gstate, num_rows, row_store, chunk_expr_cache, per_group_cache, keyed_mappings, evaluated,
+		         false);
+		break;
+	case DecideEvaluator::VERIFY:
+		VerifyEvaluation(context, gstate, num_rows, row_store, chunk_expr_cache, per_group_cache, keyed_mappings,
+		                 evaluated);
+		break;
+	default:
+		throw NotImplementedException("DECIDB_EVALUATOR: the tree evaluator is not built yet");
+	}
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
@@ -3118,7 +3076,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
     DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
-	phase.Next("execution.assemble_input");
+	DecideProfileScope phase("execution.assemble_input");
     ResolveGroupNames(per_group_cache, gstate);
     VarIndexer var_indexer;
     SolverInput solver_input =
@@ -3152,6 +3110,302 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     phase.Next("execution.solve_and_route");
     return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(),
                                bench, model_timer, solver_timer);
+}
+
+void PhysicalDecide::Evaluate(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                              DecideRowStore &row_store, ChunkExprCache &chunk_expr_cache,
+                              PerGroupCache &per_group_cache, vector<KeyedMapping> &keyed_mappings,
+                              EvaluatedClauses &evaluated, bool silent) const {
+	DecideInputScans() = 0;
+
+	//===--------------------------------------------------------------------===//
+	// PHASE 1.3: The one pass (deck §3): every expression the evaluation reads on a row, evaluated in one scan of the
+	// input, which every loop below reads (decide_row_store.hpp)
+	//===--------------------------------------------------------------------===//
+
+	DecideProfileScope phase("execution.one_pass");
+	RegisterEvaluation(context, chunk_expr_cache, row_store);
+	row_store.Build();
+	chunk_expr_cache.store = &row_store;
+
+	//===--------------------------------------------------------------------===//
+	// PHASE 1.4: Frame selectors -- their timelines, and the values they read as columns
+	//===--------------------------------------------------------------------===//
+
+	phase.Next("execution.frames");
+	BuildFrames(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
+
+	//===--------------------------------------------------------------------===//
+	// PHASE 1.5: Build Keyed Mappings for Keyed Decisions
+	//===--------------------------------------------------------------------===//
+
+	phase.Next("execution.keyed_mapping");
+	keyed_mappings = BuildKeyedMappings(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
+
+	//===--------------------------------------------------------------------===//
+	// PHASE 1.6: Scope checks of the clauses
+	//===--------------------------------------------------------------------===//
+
+	phase.Next("execution.scope_checks");
+	RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, keyed_mappings);
+	// A frame's selected position must hold one payload (D73), read once the decisions' classes are known.
+	CheckFramePeers(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
+
+	//===--------------------------------------------------------------------===//
+	// PHASE 2: Evaluate Coefficient Expressions
+	//===--------------------------------------------------------------------===//
+
+	// 1. Evaluate constraints
+	phase.Next("execution.evaluate_constraints");
+	EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
+
+	// 2. Evaluate objective
+	phase.Next("execution.evaluate_objective");
+	evaluated = EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
+
+	// 3. Evaluate composed MIN/MAX clauses (constraint and objective)
+	phase.Next("execution.evaluate_composed");
+	EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings, evaluated);
+	ReportSkippedInstances(gstate, silent);
+
+	// 4. Evaluate the value rewrite's helper decisions (their reducers' members)
+	phase.Next("execution.evaluate_value_links");
+	EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
+}
+
+//! The fields of gstate an evaluator fills, which a second run fills on its own while the first's stand aside.
+struct DecideEvaluationFields {
+	vector<EvaluatedConstraint> constraints;
+	vector<EvaluatedConstraint> singleton_row_constraints;
+	vector<SolverInput::ClassSet> class_sets;
+	vector<ReducerValueLinkSpec> value_links;
+	vector<CoefficientColumn> objective_coefficients;
+	vector<idx_t> objective_variable_indices;
+	vector<CoefficientColumn> quadratic_coefficients;
+	vector<idx_t> quadratic_variable_indices;
+	bool has_quadratic_objective = false;
+	double quadratic_sign = 1.0;
+	vector<EvaluatedConstraint::BilinearTerm> bilinear_terms;
+	vector<DecideFrameMap> frame_maps;
+	vector<std::pair<idx_t, idx_t>> frame_reads;
+	vector<unique_ptr<Expression>> frame_column_refs;
+	vector<vector<bool>> absent_reads;
+	map<idx_t, DecideGlobalSinkState::ClauseInstances> clause_instances;
+
+	void SwapWith(DecideGlobalSinkState &gstate) {
+		std::swap(constraints, gstate.evaluated_constraints);
+		std::swap(singleton_row_constraints, gstate.evaluated_singleton_row_constraints);
+		std::swap(class_sets, gstate.class_sets);
+		std::swap(value_links, gstate.evaluated_value_links);
+		std::swap(objective_coefficients, gstate.evaluated_objective_coefficients);
+		std::swap(objective_variable_indices, gstate.objective_variable_indices);
+		std::swap(quadratic_coefficients, gstate.evaluated_quadratic_coefficients);
+		std::swap(quadratic_variable_indices, gstate.quadratic_variable_indices);
+		std::swap(has_quadratic_objective, gstate.has_quadratic_objective);
+		std::swap(quadratic_sign, gstate.quadratic_sign);
+		std::swap(bilinear_terms, gstate.evaluated_bilinear_terms);
+		std::swap(frame_maps, gstate.frame_maps);
+		std::swap(frame_reads, gstate.frame_reads);
+		std::swap(frame_column_refs, gstate.frame_column_refs);
+		std::swap(absent_reads, gstate.absent_reads);
+		std::swap(clause_instances, gstate.clause_instances);
+	}
+};
+
+static double Id(idx_t id) {
+	return id == DConstants::INVALID_INDEX ? -1.0 : static_cast<double>(id);
+}
+
+static vector<double> Ids(const vector<idx_t> &ids) {
+	vector<double> numbers;
+	numbers.reserve(ids.size());
+	for (auto id : ids) {
+		numbers.push_back(Id(id));
+	}
+	return numbers;
+}
+
+static vector<double> Mask(const vector<bool> &mask) {
+	return vector<double>(mask.begin(), mask.end());
+}
+
+//! `column` on `rows`; nothing where it holds no values.
+static vector<double> ValuesAt(const CoefficientColumn &column, const vector<idx_t> &rows) {
+	vector<double> numbers;
+	if (column.Size() == 0) {
+		return numbers;
+	}
+	numbers.reserve(rows.size());
+	for (auto row : rows) {
+		numbers.push_back(column.Get(row));
+	}
+	return numbers;
+}
+
+static vector<double> Everywhere(const CoefficientColumn &column) {
+	vector<double> numbers;
+	numbers.reserve(column.Size());
+	for (idx_t row = 0; row < column.Size(); row++) {
+		numbers.push_back(column.Get(row));
+	}
+	return numbers;
+}
+
+//! A name by the values it reads, not the numbering of the run that made it.
+static string NameByValue(const GroupName &name, const PerGroupCache &cache) {
+	if (name.key_values == DConstants::INVALID_INDEX) {
+		return string();
+	}
+	vector<string> values;
+	for (auto &value : cache.key_values[name.key_values].values_of(name.group)) {
+		values.push_back(value.ToString());
+	}
+	return StringUtil::Join(values, ", ");
+}
+
+static void RecordClause(DecideEvaluationRecord &record, const EvaluatedConstraint &clause, const string &name,
+                         idx_t num_rows, const PerGroupCache &cache) {
+	// What a clause fills on a row it never emits is no one's to read.
+	vector<idx_t> emitted;
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (clause.row_group_ids.empty() || clause.row_group_ids[row] != DConstants::INVALID_INDEX) {
+			emitted.push_back(row);
+		}
+	}
+	record.Add("rows", name, StringUtil::Format("%llu groups", clause.num_groups), Ids(clause.row_group_ids));
+	for (idx_t term = 0; term < clause.row_coefficients.size(); term++) {
+		record.Add("terms", name + " term " + to_string(term), to_string(clause.variable_indices[term]),
+		           ValuesAt(clause.row_coefficients[term], emitted));
+	}
+	record.Add("bounds", name, string(), ValuesAt(clause.rhs_values, emitted));
+	record.Add("bounds", name + " admitted", string(), ValuesAt(clause.admitted_lower, emitted));
+	record.Add("bounds", name + " admits", string(), ValuesAt(clause.admitted_upper, emitted));
+	vector<string> names;
+	for (auto &group : clause.group_names) {
+		names.push_back(NameByValue(group, cache));
+	}
+	if (!names.empty()) {
+		record.Add("names", name, StringUtil::Join(names, "; "));
+	}
+}
+
+static void RecordComposedTerm(DecideEvaluationRecord &record, const ComposedMinMaxTermData &term, const string &name) {
+	record.Add("clauses", name, term.agg_name + " " + term.label, {double(term.sign), term.scale});
+	record.Add("clauses", name + " rows", string(), Mask(term.filter_mask));
+	for (idx_t i = 0; i < term.per_term_coefs.size(); i++) {
+		record.Add("clauses", name + " term " + to_string(i), to_string(term.variables[i]), term.per_term_coefs[i]);
+	}
+}
+
+DecideEvaluationRecord PhysicalDecide::RecordEvaluation(DecideGlobalSinkState &gstate, idx_t num_rows,
+                                                        const PerGroupCache &cache,
+                                                        const vector<KeyedMapping> &keyed_mappings,
+                                                        const EvaluatedClauses &evaluated) const {
+	ResolveGroupNames(cache, gstate);
+	DecideEvaluationRecord record;
+	for (idx_t c = 0; c < gstate.evaluated_constraints.size(); c++) {
+		RecordClause(record, gstate.evaluated_constraints[c], "clause " + to_string(c), num_rows, cache);
+	}
+	for (idx_t c = 0; c < gstate.evaluated_singleton_row_constraints.size(); c++) {
+		RecordClause(record, gstate.evaluated_singleton_row_constraints[c], "folded clause " + to_string(c), num_rows,
+		             cache);
+	}
+	for (idx_t t = 0; t < gstate.evaluated_objective_coefficients.size(); t++) {
+		record.Add("clauses", "objective term " + to_string(t), to_string(gstate.objective_variable_indices[t]),
+		           Everywhere(gstate.evaluated_objective_coefficients[t]));
+	}
+	for (idx_t t = 0; t < gstate.evaluated_quadratic_coefficients.size(); t++) {
+		record.Add("clauses", "squared term " + to_string(t), to_string(gstate.quadratic_variable_indices[t]),
+		           Everywhere(gstate.evaluated_quadratic_coefficients[t]));
+	}
+	for (auto &term : gstate.evaluated_bilinear_terms) {
+		record.Add("clauses", "bilinear term", to_string(term.var_a) + " " + to_string(term.var_b),
+		           Everywhere(term.row_coefficients));
+	}
+	for (auto *filters : {&evaluated.linear_filters, &evaluated.quadratic_filters, &evaluated.bilinear_filters}) {
+		for (auto &filter : *filters) {
+			record.Add("clauses", "objective filter", filter.has_filter ? "filtered" : "every row", Mask(filter.mask));
+		}
+	}
+	for (idx_t c = 0; c < evaluated.composed_constraints.size(); c++) {
+		auto &composed = evaluated.composed_constraints[c];
+		const string name = "composed " + to_string(c);
+		record.Add("clauses", name, composed.skipped ? "skipped" : "held", {composed.rhs});
+		for (idx_t t = 0; t < composed.terms.size(); t++) {
+			RecordComposedTerm(record, composed.terms[t], name + " term " + to_string(t));
+		}
+	}
+	for (idx_t t = 0; t < evaluated.composed_objective_terms.size(); t++) {
+		RecordComposedTerm(record, evaluated.composed_objective_terms[t], "composed objective " + to_string(t));
+	}
+	for (auto &link : gstate.evaluated_value_links) {
+		auto &members = link.members;
+		record.Add("links", link.label, link.agg_name + " " + to_string(link.value_var), members.coefficients);
+		record.Add("links", link.label + " groups", string(), Ids(members.group_rows));
+		record.Add("links", link.label + " members", string(), members.constants);
+		record.Add("links", link.label + " terms", string(), Ids(members.variables));
+		record.Add("links", link.label + " rows", string(), Ids(members.rows));
+	}
+	for (idx_t m = 0; m < keyed_mappings.size(); m++) {
+		auto &mapping = keyed_mappings[m];
+		record.Add("mappings", to_string(m), StringUtil::Format("%llu classes", mapping.num_classes),
+		           Ids(mapping.row_to_class));
+	}
+	for (auto &read : gstate.frame_reads) {
+		record.Add("frames", to_string(read.first) + " through frame " + to_string(read.second), string());
+	}
+	for (auto &entry : gstate.clause_instances) {
+		record.Add("instances", to_string(entry.first), string(),
+		           {double(entry.second.grouped), double(entry.second.kept)});
+	}
+	for (auto &account : run_time_accounts) {
+		record.Add("accounts", to_string(account.source_clause_id), account.subject);
+	}
+	return record;
+}
+
+void PhysicalDecide::VerifyEvaluation(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                      DecideRowStore &row_store, ChunkExprCache &chunk_expr_cache,
+                                      PerGroupCache &per_group_cache, vector<KeyedMapping> &keyed_mappings,
+                                      EvaluatedClauses &evaluated) const {
+	// Each run's error is caught, so what the other does is seen before either surfaces.
+	ErrorData first_error;
+	try {
+		Evaluate(context, gstate, num_rows, row_store, chunk_expr_cache, per_group_cache, keyed_mappings, evaluated,
+		         false);
+	} catch (std::exception &ex) {
+		first_error = ErrorData(ex);
+	}
+	DecideEvaluationRecord first;
+	if (!first_error.HasError()) {
+		first = RecordEvaluation(gstate, num_rows, per_group_cache, keyed_mappings, evaluated);
+	}
+
+	DecideEvaluationFields stood_aside;
+	stood_aside.SwapWith(gstate);
+	vector<LogicalDecide::RewriteAccount> first_accounts;
+	std::swap(first_accounts, run_time_accounts);
+	ChunkExprCache second_chunk_exprs;
+	PerGroupCache second_groups;
+	DecideRowStore second_store(context, gstate.data);
+	vector<KeyedMapping> second_mappings;
+	EvaluatedClauses second_evaluated;
+	ErrorData second_error;
+	DecideEvaluationRecord second;
+	try {
+		Evaluate(context, gstate, num_rows, second_store, second_chunk_exprs, second_groups, second_mappings,
+		         second_evaluated, true);
+		second = RecordEvaluation(gstate, num_rows, second_groups, second_mappings, second_evaluated);
+	} catch (std::exception &ex) {
+		second_error = ErrorData(ex);
+	}
+	stood_aside.SwapWith(gstate);
+	std::swap(first_accounts, run_time_accounts);
+
+	CompareDecideEvaluations(first, first_error, std::move(second), second_error);
+	if (first_error.HasError()) {
+		first_error.Throw();
+	}
 }
 
 //===--------------------------------------------------------------------===//
@@ -3388,7 +3642,7 @@ void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char
 	                                        StringUtil::Join(fields, ", ")));
 }
 
-void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate) const {
+void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate, bool silent) const {
 	for (auto &entry : gstate.clause_instances) {
 		auto &counts = entry.second;
 		if (counts.kept >= counts.grouped) {
@@ -3400,7 +3654,7 @@ void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate)
 		    counts.grouped == 1
 		        ? string("its one instance has no value and is skipped")
 		        : StringUtil::Format("%llu of %llu instances have no value and are skipped", skipped, counts.grouped));
-		if (counts.kept == 0) {
+		if (counts.kept == 0 && !silent) {
 			fprintf(stderr, "DECIDE warning: '%s' constrains nothing: %s no value, so %s skipped.\n",
 			        WrittenClause(entry.first).c_str(),
 			        counts.grouped == 1 ? "its one instance has"
