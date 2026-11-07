@@ -2326,9 +2326,11 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
         expr_ptr = std::move(marker);
 		auto result = BindFunction(expr_ptr, depth);
 		if (!result.HasError() && !stays_a_marker) {
-			// The marker parses as SUM(e), but the norm's value is its definition's, which what reads it binds to.
+			// The marker parses as SUM(e), but the norm's value is its definition's, which what reads it binds to. Its
+			// type needs only the body's: a body holding a subquery cannot be copied until planning has run.
 			auto &aggregate = *GetBoundAggregate(*result.expression);
-			auto type = DecideNormDefinition(context, aggregate, payload)->return_type;
+			auto body = make_uniq<BoundReferenceExpression>(aggregate.children[0]->return_type, 0U);
+			auto type = DecideNormDefinition(context, std::move(body), payload)->return_type;
 			aggregate.function.return_type = type;
 			aggregate.return_type = std::move(type);
 		}

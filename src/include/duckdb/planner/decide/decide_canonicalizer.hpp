@@ -189,11 +189,10 @@ struct DecideFramePlacement {
 	vector<bool> placed;
 };
 
-//! What the norm `marker` of order `order` stands for (language/guide.md §5): 1 `SUM(ABS(e))`, 2 `SUM(POWER(e, 2))`,
+//! What a norm of `body` and order `order` stands for (language/guide.md §5): 1 `SUM(ABS(e))`, 2 `SUM(POWER(e, 2))`,
 //! 'inf' `MAX(ABS(e))`, and 0 of data the count of its nonzero rows. Its type is the norm's: the binder gives it to the
 //! marker, which parses as `SUM(e)`, so what reads the norm reads the value it holds.
-unique_ptr<Expression> DecideNormDefinition(ClientContext &context, const BoundAggregateExpression &marker,
-                                            const string &order);
+unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body, const string &order);
 
 class DecideCanonicalizer {
 public:

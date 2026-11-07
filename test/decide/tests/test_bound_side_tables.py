@@ -315,3 +315,33 @@ def test_a_norm_reads_as_its_definition(decidb_cli, body, norm, value, plus):
     expected = value + (1 if plus else 0)
     for mode in ("off", "auto"):
         assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([expected] * 4), mode
+
+
+
+NORM_ROWS = "(VALUES (0, 3), (1, -4), (2, 5), (3, 0)) t(id, v)"
+
+
+@pytest.mark.parametrize(
+    "norm, value",
+    [
+        # `e` is 2, -5, 4, -1.
+        pytest.param("1", 12, id="sum-of-sizes"),
+        pytest.param("2", 46, id="sum-of-squares"),
+        pytest.param("'inf'", 5, id="greatest-size"),
+        pytest.param("0", 4, id="count-of-nonzero-rows"),
+    ],
+)
+def test_a_norm_body_holds_a_subquery(decidb_cli, norm, value):
+    """Binding sizes the norm before planning, when a bound subquery cannot be copied: it needs only the body's type."""
+    sql = f"""SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL)
+        SUCH THAT x <= norm(t.v - (SELECT 1), {norm}) AND x <= 5000 MAXIMIZE sum(x) ORDER BY id"""
+    for mode in ("off", "auto"):
+        assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([value] * 4), mode
+
+
+def test_a_norm_of_a_decision_holds_a_subquery(decidb_cli):
+    """The objective's least is x = 1 on every row."""
+    sql = f"""SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL)
+        SUCH THAT x <= 10 MINIMIZE norm(x - (SELECT 1), 1) ORDER BY id"""
+    for mode in ("off", "auto"):
+        assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([1] * 4), mode
