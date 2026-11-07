@@ -2463,3 +2463,12 @@ def test_a_frames_two_positions_read_in_its_own_order(decidb_cli):
         SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k desc)"""
     result = decidb_cli.execute_raw(sql)
     assert "reads more than one position over the kept rows (t.k = 3, 1)" in result.stderr, result.stderr
+
+
+def test_a_frame_text_holds_no_tag(decidb_cli):
+    """A cast under a function in a payload records its text, and the frame's text prints it, not its tag."""
+    frame = "at(next else 0: abs(CAST(t.v AS DOUBLE))) over (t.id)"
+    sql = f"""SELECT id, x FROM (VALUES (1, 1.0::DOUBLE), (2, 2.0::DOUBLE)) t(id, v) DECIDE x(REAL)
+        SUCH THAT x <= 7 MAXIMIZE sum(x) - {frame}"""
+    result = decidb_cli.execute_raw(sql)
+    assert f"'{frame}' does not reference a decision" in result.stderr, result.stderr

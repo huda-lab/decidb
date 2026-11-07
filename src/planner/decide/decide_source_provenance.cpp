@@ -489,9 +489,8 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	// its alias, which may be nothing but tags. Each child stands aside for its text while it prints, since a child
 	// holding a bound subquery cannot be copied. Rendered first, so nothing can throw with a child aside.
 	vector<string> written;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		written.push_back(RenderSource(child, ctx, OPERAND_PRECEDENCE));
-	});
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { written.push_back(RenderSource(child, ctx, OPERAND_PRECEDENCE)); });
 	auto &node = const_cast<Expression &>(expr);
 	vector<unique_ptr<Expression>> aside;
 	ExpressionIterator::EnumerateChildren(node, [&](unique_ptr<Expression> &child) {

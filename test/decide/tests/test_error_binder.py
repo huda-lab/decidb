@@ -875,6 +875,9 @@ class TestRefusalsInEverySpelling:
             pytest.param(
                 "sum(when (t.p OR t.q) AND t.p: t.cap)", "sum(when (t.p OR t.q) AND t.p: t.cap)", id="an-or-under-an-and"
             ),
+            pytest.param(
+                "sum(when (t.p = t.q) IS NULL: t.cap)", "sum(when ((t.p = t.q) IS NULL): t.cap)", id="is-null-over-a-comparison"
+            ),
         ],
     )
     def test_a_node_with_no_spelling_of_its_own_prints_over_its_written_children(self, decidb_cli, term, quoted):
@@ -886,6 +889,14 @@ class TestRefusalsInEverySpelling:
         )
         assert f"'{quoted}' does not reference a decision" in result.stderr, result.stderr
         assert_no_internal_leak(result, "a decision-free objective term")
+
+    def test_a_string_that_reads_as_a_tag_is_left_as_written(self, decidb_cli):
+        """Only a tag printed as an argument's name goes: the same text in a literal is what the query says."""
+        term = "CAST(sum(t.cap + length('__source_fragment_0__')) AS INTEGER)"
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM (VALUES (1, 3)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+        )
+        assert "length('__source_fragment_0__')" in result.stderr, result.stderr
 
     @pytest.mark.parametrize(
         "clause, quoted",
@@ -911,6 +922,7 @@ class TestRefusalsInEverySpelling:
             "sum((SELECT 1))",
             "norm(CAST(t.cap AS DOUBLE), 2)",
             "sum(CAST(abs(CAST(t.cap AS DOUBLE)) AS INTEGER))",
+            "CAST(sum(q := CAST(t.cap AS DOUBLE)) AS INTEGER)",
         ],
         ids=[
             "a-norm-under-a-factor",
@@ -920,6 +932,7 @@ class TestRefusalsInEverySpelling:
             "a-subquery-as-a-reducers-argument",
             "a-cast-as-a-norms-body",
             "a-cast-under-a-function-under-a-cast",
+            "a-written-argument-name-stays",
         ],
     )
     def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):

@@ -1798,8 +1798,8 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
             return result;
         }
         auto &bound_child = result.expression;
-		// Bound directly, so it takes the text a cast or subquery recorded here rather than in ExpressionBinder::Bind. A
-		// plain argument name means nothing to these aggregates, and the child's tags stay.
+		// Bound directly, so it takes the text a cast or subquery recorded here rather than in ExpressionBinder::Bind.
+		// A plain argument name means nothing to these aggregates, and the child's tags stay.
 		idx_t fragment_id;
 		if (TryParseSourceFragmentTag(child_expr->GetAlias(), fragment_id)) {
 			bound_child->SetAlias(BoundAlias(*bound_child, child_expr->GetAlias()));
