@@ -1061,7 +1061,7 @@ static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_
 //! values from each variant's first row (`first_rows`) when a message needs them, through a key-values entry of the
 //! cache that no key owns, so assembly keeps their numbering (ResolveGroupNames).
 static vector<GroupName> NameVariants(const DecideSignature &signature, const vector<DecideKey> &keys,
-                                      const vector<DecideFrameSpec> &frames, const vector<idx_t> &first_rows,
+                                      const SignatureFrames &frames, const vector<idx_t> &first_rows,
                                       const vector<idx_t> &class_of, const vector<idx_t> &variants_per_class,
                                       const vector<idx_t> &class_ids, ChunkExprCache &chunk_expr_cache,
                                       ClientContext &context, PerGroupCache &per_group_cache) {
@@ -1075,6 +1075,8 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 	for (auto &element : class_elements) {
 		add(*element.expression, element.null_mode);
 	}
+	// Each collated order key's column, and its frame.
+	vector<pair<idx_t, idx_t>> collated_positions;
 	for (auto &field : signature.fields) {
 		if (field.kind == DecideSignatureFieldKind::VALUE) {
 			add(*field.value, DecideKeyNullMode::NO_GROUP);
@@ -1084,12 +1086,15 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 			}
 		} else if (field.kind == DecideSignatureFieldKind::FRAME) {
 			// Its timeline, and its anchor's place there when it reads relative to it.
-			auto &frame = frames[field.frame];
+			auto &frame = frames.frames[field.frame];
 			for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
 				add(*element.expression, DecideKeyNullMode::NO_GROUP);
 			}
 			if (frame.Relative()) {
 				add(*frame.order, DecideKeyNullMode::NO_GROUP);
+				if (frame.order_collation) {
+					collated_positions.emplace_back(exprs.size() - 1, field.frame);
+				}
 			}
 		}
 	}
@@ -1106,6 +1111,16 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 		    LeastSpellingRows(*exprs[c], class_ids, variants_per_class.size(), chunk_expr_cache, context);
 		for (auto class_of_variant : class_of) {
 			group_rows.label[c].push_back(least[class_of_variant]);
+		}
+	}
+	// And a position by the least spelling among its rows, which its collation lets them differ in.
+	for (auto &position : collated_positions) {
+		auto &map = frames.maps[position.second];
+		auto least = LeastSpellingRows(*exprs[position.first], map.peer, map.peer_begin.size() - 1, chunk_expr_cache,
+		                               context);
+		for (auto row : first_rows) {
+			group_rows.label[position.first].push_back(map.peer[row] == DConstants::INVALID_INDEX ? row
+			                                                                                     : least[map.peer[row]]);
 		}
 	}
 	auto reader = make_shared_ptr<GroupKeyReader>(*chunk_expr_cache.store, exprs, std::move(group_rows));
@@ -3195,26 +3210,34 @@ static string DescribeFrameDifference(const DecideSignatureField &field, const v
 	auto &map = frames.maps[field.frame];
 	idx_t first = DConstants::INVALID_INDEX;
 	bool timelines = false;
-	bool positions = false;
-	std::unordered_map<idx_t, idx_t> peer_of_timeline;
+	// Each timeline's first and last peer over the rows, in timeline order, so the message does not depend on row order.
+	std::map<idx_t, std::pair<idx_t, idx_t>> span_of_timeline;
 	for (idx_t row = 0; row < ids.size(); row++) {
 		if (ids[row] == DConstants::INVALID_INDEX) {
 			continue;
 		}
-		auto seen = peer_of_timeline.emplace(map.timeline[row], map.peer[row]).first;
-		positions = positions || seen->second != map.peer[row];
+		auto &span = span_of_timeline.emplace(map.timeline[row], std::make_pair(map.peer[row], map.peer[row])).first->second;
+		span.first = MinValue(span.first, map.peer[row]);
+		span.second = MaxValue(span.second, map.peer[row]);
 		if (first == DConstants::INVALID_INDEX) {
 			first = row;
 			continue;
 		}
 		timelines = timelines || map.timeline[row] != map.timeline[first];
 	}
-	string values;
-	if (frame.Relative() && positions) {
-		varies(*frame.order, values);
-		return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s)", field.text,
-		                          frame.order_name, values);
+	if (frame.Relative()) {
+		for (auto &entry : span_of_timeline) {
+			auto &span = entry.second;
+			if (span.first != span.second) {
+				auto order = ReadRowValues(*frame.order, chunk_expr_cache, context, &map.anchors);
+				return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s, %s)",
+				                          field.text, frame.order_name,
+				                          DecideSqlLiteral(DecidePositionName(map, span.first, order)),
+				                          DecideSqlLiteral(DecidePositionName(map, span.second, order)));
+			}
+		}
 	}
+	string values;
 	if (timelines) {
 		for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
 			if (varies(*element.expression, values)) {
@@ -3938,8 +3961,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					RecordVariants(*signature, "constraints", num_variants, num_classes);
 					// A variant is named by its class, and by its own field values where its class has more than one.
 					eval_const.group_names =
-					    NameVariants(*signature, keys, frames, first_rows, class_of, variants_per_class, class_ids,
-					                 chunk_expr_cache, context, per_group_cache);
+					    NameVariants(*signature, keys,
+					                 SignatureFrames {frames, gstate.frame_maps, prepared, gstate.frame_column_refs},
+					                 first_rows, class_of, variants_per_class, class_ids, chunk_expr_cache, context,
+					                 per_group_cache);
 				} else {
 					auto class_names = GroupNames(per_group_cache, constraint->scope.class_key, classes);
 					for (idx_t id = 0; id < num_variants && !class_names.empty(); id++) {

@@ -190,6 +190,10 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
                                    ChunkExprCache &chunk_expr_cache);
 
 //! D75: each class of `frame.partition_key` among the anchors lies in one timeline; an anchor in none is no witness.
+//! How a message names peer `peer`: its rows' least value of the order key (`order`, per row), which a collation lets
+//! them differ in, so the name does not depend on row order (D69).
+const Value &DecidePositionName(const DecideFrameMap &map, idx_t peer, const vector<Value> &order);
+
 void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
                                idx_t num_rows, ChunkExprCache &chunk_expr_cache);

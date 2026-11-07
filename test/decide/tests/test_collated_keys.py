@@ -296,6 +296,7 @@ class TestACollatedReducerOverData:
 
 
 ORDER_ROWS = ((1, "a", 10.0), (2, "A", 10.0), (3, "b", 30.0))
+TWO_VALUES_ROW_ORDERS = (((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0)), ((2, "A", 20.0), (1, "a", 10.0), (3, "b", 30.0)))
 
 
 def _ordered(clause, rows=ORDER_ROWS, over="t.k", collation="COLLATE NOCASE"):
@@ -347,6 +348,31 @@ class TestACollatedOrderKey:
             "count(from first to last: t.v) {over}", over="(t.k || 'z') COLLATE NOCASE", collation=""
         )
         assert [row["x"] for row in answer(decidb_cli, f"PRAGMA verify_serializer; {counted}")] == [2, 2, 2]
+
+    @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])
+    def test_a_message_names_two_positions_not_two_spellings(self, decidb_cli, rows):
+        """'a' and 'A' are one position, so a pair of them proves nothing: the objective reads 'A' and 'b'."""
+        source = f"(SELECT id, k COLLATE NOCASE AS k, v FROM {values(rows, 'r', ('id', 'k', 'v'))}) t"
+        sql = f"SELECT id, y FROM {source} DECIDE per (): y(REAL) SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k)"
+        result = decidb_cli.execute_raw(sql)
+        assert "reads more than one position over the kept rows (t.k = 'A', 'b')" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize("rows", TWO_VALUES_ROW_ORDERS, ids=["a-first", "A-first"])
+    def test_a_position_is_named_by_its_least_spelling(self, decidb_cli, rows):
+        """D69: the label of a position with two spellings does not depend on which arrives first."""
+        result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
+        assert "finds 2 rows at t.k = 'A'" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])
+    def test_a_variant_is_named_by_its_positions_least_spelling(self, decidb_cli, rows):
+        """Each position is its own variant of the class, and DIAGNOSE names it `g, A` in either row order."""
+        source = f"""(SELECT id, 'g' AS g, k COLLATE NOCASE AS k, v FROM {values(rows, 'r', ('id', 'k', 'v'))}) t"""
+        sql = f"""PRAGMA diagnose_decide_infeasible_slack_scope='expanded';
+            DIAGNOSE SELECT id, y FROM {source} DECIDE per t.g: y(INT)
+            SUCH THAT per t.g: y = at(previous else 5: t.v) over (t.k) MAXIMIZE sum(y)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "g, A" in result.stdout + result.stderr, result.stdout + result.stderr
+        assert "g, a" not in result.stdout + result.stderr, result.stdout + result.stderr
 
     def test_one_position_holds_one_value(self, decidb_cli):
         """D73: 'a' and 'A' are one position, whose two rows read 10 and 20."""
