@@ -369,6 +369,16 @@ def test_nested_casts_that_change_nothing_print_as_the_outer(decidb_cli):
     assert f"`{bound}` takes more than one value here" in result.stderr, result.stderr
 
 
+@pytest.mark.parametrize("macro", ["a", "max(a)"], ids=["a-scalar-macro", "an-aggregate-macro"])
+def test_a_macro_named_sum_does_not_capture_a_norm(decidb_cli, macro):
+    """A norm is DECIDE syntax. Its marker parses as SUM(e), so a macro by that name took it: a scalar one raised
+    INTERNAL, and an aggregate one read max(v)'s bits as a DOUBLE."""
+    sql = f"""CREATE TEMP MACRO sum(a) AS {macro};
+        SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL) SUCH THAT x <= norm(t.v, 2) AND x <= 5000
+        MAXIMIZE system.main.sum(x) ORDER BY id"""
+    assert [row[1] for row in decidb_cli.execute(sql)[0]] == pytest.approx([50] * 4)
+
+
 def test_a_norm_of_a_decision_holds_a_subquery(decidb_cli):
     """The objective's least is x = 1 on every row."""
     sql = f"""SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL)

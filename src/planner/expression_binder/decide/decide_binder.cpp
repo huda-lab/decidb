@@ -2320,7 +2320,8 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 		                            ExpressionContainsDecideVariable(*function.children[0], variables);
         vector<unique_ptr<ParsedExpression>> marker_children;
         marker_children.push_back(std::move(function.children[0]));
-        auto marker = make_uniq<FunctionExpression>("sum", std::move(marker_children));
+        // The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
+        auto marker = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
         marker->alias = function.alias;
         AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
         expr_ptr = std::move(marker);
