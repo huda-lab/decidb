@@ -3494,7 +3494,8 @@ static idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups
 }
 
 //! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
-//! each group's instance takes its tightest value among its kept rows where the bound has one -- the least under `<`
+//! each group's instance takes its tightest value among all its kept rows where the bound has one, a row its reducers'
+//! own `when`s drop included (a group's every kept row bounds it) -- the least under `<`
 //! and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a column's (paper
 //! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
 //! (`null_rows`). `row_group_ids` empty is every row in one group.
@@ -3797,10 +3798,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
 		// Each kept row's group in the aggregate shape: the clause's kept rows by its `by`
 		// key, without the reducers' own `when` filters -- the rows whose classes a
-		// diagnosis reports for the group. Empty means "every kept row, one group", the same
-		// convention `row_group_ids` uses, which is all a clause with no `by` key has. Diagnosis
-		// prep: built under DIAGNOSE only, its one reader.
+		// diagnosis reports for the group, and the rows a tightest frame bound reads (D85).
+		// Empty means "every kept row, one group", the same convention `row_group_ids` uses,
+		// which is all a clause with no `by` key has. Built for those two readers alone.
 		vector<idx_t> kept_row_group_ids;
+		const bool reads_kept_groups = diagnose || constraint->tightest_frame_bound;
 		// The instances the clause holds before any with no value is skipped: in the aggregate shape each group of its
 		// kept rows, whether or not a reducer reads a row of it -- one that reads none has no value (deck p. 56).
 		idx_t grouped_instances = DConstants::INVALID_INDEX;
@@ -3822,7 +3824,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					auto groups = LookupOrBuildPerGroupIds(
 					    per_group_cache, keys, constraint->group_key, chunk_expr_cache, context, num_rows,
 					    emitted, &scoped_kept, eval_const.row_group_ids, eval_const.num_groups,
-					    diagnose ? &kept : nullptr, diagnose ? &kept_row_group_ids : nullptr);
+					    reads_kept_groups ? &kept : nullptr, reads_kept_groups ? &kept_row_group_ids : nullptr);
 					eval_const.group_names = GroupNames(per_group_cache, constraint->group_key, groups);
 					auto &entry = CachedKeyGroups(per_group_cache, keys, constraint->group_key, chunk_expr_cache,
 					                              context, num_rows, &scoped_kept);
@@ -4156,9 +4158,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			}
 		}
 		if (tightest_frame_bound) {
+			// Only a clause in the aggregate shape is tagged (RhsBoundRewriter::RewriteBound).
+			D_ASSERT(constraint->lhs_is_aggregate || constraint->was_minmax_easy);
 			TakeTightestFrameBound(constraint->comparison_type, eval_const.rhs_written, scoped_kept, bound_null,
-			                       eval_const.row_group_ids, eval_const.num_groups,
-			                       eval_const.rhs_values.MutableDense(), null_rows);
+			                       kept_row_group_ids, eval_const.num_groups, eval_const.rhs_values.MutableDense(),
+			                       null_rows);
 		}
 
 		// AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator

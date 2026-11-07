@@ -346,8 +346,8 @@ where the frame reads no value is no variant (`BuildSignatureIds` filters it), s
 only anchors that read one, and names what differs among them: a position, a timeline or a fallback.
 
 A frame bound of a clause over groups that differs within a group (`DecideConstraint::tightest_frame_bound`, D85) is read row by
-row as any bound, its NULLs apart, and then each group's rows take the group's tightest value among those where it has
-one (`TakeTightestFrameBound`): the least under `<=`, the greatest under `>=`, the one value under `=`, whose second is
+row as any bound, its NULLs apart, and then each group's kept rows, a row a reducer's own `when` drops included, take
+the group's tightest value among those where it has one (`TakeTightestFrameBound`): the least under `<=`, the greatest under `>=`, the one value under `=`, whose second is
 the `=` message a side table raises for a column; a group with none is marked in `null_rows`, so its instance is
 skipped. Its frame columns print as the frame is written (`FRAME_COLUMN_TAG`).
 

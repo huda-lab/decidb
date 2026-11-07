@@ -2221,3 +2221,35 @@ class TestATightestFrameBound:
         result = decidb_cli.execute_raw(sql)
         assert "takes more than one value here (3 and 4)" in result.stderr, result.stderr
         assert_no_internal_leak(result, "an = frame bound with two values")
+
+    @pytest.mark.parametrize(
+        "clause, total",
+        [
+            # `next` reads 4, 9, NULL in group a and 6, NULL in group b; the reducer's `when` drops the rows of c 3 and
+            # 2, whose `next` are the least of their groups. Rows it drops are free, at 100 each.
+            pytest.param("sum(when t.c > 3: x) by (t.g) <= {frame}", 210, id="by-group"),
+            pytest.param("sum(when t.c > 3: x) <= {frame}", 204, id="one-group"),
+            pytest.param("max(when t.c > 3: x) by (t.g) <= {frame}", 214, id="easy-max"),
+        ],
+    )
+    def test_a_row_a_reducers_when_drops_still_bounds_its_group(self, decidb_cli, column, clause, total):
+        """Every kept row of a group bounds it, as a column read by `lead` would."""
+        frame = f"at(next: t.{column}) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
+
+    def test_a_row_the_clauses_when_drops_does_not(self, decidb_cli, column):
+        """`when t.s > 1` keeps 4, 9 in group a, whose `next` reads 9, NULL, and 6 in group b, whose `next` reads NULL:
+        a's two rows share 9, b has no instance, and the rows the `when` drops hold 100 each."""
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x <= 100
+            AND when t.s > 1: sum(x) by (t.g) <= at(next: t.{column}) {OVER_S} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(309)
+
+    def test_an_equal_bound_counts_a_row_a_reducers_when_drops(self, decidb_cli, column):
+        """Group a reads `next` 4 and 9 among its kept rows, though the reducer keeps only the rows of 9 and of NULL."""
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x <= 100
+            AND sum(when t.c > 3: x) by (t.g) = at(next: t.{column}) {OVER_S} MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "takes more than one value here (4 and 9)" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "an = frame bound over a filtered anchor")
