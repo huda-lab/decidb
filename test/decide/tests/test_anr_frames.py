@@ -2411,7 +2411,6 @@ class TestAFrameBoundReadsOnlyInstances:
             # group a, which is no error then.
             pytest.param("(SELECT NULL::DOUBLE) * sum(x) by (t.g) = {frame}", 500, id="every-group"),
             pytest.param("(SELECT NULL::DOUBLE) * sum(x) = {frame}", 500, id="no-by"),
-            pytest.param("(SELECT NULL::DOUBLE) * sum(power(x, 2)) by (t.g) = {frame}", 500, id="a-square"),
         ],
     )
     def test_a_group_a_null_left_side_skips_is_no_check(self, decidb_cli, clause, total):
@@ -2419,6 +2418,12 @@ class TestAFrameBoundReadsOnlyInstances:
         sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
         assert sum(row["x"] for row in answer(decidb_cli, sql, warnings=1)) == pytest.approx(total)
+
+    def test_a_group_a_null_factor_on_a_square_skips_is_no_check(self, decidb_cli_gurobi):
+        """A square's NULL factor is read after the others, so the check has to wait for it. Only Gurobi takes a square."""
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x <= 100
+            AND (SELECT NULL::DOUBLE) * sum(power(x, 2)) by (t.g) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli_gurobi, sql, warnings=1)) == pytest.approx(500)
 
     def test_a_group_with_a_value_on_its_left_side_still_raises(self, decidb_cli):
         """The same clause with a factor that has a value: group a holds an instance, whose two values are an error."""
