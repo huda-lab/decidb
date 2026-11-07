@@ -2308,13 +2308,24 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
             return BindResult(BinderException::Unsupported(function,
                 "The order p in norm(expr, p) must be 0, 1, 2, or 'inf'."));
         }
+		// An L0 norm of a decision stays a marker for the optimizer, which gives it indicators; no row reads it as a value.
+		const bool stays_a_marker = StringUtil::StartsWith(payload, "0") &&
+		                            ExpressionContainsDecideVariable(*function.children[0], variables);
         vector<unique_ptr<ParsedExpression>> marker_children;
         marker_children.push_back(std::move(function.children[0]));
         auto marker = make_uniq<FunctionExpression>("sum", std::move(marker_children));
         marker->alias = function.alias;
         AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
         expr_ptr = std::move(marker);
-        return BindFunction(expr_ptr, depth);
+		auto result = BindFunction(expr_ptr, depth);
+		if (!result.HasError() && !stays_a_marker) {
+			// The marker parses as SUM(e), but the norm's value is its definition's, which what reads it binds to.
+			auto &aggregate = *GetBoundAggregate(*result.expression);
+			auto type = DecideNormDefinition(context, aggregate, payload)->return_type;
+			aggregate.function.return_type = type;
+			aggregate.return_type = std::move(type);
+		}
+		return result;
 	}
 	// Check if this is an aggregate function
 	QueryErrorContext error_context(expr_ptr->GetQueryLocation());

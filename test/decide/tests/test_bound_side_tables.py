@@ -285,3 +285,33 @@ def test_a_side_tables_value_is_read_past_its_key(decidb_cli, key_type, clause, 
         SELECT id, x FROM keyed k DECIDE x(BOOL) SUCH THAT {clause} MAXIMIZE SUM(x * k.v) ORDER BY id"""
     for mode in ("off", "auto"):
         assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == expected, mode
+
+
+NORM_BODIES = {
+    "INT": (30, 30, 30, 0),
+    "DECIMAL(9,2)": (1.5, 2.5, -3.5, 0),
+    "DOUBLE": (1.5, 2.5, -3.5, 0),
+}
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("plus", ["", " + 1"], ids=["bare", "under-a-sum"])
+@pytest.mark.parametrize(
+    "body, norm, value",
+    [
+        # Each norm's definition has another type than the SUM(e) it parses as: what reads it binds to the definition's.
+        pytest.param("INT", "2", 2700, id="square-of-whole-numbers-is-a-double"),
+        pytest.param("INT", "'inf'", 30, id="greatest-whole-number-is-no-hugeint"),
+        pytest.param("DECIMAL(9,2)", "2", 20.75, id="square-of-a-decimal-is-a-double"),
+        pytest.param("DECIMAL(9,2)", "'inf'", 3.5, id="greatest-decimal-keeps-its-width"),
+        pytest.param("DOUBLE", "0", 3, id="count-of-doubles-is-whole"),
+    ],
+)
+def test_a_norm_reads_as_its_definition(decidb_cli, body, norm, value, plus):
+    """`norm(e, p)` holds its definition's value in its definition's type, however it is read and on either path."""
+    rows = ", ".join(f"({i}, {v})" for i, v in enumerate(NORM_BODIES[body]))
+    sql = f"""SELECT id, x FROM (SELECT id, CAST(v AS {body}) AS v FROM (VALUES {rows}) r(id, v)) t
+        DECIDE x(REAL) SUCH THAT x <= norm(t.v, {norm}){plus} AND x <= 5000 MAXIMIZE sum(x) ORDER BY id"""
+    expected = value + (1 if plus else 0)
+    for mode in ("off", "auto"):
+        assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([expected] * 4), mode

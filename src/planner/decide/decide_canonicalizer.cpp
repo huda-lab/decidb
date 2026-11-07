@@ -845,6 +845,62 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 	return true;
 }
 
+static unique_ptr<Expression> BindScalar(ClientContext &context, const string &name,
+                                         vector<unique_ptr<Expression>> children) {
+	FunctionBinder function_binder(context);
+	ErrorData error;
+	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
+	if (error.HasError()) {
+		throw InternalException("DECIDE canonicalizer failed to bind '%s': %s", name, error.Message());
+	}
+	return result;
+}
+
+static unique_ptr<Expression> BindReducer(ClientContext &context, const string &name, unique_ptr<Expression> child) {
+	auto &entry = Catalog::GetSystemCatalog(context)
+	                  .GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, DEFAULT_SCHEMA, name)
+	                  .Cast<AggregateFunctionCatalogEntry>();
+	FunctionBinder function_binder(context);
+	ErrorData error;
+	vector<LogicalType> argument_types {child->return_type};
+	auto best = function_binder.BindFunction(entry.name, entry.functions, argument_types, error);
+	if (!best.IsValid()) {
+		throw InternalException("DECIDE canonicalizer failed to bind aggregate '%s': %s", name, error.Message());
+	}
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(child));
+	return function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
+	                                             std::move(children));
+}
+
+unique_ptr<Expression> DecideNormDefinition(ClientContext &context, const BoundAggregateExpression &marker,
+                                            const string &order) {
+	auto scalar = [&](const string &name, unique_ptr<Expression> operand) {
+		vector<unique_ptr<Expression>> children;
+		children.push_back(std::move(operand));
+		return BindScalar(context, name, std::move(children));
+	};
+	auto &body = *marker.children[0];
+	unique_ptr<Expression> definition;
+	if (order == "2") {
+		vector<unique_ptr<Expression>> square;
+		square.push_back(body.Copy());
+		square.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(2)));
+		definition = BindReducer(context, "sum", BindScalar(context, "power", std::move(square)));
+	} else if (order == "1" || order == "inf") {
+		definition = BindReducer(context, order == "1" ? "sum" : "max", scalar("abs", body.Copy()));
+	} else {
+		// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
+		// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
+		definition = BindReducer(context, "sum", scalar("abs", scalar("sign", body.Copy())));
+	}
+	definition->SetAlias(marker.GetAlias());
+	if (marker.filter) {
+		definition->Cast<BoundAggregateExpression>().filter = marker.filter->Copy();
+	}
+	return definition;
+}
+
 //! Whether `expr` is a norm marker whose order has an expression for a definition: 1, 2, 'inf', and an L0 norm of
 //! data. An L0 norm of a decision does not: its count needs indicator variables, which only the optimizer can add
 //! (DecideOptimizer::RewriteNorm).
@@ -887,18 +943,9 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	if (marker.children.size() != 1) {
 		throw InternalException("DECIDE norm marker must contain one bound expression");
 	}
-	auto &body = *marker.children[0];
-	unique_ptr<Expression> definition;
-	if (order == "2") {
-		definition = RebindReducer(marker, "sum",
-		                           BindOp("power", body.Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
-	} else if (order == "1" || order == "inf") {
-		definition = RebindReducer(marker, order == "1" ? "sum" : "max", BindOp("abs", body.Copy()));
-	} else {
-		// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
-		// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
-		definition = RebindReducer(marker, "sum", BindOp("abs", BindOp("sign", body.Copy())));
-	}
+	auto definition = DecideNormDefinition(context, marker, order);
+	// The binder gave the marker this type (BindFunction), so what reads it reads this value in place.
+	D_ASSERT(definition->return_type == marker.return_type);
 	auto alias = definition->GetAlias();
 	RemoveDecideTag(alias, string(NORM_MARKER_TAG_PREFIX) + order + "__");
 	AddDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + order + "__");
@@ -907,20 +954,7 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, unique_ptr<Expression> child) const {
-	auto &entry = Catalog::GetSystemCatalog(context)
-	                  .GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, DEFAULT_SCHEMA, name)
-	                  .Cast<AggregateFunctionCatalogEntry>();
-	FunctionBinder function_binder(context);
-	ErrorData error;
-	vector<LogicalType> argument_types {child->return_type};
-	auto best = function_binder.BindFunction(entry.name, entry.functions, argument_types, error);
-	if (!best.IsValid()) {
-		throw InternalException("DECIDE canonicalizer failed to bind aggregate '%s': %s", name, error.Message());
-	}
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(child));
-	return function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
-	                                             std::move(children));
+	return BindReducer(context, name, std::move(child));
 }
 
 unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundAggregateExpression &from, const string &name,
@@ -1045,13 +1079,7 @@ unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_pt
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name,
                                                    vector<unique_ptr<Expression>> children) const {
-	FunctionBinder function_binder(context);
-	ErrorData error;
-	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
-	if (error.HasError()) {
-		throw InternalException("DECIDE canonicalizer failed to bind '%s': %s", name, error.Message());
-	}
-	return result;
+	return BindScalar(context, name, std::move(children));
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &atoms, bool negate) const {
