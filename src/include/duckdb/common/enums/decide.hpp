@@ -583,8 +583,9 @@ inline bool IsQueryWideBoundTag(const string &alias) {
 	return HasDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 }
 
-//! On the bound of a clause over groups: a bound that reads a frame and may differ within a group, which takes the
+//! On the comparison of a clause over groups: its bound reads a frame and may differ within a group, so it takes the
 //! group's tightest value among the rows where it has one (D85). No side table can read a frame, so execution takes it.
+//! The comparison holds the tag because a comparison's tags survive a rebuild (K5), which a bound's node does not.
 static constexpr const char *FRAME_TIGHTEST_BOUND_TAG = "__frame_tightest_bound__";
 
 //! On a reference to a frame column (DecidePreparedModel::frame_columns): its name is the frame as written, which a

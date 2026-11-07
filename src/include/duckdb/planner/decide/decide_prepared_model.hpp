@@ -126,7 +126,7 @@ struct DecideConstraint {
 	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
 	//! The bound reads a frame and may differ within a group, so each group's instance takes its tightest value (D85).
-	//! Read off the bound here, while it still carries FRAME_TIGHTEST_BOUND_TAG: LowerFrames replaces a bare frame.
+	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare frame.
 	bool tightest_frame_bound = false;
 	ExpressionType comparison_type;  // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
 	bool lhs_is_aggregate = false;   // True if original LHS was an aggregate (e.g., SUM(...))

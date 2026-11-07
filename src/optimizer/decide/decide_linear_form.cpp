@@ -1014,7 +1014,7 @@ private:
 			auto constraint = make_uniq<DecideConstraint>();
 			constraint->comparison_type = comp.type;
 			constraint->rhs_expr = comp.right->Copy();
-			constraint->tightest_frame_bound = HasDecideTag(comp.right->GetAlias(), FRAME_TIGHTEST_BOUND_TAG);
+			constraint->tightest_frame_bound = HasDecideTag(comp.alias, FRAME_TIGHTEST_BOUND_TAG);
 			TryParseSourceClauseTag(comp.GetAlias(), constraint->source_clause_id);
 			TryParseRemovalGroupTag(comp.GetAlias(), constraint->removal_group_id);
 

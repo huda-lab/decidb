@@ -174,8 +174,8 @@ and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls i
 is a column stage 08 computes from the rows it selects, so no side table reads one: a frame in a row-wise bound stays
 in it, read as a column is; in a bound of a clause over groups it stays only where it has one value per group -- a
 `first` or `last` frame whose timeline key the group key holds -- and execution checks its NaN as it reads it. One
-that needs its group's tightest value (D85) is tagged `FRAME_TIGHTEST_BOUND_TAG`, and execution takes that value
-from the rows it reads (stage 08). A reducer over data whose argument reads a frame stays a reducer over the rows it
+that needs its group's tightest value (D85) has its comparison tagged `FRAME_TIGHTEST_BOUND_TAG`, which survives the
+rebuilds that give a bound a new node, and execution takes that value from the rows it reads (stage 08). A reducer over data whose argument reads a frame stays a reducer over the rows it
 reads, tagged with its entry of `LogicalDecide::frame_aggregates` (its path key and its own `per` key,
 `MakeFrameAggregate`); the linear form makes it a trailing frame column (`DecideFrameColumn::Kind::AGGREGATE`, a second
 `LowerFramesOnce` once every frame has its columns) that stage 08 computes. With several threads the

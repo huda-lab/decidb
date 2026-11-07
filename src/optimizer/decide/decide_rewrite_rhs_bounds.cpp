@@ -197,9 +197,7 @@ private:
 			// Execution reads the bound, and its NaN, as it reads a row-wise one; one that may differ within a group
 			// it reads as the group's tightest value (D85).
 			if (reduces) {
-				auto alias = comparison.right->GetAlias();
-				AddDecideTag(alias, FRAME_TIGHTEST_BOUND_TAG);
-				comparison.right->SetAlias(std::move(alias));
+				AddDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
 			}
 			return;
 		}

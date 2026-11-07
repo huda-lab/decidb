@@ -2355,3 +2355,34 @@ class TestAFrameBoundReadsOnlyInstances:
         sql = f"""SELECT id, x {table('t', CLASSED, rows)} DECIDE x(REAL)
             SUCH THAT x <= 100 AND per t.k: {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
         assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
+
+    @pytest.mark.parametrize("rows", [TIGHT_ROWS, TIGHT_ROWS[::-1]], ids=["rows-in-order", "rows-reversed"])
+    @pytest.mark.parametrize(
+        "clause, objective, total",
+        [
+            # `first` reads 3 and 2: each of these rebuilds the comparison, whose bound is then a new node.
+            pytest.param("2 * sum(x) <= {first} + 1", "MAXIMIZE", 1.5, id="factor-and-an-added-term"),
+            pytest.param("-sum(x) >= -{first}", "MAXIMIZE", 2, id="negation-on-both-sides"),
+            pytest.param("2 * sum(x) + 1 <= {first}", "MAXIMIZE", 0.5, id="a-constant-moved-over"),
+            pytest.param("2 * sum(x) - {first} <= 0", "MAXIMIZE", 1, id="the-frame-moved-over"),
+            # `previous` reads NULL, 3, 4 and NULL, 2: +1 gives 4 and 3 as the tightest, so `sum` reads 2 and 1.5.
+            pytest.param("2 * sum(x) by (t.g) <= {previous} + 1", "MAXIMIZE", 3.5, id="a-null-anchor-binds-nothing"),
+            # One row of each group reaches 2.5 and 1.5, and the others rest at -50.
+            pytest.param("2 * max(x) by (t.g) >= {previous} + 1", "MINIMIZE", -146, id="hard-max"),
+        ],
+    )
+    def test_a_rebuilt_bound_is_still_tightest(self, decidb_cli, clause, objective, total, rows):
+        """A factor, a negation or a term moved across rebuilds the comparison through the canonicalizer, which keeps
+        its own tags and makes a new right side: the first row's value bound, and row order changed the answer."""
+        first, previous = f"at(first: t.c) {OVER_S}", f"at(previous: t.c) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', TIGHT, rows)} DECIDE x(REAL) SUCH THAT x >= -50 AND x <= 100
+            AND {clause.format(first=first, previous=previous)} {objective} sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
+
+    def test_a_rebuilt_equal_bound_with_two_values_raises(self, decidb_cli):
+        """`first` reads 3 and 2, so 3 - 10 and 2 - 10 are two values, and `=` holds one."""
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL) SUCH THAT x >= -50 AND x <= 100
+            AND -sum(x) = at(first: t.c) {OVER_S} - 10 MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "takes more than one value here (-8 and -7)" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a rebuilt = frame bound")
