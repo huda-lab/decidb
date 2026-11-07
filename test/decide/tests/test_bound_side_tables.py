@@ -373,7 +373,7 @@ def test_nested_casts_that_change_nothing_print_as_the_outer(decidb_cli):
 def test_a_macro_named_sum_does_not_capture_a_norm(decidb_cli, macro):
     """A norm is DECIDE syntax. Its marker parses as SUM(e), so a macro by that name took it: a scalar one raised
     INTERNAL, and an aggregate one read max(v)'s bits as a DOUBLE."""
-    sql = f"""CREATE TEMP MACRO sum(a) AS {macro};
+    sql = f"""ATTACH ':memory:' AS scratch (READ_ONLY false); USE scratch; CREATE MACRO sum(a) AS {macro};
         SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL) SUCH THAT x <= norm(t.v, 2) AND x <= 5000
         MAXIMIZE system.main.sum(x) ORDER BY id"""
     assert [row[1] for row in decidb_cli.execute(sql)[0]] == pytest.approx([50] * 4)
