@@ -1010,7 +1010,7 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 			}
 		}
 		auto out = make_uniq<Vector>(reducer.return_type, num_rows);
-		ReduceDecideGroups(context, reducer, column.text, member, group, groups, chunk_expr_cache, *out);
+		ReduceDecideGroups(context, column, member, group, groups, chunk_expr_cache, *out);
 		vector<unique_ptr<Vector>> appended;
 		appended.push_back(std::move(out));
 		AppendDecideColumns(chunk_expr_cache, appended);
@@ -2583,6 +2583,7 @@ void PhysicalDecide::RegisterEvaluation(ClientContext &context, ChunkExprCache &
 				value(argument.get());
 				leaves(*argument);
 			}
+			value(DecideNormBody(reducer, column.norm_order));
 		} else if (column.kind != DecideFrameColumn::Kind::DEFINED) {
 			value(column.value.get());
 		}

@@ -407,6 +407,7 @@ private:
 			record.class_key = decide.keyed_scopes[scope_idx].key;
 		}
 		record.text = Written(reducer);
+		ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, record.norm_order);
 		aggregate.SetAlias(MakeFrameAggregateTag(decide.frame_aggregates.size()));
 		decide.frame_aggregates.push_back(std::move(record));
 		return marker;

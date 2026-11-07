@@ -321,7 +321,12 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const RenderC
 
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer) {
 	string order;
-	if (!ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order)) {
+	ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order);
+	return DecideNormBody(reducer, order);
+}
+
+const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order) {
+	if (order.empty()) {
 		return nullptr;
 	}
 	// ABS(e) for 1 and 'inf', POWER(e, 2) for 2, ABS(SIGN(e)) for a data-only 0: the body is the first argument of

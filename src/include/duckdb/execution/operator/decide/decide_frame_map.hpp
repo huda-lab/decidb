@@ -214,13 +214,12 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
                               idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
-//! `reducer`'s own aggregate (function and arguments; not its filter) over the rows `members` keeps of each group into
-//! `out`, on each row its group's value: `group` numbers the rows' groups below `groups`, INVALID_INDEX for a row in
-//! none, which reads NULL. The aggregate of a group with no member is SQL's over no row: NULL, and 0 for `count`.
-//! `written` is the reducer as written, for the error a NaN among the values it reads raises.
-void ReduceDecideGroups(ClientContext &context, const BoundAggregateExpression &reducer, const string &written,
-                        const vector<bool> &members, const vector<idx_t> &group, idx_t groups,
-                        ChunkExprCache &chunk_expr_cache, Vector &out);
+//! The aggregate of `column`'s reducer (function and arguments; not its filter) over the rows `members` keeps of each
+//! group into `out`, on each row its group's value: `group` numbers the rows' groups below `groups`, INVALID_INDEX for a
+//! row in none, which reads NULL. The aggregate of a group with no member is SQL's over no row: NULL, and 0 for `count`.
+//! A NaN among what it reads is an error (AggregateFold).
+void ReduceDecideGroups(ClientContext &context, const DecideFrameColumn &column, const vector<bool> &members,
+                        const vector<idx_t> &group, idx_t groups, ChunkExprCache &chunk_expr_cache, Vector &out);
 
 //! The one pass's store with the columns `values_of` (one value per row each) after its own
 //! (DecideRowStore::AppendColumn).

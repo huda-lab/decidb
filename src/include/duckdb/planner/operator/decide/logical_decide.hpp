@@ -705,6 +705,8 @@ public:
 		idx_t class_key = DConstants::INVALID_INDEX;
 		//! The reducer as written.
 		string text;
+		//! The order of the norm it was written as, whose body execution reads a NaN in; empty for any other reducer.
+		string norm_order;
 	};
 	vector<FrameAggregate> frame_aggregates;
 

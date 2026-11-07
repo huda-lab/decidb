@@ -89,6 +89,9 @@ string RenderDecideReducer(const BoundAggregateExpression &reducer, const Decide
 //! norm's body goes through here, so a new definition changes one function.
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer);
 
+//! The body of the definition `reducer` holds of a norm of order `order`, or nullptr with no order.
+const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order);
+
 //! The key of a `per` wrapper, as written (`D.region`, `()`).
 string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
 

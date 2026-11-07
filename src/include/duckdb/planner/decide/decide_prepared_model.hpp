@@ -280,11 +280,12 @@ struct DecideFrameColumn {
 	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
-	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, and the reducer as written
-	//! (LogicalDecide::FrameAggregate).
+	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, the reducer as written, and the order of
+	//! the norm it was written as (LogicalDecide::FrameAggregate).
 	idx_t key = DConstants::INVALID_INDEX;
 	idx_t class_key = DConstants::INVALID_INDEX;
 	string text;
+	string norm_order;
 };
 
 //! One term of a frame's payload over decisions: `sign * coefficient * decision`, its

@@ -2148,6 +2148,8 @@ NAN_READERS = (
     ("min-factor", f"sum(x * min(at(first: t.f) {ONE_TIMELINE_EACH})) <= 50", "DOUBLE"),
     ("max-middle", f"x <= max(at(first: t.f) {ONE_TIMELINE_EACH})", "DOUBLE"),
     ("range", "x <= min(from first to last: t.f) over (t.id)", "DOUBLE"),
+    # SIGN reads a NaN as 0, so the norm's definition hides what its body reads.
+    ("l0-norm", f"x <= norm(at(first: t.f) {ONE_TIMELINE_EACH}, 0)", "DOUBLE"),
 )
 
 
@@ -2184,6 +2186,14 @@ class TestFrameReducerFold:
             DECIDE x(REAL) SUCH THAT x <= 100 AND when NOT isnan(t.f): x <= min(at(first: t.f) {ONE_TIMELINE_EACH})
             MAXIMIZE sum(x) ORDER BY id"""
         assert [row["x"] for row in answer(decidb_cli, sql)] == [1, 100, 1]
+
+    def test_a_norm_reads_only_the_rows_its_when_keeps(self, decidb_cli):
+        """Row 2's NaN is out of the clause, and rows 1 and 3 count 2 nonzero values."""
+        rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
+            DECIDE x(REAL) SUCH THAT x <= 100 AND when NOT isnan(t.f): x <= norm(at(first: t.f) {ONE_TIMELINE_EACH}, 0)
+            MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [2, 100, 2]
 
     def test_a_count_counts_a_nan(self, decidb_cli):
         """COUNT reads no number, so all three rows count (guide §3)."""
