@@ -592,6 +592,11 @@ keys), so a message quotes `'A'`
 for a NOCASE group of 'a' and 'A' in any row order. A bound's side
 table groups on the same expression (`direct_bound_tables.cpp`).
 
+**A frame's order key compares under its collation** (D74). The binder settles it as it settles a key's and a bound
+ORDER BY's, and `DecideFrameSpec::order_collation` holds it as an expression over the value the pass read, which
+messages quote. A prepared frame keeps what binding settled whatever `default_collation` says at `EXECUTE`, and a
+plan's round trip keeps it, which a function's result type alone would not.
+
 The bound side of the aggregate shape gets its own map with the same numbering over every
 kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the
 aggregate shape or an easy MIN/MAX adds no row: it only names the classes each group's

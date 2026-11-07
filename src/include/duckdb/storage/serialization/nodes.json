@@ -1299,6 +1299,11 @@
         "id": 121,
         "name": "reducer",
         "type": "string"
+      },
+      {
+        "id": 122,
+        "name": "order_collation",
+        "type": "Expression*"
       }
     ],
     "pointer_type": "none"

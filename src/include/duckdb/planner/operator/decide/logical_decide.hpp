@@ -129,6 +129,10 @@ struct DecideFrameSpec {
 	unique_ptr<Expression> fallback;
 	//! The timeline's order key, and its direction
 	unique_ptr<Expression> order;
+	//! What positions compare: the key's value (reference 0 of what the pass read, which messages quote) under the
+	//! collation binding settled, as a bound ORDER BY's (D74), so a prepared plan or a plan's round trip compares as it
+	//! was bound. Null when the key compares as it is.
+	unique_ptr<Expression> order_collation;
 	bool descending = false;
 	bool cyclic = false;
 	//! The timeline's partition, the `within` key: an index into LogicalDecide::keys, INVALID_INDEX for one timeline.

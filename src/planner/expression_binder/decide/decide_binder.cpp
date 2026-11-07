@@ -19,6 +19,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/table_binding.hpp"
@@ -2209,6 +2210,12 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		return BindResult(std::move(order_error));
 	}
 	spec.order = std::move(BoundExpression::GetExpression(*frame.order));
+	// A frame orders peers as ORDER BY does (D74): under the key's collation, or the session's default where it has
+	// none, settled here as a bound ORDER BY's and a key's are.
+	unique_ptr<Expression> collated = make_uniq<BoundReferenceExpression>(spec.order->return_type, 0U);
+	if (ExpressionBinder::PushCollation(context, collated, spec.order->return_type)) {
+		spec.order_collation = std::move(collated);
+	}
 	// The within key resolves as a per key does -- columns, and relations standing for theirs -- into the key table,
 	// so a row whose written `within` column is NULL is in no timeline (D5, D75). Messages name its elements and the
 	// order key as written (DecideFrameSpec::timeline_names, order_name).

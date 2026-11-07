@@ -328,6 +328,26 @@ class TestACollatedOrderKey:
         sql = _ordered("count(from first to last: t.v) {over}", collation="")
         assert [row["x"] for row in answer(decidb_cli, sql)] == [3, 3, 3]
 
+    @pytest.mark.parametrize(
+        "bound_under, run_under, expected",
+        [("''", "'nocase'", [3, 3, 3]), ("'nocase'", "''", [2, 2, 2])],
+        ids=["bound-binary", "bound-nocase"],
+    )
+    def test_a_prepared_frame_compares_as_it_was_bound(self, decidb_cli, bound_under, run_under, expected):
+        """A prepared ORDER BY keeps the collation binding settled, so a later `SET` moves neither it nor a frame."""
+        prepared = _ordered("count(from first to last: t.v) {over}", collation="")
+        sql = f"""SET default_collation={bound_under}; PREPARE f AS {prepared};
+            SET default_collation={run_under}; EXECUTE f;"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == expected
+
+    def test_a_plan_round_trip_keeps_a_computed_keys_collation(self, decidb_cli):
+        """A function's result loses its collated type in a round trip, so the plan holds the collation itself: 'az'
+        and 'Az' stay one position, as `dense_rank` keeps them."""
+        counted = _ordered(
+            "count(from first to last: t.v) {over}", over="(t.k || 'z') COLLATE NOCASE", collation=""
+        )
+        assert [row["x"] for row in answer(decidb_cli, f"PRAGMA verify_serializer; {counted}")] == [2, 2, 2]
+
     def test_one_position_holds_one_value(self, decidb_cli):
         """D73: 'a' and 'A' are one position, whose two rows read 10 and 20."""
         rows = ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0))
