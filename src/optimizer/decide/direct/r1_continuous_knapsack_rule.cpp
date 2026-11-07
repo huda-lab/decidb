@@ -1421,7 +1421,11 @@ private:
 		}
 		ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
 		                  unique_ptr<Expression> reads) override {
-			return aggregate.Add(DirectAggregateOf(function, std::move(argument), std::move(reads)));
+			vector<unique_ptr<Expression>> arguments;
+			if (argument) {
+				arguments.push_back(std::move(argument));
+			}
+			return aggregate.Add(DirectAggregateOf(function, std::move(arguments), std::move(reads)));
 		}
 
 	private:

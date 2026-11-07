@@ -237,8 +237,12 @@ private:
 			auto own = GroupKeyOf(expr);
 			reducers++;
 			// A reducer holding a reducer reads its inner one per group of a path key: a side table. One holding a
-			// frame is refused there (MakeReducerColumn).
+			// frame is refused there (MakeReducerColumn). A rule's group aggregate reads one argument, so one that
+			// reads more -- a collated MIN or MAX -- takes a side table too.
 			auto &reducer = expr.Cast<BoundAggregateExpression>();
+			if (reducer.children.size() > 1) {
+				return false;
+			}
 			if (!reducer.children.empty() && (DecideCanonicalizer::ContainsReducer(*reducer.children[0]) ||
 			                                  ContainsDecideFrame(*reducer.children[0]))) {
 				return false;
@@ -352,20 +356,20 @@ private:
 		if (!reducer.children.empty() && !FrameText(*reducer.children[0]).empty()) {
 			return MakeFrameAggregate(reducer, path);
 		}
-		unique_ptr<Expression> argument;
-		if (!reducer.children.empty()) {
-			argument = reducer.children[0]->Copy();
-			ReplaceReducers(argument, path.Below(reducer));
+		vector<unique_ptr<Expression>> arguments;
+		for (auto &child : reducer.children) {
+			arguments.push_back(child->Copy());
+			ReplaceReducers(arguments.back(), path.Below(reducer));
 		}
 		auto reads = Reads(path, reducer.filter.get());
-		AddValueCheck(ArgumentMessage(reducer, argument.get(), reads, path));
+		AddValueCheck(ArgumentMessage(reducer, arguments.empty() ? nullptr : arguments[0].get(), reads, path));
 		auto function = reducer.Copy();
 		auto &aggregate = function->Cast<BoundAggregateExpression>();
 		aggregate.children.clear();
 		aggregate.filter = nullptr;
 		DecideBoundAggregate record;
 		record.function = std::move(function);
-		record.argument = std::move(argument);
+		record.arguments = std::move(arguments);
 		record.key = PathKeyOf(reducer, path);
 		idx_t scope_idx;
 		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
@@ -393,7 +397,9 @@ private:
 	unique_ptr<Expression> MakeFrameAggregate(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
 		auto marker = reducer.Copy();
 		auto &aggregate = marker->Cast<BoundAggregateExpression>();
-		ReplaceReducers(aggregate.children[0], path.Below(reducer));
+		for (auto &child : aggregate.children) {
+			ReplaceReducers(child, path.Below(reducer));
+		}
 		auto reads = Reads(path, reducer.filter.get());
 		aggregate.filter = reads ? calc.Out(reads) : nullptr;
 		LogicalDecide::FrameAggregate record;
@@ -434,8 +440,8 @@ private:
 	unique_ptr<Expression> ArgumentMessage(const BoundAggregateExpression &reducer, const Expression *argument,
 	                                       const ExprPtr &reads, const DecideReducerPath &path) {
 		auto name = StringUtil::Lower(reducer.function.name);
-		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "sum" ||
-		         name == "avg");
+		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
+		         name == "arg_max" || name == "sum" || name == "avg");
 		// The binder rejects DISTINCT and drops an ORDER BY these functions ignore, canonicalization gave every norm of
 		// data its definition, and the AVG rewrite of `<>` runs after this pass.
 		string payload;
@@ -499,7 +505,7 @@ private:
 			DecideBoundAggregate record;
 			record.function = aggregate.function->Copy();
 			if (input.argument) {
-				record.argument = input.argument->Copy();
+				record.arguments.push_back(input.argument->Copy());
 			}
 			record.key = GroupKeyIndex(comparison);
 			placeholders.push_back(aggregate.column);

@@ -2564,9 +2564,9 @@ void PhysicalDecide::RegisterEvaluation(ClientContext &context, ChunkExprCache &
 		if (column.kind == DecideFrameColumn::Kind::REDUCED || column.kind == DecideFrameColumn::Kind::AGGREGATE) {
 			auto &reducer = column.value->Cast<BoundAggregateExpression>();
 			condition(reducer.filter.get());
-			if (!reducer.children.empty()) {
-				value(reducer.children[0].get());
-				leaves(*reducer.children[0]);
+			for (auto &argument : reducer.children) {
+				value(argument.get());
+				leaves(*argument);
 			}
 		} else if (column.kind != DecideFrameColumn::Kind::DEFINED) {
 			value(column.value.get());

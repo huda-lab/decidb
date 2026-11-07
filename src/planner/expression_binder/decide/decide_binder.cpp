@@ -2133,8 +2133,13 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		}
 		if (fallback) {
 			auto *reducer = GetBoundAggregate(*result);
-			if (!reducer || reducer->children.size() != 1) {
+			if (!reducer || reducer->children.empty()) {
 				throw InternalException("DECIDE: a range frame did not bind to an aggregate over its payload");
+			}
+			if (reducer->children.size() > 1) {
+				// A collated MIN or MAX compares by a key of its value (BindMinMax), which a number has none of.
+				throw BinderException(frame, "DECIDE: in %s, else %s stands in a collated payload, which compares text",
+				                      spec.text, fallback_text);
 			}
 			auto &payload_type = reducer->children[0]->return_type;
 			LogicalType common;
@@ -2186,7 +2191,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		}
 	}
 	auto *aggregate = GetBoundAggregate(*result);
-	if (!aggregate || aggregate->children.size() != 1) {
+	if (!aggregate || aggregate->children.empty()) {
 		throw InternalException("DECIDE: a frame selector did not bind to an aggregate over its payload");
 	}
 

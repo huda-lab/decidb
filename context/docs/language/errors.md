@@ -33,6 +33,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | An expression in a frame's `within` | parse | `DECIDE: within lists columns or relations, as a per key does` |
 | A range frame over more than one expression, or a reducer other than `sum`, `avg`, `min`, `max`, `count` | parse / bind | `sum(from first to last: e) reduces one expression, found 2` · `DECIDE: a range frame reduces with sum, avg, min, max or count, found ...` |
 | A frame's `else` that is not a number | bind | `DECIDE: in at(previous else 'a': x) over (t.period), else 'a' is not a number` |
+| A range's `else` over a collated payload, whose `min` or `max` compares text under the collation | bind | `DECIDE: in max(from previous to next else 0: t.n) over (t.s), else 0 stands in a collated payload, which compares text` |
 | A decision in a frame's order key or `within` | bind | `DECIDE: x is a decision; a frame's order key and within may only use data` |
 | A frame selector in a DECIDE clause that an outer query binds (a correlated DECIDE subquery whose frame reads an outer column) | bind | `DECIDE: a frame selector is not supported here: it reads the rows of the DECIDE query whose constraints or objective it stands in, and only those` |
 | A frame selector outside a DECIDE clause (a `SELECT` list, a `WHERE`): the parser reads it in a clause only | parse | `Parser Error: syntax error at or near "over"` |

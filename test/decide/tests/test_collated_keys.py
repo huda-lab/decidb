@@ -8,6 +8,7 @@ lowercased key `gk`.
 import pytest
 
 from . import _diagnose_relation
+from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import aligned, answer, scope_solver, values  # noqa: F401
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
@@ -217,3 +218,78 @@ def test_a_finding_spells_a_group_by_its_least_spelling_when_a_later_row_holds_i
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
     found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
     assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["B"], found
+
+
+# Under NOCASE 'C' is the greatest and 'aaa' the least of group `a`, though the bytes order them the other way.
+TEXT_ROWS = ((1, "a", 1, "aaa"), (2, "a", 2, "C"), (3, "b", 3, "bb"))
+TEXT_SOURCE = f"FROM (SELECT id, g, k, n COLLATE NOCASE AS n FROM {values(TEXT_ROWS, 'v', ('id', 'g', 'k', 'n'))}) t"
+TIMELINE = "over (t.id within t.g)"
+DIRECT_MODES = pytest.mark.parametrize("mode", ["off", "auto"])
+
+
+def _bounded(cli, mode, clause):
+    sql = f"""SET decide_direct_solve='{mode}';
+        SELECT id, x {TEXT_SOURCE} DECIDE x(REAL) SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
+    return [row["x"] for row in answer(cli, sql)]
+
+
+@pytest.mark.correctness
+class TestACollatedReducerOverData:
+    """A collated MIN or MAX reads two arguments, its value and the key it compares (BindMinMax), and every reducer
+    route keeps both: the value is the spelling the collation picks. Each bound is worked out by hand from TEXT_ROWS."""
+
+    @DIRECT_MODES
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            pytest.param("length(max(t.n))", [1, 1, 1], id="side-table-max"),
+            pytest.param("length(min(t.n))", [3, 3, 3], id="side-table-min"),
+            pytest.param("length(max(when t.id <> 2: t.n))", [2, 2, 2], id="reads-a-when"),
+            pytest.param("length(max(t.n) by (t.g))", [1, 1, 2], id="by-key"),
+            pytest.param("length(max(per t.k: t.n) by (t.g))", [1, 1, 2], id="counted-by-class"),
+            pytest.param("length(min(max(t.n) by (t.g)))", [2, 2, 2], id="nested"),
+        ],
+    )
+    def test_a_bound_reads_the_spelling_the_collation_picks(self, decidb_cli, mode, bound, expected):
+        assert _bounded(decidb_cli, mode, f"x <= {bound}") == expected
+
+    @DIRECT_MODES
+    def test_a_group_bound_takes_a_side_table(self, decidb_cli, mode):
+        """A rule's group aggregate reads one argument, so a collated reducer is no group bound
+        (ReadsOnlyGroupReducers): group `a` sums to 1 and group `b` to 2, through a side table."""
+        sums = _bounded(decidb_cli, mode, "sum(x) by (t.g) <= length(max(t.n) by (t.g))")
+        assert sums[0] + sums[1] == pytest.approx(1) and sums[2] == pytest.approx(2), sums
+
+    @DIRECT_MODES
+    def test_a_coefficient_reads_it_too(self, decidb_cli, mode):
+        """`length(max(n))` is 1 here, so the three decisions share a budget of 5 at weight 1."""
+        assert sum(_bounded(decidb_cli, mode, "sum(x * length(max(t.n))) <= 5")) == pytest.approx(5)
+
+    def test_the_default_collation_makes_a_plain_column_collated(self, decidb_cli):
+        sql = f"""SET default_collation='nocase';
+            SELECT id, x FROM {values(TEXT_ROWS, 't', ('id', 'g', 'k', 'n'))}
+            DECIDE x(REAL) SUCH THAT x <= length(max(t.n)) MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [1, 1, 1]
+
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            # `at(first)` reads aaa, aaa, bb: its one frame stands once, though the reducer reads it twice.
+            pytest.param(f"length(max(at(first: t.n) {TIMELINE}))", [2, 2, 2], id="reducer-over-a-point"),
+            pytest.param(f"length(min(at(first: t.n) {TIMELINE}) by (t.g))", [3, 3, 2], id="reducer-by-key"),
+            # The range's own reducer compares under the collation, in each timeline.
+            pytest.param(f"length(max(from first to last: t.n) {TIMELINE})", [1, 1, 2], id="range-max"),
+            pytest.param(f"length(min(from first to last: t.n) {TIMELINE})", [3, 3, 2], id="range-min"),
+            pytest.param(f"length(min(max(from first to last: t.n) {TIMELINE}))", [2, 2, 2], id="reducer-over-a-range"),
+        ],
+    )
+    def test_a_frame_reads_it_too(self, decidb_cli, bound, expected):
+        assert _bounded(decidb_cli, "off", f"x <= {bound}") == expected
+
+    def test_a_range_over_collated_text_takes_no_number_else(self, decidb_cli):
+        """A missing position's `else` would need a key under the collation, and a number has none."""
+        clause = f"x <= length(max(from previous to next else 0: t.n) {TIMELINE})"
+        sql = f"SELECT id, x {TEXT_SOURCE} DECIDE x(REAL) SUCH THAT {clause} MAXIMIZE sum(x)"
+        result = decidb_cli.execute_raw(sql)
+        assert "else 0 stands in a collated payload" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "an else over a collated payload")

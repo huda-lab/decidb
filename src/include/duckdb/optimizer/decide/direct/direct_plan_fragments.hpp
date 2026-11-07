@@ -120,7 +120,7 @@ vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const 
 //! (null for COUNT(*)) on the rows where `reads` holds (null for every row), or as the aggregate itself.
 unique_ptr<BoundWindowExpression> DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument,
                                                           unique_ptr<Expression> reads);
-unique_ptr<Expression> DirectAggregateOf(const Expression &function, unique_ptr<Expression> argument,
+unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads);
 
 //! The aggregate of a rule that groups its rows, which takes the bound's aggregates: a window over the group, or a hash

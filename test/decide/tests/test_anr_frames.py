@@ -2159,14 +2159,15 @@ class TestFrameReducerFold:
 
     def test_a_nan_payload_is_the_nan_bound_error(self, decidb_cli):
         """SQL orders NaN above every number, so the greatest is NaN, which no bound may be."""
-        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {values(((1, "1"), (2, "NaN")), 'v', ('id', 'f'))}) t
+        rows = values(((1, "1"), (2, "NaN")), "v", ("id", "f"))
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
             DECIDE x(REAL) SUCH THAT x <= max(at(first: t.f) {ONE_TIMELINE_EACH}) MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
         assert "is NaN on some rows" in result.stderr, result.stderr
         assert_no_internal_leak(result, "a NaN a frame reducer reads")
 
     def test_a_row_in_no_group_reads_no_value(self, decidb_cli):
-        """Row 2's `h` is NULL, so it is in no group of the reducer: its bound has no value and only `x <= 7` holds it."""
+        """Row 2's `h` is NULL, so it is in no group of the reducer: its bound has no value, and only `x <= 7` holds."""
         assert _folded(decidb_cli, f"sum(at(first: t.f) {ONE_TIMELINE_EACH}) by (t.h)") == [1, 7]
 
     def test_no_row_in_any_group_reads_no_value(self, decidb_cli):

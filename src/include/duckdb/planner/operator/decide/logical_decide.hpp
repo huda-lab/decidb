@@ -311,11 +311,12 @@ struct DecideReducedBound {
 struct DecideBoundAggregate {
 	//! The placeholder the bound reads: its own table index, and the column after the group key's.
 	ColumnBinding column;
-	//! The BoundAggregateExpression with its function and result type bound; its argument and filter are the members
+	//! The BoundAggregateExpression with its function and result type bound; its arguments and filter are the members
 	//! below.
 	unique_ptr<Expression> function;
-	//! The value aggregated; null for COUNT(*).
-	unique_ptr<Expression> argument;
+	//! What the function reads, in its order: none for COUNT(*), and for a collated MIN or MAX the value and the key it
+	//! compares (BindMinMax).
+	vector<unique_ptr<Expression>> arguments;
 	//! The rows the reducer reads: the clause's kept rows that pass its own `when`; null for every row.
 	unique_ptr<Expression> reads;
 	//! The reducer's `by` key (an index into `keys`), INVALID_INDEX for the whole query.
@@ -327,7 +328,7 @@ struct DecideBoundAggregate {
 
 	bool Equals(const DecideBoundAggregate &other) const {
 		return key == other.key && counts_classes == other.counts_classes && class_key == other.class_key &&
-		       Expression::Equals(function, other.function) && Expression::Equals(argument, other.argument) &&
+		       Expression::Equals(function, other.function) && Expression::ListEquals(arguments, other.arguments) &&
 		       Expression::Equals(reads, other.reads);
 	}
 };

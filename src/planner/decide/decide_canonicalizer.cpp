@@ -2071,8 +2071,9 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		auto below = path.Below(inner);
 		FramePerKey own;
 		bool has_per = ReducerPerKey(inner, placement.keyed_scopes, own);
-		for (auto &child : inner.children) {
-			PlaceFramesIn(*child, below, has_per ? &own : nullptr, placement);
+		// Its value is one place: a collated MIN or MAX reads it again as the key it compares (BindMinMax).
+		if (!inner.children.empty()) {
+			PlaceFramesIn(*inner.children[0], below, has_per ? &own : nullptr, placement);
 		}
 		return;
 	}

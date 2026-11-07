@@ -499,7 +499,7 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
                               const DecideFrameMap &map, idx_t num_rows,
                               ChunkExprCache &chunk_expr_cache, Vector &out) {
 	auto &marker = column.value->Cast<BoundAggregateExpression>();
-	if (marker.children.size() != 1) {
+	if (marker.children.empty()) {
 		throw InternalException("DECIDE: %s's column reads no reducer over its payload", frame.text);
 	}
 	const idx_t windows = map.WindowCount();
@@ -510,16 +510,18 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 	if (map.fallback != (column.fallback != nullptr)) {
 		throw InternalException("DECIDE: %s's column and its map disagree on its else", frame.text);
 	}
-	// One source to reduce from: the payload's values at [0, n), the else's at [n, 2n).
+	// One source per argument to reduce from: the payload's values at [0, n), the else's at [n, 2n). Only a collated
+	// MIN or MAX has a second argument, and it takes no `else` (BindDecideFrame).
 	vector<Vector> sources;
-	sources.emplace_back(marker.children[0]->return_type, 2 * num_rows);
-	auto &source = sources[0];
-	auto payload = EvaluateOnRows(context, *marker.children[0], num_rows, map.ReadRows(), chunk_expr_cache);
-	VectorOperations::Copy(payload, source, num_rows, 0, 0);
+	for (auto &argument : marker.children) {
+		sources.emplace_back(argument->return_type, 2 * num_rows);
+		auto payload = EvaluateOnRows(context, *argument, num_rows, map.ReadRows(), chunk_expr_cache);
+		VectorOperations::Copy(payload, sources.back(), num_rows, 0, 0);
+	}
 	if (map.fallback) {
 		auto fallback =
 		    EvaluateOnRows(context, *column.fallback, num_rows, map.FallbackAnchors(), chunk_expr_cache);
-		VectorOperations::Copy(fallback, source, num_rows, 0, num_rows);
+		VectorOperations::Copy(fallback, sources[0], num_rows, 0, num_rows);
 	}
 
 	AggregateFold fold(context, marker, sources, windows);

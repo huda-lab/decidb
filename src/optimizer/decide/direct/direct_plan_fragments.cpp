@@ -118,14 +118,12 @@ unique_ptr<BoundWindowExpression> DirectWindowOfAggregate(const Expression &func
 	return result;
 }
 
-unique_ptr<Expression> DirectAggregateOf(const Expression &function, unique_ptr<Expression> argument,
+unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads) {
 	auto result = function.Copy();
 	auto &aggregate = result->Cast<BoundAggregateExpression>();
 	D_ASSERT(aggregate.children.empty() && !aggregate.filter);
-	if (argument) {
-		aggregate.children.push_back(std::move(argument));
-	}
+	aggregate.children = std::move(arguments);
 	aggregate.filter = std::move(reads);
 	return result;
 }
