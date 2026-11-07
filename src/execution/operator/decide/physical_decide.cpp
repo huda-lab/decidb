@@ -4043,8 +4043,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// read first, so a NULL or NaN there is reported as the right side's.
 		bool rhs_per_row = constraint->rhs_expr->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT;
 		bool admitted = constraint->admitted_lower != nullptr;
-		const bool tightest_frame_bound =
-		    rhs_per_row && HasDecideTag(constraint->rhs_expr->GetAlias(), FRAME_TIGHTEST_BOUND_TAG);
+		const bool tightest_frame_bound = rhs_per_row && constraint->tightest_frame_bound;
 		vector<bool> bound_null(tightest_frame_bound ? num_rows : 0, false);
 		if (rhs_per_row || admitted) {
 			ExpressionExecutor row_executor(context);

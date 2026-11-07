@@ -2178,3 +2178,46 @@ class TestFrameReducerFold:
     def test_a_count_of_nothing_is_zero(self, decidb_cli):
         """The payload is NULL on every row: its one group counts 0 (deck p. 50; D68), which bounds every `x`."""
         assert _folded(decidb_cli, f"count(at(first: nullif(t.f, t.f)) {ONE_TIMELINE_EACH})") == [0, 0]
+
+
+TIGHT = ("id", "g", "s", "c", "ci")
+TIGHT_ROWS = ((1, "a", 1, 3.0, 3), (2, "a", 2, 4.0, 4), (3, "a", 3, 9.0, 9), (4, "b", 1, 2.0, 2), (5, "b", 2, 6.0, 6))
+OVER_S = "over (t.s within t.g)"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("column", ["c", "ci"], ids=["bare", "under-a-cast"])
+class TestATightestFrameBound:
+    """A frame bound that differs within a group takes the group's tightest value (D85), bare or not: a DOUBLE `c` is
+    of the comparison's own type, so no cast stands around its frame, which lowering replaces (`tightest_frame_bound`
+    is read before it). An INT `ci` holds the same numbers under a cast. The answers are worked out by hand."""
+
+    @pytest.mark.parametrize("rows", [TIGHT_ROWS, TIGHT_ROWS[::-1]], ids=["rows-in-order", "rows-reversed"])
+    def test_a_clause_over_every_row_takes_the_least_first_value(self, decidb_cli, column, rows):
+        """`at(first)` reads 3 in group a and 2 in group b, and the one instance holds the least, in any row order."""
+        sql = f"""SELECT id, x {table('t', TIGHT, rows)} DECIDE x(REAL)
+            SUCH THAT x <= 10 AND sum(x) <= at(first: t.{column}) {OVER_S} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(2)
+
+    @pytest.mark.parametrize(
+        "clause, objective, total",
+        [
+            # `previous` reads NULL, 3, 4 in group a and NULL, 2 in group b.
+            pytest.param("sum(x) by (t.g) <= {frame}", "MAXIMIZE", 5, id="by-group-takes-its-least"),
+            pytest.param("max(x) by (t.g) >= {frame}", "MINIMIZE", 6, id="hard-max-takes-its-greatest"),
+            pytest.param("max(x) by (t.g) <= {frame}", "MAXIMIZE", 13, id="easy-max-takes-its-least"),
+        ],
+    )
+    def test_a_clause_over_groups_takes_each_groups_tightest_value(self, decidb_cli, column, clause, objective, total):
+        frame = f"at(previous: t.{column}) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND {clause.format(frame=frame)} {objective} sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
+
+    def test_an_equal_bound_with_two_values_raises(self, decidb_cli, column):
+        """Group a's `previous` reads 3 and 4, and `=` holds one value."""
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND sum(x) by (t.g) = at(previous: t.{column}) {OVER_S} MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "takes more than one value here (3 and 4)" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "an = frame bound with two values")
