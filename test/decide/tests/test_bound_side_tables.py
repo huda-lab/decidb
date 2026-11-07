@@ -339,6 +339,36 @@ def test_a_norm_body_holds_a_subquery(decidb_cli, norm, value):
         assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([value] * 4), mode
 
 
+CAST_ROWS = "(SELECT * FROM (VALUES (0, 'a', 3), (1, 'a', -4), (2, 'b', 5), (3, 'b', 0)) r(id, g, v)) t"
+
+
+@pytest.mark.parametrize(
+    "bound, expected",
+    [
+        pytest.param("CAST(norm(t.v, 2) AS DOUBLE) + 1", [51] * 4, id="a-cast-keeps-the-norm"),
+        pytest.param("TRY_CAST(norm(t.v, 2) AS DOUBLE)", [50] * 4, id="a-try-cast-keeps-the-norm"),
+        # Group a holds 3, -4 and group b 5, 0.
+        pytest.param("CAST(sum(t.v + 0.0) by (t.g) AS DOUBLE) + 2", [1, 1, 7, 7], id="a-cast-keeps-the-by"),
+    ],
+)
+def test_a_cast_that_changes_nothing_keeps_what_its_operand_carries(decidb_cli, bound, expected):
+    """A cast to the operand's own type binds to the operand: its tags stay, or the norm reads as SUM(e) and the
+    reducer as the whole table's."""
+    sql = f"""SELECT id, x FROM {CAST_ROWS} DECIDE x(REAL)
+        SUCH THAT x <= {bound} AND x <= 5000 MAXIMIZE sum(x) ORDER BY id"""
+    for mode in ("off", "auto"):
+        assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx(expected), mode
+
+
+def test_nested_casts_that_change_nothing_print_as_the_outer(decidb_cli):
+    """Each cast records its text, and they all bind to the column, which prints as what was written around it."""
+    bound = "CAST(CAST(t.w AS DOUBLE) AS DOUBLE)"
+    sql = f"""SELECT id, x FROM (VALUES (0, 'a', 1.0::DOUBLE), (1, 'a', 2.0::DOUBLE)) t(id, g, w) DECIDE x(REAL)
+        SUCH THAT sum(x) by (t.g) = {bound} MAXIMIZE sum(x)"""
+    result = decidb_cli.execute_raw(sql)
+    assert f"`{bound}` takes more than one value here" in result.stderr, result.stderr
+
+
 def test_a_norm_of_a_decision_holds_a_subquery(decidb_cli):
     """The objective's least is x = 1 on every row."""
     sql = f"""SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL)

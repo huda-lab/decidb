@@ -530,6 +530,17 @@ inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
 	return TryParseDecideIndexTag(alias, SOURCE_FRAGMENT_TAG_PREFIX, fragment_id);
 }
 
+//! The alias of a bound node whose parsed node had `parsed`: that alias, as SQL gives it, unless it is a source fragment
+//! landing on a node with an alias of its own. A cast that changes nothing binds to its operand, which keeps every tag
+//! it holds (a norm's order, a reducer's `by`) and takes the outer text as the one it prints.
+inline string BoundDecideAlias(const string &bound, const string &parsed) {
+	idx_t fragment_id;
+	if (bound.empty() || !TryParseSourceFragmentTag(parsed, fragment_id)) {
+		return parsed;
+	}
+	return StripSourceFragmentTags(bound) + MakeSourceFragmentTag(fragment_id);
+}
+
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
 	string payload;
 	if (!ExtractDecideTagPayload(alias, GROUP_KEY_TAG_PREFIX, payload)) {
