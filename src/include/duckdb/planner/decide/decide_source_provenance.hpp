@@ -23,6 +23,10 @@ class BoundConjunctionExpression;
 //! selector records its own as it binds: DecideBinder::BindDecideFrame.)
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments);
 
+//! `text`, a parsed expression as it prints, without a source fragment's tag: a function prints a child's alias as an
+//! argument's name (`tag := e`), and a child that recorded its text has one. A written name stays (`q := e`).
+string WithoutTagArguments(string text);
+
 //! Assign stable source ids to bound comparisons before planning rewrites them.
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.

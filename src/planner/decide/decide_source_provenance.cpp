@@ -33,6 +33,25 @@ static string DecideComparisonOperator(ExpressionType type) {
 	return type == ExpressionType::COMPARE_NOTEQUAL ? "<>" : ExpressionTypeToOperator(type);
 }
 
+string WithoutTagArguments(string text) {
+	static constexpr const char *ARGUMENT = " := ";
+	const idx_t prefix = strlen(SOURCE_FRAGMENT_TAG_PREFIX);
+	idx_t pos = 0;
+	while ((pos = text.find(SOURCE_FRAGMENT_TAG_PREFIX, pos)) != string::npos) {
+		idx_t end = pos + prefix;
+		while (end < text.size() && StringUtil::CharacterIsDigit(text[end])) {
+			end++;
+		}
+		if (text.compare(end, 2, "__") != 0 || text.compare(end + 2, strlen(ARGUMENT), ARGUMENT) != 0) {
+			pos = end;
+			continue;
+		}
+		const bool named = pos > 0 && (StringUtil::CharacterIsAlphaNumeric(text[pos - 1]) || text[pos - 1] == '_');
+		text.erase(pos, end + 2 - pos + (named ? 0 : strlen(ARGUMENT)));
+	}
+	return text;
+}
+
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments) {
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) {
 		TagDecideSourceFragments(child, fragments);
@@ -45,7 +64,7 @@ void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments)
 		return;
 	}
 	idx_t fragment_id = fragments.size();
-	fragments.push_back(expr.ToString());
+	fragments.push_back(WithoutTagArguments(expr.ToString()));
 	auto alias = expr.GetAlias();
 	AddDecideTag(alias, MakeSourceFragmentTag(fragment_id));
 	expr.SetAlias(std::move(alias));

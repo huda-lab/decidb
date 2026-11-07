@@ -2107,8 +2107,8 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	spec.all = frame.all;
 	spec.descending = frame.descending;
 	spec.cyclic = frame.cyclic;
-	spec.text = frame.ToString();
-	spec.order_name = frame.order->ToString();
+	spec.text = WithoutTagArguments(frame.ToString());
+	spec.order_name = WithoutTagArguments(frame.order->ToString());
 	auto fallback_text = frame.fallback ? frame.fallback->ToString() : string();
 
 	// The payload, under the aggregate that reads it at the selected rows: the range's

@@ -885,6 +885,7 @@ class TestRefusalsInEverySpelling:
             "sum(t.cap) by (t.id)",
             "sum((SELECT 1))",
             "norm(CAST(t.cap AS DOUBLE), 2)",
+            "sum(CAST(abs(CAST(t.cap AS DOUBLE)) AS INTEGER))",
         ],
         ids=[
             "a-norm-under-a-factor",
@@ -893,6 +894,7 @@ class TestRefusalsInEverySpelling:
             "a-reducer-with-its-by",
             "a-subquery-as-a-reducers-argument",
             "a-cast-as-a-norms-body",
+            "a-cast-under-a-function-under-a-cast",
         ],
     )
     def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):
