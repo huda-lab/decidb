@@ -890,6 +890,31 @@ class TestRefusalsInEverySpelling:
         assert f"'{quoted}' does not reference a decision" in result.stderr, result.stderr
         assert_no_internal_leak(result, "a decision-free objective term")
 
+    @pytest.mark.parametrize(
+        "term, quoted",
+        [
+            # The left of an IN and an operator function's operands have nothing around them to delimit them.
+            pytest.param("sum(when (t.p AND t.q) IN (false): t.cap)", "(t.p AND t.q) IN (", id="an-and-left-of-an-in"),
+            pytest.param(
+                "sum(when ((t.p = t.q) || 'x') = 'truex': t.cap)",
+                "((t.p = t.q) || 'x')",
+                id="a-comparison-under-an-operator",
+            ),
+            # A literal that reads like a tag, under a node with no rendering of its own, stays as written.
+            pytest.param(
+                "sum(coalesce(length('__source_fragment_0__'), 0) + t.cap)",
+                "length('__source_fragment_0__')",
+                id="a-literal-that-reads-like-a-tag",
+            ),
+        ],
+    )
+    def test_a_printed_operand_reads_as_written(self, decidb_cli, term, quoted):
+        result = decidb_cli.execute_raw(
+            f"""SELECT id, x FROM (VALUES (1, 3, true, false), (2, 4, false, true)) t(id, cap, p, q)
+            DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"""
+        )
+        assert quoted in result.stderr, result.stderr
+
     def test_a_string_that_reads_as_a_tag_is_left_as_written(self, decidb_cli):
         """Only an alias holds a tag: the same text in a literal is what the query says, a name's mark included."""
         term = "CAST(sum(t.cap + length('__source_fragment_0__ := abc')) AS INTEGER)"

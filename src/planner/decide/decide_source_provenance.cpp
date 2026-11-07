@@ -94,6 +94,22 @@ static constexpr int AND_PRECEDENCE = 3;
 static constexpr int COMPARISON_PRECEDENCE = 4;
 static constexpr int OPERAND_PRECEDENCE = 5;
 
+//! A child standing aside for its text while its parent prints (RenderSource): the text as it is, whatever it holds.
+class WrittenOperand : public BoundReferenceExpression {
+public:
+	WrittenOperand(string text_p, LogicalType type) : BoundReferenceExpression(std::move(type), 0U), text(std::move(text_p)) {
+	}
+	string ToString() const override {
+		return text;
+	}
+	string GetName() const override {
+		return text;
+	}
+
+private:
+	string text;
+};
+
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence = 0);
 
 const Expression &DecideUnguarded(const Expression &expr) {
@@ -160,8 +176,8 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 		return name + "(" + RenderSource(*func.children[0], ctx) + ")";
 	}
 	if (func.is_operator && func.children.size() == 2) {
-		return "(" + RenderSource(*func.children[0], ctx) + " " + name + " " + RenderSource(*func.children[1], ctx) +
-		       ")";
+		return "(" + RenderSource(*func.children[0], ctx, OPERAND_PRECEDENCE) + " " + name + " " +
+		       RenderSource(*func.children[1], ctx, OPERAND_PRECEDENCE) + ")";
 	}
 	string result = name + "(";
 	for (idx_t i = 0; i < func.children.size(); i++) {
@@ -410,7 +426,8 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 				if (labelled.first == colref.binding.column_index) {
 					// A label is parenthesized for arithmetic (`(b * x)`); as a whole operand
 					// -- a reducer's body, a side of a comparison -- it needs none.
-					return parent_precedence == 0 ? WithoutEnclosingParentheses(labelled.second) : labelled.second;
+					return parent_precedence <= OPERAND_PRECEDENCE ? WithoutEnclosingParentheses(labelled.second)
+					                                               : labelled.second;
 				}
 			}
 		}
@@ -461,7 +478,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		if (in.children.size() < 2) {
 			break;
 		}
-		string result = RenderSource(*in.children[0], ctx) + " IN (";
+		string result = RenderSource(*in.children[0], ctx, OPERAND_PRECEDENCE) + " IN (";
 		for (idx_t i = 1; i < in.children.size(); i++) {
 			if (i > 1) {
 				result += ", ";
@@ -488,7 +505,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	ExpressionIterator::EnumerateChildren(node, [&](unique_ptr<Expression> &child) {
 		auto type = child->return_type;
 		aside.push_back(std::move(child));
-		child = make_uniq<BoundReferenceExpression>(written[aside.size() - 1], std::move(type), 0U);
+		child = make_uniq<WrittenOperand>(written[aside.size() - 1], std::move(type));
 	});
 	auto result = node.ToString();
 	idx_t restored = 0;

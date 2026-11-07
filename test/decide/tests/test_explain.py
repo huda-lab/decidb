@@ -843,3 +843,11 @@ def test_a_lifted_clause_keeps_its_written_position(decidb_cli):
         packed.index("SUM(x)>=30"),
     ]
     assert positions == sorted(positions), _plan_text(out)
+
+
+def test_a_product_on_a_side_of_a_comparison_prints_bare(decidb_cli):
+    """A helper's label holds its own parentheses for arithmetic, which a whole side of a comparison does not need."""
+    sql = """SELECT id, x, y FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, c) DECIDE x(BOOL), y(INT)
+        SUCH THAT y <= 3 AND x * y <= 2 MAXIMIZE sum(x + y)"""
+    plan = _plan_text(_explain(decidb_cli, sql))
+    assert "x * y <= 2" in plan and "(x * y) <= 2" not in plan, plan
