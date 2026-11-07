@@ -293,3 +293,44 @@ class TestACollatedReducerOverData:
         result = decidb_cli.execute_raw(sql)
         assert "else 0 stands in a collated payload" in result.stderr, result.stderr
         assert_no_internal_leak(result, "an else over a collated payload")
+
+
+ORDER_ROWS = ((1, "a", 10.0), (2, "A", 10.0), (3, "b", 30.0))
+
+
+def _ordered(clause, rows=ORDER_ROWS, over="t.k", collation="COLLATE NOCASE"):
+    source = f"(SELECT id, k {collation} AS k, v FROM {values(rows, 'r', ('id', 'k', 'v'))}) t"
+    return f"""SELECT id, x FROM {source} DECIDE x(REAL)
+        SUCH THAT x <= 50 AND x <= {clause.format(over=f"over ({over})")} MAXIMIZE sum(x) ORDER BY id"""
+
+
+@pytest.mark.correctness
+class TestACollatedOrderKey:
+    """A frame's order key compares as ORDER BY does (D74): under NOCASE 'a' and 'A' are one position, so `dense_rank`
+    and a range count 2 positions, and neither reads the other as its `previous`."""
+
+    def test_a_range_counts_positions_as_dense_rank_does(self, decidb_cli):
+        sql = _ordered("count(from first to last: t.v) {over}")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [2, 2, 2]
+
+    def test_one_position_reads_no_previous_inside_itself(self, decidb_cli):
+        """Rows 1 and 2 are the first position and read the `else`; row 3 reads their one value."""
+        sql = _ordered("at(previous else 0: t.v) {over}")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [0, 0, 10]
+
+    def test_a_key_written_under_a_collation_compares_under_it(self, decidb_cli):
+        """The column is plain text; the `COLLATE` in the order key alone makes 'a' and 'A' one position."""
+        sql = _ordered("at(previous else 0: t.v) {over}", over="t.k COLLATE NOCASE", collation="")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [0, 0, 10]
+
+    def test_plain_text_keeps_its_three_positions(self, decidb_cli):
+        """With no collation 'A', 'a' and 'b' are three positions."""
+        sql = _ordered("count(from first to last: t.v) {over}", collation="")
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [3, 3, 3]
+
+    def test_one_position_holds_one_value(self, decidb_cli):
+        """D73: 'a' and 'A' are one position, whose two rows read 10 and 20."""
+        rows = ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0))
+        result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
+        assert "a position must hold one row" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "two rows at one collated position")

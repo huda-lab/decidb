@@ -18,6 +18,8 @@
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
@@ -228,16 +230,26 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
 		auto &order = CachedTransformToChunkExpression(chunk_expr_cache, *frame.order, context);
 		ExpressionExecutor executor(context);
 		executor.AddExpression(order);
+		// ORDER BY compares under the key's collation, so 'a' and 'A' under NOCASE are one peer (D74). The pass read the
+		// key as written, which messages quote, so the collation applies to what it read.
+		unique_ptr<Expression> collated = make_uniq<BoundReferenceExpression>(order.return_type, 0U);
+		ExpressionBinder::PushCollation(context, collated, order.return_type);
+		ExpressionExecutor collate_executor(context);
+		collate_executor.AddExpression(*collated);
 		DecideRowWindows windows(chunk_expr_cache);
 		DataChunk result;
 		result.Initialize(context, {order.return_type});
+		DataChunk compared;
+		compared.Initialize(context, {collated->return_type});
 		while (windows.Next()) {
 			const idx_t offset = windows.Offset();
 			const idx_t count = windows.Count();
 			result.Reset();
 			windows.Execute(executor, &map.anchors, result);
+			compared.Reset();
+			collate_executor.Execute(result, compared);
 			Vector keys(LogicalType::BLOB, count);
-			CreateSortKeyHelpers::CreateSortKey(result.data[0], count, modifiers, keys);
+			CreateSortKeyHelpers::CreateSortKey(compared.data[0], count, modifiers, keys);
 			UnifiedVectorFormat format;
 			keys.ToUnifiedFormat(count, format);
 			auto key_data = UnifiedVectorFormat::GetData<string_t>(format);
