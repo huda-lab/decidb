@@ -503,6 +503,14 @@ private:
 	idx_t pending = 0;
 };
 
+//! Every row of `out` NULL, in each field of a nested type too: the parent's mask alone leaves a STRUCT's fields holding
+//! whatever the allocator did, which a copy of the row reads.
+static void SetEveryRowNull(Vector &out, idx_t num_rows) {
+	for (idx_t row = 0; row < num_rows; row++) {
+		FlatVector::SetNull(out, row, true);
+	}
+}
+
 //! A range over data's REDUCED column (DecideFrameColumn) into `out`: the frame's own reducer run (AggregateFold) over
 //! each window's values -- the payload at each row it reads, once per visit, and the `else` at its anchor once per
 //! missing position; a NULL among them is skipped (D84; `count` counts the others, and of none is 0). Each value is
@@ -516,7 +524,7 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 	}
 	const idx_t windows = map.WindowCount();
 	if (windows == 0) {
-		FlatVector::Validity(out).SetAllInvalid(num_rows); // no anchor: nothing to read
+		SetEveryRowNull(out, num_rows); // no anchor: nothing to read
 		return;
 	}
 	if (map.fallback != (column.fallback != nullptr)) {
@@ -569,7 +577,7 @@ void ReduceDecideGroups(ClientContext &context, const BoundAggregateExpression &
                         const vector<idx_t> &group, idx_t groups, ChunkExprCache &chunk_expr_cache, Vector &out) {
 	const idx_t num_rows = members.size();
 	if (groups == 0) {
-		FlatVector::Validity(out).SetAllInvalid(num_rows); // no group: nothing to read
+		SetEveryRowNull(out, num_rows); // no group: nothing to read
 		return;
 	}
 	vector<Vector> sources;

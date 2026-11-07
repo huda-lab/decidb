@@ -270,7 +270,7 @@ struct DecideObjective {
 //! A reducer over data whose argument reads a frame (LogicalDecide::frame_aggregates) is one column of its own, after
 //! every frame's, computed once they are:
 //!   AGGREGATE — `value`, the reducer over the rows its filter keeps, its argument reading frame columns: on each row
-//!              its group's value of `key` (a DOUBLE), each class of `class_key` counted once per signature; NULL on
+//!              its group's value of `key`, in the reducer's type, each class of `class_key` counted once per signature; NULL on
 //!              a row in no group, and where the group has none to reduce (`count`: 0). `frame` is INVALID_INDEX
 struct DecideFrameColumn {
 	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED, AGGREGATE };

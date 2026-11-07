@@ -2175,6 +2175,19 @@ class TestFrameReducerFold:
         rows = tuple(row[:2] + (None,) + row[3:] for row in FOLD_ROWS)
         assert _folded(decidb_cli, f"sum(at(first: t.f) {ONE_TIMELINE_EACH}) by (t.h)", rows, warnings=1) == [7, 7]
 
+    @pytest.mark.parametrize(
+        "reducer",
+        [f"max(at(first: t.st) {ONE_TIMELINE_EACH}) by (t.g)", "max(from first to last: t.st) over (t.id within t.g)"],
+        ids=["no-group", "no-window"],
+    )
+    def test_a_struct_with_no_row_to_read_is_null_in_every_field(self, decidb_cli, reducer):
+        """Every `g` is NULL, so the reducer has no group, or the range no window: its value is a NULL STRUCT, and each
+        field of it NULL too. `coalesce` sees that NULL, so the bound is 5; a field left unset reads as a value."""
+        rows = "(SELECT id, NULL::VARCHAR AS g, {'a': id, 'b': repeat('q', 40)} AS st FROM (VALUES (1), (2)) r(id)) t"
+        sql = f"""SELECT id, x FROM {rows} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND x <= coalesce(struct_extract({reducer}, 'a'), 5) MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [5, 5]
+
     def test_a_count_of_nothing_is_zero(self, decidb_cli):
         """The payload is NULL on every row: its one group counts 0 (deck p. 50; D68), which bounds every `x`."""
         assert _folded(decidb_cli, f"count(at(first: nullif(t.f, t.f)) {ONE_TIMELINE_EACH})") == [0, 0]
