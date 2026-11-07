@@ -35,7 +35,8 @@ static string DecideComparisonOperator(ExpressionType type) {
 
 static void StripSourceFragmentAliases(ParsedExpression &expr) {
 	expr.SetAlias(StripSourceFragmentTags(expr.GetAlias()));
-	ParsedExpressionIterator::EnumerateChildren(expr, [](ParsedExpression &child) { StripSourceFragmentAliases(child); });
+	ParsedExpressionIterator::EnumerateChildren(expr,
+	                                            [](ParsedExpression &child) { StripSourceFragmentAliases(child); });
 }
 
 string DecideWrittenText(const ParsedExpression &expr) {
@@ -97,7 +98,8 @@ static constexpr int OPERAND_PRECEDENCE = 5;
 //! A child standing aside for its text while its parent prints (RenderSource): the text as it is, whatever it holds.
 class WrittenOperand : public BoundReferenceExpression {
 public:
-	WrittenOperand(string text_p, LogicalType type) : BoundReferenceExpression(std::move(type), 0U), text(std::move(text_p)) {
+	WrittenOperand(string text_p, LogicalType type)
+	    : BoundReferenceExpression(std::move(type), 0U), text(std::move(text_p)) {
 	}
 	string ToString() const override {
 		return text;
