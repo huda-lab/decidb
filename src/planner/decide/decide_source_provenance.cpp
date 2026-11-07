@@ -15,6 +15,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/bind_context.hpp"
@@ -461,7 +462,16 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	default:
 		break;
 	}
-	return expr.ToString();
+	// Any other node prints in its own syntax, over its children as written: ToString would print each child by its
+	// alias, which here may be nothing but tags. A subquery cannot be copied, and it prints by its fragment.
+	if (expr.HasSubquery()) {
+		return expr.ToString();
+	}
+	auto copy = expr.Copy();
+	ExpressionIterator::EnumerateChildren(*copy, [&](unique_ptr<Expression> &child) {
+		child = make_uniq<BoundReferenceExpression>(RenderSource(*child, ctx), child->return_type, 0U);
+	});
+	return copy->ToString();
 }
 
 static string AppendQualifier(string prefix, const string &suffix) {

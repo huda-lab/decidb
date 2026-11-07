@@ -860,6 +860,23 @@ class TestRefusalsInEverySpelling:
 
 
     @pytest.mark.parametrize(
+        "term, quoted",
+        [
+            pytest.param("coalesce(0.5 * norm(t.cap, 'inf'), 0)", "COALESCE(0.5 * norm(t.cap, 'inf'), 0)", id="coalesce"),
+            pytest.param("coalesce((SELECT 5), 0)", "COALESCE((SELECT 5), 0)", id="a-subquery-inside"),
+            pytest.param("abs(coalesce(sum(t.cap) by (t.id), 0))", "abs(COALESCE(sum(t.cap) by (t.id), 0))", id="nested"),
+        ],
+    )
+    def test_a_node_with_no_spelling_of_its_own_prints_over_its_written_children(self, decidb_cli, term, quoted):
+        """COALESCE has no rendering of its own, so it prints in its own syntax, but each child prints as written: a
+        cast's ToString prints its child by its alias, which held the tag."""
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+        )
+        assert f"'{quoted}' does not reference a decision" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a decision-free objective term")
+
+    @pytest.mark.parametrize(
         "term",
         [
             "0.5 * norm(t.cap, 'inf')",
