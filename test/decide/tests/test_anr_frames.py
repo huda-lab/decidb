@@ -2130,3 +2130,50 @@ class TestFieldsByKeys:
             MAXIMIZE sum(per t.product: y) ORDER BY tid"""
         y = [row["y"] for row in answer(decidb_cli, sql)]
         assert y[0] + y[3] == 9, y
+
+
+FOLD = ("id", "g", "h", "b", "f", "n")
+FOLD_ROWS = ((1, "a", "u", 9007199254740993, 1.0, "12"), (2, "b", None, 1, 4.0, "9"))
+ONE_TIMELINE_EACH = "over (t.id within t.id)"
+
+
+def _folded(cli, bound, rows=FOLD_ROWS, warnings=()):
+    sql = f"SELECT id, x {table('t', FOLD, rows)} DECIDE x(REAL) SUCH THAT x <= 7 AND x <= {bound} MAXIMIZE sum(x)"
+    return [row["x"] for row in answer(cli, f"{sql} ORDER BY id", warnings)]
+
+
+@pytest.mark.correctness
+class TestFrameReducerFold:
+    """A reducer over data that reads a frame is SQL's aggregate over the rows it reads, in the type it binds to
+    (ReduceDecideGroups), as a side table's is."""
+
+    def test_a_sum_keeps_a_whole_number_a_double_cannot_hold(self, decidb_cli):
+        """9007199254740993 + 1 - 9007199254740992 is 2; a DOUBLE rounds the sum to 0."""
+        bound = f"sum(at(first: t.b) {ONE_TIMELINE_EACH}) - 9007199254740992"
+        assert _folded(decidb_cli, bound) == [2, 2]
+
+    def test_a_text_payload_reduces_as_text(self, decidb_cli):
+        """'12' < '9' as text: the greatest is '9', of length 1, and the least '12', of length 2."""
+        assert _folded(decidb_cli, f"length(max(at(first: t.n) {ONE_TIMELINE_EACH}))") == [1, 1]
+        assert _folded(decidb_cli, f"length(min(at(first: t.n) {ONE_TIMELINE_EACH}))") == [2, 2]
+
+    def test_a_nan_payload_is_the_nan_bound_error(self, decidb_cli):
+        """SQL orders NaN above every number, so the greatest is NaN, which no bound may be."""
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {values(((1, "1"), (2, "NaN")), 'v', ('id', 'f'))}) t
+            DECIDE x(REAL) SUCH THAT x <= max(at(first: t.f) {ONE_TIMELINE_EACH}) MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "is NaN on some rows" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a NaN a frame reducer reads")
+
+    def test_a_row_in_no_group_reads_no_value(self, decidb_cli):
+        """Row 2's `h` is NULL, so it is in no group of the reducer: its bound has no value and only `x <= 7` holds it."""
+        assert _folded(decidb_cli, f"sum(at(first: t.f) {ONE_TIMELINE_EACH}) by (t.h)") == [1, 7]
+
+    def test_no_row_in_any_group_reads_no_value(self, decidb_cli):
+        """Every `h` is NULL: there is no group at all, and every instance is skipped."""
+        rows = tuple(row[:2] + (None,) + row[3:] for row in FOLD_ROWS)
+        assert _folded(decidb_cli, f"sum(at(first: t.f) {ONE_TIMELINE_EACH}) by (t.h)", rows, warnings=1) == [7, 7]
+
+    def test_a_count_of_nothing_is_zero(self, decidb_cli):
+        """The payload is NULL on every row: its one group counts 0 (deck p. 50; D68), which bounds every `x`."""
+        assert _folded(decidb_cli, f"count(at(first: nullif(t.f, t.f)) {ONE_TIMELINE_EACH})") == [0, 0]

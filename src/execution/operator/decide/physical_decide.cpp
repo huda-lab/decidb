@@ -976,7 +976,6 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 			                        chunk_expr_cache.store->ColumnCount());
 		}
 		auto &reducer = column.value->Cast<BoundAggregateExpression>();
-		auto name = StringUtil::Lower(reducer.function.name);
 		auto read = reducer.filter ? KeptRows(*reducer.filter, chunk_expr_cache, context, num_rows)
 		                           : vector<bool>(num_rows, true);
 		// Each row's group of the path key, INVALID_INDEX on a row in none.
@@ -1010,48 +1009,8 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 				              seen.insert((static_cast<uint64_t>(group[row]) << 32) ^ ids[row]).second;
 			}
 		}
-		vector<Value> values;
-		if (!reducer.children.empty()) {
-			values = ReadRowValues(*reducer.children[0], chunk_expr_cache, context, &member);
-		}
-		vector<double> sum(groups, 0.0);
-		vector<double> least(groups, std::numeric_limits<double>::infinity());
-		vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
-		vector<idx_t> counted(groups, 0);
-		for (idx_t row = 0; row < num_rows; row++) {
-			const idx_t g = group[row];
-			if (g == DConstants::INVALID_INDEX || !member[row]) {
-				continue;
-			}
-			if (values.empty()) {
-				counted[g]++; // count(*)
-				continue;
-			}
-			if (values[row].IsNull()) {
-				continue;
-			}
-			const double value = values[row].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-			sum[g] += value;
-			least[g] = MinValue(least[g], value);
-			greatest[g] = MaxValue(greatest[g], value);
-			counted[g]++;
-		}
-		auto out = make_uniq<Vector>(LogicalType::DOUBLE, num_rows);
-		auto result = FlatVector::GetData<double>(*out);
-		auto &validity = FlatVector::Validity(*out);
-		const bool counts = name == "count" || name == "count_star";
-		for (idx_t row = 0; row < num_rows; row++) {
-			const idx_t g = group[row];
-			if (g == DConstants::INVALID_INDEX || (!counts && counted[g] == 0)) {
-				validity.SetInvalid(row);
-				continue;
-			}
-			result[row] = counts          ? static_cast<double>(counted[g])
-			              : name == "avg" ? sum[g] / static_cast<double>(counted[g])
-			              : name == "min" ? least[g]
-			              : name == "max" ? greatest[g]
-			                              : sum[g];
-		}
+		auto out = make_uniq<Vector>(reducer.return_type, num_rows);
+		ReduceDecideGroups(context, reducer, member, group, groups, chunk_expr_cache, *out);
 		vector<unique_ptr<Vector>> appended;
 		appended.push_back(std::move(out));
 		AppendDecideColumns(chunk_expr_cache, appended);

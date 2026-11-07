@@ -439,10 +439,61 @@ struct FrameAggregateStates {
 	Vector pointers;
 };
 
-//! A range over data's REDUCED column (DecideFrameColumn) into `out`: the frame's own reducer run, through its
-//! aggregate's state functions, over each window's values -- the payload at each row it reads, once per visit, and
-//! the `else` at its anchor once per missing position -- so the value has SQL's type and arithmetic, and a NULL among
-//! them is skipped as SQL's aggregate skips it (D84; `count` counts the others, and of none is 0). Each value is
+//! An aggregate run through its state functions over values of `sources`, one vector per argument, so the value has
+//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it.
+class AggregateFold {
+public:
+	AggregateFold(ClientContext &context, const BoundAggregateExpression &aggregate, vector<Vector> &sources_p,
+	              idx_t count)
+	    : allocator(BufferAllocator::Get(context)), input(aggregate.bind_info.get(), allocator), sources(sources_p),
+	      states(aggregate.function, input, count), selection(STANDARD_VECTOR_SIZE),
+	      targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE) {
+	}
+
+	//! State `state` reads the values at `index`, `times` times.
+	void Feed(idx_t index, idx_t state, idx_t times = 1) {
+		auto target_states = FlatVector::GetData<data_ptr_t>(targets);
+		for (idx_t i = 0; i < times; i++) {
+			if (pending == STANDARD_VECTOR_SIZE) {
+				Flush();
+			}
+			selection.set_index(pending, index);
+			target_states[pending++] = states.At(state);
+		}
+	}
+
+	//! Each state's value, in `values`.
+	void Finish(Vector &values) {
+		Flush();
+		states.function.finalize(states.pointers, input, values, states.count, 0);
+	}
+
+private:
+	void Flush() {
+		if (pending == 0) {
+			return;
+		}
+		vector<Vector> slices;
+		slices.reserve(sources.size());
+		for (auto &source : sources) {
+			slices.emplace_back(source, selection, pending);
+		}
+		states.function.update(slices.data(), input, slices.size(), targets, pending);
+		pending = 0;
+	}
+
+	ArenaAllocator allocator;
+	AggregateInputData input;
+	vector<Vector> &sources;
+	FrameAggregateStates states;
+	SelectionVector selection;
+	Vector targets;
+	idx_t pending = 0;
+};
+
+//! A range over data's REDUCED column (DecideFrameColumn) into `out`: the frame's own reducer run (AggregateFold) over
+//! each window's values -- the payload at each row it reads, once per visit, and the `else` at its anchor once per
+//! missing position; a NULL among them is skipped (D84; `count` counts the others, and of none is 0). Each value is
 //! computed on the rows that read it only. An anchor whose window reads nothing reads NULL.
 static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameColumn &column,
                               const DecideFrameMap &map, idx_t num_rows,
@@ -460,7 +511,9 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 		throw InternalException("DECIDE: %s's column and its map disagree on its else", frame.text);
 	}
 	// One source to reduce from: the payload's values at [0, n), the else's at [n, 2n).
-	Vector source(marker.children[0]->return_type, 2 * num_rows);
+	vector<Vector> sources;
+	sources.emplace_back(marker.children[0]->return_type, 2 * num_rows);
+	auto &source = sources[0];
 	auto payload = EvaluateOnRows(context, *marker.children[0], num_rows, map.ReadRows(), chunk_expr_cache);
 	VectorOperations::Copy(payload, source, num_rows, 0, 0);
 	if (map.fallback) {
@@ -469,42 +522,19 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 		VectorOperations::Copy(fallback, source, num_rows, 0, num_rows);
 	}
 
-	ArenaAllocator allocator(BufferAllocator::Get(context));
-	AggregateInputData input(marker.bind_info.get(), allocator);
-	FrameAggregateStates states(marker.function, input, windows);
-	SelectionVector selection(STANDARD_VECTOR_SIZE);
-	Vector targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE);
-	auto target_states = FlatVector::GetData<data_ptr_t>(targets);
-	idx_t pending = 0;
-	auto flush = [&]() {
-		if (pending > 0) {
-			Vector slice(source, selection, pending);
-			marker.function.update(&slice, input, 1, targets, pending);
-			pending = 0;
-		}
-	};
-	auto feed = [&](idx_t index, idx_t window, idx_t times) {
-		for (idx_t i = 0; i < times; i++) {
-			if (pending == STANDARD_VECTOR_SIZE) {
-				flush();
-			}
-			selection.set_index(pending, index);
-			target_states[pending++] = states.At(window);
-		}
-	};
+	AggregateFold fold(context, marker, sources, windows);
 	for (idx_t w = 0; w < windows; w++) {
 		if (map.WindowAbsent(w)) {
 			continue;
 		}
-		map.ForEachRead(w, [&](idx_t row, idx_t times) { feed(row, w, times); });
+		map.ForEachRead(w, [&](idx_t row, idx_t times) { fold.Feed(row, w, times); });
 		const auto fallbacks = map.WindowFallbacks(w);
 		if (fallbacks > 0) {
-			feed(num_rows + map.window_anchor[w], w, fallbacks);
+			fold.Feed(num_rows + map.window_anchor[w], w, fallbacks);
 		}
 	}
-	flush();
 	Vector values(column.type, windows);
-	marker.function.finalize(states.pointers, input, values, windows, 0);
+	fold.Finish(values);
 	// Each anchor reads its window's value; every other row, and an anchor whose window reads nothing, reads NULL.
 	SelectionVector gather(num_rows);
 	vector<bool> unread(num_rows, false);
@@ -516,6 +546,36 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 	VectorOperations::Copy(values, out, gather, num_rows, 0, 0);
 	for (idx_t row = 0; row < num_rows; row++) {
 		if (unread[row]) {
+			FlatVector::SetNull(out, row, true);
+		}
+	}
+}
+
+void ReduceDecideGroups(ClientContext &context, const BoundAggregateExpression &reducer, const vector<bool> &members,
+                        const vector<idx_t> &group, idx_t groups, ChunkExprCache &chunk_expr_cache, Vector &out) {
+	const idx_t num_rows = members.size();
+	if (groups == 0) {
+		FlatVector::Validity(out).SetAllInvalid(num_rows); // no group: nothing to read
+		return;
+	}
+	vector<Vector> sources;
+	for (auto &child : reducer.children) {
+		sources.push_back(EvaluateOnRows(context, *child, num_rows, members, chunk_expr_cache));
+	}
+	AggregateFold fold(context, reducer, sources, groups);
+	SelectionVector gather(num_rows);
+	for (idx_t row = 0; row < num_rows; row++) {
+		const bool grouped = group[row] != DConstants::INVALID_INDEX;
+		if (grouped && members[row]) {
+			fold.Feed(row, group[row]);
+		}
+		gather.set_index(row, grouped ? group[row] : 0);
+	}
+	Vector values(reducer.return_type, groups);
+	fold.Finish(values);
+	VectorOperations::Copy(values, out, gather, num_rows, 0, 0);
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (group[row] == DConstants::INVALID_INDEX) {
 			FlatVector::SetNull(out, row, true);
 		}
 	}

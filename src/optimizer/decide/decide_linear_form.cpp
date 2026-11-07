@@ -498,7 +498,7 @@ private:
 			DecideFrameColumn column;
 			column.kind = DecideFrameColumn::Kind::AGGREGATE;
 			column.value = marker.Copy();
-			column.type = LogicalType::DOUBLE;
+			column.type = marker.return_type;
 			column.key = record.key;
 			column.class_key = record.class_key;
 			columns.push_back(std::move(column));
@@ -507,9 +507,8 @@ private:
 		auto name = op.frame_aggregates[index].text;
 		AddDecideTag(name, BOUND_REDUCER_TAG);
 		AddDecideTag(name, FRAME_COLUMN_TAG);
-		auto column = make_uniq<BoundReferenceExpression>(std::move(name), LogicalType::DOUBLE,
-		                                                  op.prepared.frame_column_base + slot->second);
-		return BoundCastExpression::AddCastToType(context, std::move(column), marker.return_type);
+		return make_uniq<BoundReferenceExpression>(std::move(name), marker.return_type,
+		                                           op.prepared.frame_column_base + slot->second);
 	}
 
 	void LowerFramesInPreparedModel() {
