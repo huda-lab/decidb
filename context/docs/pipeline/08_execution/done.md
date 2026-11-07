@@ -389,7 +389,8 @@ and every row of a per-row one, splits its group again. Three readers:
 - `RunScopeChecks` numbers the objective's signature over its kept rows: a second variant
   is the data check of [`../../language/guide.md`](../../language/guide.md) §7.3 (*"the
   objective would be produced more than once"*), naming the first field that takes two
-  values with its least and greatest one (`DescribeVariantDifference`, NULL last) or a
+  values with its least and greatest one (`DescribeVariantDifference`, NULL last; a frame's
+  two positions read first and last in its own order, each by `DecidePositionRows`) or a
   decision with two instances.
 - `EvaluateConstraints` emits a per-row clause under `per K:` (`ONE_ROW_PER_CLASS`) once per
   variant of each class, at the variant's first row, which stands for the variant's rows:

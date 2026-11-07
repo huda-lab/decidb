@@ -374,6 +374,22 @@ class TestACollatedOrderKey:
         assert "g, A" in result.stdout + result.stderr, result.stdout + result.stderr
         assert "g, a" not in result.stdout + result.stderr, result.stdout + result.stderr
 
+    @pytest.mark.parametrize("first", ["1 month", "30 days"])
+    def test_every_message_gives_a_position_one_name(self, decidb_cli, first):
+        """'1 month' and '30 days' are one interval, and `Value` comparison ties them, so the least is the sort key's, as
+        DIAGNOSE reads it: raw order puts 30 days first."""
+        spellings = [first, "30 days" if first == "1 month" else "1 month", "2 months"]
+        rows = values(tuple((i + 1, k, 10.0 * (i + 1)) for i, k in enumerate(spellings)), "r", ("id", "k", "v"))
+        source = f"(SELECT id, CAST(k AS INTERVAL) AS k, v FROM {rows}) t"
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM {source} DECIDE x(REAL) SUCH THAT x <= at(previous else 0: t.v) over (t.k) MAXIMIZE sum(x)"
+        )
+        assert "finds 2 rows at t.k = '30 days'" in result.stderr, result.stderr
+        result = decidb_cli.execute_raw(
+            f"SELECT id, y FROM {source} DECIDE per (): y(REAL) SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k)"
+        )
+        assert "(t.k = '30 days', '2 months')" in result.stderr, result.stderr
+
     def test_one_position_holds_one_value(self, decidb_cli):
         """D73: 'a' and 'A' are one position, whose two rows read 10 and 20."""
         rows = ((1, "a", 10.0), (2, "A", 20.0), (3, "b", 30.0))

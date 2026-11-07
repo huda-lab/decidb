@@ -1017,10 +1017,8 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 	}
 }
 
-//! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` --
-//! a column's spelling -- as ORDER BY places it.
-static vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
-                                       ChunkExprCache &chunk_expr_cache, ClientContext &context) {
+vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
+                                ChunkExprCache &chunk_expr_cache, ClientContext &context) {
 	vector<idx_t> least(num_classes, DConstants::INVALID_INDEX);
 	vector<string> least_key(num_classes);
 	vector<bool> read(row_to_class.size());
@@ -1116,11 +1114,9 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 	// And a position by the least spelling among its rows, which its collation lets them differ in.
 	for (auto &position : collated_positions) {
 		auto &map = frames.maps[position.second];
-		auto least = LeastSpellingRows(*exprs[position.first], map.peer, map.peer_begin.size() - 1, chunk_expr_cache,
-		                               context);
+		auto named = DecidePositionRows(context, frames.frames[position.second], map, chunk_expr_cache);
 		for (auto row : first_rows) {
-			group_rows.label[position.first].push_back(map.peer[row] == DConstants::INVALID_INDEX ? row
-			                                                                                     : least[map.peer[row]]);
+			group_rows.label[position.first].push_back(named[map.peer[row]]);
 		}
 	}
 	auto reader = make_shared_ptr<GroupKeyReader>(*chunk_expr_cache.store, exprs, std::move(group_rows));
@@ -3211,34 +3207,33 @@ static string DescribeFrameDifference(const DecideSignatureField &field, const v
 	auto &map = frames.maps[field.frame];
 	idx_t first = DConstants::INVALID_INDEX;
 	bool timelines = false;
-	// Each timeline's first and last peer over the rows, in timeline order, so the message does not depend on row order.
-	std::map<idx_t, std::pair<idx_t, idx_t>> span_of_timeline;
+	bool positions = false;
+	idx_t first_peer = DConstants::INVALID_INDEX;
+	idx_t last_peer = 0;
+	std::unordered_map<idx_t, idx_t> peer_of_timeline;
 	for (idx_t row = 0; row < ids.size(); row++) {
 		if (ids[row] == DConstants::INVALID_INDEX) {
 			continue;
 		}
-		auto &span = span_of_timeline.emplace(map.timeline[row], std::make_pair(map.peer[row], map.peer[row])).first->second;
-		span.first = MinValue(span.first, map.peer[row]);
-		span.second = MaxValue(span.second, map.peer[row]);
+		auto seen = peer_of_timeline.emplace(map.timeline[row], map.peer[row]).first;
+		positions = positions || seen->second != map.peer[row];
+		first_peer = MinValue(first_peer, map.peer[row]);
+		last_peer = MaxValue(last_peer, map.peer[row]);
 		if (first == DConstants::INVALID_INDEX) {
 			first = row;
 			continue;
 		}
 		timelines = timelines || map.timeline[row] != map.timeline[first];
 	}
-	if (frame.Relative()) {
-		for (auto &entry : span_of_timeline) {
-			auto &span = entry.second;
-			if (span.first != span.second) {
-				auto order = ReadRowValues(*frame.order, chunk_expr_cache, context, &map.anchors);
-				return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s, %s)",
-				                          field.text, frame.order_name,
-				                          DecideSqlLiteral(DecidePositionName(map, span.first, order)),
-				                          DecideSqlLiteral(DecidePositionName(map, span.second, order)));
-			}
-		}
-	}
 	string values;
+	if (frame.Relative() && positions) {
+		// Its first and last position in the frame's own order, each by its name.
+		auto named = DecidePositionRows(context, frame, map, chunk_expr_cache);
+		auto order = ReadRowValues(*frame.order, chunk_expr_cache, context, &map.anchors);
+		return StringUtil::Format("'%s' reads more than one position over the kept rows (%s = %s, %s)", field.text,
+		                          frame.order_name, DecideSqlLiteral(order[named[first_peer]]),
+		                          DecideSqlLiteral(order[named[last_peer]]));
+	}
 	if (timelines) {
 		for (auto &element : DecideKeyElements(keys, frame.timeline_key)) {
 			if (varies(*element.expression, values)) {
@@ -3270,7 +3265,8 @@ static string DescribeFrameDifference(const DecideSignatureField &field, const v
 
 //! What makes the rows of `ids` (a signature's numbering over the kept rows `rows`, null for every row) more than one
 //! variant, as a message says it: the first field that takes two values or instances over them, with its least and
-//! greatest value as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in.
+//! greatest value as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in; a
+//! frame's two positions read first and last in its own order.
 static string DescribeVariantDifference(const DecideSignature &signature, const vector<DecideKey> &keys,
                                         const vector<DecideVarScopeInfo> &variable_scopes,
                                         const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,

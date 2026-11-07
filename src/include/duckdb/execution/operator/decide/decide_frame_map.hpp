@@ -189,11 +189,17 @@ DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec
                                    PerGroupCache &per_group_cache, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache);
 
-//! D75: each class of `frame.partition_key` among the anchors lies in one timeline; an anchor in none is no witness.
-//! How a message names peer `peer`: its rows' least value of the order key (`order`, per row), which a collation lets
-//! them differ in, so the name does not depend on row order (D69).
-const Value &DecidePositionName(const DecideFrameMap &map, idx_t peer, const vector<Value> &order);
+//! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` -- a
+//! column's spelling -- as ORDER BY places it.
+vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
+                                ChunkExprCache &chunk_expr_cache, ClientContext &context);
 
+//! The row that names each position of `map`: the one with its least spelling of the order key, which a collation lets
+//! its rows differ in, so a name does not depend on row order (D69).
+vector<idx_t> DecidePositionRows(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
+                                 ChunkExprCache &chunk_expr_cache);
+
+//! D75: each class of `frame.partition_key` among the anchors lies in one timeline; an anchor in none is no witness.
 void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
                                const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
                                idx_t num_rows, ChunkExprCache &chunk_expr_cache);

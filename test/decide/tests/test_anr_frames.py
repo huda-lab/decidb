@@ -2443,3 +2443,11 @@ class TestAFrameBoundReadsOnlyInstances:
             SUCH THAT x <= 100 AND per t.k: sum(x) by (t.g) <= at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
         assert "is NaN on some rows" in result.stderr, result.stderr
+
+
+def test_a_frames_two_positions_read_in_its_own_order(decidb_cli):
+    """The message quotes a frame's first and last position (guide §7.3), so a descending key reads 3 first."""
+    sql = """SELECT id, y FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, k) DECIDE per (): y(REAL)
+        SUCH THAT y <= 3 MAXIMIZE at(previous else 0: y) over (t.k desc)"""
+    result = decidb_cli.execute_raw(sql)
+    assert "reads more than one position over the kept rows (t.k = 3, 1)" in result.stderr, result.stderr

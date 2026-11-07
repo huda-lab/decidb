@@ -794,8 +794,8 @@ Run before solving, on every run, also under `DIAGNOSE`:
 | The objective is produced once (§4, D72) | `DECIDE objective: 'D.capacity' takes more than one value over the kept rows (20, 40), so the objective would be produced more than once; move it inside a reducer or fix it with when.` · for a decision: `the decision 'ship' (declared per row) has more than one instance over the kept rows, ...` · for a `by` key: `'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), ...` |
 
 The phrase `would be produced more than once` is fixed; names and values come from the query and the data, the least
-and the greatest value as `ORDER BY` places them (NULL last), so the message does not depend on row order. Over a join
-a column is named with its relation.
+and the greatest value as `ORDER BY` places them (NULL last), so the message does not depend on row order. A frame's two
+positions read first and last in the frame's own order. Over a join a column is named with its relation.
 
 ### 7.4 What the data left of a clause
 

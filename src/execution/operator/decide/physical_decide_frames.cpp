@@ -353,31 +353,25 @@ static vector<Value> TimelineValues(ClientContext &context, const DecideFrameSpe
 	return values;
 }
 
-//! D73: `frame` selects `peer`, whose rows read different payloads.
-const Value &DecidePositionName(const DecideFrameMap &map, idx_t peer, const vector<Value> &order) {
-	const Value *least = &order[map.peer_rows[map.peer_begin[peer]]];
-	for (idx_t i = map.peer_begin[peer]; i < map.peer_begin[peer + 1] && !least->IsNull(); i++) {
-		auto &value = order[map.peer_rows[i]];
-		if (value < *least) {
-			least = &value;
-		}
-	}
-	return *least;
+vector<idx_t> DecidePositionRows(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
+                                 ChunkExprCache &chunk_expr_cache) {
+	return LeastSpellingRows(CachedTransformToChunkExpression(chunk_expr_cache, *frame.order, context), map.peer,
+	                         map.peer_begin.size() - 1, chunk_expr_cache, context);
 }
 
+//! D73: `frame` selects `peer`, whose rows read different payloads.
 [[noreturn]] static void ThrowAmbiguousPeer(ClientContext &context, const DecideFrameSpec &frame,
                                             const DecideFrameMap &map, idx_t peer, const vector<DecideKey> &keys,
                                             idx_t num_rows,
                                             ChunkExprCache &chunk_expr_cache) {
 	const auto row = map.peer_rows[map.peer_begin[peer]];
+	const auto named = DecidePositionRows(context, frame, map, chunk_expr_cache)[peer];
 	vector<bool> at(num_rows, false);
-	for (idx_t i = map.peer_begin[peer]; i < map.peer_begin[peer + 1]; i++) {
-		at[map.peer_rows[i]] = true;
-	}
+	at[named] = true;
 	auto names = frame.timeline_names;
 	auto values = TimelineValues(context, frame, keys, num_rows, row, chunk_expr_cache);
 	names.push_back(frame.order_name);
-	values.push_back(DecidePositionName(map, peer, ReadRowValues(*frame.order, chunk_expr_cache, context, &at)));
+	values.push_back(ReadRowValues(*frame.order, chunk_expr_cache, context, &at)[named]);
 	throw InvalidInputException("DECIDE: %s finds %llu rows at %s; a position must hold one row.", frame.text,
 	                            map.PeerSize(peer), DescribeKeyValues(names, values));
 }
