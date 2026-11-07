@@ -891,12 +891,12 @@ class TestRefusalsInEverySpelling:
         assert_no_internal_leak(result, "a decision-free objective term")
 
     def test_a_string_that_reads_as_a_tag_is_left_as_written(self, decidb_cli):
-        """Only a tag printed as an argument's name goes: the same text in a literal is what the query says."""
-        term = "CAST(sum(t.cap + length('__source_fragment_0__')) AS INTEGER)"
+        """Only an alias holds a tag: the same text in a literal is what the query says, a name's mark included."""
+        term = "CAST(sum(t.cap + length('__source_fragment_0__ := abc')) AS INTEGER)"
         result = decidb_cli.execute_raw(
             f"SELECT id, x FROM (VALUES (1, 3)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
         )
-        assert "length('__source_fragment_0__')" in result.stderr, result.stderr
+        assert "length('__source_fragment_0__ := abc')" in result.stderr, result.stderr
 
     @pytest.mark.parametrize(
         "clause, quoted",
@@ -923,6 +923,7 @@ class TestRefusalsInEverySpelling:
             "norm(CAST(t.cap AS DOUBLE), 2)",
             "sum(CAST(abs(CAST(t.cap AS DOUBLE)) AS INTEGER))",
             "CAST(sum(q := CAST(t.cap AS DOUBLE)) AS INTEGER)",
+            'CAST(sum("my q" := CAST(t.cap AS DOUBLE)) AS INTEGER)',
         ],
         ids=[
             "a-norm-under-a-factor",
@@ -933,6 +934,7 @@ class TestRefusalsInEverySpelling:
             "a-cast-as-a-norms-body",
             "a-cast-under-a-function-under-a-cast",
             "a-written-argument-name-stays",
+            "a-quoted-argument-name-stays",
         ],
     )
     def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):

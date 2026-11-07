@@ -2107,9 +2107,9 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	spec.all = frame.all;
 	spec.descending = frame.descending;
 	spec.cyclic = frame.cyclic;
-	spec.text = WithoutTagArguments(frame.ToString());
-	spec.order_name = WithoutTagArguments(frame.order->ToString());
-	auto fallback_text = frame.fallback ? frame.fallback->ToString() : string();
+	spec.text = DecideWrittenText(frame);
+	spec.order_name = DecideWrittenText(*frame.order);
+	auto fallback_text = frame.fallback ? DecideWrittenText(*frame.fallback) : string();
 
 	// The payload, under the aggregate that reads it at the selected rows: the range's
 	// reducer, else `first`, which reads the one row a point selects.

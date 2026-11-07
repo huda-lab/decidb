@@ -2472,3 +2472,20 @@ def test_a_frame_text_holds_no_tag(decidb_cli):
         SUCH THAT x <= 7 MAXIMIZE sum(x) - {frame}"""
     result = decidb_cli.execute_raw(sql)
     assert f"'{frame}' does not reference a decision" in result.stderr, result.stderr
+
+
+def test_a_frame_order_key_holds_no_tag(decidb_cli):
+    """The order key's name prints in the message, with a cast under a function in it. Rows 2 and 3 are one position."""
+    sql = """SELECT id, x FROM (VALUES (1, 1.0::DOUBLE, 10.0::DOUBLE), (2, 2.0::DOUBLE, 20.0::DOUBLE),
+            (3, 2.0::DOUBLE, 30.0::DOUBLE)) t(id, k, v) DECIDE x(REAL)
+        SUCH THAT x <= at(next else 0: t.v) over (abs(CAST(t.k AS DOUBLE))) MAXIMIZE sum(x)"""
+    result = decidb_cli.execute_raw(sql)
+    assert "finds 2 rows at abs(CAST(t.k AS DOUBLE)) = 2.0" in result.stderr, result.stderr
+
+
+def test_a_frame_else_holds_no_tag(decidb_cli):
+    """The refusal quotes the `else` as written, with a cast under a function in it."""
+    sql = """SELECT id, x FROM (VALUES (1, 1.0::DOUBLE)) t(id, c) DECIDE x(REAL)
+        SUCH THAT x <= at(next else concat(CAST(t.c AS VARCHAR), 'x'): t.c) over (t.id) MAXIMIZE sum(x)"""
+    result = decidb_cli.execute_raw(sql)
+    assert "else concat(CAST(t.c AS VARCHAR), 'x') is not a number" in result.stderr, result.stderr
