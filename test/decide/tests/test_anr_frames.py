@@ -2396,3 +2396,50 @@ class TestAFrameBoundReadsOnlyInstances:
         result = decidb_cli.execute_raw(sql)
         assert "takes more than one value here (-8 and -7)" in result.stderr, result.stderr
         assert_no_internal_leak(result, "a rebuilt = frame bound")
+
+    @pytest.mark.parametrize(
+        "clause, total",
+        [
+            # The factor is NULL, so every instance's left side is, and each is skipped; `previous` reads 3 and 4 in
+            # group a, which is no error then.
+            pytest.param("(SELECT NULL::DOUBLE) * sum(x) by (t.g) = {frame}", 500, id="every-group"),
+            pytest.param("(SELECT NULL::DOUBLE) * sum(x) = {frame}", 500, id="no-by"),
+            pytest.param("(SELECT NULL::DOUBLE) * sum(power(x, 2)) by (t.g) = {frame}", 500, id="a-square"),
+        ],
+    )
+    def test_a_group_a_null_left_side_skips_is_no_check(self, decidb_cli, clause, total):
+        frame = f"at(previous: t.c) {OVER_S}"
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND {clause.format(frame=frame)} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql, warnings=1)) == pytest.approx(total)
+
+    def test_a_group_with_a_value_on_its_left_side_still_raises(self, decidb_cli):
+        """The same clause with a factor that has a value: group a holds an instance, whose two values are an error."""
+        sql = f"""SELECT id, x {table('t', TIGHT, TIGHT_ROWS)} DECIDE x(REAL)
+            SUCH THAT x <= 100 AND (SELECT 2.0::DOUBLE) * sum(x) by (t.g) = at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "takes more than one value here (3 and 4)" in result.stderr, result.stderr
+
+    @pytest.mark.parametrize(
+        "bound, c, total",
+        [
+            # `previous` reads NULL, NaN, 5, and row 2, in no class, is the only row that reads the NaN.
+            pytest.param("at(previous: t.c) {over}", ("NaN", 5.0, 7.0), 5, id="a-nan"),
+            # `previous` reads NULL, -4, 9, and only row 2 reads the -4 that `sqrt` refuses.
+            pytest.param("sqrt(at(previous: t.c) {over})", (-4.0, 9.0, 7.0), 3, id="an-error-computing-it"),
+        ],
+    )
+    def test_a_row_in_no_class_computes_no_bound(self, decidb_cli, bound, c, total):
+        """No instance reads the row's bound, so nothing is computed there, as for a column."""
+        rows = ", ".join(f"({i + 1}, 'a', {'NULL' if i == 1 else 1}, {i + 1}, '{v}'::DOUBLE)" for i, v in enumerate(c))
+        sql = f"""SELECT id, x FROM (VALUES {rows}) t({', '.join(CLASSED)}) DECIDE x(REAL)
+            SUCH THAT x <= 100 AND per t.k: sum(x) by (t.g) <= {bound.format(over=OVER_S)} MAXIMIZE sum(x) ORDER BY id"""
+        assert sum(row["x"] for row in answer(decidb_cli, sql)) == pytest.approx(total)
+
+    def test_a_row_in_a_class_still_raises_on_its_nan(self, decidb_cli):
+        """Row 2 is in a class now, so its bound reads the NaN of row 1."""
+        rows = ", ".join(f"({i + 1}, 'a', 1, {i + 1}, '{v}'::DOUBLE)" for i, v in enumerate(("NaN", 5.0, 7.0)))
+        sql = f"""SELECT id, x FROM (VALUES {rows}) t({', '.join(CLASSED)}) DECIDE x(REAL)
+            SUCH THAT x <= 100 AND per t.k: sum(x) by (t.g) <= at(previous: t.c) {OVER_S} MAXIMIZE sum(x)"""
+        result = decidb_cli.execute_raw(sql)
+        assert "is NaN on some rows" in result.stderr, result.stderr

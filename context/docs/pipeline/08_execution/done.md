@@ -349,7 +349,10 @@ A frame bound of a clause over groups that differs within a group (`DecideConstr
 row as any bound, its NULLs apart, and then each group's kept rows, a row a reducer's own `when` drops included, take
 the group's tightest value among those where it has one (`TakeTightestFrameBound`): the least under `<=`, the greatest under `>=`, the one value under `=`, whose second is
 the `=` message a side table raises for a column; a group with none is marked in `null_rows`, so its instance is
-skipped. Its frame columns print as the frame is written (`FRAME_COLUMN_TAG`).
+skipped. A row in no class of the clause's `per` key is not read at all, as `InClassOnly` keeps a column's from being
+read (D5). The value is taken last, just before `SkipNullInstances`, and only for a group the clause still holds: a group
+some rule dropped, or a NULL on its left side will, has no instance, so no bound and no `=` check (D68). Its frame
+columns print as the frame is written (`FRAME_COLUMN_TAG`).
 
 A reducer over data reading a frame (`DecideFrameColumn::Kind::AGGREGATE`, after every frame column) is computed once
 the frames' columns are appended (`AppendDecideFrameAggregates`, in column order, so one may read another): over the

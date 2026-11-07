@@ -3524,10 +3524,11 @@ static idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups
 //! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
 //! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
 //! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
-//! holds has no instance, so no bound to read (D68).
+//! holds has no instance, so no bound to read (D68). So does a `grouped` clause's group holding a row of `null_rows`, a
+//! NULL its left side reads, which SkipNullInstances drops next.
 static void TakeTightestFrameBound(ExpressionType comparison, const string &written, const vector<bool> &kept,
                                    const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
-                                   const vector<idx_t> &instances, idx_t num_groups, vector<double> &rhs,
+                                   const vector<idx_t> &instances, idx_t num_groups, bool grouped, vector<double> &rhs,
                                    vector<bool> &null_rows) {
 	const bool one_group = kept_groups.empty();
 	const idx_t groups = one_group ? 1 : num_groups;
@@ -3535,6 +3536,12 @@ static void TakeTightestFrameBound(ExpressionType comparison, const string &writ
 	for (auto group : instances) {
 		if (group != DConstants::INVALID_INDEX) {
 			held[one_group ? 0 : group] = true;
+		}
+	}
+	for (idx_t row = 0; grouped && row < null_rows.size(); row++) {
+		const idx_t instance = instances.empty() ? 0 : instances[row];
+		if (null_rows[row] && instance != DConstants::INVALID_INDEX) {
+			held[one_group ? 0 : instance] = false;
 		}
 	}
 	auto group_of = [&](idx_t row) {
@@ -4098,6 +4105,21 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		bool admitted = constraint->admitted_lower != nullptr;
 		const bool tightest_frame_bound = rhs_per_row && constraint->tightest_frame_bound;
 		vector<bool> bound_null(tightest_frame_bound ? num_rows : 0, false);
+		// A row in no class of the `per` key has no instance, so no instance reads its bound (D5): as for a column
+		// (RhsBoundRewriter::InClassOnly), it is not computed there and bounds nothing.
+		vector<bool> rows_in_a_class;
+		if (tightest_frame_bound && constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
+			auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,
+			                                context, num_rows, &scoped_kept);
+			rows_in_a_class = scoped_kept;
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (classes.unfiltered_row_group_ids[row] == DConstants::INVALID_INDEX) {
+					rows_in_a_class[row] = false;
+					bound_null[row] = true;
+				}
+			}
+		}
+		const vector<bool> &bound_rows = rows_in_a_class.empty() ? scoped_kept : rows_in_a_class;
 		if (rhs_per_row || admitted) {
 			ExpressionExecutor row_executor(context);
 			vector<LogicalType> row_types;
@@ -4146,7 +4168,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				const idx_t count = windows.Count();
 				if (rhs_per_row) {
 					row_result.Reset();
-					windows.Execute(row_executor, &scoped_kept, row_result);
+					windows.Execute(row_executor, &bound_rows, row_result);
 				}
 				if (admitted) {
 					// Both projections read only the members among the kept rows; a row that is no member admits every
@@ -4193,7 +4215,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					// in its rebuilt one. `inf - inf` still yields NaN and is still refused.
 					ExtractDoubleColumn(row_result.data[column++], count, 1.0, eval_const.rhs_values.MutableDense(),
 					                    {DecideValueRole::BOUND, *constraint->rhs_expr, names},
-					                    tightest_frame_bound ? &bound_null : &null_rows, &scoped_kept, scanned);
+					                    tightest_frame_bound ? &bound_null : &null_rows, &bound_rows, scanned);
 					eval_const.rhs_values.SyncSize();
 				}
 				if (admitted) {
@@ -4208,24 +4230,6 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 			}
 		}
-		if (tightest_frame_bound) {
-			// Only a clause in the aggregate shape is tagged (RhsBoundRewriter::RewriteBound).
-			D_ASSERT(constraint->lhs_is_aggregate || constraint->was_minmax_easy);
-			// A row in no class of the `per` key has no instance, so no instance reads its bound (D5), as for a column
-			// (RhsBoundRewriter::InClassOnly).
-			if (constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
-				auto &classes = CachedKeyGroups(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,
-				                                context, num_rows, &scoped_kept);
-				for (idx_t row = 0; row < num_rows; row++) {
-					bound_null[row] =
-					    bound_null[row] || classes.unfiltered_row_group_ids[row] == DConstants::INVALID_INDEX;
-				}
-			}
-			TakeTightestFrameBound(constraint->comparison_type, eval_const.rhs_written, scoped_kept, bound_null,
-			                       kept_row_group_ids, eval_const.row_group_ids, eval_const.num_groups,
-			                       eval_const.rhs_values.MutableDense(), null_rows);
-		}
-
 		// AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator
         // produces fractional coefficients, which the NE integer-step guard rejects.
         // For pure linear LHS where every term is AVG-scaled, hoist the denominator to
@@ -4413,6 +4417,14 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			for (auto &term : constraint->quadratic_groups[group_idx].inner_terms) {
 				mark_absent(term, quadratic_filters[group_idx]);
 			}
+		}
+		if (tightest_frame_bound) {
+			// Only a clause in the aggregate shape is tagged (RhsBoundRewriter::RewriteBound). Taken here, once every
+			// rule that drops an instance but this next one has run, and that one by `null_rows`.
+			D_ASSERT(constraint->lhs_is_aggregate || constraint->was_minmax_easy);
+			TakeTightestFrameBound(constraint->comparison_type, eval_const.rhs_written, scoped_kept, bound_null,
+			                       kept_row_group_ids, eval_const.row_group_ids, eval_const.num_groups, grouped,
+			                       eval_const.rhs_values.MutableDense(), null_rows);
 		}
 		SkipNullInstances(null_rows, grouped, num_rows, eval_const.row_group_ids, eval_const.num_groups);
 		if (c < num_constraints) {
