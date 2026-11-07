@@ -2195,6 +2195,13 @@ class TestFrameReducerFold:
             MAXIMIZE sum(x) ORDER BY id"""
         assert [row["x"] for row in answer(decidb_cli, sql)] == [2, 100, 2]
 
+    def test_a_nan_no_row_reads_is_no_error(self, decidb_cli):
+        """Row 1 comes first, so no `next` reads its NaN: the frame reads 2, 3 and, at the last row, nothing."""
+        rows = values(((1, "NaN"), (2, "2"), (3, "3")), "v", ("id", "f"))
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
+            DECIDE x(REAL) SUCH THAT x <= 100 AND x <= min(at(next: t.f) over (t.id)) MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [2, 2, 2]
+
     def test_a_count_counts_a_nan(self, decidb_cli):
         """COUNT reads no number, so all three rows count (guide §3)."""
         rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
