@@ -379,6 +379,37 @@ def test_a_macro_named_sum_does_not_capture_a_norm(decidb_cli, macro):
     assert [row[1] for row in decidb_cli.execute(sql)[0]] == pytest.approx([50] * 4)
 
 
+RESCAN_SETUP = """SET threads=1; SET memory_limit='32MB';
+    CREATE TEMP TABLE w AS SELECT i AS id, i % 4 AS g, i % 5 AS h, i % 2 AS k, i % 3 + 1 AS c, i + 1 AS v
+    FROM range(200000) t(i); SET decide_direct_solve='require';"""
+
+
+@pytest.mark.parametrize(
+    "rule, query, total",
+    [
+        # Every `max(c)` is 3, so each group of `g` takes its top 3 values of `v`.
+        pytest.param(
+            "S1",
+            "DECIDE x(BOOL) SUCH THAT sum(x) by (g) <= max(c) by (h) AND sum(x) by (g) <= max(c) by (k) MAXIMIZE sum(x * v)",
+            2399934,
+            id="two-side-tables-under-s1",
+        ),
+        # `x` is min(10, 3) on every row, so the total is 3 * sum(v).
+        pytest.param(
+            "A1", "DECIDE x(REAL) SUCH THAT x <= 10 AND x <= max(c) by (g) MAXIMIZE sum(x * v)", 60000300000, id="a1"
+        ),
+    ],
+)
+def test_a_side_tables_value_is_read_on_the_rescan_route(decidb_cli, rule, query, total):
+    """200000 rows pass the copy budget, so a rule scans its source again and joins each side table to it: its value is
+    read past the source's columns, table by table (TakeRecomputedSource). `require` holds the rule to the query."""
+    source = f"SELECT v, x FROM w {query}"
+    plan = decidb_cli.execute_raw(f"{RESCAN_SETUP} EXPLAIN {source}")
+    assert rule in plan.stdout and "direct_source" not in plan.stdout, plan.stdout
+    rows, _ = decidb_cli.execute(f"{RESCAN_SETUP} SELECT sum(x * v) FROM ({source})")
+    assert rows[0][0] == pytest.approx(total)
+
+
 def test_a_norm_of_a_decision_holds_a_subquery(decidb_cli):
     """The objective's least is x = 1 on every row."""
     sql = f"""SELECT id, x FROM {NORM_ROWS} DECIDE x(REAL)
