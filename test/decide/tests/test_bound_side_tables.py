@@ -409,6 +409,23 @@ def test_a_side_tables_value_is_read_on_the_rescan_route(decidb_cli, rule, query
     assert rows[0][0] == pytest.approx(total)
 
 
+@pytest.mark.parametrize(
+    "bound, expected",
+    [
+        # Group a sums 3 and -4, group b 5 and 0: the inner `by` reads -1, -1, 5, 5.
+        pytest.param("sum(q := sum(t.v + 0.0) by (t.g))", 8, id="a-reducers-by"),
+        # `next` reads -4, 5, 0 and, at the last row, the `else`.
+        pytest.param("sum(q := at(next else 0: t.v) over (t.id))", 1, id="a-frame"),
+    ],
+)
+def test_an_argument_name_changes_nothing(decidb_cli, bound, expected):
+    """SQL accepts `sum(q := v)`, and the name means nothing to the aggregate, so the child keeps what it carries."""
+    sql = f"""SELECT id, x FROM {CAST_ROWS} DECIDE x(REAL)
+        SUCH THAT x >= -50 AND x <= {bound} MAXIMIZE sum(x) ORDER BY id"""
+    for mode in ("off", "auto"):
+        assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == pytest.approx([expected] * 4), mode
+
+
 def test_a_cast_under_a_reducer_prints_as_written(decidb_cli):
     """A reducer binds its argument directly, not through ExpressionBinder::Bind, and the outer cast's text wins there
     too. The bound is 2.5, so the tightest repair adds 997.5 to reach row 2's 1000."""
