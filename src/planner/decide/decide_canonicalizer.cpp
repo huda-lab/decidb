@@ -1340,7 +1340,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		if (!TryEvaluateFoldableDouble(context, scaled ? *scaled : *atom.expr, value, FOLD_PLAIN)) {
 			throw BinderException("MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
 			                      "the objective. Remove it, or move it to the SELECT list.",
-			                      QuoteAsWritten(*atom.expr));
+			                      Quote(*atom.expr));
 		}
 		out_constant_offset += atom.sign * value;
 	}
@@ -1370,18 +1370,6 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 
 string DecideCanonicalizer::Quote(const Expression &expr) const {
 	return message_names ? RenderDecideSource(expr, *message_names) : UserFacingName(expr);
-}
-
-string DecideCanonicalizer::QuoteAsWritten(const Expression &expr) const {
-	// A node whose written text was recorded (a subquery or a cast) carries it in a tag,
-	// and only that text names it in SQL; a reducer is spelled as the plan prints it,
-	// with its `when` and `by`.
-	idx_t fragment_id;
-	auto *node = StripCastsForIdentity(expr);
-	return TryParseSourceFragmentTag(node->GetAlias(), fragment_id) ||
-	               node->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
-	           ? Quote(expr)
-	           : UserFacingName(expr);
 }
 
 DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const BoundComparisonExpression &cmp,

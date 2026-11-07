@@ -569,10 +569,8 @@ private:
 	const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
 
-	//! `expr` as a scope refusal quotes it.
+	//! `expr` as a refusal quotes it: as written, with no internal name.
 	string Quote(const Expression &expr) const;
-	//! `expr` by its written text when the query recorded it, else by its bound name.
-	string QuoteAsWritten(const Expression &expr) const;
 };
 
 } // namespace duckdb

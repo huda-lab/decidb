@@ -859,6 +859,21 @@ class TestRefusalsInEverySpelling:
         assert_no_internal_leak(result, "a decision-free objective term")
 
 
+    @pytest.mark.parametrize(
+        "term",
+        ["0.5 * norm(t.cap, 'inf')", "norm(t.cap, 'inf') / 2", "0.5 * sum(t.cap)", "sum(t.cap) by (t.id)"],
+        ids=["a-norm-under-a-factor", "a-norm-under-a-divisor", "a-reducer-under-a-factor", "a-reducer-with-its-by"],
+    )
+    def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):
+        """Binding casts a factor's operand, and a cast prints its child by its alias, so the bound name held the tag
+        `__written_norm_inf__`; the term's own spelling holds no internal name (D40)."""
+        result = decidb_cli.execute_raw(
+            f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE sum(x) - {term}"
+        )
+        assert f"'{term}' does not reference a decision" in result.stderr, result.stderr
+        assert_no_internal_leak(result, "a decision-free objective term")
+
+
 _REFUSAL_ROWS = "SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) "
 
 
