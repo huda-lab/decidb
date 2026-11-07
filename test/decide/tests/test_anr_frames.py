@@ -2142,6 +2142,15 @@ def _folded(cli, bound, rows=FOLD_ROWS, warnings=()):
     return [row["x"] for row in answer(cli, f"{sql} ORDER BY id", warnings)]
 
 
+NAN_READERS = (
+    ("min-bound", f"x <= min(at(first: t.f) {ONE_TIMELINE_EACH})", "DOUBLE"),
+    ("min-float", f"x <= min(at(first: t.f) {ONE_TIMELINE_EACH})", "FLOAT"),
+    ("min-factor", f"sum(x * min(at(first: t.f) {ONE_TIMELINE_EACH})) <= 50", "DOUBLE"),
+    ("max-middle", f"x <= max(at(first: t.f) {ONE_TIMELINE_EACH})", "DOUBLE"),
+    ("range", "x <= min(from first to last: t.f) over (t.id)", "DOUBLE"),
+)
+
+
 @pytest.mark.correctness
 class TestFrameReducerFold:
     """A reducer over data that reads a frame is SQL's aggregate over the rows it reads, in the type it binds to
@@ -2157,14 +2166,31 @@ class TestFrameReducerFold:
         assert _folded(decidb_cli, f"length(max(at(first: t.n) {ONE_TIMELINE_EACH}))") == [1, 1]
         assert _folded(decidb_cli, f"length(min(at(first: t.n) {ONE_TIMELINE_EACH}))") == [2, 2]
 
-    def test_a_nan_payload_is_the_nan_bound_error(self, decidb_cli):
-        """SQL orders NaN above every number, so the greatest is NaN, which no bound may be."""
-        rows = values(((1, "1"), (2, "NaN")), "v", ("id", "f"))
-        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
-            DECIDE x(REAL) SUCH THAT x <= max(at(first: t.f) {ONE_TIMELINE_EACH}) MAXIMIZE sum(x)"""
+    @pytest.mark.parametrize("clause", NAN_READERS, ids=[c[0] for c in NAN_READERS])
+    def test_a_nan_it_reads_is_an_error(self, decidb_cli, clause):
+        """The rule sits on what the reducer reads, not on its value: SQL's MIN passes over a NaN, so a check of the
+        result alone answered 1 here, and a `when` could not be written around the reducer the message named."""
+        rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS {clause[2]}) AS f FROM {rows}) t
+            DECIDE x(REAL) SUCH THAT x <= 100 AND {clause[1]} MAXIMIZE sum(x)"""
         result = decidb_cli.execute_raw(sql)
-        assert "is NaN on some rows" in result.stderr, result.stderr
+        assert "reads a NaN on some rows" in result.stderr, result.stderr
         assert_no_internal_leak(result, "a NaN a frame reducer reads")
+
+    def test_the_when_it_advises_can_be_written(self, decidb_cli):
+        """Rows 1 and 3 keep the frame, whose least is 1; row 2's `x` has only its own bound."""
+        rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
+            DECIDE x(REAL) SUCH THAT x <= 100 AND when NOT isnan(t.f): x <= min(at(first: t.f) {ONE_TIMELINE_EACH})
+            MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [1, 100, 1]
+
+    def test_a_count_counts_a_nan(self, decidb_cli):
+        """COUNT reads no number, so all three rows count (guide §3)."""
+        rows = values(((1, "1"), (2, "NaN"), (3, "4")), "v", ("id", "f"))
+        sql = f"""SELECT id, x FROM (SELECT id, CAST(f AS DOUBLE) AS f FROM {rows}) t
+            DECIDE x(REAL) SUCH THAT x <= count(at(first: t.f) {ONE_TIMELINE_EACH}) MAXIMIZE sum(x) ORDER BY id"""
+        assert [row["x"] for row in answer(decidb_cli, sql)] == [3, 3, 3]
 
     def test_a_row_in_no_group_reads_no_value(self, decidb_cli):
         """Row 2's `h` is NULL, so it is in no group of the reducer: its bound has no value, and only `x <= 7` holds."""

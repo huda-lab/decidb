@@ -501,6 +501,7 @@ private:
 			column.type = marker.return_type;
 			column.key = record.key;
 			column.class_key = record.class_key;
+			column.text = record.text;
 			columns.push_back(std::move(column));
 			slot = frame_aggregate_slots.emplace(index, columns.size() - 1).first;
 		}

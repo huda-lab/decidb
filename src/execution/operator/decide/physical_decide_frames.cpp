@@ -23,6 +23,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 namespace duckdb {
@@ -451,15 +452,33 @@ struct FrameAggregateStates {
 	Vector pointers;
 };
 
+//! Whether one of `values`' first `count` entries is a NaN, a NULL being none.
+template <class T>
+static bool HoldsNan(Vector &values, idx_t count) {
+	UnifiedVectorFormat format;
+	values.ToUnifiedFormat(count, format);
+	auto data = UnifiedVectorFormat::GetData<T>(format);
+	for (idx_t i = 0; i < count; i++) {
+		const auto index = format.sel->get_index(i);
+		if (format.validity.RowIsValid(index) && std::isnan(data[index])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 //! An aggregate run through its state functions over values of `sources`, one vector per argument, so the value has
-//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it.
+//! SQL's type and arithmetic, and a NULL is skipped as SQL's aggregate skips it. A NaN it reads is an error, except to
+//! COUNT, which counts it (language/guide.md §3, as a reducer's ArgumentMessage): checked on what it reads, since SQL's
+//! MIN passes over one. `written` names the reducer in that error.
 class AggregateFold {
 public:
 	AggregateFold(ClientContext &context, const BoundAggregateExpression &aggregate, vector<Vector> &sources_p,
-	              idx_t count)
+	              idx_t count, const string &written_p)
 	    : allocator(BufferAllocator::Get(context)), input(aggregate.bind_info.get(), allocator), sources(sources_p),
 	      states(aggregate.function, input, count), selection(STANDARD_VECTOR_SIZE),
-	      targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE) {
+	      targets(LogicalType::POINTER, STANDARD_VECTOR_SIZE), written(written_p),
+	      refuses_nan(!sources.empty() && StringUtil::Lower(aggregate.function.name) != "count") {
 	}
 
 	//! State `state` reads the values at `index`, `times` times.
@@ -490,8 +509,22 @@ private:
 		for (auto &source : sources) {
 			slices.emplace_back(source, selection, pending);
 		}
+		if (refuses_nan && ReadsNan(slices[0])) {
+			throw InvalidInputException(DecideFrameNanMessage(written));
+		}
 		states.function.update(slices.data(), input, slices.size(), targets, pending);
 		pending = 0;
+	}
+
+	bool ReadsNan(Vector &values) const {
+		switch (values.GetType().InternalType()) {
+		case PhysicalType::DOUBLE:
+			return HoldsNan<double>(values, pending);
+		case PhysicalType::FLOAT:
+			return HoldsNan<float>(values, pending);
+		default:
+			return false;
+		}
 	}
 
 	ArenaAllocator allocator;
@@ -500,6 +533,8 @@ private:
 	FrameAggregateStates states;
 	SelectionVector selection;
 	Vector targets;
+	const string &written;
+	const bool refuses_nan;
 	idx_t pending = 0;
 };
 
@@ -544,7 +579,7 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 		VectorOperations::Copy(fallback, sources[0], num_rows, 0, num_rows);
 	}
 
-	AggregateFold fold(context, marker, sources, windows);
+	AggregateFold fold(context, marker, sources, windows, frame.text);
 	for (idx_t w = 0; w < windows; w++) {
 		if (map.WindowAbsent(w)) {
 			continue;
@@ -573,8 +608,9 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 	}
 }
 
-void ReduceDecideGroups(ClientContext &context, const BoundAggregateExpression &reducer, const vector<bool> &members,
-                        const vector<idx_t> &group, idx_t groups, ChunkExprCache &chunk_expr_cache, Vector &out) {
+void ReduceDecideGroups(ClientContext &context, const BoundAggregateExpression &reducer, const string &written,
+                        const vector<bool> &members, const vector<idx_t> &group, idx_t groups,
+                        ChunkExprCache &chunk_expr_cache, Vector &out) {
 	const idx_t num_rows = members.size();
 	if (groups == 0) {
 		SetEveryRowNull(out, num_rows); // no group: nothing to read
@@ -584,7 +620,7 @@ void ReduceDecideGroups(ClientContext &context, const BoundAggregateExpression &
 	for (auto &child : reducer.children) {
 		sources.push_back(EvaluateOnRows(context, *child, num_rows, members, chunk_expr_cache));
 	}
-	AggregateFold fold(context, reducer, sources, groups);
+	AggregateFold fold(context, reducer, sources, groups, written);
 	SelectionVector gather(num_rows);
 	for (idx_t row = 0; row < num_rows; row++) {
 		const bool grouped = group[row] != DConstants::INVALID_INDEX;

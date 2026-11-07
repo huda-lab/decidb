@@ -50,6 +50,12 @@ inline string DecideInvalidValueMessage(DecideValueRole role, const string &writ
 	       "):'.";
 }
 
+//! The error for a NaN a frame's reducer reads (`written`, the reducer or range as written): an error wherever its
+//! aggregate would pass over it, as SQL's MIN does. A frame cannot stand in a `when`, so the edit names the column.
+inline string DecideFrameNanMessage(const string &written) {
+	return "DECIDE: " + written + " reads a NaN on some rows. Skip those rows with a 'when' on the column it reads.";
+}
+
 //! The objective as a TOO_LARGE message names it: the sense, then the objective as EXPLAIN prints it
 //! (`MAXIMIZE sum(a * x)`). Empty with no objective. The solver path and the direct-solve plans both build it here.
 inline string DecideWrittenObjective(DecideSense sense, const string &objective) {

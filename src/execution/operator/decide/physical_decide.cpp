@@ -1010,7 +1010,7 @@ static void AppendDecideFrameAggregates(ClientContext &context, const SignatureF
 			}
 		}
 		auto out = make_uniq<Vector>(reducer.return_type, num_rows);
-		ReduceDecideGroups(context, reducer, member, group, groups, chunk_expr_cache, *out);
+		ReduceDecideGroups(context, reducer, column.text, member, group, groups, chunk_expr_cache, *out);
 		vector<unique_ptr<Vector>> appended;
 		appended.push_back(std::move(out));
 		AppendDecideColumns(chunk_expr_cache, appended);
