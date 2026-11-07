@@ -253,3 +253,35 @@ def test_a_bound_over_a_stored_table_is_the_oracles(decidb_cli, scope_solver):
         rows, columns = run(decidb_cli, sql, mode)
         result = aligned([dict(zip(columns, row)) for row in rows], model, "id")
         assert model.judge_scoped(result, clauses, MAXIMIZE_P) == pytest.approx(optimum), mode
+
+
+KEYED_COLUMNS = ("id", "g", "h", "c", "v", "t")
+# The key's values differ from the bound's, so a bound read from the key's column gives another answer.
+KEYED_ROWS = (
+    (1, 5, 7, 1, 5, True),
+    (2, 5, 7, 1, 4, True),
+    (3, 5, 8, 2, 3, False),
+    (4, 6, 8, 2, 2, True),
+    (5, 6, 9, 2, 1, True),
+)
+KEYED_CLAUSES = [
+    # Group 5 reads 1, 1, 2 and holds the least; group 6 reads 2. Rows 1 and 4, 5 are worth most.
+    pytest.param("sum(x) by (k.g) <= max(k.c) by (k.h)", [1, 0, 0, 1, 1], id="another-key"),
+    # A reducer's `when` leaves row 3 free: rows 1, 2 share 1, and rows 4, 5 share 2.
+    pytest.param("sum(when k.t: x) by (k.g) <= k.c", [1, 0, 1, 1, 1], id="deck-example-7"),
+    pytest.param("per k.g: sum(when k.t: x) by (k.g) <= k.c", [1, 0, 1, 1, 1], id="under-its-per"),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("key_type", ["INT", "VARCHAR", "HUGEINT"])
+@pytest.mark.parametrize("clause, expected", KEYED_CLAUSES)
+def test_a_side_tables_value_is_read_past_its_key(decidb_cli, key_type, clause, expected):
+    """A stored source a rule reads directly joins each side table's value, not its key columns: the bound is the value,
+    whatever the key's type, on the plan the default mode picks as on the solver path."""
+    rows = ", ".join(str(row).replace("True", "true").replace("False", "false") for row in KEYED_ROWS)
+    sql = f"""CREATE TEMP TABLE keyed AS SELECT id, CAST(g AS {key_type}) AS g, h, c, v, t
+            FROM (VALUES {rows}) r({', '.join(KEYED_COLUMNS)});
+        SELECT id, x FROM keyed k DECIDE x(BOOL) SUCH THAT {clause} MAXIMIZE SUM(x * k.v) ORDER BY id"""
+    for mode in ("off", "auto"):
+        assert [row[1] for row in run(decidb_cli, sql, mode)[0]] == expected, mode

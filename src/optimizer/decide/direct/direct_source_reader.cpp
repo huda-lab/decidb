@@ -192,6 +192,8 @@ unique_ptr<LogicalOperator> DirectSourceReader::JoinSideTables(unique_ptr<Logica
 			on_key.right = calc.Out(calc.Col(table.types[j], ColumnBinding(ref_index, j)));
 			join->conditions.push_back(std::move(on_key));
 		}
+		// Only the value joins the row, so the columns are the source's, then each table's value: SourceBindings'.
+		join->right_projection_map.push_back(table.keys.size());
 		join->children.push_back(std::move(top));
 		join->children.push_back(std::move(reference));
 		top = std::move(join);
