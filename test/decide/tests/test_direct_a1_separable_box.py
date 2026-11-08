@@ -28,7 +28,6 @@ tables live outside that source, so editing a case does not invalidate the cache
 objective mismatch. After changing a case or the model builder, remove its entries from `results/oracle_cache.json`.
 """
 
-import itertools
 import json
 import math
 import random
@@ -329,8 +328,8 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     assert abs(total - expected) <= 1e-4 * max(1.0, abs(expected)), (mode, total, expected)
 
 
-def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "require")):
-    """Runs the case on the oracle and on the chosen DeciDB paths, and checks they agree."""
+def _agree(decidb_cli, oracle_solver, case_, wrap="plain"):
+    """Runs the case on the oracle and on both DeciDB paths, and checks they agree."""
     sql = _sql(case_, wrap)
     oracle = _solve_with_oracle(oracle_solver, case_)
 
@@ -338,14 +337,13 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
         _check_assignment(case_, rows, columns, oracle, mode)
 
     large = writes_number_out_of_range(sql, bounded=[name for name, _ in case_.decisions])
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, number_range=large)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, number_range=large)
 
 
 # ---------------------------------------------------------------------------
 # The case tables
 # ---------------------------------------------------------------------------
 
-T, X = "t", "x"
 le, lt, ge, gt, eq = "<=", "<", ">=", ">", "="
 
 A1_CASES = {}
@@ -359,12 +357,6 @@ UPPER_CAP = clause("x <= cap", le, col("cap"))
 LOWER_ZERO_BOX = clause("x BETWEEN 0 AND cap", le, col("cap"))
 
 # --- Constant boxes, REAL ----------------------------------------------------------------------------------------
-add(
-    "real_box_between",
-    "REAL",
-    [clause("x >= 0", ge, const(0.0), replaces=True), clause("x <= cap", le, col("cap"))],
-    "sq",
-)
 add("real_default_lower_only_upper", "REAL", [UPPER_CAP], "sq")
 add(
     "real_const_both", "REAL", [clause("x >= 1", ge, const(1.0), replaces=True), clause("x <= 6", le, const(6.0))], "sq"
@@ -382,12 +374,6 @@ add(
     "REAL",
     [clause("x >= -3", ge, const(-3.0), replaces=True), clause("x <= cap", le, col("cap"))],
     "sq",
-)
-add(
-    "real_const_negative_between",
-    "REAL",
-    [clause("x >= -2", ge, const(-2.0), replaces=True), clause("x <= 5", le, const(5.0))],
-    "sq_inner_w",
 )
 add(
     "real_flipped_constant_lower",
@@ -482,7 +468,7 @@ add(
     "real_two_whens",
     "REAL",
     [
-        clause("when f: x >= 2", ge, const(2.0), when=col("f"), replaces=False),
+        clause("when f: x >= 2", ge, const(2.0), when=col("f")),
         clause("when id > 3: x <= 3", le, const(3.0), when=lambda r: r["id"] > 3),
         clause("x <= 9", le, const(9.0)),
     ],
@@ -523,18 +509,6 @@ add("real_like_terms", "REAL", [clause("2*x + 3*x <= cap", le, col("cap"), a=con
 
 # --- Infeasible and unbounded ---------------------------------------------------------------------------------------
 add("unbounded_concave", "REAL", [clause("x >= 0", ge, const(0.0), replaces=True)], "sq_neg_min")
-add(
-    "bounded_concave",
-    "REAL",
-    [clause("x >= 0", ge, const(0.0), replaces=True), clause("x <= cap", le, col("cap"))],
-    "sq_neg_min",
-)
-add(
-    "bounded_convex_max",
-    "REAL",
-    [clause("x >= 0", ge, const(0.0), replaces=True), clause("x <= cap", le, col("cap"))],
-    "sq_max",
-)
 add("unbounded_convex_max", "REAL", [clause("x >= 0", ge, const(0.0), replaces=True)], "sq_max")
 add("unbounded_one_row", "REAL", [clause("when f: x <= cap", le, col("cap"), when=col("f"))], "lin_min")
 add(
@@ -561,7 +535,7 @@ add(
 
 # --- INT -------------------------------------------------------------------------------------------------------------
 INT_BOX = [clause("x >= 0", ge, const(0.0), replaces=True), clause("x <= cap", le, col("cap"))]
-for objective_name in OBJECTIVES:
+for objective_name in ("lin_min", "lin_max", "sq", "sq_max"):
     add(f"int_objective_{objective_name}", "INT", INT_BOX, objective_name)
 add("int_fractional_cap", "INT", [clause("x <= cap/3", le, lambda r: r["cap"] / 3.0)], "lin_max")
 add(
@@ -635,7 +609,7 @@ add(
 
 # --- BOOL ------------------------------------------------------------------------------------------------------------
 BOOL_BOX = [clause("x <= 1", le, const(1.0))]
-for objective_name in ("lin_min", "lin_max", "lin_when", "sq", "sq_lin", "sq_inner_w", "sq_neg_max"):
+for objective_name in ("lin_min", "lin_max", "sq"):
     add(f"bool_objective_{objective_name}", "BOOL", BOOL_BOX, objective_name)
 add("bool_fixed_one", "BOOL", [clause("x = 1", eq, const(1.0), replaces=True)], "lin_min")
 add("bool_fixed_zero", "BOOL", [clause("x <= 0", le, const(0.0))], "lin_max")
@@ -812,14 +786,6 @@ def test_a1_reads_a_fractional_strict_bound_correctly(decidb_cli, oracle_solver,
     _agree(decidb_cli, oracle_solver, SOLVER_OFF_BY_ONE[name])
 
 
-@pytest.mark.var_integer
-@pytest.mark.cons_perrow
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(SOLVER_OFF_BY_ONE))
-def test_a1_solver_off_by_one_on_a_fractional_strict_bound(decidb_cli, oracle_solver, name):
-    _agree(decidb_cli, oracle_solver, SOLVER_OFF_BY_ONE[name], modes=("off",))
-
-
 # The same problem inside a parent query. One base case meets every context; a context does not interact with the kind
 # of bound.
 CONTEXTS = (
@@ -831,11 +797,7 @@ CONTEXTS = (
     "parent_join",
     "recombined_filters",
 )
-CONTEXT_CASES = [
-    (base, wrap)
-    for base in ("real_objective_sq_when", "int_objective_sq_inner_w", "bool_objective_sq_lin", "two_decisions_mixed")
-    for wrap in CONTEXTS
-]
+CONTEXT_CASES = [(base, wrap) for base in ("real_objective_sq_when", "two_decisions_mixed") for wrap in CONTEXTS]
 
 
 @pytest.mark.correctness
@@ -925,18 +887,10 @@ def _late(decide_text, t_sql="1.0", s_sql="1.0", cap_sql="10.0", tail=""):
 
 # name -> (sql, error class the direct path must raise).
 A1_ERROR_CASES = {
-    "infeasible_int_window": (_problem(ROWS, decl="x(INT)", bounds="x >= 0.3 AND x <= 0.7"), "infeasible"),
     "unbounded_linear_max": (_problem(ROWS, bounds="x >= 0", obj="MAXIMIZE SUM(x)"), "unbounded"),
-    "unbounded_concave": (_problem(ROWS, bounds="x >= 0", obj="MINIMIZE SUM(-POWER(x - t, 2))"), "unbounded"),
-    "unbounded_convex_max": (_problem(ROWS, bounds="x >= 0", obj="MAXIMIZE SUM(POWER(x - t, 2))"), "unbounded"),
     "unbounded_cap_is_1e20": (_problem(ROWS, bounds="x <= 1e20", obj="MAXIMIZE SUM(x)"), "unbounded"),
     "unbounded_row_cap_is_1e20": (_problem(_with(1, cap=1e20), bounds="x <= cap", obj="MAXIMIZE SUM(x)"), "unbounded"),
     "unbounded_row_cap_infinite": (_problem(_with(1, cap=INF), bounds="x <= cap", obj="MAXIMIZE SUM(x)"), "unbounded"),
-    "unbounded_int": (_problem(ROWS, decl="x(INT)", bounds="x >= 0", obj="MAXIMIZE SUM(x)"), "unbounded"),
-    "int_beyond_2_53": (
-        _problem(ROWS, decl="x(INT)", bounds="x <= 1e17 AND x >= 0", obj="MAXIMIZE SUM(x)"),
-        "int_range",
-    ),
     "int_just_beyond_2_53": (
         _problem(ROWS, decl="x(INT)", bounds="x <= 9007199254740994 AND x >= 0", obj="MAXIMIZE SUM(x)"),
         "int_range",

@@ -1,19 +1,11 @@
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <memory>
-
 #include "duckdb/common/decide_numeric_policy.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
-#include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
@@ -21,8 +13,6 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/planner/operator/decide/logical_decide.hpp"
-#include "duckdb/planner/operator/logical_projection.hpp"
 
 namespace duckdb {
 
@@ -44,7 +34,6 @@ struct Decision {
 };
 
 struct Condition final : DirectApplicabilityCondition {
-	idx_t decide_index = 0;
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! The objective as written, which a message names when a decision's quadratic or linear coefficient, computed from
 	//! finite values, is too large for a DOUBLE (TOO_LARGE), as the solver path names it.
@@ -58,19 +47,16 @@ struct Condition final : DirectApplicabilityCondition {
 
 //! No value reads a source column and nothing is conditional: every row sees the same bounds and coefficients.
 bool IsConstantProblem(const Condition &condition) {
-	auto constant = [](const Expression &expr) {
-		return expr.IsFoldable();
-	};
 	auto constant_values = [&](const vector<DirectSignedValue> &values) {
 		for (auto &value : values) {
-			if (!constant(*value.expr)) {
+			if (!value.expr->IsFoldable()) {
 				return false;
 			}
 		}
 		return true;
 	};
 	for (auto &clause : condition.clauses) {
-		if (clause.when || !constant(*clause.rhs) || !constant_values(clause.coefficient)) {
+		if (clause.when || !clause.rhs->IsFoldable() || !constant_values(clause.coefficient)) {
 			return false;
 		}
 	}
@@ -79,7 +65,7 @@ bool IsConstantProblem(const Condition &condition) {
 			return false;
 		}
 		for (auto &term : part.linear.terms) {
-			if (!constant(*term.coefficient)) {
+			if (!term.coefficient->IsFoldable()) {
 				return false;
 			}
 		}
@@ -89,7 +75,7 @@ bool IsConstantProblem(const Condition &condition) {
 			}
 		}
 		for (auto &term : part.constants) {
-			if (!constant(*term.value)) {
+			if (!term.value->IsFoldable()) {
 				return false;
 			}
 		}
@@ -130,7 +116,6 @@ public:
 			}
 		}
 		auto condition = make_uniq<Condition>();
-		condition->decide_index = ir.decide_index;
 		condition->sense = ir.objective.sense;
 		condition->objective_written = ir.objective.written;
 		for (auto &decision : ir.decisions) {
@@ -499,17 +484,15 @@ private:
 		// The raw values come first: P2 folded their checks into one flag that is true or false, never an error.
 		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, answers.valid_data)));
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			auto value = [&]() {
-				return calc.Col(LogicalType::DOUBLE, answers.value[d]);
-			};
 			checks.push_back(DirectRaiseTooLarge(optimizer, calc.Col(LogicalType::DOUBLE, answers.a[d]),
 			                                     condition.objective_written));
 			checks.push_back(DirectRaiseTooLarge(optimizer, calc.Col(LogicalType::DOUBLE, answers.b[d]),
 			                                     condition.objective_written));
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
 			                               DirectInfeasibleErrorPredicate(optimizer, errors)));
-			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),
-			                                   DirectUnboundedErrorPredicate(optimizer, errors)));
+			checks.push_back(
+			    DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", calc.Col(LogicalType::DOUBLE, answers.value[d]))),
+			                      DirectUnboundedErrorPredicate(optimizer, errors)));
 			if (DirectIsWholeNumbered(condition.decisions[d].domain)) {
 				checks.push_back(DirectRaiseUnless(calc, WithinExactRange(answers.value[d]),
 				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));

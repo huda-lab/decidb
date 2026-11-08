@@ -96,10 +96,10 @@ S1 = RuleFixture(
 )
 
 
-def _a1_late_error(decision_sql, score_sql="1.0", cap_sql="10.0"):
+def _a1_late_error(decision_sql, cap_sql):
     """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
     return f"""
-        FROM (SELECT i, {score_sql} AS score, {cap_sql} AS cap FROM range(5000) t(i)) s
+        FROM (SELECT i, 1.0 AS score, {cap_sql} AS cap FROM range(5000) t(i)) s
         DECIDE {decision_sql}
         """
 
