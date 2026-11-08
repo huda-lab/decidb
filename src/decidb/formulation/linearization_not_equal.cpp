@@ -21,43 +21,9 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 // `<>` disjunctions
 //===--------------------------------------------------------------------===//
 
-//! The ±1 band is only semantically exact when the LHS is integer-valued. For a REAL
-//! variable or a non-integer coefficient the band `(K-1, K+1)` wrongly excludes
-//! feasible continuous points. Mirrors the strict-inequality guard in
-//! `ilp_model_builder.cpp::IsEvalConstraintLhsIntegerValued`, and splits its result the
-//! same way: only one of the two failures is still the user's to fix here.
-//!
-//! A REAL decision is knowable from the declared type and is rejected at bind time by
-//! `ValidateDecideNoIntegerStepComparisonOnReal`, which names the variable and quotes
-//! the clause. Seeing one arrive here means a `<>` reached the model builder without
-//! passing that gate — an invariant violation, not a query error. The branch is kept
-//! rather than deleted so that a future rewrite introducing a REAL auxiliary inside a
-//! `<>` fails loudly instead of silently cutting the band.
-//!
-//! A fractional coefficient comes from evaluating a data column and is knowable only
-//! now, so it stays a user-facing refusal.
-enum class NELhsIntegrality : uint8_t { INTEGER, REAL_VARIABLE, FRACTIONAL_COEFFICIENT };
-
-static NELhsIntegrality NELhsIsIntegerValued(const EvaluatedConstraint &ec,
-                                             const vector<LogicalType> &variable_types) {
-    for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
-        idx_t vi = ec.variable_indices[i];
-        if (vi == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        const auto &t = variable_types[vi];
-        if (t == LogicalType::DOUBLE || t == LogicalType::FLOAT) {
-            return NELhsIntegrality::REAL_VARIABLE;
-        }
-        if (!ec.row_coefficients[i].AllIntegral()) {
-            return NELhsIntegrality::FRACTIONAL_COEFFICIENT;
-        }
-    }
-    return NELhsIntegrality::INTEGER;
-}
-
-//! Companion check on the RHS. With integer-valued LHS and a non-integer K,
-//! `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite would
+//! The ±1 band is only semantically exact when the LHS is integer-valued, which the bind-time type gate
+//! (ValidateDecideNoIntegerStepComparisonOnReal, ValidateDecideIntegralComparisonOperands) guarantees. With
+//! such an LHS and a non-integer K, `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite would
 //! emit `LHS <= K-1 ∨ LHS >= K+1`, which on the integer lattice wrongly excludes
 //! floor(K) and ceil(K) — both of which the original predicate accepted. Treat such
 //! RHS values as a silent drop. An infinite K is the same case for the same reason —
@@ -81,9 +47,8 @@ enum class NECollapse : uint8_t {
     UPPER_ONLY   //!< the range never falls below K: `<> K` is exactly `>= K+1`
 };
 
-//! Classify one row of a `<>` constraint. Only called once both integrality guards have
-//! passed, so the LHS and `K` are both on the integer lattice and a half-unit tolerance
-//! cleanly separates "can reach K" from "cannot".
+//! Classify one row of a `<>` constraint. Only called for an integer-valued LHS and an integer `K`, so a half-unit
+//! tolerance cleanly separates "can reach K" from "cannot".
 static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
                                 const vector<double> &upper_bounds, const InstanceBox &floors, const string &written) {
     double lo;
@@ -267,13 +232,6 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
                                     "Its rows hold the linear terms only, so building it would drop the rest; stage 05 "
                                     "refuses it (FindNotEqualConstraints).");
         }
-        if (NELhsIsIntegerValued(ec, input.variable_types) != NELhsIntegrality::INTEGER) {
-            throw InternalException("DECIDE: a '<>' whose left-hand side is not integer-valued reached the "
-                                    "model builder. Both halves of that refusal are stated on declared types "
-                                    "at bind time — ValidateDecideNoIntegerStepComparisonOnReal for the "
-                                    "decision, ValidateDecideIntegralComparisonOperands for every other "
-                                    "operand — so arriving here is an invariant violation, not a query error.");
-        }
         if (ec.lhs_is_aggregate) {
             // Aggregate NE: defer to after var_indexer is built. Expanded with a
             // single global z per group, whose Big-M comes from that group's SUMMED
@@ -451,8 +409,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 }
                 rhs -= fixed_offset;
 
-                // Integer-RHS guard: with integer LHS (already enforced by
-                // NELhsIsIntegerValued at deferral time) and a non-integer K,
+                // Integer-RHS guard: with integer LHS (the bind-time type gate) and a non-integer K,
                 // `LHS <> K` is a tautology for this value — every integer LHS
                 // satisfies it, so this exclusion alone is dropped, not the whole
                 // group. The ±1 Big-M rewrite would wrongly cut floor(K) and ceil(K).

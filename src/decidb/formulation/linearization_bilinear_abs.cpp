@@ -543,11 +543,4 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
     }
 }
 
-// --- MIN/MAX objective ------------------------------------------------------
-// The objective counterpart of the MIN/MAX constraint encoding above. Both build
-// the same envelope + indicator shape; they differ in what the auxiliary is pinned
-// against (a user bound there, the objective expression here) and in where the rows
-// land (`input.constraints` there, `input.global_constraints` here, because the
-// auxiliaries live in the flat global block).
-
 } // namespace duckdb

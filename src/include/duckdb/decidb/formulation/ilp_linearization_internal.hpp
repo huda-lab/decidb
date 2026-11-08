@@ -43,7 +43,7 @@ double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const s
 //! dominate one. A collapse needs to know which side of `K` the range lies on, so the
 //! coefficient sign has to be respected rather than taken through `abs`.
 //!
-//! `skip_idx` leaves one column out of the walk, the way DecideRowTermRange does: the
+//! `skip_idx` leaves one column out of the walk: the
 //! ABS envelope rows carry the auxiliary itself as a term, and what has to be bracketed
 //! there is the expression the auxiliary is pinned AGAINST, not the auxiliary.
 //!

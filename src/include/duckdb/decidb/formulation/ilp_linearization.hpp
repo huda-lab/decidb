@@ -42,9 +42,7 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           const vector<CoefficientColumn> &row_coefficients,
                           idx_t row, const vector<double> &lower_bounds,
                           const vector<double> &upper_bounds,
-                          bool &has_unbounded,
-                          idx_t skip_idx = DConstants::INVALID_INDEX,
-                          const InstanceBox *instances = nullptr);
+                          bool &has_unbounded, const InstanceBox &instances);
 
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
 //! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
@@ -98,16 +96,6 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 //! Reads `input.constraints` and tightens `input.upper_bounds`. A merged coefficient past a DOUBLE raises the error
 //! that names its clause here, before the model builder, as no bound can be read from it.
 void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer, idx_t num_rows);
-
-//! Encode every constraint stage 05 tagged with a hard MIN/MAX indicator:
-//!   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1
-//!   MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M, and SUM(y) >= 1
-//! Constraints are matched to their indicator variables via `minmax_clause_idx`
-//! (not positionally). Untagged constraints pass through unchanged, so
-//! `input.constraints` is replaced in place by the encoded list. A group whose bound
-//! is unreachable in its own direction is emitted as a plain per-row constraint
-//! instead, and a group whose bound every assignment satisfies is dropped.
-void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names);
 
 //! Whether a construct is stated natively or lowered, and the rule that decides.
 //!
@@ -560,7 +548,7 @@ struct MinMaxObjectiveSpec {
     vector<bool> member_rows;
 };
 
-//! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxIndicators`, which
+//! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxConstraints`, which
 //! encodes a MIN/MAX *constraint*. The per-row objective is replaced by a global
 //! auxiliary (`z` flat, `z_g` per group plus an outer `w` for the two-level form),
 //! pinned by envelope rows against the evaluated objective coefficients; the hard

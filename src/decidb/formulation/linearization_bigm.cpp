@@ -32,21 +32,19 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           const vector<CoefficientColumn> &row_coefficients,
                           idx_t row, const vector<double> &lower_bounds,
                           const vector<double> &upper_bounds,
-                          bool &has_unbounded,
-                          idx_t skip_idx,
-                          const InstanceBox *instances) {
+                          bool &has_unbounded, const InstanceBox &instances) {
     double sum = 0.0;
     for (idx_t t = 0; t < variable_indices.size(); t++) {
         idx_t v = variable_indices[t];
-        if (v == DConstants::INVALID_INDEX || v == skip_idx) {
+        if (v == DConstants::INVALID_INDEX) {
             continue;
         }
         double coef = std::abs(row_coefficients[t].Get(row));
         if (coef < 1e-15) {
             continue;
         }
-        double lb = instances ? instances->LowerOfRow(v, row, lower_bounds) : lower_bounds[v];
-        double ub = instances ? instances->UpperOfRow(v, row, upper_bounds) : upper_bounds[v];
+        double lb = instances.LowerOfRow(v, row, lower_bounds);
+        double ub = instances.UpperOfRow(v, row, upper_bounds);
         if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
             has_unbounded = true;
             continue;
@@ -72,8 +70,7 @@ double decide_linearize::DecideRowFixedLhsOffset(const vector<idx_t> &variable_i
 //! its left-hand side. This is the value a Big-M has to dominate, so it is also the
 //! value a caller must classify before asking for an M over it.
 double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const string &written) {
-    double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(row);
-    return rhs - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written);
+    return ec.rhs_values.Get(row) - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written);
 }
 
 //! Signed reachable interval of the variable part of `ec`'s LHS on `row`, as opposed to
@@ -233,8 +230,7 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
         }
         double rhs_mag = std::abs(rhs);
         double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
-                                                    r, lower_bounds, upper_bounds, has_unbounded,
-                                                    DConstants::INVALID_INDEX, &instances);
+                                                    r, lower_bounds, upper_bounds, has_unbounded, instances);
         M = std::max(M, range);
     }
     // Refuse before finishing the constant: an open contributor means there is no M
@@ -318,14 +314,12 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
         // reducers, is bounded by what the row says about its instance. The row's bound is the clause's less its fixed
         // terms, as the builder states it.
         auto &emitted = ClauseEmittedRows(ec, indexer, written);
-        bool uniform_rhs = ec.rhs_values.IsUniform();
         auto bound_row = [&](idx_t e, const vector<idx_t> *rows, idx_t begin, idx_t end) {
             if (begin == end) {
                 return; // an empty group, or no data rows
             }
             idx_t first_row = rows ? (*rows)[begin] : begin;
-            double k = (uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(first_row)) -
-                       SumFixedAggregateLhsOffset(ec, rows, begin, end, written);
+            double k = ec.rhs_values.Get(first_row) - SumFixedAggregateLhsOffset(ec, rows, begin, end, written);
             for (idx_t i = emitted.offsets[e]; i < emitted.offsets[e + 1]; i++) {
                 double a = emitted.values[i];
                 if (a < -1e-15) {

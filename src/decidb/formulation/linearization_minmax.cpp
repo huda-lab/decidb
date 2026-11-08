@@ -252,11 +252,8 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             }
             // The raw bound, not the effective one: each member carries its own row's
             // constant LHS part, because a per-row constant can differ inside a group and
-            // the extremum is taken over the whole expression, constant included. A
-            // uniform bound is the same value whichever row is picked, so the
-            // representative row is not even consulted.
-            double clause_bound = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
-                                                            : ec.rhs_values.Get(group.first_row);
+            // the extremum is taken over the whole expression, constant included.
+            double clause_bound = ec.rhs_values.Get(group.first_row);
             // A bound the family cannot reach is still part of the reach this encoding
             // has to cover. `MAX(x) >= 5` over `x` in [-1, 1] boxes the extremum column at
             // 1 and sizes the closing Big-M off a span of 2, so the repair "widen x's box"

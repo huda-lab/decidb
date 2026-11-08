@@ -698,89 +698,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
     phase.Next("model.constraints");
 
-    // Helper: is the LHS of this EvaluatedConstraint provably integer-valued?
-    //
-    // The check runs on the user's LHS *before* any lowering (McCormick
-    // linearization, auxiliary-variable introduction). Post-lowering auxiliaries
-    // are often declared REAL even when they always take integer values (e.g.,
-    // z = x * y with x Boolean and y Integer) — so inspecting `model.is_integer`
-    // after the fact would spuriously reject valid integer LHS shapes.
-    //
-    // A term is integer-valued when every referenced DECIDE variable is
-    // INTEGER/BOOLEAN (i.e., not `LogicalType::DOUBLE` or `LogicalType::FLOAT`)
-    // and every coefficient is integral. A product group is integer-valued when its
-    // weight is integral on every row and each form it multiplies is integer-valued.
-    //
-    // Used to gate the strict-inequality rewrite (`< K → <= K-1`, `> K → >= K+1`),
-    // which is semantically exact iff the LHS is confined to integer points.
-    //
-    // The two ways an LHS fails that test are reported differently, because only one
-    // of them is still the user's to fix here. A REAL decision is knowable from the
-    // declared type and is rejected at bind time by
-    // `ValidateDecideNoStrictComparisonOnReal`, which can name the variable and quote
-    // the clause; seeing one here means a strict comparison reached the model builder
-    // without passing that gate, which is an invariant violation, not a query error.
-    // A fractional coefficient comes from evaluating a data column and is knowable
-    // only now, so it stays a user-facing refusal.
-    enum class LhsIntegrality { INTEGER, REAL_VARIABLE, FRACTIONAL_COEFFICIENT };
-    auto IsRealType = [](const LogicalType &t) {
-        return t == LogicalType::DOUBLE || t == LogicalType::FLOAT;
-    };
-    auto IsEvalConstraintLhsIntegerValued = [&](const EvaluatedConstraint &ec) -> LhsIntegrality {
-        for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
-            idx_t vi = ec.variable_indices[i];
-            if (vi == DConstants::INVALID_INDEX) continue;
-            if (IsRealType(input.variable_types[vi])) return LhsIntegrality::REAL_VARIABLE;
-            if (!ec.row_coefficients[i].AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
-        }
-        auto form_integrality = [&](const vector<idx_t> &variables, const vector<CoefficientColumn> &columns) {
-            for (idx_t i = 0; i < variables.size(); i++) {
-                if (variables[i] != DConstants::INVALID_INDEX && IsRealType(input.variable_types[variables[i]])) {
-                    return LhsIntegrality::REAL_VARIABLE;
-                }
-                if (!columns[i].AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
-            }
-            return LhsIntegrality::INTEGER;
-        };
-        for (const auto &group : ec.product_groups) {
-            for (auto integrality : {form_integrality(group.left_variables, group.left_coefficients),
-                                     form_integrality(group.right_variables, group.right_coefficients)}) {
-                if (integrality != LhsIntegrality::INTEGER) return integrality;
-            }
-            if (!group.weight.AllIntegral()) return LhsIntegrality::FRACTIONAL_COEFFICIENT;
-        }
-        return LhsIntegrality::INTEGER;
-    };
-
-    // The one refusal both strict paths share, and it is no longer a user-facing one:
-    // the whole integer-step gate is now stated on declared types at bind time, by
-    // `ValidateDecideNoIntegerStepComparisonOnReal` for the decision and
-    // `ValidateDecideIntegralComparisonOperands` for every other operand. Reaching here
-    // means a strict comparison passed both and still evaluated to a non-integral LHS,
-    // which is an invariant violation rather than a query error.
-    //
-    // Kept rather than deleted so a future rewrite that introduces a REAL auxiliary or a
-    // fractional coefficient inside a strict constraint fails loudly, instead of silently
-    // stepping a bound that is not on the lattice.
-    auto RejectStrictOnNonIntegerLhs = [](LhsIntegrality integrality, const char *op, const char *relaxed) {
-        throw InternalException(
-            "Strict inequality '%s' with a non-integer-valued left-hand side (%s) reached "
-            "the model builder; the bind-time type gate should have rejected it", op,
-            integrality == LhsIntegrality::REAL_VARIABLE ? "REAL variable"
-                                                         : "fractional coefficient");
-    };
-
-    // Helper: apply comparison sense to a constraint.
-    // Strict `<` / `>` require a provably integer-valued LHS; otherwise reject.
+    // Helper: apply comparison sense to a constraint. A strict `<` / `>` steps the bound to the next integer, which
+    // is exact because the bind-time type gate (ValidateDecideNoIntegerStepComparisonOnReal,
+    // ValidateDecideIntegralComparisonOperands) admits only an integer-valued left-hand side.
     // `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
-    auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs,
-                                    LhsIntegrality lhs_integrality, double lhs_offset) {
+    auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs, double lhs_offset) {
         if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
             constr.sense = '>'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
-            if (lhs_integrality != LhsIntegrality::INTEGER) {
-                RejectStrictOnNonIntegerLhs(lhs_integrality, ">", ">=");
-            }
             // δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
             // diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
             constr.sense = '>'; constr.rhs = DecideStrictBound(true, rhs);
@@ -788,9 +713,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
             constr.sense = '<'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
-            if (lhs_integrality != LhsIntegrality::INTEGER) {
-                RejectStrictOnNonIntegerLhs(lhs_integrality, "<", "<=");
-            }
             // δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
             constr.sense = '<'; constr.rhs = DecideStrictBound(false, rhs);
             constr.provenance.strict = true; constr.provenance.typed_k = rhs + lhs_offset;
@@ -891,7 +813,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
-        LhsIntegrality lhs_integrality = IsEvalConstraintLhsIntegerValued(eval_const);
         const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
         // Symbolic coefficient labels for a data-weighted aggregate: map each summed decide
@@ -982,7 +903,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 double rhs = eval_const.rhs_values.Get(0);
                 double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written);
                 rhs -= lhs_offset;
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, lhs_offset);
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
                 // F2 site 1: aggregate, ungrouped.
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
                                           DConstants::INVALID_INDEX, lhs_offset);
@@ -1019,8 +940,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     double group_lhs_offset =
                         SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written);
                     double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
-                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality,
-                                         group_lhs_offset);
+                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
                     // F2 site 2: grouped aggregate (`by` and/or `when`).
                     StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_lhs_offset);
                     StampAggregateProvenance(constr.provenance, eval_const);
@@ -1049,7 +969,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 double rhs_adjustment = SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written);
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, rhs_adjustment);
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, rhs_adjustment);
                 // F2 site 3: per-row. The group label is stamped here for the same reason
                 // the aggregate sites stamp it: a diagnosis over a grouped clause has to
                 // name the group its failure sits in, not just the clause. It matters most
@@ -1076,12 +996,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // group's Q entries, all accumulated together.
 
     // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
-    // lhs_integrality: precomputed from the user's EvaluatedConstraint; gates the
-    // strict-inequality rewrite (`< K → <= K-1`) in the same way as the linear path.
     // lhs_constant: out, the constant part of the LHS folded into the bound (the linear
     // path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
     auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec, const vector<idx_t> &row_set, double rhs,
-                                        LhsIntegrality lhs_integrality, double &lhs_constant,
+                                        double &lhs_constant,
                                         const string &written) -> SolverModel::QuadraticConstraint {
         SolverModel::QuadraticConstraint qc;
         std::unordered_map<int, double> linear_accum;
@@ -1132,10 +1050,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         }
 
-        // RHS and sense (move constant terms to RHS).
-        // Mirror the linear-path strict-inequality rule: apply `< K → <= K-1`
-        // (or `> K → >= K+1`) only when the LHS is provably integer-valued;
-        // otherwise reject.
+        // RHS and sense (move constant terms to RHS). A strict `< K` / `> K` steps the bound as the linear path does.
         double adjusted_rhs = rhs - rhs_adjustment;
         qc.rhs = adjusted_rhs;
         lhs_constant = rhs_adjustment;
@@ -1147,18 +1062,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         case ExpressionType::COMPARE_EQUAL:
             qc.sense = '='; break;
         case ExpressionType::COMPARE_LESSTHAN:
-            if (lhs_integrality != LhsIntegrality::INTEGER) {
-                RejectStrictOnNonIntegerLhs(lhs_integrality, "<", "<=");
-            }
             qc.sense = '<';
             qc.rhs = DecideStrictBound(false, adjusted_rhs);
             qc.provenance.strict = true;
             qc.provenance.typed_k = rhs;
             break;
         case ExpressionType::COMPARE_GREATERTHAN:
-            if (lhs_integrality != LhsIntegrality::INTEGER) {
-                RejectStrictOnNonIntegerLhs(lhs_integrality, ">", ">=");
-            }
             qc.sense = '>';
             qc.rhs = DecideStrictBound(true, adjusted_rhs);
             qc.provenance.strict = true;
@@ -1182,7 +1091,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
-        LhsIntegrality lhs_integrality = IsEvalConstraintLhsIntegerValued(eval_const);
         const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
         if (is_aggregate) {
@@ -1198,7 +1106,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
                 double lhs_constant;
-                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality, lhs_constant, written);
+                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_constant, written);
                 // F2 site 4: quadratic aggregate, ungrouped.
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
                                           lhs_constant);
@@ -1222,8 +1130,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     double group_rhs =
                         eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(flat_rows[g_begin]);
                     double lhs_constant;
-                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality,
-                                                       lhs_constant, written);
+                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
                     // F2 site 5: grouped quadratic aggregate.
                     StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, lhs_constant);
                     StampAggregateProvenance(qc.provenance, eval_const);
@@ -1240,7 +1147,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> single_row{row};
                 double rhs = eval_const.rhs_values.Get(row);
                 double lhs_constant;
-                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality, lhs_constant, written);
+                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_constant, written);
                 // F2 site 6: quadratic per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, lhs_constant);
@@ -1336,7 +1243,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
     // Every number below was read finite or merged by AddCoefficient, so one that is not finite is a reach or a
     // Big-M DeciDB derived past a DOUBLE: the user's error names the clause it belongs to. A column belongs to the
-    // first row that reads it, else to the objective. The structural checks stay internal: they are DeciDB's bugs.
+    // first row that reads it, else to the objective.
     auto too_large = [&](idx_t source_clause_id) {
         return InvalidInputException(
             DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, source_clause_id)));
@@ -1358,36 +1265,16 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
-    for (idx_t c = 0; c < model.constraints.size(); c++) {
-        auto &constr = model.constraints[c];
-        if (constr.indices.size() != constr.coefficients.size()) {
-            throw InternalException("Constraint %llu: indices/coefficients size mismatch", c);
-        }
-        for (idx_t j = 0; j < constr.indices.size(); j++) {
-            if ((idx_t)constr.indices[j] >= total_vars) {
-                throw InternalException("Constraint %llu: variable index %d out of range (>= %llu)",
-                                        c, constr.indices[j], total_vars);
-            }
-            if (!std::isfinite(constr.coefficients[j])) {
+    for (auto &constr : model.constraints) {
+        for (auto coefficient : constr.coefficients) {
+            if (!std::isfinite(coefficient)) {
                 throw too_large(constr.provenance.source_clause_id);
             }
         }
-        if (!std::isfinite(constr.rhs) && !std::isinf(constr.rhs)) {
-            throw InternalException("Constraint %llu: RHS is NaN", c);
-        }
     }
 
-    for (idx_t k = 0; k < model.q_vals.size(); k++) {
-        if (model.q_rows[k] < 0 || (idx_t)model.q_rows[k] >= total_vars ||
-            model.q_cols[k] < 0 || (idx_t)model.q_cols[k] >= total_vars) {
-            throw InternalException("Q matrix entry %llu: index out of range (row=%d, col=%d, total_vars=%llu)",
-                                    k, model.q_rows[k], model.q_cols[k], total_vars);
-        }
-        if (model.q_rows[k] < model.q_cols[k]) {
-            throw InternalException("Q matrix entry %llu: not lower triangle (row=%d < col=%d)",
-                                    k, model.q_rows[k], model.q_cols[k]);
-        }
-        if (!std::isfinite(model.q_vals[k])) {
+    for (auto q_val : model.q_vals) {
+        if (!std::isfinite(q_val)) {
             throw too_large(DConstants::INVALID_INDEX);
         }
     }
@@ -1417,9 +1304,6 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
         // the class id via Get's mapping).
         for (idx_t row = 0; row < indexer.num_rows; row++) {
             idx_t col = indexer.Get(var, row);
-            if (col >= provenance.size()) {
-                continue; // defensive: never index past the flat array
-            }
             ColumnProvenance &slot = provenance[col];
             slot.kind = kind;
             slot.label = var_labels[var];
