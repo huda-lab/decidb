@@ -1174,25 +1174,22 @@ private:
 		unique_ptr<LogicalOperator> plan;
 		ItemColumns columns;
 	};
-	//! Stage 2: the group's key, what stage 3 reads of its totals (the spend of the anchors, the finite room down, the
+	//! Stage 2: what stage 3 reads of the group's totals (the spend of the anchors, the finite room down, the
 	//! highest price of an infinite room up and the lowest of one down), which limit the budget binds at, and the check
 	//! that raises a verdict. `limits` holds the group's L and U when a limit is read from the data, and none when both
 	//! are constants.
 	struct TotalColumns {
-		vector<ColumnBinding> key;
 		ColumnBinding anchors, down, highest_open_up, lowest_open_down, over, under, ok;
 		vector<ColumnBinding> limits;
 	};
-	//! Stage 3: the group's key, its price, and what stage 4 needs of stage 2.
+	//! Stage 3: the group's price, and what stage 4 needs of stage 2.
 	struct PriceColumns {
-		vector<ColumnBinding> key;
 		ColumnBinding price, anchors, over, under, ok;
 		vector<ColumnBinding> limits;
 	};
-	//! Stage 4: the group's key, its price, whether the tied items move up, and the two shares of step 6: the fraction
+	//! Stage 4: the group's price, whether the tied items move up, and the two shares of step 6: the fraction
 	//! of its room that each tied item with a finite room moves, and what each tied item with an infinite room moves.
 	struct ShareColumns {
-		vector<ColumnBinding> key;
 		ColumnBinding price, up, fraction, open_share, ok;
 	};
 	template <class Columns>
@@ -1240,24 +1237,6 @@ private:
 		return items;
 	}
 
-	unique_ptr<Expression> Aggregate(const char *function, const ExprPtr &value) const {
-		vector<unique_ptr<Expression>> children;
-		children.push_back(calc.Out(value));
-		return optimizer.BindAggregateFunction(function, std::move(children));
-	}
-
-	//! Joins an item plan to a group plan on the group key, compared with IS NOT DISTINCT FROM: the cross product with
-	//! the group's one row when there is no key.
-	unique_ptr<LogicalOperator> JoinOnKey(unique_ptr<LogicalOperator> items, const vector<ColumnBinding> &item_key,
-	                                      unique_ptr<LogicalOperator> groups, const vector<ColumnBinding> &group_key) {
-		vector<unique_ptr<Expression>> item_keys, group_keys;
-		for (idx_t i = 0; i < key_types.size(); i++) {
-			item_keys.push_back(calc.Out(KeyColumn(i, item_key)));
-			group_keys.push_back(calc.Out(KeyColumn(i, group_key)));
-		}
-		return DirectJoinGroupRow(std::move(items), std::move(groups), std::move(item_keys), std::move(group_keys));
-	}
-
 	//! One side of the budget in a group: the constant limit and the limit each data limit gives on that side (the
 	//! group's MIN of an upper limit, its MAX of a lower one, an equality both). A value is the number it is, however
 	//! large (the solver loads a right side of 1e25 as that number), and an infinite one is infinite: an upper limit of
@@ -1286,30 +1265,32 @@ private:
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
 		}
-		auto rows = aggregate.Add(optimizer.BindAggregateFunction("count_star", vector<unique_ptr<Expression>>()));
+		auto rows = aggregate.Add(DirectHashAggregate(optimizer, calc, "count_star", nullptr));
 		// The least message of each check in the group; the group raises them in the solver's order below.
 		vector<ColumnBinding> messages;
 		for (auto message : items.columns.messages) {
-			messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
+			messages.push_back(
+			    aggregate.Add(DirectHashAggregate(optimizer, calc, "min", calc.Col(LogicalType::VARCHAR, message))));
 		}
 		// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
 		vector<ColumnBinding> value_messages;
 		for (auto &item : items.columns.decisions) {
-			value_messages.push_back(
-			    aggregate.Add(Aggregate("min", DirectNumberMessage(calc, item.v, condition.objective_written))));
+			value_messages.push_back(aggregate.Add(DirectHashAggregate(
+			    optimizer, calc, "min", DirectNumberMessage(calc, item.v, condition.objective_written))));
 		}
 		for (auto message : items.columns.computed_messages) {
-			value_messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
+			value_messages.push_back(
+			    aggregate.Add(DirectHashAggregate(optimizer, calc, "min", calc.Col(LogicalType::VARCHAR, message))));
 		}
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
-			sums.push_back(aggregate.Add(Aggregate(TotalFunction(slot), inputs[slot])));
+			sums.push_back(aggregate.Add(DirectHashAggregate(optimizer, calc, TotalFunction(slot), inputs[slot])));
 		}
 		vector<ExprPtr> imprecise_items;
 		for (auto &item : items.columns.decisions) {
 			imprecise_items.push_back(item.imprecise);
 		}
-		auto imprecise = aggregate.Add(Aggregate("bool_or", calc.Any(imprecise_items)));
+		auto imprecise = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_or", calc.Any(imprecise_items)));
 		DirectAggregateSink sink(aggregate);
 		auto limit_eligible = condition.scoped ? BoolColumn(key[0]) : nullptr;
 		vector<DirectGroupValues> limits;
@@ -1363,7 +1344,7 @@ private:
 		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<TotalColumns> stage;
 		for (idx_t i = 0; i < key_types.size(); i++) {
-			stage.columns.key.push_back(out.Add(KeyColumn(i, key)));
+			out.Add(KeyColumn(i, key));
 		}
 		stage.columns.anchors = out.Add(totals[TOTAL_S]);
 		stage.columns.down = out.Add(totals[TOTAL_SDN]);
@@ -1479,7 +1460,8 @@ private:
 		window->children.push_back(std::move(narrow.plan));
 
 		auto &group = totals.columns;
-		auto joined = JoinOnKey(std::move(window), narrow_key, std::move(totals.plan), group.key);
+		auto joined =
+		    DirectJoinClassAnswers(binder, std::move(window), narrow_key, key_types, std::move(totals.plan)).plan;
 		Verdict verdict;
 		verdict.over = BoolColumn(group.over);
 		verdict.under = BoolColumn(group.under);
@@ -1514,22 +1496,23 @@ private:
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			price_key.push_back(aggregate.Group(calc.Out(KeyColumn(i, candidate_key))));
 		}
-		auto highest = aggregate.Add(Aggregate("max", DoubleColumn(price_candidate)));
-		auto lowest = aggregate.Add(Aggregate("min", DoubleColumn(price_candidate)));
-		auto group_anchors = aggregate.Add(Aggregate("any_value", DoubleColumn(anchors)));
-		auto group_over = aggregate.Add(Aggregate("any_value", BoolColumn(over)));
-		auto group_under = aggregate.Add(Aggregate("any_value", BoolColumn(under)));
-		auto group_ok = aggregate.Add(Aggregate("any_value", BoolColumn(ok)));
+		auto highest = aggregate.Add(DirectHashAggregate(optimizer, calc, "max", DoubleColumn(price_candidate)));
+		auto lowest = aggregate.Add(DirectHashAggregate(optimizer, calc, "min", DoubleColumn(price_candidate)));
+		auto group_anchors = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", DoubleColumn(anchors)));
+		auto group_over = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", BoolColumn(over)));
+		auto group_under = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", BoolColumn(under)));
+		auto group_ok = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", BoolColumn(ok)));
 		vector<ColumnBinding> group_limits;
 		for (auto &limit : candidate_limits) {
-			group_limits.push_back(aggregate.Add(Aggregate("any_value", DoubleColumn(limit))));
+			group_limits.push_back(
+			    aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", DoubleColumn(limit))));
 		}
 		auto reduced = aggregate.Finish(candidates.Finish(std::move(joined)));
 
 		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<PriceColumns> stage;
 		for (idx_t i = 0; i < key_types.size(); i++) {
-			stage.columns.key.push_back(out.Add(KeyColumn(i, price_key)));
+			out.Add(KeyColumn(i, price_key));
 		}
 		stage.columns.price = out.Add(
 		    PriceOf(BoolColumn(group_over), BoolColumn(group_under), DoubleColumn(highest), DoubleColumn(lowest)));
@@ -1552,7 +1535,9 @@ private:
 	Stage<ShareColumns> Shares(Stage<PriceColumns> price) {
 		auto items = ReadItems();
 		auto &group = price.columns;
-		auto joined = JoinOnKey(std::move(items.plan), items.columns.keys, std::move(price.plan), group.key);
+		auto joined =
+		    DirectJoinClassAnswers(binder, std::move(items.plan), items.columns.keys, key_types, std::move(price.plan))
+		        .plan;
 		auto lam = DoubleColumn(group.price);
 		auto inputs = PriceSumInputsOfRow(items.columns.decisions, lam);
 
@@ -1563,16 +1548,16 @@ private:
 		}
 		vector<ExprPtr> sums;
 		for (idx_t slot = 0; slot < SUM_COUNT; slot++) {
-			sums.push_back(DoubleColumn(aggregate.Add(Aggregate("sum", inputs[slot]))));
+			sums.push_back(DoubleColumn(aggregate.Add(DirectHashAggregate(optimizer, calc, "sum", inputs[slot]))));
 		}
-		auto group_price = aggregate.Add(Aggregate("any_value", lam));
-		auto anchors = aggregate.Add(Aggregate("any_value", DoubleColumn(group.anchors)));
-		auto over = aggregate.Add(Aggregate("any_value", BoolColumn(group.over)));
-		auto under = aggregate.Add(Aggregate("any_value", BoolColumn(group.under)));
-		auto ok = aggregate.Add(Aggregate("any_value", BoolColumn(group.ok)));
+		auto group_price = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", lam));
+		auto anchors = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", DoubleColumn(group.anchors)));
+		auto over = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", BoolColumn(group.over)));
+		auto under = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", BoolColumn(group.under)));
+		auto ok = aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", BoolColumn(group.ok)));
 		vector<ColumnBinding> limits;
 		for (auto &limit : group.limits) {
-			limits.push_back(aggregate.Add(Aggregate("any_value", DoubleColumn(limit))));
+			limits.push_back(aggregate.Add(DirectHashAggregate(optimizer, calc, "any_value", DoubleColumn(limit))));
 		}
 		auto reduced = aggregate.Finish(std::move(joined));
 
@@ -1588,7 +1573,7 @@ private:
 		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<ShareColumns> stage;
 		for (idx_t i = 0; i < key_types.size(); i++) {
-			stage.columns.key.push_back(out.Add(KeyColumn(i, key)));
+			out.Add(KeyColumn(i, key));
 		}
 		stage.columns.price = out.Add(DoubleColumn(group_price));
 		stage.columns.up = out.Add(up);
@@ -1606,7 +1591,9 @@ private:
 	DirectSubstitute Answer(Stage<ShareColumns> shares) {
 		auto items = ReadItems();
 		auto &group = shares.columns;
-		auto joined = JoinOnKey(std::move(items.plan), items.columns.keys, std::move(shares.plan), group.key);
+		auto joined =
+		    DirectJoinClassAnswers(binder, std::move(items.plan), items.columns.keys, key_types, std::move(shares.plan))
+		        .plan;
 		auto sources = items.columns.sources.size();
 		auto decisions = items.columns.decisions.size();
 

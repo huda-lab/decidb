@@ -242,6 +242,11 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
                                                        unique_ptr<Expression> value);
 
+//! The hash counterpart of DirectWindowExtremum: the aggregate `name` over `argument` (null for COUNT(*)), on the rows
+//! where `reads` holds (null: every row). A rule adds it to a DirectAggregateStage.
+unique_ptr<Expression> DirectHashAggregate(Optimizer &optimizer, const ExpressionBuilder &calc, const char *name,
+                                           const ExprPtr &argument, const ExprPtr &reads = nullptr);
+
 //! The inclusive running sum of `value` within each partition, in order of `order` (`direction`, NULLs last), ties in
 //! any order: DirectWindowExtremum's `sum` with a frame that ends at the current row, and the sort that gives the frame
 //! its meaning. Rows of one partition and one order share a sort with any other window of the same partition and order.

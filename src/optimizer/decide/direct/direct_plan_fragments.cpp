@@ -349,10 +349,9 @@ DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOpe
 
 unique_ptr<LogicalOperator> DirectAllRowsValid(Optimizer &optimizer, unique_ptr<LogicalOperator> rows,
                                                unique_ptr<Expression> valid) {
-	vector<unique_ptr<Expression>> arguments;
-	arguments.push_back(std::move(valid));
+	ExpressionBuilder calc(optimizer.context);
 	vector<unique_ptr<Expression>> aggregates;
-	aggregates.push_back(optimizer.BindAggregateFunction("bool_and", std::move(arguments)));
+	aggregates.push_back(DirectHashAggregate(optimizer, calc, "bool_and", calc.Wrap(std::move(valid))));
 	return DirectAggregateOver(optimizer, std::move(rows), {}, std::move(aggregates));
 }
 
@@ -431,6 +430,19 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 	result->start = WindowBoundary::UNBOUNDED_PRECEDING;
 	result->end = WindowBoundary::UNBOUNDED_FOLLOWING;
 	return result;
+}
+
+unique_ptr<Expression> DirectHashAggregate(Optimizer &optimizer, const ExpressionBuilder &calc, const char *name,
+                                           const ExprPtr &argument, const ExprPtr &reads) {
+	vector<unique_ptr<Expression>> children;
+	if (argument) {
+		children.push_back(calc.Out(argument));
+	}
+	auto bound = optimizer.BindAggregateFunction(name, std::move(children));
+	if (reads) {
+		bound->Cast<BoundAggregateExpression>().filter = calc.Out(reads);
+	}
+	return bound;
 }
 
 unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const ExpressionBuilder &calc,

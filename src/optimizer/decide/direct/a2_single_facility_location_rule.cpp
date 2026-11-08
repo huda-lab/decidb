@@ -55,13 +55,7 @@ public:
 	//! The aggregate `function` of a column over the class, on the rows where `reads` holds (null: every row).
 	ColumnBinding Add(const char *function, ColumnBinding column, const LogicalType &type,
 	                  const ExprPtr &reads = nullptr) const {
-		vector<unique_ptr<Expression>> children;
-		children.push_back(calc.Out(calc.Col(type, column)));
-		auto bound = optimizer.BindAggregateFunction(function, std::move(children));
-		if (reads) {
-			bound->Cast<BoundAggregateExpression>().filter = calc.Out(reads);
-		}
-		return aggregate.Add(std::move(bound));
+		return aggregate.Add(DirectHashAggregate(optimizer, calc, function, calc.Col(type, column), reads));
 	}
 
 	//! Makes `window` run over the rows of the row's class.
