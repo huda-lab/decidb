@@ -15,6 +15,7 @@ import atexit
 import json
 import os
 import re
+import resource
 import selectors
 import signal
 import subprocess
@@ -622,6 +623,38 @@ class DeciDBCli:
         assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
         assert_no_removed_spelling(result, sql)
         return result, latency
+
+    def execute_counting_cpu(self, sql: str, *, timeout: float = 120) -> tuple[subprocess.CompletedProcess, float]:
+        """Run *sql* in a process of its own and return ``(result, cpu)``, where cpu is the CPU seconds the process
+        spent on all its threads, user and system. Unlike wall time it does not grow when other work shares the
+        machine, so a test that bounds how much work a query does reads it.
+
+        Like ``execute_interrupted``, it skips the serializer self-check, which runs the query a second time.
+        """
+        argv = [self.exe, self.db, "-readonly"]
+        direct_mode = (self.env or {}).get(_DIRECT_SOLVE_ENV, os.environ.get(_DIRECT_SOLVE_ENV))
+        if direct_mode:
+            argv += ["-cmd", f"SET decide_direct_solve='{direct_mode}';"]
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        proc = subprocess.Popen(
+            argv + ["-c", sql],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self._subprocess_env(),
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
+        assert_no_removed_spelling(result, sql)
+        return result, cpu
 
     def assert_error(
         self,

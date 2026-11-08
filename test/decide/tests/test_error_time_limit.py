@@ -321,15 +321,19 @@ class TestTimeLimit:
         """A MIP HiGHS solves at its root returns without waiting for its symmetry search.
 
         HiGHS cancels the search once the root solves the MIP; BUG-3 checks for that cancellation at every search
-        node, not only at the search's leaves, so the answer comes back in about 1.5-2.5 s, depending on the host.
-        Without it the solve waits out the search (about 9 s) and the subprocess timeout kills it.
+        node, not only at the search's leaves, so the whole solve spends about 1.6 s of CPU (3.8 s with 24 copies on 11
+        cores, from HiGHS's workers spinning while they wait). Without it the search's thread runs to its end, and the
+        solve spends about 22 s. The bound is on CPU time, which other work on the machine stretches far less than it
+        stretches wall time (14 s with those 24 copies).
         """
-        result = _run_decidb(decidb_cli_highs, _SYMMETRY_PAIRS_SQL, time_limit=30, subprocess_timeout=6)
+        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": "30"})
+        result, cpu = cli.execute_counting_cpu(_SYMMETRY_PAIRS_SQL, timeout=60)
         assert re.search(r"\b100000\b", result.stdout), (
             f"Expected the row count 100000 but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
+        assert cpu < 10.0, f"the solve spent {cpu:.2f} s of CPU: it waited for the symmetry search"
 
     # `ResolveDecideTimeLimit`: `stod` throws on text (`abc`; an empty string throws the same way) into one catch, and
     # `parsed > 0.0` refuses a negative (`-5`) and the boundary (`0`).
