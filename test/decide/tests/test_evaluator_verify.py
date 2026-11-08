@@ -31,8 +31,9 @@ GROUPS = {
 
 
 def _verify(cli, sql, **env):
-    """On the solver path, in a process of its own: a difference is an INTERNAL error, which ends a shared session."""
-    wrapper = cli.with_env({"DECIDB_EVALUATOR": "verify", **env})
+    """On the solver path, in a process of its own: a difference is an INTERNAL error, which ends a shared session. The
+    serializer check runs a query twice, from the round-tripped plan, so it is off: these count one execution."""
+    wrapper = cli.without_verify_serializer().with_env({"DECIDB_EVALUATOR": "verify", **env})
     return wrapper.execute_raw(f"SET threads=1; SET decide_direct_solve='off'; {sql}")
 
 
