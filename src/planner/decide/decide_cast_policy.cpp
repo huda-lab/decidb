@@ -64,8 +64,7 @@ static bool EvaluateFoldableDouble(ClientContext &context, const Expression &exp
 	if (!expr.IsFoldable()) {
 		return false;
 	}
-	if ((flags & FOLD_STABLE) &&
-	    (!expr.IsConsistent() || expr.HasParameter() || expr.HasSubquery() || expr.IsAggregate() || expr.IsWindow())) {
+	if ((flags & FOLD_STABLE) && !expr.IsConsistent()) {
 		return false;
 	}
 	Value value;
@@ -114,8 +113,7 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, cons
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF && booleans) {
 		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
-		if (binding.table_index == booleans->decide_index && binding.column_index < booleans->is_boolean.size() &&
-		    booleans->is_boolean[binding.column_index]) {
+		if (binding.table_index == booleans->decide_index && booleans->is_boolean[binding.column_index]) {
 			return PlanTimeSign::POSITIVE;
 		}
 	}
@@ -142,11 +140,11 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, cons
 	if (name == "-" && func.children.size() == 1) {
 		return flip(PlanTimeSignOf(context, *func.children[0], booleans));
 	}
-	if (name == "*" && func.children.size() == 2) {
+	if (name == "*") {
 		return times(PlanTimeSignOf(context, *func.children[0], booleans),
 		             PlanTimeSignOf(context, *func.children[1], booleans));
 	}
-	if (name == "/" && func.children.size() == 2) {
+	if (name == "/") {
 		// A zero or unknown divisor leaves the quotient unknown; a zero numerator over
 		// anything else is zero.
 		auto divisor = PlanTimeSignOf(context, *func.children[1], booleans);
