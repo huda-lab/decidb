@@ -80,6 +80,14 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             id="product",
         ),
         pytest.param(
+            "ship(INT), per D: open(BOOL), per S: pick(BOOL)",
+            "per (): sum(open * pick) by () <= 2",
+            "(open*pick)becomesanauxiliaryvariable",
+            None,
+            "McCormick",
+            id="product-of-booleans",
+        ),
+        pytest.param(
             "ship(INT)",
             "ship IN (0, 5, 10)",
             "shipIN(0,5,10)becomesoneindicatorpervalue",
@@ -236,6 +244,58 @@ def test_explain_two_level_objective_rows_are_written_in_front(decidb_cli):
     )
     assert "↳max(ship)by(D.region)becomesanextremumcolumnpergroup" in text, text
     assert "↳perD.region:sum(ship)" not in text, text
+
+
+@pytest.mark.explain
+def test_explain_accounts_for_an_inner_extremum_pinned_by_indicator_rows(decidb_cli):
+    """A MAX under a maximized SUM is the hard direction: the extremum column per group is pinned."""
+    text = _plan(
+        decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE sum(per D.region: max(ship) by (D.region))")
+    )
+    assert "↳max(ship)by(D.region)becomesanextremumcolumnpergrouppinnedbyindicatorrows" in text, text
+
+
+@pytest.mark.explain
+@pytest.mark.quadratic
+def test_explain_accounts_for_an_inner_extremum_over_a_defined_body_stated_natively(decidb_cli_gurobi):
+    """An extremum over a squared member has no box to pin it with, so the solver is told it natively."""
+    text = _plan(
+        decidb_cli_gurobi,
+        _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE sum(per D.region: max(power(ship, 2)) by (D.region))"),
+    )
+    assert "↳power(ship,2)becomesahelperdecisionperrow,atmostitsvalue" in text, text
+    assert "↳max(power(ship,2))by(D.region)becomesanextremumcolumnpergroupstatedtothesolvernatively" in text, text
+
+
+@pytest.mark.explain
+def test_explain_prints_the_when_of_a_two_level_objective_in_front_of_its_rows(decidb_cli):
+    """The `when` in front of the two-level objective is written once in front of the objective and once in front of
+    the inner reducer, once per class, that the solver receives."""
+    text = _plan(
+        decidb_cli,
+        _ship_query("ship(INT)", "ship >= 1", "MAXIMIZE when S.priority: sum(per D.region: sum(ship) by (D.region))"),
+    )
+    assert "MAXIMIZEwhenS.priority:sum(perD.region:sum(ship)by(D.region))" in text, text
+    assert "↳whenS.priorityperD.region:sum(ship)by(D.region)" in text, text
+
+
+@pytest.mark.explain
+def test_explain_parenthesizes_an_or_under_an_and_in_a_reducers_when(decidb_cli):
+    """AND binds tighter than OR, so the canonical reading of a clause keeps the parentheses the OR was written in."""
+    text = _plan(
+        decidb_cli,
+        _ship_query(
+            "ship(INT)", "2 <= SUM(when (D.country = 'US' OR D.region = 'East') AND S.status = 'active': ship)"
+        ),
+    )
+    assert "≡sum(when(D.country='US'ORD.region='East')ANDS.status='active':ship)>=2" in text, text
+
+
+@pytest.mark.explain
+def test_explain_prints_a_unary_plus_as_a_call(decidb_cli):
+    """A unary plus is the function `+` over one operand; its canonical reading drops it."""
+    text = _plan(decidb_cli, _ship_query("ship(INT)", "+ship <= 8"))
+    assert "+ship<=8≡ship<=8" in text, text
 
 
 @pytest.mark.explain

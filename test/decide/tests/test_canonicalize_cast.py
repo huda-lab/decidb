@@ -614,3 +614,43 @@ def test_select_projection_cast_over_solved_decision_is_allowed(decidb_cli):
     """)
     assert cols == ["id", "rounded_x"]
     assert int(rows[0][1]) == 2
+
+
+def test_try_cast_of_data_leaves_a_decision_free_gap_for_a_row_it_cannot_cast(decidb_cli, duckdb_conn):
+    """`TRY_CAST('x' AS INTEGER)` is NULL, and a coefficient that is NULL on a row leaves that row's decision out of the
+    reducer: it is bounded by nothing but its box. The coefficients are what DuckDB evaluates them to."""
+    data = [(1, "2"), (2, "x"), (3, "4")]
+    values = ", ".join(f"({i}, '{w}')" for i, w in data)
+    coefficients = dict(
+        duckdb_conn.execute(f"SELECT id, TRY_CAST(w AS INTEGER) FROM (VALUES {values}) t(id, w)").fetchall()
+    )
+    assert coefficients == {1: 2, 2: None, 3: 4}
+    rows, cols = decidb_cli.execute(
+        f"""
+        SELECT id, x FROM (VALUES {values}) t(id, w)
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND SUM(TRY_CAST(w AS INTEGER) * x) <= 14
+        MAXIMIZE SUM(x)
+        ORDER BY id
+    """
+    )
+    xs = {int(r[cols.index("id")]): int(r[cols.index("x")]) for r in rows}
+    assert xs[2] == 5, xs
+    assert sum(c * xs[i] for i, c in coefficients.items() if c is not None) <= 14, xs
+    # Over rows 1 and 3, 2 * x1 + 4 * x3 <= 14 is best at x1 = 5, x3 = 1.
+    best = max(x1 + x3 for x1 in range(6) for x3 in range(6) if coefficients[1] * x1 + coefficients[3] * x3 <= 14)
+    assert xs[1] + xs[3] == best, xs
+
+
+@pytest.mark.error
+def test_a_bound_that_cannot_be_evaluated_reports_the_conversion(decidb_cli):
+    """The bound is not NULL and not a number: its own error is the one the query reports."""
+    decidb_cli.assert_error(
+        """
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT)
+        SUCH THAT x <= CAST('abc' AS INTEGER)
+        MAXIMIZE SUM(x)
+    """,
+        match=r"Conversion Error: Could not convert string 'abc' to INT32",
+    )

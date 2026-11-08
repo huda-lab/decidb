@@ -31,6 +31,7 @@ from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
 from ._brute_force import judge_rows
+from ._scope_cases import answer
 from ._oracle_helpers import add_bool_and
 
 
@@ -2001,3 +2002,50 @@ def test_bilinear_objective_of_a_qualified_reducer_counts_each_tuple_once(decidb
     by_id = {row[0]: row[1:] for row in rows}
     assert by_id[1] == by_id[2]
     assert by_id[1][0] * by_id[1][1] + by_id[3][0] * by_id[3][1] == pytest.approx(result.objective_value)
+
+
+# A reducer beside a product takes the value rewrite, which reads the sign of every factor it scales: a decision that
+# is not Boolean has none, and a negative literal times a Boolean is negative.
+@pytest.mark.cons_aggregate
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_a_product_of_integer_decisions_beside_a_reducer(decidb_cli_gurobi):
+    answers = answer(
+        decidb_cli_gurobi,
+        """
+        SELECT id, x, y FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), y(INT)
+        SUCH THAT x <= 3 AND y <= 3 AND SUM(x) + x * y <= 6
+        MAXIMIZE SUM(x) + SUM(y)
+        ORDER BY id
+    """,
+    )
+    judge_rows(
+        answers,
+        {name: range(4) for name in ("x0", "x1", "y0", "y1")},
+        lambda a: all(a["x0"] + a["x1"] + a[f"x{i}"] * a[f"y{i}"] <= 6 for i in range(2)),
+        lambda a: sum(a.values()),
+    )
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_a_negated_boolean_on_a_reducer(decidb_cli_gurobi):
+    """`(-2 * b) * SUM(y) >= -6` bounds b * SUM(y) by 3: b = 1 only while the sum of y stays at 3."""
+    answers = answer(
+        decidb_cli_gurobi,
+        """
+        SELECT id, y, b FROM (VALUES (1), (2)) t(id)
+        DECIDE y(INT), per (): b(BOOL)
+        SUCH THAT y <= 3 AND (-2 * b) * SUM(y) >= -6
+        MAXIMIZE SUM(y) + b
+        ORDER BY id
+    """,
+    )
+    judge_rows(
+        answers,
+        {"y0": range(4), "y1": range(4), "b": range(2)},
+        lambda a: -2 * a["b"] * (a["y0"] + a["y1"]) >= -6,
+        lambda a: a["y0"] + a["y1"] + a["b"],
+    )

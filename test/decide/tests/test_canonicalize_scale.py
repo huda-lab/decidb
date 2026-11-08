@@ -38,6 +38,7 @@ anything not positively marked as query-wide is treated as row-varying.
 
 import re
 import time
+from fractions import Fraction
 
 import pytest
 
@@ -1182,4 +1183,321 @@ def test_nested_divisor_scale(decidb_cli, scope_solver):
     """,
         IDS,
         [_x_at_most(9), _reduced("sum", "<=", 1, factor=(1.0 / 2.0) / 3.0)],
+    )
+
+
+# ---------------------------------------------------------------------------
+# A factor known before the query runs distributes over an additive spine, and
+# over a spine inside a spine. Each case is judged against every assignment.
+# ---------------------------------------------------------------------------
+
+_NESTED_ROWS = "(VALUES (1), (2)) t(id)"
+_NESTED_DOMAINS = {name: range(4) for name in ("x0", "x1", "y0", "y1")}
+
+
+def _sums(a):
+    return Fraction(a["x0"] + a["x1"]), Fraction(a["y0"] + a["y1"])
+
+
+# (clause, whether SUM(x) = sx and SUM(y) = sy satisfy it). The cases are the pairs of outer and inner factor kinds:
+# a product or a quotient over a spine that holds a product or a quotient of its own.
+NESTED_SCALE_CASES = [
+    pytest.param("2 * (3 * (SUM(x) - 1)) <= 20", lambda sx, sy: 2 * (3 * (sx - 1)) <= 20, id="product-product"),
+    pytest.param(
+        "((SUM(x) - 1) / 3) / 2 <= 0.5", lambda sx, sy: (sx - 1) / 3 / 2 <= Fraction(1, 2), id="quotient-quotient"
+    ),
+    pytest.param("2 * ((SUM(x) - 1) / 3) <= 2", lambda sx, sy: 2 * ((sx - 1) / 3) <= 2, id="product-over-quotient"),
+    pytest.param(
+        "((SUM(x) - 1) / 2) * 3 <= 4.5", lambda sx, sy: (sx - 1) / 2 * 3 <= Fraction(9, 2), id="quotient-then-product"
+    ),
+    pytest.param("2 * (3 * SUM(x) - 1) <= 22", lambda sx, sy: 2 * (3 * sx - 1) <= 22, id="product-over-scaled-term"),
+    pytest.param(
+        "(3 * SUM(x) - 1) / 2 <= 5.5",
+        lambda sx, sy: (3 * sx - 1) / 2 <= Fraction(11, 2),
+        id="quotient-over-scaled-term",
+    ),
+    pytest.param(
+        "((SUM(x) - 1) / 3 + SUM(y)) / 2 <= 2",
+        lambda sx, sy: ((sx - 1) / 3 + sy) / 2 <= 2,
+        id="quotient-over-quotient-spine",
+    ),
+    pytest.param(
+        "(((SUM(x) - 1) / 3 + SUM(y)) * 2) / 3 <= 2",
+        lambda sx, sy: ((sx - 1) / 3 + sy) * 2 / 3 <= 2,
+        id="quotient-over-product-over-quotient",
+    ),
+    pytest.param(
+        "2 * ((SUM(x) - 1) * 3 + SUM(y)) <= 20",
+        lambda sx, sy: 2 * ((sx - 1) * 3 + sy) <= 20,
+        id="product-over-product-spine",
+    ),
+    pytest.param(
+        "((SUM(x) - 1) * 3 + SUM(y)) / 2 <= 5",
+        lambda sx, sy: ((sx - 1) * 3 + sy) / 2 <= 5,
+        id="quotient-over-product-spine",
+    ),
+    pytest.param(
+        "((SUM(x) - 1) / 3 + SUM(y)) * 2 <= 8",
+        lambda sx, sy: ((sx - 1) / 3 + sy) * 2 <= 8,
+        id="product-over-quotient-spine",
+    ),
+    pytest.param(
+        "SUM(x) <= 3 * (SUM(w) - 4)", lambda sx, sy: sx <= 3 * (Fraction(5) - 4), id="data-reducer-spine-on-the-bound"
+    ),
+]
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, holds", NESTED_SCALE_CASES)
+def test_a_factor_distributes_over_a_spine_nested_in_a_spine(decidb_cli, clause, holds):
+    """`2 * (3 * (SUM(x) - 1))` is `6 * SUM(x) - 6`, and each pairing of products and quotients composes the same
+    way. Several of the cases leave a constant on the decision side, which the answer must not depend on."""
+    rows = answer(
+        decidb_cli,
+        f"""
+        SELECT id, w, x, y FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
+        DECIDE x(INT), y(INT)
+        SUCH THAT x <= 3 AND y <= 3 AND {clause}
+        MAXIMIZE SUM(x) + SUM(y)
+        ORDER BY id
+    """,
+    )
+    judge_rows(rows, _NESTED_DOMAINS, lambda a: holds(*_sums(a)), lambda a: a["x0"] + a["x1"] + a["y0"] + a["y1"])
+
+
+# Per row, on two rows and every x in 0..9: the clause as a predicate on one row's x.
+UNARY_SPINE_CASES = [
+    pytest.param("+x <= 3", lambda x: x <= 3, id="unary-plus"),
+    pytest.param("2 * +(x + 1) <= 9", lambda x: 2 * (x + 1) <= 9, id="factor-over-unary-plus"),
+    pytest.param("-(x + 1) / 2 >= -3", lambda x: -(x + 1) / 2 >= -3, id="quotient-over-unary-minus"),
+]
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, holds", UNARY_SPINE_CASES)
+def test_a_unary_sign_on_a_spine_reads_as_the_sign(decidb_cli, clause, holds):
+    rows = answer(
+        decidb_cli,
+        f"""
+        SELECT id, x FROM {_NESTED_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 9 AND {clause}
+        MAXIMIZE SUM(x)
+        ORDER BY id
+    """,
+    )
+    judge_rows(
+        rows,
+        {"x0": range(10), "x1": range(10)},
+        lambda a: all(holds(Fraction(a[f"x{i}"])) for i in range(2)),
+        lambda a: a["x0"] + a["x1"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Like terms under a constant divisor merge into one coefficient.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause, holds",
+    [
+        pytest.param("x / 2 / 2 + x / 4 <= 2", lambda x: x / 2 <= 2, id="fractional-coefficient"),
+        pytest.param(
+            "x / 'inf'::DOUBLE + x / 'inf'::DOUBLE <= 3", lambda x: True, id="infinite-divisor-leaves-the-terms-apart"
+        ),
+    ],
+)
+def test_like_terms_over_constant_divisors(decidb_cli, clause, holds):
+    rows = answer(
+        decidb_cli,
+        f"""
+        SELECT id, x FROM {_NESTED_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 9 AND {clause}
+        MAXIMIZE SUM(x)
+        ORDER BY id
+    """,
+    )
+    judge_rows(
+        rows,
+        {"x0": range(10), "x1": range(10)},
+        lambda a: all(holds(Fraction(a[f"x{i}"])) for i in range(2)),
+        lambda a: a["x0"] + a["x1"],
+    )
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.error_binder
+@pytest.mark.parametrize("clause", ["x / 0 <= 4", "x / 0.0 + x / 0.0 <= 3"])
+def test_a_zero_divisor_is_refused(decidb_cli, clause):
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_NESTED_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND {clause}
+        MAXIMIZE SUM(x)
+    """,
+        match=re.escape(f"DECIDE: {clause} computes a number too large for a DOUBLE. Scale its data down."),
+    )
+
+
+# ---------------------------------------------------------------------------
+# A factor on a reducer of the objective is one value for the whole query.
+# ---------------------------------------------------------------------------
+
+_OBJECTIVE_ROWS = "(VALUES (1, 2.0), (2, 3.0)) t(id, w)"
+
+
+@pytest.mark.obj_maximize
+@pytest.mark.error_binder
+@pytest.mark.parametrize(
+    "objective, message",
+    [
+        pytest.param(
+            "w * SUM(x)",
+            r"'w' varies per row, so it cannot multiply SUM\(x\)\. Move it inside the aggregate, e\.g\. SUM\(x \* w\)\.",
+            id="column-multiplies",
+        ),
+        pytest.param(
+            "SUM(x) / w",
+            r"'w' varies per row, so it cannot divide SUM\(x\)\. Move it inside the aggregate, e\.g\. SUM\(x / w\)\.",
+            id="column-divides",
+        ),
+        pytest.param(
+            "(w + 1) * SUM(x)",
+            r"varies per row, so it cannot multiply SUM\(x\)\. Move it inside the aggregate",
+            id="sum",
+        ),
+        pytest.param(
+            "(SELECT max(u.w) FROM (VALUES (1.0), (2.0)) u(w) WHERE u.w = t.w) * SUM(x)",
+            r"this subquery returns a different value for each row, so it cannot multiply SUM\(x\)\. Move it inside "
+            r"the aggregate, e\.g\. SUM\(x \* \(SELECT \.\.\.\)\)\.",
+            id="correlated-subquery-multiplies",
+        ),
+        pytest.param(
+            "SUM(x) / (SELECT max(u.w) FROM (VALUES (1.0), (2.0)) u(w) WHERE u.w = t.w)",
+            r"this subquery returns a different value for each row, so it cannot divide SUM\(x\)\. Move it inside "
+            r"the aggregate, e\.g\. SUM\(x / \(SELECT \.\.\.\)\)\.",
+            id="correlated-subquery-divides",
+        ),
+    ],
+)
+def test_the_objective_refuses_a_factor_that_varies_per_row(decidb_cli, objective, message):
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_OBJECTIVE_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND SUM(x) <= 7
+        MAXIMIZE {objective}
+    """,
+        match=f"DECIDE objective: .*{message}",
+    )
+
+
+@pytest.mark.obj_maximize
+@pytest.mark.error_binder
+def test_the_objective_refuses_a_reducer_over_data_alone(decidb_cli):
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_OBJECTIVE_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND SUM(x) <= 7
+        MAXIMIZE SUM(x) + AVG(w)
+    """,
+        match=r"MAXIMIZE/MINIMIZE: 'avg\(w\)' does not reference a decision, so it cannot be part of the objective\.",
+    )
+
+
+# The constant a spine carries is peeled off the objective under its factor, whichever way the factor is written.
+OBJECTIVE_CONSTANT_CASES = [
+    pytest.param("2 * (SUM(x) - 1)", lambda sx, sy: 2 * (sx - 1), id="product"),
+    pytest.param("(SUM(x) - 1) / 2", lambda sx, sy: (sx - 1) / 2, id="quotient"),
+    pytest.param("2 * (3 * SUM(x) - 1) + 3", lambda sx, sy: 2 * (3 * sx - 1) + 3, id="product-and-constant"),
+    pytest.param(
+        "(SUM(x) + 4) / 2 + 3 * (SUM(y) - 1)", lambda sx, sy: (sx + 4) / 2 + 3 * (sy - 1), id="quotient-and-product"
+    ),
+]
+
+
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective, value", OBJECTIVE_CONSTANT_CASES)
+def test_a_factor_over_the_objectives_constant_term(decidb_cli, objective, value):
+    rows = answer(
+        decidb_cli,
+        f"""
+        SELECT id, x, y FROM {_NESTED_ROWS}
+        DECIDE x(INT), y(INT)
+        SUCH THAT x <= 3 AND y <= 3 AND SUM(x) + SUM(y) <= 7
+        MAXIMIZE {objective}
+        ORDER BY id
+    """,
+    )
+    judge_rows(rows, _NESTED_DOMAINS, lambda a: sum(_sums(a)) <= 7, lambda a: value(*_sums(a)))
+
+
+# ---------------------------------------------------------------------------
+# A decision beside a reducer: what can and cannot scale it.
+# ---------------------------------------------------------------------------
+
+_DECISION_ROWS = "(VALUES (1, 2.0), (2, 3.0)) t(id, w)"
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+@pytest.mark.parametrize(
+    "clause, message",
+    [
+        pytest.param("SUM(x) / y <= 3", r"'y' is a decision, so it cannot divide SUM\(x\)\.", id="int-divides"),
+        pytest.param("SUM(x) / b <= 3", r"'b' is a decision, so it cannot divide SUM\(x\)\.", id="bool-divides"),
+        pytest.param("SUM(x) / SUM(y) <= 3", r"DECIDE: cannot divide by a DECIDE variable\.", id="reducer-divides"),
+        pytest.param(
+            "SUM(x) * (b - c) <= 3", r"'\(b - c\)' is a decision, so it cannot multiply SUM\(x\)\.", id="difference"
+        ),
+        pytest.param(
+            "SUM(x) * CASE WHEN w > 2 THEN b ELSE 0 END <= 3",
+            r"is a decision, so it cannot multiply SUM\(x\)\.",
+            id="case",
+        ),
+        pytest.param("(b * c) * SUM(x) <= 3", r"has a term of degree 3", id="product-of-booleans"),
+    ],
+)
+def test_a_decision_factor_on_a_reducer_is_refused(decidb_cli, clause, message):
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_DECISION_ROWS}
+        DECIDE x(INT), y(INT), b(BOOL), c(BOOL)
+        SUCH THAT x <= 3 AND y <= 3 AND {clause}
+        MAXIMIZE SUM(x)
+    """,
+        match=message,
+    )
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+@pytest.mark.parametrize(
+    "norm, written",
+    [
+        pytest.param("NORM(x, 1)", "NORM(x, 1)", id="l1"),
+        pytest.param("NORM(x, 2)", "NORM(x, 2)", id="l2"),
+        pytest.param("NORM(x, 'inf')", "NORM(x, inf)", id="linf"),
+        pytest.param("NORM(x, 0)", "NORM(x, 0)", id="l0"),
+        pytest.param("NORM(x, 0, 9)", "NORM(x, 0, 9)", id="l0-with-bound"),
+    ],
+)
+def test_a_refusal_names_a_norm_as_it_was_written(decidb_cli, norm, written):
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_DECISION_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND x * {norm} <= 7
+        MAXIMIZE SUM(x)
+    """,
+        match=re.escape(f"'x' is a decision, so it cannot multiply {written}."),
     )

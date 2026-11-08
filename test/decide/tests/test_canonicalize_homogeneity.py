@@ -11,6 +11,7 @@ errors with SQL-level guidance, never late physical-extractor errors.
 
 import pytest
 
+from ._brute_force import judge_rows
 from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
@@ -166,4 +167,28 @@ def test_row_varying_coefficient_on_query_wide_decision_beside_reducer_answers(d
     )
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_scalar_subquery_beside_a_grouped_reducer_is_one_value(decidb_cli):
+    """`per id: SUM(x) by (id) + m * (SELECT 2) <= 7`: the subquery is one value for the whole query, so it does not
+    make the clause finer than its `by` key. Each id's class holds its own x plus twice the query-wide m."""
+    rows = answer(
+        decidb_cli,
+        """
+        SELECT id, x, m FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT), per (): m(INT)
+        SUCH THAT x <= 5 AND m <= 3 AND per id: SUM(x) by (id) + m * (SELECT 2) <= 7
+        MAXIMIZE SUM(x) + m
+        ORDER BY id
+    """,
+    )
+    judge_rows(
+        rows,
+        {"x0": range(6), "x1": range(6), "x2": range(6), "m": range(4)},
+        lambda a: all(a[f"x{i}"] + 2 * a["m"] <= 7 for i in range(3)),
+        lambda a: a["x0"] + a["x1"] + a["x2"] + a["m"],
     )
