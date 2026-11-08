@@ -33,7 +33,7 @@ bool IsIntegralColumnType(const LogicalType &type) {
 //! wrong answer.
 bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	for (idx_t var = 0; var < op.decide_variables.size(); var++) {
-		if (var < op.is_boolean_var.size() && op.is_boolean_var[var]) {
+		if (op.is_boolean_var[var]) {
 			return true;
 		}
 		if (IsIntegralColumnType(op.decide_variables[var]->return_type)) {
@@ -95,9 +95,6 @@ DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
 //! The objective's first product group that is non-convex under the sense (IsNonconvexProductGroup), which the
 //! refusal names; null for none.
 const DecideProductGroup *FirstNonconvexGroup(const LogicalDecide &op) {
-	if (!op.prepared.objective) {
-		return nullptr;
-	}
 	for (auto &group : op.prepared.objective->product_groups) {
 		if (IsNonconvexProductGroup(group.square, group.weight_sign, op.decide_sense)) {
 			return &group;

@@ -228,14 +228,11 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	unique_ptr<Expression> member_filter;
 	auto row = ReadAsRow(calc, comparison, member_filter);
 	ExprPtr a, b;
-	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b) || out.var_idx >= decide.decide_variables.size()) {
+	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b)) {
 		return false;
 	}
 	auto type_id = decide.decide_variables[out.var_idx]->return_type.id();
 	bool whole = type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT;
-	if (!whole && type_id != LogicalTypeId::DOUBLE) {
-		return false;
-	}
 	// A strict bound steps onto the whole numbers (`x < 10` admits 9). The binder refuses one on a REAL, which has no
 	// such step (ValidateDecideIntegralComparisonOperands).
 	D_ASSERT(whole || (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN));
@@ -358,7 +355,7 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		// bound: `when c: x <= 0` does not mean `x <= 0` everywhere. This is why the pass keeps
 		// its own descent rather than using ForEachConstraintLeaf -- it asks the shared
 		// predicate what a wrapper is, then deliberately answers differently.
-		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
+		if (IsWhenFilterWrapper(conj)) {
 			break;
 		}
 		for (auto &child : conj.children) {
@@ -399,7 +396,7 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		// recorded. Only a recorded bound is loosened by a diagnosis, and a clause is one
 		// knob per kept row or class in an expanded diagnosis (D28), which one column
 		// bound cannot say, so a recorded one is flattened for the repair model too.
-		bool is_boolean = bound.var_idx < decide.is_boolean_var.size() && decide.is_boolean_var[bound.var_idx];
+		bool is_boolean = decide.is_boolean_var[bound.var_idx];
 		bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
 		if (!restates_domain) {
 			decide.user_singleton_row_bounds.push_back(
@@ -436,7 +433,7 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 	// `x <= 1` is already treated as a harmless no-op against the intrinsic box, so
 	// seeding it changes nothing about how a written bound is recorded.
 	for (idx_t i = 0; i < num_decide_vars; i++) {
-		if (i < decide.is_boolean_var.size() && decide.is_boolean_var[i]) {
+		if (decide.is_boolean_var[i]) {
 			decide.singleton_row_boxes[i].upper = 1.0;
 			// The floor is just as rigid. A written lower bound only ever raises it (`max`), so `x >= -3`
 			// leaves the box at [0,1] and a bound that cannot hold (`x >= 2`, `x <= -1`) inverts it, which
@@ -450,9 +447,7 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 		decide.singleton_row_boxes[var].lower_written = true;
 	}
 
-	if (decide.decide_constraints) {
-		FoldSingletonRowsInExpression(*decide.decide_constraints, decide);
-	}
+	FoldSingletonRowsInExpression(*decide.decide_constraints, decide);
 }
 
 } // namespace duckdb

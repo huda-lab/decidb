@@ -77,11 +77,11 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 			CollectReducerSites(func.children[1], -sign, context, decide_index, booleans, out, under_decision);
 			return;
 		}
-		if (name == "-" && func.children.size() == 1) {
+		if (name == "-") {
 			CollectReducerSites(func.children[0], -sign, context, decide_index, booleans, out, under_decision);
 			return;
 		}
-		if ((name == "*" || name == "/") && func.children.size() == 2) {
+		if (name == "*" || name == "/") {
 			// `factor * reducer` and `reducer / factor`: the factor's sign, when it is known
 			// before the query runs. A reducer in a divisor, or two decision-bearing
 			// factors, leave the sign unknown.
@@ -92,10 +92,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 					continue;
 				}
 				// A BOOL decision is never negative, so it keeps the direction of the reducer it scales.
-				int factor_sign = 0;
-				if (!(name == "/" && i == 1)) {
-					factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
-				}
+				const int factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
 				CollectReducerSites(term, sign * factor_sign, context, decide_index, booleans, out,
 				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index));
 			}
@@ -261,9 +258,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 } // namespace
 
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
-	if (!decide.decide_constraints && !decide.decide_objective) {
-		return;
-	}
 	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
 	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
@@ -305,9 +299,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		RemoveDecideTag(alias, VALUE_REWRITE_TAG);
 		cmp.SetAlias(std::move(alias));
 	};
-	if (decide.decide_constraints) {
-		rewrite(decide.decide_constraints, DecideEnclosingScope());
-	}
+	rewrite(decide.decide_constraints, DecideEnclosingScope());
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
 	// takes a helper decision the same way. The push is the sense times the term's sign, as for the body definitions.
@@ -318,9 +310,6 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		DecideEnclosingScope scope;
 		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
-			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
-				break;
-			}
 			scope = EnterDecideScope(conjunction, scope);
 			body = &conjunction.children[0];
 		}
