@@ -93,7 +93,7 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	if (decide.decide_constraints) {
 		auto constraints = std::move(decide.decide_constraints);
 		RewriteAvgInExpression(constraints, decide, string());
-		AppendConstraint(decide, std::move(constraints));
+		decide.AddConstraint(optimizer.context, std::move(constraints));
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
@@ -110,7 +110,6 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 	const idx_t decide_index = decide.decide_index;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
-	// Check if this node is an AVG aggregate — may be wrapped in a BOUND_CAST
 	Expression *inner = expr.get();
 	bool has_cast = false;
 	if (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -132,13 +131,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 		    BoundExpressionReferencesDecide(*inner, decide_index)) {
 			AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
 			                  RenderForPlan(agg, decide));
-			// Replace AVG(expr) with SUM(expr)
-			vector<unique_ptr<Expression>> sum_children;
-			sum_children.push_back(agg.children[0]->Copy());
-			auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-			if (agg.filter) {
-				new_sum->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
-			}
+			auto new_sum = BindSumOver(optimizer, agg.children[0]->Copy(), agg.filter.get());
 
 			// Tag so execution layer knows to apply AVG's row-count denominator.
 			// For a single objective AVG this is optimization-equivalent to SUM,
@@ -160,7 +153,6 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 		}
 	}
 
-	// Recurse into children
 	ExpressionIterator::EnumerateChildren(
 	    *expr, [&](unique_ptr<Expression> &child) { RewriteAvgInExpression(child, decide, clause_alias); });
 }

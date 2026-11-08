@@ -85,33 +85,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		if (aggregate.children.size() != 1) {
 			throw InternalException("DECIDE NORM marker must contain one bound expression");
 		}
-		auto old_alias = aggregate.GetAlias();
-		auto make_aggregate = [&](const string &name, unique_ptr<Expression> child) {
-			vector<unique_ptr<Expression>> children;
-			children.push_back(std::move(child));
-			auto result = optimizer.BindAggregateFunction(name, std::move(children));
-			result->alias = old_alias;
-			RemoveDecideTag(result->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
-			if (aggregate.filter) result->Cast<BoundAggregateExpression>().filter = aggregate.filter->Copy();
-			return result;
-		};
-		if (payload == "1" || payload == "2" || payload == "inf") {
-			throw InternalException("DECIDE norm of order %s reached the optimizer; canonicalization replaces it "
-			                        "with its definition",
-			                        payload);
-		}
+		// The orders left are the L0 counts: `0_auto`, and `0_<M>` for a written M.
 		bool auto_m = payload == "0_auto";
-		if (!auto_m && payload.rfind("0_", 0) != 0) {
-			throw InternalException("DECIDE NORM marker has invalid order payload '%s'", payload);
-		}
-		double m = 1.0;
-		if (!auto_m) {
-			try {
-				m = std::stod(payload.substr(2));
-			} catch (...) {
-				throw InternalException("DECIDE NORM marker has invalid L0 bound '%s'", payload);
-			}
-		}
+		double m = auto_m ? 1.0 : std::stod(payload.substr(2));
 		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
 		// An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
 		// links one row per instance.
@@ -139,7 +115,10 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		                                               aggregate.children[0]->Copy()));
 		add_link(optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()),
 		         optimizer.BindScalarFunction("*", make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))), z->Copy()));
-		expr = make_aggregate("sum", std::move(z));
+		auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
+		count->alias = aggregate.GetAlias();
+		RemoveDecideTag(count->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+		expr = std::move(count);
 	};
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
@@ -149,8 +128,10 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	decide.SetObjective(optimizer.context, std::move(objective));
 	auto constraints = std::move(decide.decide_constraints);
 	rewrite(constraints, string(), DecideEnclosingScope());
-	if (constraints) AppendConstraint(decide, std::move(constraints));
-	for (auto &link : links) AppendConstraint(decide, std::move(link));
+	if (constraints)
+		decide.AddConstraint(optimizer.context, std::move(constraints));
+	for (auto &link : links)
+		decide.AddConstraint(optimizer.context, std::move(link));
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
@@ -244,7 +225,8 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		expr = MakeTrueExpression(clause_alias);
 	};
 	rewrite(decide.decide_constraints, DecideEnclosingScope(), string());
-	for (auto &constraint : generated) AppendConstraint(decide, std::move(constraint));
+	for (auto &constraint : generated)
+		decide.AddConstraint(optimizer.context, std::move(constraint));
 }
 
 } // namespace duckdb

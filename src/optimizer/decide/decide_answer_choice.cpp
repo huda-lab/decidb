@@ -25,8 +25,6 @@ namespace {
 //! not portable and so is not serialized. Called by ChooseDecideAnswer, once, before any formulation rewrite. A plan
 //! the DECIDE optimizer never saw is refused at physical planning (`plan_decide.cpp`), so no other stage chooses a
 //! backend.
-void ChooseDecideSolver(LogicalDecide &op);
-
 void ChooseDecideSolver(LogicalDecide &op) {
 	D_ASSERT(op.solver_backend_name.empty());
 	// From here this plan carries formulation state chosen for THIS host's solver, which is not portable and so is not

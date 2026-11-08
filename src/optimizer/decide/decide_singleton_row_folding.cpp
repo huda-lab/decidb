@@ -409,10 +409,6 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		break;
 	}
 
-	case ExpressionClass::BOUND_CONSTANT:
-		// Type declarations and rewrite placeholders (`TRUE`) carry no bound.
-		break;
-
 	default:
 		break;
 	}

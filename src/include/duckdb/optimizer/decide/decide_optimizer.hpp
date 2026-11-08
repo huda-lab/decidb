@@ -206,8 +206,7 @@ private:
 	//! with auxiliary variable references, and collect metadata.
 	//! `source_alias` is the alias of the enclosing user comparison, so the rows this
 	//! emits can point back at the clause that produced them.
-	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                            vector<LogicalDecide::BilinearLink> &links, const string &source_alias);
+	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &source_alias);
 
 	//! Carries per-ABS-node metadata through the two phases of RewriteAbs.
 	struct AbsPairInfo {
@@ -241,18 +240,12 @@ private:
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis
-	//! text in decide.minmax_clause_labels and writes its index to out_clause_idx; the tag
-	//! carries that index, which is how stage 06 names the column it pins. Allocates no
+	//! text in decide.minmax_clause_labels; the tag carries its index, which is how stage 06
+	//! names the column it pins. Allocates no
 	//! variable — the binaries a Big-M pinning needs are global-block columns, created by
 	//! the pass that emits the rows reading them.
-	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name,
-	                                            const Expression &inner, const Expression *filter,
-	                                            idx_t &out_clause_idx);
-
-	//! Helper: append a constraint to the decide constraint tree via AND conjunction
-	//! Thin forwarder to LogicalDecide::AddConstraint, which canonicalizes on insert.
-	//! Non-static because it needs the optimizer's ClientContext.
-	void AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint);
+	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name, const Expression &inner,
+	                                            const Expression *filter);
 
 	Optimizer &optimizer;
 };

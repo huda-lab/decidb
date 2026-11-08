@@ -53,6 +53,13 @@ namespace duckdb {
 
 namespace {
 
+//! Whether each of the grouping expressions `own` is one of `keys`.
+bool KeysWithin(const vector<const Expression *> &own, const vector<const Expression *> &keys) {
+	return std::all_of(own.begin(), own.end(), [&](const Expression *key) {
+		return std::any_of(keys.begin(), keys.end(), [&](const Expression *group) { return group->Equals(*key); });
+	});
+}
+
 //! The bound-side rewrite of one DECIDE node: every value a bound needs that is not one row's value is replaced by a
 //! placeholder column, and the reducers behind the placeholders are recorded (LogicalDecide::bound_aggregates), not
 //! computed. A group bound that a direct-solve rule can compute itself is recorded as a DecideGroupBound instead.
@@ -167,10 +174,7 @@ private:
 			auto own = GroupKeyOf(expr);
 			reducers++;
 			return !TryParseQualifiedReducerTag(expr.GetAlias(), scope_idx) && own.size() == keys.size() &&
-			       std::all_of(own.begin(), own.end(), [&](const Expression *key) {
-				       return std::any_of(keys.begin(), keys.end(),
-				                          [&](const Expression *group) { return group->Equals(*key); });
-			       });
+			       KeysWithin(own, keys);
 		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			return false;
@@ -412,10 +416,7 @@ private:
 			auto &binding = bound.Cast<BoundColumnRefExpression>().binding;
 			for (auto &reducer : reducer_columns) {
 				if (reducer.binding == binding) {
-					return std::all_of(reducer.keys.begin(), reducer.keys.end(), [&](const Expression *key) {
-						return std::any_of(keys.begin(), keys.end(),
-						                   [&](const Expression *group) { return group->Equals(*key); });
-					});
+					return KeysWithin(reducer.keys, keys);
 				}
 			}
 			return false;

@@ -26,11 +26,20 @@ namespace duckdb {
 class ClientContext;
 class DecideCanonicalizer;
 class LogicalDecide;
+class Optimizer;
 
 namespace decide_rewrite {
 
 //! Map an aggregate's SQL name onto the objective aggregate enum.
 ObjectiveAggregateType StrToAggType(const string &name);
+
+//! Whether a lower-cased aggregate name is MIN or MAX.
+inline bool IsExtremumName(const string &name) {
+	return name == "min" || name == "max";
+}
+
+//! `SUM(body)` bound as a reducer, reading the rows `filter` keeps (null: every row).
+unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> body, const Expression *filter);
 
 //! Recognize the binder's `norm` marker alias and return its payload.
 bool TryParseNormMarker(const string &alias, string &payload);
@@ -51,7 +60,7 @@ void MarkFormulationConstraint(Expression &expr, const string &source_alias);
 string DescendSourceAlias(const Expression &expr, const string &inherited);
 
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
-unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string());
+unique_ptr<Expression> MakeTrueExpression(const string &source_alias);
 
 //! `row`, which a rewrite adds for a clause, wrapped in a copy of the clause's `when` condition when it has one, so
 //! it reads only the rows the clause keeps.
@@ -89,7 +98,7 @@ void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
 //! `scoped_variable_indices`. A non-empty `label` names the column in a
 //! diagnosis (F6) by what it stands for. Returns the column's index.
 idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
-                           DecideVarScopeInfo scope = DecideVarScopeInfo::Row(), const string &label = string());
+                           DecideVarScopeInfo scope, const string &label);
 
 //! The scope of a column defined by two others (a product's auxiliary): their least upper bound, as DuckDB promotes
 //! the type of a binary operator. Two query-wide scopes join to a query-wide one, a query-wide scope and a keyed one

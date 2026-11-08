@@ -86,13 +86,6 @@ static DecideProductGroup ReadProductGroup(DecideSplitTerm &term) {
 	return group;
 }
 
-//! Collect DECIDE variable references from a bound expression, tracking sign
-//! through subtraction operators. Used for multi-variable per-row constraints.
-struct ExprVarRef {
-	idx_t var_idx;
-	int sign; // +1 or -1
-};
-
 //===--------------------------------------------------------------------===//
 // DecideLinearFormBuilder
 //===--------------------------------------------------------------------===//
@@ -178,43 +171,6 @@ private:
 		vector<DecideSplitTerm> split;
 		splitter.Split(expr, 1, split);
 		AppendLinearTerms(split, out);
-	}
-
-	void CollectDecideVarRefs(const Expression &expr, int sign, vector<ExprVarRef> &refs) const {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-			idx_t var_idx = FindDecideVariable(expr);
-			if (var_idx != DConstants::INVALID_INDEX) {
-				refs.push_back({var_idx, sign});
-			}
-			return;
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			auto &func = expr.Cast<BoundFunctionExpression>();
-			if (func.function.name == "-" && func.children.size() == 2) {
-				CollectDecideVarRefs(*func.children[0], sign, refs);
-				CollectDecideVarRefs(*func.children[1], -sign, refs);
-				return;
-			}
-			if (func.function.name == "+" && func.children.size() == 2) {
-				CollectDecideVarRefs(*func.children[0], sign, refs);
-				CollectDecideVarRefs(*func.children[1], sign, refs);
-				return;
-			}
-			if (func.function.name == "*" && func.children.size() == 2) {
-				// Multiplication: descend into both children to find decide variables.
-				// Sign propagates unchanged — * doesn't flip algebraic sign, it changes
-				// the coefficient magnitude, which this walk does not measure.
-				CollectDecideVarRefs(*func.children[0], sign, refs);
-				CollectDecideVarRefs(*func.children[1], sign, refs);
-				return;
-			}
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			auto &cast = expr.Cast<BoundCastExpression>();
-			CollectDecideVarRefs(*cast.child, sign, refs);
-			return;
-		}
-		// Constants, data columns, etc.: no DECIDE vars
 	}
 
 	static bool BoundExpressionContainsAggregate(const Expression &expr) {
@@ -362,13 +318,16 @@ private:
 		return scope_idx;
 	}
 
-	static void ApplyAggregateMetadata(vector<DecideTerm> &terms, idx_t begin, const BoundAggregateExpression &agg) {
+	//! A reducer's AVG tag, qualifier and reduction on every term or product group extracted from its body since
+	//! `begin`.
+	template <class TERM>
+	static void ApplyAggregateMetadata(vector<TERM> &items, idx_t begin, const BoundAggregateExpression &agg) {
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
-		for (idx_t i = begin; i < terms.size(); i++) {
-			terms[i].avg_scale = is_avg;
-			terms[i].qualifier_scope_idx = qualifier_scope;
-			terms[i].reduction = LinearTermReduction::SUM;
+		for (idx_t i = begin; i < items.size(); i++) {
+			items[i].avg_scale = is_avg;
+			items[i].qualifier_scope_idx = qualifier_scope;
+			items[i].reduction = LinearTermReduction::SUM;
 		}
 	}
 
@@ -388,19 +347,6 @@ private:
 		}
 		for (idx_t i = group_before; i < constraint.product_groups.size(); i++) {
 			constraint.product_groups[i].filter = filter->Copy();
-		}
-	}
-
-	//! A reducer's AVG tag, qualifier and reduction on every group extracted from its body since `begin`, as
-	//! ApplyAggregateMetadata does for its linear terms.
-	static void ApplyAggregateMetadata(vector<DecideProductGroup> &groups, idx_t begin,
-	                                   const BoundAggregateExpression &agg) {
-		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-		idx_t qualifier_scope = QualifierScopeOf(agg);
-		for (idx_t i = begin; i < groups.size(); i++) {
-			groups[i].avg_scale = is_avg;
-			groups[i].qualifier_scope_idx = qualifier_scope;
-			groups[i].reduction = LinearTermReduction::SUM;
 		}
 	}
 
@@ -461,27 +407,13 @@ private:
 	//! optimizer has already rewritten every MIN/MAX to SUM (asserted below), and a
 	//! sum distributes over any factor regardless of sign.
 	void ApplyScaleToExtracted(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
-	                           DecideConstraint &constraint, idx_t linear_before, idx_t group_before) {
-		for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
-			auto &term = constraint.lhs_terms[i];
-			ScaleCoefficient(scale_func, scale, divides, term.coefficient, term.inputs);
+	                           vector<DecideTerm> &terms, vector<DecideProductGroup> &groups, idx_t linear_before,
+	                           idx_t group_before) {
+		for (idx_t i = linear_before; i < terms.size(); i++) {
+			ScaleCoefficient(scale_func, scale, divides, terms[i].coefficient, terms[i].inputs);
 		}
-		for (idx_t i = group_before; i < constraint.product_groups.size(); i++) {
-			auto &group = constraint.product_groups[i];
-			ScaleCoefficient(scale_func, scale, divides, group.weight, group.inputs);
-		}
-	}
-
-	//! Objective twin of ApplyScaleToExtracted: multiply a factor that stayed outside a
-	//! reducer into everything the reducer produced.
-	void ApplyScaleToObjective(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
-	                           DecideObjective &obj, idx_t linear_before, idx_t group_before) {
-		for (idx_t i = linear_before; i < obj.terms.size(); i++) {
-			ScaleCoefficient(scale_func, scale, divides, obj.terms[i].coefficient, obj.terms[i].inputs);
-		}
-		for (idx_t i = group_before; i < obj.product_groups.size(); i++) {
-			auto &group = obj.product_groups[i];
-			ScaleCoefficient(scale_func, scale, divides, group.weight, group.inputs);
+		for (idx_t i = group_before; i < groups.size(); i++) {
+			ScaleCoefficient(scale_func, scale, divides, groups[i].weight, groups[i].inputs);
 		}
 	}
 
@@ -521,8 +453,8 @@ private:
 				idx_t linear_before = constraint.lhs_terms.size();
 				idx_t group_before = constraint.product_groups.size();
 				ExtractReducerConstraintTerms(*atom.scale.aggregate, constraint, atom.sign);
-				ApplyScaleToExtracted(*atom.scale.function, *scale, atom.scale.divides, constraint, linear_before,
-				                      group_before);
+				ApplyScaleToExtracted(*atom.scale.function, *scale, atom.scale.divides, constraint.lhs_terms,
+				                      constraint.product_groups, linear_before, group_before);
 				continue;
 			}
 			// A tuple term beside the reducers: the canonicalizer admitted it as one value per group
@@ -581,7 +513,8 @@ private:
 		ExtractConstraintTerms(*agg->children[0], constraint, 1);
 		AttachReducerFilter(constraint, 0, 0, agg->filter.get());
 		if (scale_match.aggregate) {
-			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint, 0, 0);
+			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint.lhs_terms,
+			                      constraint.product_groups, 0, 0);
 		}
 	}
 
@@ -625,7 +558,6 @@ private:
 			TryParseSourceClauseTag(comp.GetAlias(), constraint->source_clause_id);
 			TryParseRemovalGroupTag(comp.GetAlias(), constraint->removal_group_id);
 
-			// Parse not-equal indicator tag if present
 			string payload;
 			if (ExtractDecideTagPayload(comp.alias, NE_CLAUSE_TAG_PREFIX, payload)) {
 				constraint->ne_clause_idx = std::stoull(payload);
@@ -655,7 +587,6 @@ private:
 			constraint->scope = DecideClauseScope(scope);
 			TryParseGroupKeyTag(comp.alias, constraint->group_key);
 
-			// Extract terms from LHS
 			// Only binder-generated wrappers over decision algebra are transparent.
 			// A data cast is a SQL computation and UnwrapDecideCasts stops at it.
 			Expression *lhs = UnwrapDecideCasts(*comp.left, decide_index);
@@ -698,25 +629,6 @@ private:
 			} else {
 				// Per-row constraint (e.g., x <= 5, or multi-variable: d >= x - c)
 				constraint->lhs_is_aggregate = false;
-
-				// K1 guard. DecideCanonicalizer puts every decision-bearing term on
-				// the left, so a decision variable reaching the RHS here means the
-				// invariant was broken upstream -- by a new optimizer rewrite that
-				// mutates a constraint in place instead of going through
-				// LogicalDecide::AddConstraint, most likely. This used to be a second
-				// implementation of the partition (the canonicalization refactor); it was
-				// verified unreachable across the golden corpus and the full suite
-				// before being replaced by the check, so a wrong answer here would
-				// otherwise be silent.
-				vector<ExprVarRef> rhs_refs;
-				CollectDecideVarRefs(*comp.right, +1, rhs_refs);
-				if (!rhs_refs.empty()) {
-					throw InternalException(
-					    "DECIDE constraint is not canonical: decision variable on the right-hand "
-					    "side of '%s'. Constraints must be canonicalized by DecideCanonicalizer "
-					    "before reaching term extraction.",
-					    comp.right->ToString());
-				}
 
 				if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 					// Simple single-variable constraint (e.g., x <= 5)
@@ -807,8 +719,8 @@ private:
 				idx_t linear_before = obj.terms.size();
 				idx_t group_before = obj.product_groups.size();
 				ExtractReducerObjectiveTerms(*atom.scale.aggregate, obj, atom.sign);
-				ApplyScaleToObjective(*atom.scale.function, *obj_scale, atom.scale.divides, obj, linear_before,
-				                      group_before);
+				ApplyScaleToExtracted(*atom.scale.function, *obj_scale, atom.scale.divides, obj.terms,
+				                      obj.product_groups, linear_before, group_before);
 				continue;
 			}
 			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
@@ -882,7 +794,6 @@ private:
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
 			if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
 				when_cond = conj.children[1]->Copy();
-				// Unwrap to get the actual objective expression
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
 			}
 		}

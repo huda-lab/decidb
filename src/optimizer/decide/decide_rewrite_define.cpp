@@ -74,10 +74,6 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 namespace {
 
-bool IsExtremumName(const string &name) {
-	return name == "min" || name == "max";
-}
-
 //! A SUM, AVG, MIN or MAX over decisions.
 optional_ptr<const BoundAggregateExpression> AsDecisionReducer(const Expression &expr, idx_t decide_index) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
@@ -384,7 +380,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		}
 	}
 	for (auto &row : rows) {
-		AppendConstraint(decide, std::move(row));
+		decide.AddConstraint(optimizer.context, std::move(row));
 	}
 }
 

@@ -57,12 +57,10 @@ unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator
 }
 
 void DecideOptimizer::OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root) {
-	// Recurse into children first (bottom-up)
 	for (auto &child : op->children) {
 		OptimizeSubtree(child, root);
 	}
 
-	// If this is a LogicalDecide node, apply DECIDE-specific optimizations
 	if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
 		OptimizeDecide(op, root);
 	}
@@ -149,6 +147,17 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 // ---------------------------------------------------------------------------
 // Bound DECIDE syntax markers: NORM and IN
 // ---------------------------------------------------------------------------
+
+unique_ptr<Expression> decide_rewrite::BindSumOver(Optimizer &optimizer, unique_ptr<Expression> body,
+                                                   const Expression *filter) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(body));
+	auto sum = optimizer.BindAggregateFunction("sum", std::move(children));
+	if (filter) {
+		sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
+	}
+	return sum;
+}
 
 bool decide_rewrite::TryParseNormMarker(const string &alias, string &payload) {
 	auto start = alias.find(NORM_MARKER_TAG_PREFIX);
@@ -354,21 +363,18 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());
 		}
 	};
-	auto is_extremum = [](const string &name) {
-		return name == "min" || name == "max";
-	};
 	for (auto &constraint : decide.composed_minmax_constraints) {
 		for (auto &term : constraint.terms) {
 			check(*term.inner_expr);
 		}
 	}
 	for (auto &term : decide.composed_minmax_objective_terms) {
-		if (is_extremum(term.agg_name)) {
+		if (IsExtremumName(term.agg_name)) {
 			check(*term.inner_expr);
 		}
 	}
 	for (auto &link : decide.reducer_value_links) {
-		if (is_extremum(link.agg_name)) {
+		if (IsExtremumName(link.agg_name)) {
 			check(*link.inner_expr);
 		}
 	}
@@ -449,14 +455,6 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 		AddDecideTag(alias, MakeRemovalGroupTag(group));
 		node.SetAlias(std::move(alias));
 	});
-}
-
-void DecideOptimizer::AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint) {
-	// The constraint pool belongs to the operator, and so does the invariant that
-	// everything in it is canonical. Rewrites keep emitting whatever shape is
-	// natural for them (`aux >= inner`, `aux >= 0 - inner`, ...); LogicalDecide
-	// puts it into canonical form on the way in.
-	decide.AddConstraint(optimizer.context, std::move(constraint));
 }
 
 // ---------------------------------------------------------------------------

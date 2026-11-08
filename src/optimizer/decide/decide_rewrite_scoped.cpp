@@ -272,14 +272,6 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
 	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: hand it to its one-product
 	// linearization, the same McCormick column any Boolean product gets.
-	auto HandProductsToBilinear = [&](unique_ptr<Expression> &expr, const string &source_alias) {
-		vector<LogicalDecide::BilinearLink> products;
-		FindAndReplaceBilinear(expr, decide, products, source_alias);
-		for (auto &product : products) {
-			decide.bilinear_links.push_back(product);
-		}
-	};
-
 	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope)> rewrite = [&](unique_ptr<Expression> &expr,
 	                                                                                  DecideEnclosingScope scope) {
 		scope = EnterDecideScope(*expr, scope);
@@ -307,7 +299,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			                     cmp.type);
 			ReplaceReducer(helpers, names, scope, ExtremumPushOf(cmp.type), source_clause_id, site);
 		}
-		HandProductsToBilinear(cmp.left, cmp.GetAlias());
+		FindAndReplaceBilinear(cmp.left, decide, cmp.GetAlias());
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
 		RemoveDecideTag(alias, VALUE_REWRITE_TAG);
@@ -341,7 +333,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 					ReplaceReducer(helpers, names, scope, outer, DConstants::INVALID_INDEX, site);
 				}
 			}
-			HandProductsToBilinear(*body, OBJECTIVE_ROW_TAG);
+			FindAndReplaceBilinear(*body, decide, OBJECTIVE_ROW_TAG);
 		}
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}

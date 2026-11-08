@@ -85,14 +85,19 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // takes the exact envelope, which boxes it.
 // ---------------------------------------------------------------------------
 
+//! `abs(e)` with a decision in `e`.
+static bool IsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	return StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1 &&
+	       BoundExpressionReferencesDecide(*func.children[0], decide_index);
+}
+
 static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
-			if (BoundExpressionReferencesDecide(*func.children[0], decide_index)) {
-				return true;
-			}
-		}
+	if (IsAbsOverDecideVar(expr, decide_index)) {
+		return true;
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
@@ -108,13 +113,8 @@ static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index)
 // Used on the side of a comparison that does not upper-bound aux (or on entire
 // BETWEEN/IN/equality/<> subtrees).
 static void TagAbsSubtreeForBigM(Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
-			if (BoundExpressionReferencesDecide(*func.children[0], decide_index)) {
-				AddDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
-			}
-		}
+	if (IsAbsOverDecideVar(expr, decide_index)) {
+		AddDecideTag(expr.alias, ABS_NEEDS_BIGM_TAG);
 	}
 	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { TagAbsSubtreeForBigM(child, decide_index); });
 }
@@ -140,17 +140,15 @@ static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sig
 	};
 	PolarityVisit visit = [&](Expression &node, int node_sign) {
 		if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			auto &func = node.Cast<BoundFunctionExpression>();
-			if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1 &&
-			    BoundExpressionReferencesDecide(*func.children[0], decide_index)) {
-				// The ABS node itself is the unit that gets tagged. An ABS nested inside it
-				// sits under a function that is not monotone in it, so no pressure and no
-				// shape pins it: it is collected with sign 0, which never classifies as pinned.
-				out.emplace_back(&node, node_sign);
-				WalkPolarity(context, *func.children[0], 0, holds, visit);
-				return true;
+			if (!IsAbsOverDecideVar(node, decide_index)) {
+				return false;
 			}
-			return false;
+			// The ABS node itself is the unit that gets tagged. An ABS nested inside it
+			// sits under a function that is not monotone in it, so no pressure and no
+			// shape pins it: it is collected with sign 0, which never classifies as pinned.
+			out.emplace_back(&node, node_sign);
+			WalkPolarity(context, *node.Cast<BoundFunctionExpression>().children[0], 0, holds, visit);
+			return true;
 		}
 		if (node.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 			return false;
@@ -188,11 +186,6 @@ static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
 		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			auto &comp = node.Cast<BoundComparisonExpression>();
-			bool lhs_has_abs = ContainsAbsOverDecideVar(*comp.left, decide_index);
-			bool rhs_has_abs = ContainsAbsOverDecideVar(*comp.right, decide_index);
-			if (!lhs_has_abs && !rhs_has_abs) {
-				return;
-			}
 			auto t = comp.type;
 			// Read the constraint as `E <op> 0` with `E = LHS - RHS`: every ABS is then
 			// a single signed term of one expression, and "does this comparison push the
@@ -222,9 +215,7 @@ static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx
 		}
 		// Other top-level shapes (BETWEEN, IN, equality, <>): no per-side direction
 		// analysis available — tag every ABS in the subtree for Big-M to be safe.
-		if (ContainsAbsOverDecideVar(node, decide_index)) {
-			TagAbsSubtreeForBigM(node, decide_index);
-		}
+		TagAbsSubtreeForBigM(node, decide_index);
 	});
 }
 
@@ -241,9 +232,6 @@ static void ClassifyAbsObjective(ClientContext &context, Expression &objective, 
 			break;
 		}
 		body = conjunction.children[0].get();
-	}
-	if (!ContainsAbsOverDecideVar(*body, decide_index)) {
-		return;
 	}
 	const int pinning_sign = sense == DecideSense::MINIMIZE ? 1 : -1;
 	vector<std::pair<Expression *, int>> signed_abs;
@@ -315,14 +303,12 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		auto &aux_var = decide.decide_variables[pair.aux_idx];
 		auto &aux_ref = aux_var->Cast<BoundColumnRefExpression>();
 
-		// Constraint 1 (C1): aux >= inner_expr
 		auto aux_ref1 = make_uniq<BoundColumnRefExpression>(
 		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
 		auto c1 = make_uniq<BoundComparisonExpression>(
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 		    std::move(aux_ref1), pair.inner_expr->Copy());
 
-		// Constraint 2 (C2): aux >= -inner_expr  (computed as 0 - inner_expr)
 		auto aux_ref2 = make_uniq<BoundColumnRefExpression>(
 		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
 		auto neg_expr = optimizer.BindScalarFunction(
@@ -377,10 +363,10 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			MarkFormulationConstraint(*c2, pair.source_alias);
 		}
 
-		AppendConstraint(decide,
-		                 ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c1), pair.when.get()), pair.scope));
-		AppendConstraint(decide,
-		                 ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c2), pair.when.get()), pair.scope));
+		decide.AddConstraint(optimizer.context,
+		                     ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c1), pair.when.get()), pair.scope));
+		decide.AddConstraint(optimizer.context,
+		                     ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c2), pair.when.get()), pair.scope));
 	}
 }
 
@@ -393,57 +379,47 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 	scope = EnterDecideScope(*expr, scope);
 
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+	if (IsAbsOverDecideVar(*expr, decide.decide_index)) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
-		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
-			if (BoundExpressionReferencesDecide(*func.children[0], decide.decide_index)) {
-				// Declare the auxiliary as INTEGER when the inner expression is
-				// integer-typed — |k| preserves integer-valuedness, so downstream
-				// strict-inequality rewrites (`SUM(|...|) < K → <= K-1`) stay sound.
-				// Without this, all ABS auxes are DOUBLE and the LHS-integer check
-				// in ilp_model_builder would reject valid integer-valued strict cases.
-				// A copy: the argument is rewritten below, and the node it was may go.
-				const LogicalType inner_type = func.children[0]->return_type;
-				bool inner_is_integer = inner_type.IsIntegral() ||
-				                        inner_type.id() == LogicalTypeId::BOOLEAN;
-				LogicalType aux_type =
-				    inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
+		// Declare the auxiliary as INTEGER when the inner expression is
+		// integer-typed — |k| preserves integer-valuedness, so downstream
+		// strict-inequality rewrites (`SUM(|...|) < K → <= K-1`) stay sound.
+		// Without this, all ABS auxes are DOUBLE and the LHS-integer check
+		// in ilp_model_builder would reject valid integer-valued strict cases.
+		// A copy: the argument is rewritten below, and the node it was may go.
+		const LogicalType inner_type = func.children[0]->return_type;
+		bool inner_is_integer = inner_type.IsIntegral() || inner_type.id() == LogicalTypeId::BOOLEAN;
+		LogicalType aux_type = inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
-				// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner) --
-				// rendered before the argument is rewritten, so a nested ABS keeps its text.
-				string label = "abs(" + RenderForPlan(*func.children[0], decide) + ")";
+		// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner) --
+		// rendered before the argument is rewritten, so a nested ABS keeps its text.
+		string label = "abs(" + RenderForPlan(*func.children[0], decide) + ")";
 
-				// Innermost first: an ABS inside this one becomes its own auxiliary now, so
-				// the inner expression copied below refers to it rather than carrying an
-				// ABS no later pass would lower (term extraction read `abs(h)` as `h`). Its
-				// pair is appended before this one, which is the order the auxiliary-bound
-				// derivation boxes them in: the outer range needs the inner box.
-				FindAndReplaceAbs(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope);
+		// Innermost first: an ABS inside this one becomes its own auxiliary now, so
+		// the inner expression copied below refers to it rather than carrying an
+		// ABS no later pass would lower (term extraction read `abs(h)` as `h`). Its
+		// pair is appended before this one, which is the order the auxiliary-bound
+		// derivation boxes them in: the outer range needs the inner box.
+		FindAndReplaceAbs(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope);
 
-				// A column defined by its argument: one per instance of the scopes the argument reads.
-				auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
-				idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__",
-				                                     aux_type, false, aux_scope, label);
+		// A column defined by its argument: one per instance of the scopes the argument reads.
+		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
+		idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__", aux_type, false,
+		                                     aux_scope, label);
 
-				// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
-				// alias before the rewrite: the one place that decides exactness, for a
-				// constraint and for the objective, for an ABS nested in another (which it
-				// collects as unknown sign) and for a dead one (which it leaves untagged).
-				const bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
+		// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
+		// alias before the rewrite: the one place that decides exactness, for a
+		// constraint and for the objective, for an ABS nested in another (which it
+		// collects as unknown sign) and for a dead one (which it leaves untagged).
+		const bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
 
-				// Stash the bound inner expression for constraint generation
-				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
-				                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label),
-				                     aux_scope});
+		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
+		                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label), aux_scope});
 
-				// Replace ABS(inner) with aux var reference
-				ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
-				return;
-			}
-		}
+		ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
+		return;
 	}
 
-	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
 		FindAndReplaceAbs(child, decide, canonicalizer, abs_pairs, clause_alias, scope);
 	});
