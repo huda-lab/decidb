@@ -412,7 +412,13 @@ private:
 	bool ReadsOnlyQueryWideDecisions(const Expression &expr) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			idx_t var_idx = FindDecideVariable(expr);
-			return var_idx == DConstants::INVALID_INDEX || op.variable_scopes[var_idx].IsGlobal();
+			// A data factor of a product outside a reducer is peeled as the atom's scale (ReadCanonicalAtoms), so the
+			// columns left here are decisions.
+			if (var_idx == DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE objective term '%s' holds a data column beside a product of decisions",
+				                        expr.ToString());
+			}
+			return op.variable_scopes[var_idx].IsGlobal();
 		}
 		bool all = true;
 		EnumerateChildrenConst(

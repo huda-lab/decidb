@@ -122,17 +122,12 @@ struct Helpers {
 	LogicalDecide &decide;
 	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
 
-	//! The link holding `agg` over the rows `scope` keeps, or INVALID_INDEX.
-	idx_t Find(const BoundAggregateExpression &agg, const DecideEnclosingScope &scope) const {
-		auto when = scope.Condition();
+	//! The link holding `agg`, or INVALID_INDEX.
+	idx_t Find(const BoundAggregateExpression &agg) const {
 		for (idx_t i = 0; i < reducers.size(); i++) {
-			auto &link = decide.reducer_value_links[i];
-			if (!reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
-				continue;
-			}
-			// A clause's rows carry copies of its `when`: the same condition.
-			const bool same_when = when ? link.when && link.when->Equals(*when) : !link.when;
-			if (same_when) {
+			// Equal aliases are copies of one written reducer (each carries the source fragment of its text), which
+			// sit in one clause under its one `when`.
+			if (reducers[i]->Equals(agg) && reducers[i]->GetAlias() == agg.GetAlias()) {
 				return i;
 			}
 		}
@@ -198,11 +193,11 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	auto account_kind = group_key == DConstants::INVALID_INDEX
 	                        ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER
 	                        : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP;
-	idx_t link_idx = helpers.Find(agg, scope);
+	idx_t link_idx = helpers.Find(agg);
 	if (link_idx != DConstants::INVALID_INDEX) {
 		auto &link = decide.reducer_value_links[link_idx];
-		link.need_envelope = link.need_envelope || need_envelope;
-		link.need_closing = link.need_closing || need_closing;
+		link.need_envelope |= need_envelope;
+		link.need_closing |= need_closing;
 		// Each clause that reads the helper says so in its own plan, once.
 		bool told = false;
 		for (auto &account : decide.rewrite_accounts) {

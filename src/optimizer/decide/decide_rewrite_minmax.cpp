@@ -598,13 +598,11 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		if (scope.per_wrapper) {
 			auto per_class = scope.per_wrapper;
 			// The clause's own `per K:`, outermost as the binder nests it: the easy half
-			// stands for the same classes (D28) and prints in front as written.
+			// stands for the same classes (D28) and prints in front as written. The wrapper holds its clause only,
+			// its key is in the tag (DecideConstraintsBinder).
 			auto per_wrapper = make_uniq<BoundConjunctionExpression>(per_class->type);
 			per_wrapper->alias = per_class->alias;
 			per_wrapper->children.push_back(std::move(easy));
-			for (idx_t i = 1; i < per_class->children.size(); i++) {
-				per_wrapper->children.push_back(per_class->children[i]->Copy());
-			}
 			easy = std::move(per_wrapper);
 		}
 		new_constraints.push_back(std::move(easy));

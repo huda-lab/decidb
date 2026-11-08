@@ -199,10 +199,15 @@ static void FoldKnownBound(ClientContext &context, ExpressionType type, const De
 	out.folds = TryEvaluateFoldableDouble(context, *bound.a, a_value, FOLD_CATCH_ALL) && a_value != 0.0 &&
 	            std::isfinite(a_value) && TryEvaluateFoldableDouble(context, *bound.r, r_value, FOLD_CATCH_ALL) &&
 	            !std::isnan(r_value) &&
-	            TryEvaluateFoldableDouble(context, *bound.RowLower(), out.lower_value, FOLD_CATCH_ALL) &&
-	            TryEvaluateFoldableDouble(context, *bound.RowUpper(), out.upper_value, FOLD_CATCH_ALL);
+	            TryEvaluateFoldableDouble(context, *bound.RowLower(), out.lower_value, FOLD_CATCH_ALL);
 	if (!out.folds) {
 		return;
+	}
+	// The ends are read from the same `a`, `r` and row: once the lower end folds, so does the upper.
+	const bool upper_folds = TryEvaluateFoldableDouble(context, *bound.RowUpper(), out.upper_value, FOLD_CATCH_ALL);
+	if (!upper_folds) {
+		throw InternalException("DECIDE: the upper end of a bound does not fold though its lower end does; "
+		                        "AdmittedInterval promises ends read from the same a, r and row");
 	}
 	bool strict = type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
 	bool at_most = type == ExpressionType::COMPARE_LESSTHANOREQUALTO || type == ExpressionType::COMPARE_LESSTHAN;
@@ -335,7 +340,10 @@ void DecideWrittenBox::Add(char sense, double k) {
 }
 
 void DecideWrittenBox::AddLowered(char sense, double k) {
-	if (sense != '<' && k < 0.0) {
+	if (sense == '<') {
+		throw InternalException("DECIDE: a '<' bound reached the lowered box; its callers promise '>' and '=' only");
+	}
+	if (k < 0.0) {
 		DecideFoldSingletonRow(box, '>', k);
 	}
 }
