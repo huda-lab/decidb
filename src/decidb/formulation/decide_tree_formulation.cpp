@@ -157,6 +157,7 @@ private:
 	std::unordered_set<idx_t> completed_auxiliaries;
 	std::unordered_set<idx_t> busy_auxiliaries;
 	std::unordered_map<idx_t, vector<DecideTreeValuePtr>> synthesized_rows;
+	std::unordered_map<const DecideDescentGroup *, idx_t> group_class_sets;
 	bool enable_auxiliaries = false;
 	string written;
 	idx_t source = DConstants::INVALID_INDEX;
@@ -196,32 +197,49 @@ private:
 		return name;
 	}
 
+	//! A row names the classes its clause's `per` makes (SolverInput::ClassSet). With none written, an instance of a
+	//! grouped clause stands for every kept row of its group, whichever row holds its entry: one set per group.
 	void Provenance(idx_t root, const DecideDescentEntry &entry, SolverInput::RawConstraint &row) {
 		auto &node = *tree.nodes[root];
 		const bool grouped = node.facts && (node.facts->lhs_is_aggregate || node.facts->was_minmax_easy);
-		bool named = false;
+		const DecideNodeContainer *members = nullptr;
+		const DecideDescentGroup *group = nullptr;
 		if (grouped) {
 			for (auto &read : node.child_reads) {
 				auto &child = *tree.nodes[read.node];
 				if (child.kind != DecideNodeKind::REDUCER || child.key != node.facts->group_key) {
 					continue;
 				}
-				for (auto &member : descent.Containers()[read.node].entries) {
+				members = &descent.Containers()[read.node];
+				for (auto &member : members->entries) {
 					if (member.row == entry.row) {
-						row.group_key = descent.Containers()[read.node].groups[member.slot].rank;
+						group = &members->groups[member.slot];
+						row.group_key = group->rank;
 						row.group_name = Name(read.node, member.slot, entry.row);
-						named = true;
 						break;
 					}
 				}
-				if (named) {
+				if (group) {
 					break;
 				}
 			}
 		}
-		if (!named && node.per != DecideTreePer::ROW) {
+		if (!group && node.per != DecideTreePer::ROW) {
 			row.group_key = descent.Containers()[root].groups[entry.slot].rank;
 			row.group_name = Name(root, entry.slot, entry.row);
+		}
+		if (group && node.facts->scope.per == DecideClauseScope::PerRole::NONE) {
+			auto known = group_class_sets.find(group);
+			if (known == group_class_sets.end()) {
+				SolverInput::ClassSet classes {SolverInput::ClassSet::Kind::KEPT_ROWS, {}, {}};
+				for (auto index : group->entries) {
+					classes.rows.push_back(members->entries[index].row);
+				}
+				known = group_class_sets.emplace(group, input.class_sets.size()).first;
+				input.class_sets.push_back(std::move(classes));
+			}
+			row.class_set = known->second;
+			return;
 		}
 		SolverInput::ClassSet classes;
 		if (node.per == DecideTreePer::ONE) {
@@ -238,6 +256,9 @@ private:
 	}
 
 	void MergeClasses(idx_t target, idx_t source_set) {
+		if (target == source_set) {
+			return;
+		}
 		auto &to = input.class_sets[target];
 		auto &from = input.class_sets[source_set];
 		for (auto row : from.rows) {
@@ -344,6 +365,16 @@ private:
 		throw InternalException("DECIDE tree formulation read an unknown value kind");
 	}
 
+	//! What a root bounds at an entry: an easy extremum each member directly, as MAX(e) <= K is every member e <= K,
+	//! with no symbolic intermediate column; any other root the entry's value.
+	static vector<DecideTreeValuePtr> Bounded(const DecideNode &node, const DecideTreeValuePtr &value, int push) {
+		if (node.facts && node.facts->was_minmax_easy && value->kind == DecideTreeValueKind::REDUCER &&
+		    ((value->operation == "max" && push > 0) || (value->operation == "min" && push < 0))) {
+			return value->operands;
+		}
+		return {value};
+	}
+
 	void LiftedFloors() {
 		const auto infinity = std::numeric_limits<double>::infinity();
 		vector<vector<double>> lowered(input.num_decide_vars);
@@ -358,30 +389,36 @@ private:
 			}
 			written = node.text;
 			auto &values = evaluation.Results()[root];
-			auto &container = descent.Containers()[root];
+			const int push = node.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+			                         node.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO
+			                     ? -1
+			                     : 1;
 			for (auto entry : SurvivingEntries(root, true)) {
-				auto form = Compile(values.entries[entry], 0);
-				form.Add(Compile(values.rhs[entry], 0), -1, written);
-				form.Compact();
-				if (form.terms.size() != 1 || !form.quadratic.empty()) {
-					throw InternalException("DECIDE tree lifted floor is not a bound on one decision");
+				// The floor is on each decision the root bounds, whichever row its instance's entry is.
+				for (auto &bounded : Bounded(node, values.entries[entry], push)) {
+					auto form = Compile(bounded, 0);
+					form.Add(Compile(values.rhs[entry], 0), -1, written);
+					form.Compact();
+					if (form.terms.size() != 1 || !form.quadratic.empty()) {
+						throw InternalException("DECIDE tree lifted floor is not a bound on one decision");
+					}
+					const auto term = *form.terms.begin();
+					double floor = -form.constant / term.second;
+					if (node.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+					    node.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+						floor = DecideStrictBound(true, floor);
+					}
+					floor = MaxValue(floor, -DECIDE_SOLVER_INFINITY);
+					if (lowered[variable].empty()) {
+						lowered[variable].assign(indexer.NamedInstances(variable), infinity);
+					}
+					const auto instance = indexer.InstanceOfColumn(variable, NumericCast<idx_t>(term.first));
+					if (instance >= lowered[variable].size()) {
+						continue;
+					}
+					auto &current = lowered[variable][instance];
+					current = current == infinity ? floor : MaxValue(current, floor);
 				}
-				const auto term = *form.terms.begin();
-				double floor = -form.constant / term.second;
-				if (node.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
-				    node.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-					floor = DecideStrictBound(true, floor);
-				}
-				floor = MaxValue(floor, -DECIDE_SOLVER_INFINITY);
-				if (lowered[variable].empty()) {
-					lowered[variable].assign(indexer.NamedInstances(variable), infinity);
-				}
-				const auto instance = indexer.InstanceOf(variable, container.entries[entry].row);
-				if (instance >= lowered[variable].size()) {
-					continue;
-				}
-				auto &current = lowered[variable][instance];
-				current = current == infinity ? floor : MaxValue(current, floor);
 			}
 		}
 		input.instance_lower_bounds.resize(input.num_decide_vars);
@@ -1026,17 +1063,7 @@ private:
 			if (index >= state.rhs.size() || !state.rhs[index] || !state.rhs[index]->Present()) {
 				continue;
 			}
-			vector<DecideTreeValuePtr> bodies {state.entries[index]};
-			// A root bounds an easy extremum directly: MAX(e)<=K is every
-			// member e<=K. It needs no symbolic intermediate column.
-			if (node.facts && node.facts->was_minmax_easy &&
-			    state.entries[index]->kind == DecideTreeValueKind::REDUCER) {
-				auto &value = *state.entries[index];
-				if ((value.operation == "max" && push > 0) || (value.operation == "min" && push < 0)) {
-					bodies = value.operands;
-				}
-			}
-			for (auto &body : bodies) {
+			for (auto &body : Bounded(node, state.entries[index], push)) {
 				auto form = Compile(body, push);
 				const auto lhs_constant = form.constant;
 				if (state.rhs[index]->kind == DecideTreeValueKind::DATA) {

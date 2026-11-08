@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+from . import _diagnose_relation
 from ._anr_cases import F1_MAX, F1_SUM, F2_PREVIOUS
 from ._scope_cases import answer, dump_counts
 
@@ -216,3 +217,100 @@ def test_a_product_has_no_value_where_a_factor_has_none(decidb_cli):
         SUCH THAT x <= 9 AND x + b * sum(when t.c: x) by (t.g) <= 5 MAXIMIZE sum(x) + sum(b) ORDER BY id"""
     cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
     assert answer(cli, sql) == [{"id": 1, "x": 5, "b": False}, {"id": 2, "x": 9, "b": True}]
+
+
+#: A clause in the grouped shape is one model row per group of its `by` key (language/guide.md §6.4), so a root no `per`
+#: makes a class root is a class of that key (decide_tree.cpp, GroupClass), not one instance per row. Each case reaches
+#: an arm no other case reaches. Groups a and b keep no row for the reducer's `when`, so each of their 2 instances has
+#: no value (D90) and every x keeps its cap of 10. One instance per row counted 5.
+GROUP_CLASS_CASES = {
+    # GroupClass from Root, through the aggregate shape.
+    "an-aggregate-by-a-key": "sum(when t.c > 100: x) by (t.g) <= 5",
+    # Through an easy extremum, which is not the aggregate shape (ReadDecideClauseFacts).
+    "an-easy-extremum-by-a-key": "max(when t.c > 100: x) by (t.g) <= 5",
+}
+
+
+@pytest.mark.parametrize("case", list(GROUP_CLASS_CASES))
+def test_a_grouped_root_is_one_instance_per_group(decidb_cli, case):
+    sql = f"""SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES (1, 'a', 3), (2, 'a', 4), (3, 'a', 9), (4, 'b', 2), (5, 'b', 6)) t(id, g, c)
+        DECIDE x(INT) SUCH THAT x <= 10 AND {GROUP_CLASS_CASES[case]} MAXIMIZE SUM(x) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    rows = answer(cli, sql, warnings=["each of its 2 instances has no value"])
+    assert rows == [{"id": i, "x": 10} for i in range(1, 6)]
+
+
+def test_an_ungrouped_root_is_one_model_row(decidb_cli, tmp_path):
+    """`SUM(x) <> 0` over three BOOL rows cannot reach below 0, so it is the one row `SUM(x) >= 1`, which x1 meets at
+    the least cost. A root per row emitted it once per row."""
+    sql = """SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <> 0
+        MINIMIZE SUM(t.id * x) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_NATIVE_CONSTRUCTS": "off"})
+    assert answer(cli, sql) == [{"id": 1, "x": True}, {"id": 2, "x": False}, {"id": 3, "x": False}]
+    assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump"))["num_rows"] == 1
+
+
+#: An expanded diagnosis names what a grouped instance stands for (decide_tree_formulation.cpp, Provenance). Group a's
+#: two BOOL rows reach 2, so `>= 3` loosens to `>= 2` there; group b's three rows meet it. Each case reaches an arm of
+#: the class set no other case reaches.
+EXPANDED_CASES = {
+    # With no `per`, every kept row of its group (SolverInput::ClassSet's KEPT_ROWS), not only the row holding its
+    # entry: rows 0 and 1.
+    "no-per": (
+        "sum(x) by (t.g) >= 3",
+        [("expanded_row", "NULL", "0", "sum(x) by (t.g) >= 2"), ("expanded_row", "NULL", "1", "sum(x) by (t.g) >= 2")],
+    ),
+    # A written `per` names its classes (KEY_VALUES), though its instance also stands for a group: the class a.
+    "a-per-key": (
+        "per t.g: sum(x) by (t.g) >= 3",
+        [("expanded_group", "a", "NULL", "per t.g: sum(x) by (t.g) >= 2")],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(EXPANDED_CASES))
+def test_an_expanded_diagnosis_names_what_a_grouped_instance_stands_for(decidb_cli, case):
+    clause, expected = EXPANDED_CASES[case]
+    sql = f"""SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b'), (4, 'b'), (5, 'b')) t(id, g)
+        DECIDE x(BOOL) SUCH THAT {clause} MAXIMIZE SUM(x)"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    result = _diagnose_relation.run(cli, sql, setup="SET decide_direct_solve='off';\n", scope="expanded")
+    edits = [row for row in _diagnose_relation.rows(result) if row["clause"] == clause]
+    found = [(row["edit_source"], row["group"], row["row"], row["suggested_change"]) for row in edits]
+    assert found == expected, result.stdout
+
+
+def test_the_anchors_of_a_group_share_its_class_set(decidb_cli):
+    """With no `per`, each anchor of a frame bound is an instance of the group it bounds (D85), and every one stands for
+    the group's kept rows: one class set per group (decide_tree_formulation.cpp, Provenance), which merging the anchors
+    into the group's one row leaves alone (MergeClasses). A set per anchor, or a merge of the set into itself, took
+    over 30 s here, against under a second. The reducer reads row 0 alone, bound by the least `previous` value, 5, so
+    every x is 1."""
+    sql = """SET decide_direct_solve='off';
+        SELECT count(*) AS n, sum(x) AS total FROM (SELECT * FROM (SELECT i AS s, (i % 13) + 5.0 AS c
+        FROM range(6000) r(i)) t DECIDE x(REAL) SUCH THAT x <= 1 AND sum(when t.s = 0: x) <= at(previous: t.c)
+        over (t.s) MAXIMIZE sum(x))"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    rows, _ = cli.execute(sql, timeout=20)
+    assert rows == [(6000, 6000.0)]
+
+
+#: A floor below 0 that a clause lifts lands on each decision the clause bounds (decide_tree_formulation.cpp,
+#: LiftedFloors through Bounded): an easy extremum's members, whichever row holds its group's entry. `p` keeps rows 1
+#: and 4, whose x may go down to -5, and rows 2 and 3 keep the default floor of 0, so MINIMIZE takes -5, 0, 0, -5. Each
+#: case reaches one side the comparison pushes.
+LIFTED_FLOOR_CASES = {
+    "a-minimum-bounded-below": "min(when p: x) >= -5",
+    "a-maximum-bounded-above": "max(when p: -x) <= 5",
+}
+
+
+@pytest.mark.parametrize("case", list(LIFTED_FLOOR_CASES))
+def test_a_lifted_floor_lands_on_each_member(decidb_cli, case):
+    sql = f"""SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES (1, true), (2, false), (3, false), (4, true)) t(id, p)
+        DECIDE x(INT) SUCH THAT x <= 10 AND {LIFTED_FLOOR_CASES[case]} MINIMIZE SUM(x) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, sql) == [{"id": 1, "x": -5}, {"id": 2, "x": 0}, {"id": 3, "x": 0}, {"id": 4, "x": -5}]

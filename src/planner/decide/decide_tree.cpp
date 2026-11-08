@@ -277,6 +277,7 @@ public:
 			for (auto &term : composed.terms) {
 				Composed(index, term);
 			}
+			GroupClass(node);
 			tree->roots.push_back(index);
 		}
 		if (!op.composed_minmax_objective_terms.empty()) {
@@ -533,17 +534,24 @@ private:
 		node.body = Lower(index, *comparison.left);
 		node.rhs = Lower(index, *comparison.right);
 		node.facts->rhs_expr = node.rhs->Copy();
-		for (auto *expression : {&node.facts->admitted_a, &node.facts->admitted_r, &node.facts->admitted_member}) {
-			if (*expression) {
-				*expression = Lower(index, **expression);
-			}
-		}
 		UseSignature(node, signature);
 		auto end = std::remove_if(node.signature.begin(), node.signature.end(), [&](const DecideSignatureField &field) {
 			return field.kind == DecideSignatureFieldKind::DECISION && field.decision == node.defined_var;
 		});
 		node.signature.erase(end, node.signature.end());
+		GroupClass(node);
 		tree->roots.push_back(index);
+	}
+
+	//! A clause in the grouped shape (the aggregate shape, an easy or a composed extremum) is one model row per group
+	//! of its `by` key (language/guide.md §6.4), so a root no `per` made a class root is a class of that key, one for
+	//! `by ()`. Its sigma stays what it reads: a frame bound's position still tells a group's anchors apart, and the
+	//! group takes their tightest value (D85). A `per K:` keeps its class, which names the classes a row stands for.
+	void GroupClass(DecideNode &node) {
+		if (node.per == DecideTreePer::ROW && (node.facts->lhs_is_aggregate || node.facts->was_minmax_easy)) {
+			node.key = node.facts->group_key;
+			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
+		}
 	}
 
 	bool HasDecision(const Expression &expression) const {

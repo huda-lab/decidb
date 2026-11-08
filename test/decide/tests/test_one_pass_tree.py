@@ -132,3 +132,24 @@ def test_shared_frame_inserts_each_source_row_once(decidb_cli):
     assert len(shared_frames) == 1, tree
     frame = shared_frames[0]
     assert (frame["incoming"], frame["outgoing"], frame["entries"]) == (2, 2, 2), containers
+
+
+#: A grouped root with no `per` holds one entry per group of its `by` key (decide_tree.cpp, GroupClass), where it held
+#: one per row, each reading its group's whole value. Each case reaches a cause no other case reaches.
+GROUPED_ROOT_CASES = {
+    # GroupClass from Build: a composed extremum is one model row.
+    "a-composed-extremum": ("max(t.w * x) - min(x) <= 5", 1),
+    # An easy extremum's member test, w > 1, is read by its operand alone. The root has no column of w, which kept an
+    # entry per value of it in group a, nor a field, which made each an instance.
+    "an-easy-extremum-with-a-member-test": ("max(when t.w > 1: x) by (t.g) <= 2", 2),
+}
+
+
+@pytest.mark.parametrize("case", list(GROUPED_ROOT_CASES))
+def test_a_grouped_root_holds_one_entry_per_group(decidb_cli, case):
+    clause, groups = GROUPED_ROOT_CASES[case]
+    sql = f"""SELECT id, x FROM (VALUES (1, 'a', 1.0), (2, 'a', 2.0), (3, 'b', 3.0)) t(id, g, w) DECIDE x(INT)
+        SUCH THAT x <= 3 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
+    _, containers = construction(decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}), sql)
+    roots = [node for node in nodes(containers) if node["text"] == clause]
+    assert [(node["entries"], node["instances"]) for node in roots] == [(groups, groups)], containers
