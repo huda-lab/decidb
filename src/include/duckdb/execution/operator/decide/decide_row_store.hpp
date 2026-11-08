@@ -49,7 +49,7 @@ public:
 	//! the pass keeps them. Only before Build.
 	void KeepColumnsOf(const Expression &lowered);
 	//! The pass: one scan of the input, evaluating every registered expression on every row.
-	void Build();
+	void Build(const std::function<void(DataChunk &, idx_t)> &observe = nullptr);
 	//! A column computed bottom-up (a frame's), numbered after the input's and the computed ones before it.
 	void AppendColumn(const Vector &values);
 	void AppendColumn(const Vector &values, const std::map<idx_t, ErrorData> &errors);

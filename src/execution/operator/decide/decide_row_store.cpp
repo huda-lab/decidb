@@ -164,7 +164,7 @@ void DecideRowStore::Register(const Expression &lowered) {
 	}
 }
 
-void DecideRowStore::Build() {
+void DecideRowStore::Build(const std::function<void(DataChunk &, idx_t)> &observe) {
 	for (idx_t column = 0; column < input_columns; column++) {
 		if (keep[column]) {
 			columns[column] = make_uniq<Vector>(types[column], MaxValue<idx_t>(num_rows, 1));
@@ -191,6 +191,9 @@ void DecideRowStore::Build() {
 	chunk.Initialize(context, data.Types());
 	idx_t offset = 0;
 	while (data.Scan(scan, chunk)) {
+		if (observe) {
+			observe(chunk, offset);
+		}
 		for (idx_t column = 0; column < input_columns; column++) {
 			if (columns[column]) {
 				VectorOperations::Copy(chunk.data[column], *columns[column], chunk.size(), 0, offset);

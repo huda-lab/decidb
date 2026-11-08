@@ -289,7 +289,8 @@ public:
         return true;
     }
     bool ParallelSink() const override {
-        return true;
+        // Tree row identities follow source order until local dictionaries can be merged and rebased.
+        return !tree;
     }
 
 public:

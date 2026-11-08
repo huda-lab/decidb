@@ -1,5 +1,6 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/execution/operator/decide/decide_evaluator.hpp"
+#include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_row_store.hpp"
@@ -1797,6 +1798,30 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 //! rather than deriving one.
 using UserBoundSpec = LogicalDecide::UserBoundSpec;
 
+//! Keep the diagnostic chunk-size setting on the same path used by the source pipeline and the shadow scan.
+static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t row_base) {
+	idx_t chunk_size = STANDARD_VECTOR_SIZE;
+	if (auto setting = std::getenv("DECIDB_DESCENT_CHUNK")) {
+		char *end = nullptr;
+		auto size = std::strtoul(setting, &end, 10);
+		if (!*setting || *end || size == 0 || size > STANDARD_VECTOR_SIZE) {
+			throw InvalidInputException("DECIDB_DESCENT_CHUNK must be between 1 and %llu", STANDARD_VECTOR_SIZE);
+		}
+		chunk_size = size;
+	}
+	for (idx_t first = 0; first < chunk.size(); first += chunk_size) {
+		auto count = MinValue<idx_t>(chunk_size, chunk.size() - first);
+		DataChunk slice;
+		slice.InitializeEmpty(chunk.GetTypes());
+		SelectionVector selected(count);
+		for (idx_t row = 0; row < count; row++) {
+			selected.set_index(row, first + row);
+		}
+		slice.Slice(chunk, selected, count);
+		descent.Append(slice, row_base + first);
+	}
+}
+
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
@@ -3125,7 +3150,24 @@ void PhysicalDecide::Evaluate(ClientContext &context, DecideGlobalSinkState &gst
 
 	DecideProfileScope phase("execution.one_pass");
 	RegisterEvaluation(context, chunk_expr_cache, row_store);
-	row_store.Build();
+	unique_ptr<DecideDescent> descent;
+	if (tree) {
+		descent = make_uniq<DecideDescent>(*tree, context);
+		if (!silent && std::getenv("DECIDB_DUMP_TREE")) {
+			fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
+		}
+	}
+	row_store.Build([&](DataChunk &chunk, idx_t offset) {
+		if (descent) {
+			AppendDecideDescent(*descent, chunk, offset);
+		}
+	});
+	if (descent) {
+		descent->Finish();
+		if (!silent && std::getenv("DECIDB_DUMP_CONTAINERS")) {
+			fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", descent->Dump().c_str());
+		}
+	}
 	chunk_expr_cache.store = &row_store;
 
 	//===--------------------------------------------------------------------===//
