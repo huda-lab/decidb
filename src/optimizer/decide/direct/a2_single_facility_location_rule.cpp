@@ -35,6 +35,8 @@ struct PlanTools {
 	Binder &binder;
 	const vector<ColumnBinding> &source_bindings;
 	const DirectStateErrors &errors;
+	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
+	const string &written;
 };
 
 //! The window over the rows of a row's class: an aggregate added to it holds the class's value on every row.
@@ -82,38 +84,59 @@ private:
 
 using OverSource = std::function<unique_ptr<Expression>(const Expression &)>;
 
+//! The columns a loss keeps from stage to stage, by name: one subclass per loss. The skeleton makes one for the plan
+//! (Loss::NewColumns) and hands it to every stage without reading it, as DuckDB hands a GlobalSinkState to a sink; a
+//! loss casts it back to its own. A field holds the binding of the latest stage that wrote it.
+struct LossColumns {
+	virtual ~LossColumns() = default;
+
+	template <class T>
+	T &Cast() {
+		DynamicCastCheck<T>(this);
+		return reinterpret_cast<T &>(*this);
+	}
+};
+
 //! One loss, a Strategy behind the plan's stage skeleton (PlanBuilder::Build, a Template Method). The skeleton owns
-//! what every loss shares: the key, the bounds, the interval, the clamp, the answer of a row with no class and the
-//! infeasible error. A loss owns its columns at each stage, given and returned as lists of bindings that only it reads
-//! back, and its target: the point of the class it asks for before the clamp.
+//! what every loss shares: the key, the bounds, the interval, the clamp, the answer of a row with no class, the
+//! infeasible error and the too-large check of the answer. A loss owns its columns at each stage (LossColumns) and its
+//! target: the point of the class it asks for before the clamp.
 class Loss {
 public:
 	virtual ~Loss() = default;
 
 	//! What a loss gives back from its last stage: its target (a point of the class, or NULL when every point is
-	//! optimal, which the skeleton reads as 0) and its checks, which raise or warn.
+	//! optimal, which the skeleton reads as 0), its checks, which raise, and its warnings. The skeleton runs the
+	//! checks, then the too-large check of the clamped answer, then the warnings, so the first error to raise is the
+	//! same whatever the loss.
 	struct Answer {
 		ExprPtr target;
+		//! Where the clamped answer must be a number a DOUBLE holds, or null for no such check. A target past a DOUBLE
+		//! clamps to a finite end of the interval, and with that end open the answer is past a DOUBLE.
+		ExprPtr finite_where;
 		vector<unique_ptr<Expression>> checks;
+		vector<unique_ptr<Expression>> warnings;
 	};
 
+	//! The loss's columns, empty, for the stages below to fill.
+	virtual unique_ptr<LossColumns> NewColumns() const = 0;
 	//! P1: the loss's raw values on the rows it reads, each checked as the solver checks it (appended to `checks`).
 	//! `over` re-points a value of the source at the plan.
-	virtual vector<ColumnBinding> LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over,
-	                                        vector<unique_ptr<Expression>> &checks) const = 0;
-	//! P2: the row's values the class aggregates read, from `raw`. Appends the row's checks.
-	virtual vector<ColumnBinding> PerRow(const PlanTools &tools, DirectProjectionStage &p2,
-	                                     const vector<ColumnBinding> &raw,
-	                                     vector<unique_ptr<Expression>> &checks) const = 0;
+	virtual void LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over,
+	                       LossColumns &columns, vector<unique_ptr<Expression>> &checks) const = 0;
+	//! P2: the row's values the class aggregates read, from the raw values. Appends the row's checks.
+	virtual void PerRow(const PlanTools &tools, DirectProjectionStage &p2, LossColumns &columns,
+	                    vector<unique_ptr<Expression>> &checks) const = 0;
 	//! W: the class's values, DOUBLE columns, from the aggregates the loss adds to the class window. A loss that
 	//! needs a window of its own first puts it over `plan`.
-	virtual vector<ColumnBinding> Aggregate(const PlanTools &tools, const ClassWindow &window,
-	                                        unique_ptr<LogicalOperator> &plan,
-	                                        const vector<ColumnBinding> &row) const = 0;
+	virtual void Aggregate(const PlanTools &tools, const ClassWindow &window, unique_ptr<LogicalOperator> &plan,
+	                       LossColumns &columns) const = 0;
+	//! P3: forwards the class's values through the interval's projection, which is all P4 reads.
+	virtual void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const = 0;
 	//! P4: the target over the class's values, which the skeleton clamps into `[lower, upper]`. `has_class` is false on
 	//! a row with no class.
-	virtual Answer Finish(const PlanTools &tools, const vector<ExprPtr> &classes, const ExprPtr &lower,
-	                      const ExprPtr &upper, const ExprPtr &has_class) const = 0;
+	virtual Answer Finish(const PlanTools &tools, LossColumns &columns, const ExprPtr &lower, const ExprPtr &upper,
+	                      const ExprPtr &has_class) const = 0;
 };
 
 //! The factor that turns a part's value into a minimum: the sense, the part's sign and its constant factor.
@@ -122,80 +145,93 @@ static double Orientation(const DirectIR &ir, const DirectLinearPart &linear) {
 	return (ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0) * linear.sign * part_factor;
 }
 
+//! Forwards a DOUBLE column of the class through P3, and names it by its binding there.
+static void CarryDouble(const ExpressionBuilder &calc, DirectProjectionStage &p3, ColumnBinding &column) {
+	column = p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, column)));
+}
+
+//! Appends `from` to `to`.
+static void MoveInto(vector<unique_ptr<Expression>> &to, vector<unique_ptr<Expression>> &from) {
+	for (auto &item : from) {
+		to.push_back(std::move(item));
+	}
+}
+
+//! The columns of the squared loss.
+struct SquareColumns final : LossColumns {
+	//! P1: the part as DirectLayoutQuadraticPart lays it out.
+	DirectQuadraticColumns laid;
+	//! P2: the row's `a` and `b`, with the sense applied.
+	ColumnBinding row_a;
+	ColumnBinding row_b;
+	//! W, then P3: the class's `a` and `b`.
+	ColumnBinding a;
+	ColumnBinding b;
+};
+
 //! `weight * (w*c + t)^2` summed over the rows: the objective is `a*c^2 + b*c` with `a` the sum of `weight*w^2` and `b`
 //! the sum of `2*weight*w*t`. The weight is a constant, or a value read from the data of either sign. Where `a` is
 //! positive the minimum over the interval is the turning point `-b / (2*a)`; otherwise the objective is concave or
 //! linear and the minimum is at an end of the interval.
 class SquareLoss final : public Loss {
 public:
-	SquareLoss(DirectQuadraticPart part_p, double sense_p, string written_p)
-	    : sense(sense_p), written(std::move(written_p)) {
+	SquareLoss(DirectQuadraticPart part_p, double sense_p) : sense(sense_p) {
 		parts.push_back(std::move(part_p));
 	}
 
-	vector<ColumnBinding> LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over,
-	                                vector<unique_ptr<Expression>> &checks) const override {
-		auto columns = DirectLayoutQuadraticPart(tools.optimizer, tools.calc, p1, parts[0], 1, tools.source_bindings,
-		                                         over, checks);
-		vector<ColumnBinding> raw;
-		if (columns.has_mask) {
-			raw.push_back(columns.mask);
-		}
-		auto &square = columns.squares[0];
-		raw.push_back(square.k);
-		raw.push_back(square.w);
-		raw.push_back(square.t);
-		return raw;
+	unique_ptr<LossColumns> NewColumns() const override {
+		return make_uniq<SquareColumns>();
 	}
 
-	vector<ColumnBinding> PerRow(const PlanTools &tools, DirectProjectionStage &p2, const vector<ColumnBinding> &raw,
-	                             vector<unique_ptr<Expression>> &) const override {
-		DirectQuadraticColumns laid;
-		idx_t at = 0;
-		laid.has_mask = parts[0].kept != nullptr;
-		if (laid.has_mask) {
-			laid.mask = raw[at++];
-		}
-		DirectQuadraticColumns::Square square;
-		square.k = raw[at++];
-		square.w = raw[at++];
-		square.t = raw[at++];
-		laid.squares.push_back(square);
+	void LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over, LossColumns &columns,
+	               vector<unique_ptr<Expression>> &checks) const override {
+		columns.Cast<SquareColumns>().laid = DirectLayoutQuadraticPart(tools.optimizer, tools.calc, p1, parts[0], 1,
+		                                                               tools.source_bindings, over, checks);
+	}
+
+	void PerRow(const PlanTools &tools, DirectProjectionStage &p2, LossColumns &columns,
+	            vector<unique_ptr<Expression>> &) const override {
+		auto &square = columns.Cast<SquareColumns>();
 		auto &calc = tools.calc;
-		auto sum = DirectFoldQuadratic(tools.optimizer, calc, parts, {laid}, 0);
-		return {p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a))), p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b)))};
+		auto sum = DirectFoldQuadratic(tools.optimizer, calc, parts, {square.laid}, 0);
+		square.row_a = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a)));
+		square.row_b = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b)));
 	}
 
-	vector<ColumnBinding> Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
-	                                const vector<ColumnBinding> &row) const override {
-		return {window.Add("sum", row[0], LogicalType::DOUBLE), window.Add("sum", row[1], LogicalType::DOUBLE)};
+	void Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
+	               LossColumns &columns) const override {
+		auto &square = columns.Cast<SquareColumns>();
+		square.a = window.Add("sum", square.row_a, LogicalType::DOUBLE);
+		square.b = window.Add("sum", square.row_b, LogicalType::DOUBLE);
 	}
 
-	Answer Finish(const PlanTools &tools, const vector<ExprPtr> &classes, const ExprPtr &lower, const ExprPtr &upper,
+	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
+		auto &square = columns.Cast<SquareColumns>();
+		CarryDouble(tools.calc, p3, square.a);
+		CarryDouble(tools.calc, p3, square.b);
+	}
+
+	Answer Finish(const PlanTools &tools, LossColumns &columns, const ExprPtr &lower, const ExprPtr &upper,
 	              const ExprPtr &has_class) const override {
 		auto &calc = tools.calc;
-		auto &a = classes[0];
-		auto &b = classes[1];
+		auto &square = columns.Cast<SquareColumns>();
+		auto a = calc.Col(LogicalType::DOUBLE, square.a);
+		auto b = calc.Col(LogicalType::DOUBLE, square.b);
 		auto turning = DirectTurningPoint(calc, a, b, false);
 		Answer answer;
 		auto convex = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, calc.Num(0.0));
 		auto end = EndOfInterval(calc, a, b, lower, upper);
 		answer.target = calc.If(convex, turning.target, end);
-		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, a, written));
-		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, b, written));
+		answer.finite_where = convex;
+		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, a, tools.written));
+		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, b, tools.written));
 		// A concave or linear objective whose best end is infinite improves without limit. It follows the checks of the
 		// sums, which can themselves be infinite.
 		auto infinite = calc.Any({calc.Cmp(ExpressionType::COMPARE_EQUAL, end, calc.Num(POSITIVE_INFINITY)),
 		                          calc.Cmp(ExpressionType::COMPARE_EQUAL, end, calc.Num(NEGATIVE_INFINITY))});
 		answer.checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, calc.And(calc.Not(convex), infinite))),
 		                                      DirectUnboundedErrorPredicate(tools.optimizer, tools.errors)));
-		// A turning point past a DOUBLE (a total weight that cancels toward 0 beside a large `b`) clamps to a finite
-		// end of the interval; with that end open the answer is past a DOUBLE.
-		auto clamped = calc.Min({calc.Max({turning.target, lower}), upper});
-		answer.checks.push_back(DirectRaiseTooLarge(
-		    tools.optimizer, calc.If(calc.And(has_class, convex), clamped, calc.Constant(Value(LogicalType::DOUBLE))),
-		    written));
-		answer.checks.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
+		answer.warnings.push_back(DirectWarnIf(calc, calc.Out(turning.loses_precision)));
 		return answer;
 	}
 
@@ -222,41 +258,56 @@ private:
 	vector<DirectQuadraticPart> parts;
 	//! The sense as a factor: -1 for a maximum.
 	double sense;
-	//! The objective as a message names it: a number computed past a DOUBLE names it, as the solver path names one.
-	string written;
+};
+
+//! The columns of a loss over centers: a term's slope and constant (P1), then the row's center and weight (P2).
+struct CenteredColumns : LossColumns {
+	ColumnBinding slope;
+	ColumnBinding constant;
+	ColumnBinding center;
+	ColumnBinding weight;
+};
+
+//! The class's weight and its lower and upper median (W, then P3).
+struct MedianColumns final : CenteredColumns {
+	ColumnBinding total;
+	ColumnBinding lower;
+	ColumnBinding upper;
+};
+
+//! The class's least and greatest center (W, then P3).
+struct ExtremeColumns final : CenteredColumns {
+	ColumnBinding least;
+	ColumnBinding greatest;
 };
 
 //! `K * ABS(s*c + t)` on each row, the term of the absolute and the maximum absolute loss: a row has a center
 //! `v = -t/s` and a weight `m = K*|s|`, with `K` the term's weight oriented as a minimum. A row the objective drops, or
-//! whose NULL a guard skipped, has no center and no weight. The term is laid out as a square is (the same weight,
-//! slope and constant), which the shared layout does.
+//! whose NULL a guard skipped, has no center and no weight. The shared layout of a part lays the term out
+//! (DirectLayoutQuadraticPart): its weight, slope and constant.
 class CenteredLoss : public Loss {
 public:
 	CenteredLoss(DirectQuadraticPart term_p, double weight_p) : term(std::move(term_p)), weight(weight_p) {
 	}
 
-	//! The columns of a square: the mask when the part has one, then the slope and the constant.
-	vector<ColumnBinding> LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over,
-	                                vector<unique_ptr<Expression>> &checks) const override {
-		auto columns =
+	//! The term's slope and constant.
+	void LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over, LossColumns &columns,
+	               vector<unique_ptr<Expression>> &checks) const override {
+		auto laid =
 		    DirectLayoutQuadraticPart(tools.optimizer, tools.calc, p1, term, 1, tools.source_bindings, over, checks);
-		vector<ColumnBinding> raw;
-		if (columns.has_mask) {
-			raw.push_back(columns.mask);
-		}
-		raw.push_back(columns.squares[0].w);
-		raw.push_back(columns.squares[0].t);
-		return raw;
+		auto &centered = columns.Cast<CenteredColumns>();
+		centered.slope = laid.squares[0].w;
+		centered.constant = laid.squares[0].t;
 	}
 
 	//! The row's center and weight. The center divides by the slope, so it warns where the slope, or a nonzero constant
 	//! beside it, is below the normal range (DirectTurningPoint's rule).
-	vector<ColumnBinding> PerRow(const PlanTools &tools, DirectProjectionStage &p2, const vector<ColumnBinding> &raw,
-	                             vector<unique_ptr<Expression>> &checks) const override {
+	void PerRow(const PlanTools &tools, DirectProjectionStage &p2, LossColumns &columns,
+	            vector<unique_ptr<Expression>> &checks) const override {
 		auto &calc = tools.calc;
-		idx_t at = term.kept ? 1 : 0;
-		auto slope = calc.Col(LogicalType::DOUBLE, raw[at]);
-		auto constant = calc.Col(LogicalType::DOUBLE, raw[at + 1]);
+		auto &centered = columns.Cast<CenteredColumns>();
+		auto slope = calc.Col(LogicalType::DOUBLE, centered.slope);
+		auto constant = calc.Col(LogicalType::DOUBLE, centered.constant);
 		auto zero = calc.Num(0.0);
 		auto present = calc.And(calc.Not(calc.IsNull(slope)), calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, slope, zero));
 		auto center = calc.If(present, calc.Div(calc.Neg(constant), slope), calc.Constant(Value(LogicalType::DOUBLE)));
@@ -265,7 +316,8 @@ public:
 		                               DirectBelowNormalRange(calc, constant));
 		checks.push_back(DirectWarnIf(
 		    calc, calc.Out(calc.And(present, calc.Any({DirectBelowNormalRange(calc, slope), small_constant})))));
-		return {p2.Add(calc.Out(center)), p2.Add(calc.Out(row_weight))};
+		centered.center = p2.Add(calc.Out(center));
+		centered.weight = p2.Add(calc.Out(row_weight));
 	}
 
 private:
@@ -282,16 +334,18 @@ private:
 //! center where the weight from it on, `M - R + m`, is at least half.
 class AbsoluteLoss final : public CenteredLoss {
 public:
-	AbsoluteLoss(DirectQuadraticPart term_p, double weight_p, string written_p)
-	    : CenteredLoss(std::move(term_p), weight_p), written(std::move(written_p)) {
+	using CenteredLoss::CenteredLoss;
+
+	unique_ptr<LossColumns> NewColumns() const override {
+		return make_uniq<MedianColumns>();
 	}
 
-	vector<ColumnBinding> Aggregate(const PlanTools &tools, const ClassWindow &window,
-	                                unique_ptr<LogicalOperator> &plan,
-	                                const vector<ColumnBinding> &row) const override {
+	void Aggregate(const PlanTools &tools, const ClassWindow &window, unique_ptr<LogicalOperator> &plan,
+	               LossColumns &columns) const override {
+		auto &median = columns.Cast<MedianColumns>();
 		auto &calc = tools.calc;
-		auto center = calc.Col(LogicalType::DOUBLE, row[0]);
-		auto weight = calc.Col(LogicalType::DOUBLE, row[1]);
+		auto center = calc.Col(LogicalType::DOUBLE, median.center);
+		auto weight = calc.Col(LogicalType::DOUBLE, median.weight);
 		// A window of its own under the class window: both aggregates share the class and its order of centers. A row
 		// with no center sorts last, and its weight is 0.
 		auto sorted = make_uniq<LogicalWindow>(tools.binder.GenerateTableIndex());
@@ -301,36 +355,42 @@ public:
 		sorted->expressions.push_back(std::move(total));
 		sorted->expressions.push_back(
 		    DirectRunningSum(tools.optimizer, calc, weight, center, OrderType::ASCENDING, window.Partitions()));
-		ColumnBinding class_weight(sorted->window_index, 0);
+		median.total = ColumnBinding(sorted->window_index, 0);
 		auto up_to = calc.Col(LogicalType::DOUBLE, ColumnBinding(sorted->window_index, 1));
 		sorted->children.push_back(std::move(plan));
 		plan = std::move(sorted);
 
-		auto total_weight = calc.Col(LogicalType::DOUBLE, class_weight);
+		auto total_weight = calc.Col(LogicalType::DOUBLE, median.total);
 		auto two = calc.Num(2.0);
 		auto from_here = calc.Add(calc.Sub(total_weight, up_to), weight);
-		auto lower =
-		    window.Add("min", row[0], LogicalType::DOUBLE,
+		median.lower =
+		    window.Add("min", median.center, LogicalType::DOUBLE,
 		               calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, up_to), total_weight));
-		auto upper =
-		    window.Add("max", row[0], LogicalType::DOUBLE,
+		median.upper =
+		    window.Add("max", median.center, LogicalType::DOUBLE,
 		               calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, from_here), total_weight));
-		return {class_weight, lower, upper};
 	}
 
-	Answer Finish(const PlanTools &tools, const vector<ExprPtr> &classes, const ExprPtr &, const ExprPtr &,
+	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
+		auto &median = columns.Cast<MedianColumns>();
+		CarryDouble(tools.calc, p3, median.total);
+		CarryDouble(tools.calc, p3, median.lower);
+		CarryDouble(tools.calc, p3, median.upper);
+	}
+
+	Answer Finish(const PlanTools &tools, LossColumns &columns, const ExprPtr &, const ExprPtr &,
 	              const ExprPtr &) const override {
 		auto &calc = tools.calc;
+		auto &median = columns.Cast<MedianColumns>();
 		Answer answer;
 		// The point of the optimal medians nearest 0. With no weight on any row of the class, both medians are NULL,
 		// which the extrema skip: the target is 0.
-		answer.target = calc.Min({calc.Max({calc.Num(0.0), classes[1]}), classes[2]});
-		answer.checks.push_back(DirectRaiseTooLarge(tools.optimizer, classes[0], written));
+		answer.target = calc.Min({calc.Max({calc.Num(0.0), calc.Col(LogicalType::DOUBLE, median.lower)}),
+		                          calc.Col(LogicalType::DOUBLE, median.upper)});
+		answer.checks.push_back(
+		    DirectRaiseTooLarge(tools.optimizer, calc.Col(LogicalType::DOUBLE, median.total), tools.written));
 		return answer;
 	}
-
-private:
-	string written;
 };
 
 //! `MAX(K * ABS(s*c + t))`: the minimum is at the midpoint of the least and the greatest center `v = -t/s`, the same
@@ -339,18 +399,32 @@ class MaxAbsoluteLoss final : public CenteredLoss {
 public:
 	using CenteredLoss::CenteredLoss;
 
-	vector<ColumnBinding> Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
-	                                const vector<ColumnBinding> &row) const override {
-		return {window.Add("min", row[0], LogicalType::DOUBLE), window.Add("max", row[0], LogicalType::DOUBLE)};
+	unique_ptr<LossColumns> NewColumns() const override {
+		return make_uniq<ExtremeColumns>();
 	}
 
-	Answer Finish(const PlanTools &tools, const vector<ExprPtr> &classes, const ExprPtr &, const ExprPtr &,
+	void Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
+	               LossColumns &columns) const override {
+		auto &extreme = columns.Cast<ExtremeColumns>();
+		extreme.least = window.Add("min", extreme.center, LogicalType::DOUBLE);
+		extreme.greatest = window.Add("max", extreme.center, LogicalType::DOUBLE);
+	}
+
+	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
+		auto &extreme = columns.Cast<ExtremeColumns>();
+		CarryDouble(tools.calc, p3, extreme.least);
+		CarryDouble(tools.calc, p3, extreme.greatest);
+	}
+
+	Answer Finish(const PlanTools &tools, LossColumns &columns, const ExprPtr &, const ExprPtr &,
 	              const ExprPtr &) const override {
 		auto &calc = tools.calc;
+		auto &extreme = columns.Cast<ExtremeColumns>();
 		Answer answer;
 		// Each half is taken before the sum: the sum of the ends can pass a DOUBLE.
 		auto two = calc.Num(2.0);
-		answer.target = calc.Add(calc.Div(classes[0], two), calc.Div(classes[1], two));
+		answer.target = calc.Add(calc.Div(calc.Col(LogicalType::DOUBLE, extreme.least), two),
+		                         calc.Div(calc.Col(LogicalType::DOUBLE, extreme.greatest), two));
 		return answer;
 	}
 };
@@ -371,6 +445,8 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The bounds the plan evaluates per row: read from the data, or under a `when`. A class's interval is the box
 	//! tightened by the tightest end of each clause over the rows of the class.
 	vector<DirectBoundClause> clauses;
+	//! The objective as written, which a too-large message names (PlanTools::written).
+	string written;
 	//! The decision's key, empty for a query-wide decision (one class). A row with a NULL in a `no_group` element is in
 	//! no class: it has no decision, and the front end already leaves it out of the objective's `kept` rows.
 	vector<DirectKeyElement> keys;
@@ -389,6 +465,7 @@ public:
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
+		condition->written = ir.objective.written;
 		if (ir.decisions[0].scope == DecideVarScope::KEYED) {
 			// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it takes.
 			for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
@@ -463,7 +540,7 @@ static unique_ptr<Loss> ProveSquare(const DirectIR &ir, ClientContext &context, 
 		return nullptr;
 	}
 	double sense = ir.objective.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
-	return make_uniq<SquareLoss>(std::move(part), sense, ir.objective.written);
+	return make_uniq<SquareLoss>(std::move(part), sense);
 }
 
 //! The one `ABS` of a part, read into `part.squares` so the shared layout of a part lays it out: the weight, the slope
@@ -499,7 +576,7 @@ static unique_ptr<Loss> ProveAbsolute(const DirectIR &ir, ClientContext &context
 	if (!std::isfinite(center_weight) || center_weight < std::numeric_limits<double>::min()) {
 		return nullptr;
 	}
-	return make_uniq<AbsoluteLoss>(std::move(part), weight, ir.objective.written);
+	return make_uniq<AbsoluteLoss>(std::move(part), weight);
 }
 
 //! One plain `MAX` of one `ABS`, minimized. The midpoint of the extreme centers is the same for every positive `K`.
@@ -559,7 +636,8 @@ public:
 	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
 	      source_bindings(source_bindings_p),
-	      source_types(source_types_p), tools {optimizer, calc, binder, source_bindings, errors_p}, errors(errors_p) {
+	      source_types(source_types_p), tools {optimizer, calc, binder, source_bindings, errors_p, condition_p.written},
+	      errors(errors_p) {
 		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
@@ -567,22 +645,25 @@ public:
 		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
 		auto from_scope = DirectCarriedOf(state, source_bindings.size());
 
+		// The loss's columns travel through every stage; the skeleton never reads them.
+		auto loss_columns = condition.loss->NewColumns();
+
 		DirectProjectionStage p1(binder.GenerateTableIndex());
-		auto raw = LayoutRawValues(p1, from_scope, state.state_index);
+		auto raw = LayoutRawValues(p1, from_scope, state.state_index, *loss_columns);
 		auto plan = p1.Finish(std::move(state.plan));
 
 		DirectProjectionStage p2(binder.GenerateTableIndex());
-		auto coefficients = ComputeRows(p2, raw);
+		auto coefficients = ComputeRows(p2, raw, *loss_columns);
 		plan = p2.Finish(std::move(plan));
 
-		auto aggregates = AggregateClasses(coefficients, plan);
+		auto aggregates = AggregateClasses(coefficients, plan, *loss_columns);
 
 		DirectProjectionStage p3(binder.GenerateTableIndex());
-		auto interval = ComputeInterval(p3, aggregates);
+		auto interval = ComputeInterval(p3, aggregates, *loss_columns);
 		plan = p3.Finish(std::move(plan));
 
 		DirectProjectionStage p4(binder.GenerateTableIndex());
-		ComputeAnswer(p4, interval);
+		ComputeAnswer(p4, interval, *loss_columns);
 		plan = p4.Finish(std::move(plan));
 
 		DirectSubstitute substitute;
@@ -601,8 +682,6 @@ private:
 	struct Raw {
 		DirectCarried carried;
 		vector<DirectBoundColumns> clauses;
-		//! The loss's raw columns.
-		vector<ColumnBinding> loss;
 		vector<unique_ptr<Expression>> checks;
 	};
 	//! A clause's lower and upper end on the row (DirectClauseBounds), and the row's `when` for a clause that lifts the
@@ -616,16 +695,12 @@ private:
 	struct Rows {
 		DirectCarried carried;
 		vector<ClauseEnds> ends;
-		//! The loss's columns for the row.
-		vector<ColumnBinding> loss;
 		ColumnBinding valid;
 	};
-	//! Columns of W: the class's values and the aggregates of its clauses, over the results.
+	//! Columns of W: the aggregates of the clauses, over the results.
 	struct Aggregates {
 		DirectCarried carried;
 		ColumnBinding valid;
-		//! The loss's class values, DOUBLE.
-		vector<ColumnBinding> classes;
 		vector<DirectGroupValues> lowers;
 		vector<DirectGroupValues> uppers;
 		//! Whether some row of a floor-lifting clause is kept, one per such clause.
@@ -635,7 +710,6 @@ private:
 	struct Interval {
 		DirectCarried carried;
 		ColumnBinding valid;
-		vector<ColumnBinding> classes;
 		vector<ColumnBinding> clause_lowers;
 		vector<ColumnBinding> clause_uppers;
 		ColumnBinding floor;
@@ -658,7 +732,8 @@ private:
 	// P1: raw values
 	//===------------------------------------------------------------------===//
 
-	Raw LayoutRawValues(DirectProjectionStage &p1, const DirectCarried &from_scope, idx_t state_index) const {
+	Raw LayoutRawValues(DirectProjectionStage &p1, const DirectCarried &from_scope, idx_t state_index,
+	                    LossColumns &loss_columns) const {
 		Raw raw;
 		raw.carried = p1.Forward(from_scope, source_types, IsKeyed());
 		OverSource over_state = [&](const Expression &value) {
@@ -667,7 +742,7 @@ private:
 		};
 		raw.clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over_state,
 		                                       raw.checks);
-		raw.loss = condition.loss->LayoutRaw(tools, p1, over_state, raw.checks);
+		condition.loss->LayoutRaw(tools, p1, over_state, loss_columns, raw.checks);
 		return raw;
 	}
 
@@ -675,7 +750,7 @@ private:
 	// P2: the loss's values for the row, each clause's ends, and the checks
 	//===------------------------------------------------------------------===//
 
-	Rows ComputeRows(DirectProjectionStage &p2, Raw &raw) const {
+	Rows ComputeRows(DirectProjectionStage &p2, Raw &raw, LossColumns &loss_columns) const {
 		Rows result;
 		result.carried = p2.Forward(raw.carried, source_types, IsKeyed());
 		for (auto &columns : raw.clauses) {
@@ -689,7 +764,7 @@ private:
 			}
 			result.ends.push_back(ends);
 		}
-		result.loss = condition.loss->PerRow(tools, p2, raw.loss, raw.checks);
+		condition.loss->PerRow(tools, p2, loss_columns, raw.checks);
 		// Every check is true or raises; a row passes when all of them do.
 		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;
@@ -703,7 +778,7 @@ private:
 	//! clause the MAX of its lower ends and the MIN of its upper ends (DirectTightestBound), and whether some row a
 	//! floor-lifting clause keeps exists. A row with no class sits in a partition of its own, and its answer is NULL
 	//! whatever the partition holds.
-	Aggregates AggregateClasses(const Rows &rows, unique_ptr<LogicalOperator> &plan) const {
+	Aggregates AggregateClasses(const Rows &rows, unique_ptr<LogicalOperator> &plan, LossColumns &loss_columns) const {
 		auto window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
 		auto &carried = rows.carried;
 		vector<ExprPtr> partitions;
@@ -714,7 +789,7 @@ private:
 		Aggregates result;
 		result.carried = carried;
 		result.valid = rows.valid;
-		result.classes = condition.loss->Aggregate(tools, class_window, plan, rows.loss);
+		condition.loss->Aggregate(tools, class_window, plan, loss_columns);
 		DirectWindowSink sink(*window, [&](BoundWindowExpression &aggregate) { class_window.Partition(aggregate); });
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
@@ -748,13 +823,11 @@ private:
 
 	//! The loss's class values, each clause's tightest ends, and the static floor, lowered when a row a floor-lifting
 	//! clause keeps exists.
-	Interval ComputeInterval(DirectProjectionStage &p3, const Aggregates &aggregates) const {
+	Interval ComputeInterval(DirectProjectionStage &p3, const Aggregates &aggregates, LossColumns &loss_columns) const {
 		Interval result;
 		result.carried = p3.Forward(aggregates.carried, source_types, IsKeyed());
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
-		for (auto &value : aggregates.classes) {
-			result.classes.push_back(p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, value))));
-		}
+		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			result.clause_lowers.push_back(p3.Add(calc.Out(calc.Cast(aggregates.lowers[j].lower, LogicalType::DOUBLE))));
 			result.clause_uppers.push_back(p3.Add(calc.Out(calc.Cast(aggregates.uppers[j].upper, LogicalType::DOUBLE))));
@@ -767,20 +840,16 @@ private:
 	// P4: the answer
 	//===------------------------------------------------------------------===//
 
-	void ComputeAnswer(DirectProjectionStage &p4, const Interval &interval) const {
+	void ComputeAnswer(DirectProjectionStage &p4, const Interval &interval, LossColumns &loss_columns) const {
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			p4.Add(calc.Out(calc.Col(source_types[i], interval.carried.source[i])));
-		}
-		vector<ExprPtr> classes;
-		for (auto &binding : interval.classes) {
-			classes.push_back(calc.Col(LogicalType::DOUBLE, binding));
 		}
 		ExprPtr lower, upper;
 		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, interval.floor), condition.upper, interval.clause_lowers,
 		             interval.clause_uppers, lower, upper);
 		// A row with no class has no decision and shows NULL.
 		auto has_class = IsKeyed() ? calc.Col(LogicalType::BOOLEAN, interval.carried.eligible) : calc.Bool(true);
-		auto finish = condition.loss->Finish(tools, classes, lower, upper, has_class);
+		auto finish = condition.loss->Finish(tools, loss_columns, lower, upper, has_class);
 		// The loss's target clamped into the interval. A NULL target leaves every point optimal, and the point of the
 		// interval nearest 0 is the answer: the clamp of 0. Adding 0.0 turns -0.0 into 0.0.
 		auto zero = calc.Num(0.0);
@@ -793,9 +862,15 @@ private:
 		// it, so a query whose only bounds are constants has two constants here, which DuckDB folds.
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
 		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
-		for (auto &check : finish.checks) {
-			checks.push_back(std::move(check));
+		// The loss's checks, then the answer's, then the loss's warnings: a warning prints as it runs, so it follows
+		// every check that can raise first.
+		MoveInto(checks, finish.checks);
+		if (finish.finite_where) {
+			auto in_range =
+			    calc.If(calc.And(has_class, finish.finite_where), answer, calc.Constant(Value(LogicalType::DOUBLE)));
+			checks.push_back(DirectRaiseTooLarge(optimizer, in_range, condition.written));
 		}
+		MoveInto(checks, finish.warnings);
 		p4.Add(DirectAllHold(calc, std::move(checks)));
 	}
 };
