@@ -40,8 +40,12 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
 	if (name == "sum") return ObjectiveAggregateType::SUM;
 	if (name == "min") return ObjectiveAggregateType::MIN_AGG;
-	if (name == "max") return ObjectiveAggregateType::MAX_AGG;
-	return ObjectiveAggregateType::NONE;
+	if (name != "max") {
+		throw InternalException("DECIDE: aggregate '%s' reached the objective rewrite; the binder promises sum, min or "
+		                        "max there",
+		                        name);
+	}
+	return ObjectiveAggregateType::MAX_AGG;
 }
 
 //! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
@@ -168,7 +172,8 @@ bool decide_rewrite::TryParseNormMarker(const string &alias, string &payload) {
 	start += strlen(NORM_MARKER_TAG_PREFIX);
 	auto end = alias.find("__", start);
 	if (end == string::npos) {
-		return false;
+		throw InternalException("DECIDE: NORM marker '%s' has no closing '__'; the canonicalizer promises to write it",
+		                        alias);
 	}
 	payload = alias.substr(start, end - start);
 	return true;
@@ -210,18 +215,16 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 	    make_uniq<BoundColumnRefExpression>(name, type, ColumnBinding(decide.decide_index, var_idx)));
 	decide.num_auxiliary_vars++;
 	decide.is_boolean_var.push_back(is_boolean);
-	if (!decide.variable_scopes.empty() || scope.scope != DecideVarScope::ROW) {
-		while (decide.variable_scopes.size() < var_idx) {
-			decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-		}
-		decide.variable_scopes.push_back(scope);
+	if (decide.variable_scopes.size() != var_idx) {
+		throw InternalException("DECIDE: %llu scopes for %llu decisions; the binder promises one scope per decision and "
+		                        "every rewrite adds a scope with its decision",
+		                        decide.variable_scopes.size(), var_idx);
 	}
+	decide.variable_scopes.push_back(scope);
 	if (scope.IsKeyed()) {
 		decide.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(var_idx);
 	}
-	if (!label.empty()) {
-		decide.aux_var_expressions.emplace_back(var_idx, label);
-	}
+	decide.aux_var_expressions.emplace_back(var_idx, label);
 	return var_idx;
 }
 
@@ -240,8 +243,7 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
 		if (ref.binding.table_index == decide.decide_index) {
 			auto var_idx = ref.binding.column_index;
-			return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
-			                                               : DecideVarScopeInfo::Row();
+			return decide.variable_scopes[var_idx];
 		}
 	}
 	if (canonicalizer.IsQueryWideConstant(expr)) {
@@ -252,13 +254,10 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 	    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return DecideVarScopeInfo::Row();
 	}
-	bool saw_child = false;
 	auto scope = DecideVarScopeInfo::Global();
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		saw_child = true;
-		scope = JoinScopes(scope, ScopeOf(decide, canonicalizer, child));
-	});
-	return saw_child ? scope : DecideVarScopeInfo::Row();
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { scope = JoinScopes(scope, ScopeOf(decide, canonicalizer, child)); });
+	return scope;
 }
 
 unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {
@@ -309,7 +308,6 @@ void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, const string &clau
 string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &inherited) {
 	idx_t provenance_id;
 	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) ||
-	               TryParseRemovalGroupTag(expr.GetAlias(), provenance_id) ||
 	               HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
 	           ? expr.GetAlias()
 	           : inherited;
@@ -317,17 +315,16 @@ string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &
 
 //! Does `expr` hold a NORM marker anywhere beneath it?
 //!
-//! `l0_only` narrows the answer to the L0 counts: a norm payload is `1`, `2`, `inf`,
-//! `0_auto`, or `0_<double>`, so the `0_` prefix selects exactly those and nothing else.
-static bool ContainsNormMarker(const Expression &expr, bool l0_only) {
+//! Only the L0 counts over decisions are still markers here (`0_auto`, `0_<double>`): canonicalization replaced every
+//! other norm by its definition (DecideCanonicalizer::DesugarNorms).
+static bool ContainsNormMarker(const Expression &expr) {
 	string payload;
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	    TryParseNormMarker(expr.GetAlias(), payload) && (!l0_only || payload.rfind("0_", 0) == 0)) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && TryParseNormMarker(expr.GetAlias(), payload)) {
 		return true;
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!found && ContainsNormMarker(child, l0_only)) {
+		if (!found && ContainsNormMarker(child)) {
 			found = true;
 		}
 	});
@@ -344,7 +341,7 @@ static bool ContainsNormMarker(const Expression &expr, bool l0_only) {
 //! instead of returning a number nothing marks as wrong.
 static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 	decide.EnumerateExpressions([](unique_ptr<Expression> *expr) {
-		if (*expr && ContainsNormMarker(**expr, false)) {
+		if (ContainsNormMarker(**expr)) {
 			throw InternalException("DECIDE NORM marker survived optimization in '%s'", (*expr)->ToString());
 		}
 	});
@@ -370,9 +367,7 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 		}
 	}
 	for (auto &term : decide.composed_minmax_objective_terms) {
-		if (IsExtremumName(term.agg_name)) {
-			check(*term.inner_expr);
-		}
+		check(*term.inner_expr);
 	}
 	for (auto &link : decide.reducer_value_links) {
 		if (IsExtremumName(link.agg_name)) {
@@ -392,9 +387,7 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 		}
 		ExpressionIterator::EnumerateChildren(expr, hard_rows);
 	};
-	if (decide.decide_constraints) {
-		hard_rows(*decide.decide_constraints);
-	}
+	hard_rows(*decide.decide_constraints);
 	auto is_extremum_agg = [](ObjectiveAggregateType agg) {
 		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
 	};
@@ -414,28 +407,22 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 }
 
 void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
-	if (!decide.decide_constraints) {
-		return;
-	}
 	auto is_removable = [](const Expression &node) {
 		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			return node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsNormMarker(node, true);
+			return node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsNormMarker(node);
 		}
-		return node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && node.type == ExpressionType::COMPARE_IN;
+		return true; // a COMPARE_IN
 	};
 	// The clause a leaf belongs to, named by its first source id: a BETWEEN is one clause of two leaves, which
-	// diagnosis removes together or not at all. INVALID_INDEX for a leaf with no source clause.
+	// diagnosis removes together or not at all.
 	auto clause_of = [&](const Expression &node) {
-		idx_t source_id;
-		if (!TryParseSourceClauseTag(node.GetAlias(), source_id) || source_id >= decide.constraint_sources.size()) {
-			return DConstants::INVALID_INDEX;
-		}
+		auto source_id = SourceClauseOf(node, decide);
 		auto &source = decide.constraint_sources[source_id];
 		return source.between_upper ? source.between_partner : source_id;
 	};
 	std::set<idx_t> removable_clauses;
 	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
-		if (is_removable(node) && clause_of(node) != DConstants::INVALID_INDEX) {
+		if (is_removable(node)) {
 			removable_clauses.insert(clause_of(node));
 		}
 	});
@@ -443,14 +430,10 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 	std::map<idx_t, idx_t> group_of_clause;
 	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
 		auto clause = clause_of(node);
-		bool removable = clause == DConstants::INVALID_INDEX ? is_removable(node) : removable_clauses.count(clause) > 0;
-		if (!removable) {
+		if (removable_clauses.count(clause) == 0) {
 			return;
 		}
-		idx_t group = next_group;
-		if (clause != DConstants::INVALID_INDEX) {
-			group = group_of_clause.emplace(clause, next_group).first->second;
-		}
+		idx_t group = group_of_clause.emplace(clause, next_group).first->second;
 		next_group = std::max(next_group, group + 1);
 		auto alias = node.GetAlias();
 		AddDecideTag(alias, MakeRemovalGroupTag(group));
@@ -527,7 +510,7 @@ void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int 
 			WalkPolarity(context, *func.children[1], -sign, holds, visit);
 			return;
 		}
-		if (name == "-" && func.children.size() == 1) {
+		if (name == "-") {
 			WalkPolarity(context, *func.children[0], -sign, holds, visit);
 			return;
 		}
@@ -548,7 +531,7 @@ void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int 
 					continue;
 				}
 				auto child_sign = PlanTimeSignOf(context, child);
-				const bool is_divisor = name == "/" && i == 1;
+				const bool is_divisor = name == "/";
 				if (child_sign == PlanTimeSign::ZERO && !is_divisor) {
 					return;
 				}

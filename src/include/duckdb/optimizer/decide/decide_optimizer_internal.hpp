@@ -92,11 +92,10 @@ void WalkPolarity(ClientContext &context, Expression &expr, int sign, const Pola
 void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
 
 //! Allocate an auxiliary decision column `name` of `type`: its reference in
-//! `decide_variables`, its Boolean flag, and its scope -- recorded only when the plan
-//! keeps scopes at all (`variable_scopes` is empty while every decision is row-scoped,
-//! and stays so for a row-scoped auxiliary). A keyed auxiliary is one of its keyed scope's
-//! `scoped_variable_indices`. A non-empty `label` names the column in a
-//! diagnosis (F6) by what it stands for. Returns the column's index.
+//! `decide_variables`, its Boolean flag, and its scope (the binder gives every declared decision one, so
+//! `variable_scopes` stays parallel to `decide_variables`). A keyed auxiliary is one of its keyed scope's
+//! `scoped_variable_indices`. `label` names the column in a diagnosis (F6) by what it stands for. Returns the
+//! column's index.
 idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
                            DecideVarScopeInfo scope, const string &label);
 
