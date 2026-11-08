@@ -190,11 +190,6 @@ bool DirectIRIsReadable(const DirectIR &ir) {
 	if (ir.objective.status != DirectAnalysisStatus::PROVED || !std::isfinite(ir.objective.offset)) {
 		return false;
 	}
-	// No objective (`DecideSense::FEASIBILITY`) is a sense the rules know.
-	if (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
-	    ir.objective.sense != DecideSense::FEASIBILITY) {
-		return false;
-	}
 	for (auto &constraint : ir.constraints) {
 		if (constraint.status != DirectAnalysisStatus::PROVED) {
 			return false;

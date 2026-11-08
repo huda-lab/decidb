@@ -73,7 +73,6 @@ public:
 			return RenderDecideSource(expr, decide.source_fragments, decide.keyed_scopes, &decide.keys);
 		};
 		ir.decide_index = decide.decide_index;
-		ir.source_clause_count = decide.constraint_sources.size();
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 		source_bindings = decide.SourceBindings();
 		ir.source_bindings = source_bindings;

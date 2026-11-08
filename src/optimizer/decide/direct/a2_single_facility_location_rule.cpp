@@ -420,7 +420,7 @@ private:
 //! interval is their intersection. An empty interval is not declined: the plan raises the solver's infeasible error.
 bool Rule::ProveInterval(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &ir_node : ir.constraints) {
-		if (!DirectIsSingletonRow(ir, ir_node)) {
+		if (!ir_node.singleton_row) {
 			return false;
 		}
 	}

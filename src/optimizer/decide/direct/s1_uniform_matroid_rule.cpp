@@ -99,11 +99,11 @@ struct Condition final : DirectApplicabilityCondition {
 //! Every term is the decision times a coefficient.
 bool OnlyDecisionTerms(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
-		if (!term.IsLinear() || term.var_a != 0) {
+		if (!term.IsLinear()) {
 			return false;
 		}
 	}
-	return !terms.empty();
+	return true;
 }
 
 //! The signed sum of the terms' coefficients, as the solver's like-term collection sums them; false when one is not a
@@ -112,8 +112,7 @@ bool ConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms,
 	slope = 0;
 	for (auto &term : terms) {
 		double value;
-		if (!term.coefficient ||
-		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
+		if (!TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
 			return false;
 		}
 		slope += term.sign * value;
@@ -126,10 +125,9 @@ bool ConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms,
 bool SourceOnlyCoefficients(ClientContext &context, const DirectIR &ir, const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
 		double value;
-		if (!term.coefficient ||
-		    (term.coefficient->IsFoldable()
-		         ? !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)
-		         : !DirectIsSourceOnlyNumeric(*term.coefficient, ir.decide_index, ir.source_bindings))) {
+		if (term.coefficient->IsFoldable()
+		        ? !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)
+		        : !DirectIsSourceOnlyNumeric(*term.coefficient, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
 	}
@@ -173,14 +171,10 @@ ExpressionType FlipComparison(ExpressionType comparison) {
 //! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null otherwise. CheckCondition has
 //! declined a membership constraint before it asks, and checks that the terms add up to exactly one `x`.
 const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
-	if (ir_node.aggregate || ir_node.lhs.size() != 1) {
+	if (ir_node.aggregate || !OnlyDecisionTerms(ir_node.lhs[0].terms)) {
 		return nullptr;
 	}
-	auto &part = ir_node.lhs[0];
-	if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || !OnlyDecisionTerms(part.terms)) {
-		return nullptr;
-	}
-	return &part.terms;
+	return &ir_node.lhs[0].terms;
 }
 
 //! Turns `SUM(x) <comparison> expr` (`SUM(x) <comparison> -expr` when `negate`) into an inclusive count limit in
@@ -253,19 +247,11 @@ public:
 	}
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
 		if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::BOOL ||
-		    ir.decisions[0].scope != DecideVarScope::ROW || ir.decisions[0].output_type != LogicalType::INTEGER ||
-		    !ir.keyed_scopes.empty()) {
-			return nullptr;
-		}
-		if (ir.source_clause_count != ir.constraints.size()) {
+		    ir.decisions[0].scope != DecideVarScope::ROW || !ir.keyed_scopes.empty()) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
 		for (auto &ir_node : ir.constraints) {
-			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
-				return nullptr;
-			}
 			if (ir_node.comparison == ExpressionType::COMPARE_IN) {
 				return nullptr;
 			}
@@ -279,9 +265,6 @@ public:
 			condition->bound_factors.push_back(&ir_node);
 		}
 		if (condition->bound_factors.empty()) {
-			return nullptr;
-		}
-		if (ir.objective.parts.empty() && ir.objective.sense != DecideSense::FEASIBILITY) {
 			return nullptr;
 		}
 		condition->sense = ir.objective.sense;
@@ -530,7 +513,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			return false;
 		}
 		for (auto &term : part.terms) {
-			if (!term.IsLinear() || term.var_a != 0) {
+			if (!term.IsLinear()) {
 				return false;
 			}
 		}

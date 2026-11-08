@@ -127,7 +127,6 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(ir.decisions[0].scope == DecideVarScope::ROW);
 	REQUIRE(ir.objective.status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.objective.parts.size() == 1);
-	REQUIRE(ir.source_clause_count == 1);
 	REQUIRE(ir.constraints.size() == 1);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.constraints[0].source_clause_id == 0);
@@ -144,7 +143,8 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(damaged.constraints.size() == 1);
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(damaged.constraints[0].source_clause_id == DConstants::INVALID_INDEX);
-	REQUIRE(s1->CheckCondition(damaged, *con.context) == nullptr);
+	// The rule driver offers no rule an IR with a not-proved constraint.
+	REQUIRE(!DirectIRIsReadable(damaged));
 }
 
 TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]") {
@@ -163,7 +163,6 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
-		REQUIRE(ir.constraints.size() == ir.source_clause_count);
 		auto condition = s1->CheckCondition(ir, *con.context);
 		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");

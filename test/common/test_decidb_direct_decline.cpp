@@ -25,8 +25,8 @@
 // calls the rule under test on it and records whether it applied. The query is planned (EXPLAIN), never run, and
 // the probe declines, so the solver path stays in place.
 //
-// The edit is for the shapes the front end never produces from SQL (a per-row clause that carries a reducer, a term
-// over a second decision, an output type that is not INTEGER) and for grouping keys. Every case names the branch it
+// The edit is for the shapes the front end never produces from SQL (a nested reducer, an expression of the wrong
+// type, a column outside the source) and for grouping keys. Every case names the branch it
 // targets, and reaches an arm of the rule's decision code that no other case of the rule reaches (the per-arm
 // check is `make decide-coverage`). Each rule also has forms that apply, so a decline is about the one thing a
 // case changes.
@@ -243,40 +243,15 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("two decisions", "SUM(x) <= 2", nullptr, S1_OBJECTIVE, "x(BOOL), y(BOOL)"));
 	shapes.push_back(S1("a REAL decision", "SUM(x) <= 2", nullptr, S1_OBJECTIVE, "x(REAL)"));
 	shapes.push_back(S1("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "per (): s(BOOL)"));
-	shapes.push_back(S1("a decision whose output is not INTEGER", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
 	shapes.push_back(S1("a keyed scope", "SUM(x) <= 2", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
 	// CheckCondition: the constraints.
-	shapes.push_back(S1("no constraint", "SUM(x) <= 2", [](DirectIR &ir) {
-		ir.constraints.clear();
-		ir.source_clause_count = 0;
-	}));
-	shapes.push_back(S1("a clause count that differs from the constraint count", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.source_clause_count++; }));
-	shapes.push_back(S1("a source clause id out of range", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.constraints[0].source_clause_id = DConstants::INVALID_INDEX; }));
-	shapes.push_back(S1("one source clause read twice", "SUM(x) >= 1 AND SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.constraints[1].source_clause_id = ir.constraints[0].source_clause_id; }));
 	shapes.push_back(S1("a membership constraint", "SUM(x) <= 2 AND x IN (0, 1)"));
 	shapes.push_back(S1("a count that is not a bound", "SUM(x) <> 1"));
 	shapes.push_back(S1("no count bound, only a fixed value", "x = 1"));
 	// FixedTerms and OnlyDecisionTerms: a per-row clause that is not a fix is read as a count bound, which declines.
-	shapes.push_back(S1("a per-row clause with a negative sign", "SUM(x) <= 2 AND x <= 1",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).sign = -1; }));
-	shapes.push_back(S1("a per-row clause with a reducer", "SUM(x) <= 2 AND x <= 1",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).reducer = DirectReducer::SUM; }));
-	shapes.push_back(S1("a per-row clause with a scale", "SUM(x) <= 2 AND x <= 1", [](DirectIR &ir) {
-		LeftPart(ir, 1).scale = make_uniq<BoundConstantExpression>(Value::DOUBLE(2.0));
-	}));
-	shapes.push_back(S1("a per-row clause with two parts", "SUM(x) <= 2 AND x <= 1",
-	                    [](DirectIR &ir) { ir.constraints[1].lhs.emplace_back(); }));
 	shapes.push_back(S1("a per-row clause that is a square", "SUM(x) <= 2 AND POWER(x, 2) <= 1"));
-	shapes.push_back(S1("a per-row clause over another decision", "SUM(x) <= 2 AND x <= 1",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
 	// CheckCondition: the objective.
 	shapes.push_back(S1("an objective with a by key", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
-	shapes.push_back(
-	    S1("a sense with no objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts.clear(); }));
 	// ProveScope.
 	shapes.push_back(S1("a count with a negative sign", "0 - SUM(x) >= -2"));
 	// The canonicalizer reads `0 - SUM(x)` as a scale of -1, so only an edit sets the part's own sign.
@@ -313,8 +288,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	    S1("a fixed value with an infinite coefficient", "SUM(x) <= 2 AND CAST('inf' AS DOUBLE) * x <= 1"));
 	shapes.push_back(S1("a not-equal value with a column coefficient", "SUM(x) <= 2 AND cap * x <> 1"));
 	shapes.push_back(S1("a not-equal value with a coefficient other than 1", "SUM(x) <= 2 AND 2 * x <> 2"));
-	shapes.push_back(S1("a fixed value with no coefficient", "SUM(x) <= 2 AND x = 1",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
 	shapes.push_back(S1("a fixed value under a WHEN that reads more than the source",
 	                    "SUM(x) <= 2 AND when txid_current() >= 0: x = 1"));
 	shapes.push_back(S1("a fixed value below the Boolean domain", "SUM(x) <= 2 AND x <= -1"));
@@ -343,10 +316,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a count body with a column coefficient", "SUM(w*x) <= 2"));
 	shapes.push_back(S1("a count body that adds up to two", "SUM(2*x) <= 2"));
 	shapes.push_back(S1("a count body that is a square", "SUM(POWER(x, 2)) <= 2"));
-	shapes.push_back(
-	    S1("a count body over another decision", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).terms[0].var_a = 1; }));
-	shapes.push_back(S1("a count body with no coefficient", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { LeftPart(ir).terms[0].coefficient.reset(); }));
 	// The right-hand-side rewrite turns an aggregate on the right into a source column, so the IR holds one only when
 	// the rewrite leaves it.
 	shapes.push_back(S1("a count bound that is an aggregate", "SUM(x) <= 2", [](DirectIR &ir) {
@@ -378,8 +347,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(
 	    S1("a qualified objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(S1("an objective constant", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x + 1)"));
-	shapes.push_back(S1("an objective term over another decision", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].var_a = 1; }));
 	shapes.push_back(S1("an objective divided by zero", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) / 0"));
 	shapes.push_back(
 	    S1("an objective scaled by infinity", "SUM(x) <= 2", nullptr, "MAXIMIZE 'inf'::DOUBLE * SUM(w*x)"));
@@ -434,18 +401,15 @@ duckdb::vector<Shape> A1AppliesShapes() {
 duckdb::vector<Shape> A1DeclineShapes() {
 	duckdb::vector<Shape> shapes;
 	// CheckCondition: the decisions.
-	shapes.push_back(A1("no decision", "x <= cap", [](DirectIR &ir) { ir.decisions.clear(); }));
 	shapes.push_back(A1("a keyed scope", "x <= cap", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
 	shapes.push_back(A1("a query-wide decision", "s <= 3", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	// CheckCondition: the constraints.
 	shapes.push_back(A1("an aggregate constraint", "SUM(x) <= 5"));
 	shapes.push_back(A1("a membership constraint", "x IN (1, 2)"));
 	shapes.push_back(A1("a not-equal constraint", "x <> 2", nullptr, A1_OBJECTIVE, "x(INT)"));
-	// DirectIsSingletonRow.
+	// A constraint that is not a bound on one decision.
 	shapes.push_back(A1("a product of two decisions", "x * y <= 4", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(A1("a left part over two decisions", "x + y <= 3", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
-	shapes.push_back(A1("a bound on a decision that is not declared", "x <= cap",
-	                    [](DirectIR &ir) { ir.constraints[0].bound.var_idx = 1; }));
 	// CheckCondition: the objective.
 	shapes.push_back(A1("an objective with a by key", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
 	shapes.push_back(A1("an average objective", "x <= cap", nullptr, "MAXIMIZE AVG(w*x)"));
@@ -501,24 +465,10 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	                    "MAXIMIZE SUM(txid_current()*x)"));
 	shapes.push_back(A1("an objective divided by zero", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) / 0"));
 	shapes.push_back(A1("an objective scaled by infinity", "x <= cap", nullptr, "MAXIMIZE 'inf'::DOUBLE * SUM(w*x)"));
-	shapes.push_back(A1("an objective term over a decision that is not declared", "x <= cap",
-	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].var_a = 5; }));
 	shapes.push_back(A1("an objective part with a filter that reads more than the source", "x <= cap",
 	                    [](DirectIR &ir) { ir.objective.parts[0].filter = ForeignBoolean(); }));
 	shapes.push_back(A1("an objective constant fixed only within the query", "x <= cap", nullptr,
 	                    "MAXIMIZE SUM(w*x + txid_current())"));
-	shapes.push_back(A1("an objective term with no coefficient", "x <= cap",
-	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient.reset(); }));
-	shapes.push_back(A1(
-	    "an objective constant with no value", "x <= cap",
-	    [](DirectIR &ir) {
-		    for (auto &term : ir.objective.parts[0].terms) {
-			    if (term.IsConstant()) {
-				    term.coefficient.reset();
-			    }
-		    }
-	    },
-	    "MAXIMIZE SUM(w*x + 1)"));
 	shapes.push_back(A1(
 	    "a square scaled by zero", "x <= cap",
 	    [](DirectIR &ir) {
@@ -541,10 +491,6 @@ duckdb::vector<Shape> A1DeclineShapes() {
 		    terms.push_back(CopyTerm(terms[0]));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
-	shapes.push_back(A1(
-	    "a square over a decision that is not declared", "x <= cap",
-	    [](DirectIR &ir) { SquareForm(ir.objective.parts[0].terms[0])[0].var_a = 5; },
-	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(
 	    A1("a square over two decisions", "x <= cap", nullptr, "MINIMIZE SUM(POWER(x + y, 2))", "x(REAL), y(REAL)"));
 	shapes.push_back(A1(
@@ -563,10 +509,6 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1("a square with a constant fixed only within the query", "x <= cap", nullptr,
 	                    "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
-	shapes.push_back(A1(
-	    "a square term with no coefficient", "x <= cap",
-	    [](DirectIR &ir) { SquareForm(ir.objective.parts[0].terms[0])[1].coefficient.reset(); },
-	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	return shapes;
 }
 
@@ -657,21 +599,14 @@ duckdb::vector<Shape> R1AppliesShapes() {
 duckdb::vector<Shape> R1DeclineShapes() {
 	duckdb::vector<Shape> shapes;
 	// CheckCondition: the decision.
-	shapes.push_back(R1("no decision", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) { ir.decisions.clear(); }));
 	// ProveDecision reads every decision, not the first alone.
 	shapes.push_back(
 	    R1("an INT second decision", "SUM(cap*x + cap*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(INT)"));
-	shapes.push_back(R1(
-	    "a second decision whose output is not DOUBLE", "SUM(cap*x + cap*y) <= 5",
-	    [](DirectIR &ir) { ir.decisions[1].output_type = LogicalType::BIGINT; }, "MAXIMIZE SUM(w*x + w*y)",
-	    "x(REAL), y(REAL)"));
 	shapes.push_back(R1("a query-wide second decision", "SUM(cap*x + cap*s) <= 5", nullptr, "MAXIMIZE SUM(w*x) + s",
 	                    "x(REAL), per (): s(REAL)"));
 	shapes.push_back(R1("an INT decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(INT)"));
 	shapes.push_back(R1("a BOOL decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(BOOL)"));
 	shapes.push_back(R1("a query-wide decision", "SUM(cap*s) <= 5", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
-	shapes.push_back(R1("a decision whose output is not DOUBLE", "SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
 	shapes.push_back(R1("a keyed scope", "SUM(cap*x) <= 5", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
 	// CheckCondition: the constraints.
 	shapes.push_back(R1("no budget, only a bound", "x <= cap"));
@@ -683,7 +618,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	// Two decisions share the budget; the clauses of one budget name the same decisions (SameBudgetTerms).
 	shapes.push_back(R1("two budgets with the same weights over different decisions",
 	                    "SUM(cap*x) >= 1 AND SUM(cap*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
-	// A per-row constraint that reads two decisions links them (DirectIsSingletonRow).
+	// A per-row constraint that reads two decisions links them.
 	shapes.push_back(R1("a per-row constraint that links two decisions",
 	                    "x <= cap AND y <= cap AND x + y <= 4 AND SUM(cap*x + cap*y) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
@@ -707,8 +642,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(
 	    R1("an aggregate WHEN that reads more than the source", "SUM(when txid_current() >= 0: cap*x) <= 5"));
 	// ProveBudget.
-	shapes.push_back(R1("a strict budget", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[1].comparison = ExpressionType::COMPARE_LESSTHAN; }));
 	shapes.push_back(R1("a scaled budget", "x <= cap AND 2 * SUM(cap*x) <= 5"));
 	shapes.push_back(R1("a negated budget", "x <= cap AND 0 - SUM(cap*x) >= -5"));
 	shapes.push_back(R1("a budget of two sums", "x <= cap AND SUM(cap*x) + SUM(w*x) <= 5"));
@@ -717,12 +650,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	                    [](DirectIR &ir) { LeftPart(ir, 1).inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(R1("a budget with a constant term", "x <= cap AND SUM(cap*x + 1) <= 5"));
 	shapes.push_back(R1("a squared budget", "x <= cap AND SUM(POWER(x, 2)) <= 5"));
-	shapes.push_back(R1("a budget with no term", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).terms.clear(); }));
-	shapes.push_back(R1("a budget term over another decision", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
-	shapes.push_back(R1("a budget term with no coefficient", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
 	shapes.push_back(
 	    R1("a budget with a weight fixed only within the query", "x <= cap AND SUM(txid_current()*x) <= 5"));
 	shapes.push_back(R1("a budget with a weight outside the source", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) {
@@ -773,10 +700,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("an objective constant", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x + 1)"));
 	shapes.push_back(
 	    R1("an objective square", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MINIMIZE SUM(POWER(x - w, 2))"));
-	shapes.push_back(R1("an objective term over another decision", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].var_a = 1; }));
-	shapes.push_back(R1("an objective term with no coefficient", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient.reset(); }));
 	shapes.push_back(
 	    R1("an objective divided by zero", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) / 0"));
 	shapes.push_back(R1("an objective coefficient fixed only within the query", "x <= cap AND SUM(cap*x) <= 5", nullptr,
@@ -937,7 +860,6 @@ duckdb::vector<Shape> N1AppliesShapes() {
 duckdb::vector<Shape> N1DeclineShapes() {
 	duckdb::vector<Shape> shapes;
 	// CheckCondition: the decision.
-	shapes.push_back(N1("no decision", N1_LIMIT, [](DirectIR &ir) { ir.decisions.clear(); }));
 	shapes.push_back(
 	    N1("two decisions", "SUM(POWER(x, 2)) <= 25 AND y <= 1", nullptr, N1_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(N1("an INT decision", N1_LIMIT, nullptr, N1_OBJECTIVE, "x(INT)"));
@@ -954,8 +876,6 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a BETWEEN limit", "SUM(POWER(x, 2)) BETWEEN 1 AND 25"));
 	shapes.push_back(N1("an equal limit", "SUM(POWER(x, 2)) = 25"));
 	shapes.push_back(N1("a limit from below", "SUM(POWER(x, 2)) >= 25"));
-	shapes.push_back(N1("a strict limit", N1_LIMIT,
-	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_LESSTHAN; }));
 	shapes.push_back(N1("a scaled sum", "2 * SUM(POWER(x, 2)) <= 50"));
 	shapes.push_back(N1("a negated sum", "-SUM(POWER(x, 2)) >= -25"));
 	shapes.push_back(N1("an average", "AVG(POWER(x, 2)) <= 25"));
@@ -1162,8 +1082,6 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	                    "MINIMIZE SUM(POWER(c - w * txid_current(), 2))"));
 	shapes.push_back(A2("a linear objective", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(w * c)"));
 	shapes.push_back(
-	    A2("a second square", "c BETWEEN 0 AND 10", [](DirectIR &ir) { AddSquare(ir.objective.parts[0].terms); }));
-	shapes.push_back(
 	    A2("a linear term beside the square", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(c - w, 2) + w * c)"));
 	shapes.push_back(A2("a per-row constant beside the square", "c BETWEEN 0 AND 10", nullptr,
 	                    "MINIMIZE SUM(POWER(c - w, 2) + cap)"));
@@ -1262,24 +1180,17 @@ TEST_CASE("A2 and every other rule never apply to the same query", "[decidb]") {
 // The rule driver's check that the front end read the whole IR
 //===--------------------------------------------------------------------===//
 
-//! An IR the front end read in full, built by hand: one proved constraint, a finite offset and a known sense.
+//! An IR the front end read in full, built by hand: one proved constraint and a finite offset.
 DirectIR ReadableIR() {
 	DirectIR ir;
 	ir.constraints.emplace_back();
 	ir.objective.status = DirectAnalysisStatus::PROVED;
-	ir.objective.sense = DecideSense::MAXIMIZE;
 	ir.objective.offset = 0;
 	return ir;
 }
 
 TEST_CASE("The rule driver offers a rule only an IR the front end read in full", "[decidb]") {
 	REQUIRE(DirectIRIsReadable(ReadableIR()));
-	// Each sense the rules know is readable; the objective sense is a branch of its own.
-	for (auto sense : {DecideSense::MAXIMIZE, DecideSense::MINIMIZE, DecideSense::FEASIBILITY}) {
-		auto ir = ReadableIR();
-		ir.objective.sense = sense;
-		CHECK(DirectIRIsReadable(ir));
-	}
 
 	// Each case breaks the one thing it names.
 	auto objective = ReadableIR();
@@ -1288,9 +1199,6 @@ TEST_CASE("The rule driver offers a rule only an IR the front end read in full",
 	auto offset = ReadableIR();
 	offset.objective.offset = std::numeric_limits<double>::infinity();
 	CHECK(!DirectIRIsReadable(offset));
-	auto sense = ReadableIR();
-	sense.objective.sense = static_cast<DecideSense>(7);
-	CHECK(!DirectIRIsReadable(sense));
 	auto constraint = ReadableIR();
 	constraint.constraints.emplace_back();
 	constraint.constraints[1].status = DirectAnalysisStatus::NOT_PROVED;

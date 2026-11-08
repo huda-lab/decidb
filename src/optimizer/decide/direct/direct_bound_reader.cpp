@@ -29,18 +29,14 @@ static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> 
 	return true;
 }
 
-bool DirectIsSingletonRow(const DirectIR &ir, const DirectIRConstraint &ir_node) {
-	return ir_node.singleton_row && ir_node.bound.var_idx < ir.decisions.size();
-}
-
 bool DirectContradictsDomain(const DirectIR &ir) {
 	// Every bound here is the user's (Add): direct solve runs before RewriteInDomain, so a rule reads an IN as written
 	// and never the bounds its lowering adds (AddLowered).
 	vector<DecideWrittenBox> written(ir.decisions.size());
 	for (auto &ir_node : ir.constraints) {
-		if (ir_node.variable_bound && DirectIsSingletonRow(ir, ir_node)) {
+		if (ir_node.variable_bound && ir_node.singleton_row) {
 			written[ir_node.bound.var_idx].Add(ir_node.bound.sense, ir_node.bound.written_k);
-		} else if (ir_node.scope.when && DirectIsSingletonRow(ir, ir_node) && ir_node.bound.LiftsDefaultFloor()) {
+		} else if (ir_node.scope.when && ir_node.singleton_row && ir_node.bound.LiftsDefaultFloor()) {
 			// A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
 			// negative); the solve says whether the clauses on the other rows leave a value.
 			written[ir_node.bound.var_idx].AddLowered('>', ir_node.bound.written_k);
@@ -72,7 +68,7 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		idx_t decision = bound.var_idx;
 		// The classifier and the IR read the comparison with the same term splitter: one part of linear terms in the
 		// decision.
-		D_ASSERT(DirectIsSingletonRow(ir, ir_node) && ir_node.lhs.size() == 1);
+		D_ASSERT(ir_node.singleton_row && ir_node.lhs.size() == 1);
 		if (!DirectIsSourceOnlyValue(*ir_node.rhs, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
@@ -218,7 +214,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 		if (!term.IsLinear()) {
 			continue;
 		}
-		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
+		if (!DirectProveValue(ir, *term.coefficient)) {
 			return false;
 		}
 		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy()});
@@ -232,7 +228,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 
 bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
                             DirectConstantTerm &out) {
-	if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
+	if (!DirectProveValue(ir, *term.coefficient)) {
 		return false;
 	}
 	out.sign = term.sign;
@@ -258,13 +254,13 @@ static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, co
 	return true;
 }
 
-//! The one decision a form's linear terms name; false when they name two, an undeclared one, none, or a term is neither
-//! linear nor constant.
+//! The one decision a form's linear terms name; false when they name two, none, or a term is neither linear nor
+//! constant.
 static bool DirectReadFormDecision(const DirectIR &ir, const vector<DecideSplitTerm> &form, idx_t &decision) {
 	bool has_decision = false;
 	for (auto &inner : form) {
 		if (inner.IsLinear()) {
-			if (inner.var_a >= ir.decisions.size() || (has_decision && decision != inner.var_a)) {
+			if (has_decision && decision != inner.var_a) {
 				return false;
 			}
 			decision = inner.var_a;
@@ -282,7 +278,7 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 		return false;
 	}
 	for (auto &inner : form) {
-		if (!inner.coefficient || !DirectProveValue(ir, *inner.coefficient)) {
+		if (!DirectProveValue(ir, *inner.coefficient)) {
 			return false;
 		}
 		DirectSignedValue value;
@@ -337,11 +333,6 @@ bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const D
                              DirectQuadraticPart &out) {
 	if (!DirectReadLinearPart(ir, context, part, clause, out.linear) || !DirectObjectivePartKept(ir, part, out.kept)) {
 		return false;
-	}
-	for (auto &term : out.linear.terms) {
-		if (term.decision >= ir.decisions.size()) {
-			return false;
-		}
 	}
 	for (auto &term : part.terms) {
 		if (term.IsLinear()) {

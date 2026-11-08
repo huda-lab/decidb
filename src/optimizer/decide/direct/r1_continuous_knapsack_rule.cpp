@@ -83,13 +83,10 @@ struct Condition final : DirectApplicabilityCondition {
 	string objective_written;
 };
 
-//! The terms are linear in the declared decisions and none is missing its coefficient.
-bool OnlyLinearTerms(const vector<DecideSplitTerm> &terms, idx_t decision_count) {
-	if (terms.empty()) {
-		return false;
-	}
+//! The terms are all linear.
+bool OnlyLinearTerms(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
-		if (!term.IsLinear() || term.var_a >= decision_count || !term.coefficient) {
+		if (!term.IsLinear()) {
 			return false;
 		}
 	}
@@ -143,12 +140,11 @@ private:
 
 //! Every decision is a row-scoped REAL decision: an item is one decision on one row.
 bool Rule::ProveDecision(const DirectIR &ir) const {
-	if (ir.decisions.empty() || !ir.keyed_scopes.empty()) {
+	if (!ir.keyed_scopes.empty()) {
 		return false;
 	}
 	for (auto &decision : ir.decisions) {
-		if (decision.domain != DirectDomain::REAL || decision.scope != DecideVarScope::ROW ||
-		    decision.output_type != LogicalType::DOUBLE) {
+		if (decision.domain != DirectDomain::REAL || decision.scope != DecideVarScope::ROW) {
 			return false;
 		}
 	}
@@ -164,7 +160,7 @@ bool Rule::ProveConstraints(const DirectIR &ir, vector<const DirectIRConstraint 
 			budgets.push_back(&ir_node);
 			continue;
 		}
-		if (!DirectIsSingletonRow(ir, ir_node)) {
+		if (!ir_node.singleton_row) {
 			return false;
 		}
 	}
@@ -207,7 +203,7 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
                              Condition &condition, bool first) const {
 	// ProveBudgetScope has proved that every clause is a plain SUM.
 	auto sum = ir_node.PlainSum();
-	if (!OnlyLinearTerms(sum->terms, ir.decisions.size())) {
+	if (!OnlyLinearTerms(sum->terms)) {
 		return false;
 	}
 	DirectLinearPart weights;
@@ -228,11 +224,8 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
 //! (AggregatePlanBuilder::GroupTotals).
 bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
                       Condition &condition) const {
+	// The binder refuses `<`, `>` and `<>` over a REAL decision, so the comparison is `<=`, `>=` or `=`.
 	auto comparison = ir_node.comparison;
-	if (comparison != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
-	    comparison != ExpressionType::COMPARE_GREATERTHANOREQUALTO && comparison != ExpressionType::COMPARE_EQUAL) {
-		return false;
-	}
 	double limit;
 	if (!TryEvaluateFoldableDouble(context, *ir_node.rhs, limit, DIRECT_FINITE_CONSTANT)) {
 		return ProveDataLimit(ir, ir_node, condition);
@@ -298,7 +291,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 //! The objective: signed, scaled `SUM(v*x)` parts, or none. Each coefficient must be a value of the source row.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto &part : ir.objective.parts) {
-		if (!part.IsPlainSum() || !OnlyLinearTerms(part.terms, ir.decisions.size())) {
+		if (!part.IsPlainSum() || !OnlyLinearTerms(part.terms)) {
 			return false;
 		}
 		DirectLinearPart read;

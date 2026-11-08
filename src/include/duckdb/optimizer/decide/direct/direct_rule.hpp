@@ -226,8 +226,6 @@ struct DirectIR {
 	vector<DirectIRDecision> decisions;
 	vector<DirectIRKeyedScope> keyed_scopes;
 	vector<ColumnBinding> source_bindings;
-	//! Number of entries in the source-clause registry.
-	idx_t source_clause_count = 0;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.

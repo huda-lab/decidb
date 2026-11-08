@@ -89,7 +89,7 @@ public:
 	}
 
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions.empty() || !ir.keyed_scopes.empty()) {
+		if (!ir.keyed_scopes.empty()) {
 			return nullptr;
 		}
 		for (auto &decision : ir.decisions) {
@@ -101,7 +101,7 @@ public:
 			if (ir_node.aggregate) {
 				return nullptr;
 			}
-			if (!DirectIsSingletonRow(ir, ir_node)) {
+			if (!ir_node.singleton_row) {
 				return nullptr;
 			}
 		}

@@ -105,7 +105,7 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	const DirectIRConstraint *clause = nullptr;
 	for (auto &ir_node : ir.constraints) {
 		if (!ir_node.aggregate) {
-			if (!DirectIsSingletonRow(ir, ir_node)) {
+			if (!ir_node.singleton_row) {
 				return false;
 			}
 			continue;
