@@ -1969,10 +1969,6 @@ public:
 		}
 
 		// Minimal: keep constructor lean; detailed solver output comes from HiGHS
-		if (op.tree && (SelectedDecideEvaluator() == DecideEvaluator::TREE ||
-		                SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE)) {
-			descent = make_uniq<DecideDescent>(*op.tree, context);
-		}
 	}
 
     mutex lock;
@@ -2140,12 +2136,7 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
-    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     DecideProfileSample profile(lstate.profile_sink);
-    if (gstate.descent) {
-        AppendDecideDescent(*gstate.descent, chunk, gstate.descent_rows);
-		gstate.descent_rows += chunk.size();
-    }
     lstate.data.Append(lstate.append_state, chunk);
     return SinkResultType::NEED_MORE_INPUT;
 }
@@ -3091,7 +3082,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // by every other call site that asks for the same expression set.
     PerGroupCache per_group_cache;
 
-	if (gstate.descent) {
+	// The descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a row is the
+	// position the buffer gives it, the one every later phase reads.
+	if (tree && (SelectedDecideEvaluator() == DecideEvaluator::TREE ||
+	             SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE)) {
+		gstate.descent = make_uniq<DecideDescent>(*tree, context);
+		DecideInputScans() = 0;
+		DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
+			AppendDecideDescent(*gstate.descent, chunk, offset);
+			gstate.descent_rows += chunk.size();
+		});
 		gstate.descent->Finish();
 		DecideTreeEvaluation values(*tree, *gstate.descent, context);
 		values.Evaluate();
@@ -3222,7 +3222,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 		indexer.total_vars = indexer.global_block_start + solver_input.num_global_vars;
 		ReportAnEmptyObjective(solver_input);
 		EvaluatedClauses evaluated;
-		DecideProfileScope::Counter("execution.input_scans", gstate.descent_rows ? 1.0 : 0.0);
+		DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
 		DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
 		return FinalizeSolveResult(context, gstate, solver_input, indexer, evaluated, elastic.get(), bench, model_timer,
 		                           solver_timer);

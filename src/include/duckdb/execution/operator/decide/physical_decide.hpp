@@ -289,9 +289,7 @@ public:
         return true;
     }
     bool ParallelSink() const override {
-        // The first tree implementation assigns row identity as chunks arrive. Parallel local containers require
-        // an explicit dictionary/row rebase at Combine before they can preserve the same identities.
-        return !tree;
+        return true;
     }
 
 public:
