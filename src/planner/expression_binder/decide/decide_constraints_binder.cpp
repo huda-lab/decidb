@@ -80,27 +80,18 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                 // bounds is a category error. Same rule K0 already states for the
                 // canonicalizer: recurse into child 0 only.
                 if (func.function_name == QUALIFIED_REDUCER_TAG || func.function_name == REDUCER_BY_TAG) {
-                    return !func.children.empty() && IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
+                    return IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
                 }
                 // A bound is evaluated as an expression over the row, so subtraction and
                 // negation compose from allowed operands exactly like addition does
                 // (`-5.0::DOUBLE` is a negative bound).
-                if (!IsAllowedOperatorChildren(func.children, variables)) {
-                    return false;
-                }
-                if (func.filter && !IsAllowedDecisionFreeBoundExpression(*func.filter, variables)) {
-                    return false;
-                }
-                return true;
+                return IsAllowedOperatorChildren(func.children, variables);
             }
             if (IsDecideAggregateName(func.function_name)) {
                 if (func.children.size() != 1) {
                     return false;
                 }
                 if (func.filter && !IsAllowedDecisionFreeBoundExpression(*func.filter, variables)) {
-                    return false;
-                }
-                if (ExpressionContainsDecideVariable(*func.children[0], variables)) {
                     return false;
                 }
                 return true;
@@ -187,9 +178,6 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     // BOUND, not of a position, so it is checked on whichever side is the bound;
     // when both sides bear decisions there is no bound and nothing to check.
     if (left_type == DecideExpression::SUM || right_type == DecideExpression::SUM) {
-        if (!ContainsDecideAggregate(*comp.left) && !ContainsDecideAggregate(*comp.right)) {
-            return BindResult(BinderException::Unsupported(expr, "DECIDE constraint must contain SUM(...), AVG(...), MIN(...), or MAX(...)"));
-        }
         auto IsValidBound = [&](const ParsedExpression &side) {
             return IsAllowedDecisionFreeBoundExpression(side, variables) &&
                    !ExpressionContainsDecideVariable(side, variables);
@@ -324,8 +312,8 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	// other half) binds the condition afresh from it as written.
 	unique_ptr<ParsedExpression> condition_text;
 	unique_ptr<Expression> condition;
-	idx_t when_text = when && qualifier_context ? qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN)
-	                                            : DConstants::INVALID_INDEX;
+	idx_t when_text =
+	    when ? qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN) : DConstants::INVALID_INDEX;
 	if (when) {
 		condition_text = when->children[1]->Copy();
 		auto error = bind_condition(when->children[1], condition);
@@ -336,19 +324,14 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	idx_t key = DConstants::INVALID_INDEX;
 	idx_t key_fragment = DConstants::INVALID_INDEX;
 	if (per) {
-		if (!qualifier_context || !qualifier_context->keys) {
-			throw InternalException("DECIDE: a per wrapper needs the clause's keys");
-		}
 		// The key as written (`per D`), read before its elements bind. It cannot ride on
 		// the marker's alias: the expression binder gives the bound wrapper that alias.
 		auto key_text = DecideKeyToString(*per);
-		if (qualifier_context->source_fragments) {
-			// the key as the user wrote it, when the parser kept it
-			key_fragment = qualifier_context->WrittenFragment(*per, DecideSpanRole::PER);
-			if (key_fragment == DConstants::INVALID_INDEX) {
-				key_fragment = qualifier_context->source_fragments->size();
-				qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
-			}
+		// the key as the user wrote it, when the parser kept it
+		key_fragment = qualifier_context->WrittenFragment(*per, DecideSpanRole::PER);
+		if (key_fragment == DConstants::INVALID_INDEX) {
+			key_fragment = qualifier_context->source_fragments->size();
+			qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
 		}
 		key = BindKey(context, binder.bind_context, *per, DecisionNames(variables), key_text, *qualifier_context->keys);
 	}
@@ -381,15 +364,13 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			if (key != DConstants::INVALID_INDEX) {
 				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
 			}
-			if (key_fragment != DConstants::INVALID_INDEX) {
-				AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
-			}
+			AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
 			constraint = std::move(wrapper);
 		}
 		return constraint;
 	};
 	auto bound = std::move(BoundExpression::GetExpression(**body));
-	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION && bound->alias.empty()) {
+	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &halves = bound->Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		for (auto &half : halves.children) {
@@ -403,7 +384,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
     auto location = expr_ptr->GetQueryLocation();
     auto result = TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression));
-    if (!result.HasError() && result.expression) {
+    if (!result.HasError()) {
         PreserveDecideSourceFragment(*expr_ptr, *result.expression);
     }
     return ThrowClauseError(PreserveQueryLocation(location, std::move(result)), root_expression);
@@ -440,12 +421,6 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
 		                             expr.ToString())));
 	}
-	case ExpressionClass::CAST: {
-        if (!is_top_expression) {
-            return ExpressionBinder::BindExpression(expr_ptr, depth);
-        }
-        break;
-    }
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
 		// `[when c] [per K]:` in front of a constraint.

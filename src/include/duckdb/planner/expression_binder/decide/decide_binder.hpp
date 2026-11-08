@@ -164,7 +164,7 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 //! can be recognised as the bound `K` and skipped.
 //! `names` quotes an operand of a clause as written.
 void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index,
-                                              optional_ptr<const DecideSourceNames> names = nullptr);
+                                              const DecideSourceNames &names);
 
 //! Whether every value `expr` can take is whole, by declared types, every addend counted:
 //! `sum(x + 0.5)` is not, `sum(power(x, 2))` is. The test a helper decision standing for
@@ -203,7 +203,7 @@ protected:
     //! the clause's own verdict and must reach the user as it is.
     static BindResult ThrowClauseError(BindResult result, bool root_expression);
 
-    //! True when `expr` is a bare reference to a query-wide (`per ()`) decision.
+    //! True when `expr`, a reference to a decision (IsVariableExpression), names a query-wide (`per ()`) one.
     //! A scalar has one solver column, so it needs no reducer to collapse it —
     //! and conversely may not appear inside one on its own.
     bool IsScalarDecideVariable(const ParsedExpression &expr) const;

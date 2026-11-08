@@ -41,7 +41,7 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		}
 		ErrorData error;
 		auto binding = bind_context.GetBinding(colref.GetTableName(), error);
-		if (!binding || binding->HasMatchingBinding(colref.GetColumnName())) {
+		if (!binding) {
 			return;
 		}
 		if (data_position) {
@@ -95,32 +95,21 @@ static void RefuseVolatile(const Expression &expr, const char *where) {
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { RefuseVolatile(child, where); });
 }
 
+//! The grammar builds a declaration as `name = 'type_marker'` (typed_decide_variable), the name a column reference,
+//! under a `per` or `per row` scope marker when the declaration has one.
 static ParsedDeclaration SplitDeclaration(const ParsedExpression &declaration) {
-	if (declaration.GetExpressionClass() != ExpressionClass::COMPARISON) {
-		throw BinderException(declaration, "Invalid DECIDE variable declaration.");
-	}
 	auto &comp = declaration.Cast<ComparisonExpression>();
 	ParsedDeclaration result;
 	auto *name = comp.left.get();
 	if (name->GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &marker = name->Cast<FunctionExpression>();
-		if (marker.is_operator && marker.function_name == SCOPE_PER_TAG && !marker.children.empty()) {
+		if (marker.function_name == SCOPE_PER_TAG) {
 			result.per = &marker;
-			name = marker.children[0].get();
-		} else if (marker.is_operator && marker.function_name == SCOPE_PER_ROW_TAG && !marker.children.empty()) {
-			name = marker.children[0].get();
 		}
-	}
-	if (name->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-		throw BinderException(declaration, "Invalid DECIDE variable declaration: expected variable name on left side.");
+		name = marker.children[0].get();
 	}
 	result.name = &name->Cast<ColumnRefExpression>();
-	if (comp.right->GetExpressionClass() == ExpressionClass::CONSTANT) {
-		auto &type = comp.right->Cast<ConstantExpression>();
-		if (type.value.type() == LogicalType::VARCHAR) {
-			result.type_marker = type.value.ToString();
-		}
-	}
+	result.type_marker = comp.right->Cast<ConstantExpression>().value.ToString();
 	return result;
 }
 
@@ -297,7 +286,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // operand's type is only known now that binding has resolved it. Together
                 // they are the whole refusal; the model builder raises none.
 			    DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
-			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
+			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, names);
 			    result.decide_constraint_sources =
 			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
 			                                       result.decide_index, &keys, &statement.decide_text);
