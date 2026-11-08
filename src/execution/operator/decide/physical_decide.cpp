@@ -1959,8 +1959,9 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 			throw InvalidInputException(
 			    text.one_class
 			        ? StringUtil::Format(text.Format())
-			        : StringUtil::Format(text.Format(), DescribeKeyValues(keys[check.key].Names(),
-			                                                              key_values.values_of(groups[failing]))));
+			        : StringUtil::Format(text.Format(),
+			                             DescribeKeyValues(text.InKeyOrder(keys[check.key].Names()),
+			                                               text.InKeyOrder(key_values.values_of(groups[failing])))));
 		}
 	}
 }

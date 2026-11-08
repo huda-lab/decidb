@@ -163,9 +163,18 @@ private:
 		if (!check.key.empty()) {
 			string names;
 			vector<ExprPtr> labels {nullptr};
+			vector<ExprPtr> spellings;
+			vector<string> element_names;
 			for (idx_t i = 0; i < check.key.size(); i++) {
-				names += (i > 0 ? ", " : "") + StringUtil::Replace(check.key[i].name, "%", "%%") + " = %s";
-				labels.push_back(Literal(Result(*classes, column++)));
+				element_names.push_back(StringUtil::Replace(check.key[i].name, "%", "%%") + " = %s");
+				spellings.push_back(Literal(Result(*classes, column++)));
+			}
+			// The class is named in the order the clause wrote its key.
+			element_names = check.text.InKeyOrder(element_names);
+			spellings = check.text.InKeyOrder(spellings);
+			for (idx_t i = 0; i < element_names.size(); i++) {
+				names += (i > 0 ? ", " : "") + element_names[i];
+				labels.push_back(spellings[i]);
 			}
 			labels[0] = calc.Constant(Value(names));
 			arguments.push_back(calc.Fn("printf", labels));
