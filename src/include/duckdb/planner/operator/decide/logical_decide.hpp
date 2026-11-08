@@ -704,6 +704,8 @@ public:
 	vector<RetainedBoundAggregate> retained_bound_aggregates;
 	//! The checks side plans execute during the transition, retained for tree execution.
 	vector<unique_ptr<Expression>> retained_row_checks;
+	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
+	vector<unique_ptr<Expression>> retained_expressions;
 
 	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
 	//! values execution computes, so the reducer stays in the tree, tagged with its entry (FRAME_AGGREGATE_TAG_PREFIX)

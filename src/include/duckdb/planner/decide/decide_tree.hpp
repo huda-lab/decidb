@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/decide_error_ledger.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -43,6 +44,11 @@ struct DecideNode {
 	vector<idx_t> dependencies;
 	vector<DecideTreeRead> child_reads;
 	string text;
+	//! Stable reporting priority, independent of when top-down/bottom-up visits the node.
+	DecideErrorPhase route_phase = DecideErrorPhase::CONSTRAINTS;
+	DecideErrorPhase value_phase = DecideErrorPhase::CONSTRAINTS;
+	idx_t route_order = 0;
+	idx_t value_order = 0;
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
 	vector<unique_ptr<Expression>> member_tests;
@@ -91,6 +97,7 @@ struct DecideTree {
 	vector<idx_t> roots;
 	//! Deterministic children-first order, including shared and definition edges.
 	vector<idx_t> eval_order;
+	vector<string> source_fragments;
 	vector<DecideKey> keys;
 	vector<KeyedScopeInfo> keyed_scopes;
 	vector<DecideVarScopeInfo> variable_scopes;

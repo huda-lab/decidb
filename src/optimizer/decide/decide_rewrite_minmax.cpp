@@ -481,9 +481,11 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 			rest = optimizer.BindScalarFunction(term.first > 0 ? "+" : "-", std::move(rest), std::move(copy));
 		}
 	}
+	const bool has_rest = rest != nullptr;
 	if (!rest) {
 		rest = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
-	} else if (scoped_when) {
+	}
+	if (scoped_when && (has_rest || DecideTreeRequested())) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
 		auto wrapper = make_uniq<BoundConjunctionExpression>(conj.type);
 		wrapper->children.push_back(std::move(rest));

@@ -368,6 +368,7 @@ static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
 //! Metadata for the executable tree when a flat MIN/MAX carrier deliberately
 //! drops its qualifier. Flat term extraction and rendering do not read these.
+static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retained_expression_";
 static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
 static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
 

@@ -11,6 +11,7 @@
 
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
 
 #include <functional>
@@ -90,6 +91,9 @@ public:
 		return decision_rows;
 	}
 	string Dump() const;
+	const DecideErrorLedger &Errors() const {
+		return errors;
+	}
 
 private:
 	struct RoutingRow {
@@ -113,6 +117,14 @@ private:
 	vector<unordered_map<hash_t, vector<idx_t>>> decision_indexes;
 	std::function<idx_t(idx_t, idx_t)> decision_resolver;
 	bool finished = false;
+	DecideErrorLedger errors;
+	DecideErrorRank current_rank;
+	idx_t active_node = DConstants::INVALID_INDEX;
+	idx_t active_row_base = 0;
+	vector<unordered_set<idx_t>> failed_rows;
+	bool Failed(idx_t row) const {
+		return active_node < failed_rows.size() && failed_rows[active_node].count(active_row_base + row);
+	}
 
 	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const vector<RoutingRow> &incoming);
 	vector<Value> Evaluate(const Expression &expression, DataChunk &chunk, const vector<RoutingRow> &rows);

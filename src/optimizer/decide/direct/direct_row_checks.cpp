@@ -12,6 +12,8 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -118,6 +120,29 @@ void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const v
 				retained.aggregate.arguments.push_back(argument->Copy());
 			}
 			decide.retained_bound_aggregates.push_back(std::move(retained));
+			// A tree-only result is never rebound to a side-table column. Give
+			// every read its source spelling through the same fragment registry
+			// that keeps casts and subqueries readable after binding. Do this
+			// in record order, so an outer reducer sees named inner results.
+			auto display = aggregate.function->Copy();
+			for (auto &argument : aggregate.arguments) {
+				display->Cast<BoundAggregateExpression>().children.push_back(argument->Copy());
+			}
+			auto fragment = decide.source_fragments.size();
+			decide.source_fragments.push_back(
+			    RenderDecideSource(*display, decide.source_fragments, decide.keyed_scopes, &decide.keys));
+			std::function<void(Expression &)> name_result = [&](Expression &expression) {
+				if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+				    expression.Cast<BoundColumnRefExpression>().binding == aggregate.column) {
+					idx_t existing;
+					if (!HasDecideTag(expression.alias, BOUND_REDUCER_TAG) &&
+					    !TryParseSourceFragmentTag(expression.alias, existing)) {
+						AddDecideTag(expression.alias, MakeSourceFragmentTag(fragment));
+					}
+				}
+				ExpressionIterator::EnumerateChildren(expression, name_result);
+			};
+			decide.EnumerateExpressions([&](unique_ptr<Expression> *expression) { name_result(**expression); });
 		}
 	}
 	if (SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE) {

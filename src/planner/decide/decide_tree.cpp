@@ -162,6 +162,7 @@ public:
 	DecideTreeBuilder(ClientContext &context, const LogicalDecide &op) : context(context), op(op) {
 		tree = make_uniq<DecideTree>();
 		tree->decide_index = op.decide_index;
+		tree->source_fragments = op.source_fragments;
 		tree->variable_scopes = op.variable_scopes;
 		tree->keyed_scopes = op.keyed_scopes;
 		tree->value_nodes.assign(op.decide_variables.size(), DConstants::INVALID_INDEX);
@@ -211,6 +212,7 @@ public:
 				                            }
 			                            });
 		}
+		idx_t objective_root = DConstants::INVALID_INDEX;
 		if (op.decide_objective) {
 			const Expression *body = op.decide_objective.get();
 			const Expression *condition = nullptr;
@@ -222,11 +224,12 @@ public:
 				}
 			}
 			auto index = NewNode(DecideNodeKind::SCOPE);
+			objective_root = index;
 			auto &node = *tree->nodes[index];
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
 			node.text = op.written_objective.empty() ? Text(*body) : op.written_objective;
-			Gates(node, condition);
+			Gates(index, condition);
 			node.body = Lower(index, *body);
 			if (op.flat_objective_agg == ObjectiveAggregateType::MIN_AGG ||
 			    op.flat_objective_agg == ObjectiveAggregateType::MAX_AGG) {
@@ -261,7 +264,7 @@ public:
 			} else {
 				node.text = "composed comparison";
 			}
-			Scope(node, composed.scope);
+			Scope(index, composed.scope);
 			node.facts->scope.when = composed.scope.when ? composed.scope.when->Copy() : nullptr;
 			node.facts->scope.per = composed.scope.per;
 			node.facts->scope.class_key = composed.scope.class_key;
@@ -277,15 +280,19 @@ public:
 			tree->roots.push_back(index);
 		}
 		if (!op.composed_minmax_objective_terms.empty()) {
-			auto index = NewNode(DecideNodeKind::SCOPE);
+			auto index = objective_root;
+			if (index == DConstants::INVALID_INDEX) {
+				index = NewNode(DecideNodeKind::SCOPE);
+				tree->roots.push_back(index);
+			}
 			auto &node = *tree->nodes[index];
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
-			node.text = "composed objective";
+			node.text = op.written_objective.empty() ? "composed objective" : op.written_objective;
 			for (auto &term : op.composed_minmax_objective_terms) {
 				Composed(index, term);
 			}
-			tree->roots.push_back(index);
+			UseSignature(node, op.objective_signature);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
 		// that definition as an explicit root rather than relying on registry order.
@@ -302,6 +309,7 @@ public:
 		RemoveInheritedPathGates();
 		Definitions();
 		PostOrder();
+		ErrorRanks();
 		tree->Validate();
 		return std::move(tree);
 	}
@@ -315,8 +323,42 @@ private:
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
 
+	void ErrorRanks() {
+		vector<bool> assigned(tree->nodes.size(), false);
+		std::function<void(idx_t, DecideErrorPhase, idx_t)> visit = [&](idx_t index, DecideErrorPhase phase,
+		                                                                idx_t order) {
+			auto &node = *tree->nodes[index];
+			if (node.value_check || std::find(record_nodes.begin(), record_nodes.end(), index) != record_nodes.end()) {
+				phase = DecideErrorPhase::SOURCE_CHECK;
+			} else if (node.kind == DecideNodeKind::FRAME) {
+				phase = DecideErrorPhase::FRAMES;
+				order = node.frame;
+			} else if (node.defined_var != DConstants::INVALID_INDEX) {
+				phase = DecideErrorPhase::KEYED_MAPPING;
+			} else if (node.link != DConstants::INVALID_INDEX) {
+				phase = DecideErrorPhase::VALUE_LINKS;
+				order = node.link;
+			}
+			if (assigned[index] && std::make_pair(node.value_phase, node.value_order) <= std::make_pair(phase, order)) {
+				return;
+			}
+			assigned[index] = true;
+			node.route_phase = node.value_phase = phase;
+			node.route_order = node.value_order = order;
+			for (auto child : node.children) {
+				visit(child, phase, order);
+			}
+		};
+		for (auto root : tree->roots) {
+			auto &node = *tree->nodes[root];
+			visit(root, node.objective ? DecideErrorPhase::OBJECTIVE : DecideErrorPhase::CONSTRAINTS,
+			      node.source_clause_id == DConstants::INVALID_INDEX ? root : node.source_clause_id);
+		}
+	}
+
 	string Text(const Expression &expression) const {
-		return RenderDecideSource(expression, op.source_fragments, op.keyed_scopes, &op.keys);
+		return RenderDecideSource(expression, DecidePlanNames(op.source_fragments, op.keyed_scopes, op.keys,
+		                                                      op.decide_index, op.aux_var_expressions));
 	}
 
 	unique_ptr<Expression> Resolve(const Expression &expression) const {
@@ -396,18 +438,25 @@ private:
 		ExpressionIterator::EnumerateChildren(expression, [&](const Expression &child) { Carry(node, child); });
 	}
 
-	void Gates(DecideNode &node, const Expression *condition) {
+	void Gates(idx_t owner, const Expression *condition) {
+		auto &node = *tree->nodes[owner];
 		if (!condition) {
 			return;
 		}
 		if (HasDecideTag(condition->GetAlias(), SKIP_NULL_TAG)) {
-			node.member_tests.push_back(Resolve(*condition));
+			// An O container gathers positions before any reader's generated
+			// presence test runs. Testing that same frame here would make it
+			// depend on its own not-yet-computed result.
+			if (node.kind == DecideNodeKind::FRAME) {
+				return;
+			}
+			node.member_tests.push_back(Lower(owner, *condition));
 			Carry(node, *node.member_tests.back());
 			return;
 		}
 		if (condition->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 			for (auto &child : condition->Cast<BoundConjunctionExpression>().children) {
-				Gates(node, child.get());
+				Gates(owner, child.get());
 			}
 			return;
 		}
@@ -453,8 +502,9 @@ private:
 		}
 	}
 
-	void Scope(DecideNode &node, const DecideClauseScope &scope) {
-		Gates(node, scope.when.get());
+	void Scope(idx_t owner, const DecideClauseScope &scope) {
+		auto &node = *tree->nodes[owner];
+		Gates(owner, scope.when.get());
 		if (scope.per != DecideClauseScope::PerRole::NONE) {
 			node.key = scope.class_key;
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
@@ -476,7 +526,7 @@ private:
 		TryParseSourceClauseTag(comparison.GetAlias(), node.source_clause_id);
 		TryParseRemovalGroupTag(comparison.GetAlias(), node.removal_group_id);
 		TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, node.defined_var);
-		Gates(node, scope.Condition());
+		Gates(index, scope.Condition());
 		idx_t signature = DConstants::INVALID_INDEX;
 		if (scope.per_wrapper) {
 			node.key = scope.PerKey();
@@ -540,6 +590,13 @@ private:
 
 	unique_ptr<Expression> Lower(idx_t owner, const Expression &expression, bool query_wide = false) {
 		auto &node = *tree->nodes[owner];
+		idx_t retained;
+		if (TryParseDecideIndexTag(expression.GetAlias(), TREE_RETAINED_EXPRESSION_TAG_PREFIX, retained)) {
+			if (retained >= op.retained_expressions.size()) {
+				throw InternalException("DECIDE tree: a retained expression is missing");
+			}
+			return Lower(owner, *op.retained_expressions[retained], query_wide);
+		}
 		query_wide =
 		    query_wide || IsQueryWideValueTag(expression.GetAlias()) || IsQueryWideBoundTag(expression.GetAlias());
 		auto record = FindRecord(expression);
@@ -564,7 +621,8 @@ private:
 					}
 				}
 				node.decision_value = true;
-				if (variable >= op.variable_scopes.size() || !op.variable_scopes[variable].IsGlobal()) {
+				if (!query_wide &&
+				    (variable >= op.variable_scopes.size() || !op.variable_scopes[variable].IsGlobal())) {
 					DecideSignatureField field;
 					field.kind = DecideSignatureFieldKind::DECISION;
 					field.decision = variable;
@@ -608,7 +666,7 @@ private:
 		Edge(index, operand);
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
-		Gates(entry, aggregate.filter.get());
+		Gates(operand, aggregate.filter.get());
 		idx_t qualifier;
 		const bool qualified = TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier) ||
 		                       TryParseDecideIndexTag(aggregate.GetAlias(), TREE_REDUCER_SCOPE_TAG_PREFIX, qualifier);
@@ -663,7 +721,7 @@ private:
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
-		Gates(node, link.when.get());
+		Gates(index, link.when.get());
 		if (link.value_var < tree->value_nodes.size()) {
 			tree->value_nodes[link.value_var] = index;
 		}
@@ -671,7 +729,7 @@ private:
 		Edge(index, operand);
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
-		Gates(entry, link.filter.get());
+		Gates(operand, link.filter.get());
 		if (link.qualifier_scope_idx < op.keyed_scopes.size()) {
 			entry.key = op.keyed_scopes[link.qualifier_scope_idx].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
@@ -704,7 +762,7 @@ private:
 		Edge(index, operand);
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
-		Gates(entry, record.reads.get());
+		Gates(operand, record.reads.get());
 		if (record.counts_classes) {
 			entry.key = record.class_key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
@@ -737,7 +795,7 @@ private:
 		node.key = frame.timeline_key;
 		node.text = frame.text;
 		node.aggregate = frame.reducer;
-		Gates(node, frame.rows.get());
+		Gates(index, frame.rows.get());
 		if (frame.order) {
 			node.over = Resolve(*frame.order);
 			node.frame_spec->order = node.over->Copy();
@@ -778,7 +836,18 @@ private:
 		Edge(reducer, operand);
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
-		Gates(entry, term.filter.get());
+		Gates(operand, term.filter.get());
+		// ScopeComposedTerms prepends the clause/objective predicate to each
+		// flat term. It belongs to the root E in this graph, so remove only
+		// that known prefix; a repeated predicate written by the operand stays.
+		auto &inherited = tree->nodes[owner]->when;
+		bool prefix = entry.when.size() >= inherited.size();
+		for (idx_t i = 0; prefix && i < inherited.size(); i++) {
+			prefix = entry.when[i]->Equals(*inherited[i]);
+		}
+		if (prefix) {
+			entry.when.erase(entry.when.begin(), entry.when.begin() + inherited.size());
+		}
 		if (term.qualifier_scope_idx < op.keyed_scopes.size()) {
 			entry.key = op.keyed_scopes[term.qualifier_scope_idx].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;

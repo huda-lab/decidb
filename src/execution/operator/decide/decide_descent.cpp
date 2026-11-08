@@ -54,7 +54,8 @@ static bool DescentKeyLess(const vector<Value> &left, const vector<Value> &right
 DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
     : tree(tree_p), context(context_p), containers(tree.nodes.size()), indexes(tree.nodes.size()),
       decision_groups(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
-      decision_recorded(tree.keyed_scopes.size()), decision_indexes(tree.keyed_scopes.size()) {
+      decision_recorded(tree.keyed_scopes.size()), decision_indexes(tree.keyed_scopes.size()),
+      failed_rows(tree.nodes.size()) {
 }
 
 void DecideDescent::SetDecisionResolver(std::function<idx_t(idx_t, idx_t)> resolver) {
@@ -74,12 +75,53 @@ vector<Value> DecideDescent::Evaluate(const Expression &expression, DataChunk &c
 	DataChunk selected;
 	selected.InitializeEmpty(chunk.GetTypes());
 	selected.Slice(chunk, selection, rows.size());
-	ExpressionExecutor executor(context, expression);
-	Vector values(expression.return_type);
-	executor.ExecuteExpression(selected, values);
-	result.reserve(rows.size());
+	auto rank = current_rank;
+	current_rank.expression++;
+	try {
+		ExpressionExecutor executor(context, expression);
+		Vector values(expression.return_type);
+		executor.ExecuteExpression(selected, values);
+		result.reserve(rows.size());
+		for (idx_t i = 0; i < rows.size(); i++) {
+			result.push_back(values.GetValue(i));
+		}
+		return result;
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (error.Type() == ExceptionType::INTERRUPT || error.Type() == ExceptionType::OUT_OF_MEMORY ||
+		    error.Type() == ExceptionType::FATAL || error.Type() == ExceptionType::INTERNAL) {
+			throw;
+		}
+	}
+	// A failed vector identifies neither the bad row nor the other rows' values. Retry that selection row by row
+	// and retain reached errors until the bottom-up reporting order is known.
 	for (idx_t i = 0; i < rows.size(); i++) {
-		result.push_back(values.GetValue(i));
+		if (Failed(rows[i].row)) {
+			result.emplace_back(expression.return_type);
+			continue;
+		}
+		SelectionVector one(1);
+		one.set_index(0, i);
+		DataChunk input;
+		input.InitializeEmpty(selected.GetTypes());
+		input.Slice(selected, one, 1);
+		try {
+			ExpressionExecutor executor(context, expression);
+			Vector value(expression.return_type);
+			executor.ExecuteExpression(input, value);
+			result.push_back(value.GetValue(0));
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (error.Type() == ExceptionType::INTERNAL) {
+				throw;
+			}
+			rank.row = active_row_base + rows[i].row;
+			errors.Add(rank, error);
+			if (active_node < failed_rows.size()) {
+				failed_rows[active_node].insert(rank.row);
+			}
+			result.emplace_back(expression.return_type);
+		}
 	}
 	return result;
 }
@@ -97,7 +139,7 @@ vector<uint8_t> DecideDescent::Truth(const Expression &expression, DataChunk &ch
 			vector<RoutingRow> unresolved;
 			vector<idx_t> positions;
 			for (idx_t i = 0; i < rows.size(); i++) {
-				if ((is_and && result[i] != 0) || (!is_and && result[i] != 1)) {
+				if (!Failed(rows[i].row) && ((is_and && result[i] != 0) || (!is_and && result[i] != 1))) {
 					unresolved.push_back(rows[i]);
 					positions.push_back(i);
 				}
@@ -347,6 +389,9 @@ void DecideDescent::Insert(idx_t node, DecideDescentEntry entry, bool distinct) 
 void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
                            const vector<RoutingRow> &incoming) {
 	auto &node = *tree.nodes[node_index];
+	active_node = node_index;
+	active_row_base = row_base;
+	current_rank = {node.route_phase, node.route_order, 0, DConstants::INVALID_INDEX};
 	if (context.interrupted) {
 		throw InterruptException();
 	}
@@ -367,7 +412,7 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		auto truth = Truth(*condition, chunk, rows);
 		vector<RoutingRow> kept;
 		for (idx_t i = 0; i < rows.size(); i++) {
-			if (truth[i] == 1) {
+			if (truth[i] == 1 && !Failed(rows[i].row)) {
 				kept.push_back(rows[i]);
 			}
 		}
@@ -385,6 +430,9 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 	vector<RoutingRow> stored;
 	vector<idx_t> slots;
 	for (idx_t i = 0; i < rows.size(); i++) {
+		if (Failed(rows[i].row)) {
+			continue;
+		}
 		auto child = rows[i];
 		if (!present[i]) {
 			if (node.kind == DecideNodeKind::SCOPE) {
@@ -404,7 +452,6 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		}
 		children.push_back(child);
 	}
-	container.rows_out += children.size();
 	if (node.defined_var < tree.variable_scopes.size() && tree.variable_scopes[node.defined_var].IsKeyed()) {
 		DecisionClasses(node.defined_var, chunk, stored, row_base);
 	}
@@ -458,6 +505,9 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		}
 	}
 	for (idx_t i = 0; i < stored.size(); i++) {
+		if (Failed(stored[i].row)) {
+			continue;
+		}
 		DecideDescentEntry entry;
 		entry.row = row_base + stored[i].row;
 		entry.parent_slot = stored[i].parent_slot;
@@ -474,6 +524,10 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		}
 		Insert(node_index, std::move(entry), node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW);
 	}
+	children.erase(
+	    std::remove_if(children.begin(), children.end(), [&](const RoutingRow &row) { return Failed(row.row); }),
+	    children.end());
+	container.rows_out += children.size();
 	for (auto child : node.children) {
 		Visit(child, chunk, row_base, children);
 	}

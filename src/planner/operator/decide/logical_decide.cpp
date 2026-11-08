@@ -343,6 +343,9 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &check : retained_row_checks) {
 		callback(&check);
 	}
+	for (auto &expression : retained_expressions) {
+		callback(&expression);
+	}
 	// A bound left to a direct-solve rule reads the source, and the reducers other bounds record, through these.
 	for (auto &bound : reduced_bounds) {
 		for (auto &input : bound.group->inputs) {
