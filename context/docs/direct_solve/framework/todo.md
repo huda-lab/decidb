@@ -126,7 +126,7 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 ## BLOAT-20 — Decline guards that only an edited IR reaches
 
-- **Decision needed.** Some decline guards of the rules cannot be reached from SQL, only from the C++ decline test,
+- **Problem.** Some decline guards of the rules cannot be reached from SQL, only from the C++ decline test,
   which edits the IR on purpose (`test/common/test_decidb_direct_decline.cpp`, header: "the shapes the front end never
   produces from SQL"). In R1: the `output_type != DOUBLE` test in `ProveDecision` (`direct_ir.cpp:216-222` gives the
   REAL domain only to a DOUBLE output), `ir.decisions.empty()` (the grammar requires a decision), the strict-comparison
@@ -134,6 +134,11 @@ solver path answers those queries, so none of them is wrong, only slower.
   `!term.coefficient` in `OnlyLinearTerms`. S1, A1, N1 and A2 likely hold the same kind. Either they are dead code
   (delete each guard and the C++ cases that reach only it), or they are the rule's own contract on its input, kept
   because a front-end change could start producing the shape (keep them, and the edited-IR cases stay).
-- **Change.** Per the ruling: list the guards of every rule that only an edited IR reaches, then delete them with
-  their C++ cases, or record the contract rule in `../architecture/rules.md`.
+- **Ruling (owner, 2026-10-21, H-34 batch 2; applied 2026-11-08).** Unreachable defensive branches are dead code:
+  delete them with the tests that only reach them; when a later change makes a shape reachable, handle it then. Two
+  kinds stay: rule-handoff checks, and type-safety checks that guard a cast or a typed read.
+- **Change.** List the guards of every rule (S1, A1, R1, N1, A2) and of the engine that only an edited IR reaches;
+  delete each one that is neither kind above, with the C++ cases in `test_decidb_direct_decline.cpp` that reach only
+  it. A guard whose shape SQL can still produce (for example a key-only keyed scope from
+  `decide_declarations_binder.cpp:308`) stays.
 - **Done when.** The matrix passes with no answer, error text or golden changed.

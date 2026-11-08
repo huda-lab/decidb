@@ -13,7 +13,6 @@ A2, A3 in order; B1 beside the A batches; B2 after A2.
 
 - [ ] A2-9 Data weights on the absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-9
 - [ ] H-08 VALUE-shape clauses: which rule takes them — direct_solve/framework/todo.md § H-08
-- [ ] BLOAT-20 Guards only an edited IR reaches: dead or contract — direct_solve/framework/todo.md § BLOAT-20
 
 ## X1. Bloat: direct-solve engine
 
