@@ -2,16 +2,6 @@
 
 Open work in the optimizer passes. Finished work is in [done.md](done.md).
 
-## BLOAT-8 — Bloat in the optimizer passes
-
-- **Problem.** The stage-05 code (`src/optimizer/decide/*.cpp`, the `direct/` folder apart; about 5,700 lines) has not
-  been read for bloat.
-- **Change.** Remove the bloat by `../../direct_solve/framework/todo.md` § How to work any task (Removing bloat), in
-  these files and the tests that reach only what goes.
-- **Done when.** `make decide-test` and `build/release/test/unittest "[decidb]"` pass with no answer, error text or
-  golden changed, and the report lists each removal with its evidence and the lines and `lizard` figures
-  before and after.
-
 ## BUG-51 — A bad value under `ABS` is worded as a bound the user never wrote
 
 - **Problem.** On the solver path, a NaN value in `SUM(ABS(c - v))` raises `DECIDE: the bound -v is NaN on some rows.
