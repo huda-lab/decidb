@@ -7,7 +7,6 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
-#include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/solver/solver_registry.hpp"
@@ -79,9 +78,6 @@ public:
 
     // The variables to be decided (e.g., x, y)
     vector<unique_ptr<Expression>> decide_variables;
-
-    // O(1) lookup: ColumnBinding → decide_variables index (built in constructor)
-    column_binding_map_t<idx_t> decide_variable_map;
 
     // The bound constraints expression
     unique_ptr<Expression> decide_constraints;

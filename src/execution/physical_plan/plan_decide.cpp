@@ -274,7 +274,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Back-fill SELECT-only columns from the child projection's user-written names.
     // Only slots the DECIDE-clause harvest left empty are touched, so a name the user
     // referenced in the clause always wins over the raw projection alias.
-    for (idx_t i = 0; i < decide_op->input_column_names.size() && i < child_userwritten_names.size(); i++) {
+    for (idx_t i = 0; i < decide_op->input_column_names.size(); i++) {
         if (decide_op->input_column_names[i].empty() && !child_userwritten_names[i].empty()) {
             decide_op->input_column_names[i] = QuoteColumnName(child_userwritten_names[i]);
         }
