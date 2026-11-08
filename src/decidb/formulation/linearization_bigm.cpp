@@ -35,11 +35,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           bool &has_unbounded, const InstanceBox &instances) {
     double sum = 0.0;
     for (idx_t t = 0; t < variable_indices.size(); t++) {
-        idx_t v = variable_indices[t];
-        if (v == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        double coef = std::abs(row_coefficients[t].Get(row));
+		idx_t v = variable_indices[t]; // a per-row clause holds no data-only term: its data is on the bound side
+		double coef = std::abs(row_coefficients[t].Get(row));
         if (coef < 1e-15) {
             continue;
         }
@@ -104,13 +101,6 @@ void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t
         if (std::abs(coef) < 1e-15) {
             continue;
         }
-        // An auxiliary introduced after the rigid box was captured has no rigid entry;
-        // treat it as unbounded, which declines the collapse rather than guessing.
-        if (v >= lower_bounds.size() || v >= upper_bounds.size()) {
-            lo_unbounded = true;
-            hi_unbounded = true;
-            continue;
-        }
         double lb = instances ? instances->LowerOfRow(v, row, lower_bounds) : lower_bounds[v];
         double ub = instances ? instances->UpperOfRow(v, row, upper_bounds) : upper_bounds[v];
         bool lb_unbounded = DecideIsOpenBelow(lb);
@@ -148,20 +138,13 @@ void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t
 //!
 //! The callers differ only in how they locate the column to blame, so the words the
 //! user reads live here, once. `open` says whether a column of the row has an open box
-//! (an auxiliary's counts); `bad` is then that column, or INVALID_INDEX when the open
-//! bound could not be attributed to any named column. With no open column the reach
+//! (an auxiliary's counts); `bad` is then that column. With no open column the reach
 //! overflowed a DOUBLE: nothing is missing a bound, and the refusal names `written`, the
 //! clause the row belongs to, as every number too large for a DOUBLE does (AddCoefficient).
 [[noreturn]] void decide_linearize::ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names,
                                                              const char *construct, const string &written) {
     if (!open) {
         throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written));
-    }
-    if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
-        throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
-                                    "reads, and one of them is unbounded. Add an upper and a lower bound "
-                                    "to the variables in that clause.",
-                                    construct);
     }
     const string &name = var_names[bad];
     throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
@@ -184,11 +167,10 @@ idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec,
         if (v == DConstants::INVALID_INDEX || v == ec.abs_aux_idx) {
             continue;
         }
-        if (v < upper_bounds.size() && v < lower_bounds.size() &&
-            (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v]))) {
-            return v;
-        }
-    }
+		if (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v])) {
+			return v;
+		}
+	}
     return DConstants::INVALID_INDEX;
 }
 
@@ -250,14 +232,13 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
         if (!ec.product_groups.empty()) {
             continue;
         }
-        // A row that means something other than what its terms say: a hard MIN/MAX
-        // (marked by its aggregate name, which both arms carry), a `<>` disjunction, or
-        // an ABS envelope. None of them implies a bound on anything.
-        if (!ec.minmax_agg_type.empty() || ec.ne_clause_idx != DConstants::INVALID_INDEX ||
-            ec.abs_aux_idx != DConstants::INVALID_INDEX) {
-            continue;
-        }
-        // WHEN-conditional constraints apply to only a subset of rows, but the
+		// A row that means something other than what its terms say: a hard MIN/MAX
+		// (marked by its aggregate name, which both arms carry). A `<>` disjunction and an ABS
+		// envelope are not `<=` or `=` rows, so the comparison above has passed them by.
+		if (!ec.minmax_agg_type.empty()) {
+			continue;
+		}
+		// WHEN-conditional constraints apply to only a subset of rows, but the
         // bound we derive is shared across ALL of a variable's rows. Deriving it
         // from the active subset would wrongly bound the excluded (WHEN-false)
         // rows, which carry no such constraint. Skip any constraint that has
@@ -287,8 +268,9 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
             if (v == DConstants::INVALID_INDEX) {
                 continue;
             }
-            single_variable = single_variable && (only_variable == DConstants::INVALID_INDEX || only_variable == v);
-            only_variable = v;
+			single_variable =
+			    single_variable && only_variable == DConstants::INVALID_INDEX; // equal terms of one decision are merged
+			only_variable = v;
         }
         bool nonneg = true;
         for (idx_t v : ec.variable_indices) {

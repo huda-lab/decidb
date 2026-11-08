@@ -54,10 +54,8 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const 
     double lo;
     double hi;
     DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi, DConstants::INVALID_INDEX, &floors);
-    double k = DecideRowEffectiveBound(ec, row, written);
-    if (!std::isfinite(k)) {
-        return NECollapse::DISJUNCTION;
-    }
+	// K is finite: LinearizeNotEqual drops a clause whose bound is not whole (an infinite one included) before this.
+	double k = DecideRowEffectiveBound(ec, row, written);
     if (hi < k - 0.5 || lo > k + 0.5) {
         return NECollapse::ALWAYS_TRUE;
     }
@@ -101,10 +99,8 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
 //! The clause a `<>` came from, quoted as written, naming every binary it allocates so a
 //! diagnosis renders `SUM(x) <> 0` rather than an internal column.
 static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConstraint &ec) {
-    if (ec.ne_clause_idx < input.ne_clause_sources.size()) {
-        return QuoteWrittenClause(input.constraint_sources[input.ne_clause_sources[ec.ne_clause_idx]]);
-    }
-    return string();
+	// The tag carries the index minted beside the source (RewriteNotEqual), so it is always in range.
+	return QuoteWrittenClause(input.constraint_sources[input.ne_clause_sources[ec.ne_clause_idx]]);
 }
 
 //! One per-row `<>`, in whichever shape its own reachable range earns.
@@ -126,28 +122,22 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
                              const string &label) {
     const idx_t num_rows = input.num_rows;
     bool has_groups = !ec.row_group_ids.empty();
-    const string written = DecideWrittenClause(input, ec.source_clause_id);
     for (idx_t r = 0; r < num_rows; r++) {
         if (has_groups && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue; // masked out by `when` or its group, or a non-integer bound on this row
         }
         double k = ec.rhs_values.Get(r);
 
-        vector<int> indices;
+		// A per-row clause holds no data-only term: its data is on the bound side already.
+		vector<int> indices;
         vector<double> coefficients;
-        double constant = 0.0;
         for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-            idx_t v = ec.variable_indices[t];
             double coef = ec.row_coefficients[t].Get(r);
-            if (v == DConstants::INVALID_INDEX) {
-                AddCoefficient(constant, coef, written); // constant LHS part folds into the bound
-                continue;
-            }
             if (coef == 0.0) {
                 continue;
             }
-            indices.push_back(static_cast<int>(indexer.Get(v, r)));
-            coefficients.push_back(coef);
+			indices.push_back(static_cast<int>(indexer.Get(ec.variable_indices[t], r)));
+			coefficients.push_back(coef);
         }
 
         // Each row's disjunction gets its own binary, allocated HERE — by the pass that
@@ -168,9 +158,6 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
             rc.removal_group_id = ec.removal_group_id;
             rc.indicator_col = z_col;
             rc.StampGroup(ec, has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX);
-            // The folded LHS constant, so a report quotes the user's `K` and not the
-            // bound this fold produced.
-            rc.rhs_mechanism_offset = -constant;
         };
 
         if (collapse != NECollapse::DISJUNCTION) {
@@ -179,8 +166,8 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
             rc.indices = std::move(indices);
             rc.coefficients = std::move(coefficients);
             rc.sense = lower ? '<' : '>';
-            rc.rhs = (lower ? k - 1.0 : k + 1.0) - constant;
-            stamp(rc);
+			rc.rhs = lower ? k - 1.0 : k + 1.0;
+			stamp(rc);
             input.global_constraints.push_back(std::move(rc));
             continue;
         }
@@ -204,10 +191,10 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
             input.indicator_constraints.push_back(std::move(ic));
         };
         // z = 0  =>  LHS <= K - 1
-        emit(indices, coefficients, 0, '<', k - 1.0 - constant);
-        // z = 1  =>  LHS >= K + 1. Last use of the row's terms.
-        emit(std::move(indices), std::move(coefficients), 1, '>', k + 1.0 - constant);
-    }
+		emit(indices, coefficients, 0, '<', k - 1.0);
+		// z = 1  =>  LHS >= K + 1. Last use of the row's terms.
+		emit(std::move(indices), std::move(coefficients), 1, '>', k + 1.0);
+	}
 }
 
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
@@ -344,9 +331,6 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
         for (idx_t g = 0; g < num_groups_to_process; g++) {
             idx_t g_begin = offsets[g];
             idx_t g_end = offsets[g + 1];
-            if (g_begin == g_end) {
-                continue;
-            }
             idx_t g_size = g_end - g_begin;
 
             // The fixed (decision-free) part of the LHS does not depend on which
@@ -368,32 +352,29 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 }
             }
 
-            // Range collapse, per group. Same reasoning as the per-row path, over the
-            // group's summed interval: each row of a group contributes its own solver
-            // column, so the group's reachable range is the sum of its rows' ranges.
-            // Unlike the per-row path a mixed verdict costs nothing here, because groups
-            // are already emitted independently — each gets the encoding its own range
-            // earns. Neither the range nor the LHS accumulation below depends on which
-            // excluded value is being tested, so both are computed once per group and
-            // reused for every value in `distinct_rhs`.
-            // A term beside the reducers enters the group's row once: execution kept its coefficient on one row of
-            // the group (CountOnce), so the per-row ranges count it once too.
-            const bool has_linear_range = ec.product_groups.empty();
-            double grp_lo = 0.0;
+			// Range collapse, per group. Same reasoning as the per-row path, over the
+			// group's summed interval: each row of a group contributes its own solver
+			// column, so the group's reachable range is the sum of its rows' ranges.
+			// Unlike the per-row path a mixed verdict costs nothing here, because groups
+			// are already emitted independently — each gets the encoding its own range
+			// earns. Neither the range nor the LHS accumulation below depends on which
+			// excluded value is being tested, so both are computed once per group and
+			// reused for every value in `distinct_rhs`.
+			// A term beside the reducers enters the group's row once: execution kept its coefficient on one row of
+			// the group (CountOnce), so the per-row ranges count it once too.
+			// The clause is linear: LinearizeNotEqual throws on a product group before it defers one.
+			double grp_lo = 0.0;
             double grp_hi = 0.0;
-            if (has_linear_range) {
-                for (idx_t k = g_begin; k < g_end; k++) {
-                    double row_lo;
-                    double row_hi;
-                    DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds,
-                                         input.rigid_upper_bounds, row_lo, row_hi, DConstants::INVALID_INDEX,
-                                         &floors);
-                    grp_lo += row_lo; // -inf is absorbing, and only ever accumulates here
-                    grp_hi += row_hi;
-                }
-            }
+			for (idx_t k = g_begin; k < g_end; k++) {
+				double row_lo;
+				double row_hi;
+				DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds, input.rigid_upper_bounds, row_lo,
+				                     row_hi, DConstants::INVALID_INDEX, &floors);
+				grp_lo += row_lo; // -inf is absorbing, and only ever accumulates here
+				grp_hi += row_hi;
+			}
 
-            // The group's LHS as a snapshot, copied for every excluded value's disjunction below (only the last
+			// The group's LHS as a snapshot, copied for every excluded value's disjunction below (only the last
             // consumes it by move).
             auto row_begin = NumericCast<int64_t>(emitted.offsets[g]);
             auto row_end = NumericCast<int64_t>(emitted.offsets[g + 1]);
@@ -423,16 +404,14 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 }
 
                 NECollapse collapse = NECollapse::DISJUNCTION;
-                if (has_linear_range) {
-                    if (grp_hi < rhs - 0.5 || grp_lo > rhs + 0.5) {
-                        collapse = NECollapse::ALWAYS_TRUE;
-                    } else if (grp_lo > rhs - 0.5) {
-                        collapse = NECollapse::UPPER_ONLY;
-                    } else if (grp_hi < rhs + 0.5) {
-                        collapse = NECollapse::LOWER_ONLY;
-                    }
-                }
-                if (collapse == NECollapse::ALWAYS_TRUE) {
+				if (grp_hi < rhs - 0.5 || grp_lo > rhs + 0.5) {
+					collapse = NECollapse::ALWAYS_TRUE;
+				} else if (grp_lo > rhs - 0.5) {
+					collapse = NECollapse::UPPER_ONLY;
+				} else if (grp_hi < rhs + 0.5) {
+					collapse = NECollapse::LOWER_ONLY;
+				}
+				if (collapse == NECollapse::ALWAYS_TRUE) {
                     continue; // this group's aggregate cannot reach this K — excludes nothing
                 }
 

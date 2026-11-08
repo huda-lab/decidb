@@ -69,10 +69,10 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 	input.instance_reach_upper.resize(input.num_decide_vars);
 	for (auto &link : input.reducer_value_links) {
 		auto &ec = link.rows;
-		const bool grouped = !ec.row_group_ids.empty();
-		vector<vector<idx_t>> members(grouped ? ec.num_groups : 1);
+		// A helper's rows are always grouped (PhysicalDecide numbers them by their `by` key), and each group has a row.
+		vector<vector<idx_t>> members(ec.num_groups);
 		for (idx_t row = 0; row < input.num_rows; row++) {
-			idx_t group = grouped ? ec.row_group_ids[row] : 0;
+			idx_t group = ec.row_group_ids[row];
 			if (group != DConstants::INVALID_INDEX) {
 				members[group].push_back(row);
 			}
@@ -86,9 +86,6 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 		vector<bool> reached(num_instances, false);
 		AuxRange box;
 		for (auto &rows : members) {
-			if (rows.empty()) {
-				continue;
-			}
 			auto group_reach = GroupReach(link, input, rows);
 			auto instance = indexer.InstanceOf(value_var, rows.front());
 			reach[instance].Cover(group_reach);
@@ -135,9 +132,6 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 		auto groups = BuildMinMaxGroups(input, link.rows, link.label);
 		MinMaxRowMembers row_members(input, indexer, link.rows, link.label);
 		for (auto &group : groups) {
-			if (group.rows.empty()) {
-				continue;
-			}
 			if (!IsExtremum(link)) {
 				// `value - sum of members' expressions` against `sum of their constants`: the
 				// side the clauses push the value against (`value >= sum` when they push it

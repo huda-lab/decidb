@@ -27,9 +27,6 @@ idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexer, cons
 idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer, double obj_coeff,
                          const string &label = string());
 
-//! Fix a global auxiliary to a constant by collapsing its box onto `value`.
-void PinGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx, double value);
-
 //! The constant part of one row's LHS: the terms whose variable index is fixed. `written` names the clause when the
 //! sum grows past a DOUBLE (AddCoefficient).
 double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
@@ -59,8 +56,7 @@ void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector
 
 //! Refuse a Big-M that has no finite M. Every caller refuses in the same words, so the
 //! message the user reads lives in one place. `open` says whether a column of the row
-//! has an open box (an auxiliary's counts): `bad` is then the column to name, or
-//! INVALID_INDEX when the open bound could not be attributed to any named column. With
+//! has an open box (an auxiliary's counts): `bad` is then the column to name. With
 //! no open column the reach overflowed a DOUBLE, and the refusal is the TOO_LARGE
 //! message naming `written`, the clause the row belongs to (DecideWrittenClause).
 [[noreturn]] void ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names, const char *construct,

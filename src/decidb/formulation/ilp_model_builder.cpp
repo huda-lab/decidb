@@ -54,9 +54,10 @@ struct FormRow {
 static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t row,
                            const VarIndexer &indexer, const string &written) {
     FormRow form;
-    for (idx_t t = 0; t < variables.size() && t < columns.size(); t++) {
-        double a = row < columns[t].Size() ? columns[t].Get(row) : 0.0;
-        if (a == 0.0) {
+	// `variables` and `columns` are pushed together (EvaluateProductGroups), and each column holds every data row.
+	for (idx_t t = 0; t < variables.size(); t++) {
+		double a = columns[t].Get(row);
+		if (a == 0.0) {
             continue;
         }
         if (variables[t] == DConstants::INVALID_INDEX) {
@@ -64,8 +65,8 @@ static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<Coeffici
             continue;
         }
         form.terms.emplace_back(static_cast<int>(indexer.Get(variables[t], row)), a);
-    }
-    return form;
+	}
+	return form;
 }
 
 //! Q's entry for the monomial `x_a * x_b`, which `x_b * x_a` shares: the lower triangle (ilp_model.hpp).
@@ -124,8 +125,8 @@ template <class ADD_LINEAR>
 static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t row, const VarIndexer &indexer,
                                std::unordered_map<uint64_t, double> &q, ADD_LINEAR &&add_linear, double &constant,
                                const string &written) {
-    double w = row < group.weight.Size() ? group.weight.Get(row) : 0.0;
-    if (w == 0.0) {
+	double w = group.weight.Get(row);
+	if (w == 0.0) {
         return;
     }
     auto left = ReadFormRow(group.left_variables, group.left_coefficients, row, indexer, written);
@@ -197,13 +198,12 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
 }
 
 idx_t VarIndexer::OwnerOf(idx_t col) const {
-    if (col >= global_block_start) {
-        return DConstants::INVALID_INDEX; // global block: no decide variable owns it
-    }
-    if (col < keyed_block_start) {
-        // Row block, laid out row-major: every row holds one slot per row-scoped var.
-        return num_row_vars == 0 ? DConstants::INVALID_INDEX : row_offset_var[col % num_row_vars];
-    }
+	D_ASSERT(col < global_block_start); // the global block has no decide variable
+	if (col < keyed_block_start) {
+		// Row block, laid out row-major: every row holds one slot per row-scoped var (keyed_block_start is 0 with
+		// none).
+		return row_offset_var[col % num_row_vars];
+	}
     if (col < scalar_block_start) {
         // Keyed block: bases ascend in keyed_block_var order, so the owner is the
         // last variable whose base does not exceed `col`.
@@ -259,12 +259,12 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
                    idx_t num_groups,
                    vector<idx_t> &offsets,
                    vector<idx_t> &flat_rows) {
-    if (row_group_ids.empty() || num_groups == 0) {
-        offsets.clear();
+	if (num_groups == 0) {
+		offsets.clear();
         flat_rows.clear();
         return;
-    }
-    offsets.assign(num_groups + 1, 0);
+	}
+	offsets.assign(num_groups + 1, 0);
     // First pass: count rows per group
     for (idx_t r = 0; r < row_group_ids.size(); r++) {
         idx_t gid = row_group_ids[r];
@@ -447,20 +447,20 @@ SolverModelClass SolverModel::ModelClass() const {
     shape.nonconvex_objective = nonconvex_quadratic;
     // Any integral column, auxiliaries included: a Big-M indicator makes the program mixed-integer just as a user's
     // `x(INT)` does.
-    for (idx_t col = 0; col < num_vars && col < is_integer.size(); col++) {
-        if (is_integer[col]) {
+	for (idx_t col = 0; col < num_vars; col++) {
+		if (is_integer[col]) {
             shape.integral_column = true;
             break;
         }
-    }
-    // An off-diagonal entry means two decision variables are coupled in the objective, which makes Q rank-deficient.
-    for (idx_t k = 0; k < q_vals.size() && k < q_rows.size() && k < q_cols.size(); k++) {
-        if (q_rows[k] != q_cols[k] && q_vals[k] != 0.0) {
-            shape.coupled_objective = true;
+	}
+	// An off-diagonal entry means two decision variables are coupled in the objective, which makes Q rank-deficient.
+	for (idx_t k = 0; k < q_vals.size(); k++) {
+		if (q_rows[k] != q_cols[k]) {
+			shape.coupled_objective = true;
             break;
-        }
-    }
-    return ClassifyDecideModel(shape);
+		}
+	}
+	return ClassifyDecideModel(shape);
 }
 
 bool SolverModel::ProvesInfeasible() const {
@@ -474,12 +474,12 @@ bool SolverModel::ProvesInfeasible() const {
             return true;
         }
     }
-    for (idx_t col = 0; col < num_vars && col < col_lower.size() && col < col_upper.size(); col++) {
-        if (col_lower[col] > col_upper[col]) {
+	for (idx_t col = 0; col < num_vars; col++) {
+		if (col_lower[col] > col_upper[col]) {
             return true;
         }
-    }
-    return false;
+	}
+	return false;
 }
 
 void SolverModel::ClearObjective() {
@@ -519,20 +519,20 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     for (idx_t var = 0; var < num_decide_vars; var++) {
         auto logical_type = input.variable_types[var];
 
-        if (logical_type == LogicalType::DOUBLE || logical_type == LogicalType::FLOAT) {
-            per_var_binary[var] = false;
+		if (logical_type == LogicalType::DOUBLE) {
+			per_var_binary[var] = false;
             per_var_lower[var] = 0.0;
             per_var_upper[var] = DECIDE_SOLVER_INFINITY;
-        } else if (logical_type == LogicalType::BOOLEAN) {
-            per_var_binary[var] = true;
+		} else if (logical_type == LogicalType::BOOLEAN) {
+			per_var_binary[var] = true;
             per_var_lower[var] = 0.0;
             per_var_upper[var] = 1.0;
-        } else {
-            // INTEGER / BIGINT or default
+		} else {
+			// INTEGER / BIGINT or default
             per_var_lower[var] = 0.0;
             per_var_upper[var] = DECIDE_SOLVER_INFINITY;
-        }
-    }
+		}
+	}
 
     // Merge with explicit bounds from input. The physical operator already
     // resolved each variable's lower bound (defaulting unconstrained variables to
@@ -546,19 +546,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
         if (var < input.upper_bounds.size()) {
             per_var_upper[var] = std::min(per_var_upper[var], input.upper_bounds[var]);
-        }
-    }
-
-    // A BOOLEAN-domain variable's bounds are normally exactly [0,1] (the merge above
-    // is a no-op for it — its lower default is already the resolved, folded 0, and
-    // its upper is capped by the type default). But an explicit, unusual user pin that
-    // widens past the domain (e.g. `x >= -1` on a declared BOOL) would leave `binary`
-    // paired with an out-of-[0,1] bound, which solver backends don't accept. Downgrade
-    // to a plain bounded integer in that case rather than sending a contradictory
-    // (binary, out-of-range) column — same solve result, just not flagged binary.
-    for (idx_t var = 0; var < num_decide_vars; var++) {
-        if (per_var_binary[var] && (per_var_lower[var] < 0.0 || per_var_upper[var] > 1.0)) {
-            per_var_binary[var] = false;
         }
     }
 
@@ -577,9 +564,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             // alone), and a helper's ends at its own group's reach.
             model.col_lower[var_idx] = input.InstanceBoxLower(var, inst, per_var_lower);
             model.col_upper[var_idx] = input.InstanceBoxUpper(var, inst, per_var_upper);
-            model.is_integer[var_idx] = !(input.variable_types[var] == LogicalType::DOUBLE ||
-                                          input.variable_types[var] == LogicalType::FLOAT);
-            model.is_binary[var_idx] = per_var_binary[var];
+			model.is_integer[var_idx] = input.variable_types[var] != LogicalType::DOUBLE;
+			model.is_binary[var_idx] = per_var_binary[var];
         }
 		// A row with no decision maps to the absent class: fixed at 0, so an objective term
 		// that reads it is dropped (KeyedMapping::absent_class).
@@ -609,8 +595,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                   input.global_upper_bounds[g] < DECIDE_EFFECTIVE_INFINITY));
         model.col_lower[var_idx] = input.global_lower_bounds[g];
         model.col_upper[var_idx] = input.global_upper_bounds[g];
-        model.is_integer[var_idx] = !(gtype == LogicalType::DOUBLE || gtype == LogicalType::FLOAT);
-        model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
+		model.is_integer[var_idx] = gtype != LogicalType::DOUBLE;
+		model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
     }
 
     //===--------------------------------------------------------------------===//
@@ -623,32 +609,26 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // Set objective coefficients for global variables
     for (idx_t g = 0; g < input.num_global_vars; g++) {
         idx_t var_idx = indexer.global_block_start + g;
-        if (g < input.global_obj_coeffs.size()) {
-            model.obj_coeffs[var_idx] = input.global_obj_coeffs[g];
-        }
-    }
+		model.obj_coeffs[var_idx] = input.global_obj_coeffs[g];
+	}
     model.maximize = (input.sense == DecideSense::MAXIMIZE);
     model.obj_constant = input.objective_constant;
 
     if (!input.objective_variable_indices.empty()) {
         for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
             idx_t decide_var_idx = input.objective_variable_indices[term_idx];
-            if (term_idx >= input.objective_coefficients.size()) {
-                continue;
-            }
             // Every row's coefficient counts. A term beside the reducers counts once: execution kept its
             // coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
             auto &col = input.objective_coefficients[term_idx];
             // A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed
             // without a check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
             if (decide_var_idx == DConstants::INVALID_INDEX) {
-                for (idx_t row = 0; row < num_rows && row < col.Size(); row++) {
-                    model.obj_constant += col.Get(row);
-                }
-                continue;
+				for (idx_t row = 0; row < num_rows; row++) {
+					model.obj_constant += col.Get(row);
+				}
+				continue;
             }
             for (idx_t row = 0; row < num_rows; row++) {
-                if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
                 // Use += because keyed vars: multiple rows map to same solver var
                 AddCoefficient(model.obj_coeffs[var_idx], col.Get(row), input.objective_written);
@@ -770,10 +750,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
             return true;
         }
-        if (input.keep_singleton_rows || constr.indices.size() != 1) {
-            return false;
-        }
-        if (lower == std::numeric_limits<double>::infinity() || upper == -std::numeric_limits<double>::infinity()) {
+		if (input.keep_singleton_rows) {
+			return false;
+		}
+		D_ASSERT(constr.indices.size() == 1); // a bound on one decision: one term, merged by the canonicalizer
+		if (lower == std::numeric_limits<double>::infinity() || upper == -std::numeric_limits<double>::infinity()) {
             return false;
         }
         // The column's box is finite, so an open end (±infinity) leaves it as it is.
@@ -868,13 +849,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
                 FoldedAggTerm term;
                 term.decide_var_idx = v;
-                if (eval_const.row_coefficients[t].IsUniform()) {
-                    term.has_unit = true;
-                    term.unit = eval_const.row_coefficients[t].Get(0);
-                } else if (t < eval_const.coefficient_labels.size()) {
-                    term.has_unit = ParseLiteralCoefficient(eval_const.coefficient_labels[t], term.unit);
-                }
-                clause_folded_terms.push_back(term);
+				// A term's label is pushed with its variable, wherever an aggregate is evaluated.
+				term.has_unit = ParseLiteralCoefficient(eval_const.coefficient_labels[t], term.unit);
+				clause_folded_terms.push_back(term);
             }
         }
 
@@ -1085,18 +1062,17 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             continue;  // Already handled as linear above
         }
 
-        idx_t repair_group_id = eval_const.repair_group_id != DConstants::INVALID_INDEX
-                                    ? eval_const.repair_group_id
-                                    : static_cast<idx_t>(&eval_const - input.constraints.data());
+		// A clause with a product group is the user's: it is numbered where it is evaluated.
+		idx_t repair_group_id = eval_const.repair_group_id;
 
-        bool is_aggregate = eval_const.lhs_is_aggregate;
+		bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
         const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
         if (is_aggregate) {
-            double rhs = eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(0);
+			double rhs = eval_const.rhs_values.Get(0);
 
-            // Before the RHS was reduced per group this path read row 0's value for
+			// Before the RHS was reduced per group this path read row 0's value for
             // every group with no check at all, so a row-varying bound was silently
             // wrong here rather than refused. Now the invariant holds by construction.
             D_ASSERT(RhsIsConstantWithinGroups(eval_const));
@@ -1127,9 +1103,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                                    flat_rows.begin() + g_end);
                     // This group's own bound — see the linear grouped path for why row 0
                     // is the wrong row to read once the RHS varies by group.
-                    double group_rhs =
-                        eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(flat_rows[g_begin]);
-                    double lhs_constant;
+					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]);
+					double lhs_constant;
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
                     // F2 site 5: grouped quadratic aggregate.
                     StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, lhs_constant);
@@ -1273,12 +1248,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
-    for (auto q_val : model.q_vals) {
-        if (!std::isfinite(q_val)) {
-            throw too_large(DConstants::INVALID_INDEX);
-        }
-    }
-
     // Moved last: every row above names its clause from them (DecideWrittenClause).
     model.constraint_sources = std::move(input.constraint_sources);
     return model;
@@ -1296,9 +1265,8 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
 
     idx_t num_decide_vars = var_labels.size();
     for (idx_t var = 0; var < num_decide_vars; var++) {
-        ColumnKind kind = (var < var_is_aux.size() && var_is_aux[var]) ? ColumnKind::AUX
-                                                                       : ColumnKind::USER;
-        // Inverting Get(var, row) over all rows visits every column this variable
+		ColumnKind kind = var_is_aux[var] ? ColumnKind::AUX : ColumnKind::USER;
+		// Inverting Get(var, row) over all rows visits every column this variable
         // owns. Keyed variables collapse multiple rows onto one column;
         // the repeated writes are idempotent (same var/label, instance pinned to
         // the class id via Get's mapping).
@@ -1331,11 +1299,8 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
         if (global_var_labels[g].empty()) {
             continue;
         }
-        idx_t col = indexer.global_block_start + g;
-        if (col < provenance.size()) {
-            provenance[col].label = global_var_labels[g];
-        }
-    }
+		provenance[indexer.global_block_start + g].label = global_var_labels[g];
+	}
     return provenance;
 }
 

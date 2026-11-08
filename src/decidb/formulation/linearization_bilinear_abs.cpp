@@ -37,9 +37,8 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
             idx_t blame = link.other_var_idx;
             for (const auto &helper : input.reducer_value_links) {
                 if (helper.value_var == link.other_var_idx) {
-                    idx_t member = FindUnboundedContributor(helper.rows, box.lower, box.upper);
-                    blame = member == DConstants::INVALID_INDEX ? blame : member;
-                }
+					blame = FindUnboundedContributor(helper.rows, box.lower, box.upper);
+				}
             }
             throw InvalidInputException(
                 "Bilinear term requires a finite upper bound on variable '%s'. "
@@ -172,10 +171,8 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
     // auxiliary's own box rather than leaving a row (`FoldSingletonRows`). The floor
     // it puts there IS the demand, and without this the ceiling below is set under it —
     // an empty column, which no widening of `x` can repair.
-    if (aux_idx < input.lower_bounds.size() && input.lower_bounds[aux_idx] > -DECIDE_EFFECTIVE_INFINITY) {
-        demanded = MaxValue<double>(demanded, input.lower_bounds[aux_idx]);
-    }
-    for (const auto &ec : input.constraints) {
+	demanded = MaxValue<double>(demanded, input.lower_bounds[aux_idx]);
+	for (const auto &ec : input.constraints) {
         if (ec.abs_aux_idx == aux_idx) {
             continue; // the definitional pair: it states what the auxiliary IS, not what was asked of it
         }
@@ -480,10 +477,10 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             idx_t term_count = 0;
             for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
                 idx_t v = c1.variable_indices[t];
-                if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
-                    continue;
-                }
-                double coef = c1.row_coefficients[t].Get(r);
+				if (v == link.aux_idx) {
+					continue;
+				}
+				double coef = c1.row_coefficients[t].Get(r);
                 if (coef == 0.0) {
                     continue;
                 }
@@ -504,10 +501,10 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
                 link_row.coefficients.push_back(1.0);
                 for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
                     idx_t v = c1.variable_indices[t];
-                    if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
-                        continue;
-                    }
-                    double coef = c1.row_coefficients[t].Get(r);
+					if (v == link.aux_idx) {
+						continue;
+					}
+					double coef = c1.row_coefficients[t].Get(r);
                     if (coef == 0.0) {
                         continue;
                     }

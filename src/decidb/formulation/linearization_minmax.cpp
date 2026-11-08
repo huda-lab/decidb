@@ -67,10 +67,10 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
         vector<bool> group_active(group_count, false);
         for (idx_t r = 0; r < num_rows; r++) {
             idx_t g = has_groups ? ec.row_group_ids[r] : 0;
-            if (g == DConstants::INVALID_INDEX || g >= group_count) {
-                continue;
-            }
-            group_kind[g] = ClassifyMinMaxBound(DecideRowEffectiveBound(ec, r, written), is_max_agg);
+			if (g == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			group_kind[g] = ClassifyMinMaxBound(DecideRowEffectiveBound(ec, r, written), is_max_agg);
             group_active[g] = true;
         }
         bool any_vacuous = false, any_no_solution = false, any_linearize = false;
@@ -153,10 +153,10 @@ vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input
     vector<MinMaxGroup> groups(group_count);
     for (idx_t r = 0; r < num_rows; r++) {
         idx_t g = has_groups ? ec.row_group_ids[r] : 0;
-        if (g == DConstants::INVALID_INDEX || g >= group_count) {
-            continue;
-        }
-        auto &group = groups[g];
+		if (g == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto &group = groups[g];
         if (group.first_row == DConstants::INVALID_INDEX) {
             group.first_row = r;
         }
@@ -243,39 +243,36 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             if (group.rows.empty()) {
                 continue; // masked-out group: nothing to take an extremum over
             }
-            // The extremum of a family lies inside the family's own bracket. Labelled
-            // with the clause text stage 05 recorded, so a diagnosis over this column
-            // reads `MAX(x * c)` rather than an internal name.
-            string label;
-            if (ec.minmax_clause_idx < input.minmax_clause_labels.size()) {
-                label = input.minmax_clause_labels[ec.minmax_clause_idx];
-            }
-            // The raw bound, not the effective one: each member carries its own row's
+			// The extremum of a family lies inside the family's own bracket. Labelled
+			// with the clause text stage 05 recorded, so a diagnosis over this column
+			// reads `MAX(x * c)` rather than an internal name.
+			// The tag carries the index minted beside the label (RewriteMinMax), so it is always in range.
+			const string &label = input.minmax_clause_labels[ec.minmax_clause_idx];
+			// The raw bound, not the effective one: each member carries its own row's
             // constant LHS part, because a per-row constant can differ inside a group and
             // the extremum is taken over the whole expression, constant included.
             double clause_bound = ec.rhs_values.Get(group.first_row);
-            // A bound the family cannot reach is still part of the reach this encoding
-            // has to cover. `MAX(x) >= 5` over `x` in [-1, 1] boxes the extremum column at
-            // 1 and sizes the closing Big-M off a span of 2, so the repair "widen x's box"
-            // is not representable and the infeasible diagnosis can only offer to weaken
-            // the MAX — advice worth 2 where advice worth 10 was available at the same
-            // edit cost. Widening here is the same rule `DemandedAuxReach` applies to ABS,
-            // and it fires under the same condition: only when the bound lies outside the
-            // family, which is only when the clause cannot be met as written. Nothing is
-            // loosened for a query that solves.
-            bool bound_out_of_reach = false;
-            if (std::isfinite(clause_bound)) {
-                if (is_max_agg) {
-                    if (!group.family.hi_unbounded && clause_bound > group.family.hi) {
-                        group.family.hi = clause_bound;
-                        bound_out_of_reach = true;
-                    }
-                } else if (!group.family.lo_unbounded && clause_bound < group.family.lo) {
-                    group.family.lo = clause_bound;
-                    bound_out_of_reach = true;
-                }
-            }
-            // The two arms need different boxes here, and only one number separates
+			// A bound the family cannot reach is still part of the reach this encoding
+			// has to cover. `MAX(x) >= 5` over `x` in [-1, 1] boxes the extremum column at
+			// 1 and sizes the closing Big-M off a span of 2, so the repair "widen x's box"
+			// is not representable and the infeasible diagnosis can only offer to weaken
+			// the MAX — advice worth 2 where advice worth 10 was available at the same
+			// edit cost. Widening here is the same rule `DemandedAuxReach` applies to ABS,
+			// and it fires under the same condition: only when the bound lies outside the
+			// family, which is only when the clause cannot be met as written. Nothing is
+			// loosened for a query that solves.
+			// The bound is finite here: an infinite one was classified, and a NaN one refused, before this.
+			bool bound_out_of_reach = false;
+			if (is_max_agg) {
+				if (!group.family.hi_unbounded && clause_bound > group.family.hi) {
+					group.family.hi = clause_bound;
+					bound_out_of_reach = true;
+				}
+			} else if (!group.family.lo_unbounded && clause_bound < group.family.lo) {
+				group.family.lo = clause_bound;
+				bound_out_of_reach = true;
+			}
+			// The two arms need different boxes here, and only one number separates
             // them. The lowering emits the CLOSING side alone (`z <= max`), so `K` is a
             // perfectly good ceiling for `z` and the family's widened span is a valid
             // Big-M. The native arm states `z = MAX(t..)` as an EQUALITY, so `z` has to
@@ -420,9 +417,6 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
 void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const ExtremumLinkSpec &spec,
                       const ExtremumMemberSource &members, const vector<string> &var_names,
                       NativeConstructPolicy policy) {
-    if (members.count == 0) {
-        return;
-    }
     int result_col = (int)spec.result_column;
     // One scratch row serves every member: each is built into it, copied into the row the model receives, and
     // overwritten by the next.
@@ -712,46 +706,19 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     AddGlobalContinuousAux(input, indexer, row_family(), 0.0); // obj set by outer phase
             }
 
-            // Build a per-group CSR of the member rows: the rows the inner reducer reads,
-            // whatever their coefficients. Mirrors PATH A's active_rows.
-            vector<idx_t> active_offsets(K + 1, 0);
-            vector<idx_t> active_flat_rows;
-            active_flat_rows.reserve(obj_flat_rows.size());
-            for (idx_t g = 0; g < K; g++) {
-                active_offsets[g] = active_flat_rows.size();
-                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-                    idx_t row = obj_flat_rows[k];
-                    if (spec.member_rows[row]) {
-                        active_flat_rows.push_back(row);
-                    }
-                }
-            }
-            active_offsets[K] = active_flat_rows.size();
-
-            // For groups with no active rows, the original code emitted vacuous
-            // z_g op 0 rows that — combined with the outer optimization direction —
-            // implicitly pinned z_g at 0. Skipping those rows lets z_g float free,
-            // so we instead pin z_g's bounds directly. Captured as a lambda so both
-            // easy and hard branches use identical pinning logic.
-            auto PinZGroupToZero = [&](idx_t g) {
-                PinGlobalAux(input, indexer, group_value_indices[g], 0.0);
-            };
-
-            for (idx_t g = 0; g < K; g++) {
-                if (active_offsets[g] == active_offsets[g + 1]) {
-                    PinZGroupToZero(g);
-                    continue;
-                }
+			// The members of group g are its rows (obj_flat_rows): the objective's grouping holds only the rows the
+			// reducer reads, whatever their coefficients, so every group has one.
+			for (idx_t g = 0; g < K; g++) {
                 ExtremumMemberSource members;
-                members.count = active_offsets[g + 1] - active_offsets[g];
-                members.fill_link = [&, g](idx_t i, MinMaxLinkRow &link) {
-                    AddObjectiveRowTerms(link, active_flat_rows[active_offsets[g] + i], 1.0);
-                    row_terms.Flush(link.indices, link.coefficients);
-                };
-                members.range = [&, g](idx_t i) {
-                    return row_range_for(active_flat_rows[active_offsets[g] + i]);
-                };
-                EmitExtremumLink(input, indexer,
+				members.count = group_size(g);
+				members.fill_link = [&, g](idx_t i, MinMaxLinkRow &link) {
+					AddObjectiveRowTerms(link, obj_flat_rows[obj_offsets[g] + i], 1.0);
+					row_terms.Flush(link.indices, link.coefficients);
+				};
+				members.range = [&, g](idx_t i) {
+					return row_range_for(obj_flat_rows[obj_offsets[g] + i]);
+				};
+				EmitExtremumLink(input, indexer,
                                  objective_link(group_value_indices[g], !inner_is_min,
                                                 inner_easy, row_family()),
                                  members, var_names, native_min_max);
@@ -760,7 +727,6 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
 
         // Phase B: Outer aggregate — combines K group values into scalar objective
         bool outer_is_sum = (spec.per_outer_agg == ObjectiveAggregateType::SUM);
-        bool outer_is_minmax = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG || spec.per_outer_agg == ObjectiveAggregateType::MAX_AGG);
         bool outer_is_min = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG);
 
         if (inner_is_minmax && outer_is_sum) {
@@ -768,8 +734,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             for (idx_t g = 0; g < K; g++) {
                 input.global_obj_coeffs[group_value_indices[g] - indexer.global_block_start] = 1.0;
             }
-        } else if (inner_is_minmax && outer_is_minmax) {
-            // Outer MIN/MAX over z_g's: create global w auxiliary
+		} else if (inner_is_minmax) {
+			// Outer MIN/MAX over z_g's: create global w auxiliary
             bool outer_easy = spec.per_outer_is_easy;
 
             // w is an extremum over the z_g's, and every z_g is boxed by the per-row
@@ -794,8 +760,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             EmitExtremumLink(input, indexer,
                              objective_link(w_idx, !outer_is_min, outer_easy, row_family()),
                              members, var_names, native_min_max);
-        } else if (!inner_is_minmax && outer_is_sum) {
-            if (spec.per_inner_was_avg) {
+		} else if (outer_is_sum) {
+			if (spec.per_inner_was_avg) {
                 // Inner AVG + Outer SUM: scale each row's coefficient by 1/n_g
                 // SUM over groups of AVG(expr) = Σ_g (Σ_{r∈g} c_r * x_r) / n_g
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
@@ -811,8 +777,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             // Restore (possibly scaled) objective coefficients
             input.objective_coefficients = std::move(saved_obj_coefficients);
             input.objective_variable_indices = std::move(saved_obj_var_indices);
-        } else if (!inner_is_minmax && outer_is_minmax) {
-            // Inner SUM + Outer MIN/MAX: compute per-group sums, then optimize over them
+		} else {
+			// Inner SUM + Outer MIN/MAX: compute per-group sums, then optimize over them
             // Create w auxiliary for outer MIN/MAX over group sums
             bool outer_easy = spec.per_outer_is_easy;
 
@@ -862,9 +828,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             // range `w` and every member is boxed by.
             EmitExtremumLink(input, indexer, objective_link(w_idx, !outer_is_min, outer_easy, group_sum_family),
                              members, var_names, native_min_max);
-        }
-    } else if (spec.flat_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty()) {
-        // ================================================================
+		}
+	} else if (spec.flat_agg != ObjectiveAggregateType::NONE) {
+		// ================================================================
         // PATH A: flat MIN/MAX objective
         // ================================================================
         bool is_min_agg = (spec.flat_agg == ObjectiveAggregateType::MIN_AGG);
@@ -906,7 +872,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         EmitExtremumLink(input, indexer,
                          objective_link(z_idx, !is_min_agg, is_easy, row_family()), members,
                          var_names, native_min_max);
-    }
+	}
 }
 
 // --- Composed (additive) MIN/MAX --------------------------------------------
@@ -1104,16 +1070,12 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
             }
             continue;
         }
-        // SUM/AVG term. For AVG, divide by filtered row count.
-        double avg_divisor = 1.0;
+		// SUM/AVG term. For AVG, divide by filtered row count; a term that reads no row skips its whole clause
+		// (PhysicalDecide, `reads_no_row`), so the count is not 0.
+		double avg_divisor = 1.0;
         if (ta.agg_name == "avg") {
-            idx_t cnt = ComposedTermRows(ta, num_rows);
-            if (cnt == 0) {
-                // Empty aggregate — contributes 0; skip.
-                continue;
-            }
-            avg_divisor = static_cast<double>(cnt);
-        }
+			avg_divisor = static_cast<double>(ComposedTermRows(ta, num_rows));
+		}
         for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
             auto &inner_t = (*ta.inner_terms)[it];
             for (idx_t row = 0; row < num_rows; row++) {

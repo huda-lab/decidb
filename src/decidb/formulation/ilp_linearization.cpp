@@ -80,16 +80,6 @@ idx_t decide_linearize::AddGlobalBinaryAux(SolverInput &input, const VarIndexer 
     return aux_idx;
 }
 
-//! Pin an already-created auxiliary to exactly `value`. Used where a reducer turns
-//! out to range over nothing at all, so the auxiliary has no pinning rows and would
-//! otherwise float on whatever box it was given.
-void decide_linearize::PinGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx,
-                                    double value) {
-    idx_t local = aux_idx - indexer.global_block_start;
-    input.global_lower_bounds[local] = value;
-    input.global_upper_bounds[local] = value;
-}
-
 //===--------------------------------------------------------------------===//
 // Lowering: constructs the chosen backend cannot state
 //===--------------------------------------------------------------------===//
@@ -111,17 +101,9 @@ static const BilinearLinkSpec *BilinearLinkOf(const SolverInput &input, idx_t v)
 //! (`SolverInput::InstanceLower`) and a helper's box is its instance's reach, as the builder writes them.
 static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
                           const VarIndexer &indexer, int col, double &lo, double &hi) {
-    idx_t c = static_cast<idx_t>(col);
-    if (c >= indexer.global_block_start) {
-        idx_t g = c - indexer.global_block_start;
-        lo = box.global_lower[g];
-        hi = box.global_upper[g];
-        if (input.global_variable_types[g] == LogicalType::BOOLEAN) {
-            lo = MaxValue<double>(lo, 0.0);
-            hi = MinValue<double>(hi, 1.0);
-        }
-        return;
-    }
+	// A `<>` row holds decision columns only: ClauseEmittedRows states them through `VarIndexer::Get`, and the
+	// indicator binary is added after this reads the row.
+	idx_t c = static_cast<idx_t>(col);
     idx_t v = indexer.OwnerOf(c);
     D_ASSERT(v != DConstants::INVALID_INDEX);
     // The same asymmetry the model builder applies: the lower bound is authoritative
@@ -133,19 +115,18 @@ static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
     if (input.variable_types[v] == LogicalType::BOOLEAN) {
         hi = MinValue<double>(hi, 1.0);
     }
-    // A bilinear auxiliary's column stays open; its McCormick rows hold it to the product
-    // of a 0/1 and x's box, exactly [min(0, L), max(0, U)], x's box being that of the instance this one reads.
-    if (auto link = BilinearLinkOf(input, v)) {
+	// A bilinear auxiliary's column stays open; its McCormick rows hold it to the product
+	// of a 0/1 and x's box, exactly [min(0, L), max(0, U)], x's box being that of the instance this one reads.
+	// U is finite: DeriveBilinearAuxiliaryBounds refuses a factor open above before this runs.
+	if (auto link = BilinearLinkOf(input, v)) {
         idx_t other_instance = indexer.InstanceUnder(link->other_var_idx, v, instance);
         double x_lo = box.InstanceLower(input, link->other_var_idx, other_instance);
         double x_hi = box.InstanceUpper(link->other_var_idx, other_instance);
         if (x_lo > -1e20) {
             lo = MaxValue<double>(lo, MinValue<double>(0.0, x_lo));
         }
-        if (x_hi < 1e20) {
-            hi = MinValue<double>(hi, MaxValue<double>(0.0, x_hi));
-        }
-    }
+		hi = MinValue<double>(hi, MaxValue<double>(0.0, x_hi));
+	}
 }
 
 //! How far a row's left-hand side can reach, toward the end its bound is on. `hi_end`
@@ -158,11 +139,8 @@ static bool FlatRowReach(const SolverInput &input, const FormulationBox &box,
                          bool hi_end, double &reach, idx_t &blame_col) {
     reach = 0.0;
     for (idx_t k = 0; k < indices.size(); k++) {
-        double c = coefficients[k];
-        if (c == 0.0) {
-            continue;
-        }
-        double lo, hi;
+		double c = coefficients[k]; // nonzero: an emitted row states only nonzero coefficients
+		double lo, hi;
         FlatColumnBox(input, box, indexer, indices[k], lo, hi);
         // A negative coefficient swaps which end of the box feeds which end of the term,
         // so the sign has to be respected before an end is blamed.
@@ -213,19 +191,16 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
         M = MaxValue<double>(M, 0.0) + 1.0;
 
         SolverInput::RawConstraint lowered = std::move(row);
-        // `z == v` implies the row, so the row must be slackened by M exactly when
-        // `z != v`: by `M*z` when v is 0, and by `M*(1-z)` when v is 1 — which moves the
-        // bound as well as adding the term.
-        double m_coeff;
-        if (ic.binary_value == 0) {
-            m_coeff = hi_end ? -M : M;
-        } else {
-            m_coeff = hi_end ? M : -M;
-            lowered.rhs += hi_end ? M : -M;
-        }
-        lowered.indices.push_back(ic.binary_column);
-        lowered.coefficients.push_back(m_coeff);
-        input.global_constraints.push_back(std::move(lowered));
+		// `z == v` implies the row, so the row must be slackened by M exactly when `z != v`. The `<>` rewrite states
+		// two halves: `z == 0 => LHS <= K-1`, slackened by `M*z`, and `z == 1 => LHS >= K+1`, slackened by `M*(1-z)`,
+		// which moves the bound as well as adding the term.
+		D_ASSERT((ic.binary_value == 0) == hi_end);
+		if (ic.binary_value == 1) {
+			lowered.rhs -= M;
+		}
+		lowered.indices.push_back(ic.binary_column);
+		lowered.coefficients.push_back(-M);
+		input.global_constraints.push_back(std::move(lowered));
     }
     input.indicator_constraints.clear();
 }
