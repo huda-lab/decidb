@@ -52,7 +52,7 @@ struct Condition final : DirectApplicabilityCondition {
 
 //! `weight * w^2` of a square, where its weight and its inner slope `w` fold to constants; false otherwise. A weight
 //! read from the data is not one: the rule declines it here.
-bool FoldSquareFactor(ClientContext &context, const DirectSquareTerm &square, double &factor) {
+bool FoldSquareFactor(ClientContext &context, const DirectWeightedForm &square, double &factor) {
 	double weight, slope;
 	if (!DirectFoldConstantSum(context, square.weight, weight) ||
 	    !DirectFoldConstantSum(context, square.inner.linear, slope)) {
@@ -132,7 +132,7 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	if (terms.size() != 1 || !terms[0].IsSquare()) {
 		return false;
 	}
-	DirectSquareTerm square;
+	DirectWeightedForm square;
 	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner.constant.empty() ||
 	    !FoldSquareFactor(context, square, condition.square_factor) || condition.square_factor <= 0.0) {
 		return false;

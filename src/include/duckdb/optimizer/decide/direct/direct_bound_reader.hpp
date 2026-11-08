@@ -187,19 +187,13 @@ struct DirectLinearForm {
 	DirectNumberNames constant_names;
 };
 
-//! `weight * (inner)^2`, where the weight is the term's sign times its coefficient, a numeric value of the source row
-//! (a constant, or read from the data).
-struct DirectSquareTerm {
+//! `weight * f(inner)`, where `f` is set by the reader that fills it: DirectReadSquareTerm reads `f(x) = x^2` and
+//! DirectReadAbsTerm reads `f(x) = ABS(x)`. The weight is the term's sign times its coefficient, a numeric value of the
+//! source row (a constant, or read from the data).
+struct DirectWeightedForm {
 	//! The values whose sum is the weight: one, the term's sign and its coefficient (1 when it has none).
 	vector<DirectSignedValue> weight;
 	//! What a message names for the weight (DirectNamesOf).
-	DirectNumberNames weight_names;
-	DirectLinearForm inner;
-};
-
-//! `weight * ABS(inner)`, read as a square is.
-struct DirectAbsTerm {
-	vector<DirectSignedValue> weight;
 	DirectNumberNames weight_names;
 	DirectLinearForm inner;
 };
@@ -217,15 +211,16 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 //! Reads a square of a part: a linear form squared under a coefficient. False when the form is not linear in one
 //! decision, or the coefficient or a value in the form is not a numeric value of the source row. A weight read from the
 //! data is read like any other; a rule that needs a constant one folds it (DirectFoldConstantSum).
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectSquareTerm &out);
+bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
+                          DirectWeightedForm &out);
 
-//! Reads an absolute value of a part, `ABS(inner)` under a coefficient, as a square is read. DirectReadQuadraticPart
-//! does not call it, so a rule that does not take an absolute loss declines one without a check of its own. False when
-//! the term is not an `ABS`, or its form or coefficient cannot be read.
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectAbsTerm &out);
+//! Reads an absolute value of a part, `ABS(inner)` under a coefficient, into the same form a square is read into.
+//! DirectReadQuadraticPart does not call it, so a rule that does not take an absolute loss declines one without a check
+//! of its own. False when the term is not an `ABS`, or its form or coefficient cannot be read.
+bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out);
 
 //! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient
-//! 0), so a square's weight `DirectSquareTerm::weight` or slope `DirectLinearForm::linear` folds to the number every
+//! 0), so a term's weight `DirectWeightedForm::weight` or slope `DirectLinearForm::linear` folds to the number every
 //! row shares. False when a value is not a finite constant.
 bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total);
 
@@ -236,7 +231,8 @@ struct DirectQuadraticPart {
 	//! The rows the part reads (DirectObjectivePartKept), null for every row.
 	unique_ptr<Expression> kept;
 	vector<DirectConstantTerm> constants;
-	vector<DirectSquareTerm> squares;
+	//! The squares of the part. A2 lays its `ABS` here too.
+	vector<DirectWeightedForm> squares;
 };
 
 //! Reads a part of an objective into its linear terms, constants and squares (DirectReadLinearPart,

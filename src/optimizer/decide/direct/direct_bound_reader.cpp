@@ -292,12 +292,12 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 }
 
 bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause,
-                          DirectSquareTerm &out) {
+                          DirectWeightedForm &out) {
 	return term.IsSquare() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
 	       DirectReadLinearForm(ir, term.factors[0].form, clause, out.inner);
 }
 
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectAbsTerm &out) {
+bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out) {
 	return term.IsAbs() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
 	       DirectReadLinearForm(ir, term.inner, clause, out.inner);
 }

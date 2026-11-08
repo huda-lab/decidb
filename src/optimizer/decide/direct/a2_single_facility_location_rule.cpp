@@ -466,23 +466,17 @@ static unique_ptr<Loss> ProveSquare(const DirectIR &ir, ClientContext &context, 
 	return make_uniq<SquareLoss>(std::move(part), sense, ir.objective.written);
 }
 
-//! The one `ABS` of a part, read like a square so the shared layout of a square's columns lays it out: the weight, the
-//! slope and the constant of `K * ABS(s*c + t)`. `weight` is `K` oriented as a minimum and `slope` is `s`. False when
+//! The one `ABS` of a part, read into `part.squares` so the shared layout of a part lays it out: the weight, the slope
+//! and the constant of `K * ABS(s*c + t)`. `weight` is `K` oriented as a minimum and `slope` is `s`. False when
 //! `s` is not a nonzero constant, or `K` is not a constant that is positive once the sense is applied: a weight read
 //! from the data is the solver's. The part holds the `ABS` and no other term (ProveObjective).
 static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir,
                          DirectQuadraticPart &part, double &weight, double &slope) {
-	DirectAbsTerm term;
 	if (!DirectReadLinearPart(ir, context, part_ir, ir.objective.written, part.linear) ||
 	    !DirectObjectivePartKept(ir, part_ir, part.kept) ||
-	    !DirectReadAbsTerm(ir, part_ir.terms[0], ir.objective.written, term)) {
+	    !DirectReadAbsTerm(ir, part_ir.terms[0], ir.objective.written, part.squares.emplace_back())) {
 		return false;
 	}
-	DirectSquareTerm as_square;
-	as_square.weight = std::move(term.weight);
-	as_square.weight_names = std::move(term.weight_names);
-	as_square.inner = std::move(term.inner);
-	part.squares.push_back(std::move(as_square));
 	auto &read = part.squares[0];
 	double constant;
 	if (!DirectFoldConstantSum(context, read.weight, constant) ||
