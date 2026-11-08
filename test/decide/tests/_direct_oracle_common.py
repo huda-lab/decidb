@@ -3,8 +3,9 @@
 
 A rule's suite supplies its own case table, its own function that builds the oracle model, and its own check of one
 DeciDB assignment. This module supplies the rest: the fixture that keeps a forced backend out of the way, running a
-query under a `decide_direct_solve` mode, the outcome of a query as a value to compare, the `VALUES` list for a table of
-records, `sql_literal` (the one spelling of a constant), and the "oracle, `off`, `require`" comparison itself.
+query under a `decide_direct_solve` mode, running one in a process with no Gurobi licence (`without_gurobi`), the
+outcome of a query as a value to compare, the `VALUES` list for a table of records, `sql_literal` (the one spelling of a
+constant), and the "oracle, `off`, `require`" comparison itself.
 
 Test functions stay in their own files with their own names: `oracle_solver` caches each result under the test node id
 plus a hash of the test function's source, so moving a test or editing its body would re-run the oracle. Only helpers
@@ -13,6 +14,8 @@ live here, and the helpers are not part of that hash.
 
 import contextlib
 import math
+import os
+import subprocess
 
 import pytest
 
@@ -47,6 +50,17 @@ def outcome(cli, sql, mode, expect_number_range=False):
         return "ok", run(cli, sql, mode, expect_number_range)[0]
     except DeciDBCliError as error:
         return "error", error_class(str(error))
+
+
+def without_gurobi(exe_path, tmp_path):
+    """Returns `run(sql)`, which runs a statement in a process that cannot reach a Gurobi licence."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
+    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+
+    def run_sql(sql):
+        return subprocess.run([exe_path, "-noheader", "-list", "-c", sql], env=env, capture_output=True, text=True)
+
+    return run_sql
 
 
 def values_clause(records, names, types, literal):

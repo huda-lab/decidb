@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -279,13 +280,7 @@ public:
 		}
 		auto state = DirectProjectScope(binder, std::move(rows), condition.scoped, condition.when.get(),
 		                                condition.group_keys, {}, std::move(instance));
-		Carried from_scope;
-		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			from_scope.source.push_back(state.input_bindings[i]);
-		}
-		from_scope.eligible = state.eligible;
-		from_scope.keys = state.keys;
-		from_scope.key_types = state.key_types;
+		auto from_scope = DirectCarriedOf(state, source_bindings.size());
 
 		DirectProjectionStage p1(binder.GenerateTableIndex());
 		auto raw = LayoutRawValues(p1, from_scope, state.state_index);
@@ -348,17 +343,8 @@ public:
 	}
 
 private:
-	//! The columns every stage forwards.
-	struct Carried {
-		vector<ColumnBinding> source;
-		//! Set only for a scoped clause.
-		ColumnBinding eligible;
-		vector<ColumnBinding> keys;
-		//! The types of `keys`.
-		vector<LogicalType> key_types;
-	};
 	struct Raw {
-		Carried carried;
+		DirectCarried carried;
 		//! What the aggregates of the limit read, one member per input of the limit's group bound.
 		vector<DirectGroupInputColumns> limit_inputs;
 		vector<DirectQuadraticColumns> parts;
@@ -366,7 +352,7 @@ private:
 	};
 	//! Columns of P2.
 	struct Coefficients {
-		Carried carried;
+		DirectCarried carried;
 		vector<DirectGroupInputColumns> limit_inputs;
 		ColumnBinding a;
 		ColumnBinding b;
@@ -374,7 +360,7 @@ private:
 	};
 	//! Columns of P3.
 	struct Targets {
-		Carried carried;
+		DirectCarried carried;
 		ColumnBinding limit;
 		ColumnBinding target;
 		ColumnBinding value;
@@ -385,7 +371,7 @@ private:
 	};
 	//! Columns of P4.
 	struct Lengths {
-		Carried carried;
+		DirectCarried carried;
 		ColumnBinding limit;
 		ColumnBinding value;
 		ColumnBinding in_ball;
@@ -410,24 +396,9 @@ private:
 		return calc.Col(LogicalType::BOOLEAN, binding);
 	}
 
-	Carried Forward(DirectProjectionStage &stage, const Carried &from) const {
-		Carried to;
-		for (idx_t i = 0; i < from.source.size(); i++) {
-			to.source.push_back(stage.Add(calc.Out(calc.Col(source_types[i], from.source[i]))));
-		}
-		if (condition.scoped) {
-			to.eligible = stage.Add(calc.Out(Boolean(from.eligible)));
-		}
-		for (idx_t i = 0; i < from.keys.size(); i++) {
-			to.keys.push_back(stage.Add(calc.Out(calc.Col(from.key_types[i], from.keys[i]))));
-		}
-		to.key_types = from.key_types;
-		return to;
-	}
-
 	//! Makes `window` run over the rows of the row's group. A row outside every ball reads NULL in the window's input,
 	//! so it adds nothing to the group whose key it shares, and the answer does not read what the window returns on it.
-	void PartitionByGroup(const Carried &carried, BoundWindowExpression &window) const {
+	void PartitionByGroup(const DirectCarried &carried, BoundWindowExpression &window) const {
 		for (idx_t i = 0; i < carried.keys.size(); i++) {
 			window.partitions.push_back(calc.Out(calc.Col(carried.key_types[i], carried.keys[i])));
 		}
@@ -443,9 +414,9 @@ private:
 	// P1: raw values
 	//===------------------------------------------------------------------===//
 
-	Raw LayoutRawValues(DirectProjectionStage &p1, const Carried &from_scope, idx_t state_index) const {
+	Raw LayoutRawValues(DirectProjectionStage &p1, const DirectCarried &from_scope, idx_t state_index) const {
 		Raw raw;
-		raw.carried = Forward(p1, from_scope);
+		raw.carried = p1.Forward(from_scope, source_types, condition.scoped);
 		if (limit_bound) {
 			auto eligible = condition.scoped ? Boolean(from_scope.eligible) : nullptr;
 			auto inputs = DirectGroupInputs(calc, *limit_bound, eligible,
@@ -481,7 +452,7 @@ private:
 
 	Coefficients ComputeCoefficients(DirectProjectionStage &p2, Raw &raw) const {
 		Coefficients result;
-		result.carried = Forward(p2, raw.carried);
+		result.carried = p2.Forward(raw.carried, source_types, condition.scoped);
 		for (idx_t i = 0; i < raw.limit_inputs.size(); i++) {
 			DirectGroupInputColumns columns;
 			if (raw.limit_inputs[i].reads.table_index != DConstants::INVALID_INDEX) {
@@ -509,7 +480,7 @@ private:
 	Targets ComputeTargets(DirectProjectionStage &p3, const Coefficients &coefficients,
 	                       const DirectGroupValues &limit_values) const {
 		Targets result;
-		result.carried = Forward(p3, coefficients.carried);
+		result.carried = p3.Forward(coefficients.carried, source_types, condition.scoped);
 		auto a = Double(coefficients.a);
 		auto b = Double(coefficients.b);
 		auto zero = calc.Num(0.0);
@@ -548,7 +519,7 @@ private:
 
 	Lengths ComputeLengths(DirectProjectionStage &p4, const Targets &targets) const {
 		Lengths result;
-		result.carried = Forward(p4, targets.carried);
+		result.carried = p4.Forward(targets.carried, source_types, condition.scoped);
 		auto value = Double(targets.value);
 		auto in_ball = Boolean(targets.in_ball);
 		auto limit = Double(targets.limit);

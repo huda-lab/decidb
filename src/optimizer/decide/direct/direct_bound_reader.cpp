@@ -11,6 +11,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 
 namespace duckdb {
 
@@ -195,6 +196,16 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 	       std::isfinite(constant);
 }
 
+vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t decision) {
+	vector<DirectSignedValue> values;
+	for (auto &term : part.terms) {
+		if (term.decision == decision) {
+			values.push_back({term.sign, term.coefficient->Copy()});
+		}
+	}
+	return values;
+}
+
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
                           DirectLinearPart &out) {
 	out.sign = part.sign;
@@ -214,13 +225,7 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 	}
 	// The part's factor is a literal, which no column holds: a message names the terms' own values.
 	for (idx_t decision = 0; decision < ir.decisions.size(); decision++) {
-		vector<DirectSignedValue> like;
-		for (auto &term : out.terms) {
-			if (term.decision == decision) {
-				like.push_back({term.sign, term.coefficient->Copy()});
-			}
-		}
-		out.names.push_back(DirectNamesOf(ir, like, clause));
+		out.names.push_back(DirectNamesOf(ir, DirectValuesOn(out, decision), clause));
 	}
 	return true;
 }

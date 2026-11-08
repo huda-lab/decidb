@@ -5,6 +5,7 @@
 #include <map>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -15,7 +16,6 @@
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
-#include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
 #include "duckdb/planner/operator/logical_expression_get.hpp"
@@ -865,17 +865,6 @@ private:
 		return index;
 	}
 
-	//! The terms of a part that name the decision.
-	static vector<DirectSignedValue> SignedValues(const DirectLinearPart &part, idx_t decision) {
-		vector<DirectSignedValue> values;
-		for (auto &term : part.terms) {
-			if (term.decision == decision) {
-				values.push_back({term.sign, term.coefficient->Copy()});
-			}
-		}
-		return values;
-	}
-
 	//===------------------------------------------------------------------===//
 	// P1 and P2: raw values, limits from the data, per-clause bounds, the objective value
 	//===------------------------------------------------------------------===//
@@ -933,11 +922,11 @@ private:
 			}
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto weights = SignedValues(condition.budget, k);
+			auto weights = DirectValuesOn(condition.budget, k);
 			auto weight = weights.empty() ? Zero() : calc.Wrap(DirectSumOf(optimizer, weights, over_state));
 			added.emplace_back(Dec("w", k), condition.scoped ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
-				auto values = SignedValues(condition.objective[p], k);
+				auto values = DirectValuesOn(condition.objective[p], k);
 				if (values.empty()) {
 					continue;
 				}
@@ -980,12 +969,12 @@ private:
 			            calc.Constant(Value(LogicalType::VARCHAR)))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			auto weights = SignedValues(condition.budget, k);
+			auto weights = DirectValuesOn(condition.budget, k);
 			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
 				messages.push_back(number(Dec("w", k), condition.budget.names[k]));
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
-				auto values = SignedValues(condition.objective[p], k);
+				auto values = DirectValuesOn(condition.objective[p], k);
 				if (!values.empty() && !DirectIsFiniteWhereKept(optimizer, values)) {
 					messages.push_back(number(Dec("o" + std::to_string(p), k), condition.objective[p].names[k]));
 				}
@@ -1127,34 +1116,6 @@ private:
 	}
 };
 
-//! One hash aggregate under construction: the groups, then the aggregates, each with the binding it gets in the output.
-class AggregateStage {
-public:
-	explicit AggregateStage(Binder &binder)
-	    : group_index(binder.GenerateTableIndex()), aggregate_index(binder.GenerateTableIndex()) {
-	}
-	ColumnBinding Group(unique_ptr<Expression> expression) {
-		groups.push_back(std::move(expression));
-		return ColumnBinding(group_index, groups.size() - 1);
-	}
-	ColumnBinding Add(unique_ptr<Expression> aggregate) {
-		aggregates.push_back(std::move(aggregate));
-		return ColumnBinding(aggregate_index, aggregates.size() - 1);
-	}
-	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child) {
-		auto aggregate = make_uniq<LogicalAggregate>(group_index, aggregate_index, std::move(aggregates));
-		aggregate->groups = std::move(groups);
-		aggregate->children.push_back(std::move(child));
-		return std::move(aggregate);
-	}
-
-private:
-	idx_t group_index;
-	idx_t aggregate_index;
-	vector<unique_ptr<Expression>> groups;
-	vector<unique_ptr<Expression>> aggregates;
-};
-
 //! Builds the plan of definition.md § The plan for one or several decisions, with limits that are constants or read
 //! from the data: aggregate-then-join. Each group is reduced to one row of numbers (its totals, its price, its sums at
 //! the price) and every source row joins its group's row and computes its answer in one projection. A group key is
@@ -1293,33 +1254,21 @@ private:
 	}
 
 	//! Joins an item plan to a group plan on the group key, compared with IS NOT DISTINCT FROM: the cross product with
-	//! the group's one row when there is no key. With a key the join is a SINGLE join, the form DuckDB uses to give
-	//! each row of a scalar subquery its one matching row: the group key is unique in the group plan and every item's
-	//! group is in it. A SINGLE join has no inverse, so BuildProbeSideOptimizer keeps the group plan the build side,
-	//! and JOIN_ORDER estimates it as its item child, whereas an inner join is estimated from the aggregates' child/2
-	//! cardinalities as far larger than either side and gets flipped to build on the items.
+	//! the group's one row when there is no key.
 	unique_ptr<LogicalOperator> JoinOnKey(unique_ptr<LogicalOperator> items, const vector<ColumnBinding> &item_key,
 	                                      unique_ptr<LogicalOperator> groups, const vector<ColumnBinding> &group_key) {
-		if (key_types.empty()) {
-			return LogicalCrossProduct::Create(std::move(items), std::move(groups));
-		}
-		auto join = make_uniq<LogicalComparisonJoin>(JoinType::SINGLE);
+		vector<unique_ptr<Expression>> item_keys, group_keys;
 		for (idx_t i = 0; i < key_types.size(); i++) {
-			JoinCondition key_equal;
-			key_equal.comparison = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
-			key_equal.left = calc.Out(KeyColumn(i, item_key));
-			key_equal.right = calc.Out(KeyColumn(i, group_key));
-			join->conditions.push_back(std::move(key_equal));
+			item_keys.push_back(calc.Out(KeyColumn(i, item_key)));
+			group_keys.push_back(calc.Out(KeyColumn(i, group_key)));
 		}
-		join->children.push_back(std::move(items));
-		join->children.push_back(std::move(groups));
-		return std::move(join);
+		return DirectJoinGroupRow(std::move(items), std::move(groups), std::move(item_keys), std::move(group_keys));
 	}
 
 	//! Takes the aggregates of the limits' group bounds into stage 2's hash aggregate.
 	class AggregateSink final : public DirectGroupSink {
 	public:
-		explicit AggregateSink(AggregateStage &aggregate_p) : aggregate(aggregate_p) {
+		explicit AggregateSink(DirectAggregateStage &aggregate_p) : aggregate(aggregate_p) {
 		}
 		ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
 		                  unique_ptr<Expression> reads) override {
@@ -1327,7 +1276,7 @@ private:
 		}
 
 	private:
-		AggregateStage &aggregate;
+		DirectAggregateStage &aggregate;
 	};
 
 	//! One side of the budget in a group: the constant limit and the limit each data limit gives on that side (the
@@ -1353,7 +1302,7 @@ private:
 	Stage<TotalColumns> GroupTotals() {
 		auto items = ReadItems();
 		auto inputs = TotalInputsOfRow(items.columns.decisions);
-		AggregateStage aggregate(binder);
+		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
@@ -1581,7 +1530,7 @@ private:
 			candidate_limits.push_back(candidates.Add(DoubleColumn(limit)));
 		}
 
-		AggregateStage aggregate(binder);
+		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> price_key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			price_key.push_back(aggregate.Group(calc.Out(KeyColumn(i, candidate_key))));
@@ -1628,7 +1577,7 @@ private:
 		auto lam = DoubleColumn(group.price);
 		auto inputs = PriceSumInputsOfRow(items.columns.decisions, lam);
 
-		AggregateStage aggregate(binder);
+		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));

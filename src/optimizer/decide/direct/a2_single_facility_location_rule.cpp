@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -570,11 +571,7 @@ public:
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> rows) const {
 		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
-		Carried from_scope;
-		from_scope.source = state.input_bindings;
-		from_scope.eligible = state.eligible;
-		from_scope.keys = state.keys;
-		from_scope.key_types = state.key_types;
+		auto from_scope = DirectCarriedOf(state, source_bindings.size());
 
 		DirectProjectionStage p1(binder.GenerateTableIndex());
 		auto raw = LayoutRawValues(p1, from_scope, state.state_index);
@@ -606,18 +603,9 @@ public:
 	}
 
 private:
-	//! The columns every stage forwards.
-	struct Carried {
-		vector<ColumnBinding> source;
-		//! Set only for a keyed decision.
-		ColumnBinding eligible;
-		vector<ColumnBinding> keys;
-		//! The types of `keys`.
-		vector<LogicalType> key_types;
-	};
 	//! Columns of P1.
 	struct Raw {
-		Carried carried;
+		DirectCarried carried;
 		vector<DirectBoundColumns> clauses;
 		//! The loss's raw columns.
 		vector<ColumnBinding> loss;
@@ -632,7 +620,7 @@ private:
 	};
 	//! Columns of P2.
 	struct Rows {
-		Carried carried;
+		DirectCarried carried;
 		vector<ClauseEnds> ends;
 		//! The loss's columns for the row.
 		vector<ColumnBinding> loss;
@@ -640,7 +628,7 @@ private:
 	};
 	//! Columns of W: the class's values and the aggregates of its clauses, over the results.
 	struct Aggregates {
-		Carried carried;
+		DirectCarried carried;
 		ColumnBinding valid;
 		//! The loss's class values, DOUBLE.
 		vector<ColumnBinding> classes;
@@ -651,7 +639,7 @@ private:
 	};
 	//! Columns of P3.
 	struct Interval {
-		Carried carried;
+		DirectCarried carried;
 		ColumnBinding valid;
 		vector<ColumnBinding> classes;
 		vector<ColumnBinding> clause_lowers;
@@ -672,28 +660,13 @@ private:
 		return !condition.keys.empty();
 	}
 
-	Carried Forward(DirectProjectionStage &stage, const Carried &from) const {
-		Carried to;
-		for (idx_t i = 0; i < from.source.size(); i++) {
-			to.source.push_back(stage.Add(calc.Out(calc.Col(source_types[i], from.source[i]))));
-		}
-		if (IsKeyed()) {
-			to.eligible = stage.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, from.eligible)));
-		}
-		for (idx_t i = 0; i < from.keys.size(); i++) {
-			to.keys.push_back(stage.Add(calc.Out(calc.Col(from.key_types[i], from.keys[i]))));
-		}
-		to.key_types = from.key_types;
-		return to;
-	}
-
 	//===------------------------------------------------------------------===//
 	// P1: raw values
 	//===------------------------------------------------------------------===//
 
-	Raw LayoutRawValues(DirectProjectionStage &p1, const Carried &from_scope, idx_t state_index) const {
+	Raw LayoutRawValues(DirectProjectionStage &p1, const DirectCarried &from_scope, idx_t state_index) const {
 		Raw raw;
-		raw.carried = Forward(p1, from_scope);
+		raw.carried = p1.Forward(from_scope, source_types, IsKeyed());
 		OverSource over_state = [&](const Expression &value) {
 			return state_index == DConstants::INVALID_INDEX ? value.Copy()
 			                                                : DirectOverProjection(value, source_bindings, state_index);
@@ -710,7 +683,7 @@ private:
 
 	Rows ComputeRows(DirectProjectionStage &p2, Raw &raw) const {
 		Rows result;
-		result.carried = Forward(p2, raw.carried);
+		result.carried = p2.Forward(raw.carried, source_types, IsKeyed());
 		for (auto &columns : raw.clauses) {
 			ExprPtr lower, upper;
 			DirectClauseBounds(calc, columns, lower, upper);
@@ -783,7 +756,7 @@ private:
 	//! clause keeps exists.
 	Interval ComputeInterval(DirectProjectionStage &p3, const Aggregates &aggregates) const {
 		Interval result;
-		result.carried = Forward(p3, aggregates.carried);
+		result.carried = p3.Forward(aggregates.carried, source_types, IsKeyed());
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		for (auto &value : aggregates.classes) {
 			result.classes.push_back(p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, value))));

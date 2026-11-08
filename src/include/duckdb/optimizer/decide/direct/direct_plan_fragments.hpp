@@ -33,6 +33,17 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
 unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
                                         double scale, bool divides);
 
+//! The columns every stage of a rule forwards: the source columns, the eligible flag and the group key of its scope
+//! (DirectScopeState).
+struct DirectCarried {
+	vector<ColumnBinding> source;
+	//! Set only for a scoped rule.
+	ColumnBinding eligible;
+	vector<ColumnBinding> keys;
+	//! The types of `keys`.
+	vector<LogicalType> key_types;
+};
+
 //! One projection under construction: each column is added as an expression and gets its binding at once, and the
 //! stage becomes a LogicalProjection over a child.
 class DirectProjectionStage {
@@ -45,10 +56,33 @@ public:
 	ColumnBinding Add(unique_ptr<Expression> expression);
 	//! The same, for a value of the ExpressionBuilder; the stage keeps a copy.
 	ColumnBinding Add(const ExprPtr &expression);
+	//! Adds a column that reads each of `columns` of the child, whose types are `types`; returns where they are.
+	vector<ColumnBinding> Forward(const vector<ColumnBinding> &columns, const vector<LogicalType> &types);
+	//! The same for what a scoped rule carries, in whose scope (`scoped`) the eligible flag is set.
+	DirectCarried Forward(const DirectCarried &from, const vector<LogicalType> &source_types, bool scoped);
 	unique_ptr<LogicalOperator> Finish(unique_ptr<LogicalOperator> child);
 
 private:
 	vector<unique_ptr<Expression>> expressions;
+};
+
+//! One hash aggregate under construction: each group and each aggregate gets its binding in the output at once, the
+//! groups first, then the aggregates, and the stage becomes a LogicalAggregate over a child.
+class DirectAggregateStage {
+public:
+	explicit DirectAggregateStage(Binder &binder);
+
+	//! Groups by `expression`, over the child's columns; returns the group's column.
+	ColumnBinding Group(unique_ptr<Expression> expression);
+	//! Adds an aggregate; returns its column.
+	ColumnBinding Add(unique_ptr<Expression> aggregate);
+	unique_ptr<LogicalAggregate> Finish(unique_ptr<LogicalOperator> child);
+
+private:
+	idx_t group_index;
+	idx_t aggregate_index;
+	vector<unique_ptr<Expression>> groups;
+	vector<unique_ptr<Expression>> aggregates;
 };
 
 //! `sum(sign * value)` over proved values, each read as DOUBLE (DirectScaledTerm); null for none. `over` re-points a
@@ -137,6 +171,13 @@ unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_pt
                                                  const vector<ExprPtr> &groups,
                                                  vector<unique_ptr<Expression>> aggregates);
 
+//! Joins each row of `rows` to the one row of `groups` that has its key. `row_keys` and `group_keys` are the key
+//! expressions of the two sides, pairwise, compared with IS NOT DISTINCT FROM so a NULL key matches; with no key the
+//! join is the cross product with the group's one row.
+unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups,
+                                               vector<unique_ptr<Expression>> row_keys,
+                                               vector<unique_ptr<Expression>> group_keys);
+
 //! A verdict on every row of `rows` (DirectSourceReader::Gate): one row whose one BOOLEAN column is true when `valid`,
 //! over `rows`' columns, is true on every row, and otherwise the error of a row that raises it. It is NULL for no rows,
 //! which a gate passes none of and which have no row to raise on. The solver reads every input row before it returns,
@@ -217,10 +258,8 @@ vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const 
                                            const ExprPtr &eligible,
                                            const std::function<unique_ptr<Expression>(const Expression &)> &over);
 
-//! `function` (a BoundAggregateExpression of a group bound) as a window over the whole partition reading `argument`
-//! (null for COUNT(*)) on the rows where `reads` holds (null for every row), or as the aggregate itself.
-unique_ptr<BoundWindowExpression> DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument,
-                                                          unique_ptr<Expression> reads);
+//! `function` (a BoundAggregateExpression of a group bound) as the aggregate itself, reading `argument` (null for
+//! COUNT(*)) on the rows where `reads` holds (null for every row).
 unique_ptr<Expression> DirectAggregateOf(const Expression &function, unique_ptr<Expression> argument,
                                          unique_ptr<Expression> reads);
 
@@ -235,9 +274,9 @@ public:
 	                          unique_ptr<Expression> reads) = 0;
 };
 
-//! The window form of a DirectGroupSink: each aggregate becomes a window over the whole partition
-//! (DirectWindowOfAggregate) added to `window`, and its column is the window's. `partition` gives each window the
-//! rule's group (the partition and nothing else, so every row of the group reads the same value).
+//! The window form of a DirectGroupSink: each aggregate becomes a window over the whole partition, reading the
+//! argument on the rows where `reads` holds, added to `window`, and its column is the window's. `partition` gives each
+//! window the rule's group (the partition and nothing else, so every row of the group reads the same value).
 class DirectWindowSink final : public DirectGroupSink {
 public:
 	DirectWindowSink(LogicalWindow &window_p, std::function<void(BoundWindowExpression &)> partition_p)
@@ -319,6 +358,10 @@ struct DirectScopeState {
 	vector<ColumnBinding> extra;
 };
 
+//! What a rule carries through its stages from the scope: the first `source_width` columns of the state are the
+//! source's.
+DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width);
+
 //! A row whose `when` is false or NULL does not join the clause, and neither does a row with a NULL in a column of a
 //! `by` key (D5: a NULL key is in no group; the columns of a relation compare NULL as a value, and group). `keys` are
 //! the `by` key, its expressions over the input's columns; they are computed on the rows the `when` keeps alone, as
@@ -344,11 +387,5 @@ struct DirectRowBound {
 //! The message a row raises for a per-row bound that is NaN or, for a coefficient, infinite, on a row its clause keeps;
 //! NULL when the bound is valid, or skips the instance it reaches.
 ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBound &bound);
-
-//! Raises the solver's error when a per-row bound is NaN or, for a coefficient, infinite, on a row its clause keeps;
-//! nothing is read on a row a `when` drops, and a NULL passes (it skips the instance). Which failing row is reported is
-//! not specified. Nothing is added when there is nothing to check.
-unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                 const vector<DirectRowBound> &bounds);
 
 } // namespace duckdb

@@ -4,16 +4,14 @@ The answers themselves are checked in `test_direct_s1_uniform_matroid.py` and wh
 the conformance suite, `test_direct_rule_conformance.py`.
 """
 
-import os
 import re
 import math
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import outcome
+from ._direct_oracle_common import outcome, without_gurobi
 
 
 def _source_query(scores, capacity, sense="MAXIMIZE"):
@@ -586,19 +584,6 @@ def _two_rows_query(domain, decide):
     return f"SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE, 'a'), (2, 4.0::DOUBLE, NULL)) t(id, s, k) DECIDE x({domain}) SUCH THAT {decide}) q"
 
 
-def _without_gurobi(decidb_exe_path, tmp_path):
-    """Runs a statement in a process that cannot reach a Gurobi licence."""
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
-    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
-
-    def run(sql):
-        return subprocess.run(
-            [decidb_exe_path, "-noheader", "-list", "-c", sql], env=env, capture_output=True, text=True
-        )
-
-    return run
-
-
 @pytest.mark.error
 @pytest.mark.parametrize(
     "domain,decide,state",
@@ -613,7 +598,7 @@ def _without_gurobi(decidb_exe_path, tmp_path):
     ],
 )
 def test_the_state_errors_leave_out_diagnose_where_it_is_refused(decidb_exe_path, tmp_path, domain, decide, state):
-    run = _without_gurobi(decidb_exe_path, tmp_path)
+    run = without_gurobi(decidb_exe_path, tmp_path)
     sql = _two_rows_query(domain, decide)
     # The premise: DIAGNOSE on this query is refused for lack of a solver.
     assert "which needs Gurobi" in run(f"SET decide_direct_solve='auto'; DIAGNOSE {sql}").stderr
@@ -633,7 +618,7 @@ def test_the_state_errors_leave_out_diagnose_where_it_is_refused(decidb_exe_path
     ],
 )
 def test_the_state_errors_keep_diagnose_where_it_runs_without_gurobi(decidb_exe_path, tmp_path, domain, decide, state):
-    run = _without_gurobi(decidb_exe_path, tmp_path)
+    run = without_gurobi(decidb_exe_path, tmp_path)
     sql = _two_rows_query(domain, decide)
     assert "which needs Gurobi" not in run(f"SET decide_direct_solve='auto'; DIAGNOSE {sql}").stderr
     error = run(f"SET decide_direct_solve='require'; {sql}").stderr

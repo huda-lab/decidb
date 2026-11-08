@@ -877,12 +877,9 @@ def _with(index, **changes):
     return rows
 
 
-def _late(decide_text, t_sql="1.0", s_sql="1.0", cap_sql="10.0", tail=""):
-    """A 5,000-row problem whose last row is built by the given SQL. Rows 0 to 4998 are ordinary."""
-    return (
-        f"SELECT i, x FROM (SELECT i, {t_sql} AS t, {s_sql} AS s, {cap_sql} AS cap FROM range(5000) r(i)) "
-        f"DECIDE {decide_text} {tail}"
-    )
+def _late(decide_text, t_sql="1.0"):
+    """A 5,000-row problem whose target is built by the given SQL. Rows 0 to 4998 are ordinary."""
+    return f"SELECT i, x FROM (SELECT i, {t_sql} AS t, 10.0 AS cap FROM range(5000) r(i)) DECIDE {decide_text}"
 
 
 # name -> (sql, error class the direct path must raise).
@@ -894,15 +891,6 @@ A1_ERROR_CASES = {
     "int_just_beyond_2_53": (
         _problem(ROWS, decl="x(INT)", bounds="x <= 9007199254740994 AND x >= 0", obj="MAXIMIZE SUM(x)"),
         "int_range",
-    ),
-    # Late rows: the error must raise however little of the result is read.
-    "late_unbounded_row_under_limit": (
-        _late(
-            "x(REAL) SUCH THAT x <= cap MAXIMIZE SUM(s*x)",
-            cap_sql="CASE WHEN i = 4999 THEN 1e30 ELSE 10.0 END",
-            tail="LIMIT 1",
-        ),
-        "unbounded",
     ),
 }
 

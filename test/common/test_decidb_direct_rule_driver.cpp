@@ -497,38 +497,6 @@ TEST_CASE("A rule's verdict reads every row before an outer LIMIT or COUNT retur
 	REQUIRE(nothing->RowCount() == 0);
 }
 
-TEST_CASE("With both real rules registered each query shape reaches the rule that applies to it", "[decidb]") {
-	DuckDB db(nullptr);
-	Connection con(db);
-	REQUIRE_NO_FAIL(
-	    con.Query("CREATE TABLE items AS SELECT * FROM (VALUES (1, 2.0, 5.0), (2, -1.0, 4.0), (3, 3.0, 6.0)) "
-	              "v(id, score, cap)"));
-	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
-	auto plan_of = [&](const string &query) {
-		auto result = con.Query("EXPLAIN " + query);
-		REQUIRE_NO_FAIL(*result);
-		return result->ToString();
-	};
-	// A count bound is S1's; per-row bounds on any decision type are A1's. Neither needs a line of engine code that
-	// knows the other exists.
-	auto s1_plan = plan_of("SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(score*x)");
-	REQUIRE(s1_plan.find("S1_UNIFORM_MATROID") != string::npos);
-	REQUIRE(s1_plan.find("A1_SEPARABLE_BOX") == string::npos);
-	for (string declaration : {"x(REAL)", "x(INT)", "x(BOOL)"}) {
-		auto a1_plan =
-		    plan_of("SELECT id, x FROM items DECIDE " + declaration + " SUCH THAT x <= 1 MAXIMIZE SUM(score*x)");
-		INFO(declaration);
-		REQUIRE(a1_plan.find("A1_SEPARABLE_BOX") != string::npos);
-		REQUIRE(a1_plan.find("S1_UNIFORM_MATROID") == string::npos);
-	}
-	// A query neither rule applies to raises the one fixed line, which names no rule.
-	auto no_rule = con.Query("SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 MAXIMIZE SUM(score*x)");
-	REQUIRE(no_rule->HasError());
-	REQUIRE(no_rule->GetError().find("decide_direct_solve=require") != string::npos);
-	REQUIRE(no_rule->GetError().find("S1_UNIFORM_MATROID") == string::npos);
-	REQUIRE(no_rule->GetError().find("A1_SEPARABLE_BOX") == string::npos);
-}
-
 TEST_CASE("With all three real rules registered each query shape reaches the rule that applies to it", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

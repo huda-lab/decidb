@@ -8,11 +8,6 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
-#include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_columnref_expression.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 
 namespace duckdb {
 
@@ -300,18 +295,18 @@ private:
 
 		DirectProjectionStage p2(binder.GenerateTableIndex());
 		Bounds bounds;
-		auto passthrough2 = Passthrough(p2, raw.source);
+		auto passthrough2 = p2.Forward(raw.source, source_types);
 		ComputeBounds(p2, raw, checks, bounds);
 		stages.plan = p2.Finish(std::move(stages.plan));
 
 		DirectProjectionStage p3(binder.GenerateTableIndex());
-		auto passthrough3 = Passthrough(p3, passthrough2);
+		auto passthrough3 = p3.Forward(passthrough2, source_types);
 		Box box;
 		ComputeBox(p3, bounds, box);
 		stages.plan = p3.Finish(std::move(stages.plan));
 
 		DirectProjectionStage p4(binder.GenerateTableIndex());
-		stages.passthrough = Passthrough(p4, passthrough3);
+		stages.passthrough = p4.Forward(passthrough3, source_types);
 		ComputeAnswers(p4, box, stages.answers);
 		stages.plan = p4.Finish(std::move(stages.plan));
 		return stages;
@@ -324,14 +319,6 @@ private:
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
 	const DirectStateErrors &errors;
-
-	vector<ColumnBinding> Passthrough(DirectProjectionStage &stage, const vector<ColumnBinding> &columns) const {
-		vector<ColumnBinding> result;
-		for (idx_t i = 0; i < columns.size(); i++) {
-			result.push_back(stage.Add(calc.Out(calc.Col(source_types[i], columns[i]))));
-		}
-		return result;
-	}
 
 	//===------------------------------------------------------------------===//
 	// P1: raw values

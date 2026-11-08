@@ -10,10 +10,7 @@
 
 namespace duckdb {
 
-class BoundCastExpression;
-class BoundColumnRefExpression;
 class ClientContext;
-class Optimizer;
 enum class DirectDomain : uint8_t;
 struct DirectIR;
 struct DirectPart;
@@ -49,9 +46,6 @@ void DirectReplaceColumns(unique_ptr<Expression> &expr, const vector<ColumnBindi
 //! does not count.
 bool DirectMayThrow(const Expression &expr);
 
-//! True for a cast that can fail on some value: a narrowing cast that is not TRY_CAST. This node only, not its child.
-bool DirectCastMayThrow(const BoundCastExpression &cast);
-
 //! A deterministic, nonthrowing BOOLEAN expression over source columns only: a predicate that can be evaluated for
 //! every row without changing which rows raise an error.
 bool DirectIsSourceOnlyPredicate(const Expression &expr, idx_t decide_index,
@@ -69,7 +63,7 @@ constexpr uint32_t DIRECT_FINITE_CONSTANT = DIRECT_CONSTANT | FOLD_EXACT_FINITE;
 //! finite foldable constant, and nonzero when it divides.
 bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale);
 
-//! A data-valued value a rule may read per row and check for NULL (DirectCheckRowBounds): numeric, nonthrowing,
+//! A data-valued value a rule may read per row and check for NULL: numeric, nonthrowing,
 //! deterministic, decision-free, over source columns only, and mentioning at least one.
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
                                const vector<ColumnBinding> &source_bindings);

@@ -13,9 +13,11 @@
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/operator/logical_comparison_join.hpp"
+#include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
-#include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
@@ -54,6 +56,31 @@ ColumnBinding DirectProjectionStage::Add(unique_ptr<Expression> expression) {
 
 ColumnBinding DirectProjectionStage::Add(const ExprPtr &expression) {
 	return Add(expression->Copy());
+}
+
+static unique_ptr<Expression> ColumnOf(const LogicalType &type, ColumnBinding binding) {
+	return make_uniq<BoundColumnRefExpression>(type, binding);
+}
+
+vector<ColumnBinding> DirectProjectionStage::Forward(const vector<ColumnBinding> &columns,
+                                                     const vector<LogicalType> &types) {
+	vector<ColumnBinding> forwarded;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		forwarded.push_back(Add(ColumnOf(types[i], columns[i])));
+	}
+	return forwarded;
+}
+
+DirectCarried DirectProjectionStage::Forward(const DirectCarried &from, const vector<LogicalType> &source_types,
+                                             bool scoped) {
+	DirectCarried to;
+	to.source = Forward(from.source, source_types);
+	if (scoped) {
+		to.eligible = Add(ColumnOf(LogicalType::BOOLEAN, from.eligible));
+	}
+	to.keys = Forward(from.keys, from.key_types);
+	to.key_types = from.key_types;
+	return to;
 }
 
 unique_ptr<LogicalOperator> DirectProjectionStage::Finish(unique_ptr<LogicalOperator> child) {
@@ -98,11 +125,6 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 			checks.push_back(std::move(check));
 		}
 	};
-	// Linear coefficients add up per decision.
-	vector<vector<DirectSignedValue>> linear_values(decision_count);
-	for (auto &term : part.linear.terms) {
-		linear_values[term.decision].push_back({term.sign, term.coefficient->Copy()});
-	}
 	for (auto &square : part.squares) {
 		DirectQuadraticColumns::Square laid;
 		auto &inner = square.inner;
@@ -119,12 +141,14 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 		}
 		columns.squares.push_back(laid);
 	}
+	// Linear coefficients add up per decision.
 	for (idx_t d = 0; d < decision_count; d++) {
-		if (linear_values[d].empty()) {
+		auto values = DirectValuesOn(part.linear, d);
+		if (values.empty()) {
 			continue;
 		}
-		auto binding = on_kept(calc.Wrap(DirectSumOf(optimizer, linear_values[d], over)));
-		check_number(binding, part.linear.names[d], linear_values[d]);
+		auto binding = on_kept(calc.Wrap(DirectSumOf(optimizer, values, over)));
+		check_number(binding, part.linear.names[d], values);
 		columns.linear_decision.push_back(d);
 		columns.linear.push_back(binding);
 	}
@@ -245,18 +269,64 @@ DirectSquareTarget DirectTurningPoint(const ExpressionBuilder &calc, const ExprP
 	return result;
 }
 
+DirectAggregateStage::DirectAggregateStage(Binder &binder)
+    : group_index(binder.GenerateTableIndex()), aggregate_index(binder.GenerateTableIndex()) {
+}
+
+ColumnBinding DirectAggregateStage::Group(unique_ptr<Expression> expression) {
+	groups.push_back(std::move(expression));
+	return ColumnBinding(group_index, groups.size() - 1);
+}
+
+ColumnBinding DirectAggregateStage::Add(unique_ptr<Expression> aggregate) {
+	aggregates.push_back(std::move(aggregate));
+	return ColumnBinding(aggregate_index, aggregates.size() - 1);
+}
+
+unique_ptr<LogicalAggregate> DirectAggregateStage::Finish(unique_ptr<LogicalOperator> child) {
+	auto aggregate = make_uniq<LogicalAggregate>(group_index, aggregate_index, std::move(aggregates));
+	aggregate->groups = std::move(groups);
+	aggregate->children.push_back(std::move(child));
+	return aggregate;
+}
+
 unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_ptr<LogicalOperator> child,
                                                  const vector<ExprPtr> &groups,
                                                  vector<unique_ptr<Expression>> aggregates) {
 	ExpressionBuilder calc(optimizer.context);
-	auto &binder = optimizer.binder;
-	auto aggregate =
-	    make_uniq<LogicalAggregate>(binder.GenerateTableIndex(), binder.GenerateTableIndex(), std::move(aggregates));
+	DirectAggregateStage stage(optimizer.binder);
 	for (auto &group : groups) {
-		aggregate->groups.push_back(calc.Out(group));
+		stage.Group(calc.Out(group));
 	}
-	aggregate->children.push_back(std::move(child));
-	return aggregate;
+	for (auto &aggregate : aggregates) {
+		stage.Add(std::move(aggregate));
+	}
+	return stage.Finish(std::move(child));
+}
+
+unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups,
+                                               vector<unique_ptr<Expression>> row_keys,
+                                               vector<unique_ptr<Expression>> group_keys) {
+	D_ASSERT(row_keys.size() == group_keys.size());
+	if (row_keys.empty()) {
+		return LogicalCrossProduct::Create(std::move(rows), std::move(groups));
+	}
+	// A SINGLE join, the form DuckDB uses to give each row of a scalar subquery its one matching row: the key is
+	// unique in the group plan and every row's group is in it. A SINGLE join has no inverse, so BuildProbeSideOptimizer
+	// keeps the group plan the build side, and JOIN_ORDER estimates it as its row child, whereas an inner join is
+	// estimated from the aggregates' child/2 cardinalities as far larger than either side and gets flipped to build on
+	// the rows.
+	auto join = make_uniq<LogicalComparisonJoin>(JoinType::SINGLE);
+	for (idx_t i = 0; i < row_keys.size(); i++) {
+		JoinCondition on_key;
+		on_key.comparison = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
+		on_key.left = std::move(row_keys[i]);
+		on_key.right = std::move(group_keys[i]);
+		join->conditions.push_back(std::move(on_key));
+	}
+	join->children.push_back(std::move(rows));
+	join->children.push_back(std::move(groups));
+	return std::move(join);
 }
 
 unique_ptr<LogicalOperator> DirectAllRowsValid(Optimizer &optimizer, unique_ptr<LogicalOperator> rows,
@@ -301,8 +371,8 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 	               calc.Constant(Value(LogicalType::VARCHAR)));
 }
 
-unique_ptr<BoundWindowExpression> DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument,
-                                                          unique_ptr<Expression> reads) {
+static unique_ptr<BoundWindowExpression>
+DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument, unique_ptr<Expression> reads) {
 	auto &aggregate = function.Cast<BoundAggregateExpression>();
 	// Hand-built, as in DirectWindowExtremum.
 	auto result = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
@@ -419,6 +489,16 @@ unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_p
 	return std::move(window);
 }
 
+DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width) {
+	DirectCarried carried;
+	carried.source.assign(state.input_bindings.begin(),
+	                      state.input_bindings.begin() + NumericCast<int64_t>(source_width));
+	carried.eligible = state.eligible;
+	carried.keys = state.keys;
+	carried.key_types = state.key_types;
+	return carried;
+}
+
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<DirectKeyElement> &keys,
                                     vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance) {
@@ -487,31 +567,6 @@ ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBoun
 		message = calc.If(calc.Of(*bound.kept), message, none);
 	}
 	return message;
-}
-
-unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                 const vector<DirectRowBound> &bounds) {
-	if (bounds.empty()) {
-		return input;
-	}
-	ExpressionBuilder calc(optimizer.context);
-	// One window takes, per bound, the least message among the rows it is bad on: NULL on a row the bound is valid.
-	auto window_index = optimizer.binder.GenerateTableIndex();
-	auto window = make_uniq<LogicalWindow>(window_index);
-	for (auto &bound : bounds) {
-		auto message = DirectRowBoundMessage(calc, bound);
-		window->expressions.push_back(DirectWindowExtremum(optimizer, "min", calc.Out(message)));
-	}
-	window->children.push_back(std::move(input));
-
-	vector<unique_ptr<Expression>> checks;
-	for (idx_t i = 0; i < bounds.size(); i++) {
-		auto message = calc.Col(LogicalType::VARCHAR, ColumnBinding(window_index, i));
-		checks.push_back(DirectRaiseMessage(optimizer, calc, message));
-	}
-	auto guard = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
-	guard->children.push_back(std::move(window));
-	return std::move(guard);
 }
 
 //===--------------------------------------------------------------------===//

@@ -3,11 +3,11 @@
 #include "duckdb/common/enums/cte_materialize.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
-#include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -177,24 +177,13 @@ unique_ptr<LogicalOperator> DirectSourceReader::JoinSideTables(unique_ptr<Logica
 		    make_uniq<LogicalCTERef>(ref_index, table.cte_index, table.types, PositionalNames(table.types.size()),
 		                             CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 		side_values.emplace_back(ref_index, table.keys.size());
-		if (table.keys.empty()) {
-			// One group: its one row.
-			top = LogicalCrossProduct::Create(std::move(top), std::move(reference));
-			continue;
-		}
-		// The form DuckDB gives each row of a scalar subquery its one matching row: every row's group is in the table.
-		auto join = make_uniq<LogicalComparisonJoin>(JoinType::SINGLE);
+		vector<unique_ptr<Expression>> row_keys, table_keys;
 		for (idx_t j = 0; j < table.keys.size(); j++) {
-			JoinCondition on_key;
-			on_key.comparison = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
-			on_key.left = table.keys[j]->Copy();
-			DirectReplaceColumns(on_key.left, source_columns, on_top);
-			on_key.right = calc.Out(calc.Col(table.types[j], ColumnBinding(ref_index, j)));
-			join->conditions.push_back(std::move(on_key));
+			row_keys.push_back(table.keys[j]->Copy());
+			DirectReplaceColumns(row_keys.back(), source_columns, on_top);
+			table_keys.push_back(calc.Out(calc.Col(table.types[j], ColumnBinding(ref_index, j))));
 		}
-		join->children.push_back(std::move(top));
-		join->children.push_back(std::move(reference));
-		top = std::move(join);
+		top = DirectJoinGroupRow(std::move(top), std::move(reference), std::move(row_keys), std::move(table_keys));
 	}
 	return top;
 }

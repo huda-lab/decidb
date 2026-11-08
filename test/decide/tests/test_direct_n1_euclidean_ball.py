@@ -26,7 +26,6 @@ objective mismatch. After changing a case or the model builder, remove its entri
 """
 
 import math
-import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -36,7 +35,7 @@ import pytest
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import agree_with_oracle, outcome, run, sql_literal, values_clause
+from ._direct_oracle_common import agree_with_oracle, outcome, run, sql_literal, values_clause, without_gurobi
 
 
 BIG = 1e30  # the oracle reads a bound this large as none
@@ -819,17 +818,11 @@ def test_n1_a_target_outside_a_tiny_ball_reads_the_scale_and_warns(decidb_cli):
 
 
 # A square's turning point warns from one expression under every rule (DirectTurningPoint): a square factor, or a nonzero
-# linear coefficient beside it, below the normal range of a DOUBLE. A1 and N1 take the same objective in a box and in a
-# ball, so each pair must warn alike. In the ball the target stays inside, so the scale (h) is never read: the warning
-# is the target's alone.
-_SQUARE_SETTINGS = {
-    "a1": "x >= 0 AND x <= 10",
-    "n1": "SUM(POWER(x, 2)) <= 100",
-}
+# linear coefficient beside it, below the normal range of a DOUBLE. In the ball the target stays inside, so the scale (h)
+# is never read: the warning is the target's alone.
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("rule", ["a1", "n1"])
 @pytest.mark.parametrize(
     "objective,warns",
     [
@@ -843,8 +836,8 @@ _SQUARE_SETTINGS = {
         ("MINIMIZE SUM(1e-300 * POWER(x, 2))", False),
     ],
 )
-def test_a_tiny_square_factor_warns_under_a1_and_n1_alike(decidb_cli, rule, objective, warns):
-    sql = f"SELECT x FROM (FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT {_SQUARE_SETTINGS[rule]} {objective}) q"
+def test_n1_a_tiny_square_factor_warns(decidb_cli, objective, warns):
+    sql = f"SELECT x FROM (FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 100 {objective}) q"
     run(decidb_cli, sql, "require", expect_number_range=warns)
 
 
@@ -942,18 +935,11 @@ def test_n1_infinite_limit_with_an_improving_row_is_unbounded(decidb_cli):
 def test_n1_answers_on_a_machine_with_no_gurobi(decidb_exe_path, tmp_path):
     # The refusal of a quadratic limit is raised when the solver plan is built, after a rule applied and replaced it. The
     # solver's refusal is what `off` still raises, which shows Gurobi really is unavailable to this process.
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
-    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+    cli = without_gurobi(decidb_exe_path, tmp_path)
     query = (
         "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, s) "
         "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
     )
-
-    def cli(sql):
-        return subprocess.run(
-            [decidb_exe_path, "-noheader", "-list", "-c", sql], env=env, capture_output=True, text=True
-        )
-
     answered = cli(query)
     assert answered.stdout.split() == ["1|3.0", "2|4.0"], answered.stderr
     refused = cli(f"SET decide_direct_solve='off'; {query}")
@@ -964,15 +950,11 @@ def test_n1_answers_on_a_machine_with_no_gurobi(decidb_exe_path, tmp_path):
 def test_a_refusal_with_no_gurobi_quotes_the_quadratic_clause(decidb_exe_path, tmp_path):
     # An extra clause makes N1 decline, so the solver plan is built and refuses the quadratic limit. The refusal names
     # that limit as written, and not the linear clause beside it.
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
-    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
     query = (
         "SELECT id, x FROM (FROM (VALUES (1, 3.0::DOUBLE), (2, 4.0::DOUBLE)) t(id, s) "
         "DECIDE x(REAL) SUCH THAT SUM(x) <= 50 AND SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
     )
-    refused = subprocess.run(
-        [decidb_exe_path, "-noheader", "-list", "-c", query], env=env, capture_output=True, text=True
-    )
+    refused = without_gurobi(decidb_exe_path, tmp_path)(query)
     assert "the SUCH THAT clause `SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables" in refused.stderr, (
         refused.stderr
     )

@@ -145,6 +145,9 @@ struct DirectLinearPart {
 	vector<DirectNumberNames> names;
 };
 
+//! The terms of `part` that name `decision`, each as a signed value.
+vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t decision);
+
 //! What a message names for a number computed from `values` (DirectNumberNames): each value a column holds, printed as
 //! the user wrote it, in reading order, and `clause`. A literal is no column's value: a number made of literals names
 //! the clause, as the solver path names it.

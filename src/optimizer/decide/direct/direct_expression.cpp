@@ -96,7 +96,8 @@ void DirectReplaceColumns(unique_ptr<Expression> &expr, const vector<ColumnBindi
 	    *expr, [&](unique_ptr<Expression> &child) { DirectReplaceColumns(child, columns, values); });
 }
 
-bool DirectCastMayThrow(const BoundCastExpression &cast) {
+//! True for a cast that can fail on some value: a narrowing cast that is not TRY_CAST. This node only, not its child.
+static bool DirectCastMayThrow(const BoundCastExpression &cast) {
 	// TRY_CAST turns conversion failures into NULL; the solver validates that result on every row.
 	// BoundCastExpression::CanThrow conservatively treats it like a regular narrowing cast.
 	return !cast.try_cast && cast.return_type.id() != cast.child->return_type.id() &&
