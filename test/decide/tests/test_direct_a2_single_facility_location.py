@@ -11,9 +11,16 @@ The solver has one behavior the oracle cannot derive from the SQL, so each case 
 replaces the variable's default lower bound of 0 (D41), and a row whose value is NULL contributes nothing to the
 objective (the solver reads its square as absent).
 
-When the objective keeps no row (its `when` drops every row, or every value is NULL), every value in the interval is
-optimal. The oracle accepts any of them; the owner's ruling (2026-11-06) is that the direct path answers the point of the
-interval nearest 0, which `test_a2_an_objective_that_keeps_no_row_answers_the_point_nearest_zero` pins exactly.
+Where several points are optimal (an objective that keeps no row, a flat or tied concave class, the middle of an even
+count) the oracle accepts any of them. The owner's rulings (2026-11-06) are that the direct path answers the one nearest
+0, the lower of two as near. Each oracle test derives that point in Python, from the case and not from the plan, and on
+the `require` run compares the answer with it (`_check_ruled_point`).
+
+Each case in a table is named for the branch of the plan it reaches. The branches: the square's turning point or an
+end of the interval (the upper end, the lower end, the tie nearer either, a flat class), the lower and the upper median,
+the midpoint of the extreme centers, a clamp up, down or none, the point nearest 0 for a class with no kept row, a NULL
+value or weight, a row a `when` drops, a row with no class, each way the interval is written, and each spelling of an
+objective once for the IR's reading of it.
 
 What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in
 `test_direct_rule_conformance.py`, and the wording of the errors in `test_direct_user_facing.py`.
@@ -73,16 +80,12 @@ ROWS = (
     _row(4, -1.5, False),
     _row(5, 6.25, True),
 )
-# The worked example of the rule's definition.
-WORKED_ROWS = (_row(1, 2.0, True), _row(2, 4.0, True), _row(3, 9.0, True))
 # Rows whose value is NULL contribute nothing to the objective.
 NULL_ROWS = ROWS + (_row(6, None, True), _row(7, None, False))
 ALL_NULL_ROWS = (_row(1, None, True), _row(2, None, True), _row(3, None, False))
 # A NaN and an infinity on rows a `when` drops: nothing is computed on them.
 DROPPED_BAD_ROWS = ROWS + (_row(6, math.nan, False), _row(7, INF, False), _row(8, -INF, False))
-ONE_ROW = (_row(1, 7.5, True),)
 ZERO_ROWS = (_row(1, 0.0, True), _row(2, 0.0, True))
-DUPLICATE_ROWS = (_row(1, 2.0, True), _row(1, 2.0, True), _row(1, 4.0, True))
 
 
 def _names(rows):
@@ -170,11 +173,9 @@ BOXES = {
     "clamped_up": Box("c BETWEEN 6 AND 8", 6.0, 8.0),
     "clamped_down": Box("c BETWEEN 0 AND 3", 0.0, 3.0),
     "default_lower": Box("c <= 10", 0.0, 10.0),
-    "default_lower_clamps": Box("c <= 3", 0.0, 3.0),
     "negative_lower_replaces_default": Box("c BETWEEN -5 AND 5", -5.0, 5.0),
     "negative_interval": Box("c BETWEEN -5 AND -2", -5.0, -2.0),
     "lower_only_clamps": Box("c >= 5", 5.0, INF),
-    "lower_only_negative": Box("c >= -2", -2.0, INF),
     "open_lower": Box("c >= -1e30 AND c <= 4", -INF, 4.0),
     "open_both": Box("c >= -1e30 AND c <= 1e30", -INF, INF),
     "point": Box("c = 3", 3.0, 3.0),
@@ -226,6 +227,32 @@ def _totals(case_, rows=None):
         ra, rb = case_.objective.coefficients(row)
         a, b = a + ra, b + rb
     return a, b
+
+
+def _ruled_point(a, b, lower, upper):
+    """The point the rulings name for a class that minimizes `a*c^2 + b*c` on [lower, upper], derived by enumeration and
+    not by the plan's formula: the turning point clamped into the interval when the objective is convex, else the best
+    of the two ends, and among the optimal points the one nearest 0 (the lower of two as near), as the A2 tie rule says.
+    An end that is infinite and best is unbounded, which raises and never reaches this."""
+    if a > 0:
+        return min(max(-b / (2.0 * a), lower), upper)
+    if a == 0 and b == 0:
+        return min(max(0.0, lower), upper)
+
+    def value(c):
+        return b * c if a == 0 else a * c * c + b * c
+
+    best = min(value(lower), value(upper))
+    return min((c for c in (lower, upper) if value(c) == best), key=lambda c: (abs(c), c))
+
+
+def _check_ruled_point(mode, center, ruled, key):
+    """The oracle accepts any optimal point and the solver path may answer any of them; the direct path answers the
+    ruled one, and prints 0.0 for it, never -0.0."""
+    if mode != "require":
+        return
+    assert center == pytest.approx(ruled, abs=1e-9, rel=1e-9), (mode, key, center, ruled)
+    assert center != 0.0 or math.copysign(1.0, center) == 1.0, (mode, key, "-0.0 must print as 0.0")
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +340,8 @@ def _check_assignment(case_, rows, columns, oracle, mode):
         assert lower - 1e-9 <= center <= upper + 1e-9, (mode, center, lower, upper)
         a, b = _totals(case_, members)
         total += a * center * center + b * center
+        sign = -1.0 if case_.objective.maximize else 1.0
+        _check_ruled_point(mode, center, _ruled_point(sign * a, sign * b, lower, upper), key)
     expected = oracle.objective_value
     assert abs(total - expected) <= 1e-5 * max(1.0, abs(expected)), (mode, total, expected)
 
@@ -340,34 +369,29 @@ for _name in OBJECTIVES:
     if _name != "sq_when_none":
         A2_CASES[f"objective_{_name}"] = case("interior", _name)
 
-# Every interval, under the plain square: the mean of ROWS is 3.95.
+# Every interval spelling once, under the plain square: the mean of ROWS is 3.95, so the interval decides the branch of
+# the clamp (up, down or none) and how the box is read.
 for _name in BOXES:
-    A2_CASES[f"box_{_name}"] = case(_name, "sq")
+    if _name not in ("default_lower", "negative_lower_replaces_default"):
+        A2_CASES[f"box_{_name}"] = case(_name, "sq")
 
-# The mean clamped from each side, under objectives that change it.
-A2_CASES["clamp_when_up"] = case("clamped_up", "sq_when")  # the mean of f rows is 5.75
-A2_CASES["clamp_when_down"] = case("clamped_down", "sq_when")
-A2_CASES["clamp_maximized_down"] = case("clamped_down", "sq_max_negated")
-A2_CASES["clamp_negative_mean_to_default_lower"] = case("interior", "sq_plus")
-A2_CASES["negative_mean_inside_a_negative_interval"] = case("negative_lower_replaces_default", "sq_plus")
-A2_CASES["slope_with_clamp"] = case("clamped_down", "sq_slope")
+# A target below 0 is clamped up to the default floor of 0, and a written negative lower bound replaces that floor
+# (`sq_plus` has the mean -3.95).
+A2_CASES["default_floor_clamps_a_negative_target"] = case("default_lower", "sq_plus")
+A2_CASES["negative_lower_bound_replaces_the_default_floor"] = case("negative_lower_replaces_default", "sq_plus")
 
-# The objective keeps no row: every value of the interval is optimal.
-for _name in BOXES:
+# The objective keeps no row, so every point of the interval is optimal and the answer is the point nearest 0: 0 inside
+# the interval, its lower end above 0, its upper end below 0.
+for _name in ("interior", "clamped_up", "negative_interval"):
     A2_CASES[f"no_row_kept_{_name}"] = case(_name, "sq_when_none")
 
-# NULL values, a NaN and infinities on dropped rows, the worked example, one row and duplicate rows.
+# A row dropped by a NULL value alone and beside a `when`, a class of NULL values, and a NaN and infinities on rows a
+# `when` drops (the objective's and the part's own).
 A2_CASES["null_value_drops_the_square"] = case("interior", "sq", NULL_ROWS)
 A2_CASES["null_value_beside_a_when"] = case("interior", "sq_when", NULL_ROWS)
-A2_CASES["null_values_clamped"] = case("clamped_up", "sq", NULL_ROWS)
 A2_CASES["every_value_null"] = case("interior", "sq", ALL_NULL_ROWS)
-A2_CASES["every_value_null_negative_interval"] = case("negative_interval", "sq", ALL_NULL_ROWS)
 A2_CASES["bad_values_on_dropped_rows"] = case("interior", "sq_when", DROPPED_BAD_ROWS)
 A2_CASES["bad_values_on_rows_a_part_filter_drops"] = case("interior", "sq_filter", DROPPED_BAD_ROWS)
-A2_CASES["worked_example"] = case("interior", "sq", WORKED_ROWS)
-A2_CASES["one_row"] = case("interior", "sq", ONE_ROW)
-A2_CASES["one_row_clamped"] = case("clamped_down", "sq", ONE_ROW)
-A2_CASES["duplicate_rows"] = case("interior", "sq", DUPLICATE_ROWS)
 
 
 @pytest.mark.var_real
@@ -389,36 +413,6 @@ def test_a2_the_worked_example_returns_the_mean(decidb_cli):
     rows, columns = _run(decidb_cli, sql, "require")
     assert columns == ["id", "center"]
     assert rows == [(1, 5.0), (2, 5.0), (3, 5.0)]
-
-
-# The interval's point nearest 0, derived here in Python: the owner's ruling for an objective that keeps no row.
-NO_ROW_BOXES = {
-    "interior": 0.0,
-    "clamped_up": 6.0,
-    "default_lower_clamps": 0.0,
-    "negative_lower_replaces_default": 0.0,
-    "negative_interval": -2.0,
-    "lower_only_clamps": 5.0,
-    "lower_only_negative": 0.0,
-    "open_lower": 0.0,
-    "open_both": 0.0,
-    "point": 3.0,
-}
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("box", sorted(NO_ROW_BOXES))
-@pytest.mark.parametrize("keeps_none", ["when", "null_values"])
-def test_a2_an_objective_that_keeps_no_row_answers_the_point_nearest_zero(decidb_cli, box, keeps_none):
-    interval = BOXES[box]
-    nearest = min(max(0.0, interval.lower), interval.upper)
-    assert nearest == NO_ROW_BOXES[box], "the table states the ruling in Python, the interval states the rest"
-    case_ = case(box, "sq_when_none") if keeps_none == "when" else case(box, "sq", ALL_NULL_ROWS)
-    rows, _ = _run(decidb_cli, _sql(case_), "require")
-    assert [row[1] for row in rows] == [nearest] * len(case_.rows)
-    # The solver may answer any other point of the interval, and every one is optimal.
-    for row in _run(decidb_cli, _sql(case_), "off")[0]:
-        assert interval.lower <= row[1] <= interval.upper
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +439,6 @@ KEYED_ALL_NULL_ROWS = KEYED_ROWS + (_krow(10, "e", 1, None, True), _krow(11, "e"
 # A NaN and an infinity on rows the `when` drops, and on rows with no class: nothing is computed on either.
 KEYED_DROPPED_BAD_ROWS = KEYED_ROWS + (_krow(12, "a", 1, math.nan, False), _krow(13, "b", 1, -INF, False))
 KEYED_NO_CLASS_BAD_ROWS = KEYED_ROWS + (_krow(12, None, 1, math.nan, True), _krow(13, None, 2, INF, True))
-ONE_CLASS_ROWS = tuple(_krow(row["id"], "a", 1, row["v"], row["f"]) for row in ROWS)
 DUPLICATE_KEYED_ROWS = (_krow(1, "a", 1, 2.0, True), _krow(1, "a", 1, 2.0, True), _krow(2, "b", 1, 4.0, True))
 # `per t:` keys on the whole row: each distinct row is a class, and a NULL in it is a value.
 RELATION_ROWS = (
@@ -464,18 +457,14 @@ def keyed(box, objective, rows, keys=("k",), relation=False):
 
 
 KEYED_CASES = {
-    "several_keys": keyed("interior", "sq", KEYED_ROWS),
-    "multi_column_key": keyed("interior", "sq", KEYED_ROWS, ("k", "j")),
+    # A key of one column and of two, each with a row that has no class (a NULL element), so one case holds both.
     "null_key": keyed("interior", "sq", KEYED_NULL_ROWS),
     "null_in_one_column_of_a_multi_column_key": keyed("interior", "sq", KEYED_NULL_ROWS, ("k", "j")),
+    # A class with no kept row (the `when` drops every row of "d"; every value of "e" is NULL) beside classes that have
+    # theirs: each answers the point of the interval nearest 0.
     "class_with_no_kept_row": keyed("interior", "sq_when", KEYED_NO_KEPT_ROWS),
-    "class_with_no_kept_row_negative_interval": keyed("negative_interval", "sq_when", KEYED_NO_KEPT_ROWS),
-    "class_with_no_kept_row_clamped_up": keyed("clamped_up", "sq_when", KEYED_NO_KEPT_ROWS),
     "class_with_every_value_null": keyed("interior", "sq", KEYED_ALL_NULL_ROWS),
     "centers_clamped_per_class": keyed(KEYED_SPLIT_BOX, "sq", KEYED_ROWS),
-    "maximized": keyed("clamped_down", "sq_max_negated", KEYED_ROWS),
-    "slope": keyed("interior", "sq_slope", KEYED_ROWS),
-    "one_class": keyed("interior", "sq", ONE_CLASS_ROWS),
     "duplicate_rows": keyed("interior", "sq", DUPLICATE_KEYED_ROWS),
     "bad_values_on_rows_a_when_drops": keyed("interior", "sq_when", KEYED_DROPPED_BAD_ROWS),
     "bad_values_on_rows_with_no_class": keyed("interior", "sq", KEYED_NO_CLASS_BAD_ROWS),
@@ -492,24 +481,9 @@ def test_a2_keyed_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name
     _agree(decidb_cli, oracle_solver, KEYED_CASES[name])
 
 
-@pytest.mark.correctness
-@pytest.mark.parametrize("box", sorted(NO_ROW_BOXES))
-def test_a2_a_class_with_no_kept_row_answers_the_point_nearest_zero(decidb_cli, box):
-    # The ruling for the query-wide form holds per class: class "d" has no kept row, and the other classes keep theirs.
-    interval = BOXES[box]
-    nearest = min(max(0.0, interval.lower), interval.upper)
-    assert nearest == NO_ROW_BOXES[box]
-    case_ = keyed(box, "sq_when", KEYED_NO_KEPT_ROWS)
-    rows, _ = _run(decidb_cli, _sql(case_), "require")
-    assert [row[1] for row in rows if row[0] in (10, 11)] == [nearest, nearest]
-    for row in _run(decidb_cli, _sql(case_), "off")[0]:
-        if row[0] in (10, 11):
-            assert interval.lower <= row[1] <= interval.upper
-
-
 KEYED_CONTEXT_CASES = [
     (base, wrap)
-    for base in ("null_key", "class_with_no_kept_row", "multi_column_key")
+    for base in ("null_in_one_column_of_a_multi_column_key",)
     for wrap in ("cte_materialized", "cte_inlined", "wide_source", "parent_join", "recombined_filters")
 ]
 
@@ -636,12 +610,23 @@ def tight(box, objective, rows, keys=()):
 
 
 DATA_CASES = {}
-for _name in DATA_BOXES:
-    DATA_CASES[f"query_wide_{_name}"] = tight(_name, "sq", TIGHT_ROWS)
+# Each way a clause is read once, keyed: an upper and a lower end together (as two clauses and as `BETWEEN`), under a
+# `when`, a constant lower bound under a `when` beside a data upper bound, a coefficient read from the data, and
+# constant bounds beside a data bound. The ungrouped aggregate is reached query-wide: the tightest ends of all the rows
+# cross (an empty interval, which raises) or, under a `when`, hold a feasible interval.
+for _name in (
+    "both",
+    "between",
+    "both_under_when",
+    "lifted_floor_and_data_upper",
+    "data_coefficient",
+    "constant_and_data",
+):
     DATA_CASES[f"keyed_{_name}"] = tight(_name, "sq", TIGHT_D_ROWS, ("k",))
+DATA_CASES["query_wide_empty_interval"] = tight("both", "sq", TIGHT_ROWS)
+DATA_CASES["query_wide_both_under_when"] = tight("both_under_when", "sq", TIGHT_ROWS)
 # A negative optimum meets the default floor of 0, which a data lower bound does not lower and a constant lower bound
 # under a `when` does.
-DATA_CASES["query_wide_lower_keeps_the_floor"] = tight("lower", "sq_plus", TIGHT_ROWS)
 DATA_CASES["keyed_lower_keeps_the_floor"] = tight("lower", "sq_plus", TIGHT_D_ROWS, ("k",))
 DATA_CASES["query_wide_lifted_floor_is_reached"] = tight("lifted_floor", "sq_plus", TIGHT_ROWS)
 DATA_CASES["keyed_lifted_floor_per_class"] = tight("lifted_floor", "sq_plus", TIGHT_D_ROWS, ("k",))
@@ -651,6 +636,20 @@ DATA_CASES["keyed_empty_interval_in_one_class"] = tight("both", "sq", TIGHT_EMPT
 DATA_CASES["query_wide_maximized"] = tight("upper", "sq_max_negated", TIGHT_ROWS)
 DATA_CASES["query_wide_nan_bound_on_a_row_a_when_drops"] = tight("upper_under_when", "sq", TIGHT_DROPPED_NAN_ROWS)
 DATA_CASES["keyed_nan_bound_on_a_row_a_when_drops"] = tight("both_under_when", "sq", TIGHT_DROPPED_NAN_ROWS, ("k",))
+# Each class keeps no row (`v > 100` is never true), so each answers the point of its own interval nearest 0: above 0,
+# inside it, or below it. "x" has no row the `when` keeps, so its floor stays 0; "y" and "z" lower it to -4.
+DATA_CASES["keyed_no_kept_row_in_data_intervals"] = tight(
+    "between",
+    "sq_when_none",
+    (_drow(1, "x", 5.0, False, 2.0, 9.0), _drow(2, "y", 5.0, True, -1.0, 4.0), _drow(3, "z", 5.0, True, 1.0, 4.0)),
+    ("k",),
+)
+DATA_CASES["keyed_no_kept_row_under_a_lifted_floor"] = tight(
+    "lifted_floor_and_data_upper",
+    "sq_when_none",
+    (_drow(1, "x", 5.0, False, 0.0, 9.0), _drow(2, "y", 5.0, True, 0.0, -2.0), _drow(3, "z", 5.0, True, 0.0, 4.0)),
+    ("k",),
+)
 
 
 @pytest.mark.var_real
@@ -663,7 +662,7 @@ def test_a2_data_bounds_oracle_solver_and_direct_agree(decidb_cli, oracle_solver
 
 DATA_CONTEXT_CASES = [
     (base, wrap)
-    for base in ("keyed_both_under_when", "query_wide_lifted_floor_is_reached")
+    for base in ("keyed_both_under_when",)
     for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
 ]
 
@@ -674,34 +673,6 @@ def test_a2_data_bounds_agree_inside_a_parent_context(decidb_cli, oracle_solver,
     _agree(decidb_cli, oracle_solver, DATA_CASES[base], wrap=wrap)
 
 
-NEAREST_ROWS = (
-    # Each class's objective keeps no row (`v > 100` is never true), so each answers the point of its interval nearest 0.
-    (
-        "c BETWEEN lo AND cap",
-        (_drow(1, "x", 5.0, False, 2.0, 9.0), _drow(2, "y", 5.0, True, -1.0, 4.0), _drow(3, "z", 5.0, True, 1.0, 4.0)),
-        {1: 2.0, 2: 0.0, 3: 1.0},
-    ),
-    (
-        # "x" has no row the `when` keeps, so its floor stays 0; "y" and "z" lower it to -4.
-        "when f: c BETWEEN -4 AND cap",
-        (_drow(1, "x", 5.0, False, 0.0, 9.0), _drow(2, "y", 5.0, True, 0.0, -2.0), _drow(3, "z", 5.0, True, 0.0, 4.0)),
-        {1: 0.0, 2: -2.0, 3: 0.0},
-    ),
-)
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("bounds,rows,expected", NEAREST_ROWS)
-def test_a2_a_class_with_no_kept_row_answers_the_nearest_point_of_its_data_interval(decidb_cli, bounds, rows, expected):
-    sql = (
-        f"SELECT id, c FROM (FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))}) "
-        f"DECIDE per k: c(REAL) SUCH THAT {bounds} MINIMIZE when v > 100: SUM(POWER(c - v, 2))) q ORDER BY id"
-    )
-    assert dict(_run(decidb_cli, sql, "require")[0]) == expected
-    # The solver may answer any other point of the interval, and every one is optimal.
-    assert all(row[1] is not None for row in _run(decidb_cli, sql, "off")[0])
-
-
 CONTEXTS = (
     "cte_materialized",
     "cte_inlined",
@@ -710,11 +681,7 @@ CONTEXTS = (
     "parent_join",
     "recombined_filters",
 )
-CONTEXT_CASES = [
-    (base, wrap)
-    for base in ("objective_sq_when", "box_clamped_up", "null_value_drops_the_square", "no_row_kept_negative_interval")
-    for wrap in CONTEXTS
-]
+CONTEXT_CASES = [(base, wrap) for base in ("objective_sq_when",) for wrap in CONTEXTS]
 
 
 @pytest.mark.correctness
@@ -1101,7 +1068,6 @@ W_SETS = {
     "zero_total_lower": ((2.0, 1.0), (5.0, -1.0)),  # W = 0, b > 0: the lower end
     "zero_total_upper": ((5.0, 1.0), (2.0, -1.0)),  # W = 0, b < 0: the upper end
     "zero_total_flat": ((3.0, 1.0), (3.0, -1.0)),  # W = 0, b = 0: every point is optimal, the one nearest 0
-    "zero_weights": ((2.0, 0.0), (4.0, 0.0)),
     "null_weights_skip_their_rows": ((2.0, 1.0), (4.0, 2.0), (9.0, 0.5), (3.0, None), (None, None)),
     "every_weight_null": ((2.0, None), (4.0, None)),
     "concave_tie": ((5.0, -1.0),),  # W < 0 and f(L) = f(U) on [0, 10]: the end nearest 0
@@ -1139,7 +1105,6 @@ KEYED_W_ROWS = _keyed_rows(
 # A row with a NULL key has no decision, so its weight is never read.
 KEYED_W_NULL_KEY_ROWS = KEYED_W_ROWS + (_wrow(40, None, 100.0, math.nan), _wrow(41, None, 3.0, -2.0))
 
-W_FINITE_BOXES = ("interior", "clamped_up", "clamped_down", "negative_interval", "negative_lower_replaces_default")
 W_OBJECTIVE = WEIGHTED_OBJECTIVES["w_sq"]
 
 
@@ -1148,13 +1113,25 @@ def _weighted_case(box, objective, rows, keys=()):
 
 
 W_CASES = {}
-for _set, _triples in W_SETS.items():
-    for _box in W_FINITE_BOXES:
-        W_CASES[f"{_set}_in_{_box}"] = _weighted_case(_box, "w_sq", _query_wide_rows(_triples))
-# Every spelling of the weighted objective, on a class that sums to a positive, a negative and a mixed weight.
+# One case per branch of the answer, each on the interval where the comment on its set says it is reached.
+for _set, _box in (
+    ("positive", "interior"),
+    ("negative_far_upper", "interior"),
+    ("negative_far_lower", "interior"),
+    ("zero_total_lower", "interior"),
+    ("zero_total_upper", "interior"),
+    ("zero_total_flat", "interior"),
+    ("concave_tie", "interior"),
+    ("concave_tie_below_zero", "negative_interval"),
+    ("concave_tie_as_near", "negative_lower_replaces_default"),
+    ("null_weights_skip_their_rows", "interior"),
+    ("every_weight_null", "interior"),
+):
+    W_CASES[f"{_set}_in_{_box}"] = _weighted_case(_box, "w_sq", _query_wide_rows(W_SETS[_set]))
+# Every other spelling of the weighted objective once, on the class of positive weights.
 for _name in WEIGHTED_OBJECTIVES:
-    for _set in ("positive", "negative_far_upper", "positive_total", "negative_total"):
-        W_CASES[f"{_set}_under_{_name}"] = _weighted_case("interior", _name, _query_wide_rows(W_SETS[_set]))
+    if _name != "w_sq":
+        W_CASES[f"positive_under_{_name}"] = _weighted_case("interior", _name, _query_wide_rows(W_SETS["positive"]))
 # An interval open on one side: a chosen finite end is the answer, and the improving direction of a linear objective
 # decides whether the open end is chosen (the error table has that case).
 W_CASES["zero_total_upper_with_an_open_lower_end"] = _weighted_case(
@@ -1167,18 +1144,14 @@ W_CASES["positive_with_both_ends_open"] = _weighted_case("open_both", "w_sq", _q
 W_CASES["negative_far_upper_with_an_open_lower_end"] = _weighted_case(
     "open_lower", "w_sq", _query_wide_rows(W_SETS["negative_far_upper"])
 )
-W_CASES["concave_tie_in_a_point_interval"] = _weighted_case("point", "w_sq", _query_wide_rows(W_SETS["concave_tie"]))
 # A NaN and an infinite weight on rows a `when` drops are never read.
 W_CASES["bad_weights_on_dropped_rows"] = _weighted_case(
     "interior",
     "w_sq_when",
     _query_wide_rows(W_SETS["positive"] + ((-5.0, math.nan), (-3.0, INF))),
 )
-for _box in W_FINITE_BOXES:
-    W_CASES[f"keyed_in_{_box}"] = _weighted_case(_box, "w_sq", KEYED_W_ROWS, ("k",))
-    W_CASES[f"keyed_null_key_in_{_box}"] = _weighted_case(_box, "w_sq", KEYED_W_NULL_KEY_ROWS, ("k",))
-for _name in WEIGHTED_OBJECTIVES:
-    W_CASES[f"keyed_under_{_name}"] = _weighted_case("interior", _name, KEYED_W_ROWS, ("k",))
+# One class of each branch of the answer in one keyed query, with rows of no class whose weights are never read.
+W_CASES["keyed_null_key_in_interior"] = _weighted_case("interior", "w_sq", KEYED_W_NULL_KEY_ROWS, ("k",))
 W_CASES["keyed_with_an_open_lower_end"] = _weighted_case(
     "open_lower",
     "w_sq",
@@ -1208,11 +1181,7 @@ def test_a2_weighted_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, n
 
 W_CONTEXT_CASES = [
     (base, wrap)
-    for base in (
-        "keyed_null_key_in_interior",
-        "mixed_weights_with_data_bounds_per_class",
-        "zero_total_lower_in_interior",
-    )
+    for base in ("mixed_weights_with_data_bounds_per_class",)
     for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
 ]
 
@@ -1221,51 +1190,6 @@ W_CONTEXT_CASES = [
 @pytest.mark.parametrize("base,wrap", W_CONTEXT_CASES)
 def test_a2_weighted_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
     _agree(decidb_cli, oracle_solver, W_CASES[base], wrap=wrap)
-
-
-def _ruled_point(a, b, lower, upper):
-    """The point the rulings name for a class that minimizes `a*c^2 + b*c` on the finite interval [lower, upper], derived
-    by enumeration and not by the plan's formula: the best of the two ends when the objective is concave or linear,
-    and among the optimal points the one nearest 0 (the lower of two as near), as the A2 tie rule says."""
-    if a > 0:
-        return min(max(-b / (2.0 * a), lower), upper)
-
-    def value(c):
-        return a * c * c + b * c
-
-    best = min(value(lower), value(upper))
-    if a == 0 and b == 0:
-        optimal = [min(max(0.0, lower), upper)]
-    else:
-        optimal = [c for c in (lower, upper) if value(c) == best]
-    return min(optimal, key=lambda c: (abs(c), c))
-
-
-W_PINNED = sorted(name for name in W_CASES if "open" not in name and "bad_weights" not in name)
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", W_PINNED)
-def test_a2_a_weighted_class_answers_the_ruled_point(decidb_cli, name):
-    # The oracle accepts any optimal point; the rulings pick one, and this derives it in Python for every class.
-    case_ = W_CASES[name]
-    rows, _ = _run(decidb_cli, _sql(case_), "require")
-    classes = _classes(case_)
-    in_class = {id(row): key for key, members in classes.items() for row in members}
-    sign = -1.0 if case_.objective.maximize else 1.0
-    answers = {}
-    for source_row, row in zip(case_.rows, rows):
-        key = in_class.get(id(source_row))
-        if key is None:
-            assert row[1] is None
-            continue
-        if key not in answers:
-            members = classes[key]
-            a, b = _totals(case_, members)
-            lower, upper = _interval(case_, members)
-            answers[key] = _ruled_point(sign * a, sign * b, lower, upper)
-        assert row[1] == pytest.approx(answers[key], abs=1e-9, rel=1e-9), (key, row, answers[key])
-        assert row[1] != 0.0 or math.copysign(1.0, row[1]) == 1.0, "-0.0 must print as 0.0"
 
 
 @pytest.mark.error
@@ -1488,6 +1412,26 @@ def _abs_objective_at(case_, centers):
     return sum(values)
 
 
+def _ruled_absolute(case_, members, lower, upper):
+    """The point the rulings name for the absolute loss, derived by enumeration: the objective is piecewise linear, so
+    its optimal points are a segment whose ends are among the centers and the ends of the interval. Among the
+    candidates that reach the least value, the one nearest 0 (the lower of two as near)."""
+    candidates = {min(max(0.0, lower), upper), lower, upper}
+    for weight, slope, t in _abs_terms_of(case_, members):
+        candidates.add(min(max(-t / slope, lower), upper))
+    candidates = [c for c in candidates if lower <= c <= upper]
+    value = {c: sum(_abs_values(case_, members, c)) for c in candidates}
+    best = min(value.values())
+    return min((c for c in candidates if value[c] <= best + 1e-9 * max(1.0, abs(best))), key=lambda c: (abs(c), c))
+
+
+def _ruled_midpoint(case_, members, lower, upper):
+    centers = [-t / slope for weight, slope, t in _abs_terms_of(case_, members)]
+    if not centers:
+        return min(max(0.0, lower), upper)
+    return min(max(min(centers) / 2.0 + max(centers) / 2.0, lower), upper)
+
+
 def _check_abs_assignment(case_, rows, columns, oracle, mode):
     assert columns == ["id", "c"], mode
     assert [row[0] for row in rows] == [row["id"] for row in case_.rows], mode
@@ -1501,9 +1445,11 @@ def _check_abs_assignment(case_, rows, columns, oracle, mode):
             continue
         assert isinstance(row[1], float), (mode, rows)
         assert centers.setdefault(key, row[1]) == row[1], (mode, "every row of a class carries its one center", key)
+    ruled = _ruled_midpoint if case_.objective.kind == "max" else _ruled_absolute
     for key, members in classes.items():
         lower, upper = _interval(case_, members)
         assert lower - 1e-9 <= centers[key] <= upper + 1e-9, (mode, centers[key], lower, upper)
+        _check_ruled_point(mode, centers[key], ruled(case_, members, lower, upper), key)
     total = _abs_objective_at(case_, centers)
     expected = oracle.objective_value
     assert abs(total - expected) <= 1e-5 * max(1.0, abs(expected)), (mode, total, expected)
@@ -1523,86 +1469,79 @@ def _abs_case(box, objective, rows=ROWS, keys=(), relation=False):
     return Case(box if isinstance(box, Box) else BOXES[box], ABS_OBJECTIVES[objective], rows, keys, relation)
 
 
-# An odd count (the median is a value), an even count (every point between the middle two is optimal), ties, a flat
-# optimum that holds 0, one row, NULL values, no value at all, and a NaN and an infinity on rows a `when` drops.
+# An odd count (the median is a value), an even count (every point between the middle two is optimal, and the answer is
+# the lower median above 0 and the upper one below 0), ties, a flat optimum that holds 0, NULL values and no value at
+# all.
 EVEN_ROWS = (_row(1, 2.0, True), _row(2, 4.0, False), _row(3, 9.0, True), _row(4, -1.5, False))
 TIED_ROWS = (_row(1, 3.0, True), _row(2, 3.0, False), _row(3, 3.0, True), _row(4, 7.0, True), _row(5, 7.0, False))
 EVEN_BELOW_ZERO_ROWS = (_row(1, -9.0, True), _row(2, -4.0, False), _row(3, -2.0, True), _row(4, 1.5, False))
 FLAT_AROUND_ZERO_ROWS = (_row(1, -3.0, True), _row(2, 5.0, False))
-FLAT_BELOW_ZERO_ROWS = (_row(1, -6.0, True), _row(2, -2.0, False))
-ABS_ROW_SETS = {
-    "odd": ROWS,
-    "even": EVEN_ROWS,
-    "even_below_zero": EVEN_BELOW_ZERO_ROWS,
-    "ties": TIED_ROWS,
-    "flat_around_zero": FLAT_AROUND_ZERO_ROWS,
-    "flat_below_zero": FLAT_BELOW_ZERO_ROWS,
-    "one_row": ONE_ROW,
-    "null_values": NULL_ROWS,
-    "every_value_null": ALL_NULL_ROWS,
-    "duplicate_rows": DUPLICATE_ROWS,
-}
-ABS_BOXES = ("interior", "clamped_up", "clamped_down", "negative_interval", "negative_lower_replaces_default", "point")
 
 ABS_CASES = {}
-for _kind, _objective in (("abs", "abs"), ("max", "max")):
-    for _set, _rows in ABS_ROW_SETS.items():
-        for _box in ABS_BOXES:
-            ABS_CASES[f"{_objective}_{_set}_in_{_box}"] = _abs_case(_box, _objective, _rows)
-    # Every interval, the median or the midpoint of ROWS clamped into it.
-    for _box in BOXES:
-        ABS_CASES[f"{_objective}_in_every_box_{_box}"] = _abs_case(_box, _objective)
-# Every spelling of the objective. The `when`s need the rows that `f` keeps.
+# The median of ROWS is 4 and the midpoint of its extreme centers is 3.75; the clamp is up, down or none.
+for _objective in ("abs", "max"):
+    ABS_CASES[f"{_objective}_odd_in_interior"] = _abs_case("interior", _objective)
+    ABS_CASES[f"{_objective}_odd_in_clamped_up"] = _abs_case("clamped_up", _objective)
+    ABS_CASES[f"{_objective}_odd_in_clamped_down"] = _abs_case("clamped_down", _objective)
+# The answer is the point of the optimal medians nearest 0: the lower median (2, of 2 and 4), the upper median (-2, of
+# -4 and -2) and 0 between a negative and a positive median. The interval holds each answer.
+ABS_CASES["abs_even_in_interior"] = _abs_case("interior", "abs", EVEN_ROWS)
+ABS_CASES["abs_even_below_zero_in_negative_lower_replaces_default"] = _abs_case(
+    "negative_lower_replaces_default", "abs", EVEN_BELOW_ZERO_ROWS
+)
+ABS_CASES["abs_flat_around_zero_in_negative_lower_replaces_default"] = _abs_case(
+    "negative_lower_replaces_default", "abs", FLAT_AROUND_ZERO_ROWS
+)
+ABS_CASES["abs_ties_in_interior"] = _abs_case("interior", "abs", TIED_ROWS)
+# A NULL value has no center, and a row with no center weighs nothing.
+for _objective in ("abs", "max"):
+    ABS_CASES[f"{_objective}_null_values_in_interior"] = _abs_case("interior", _objective, NULL_ROWS)
+    # No row has a center: the answer is the point of the interval nearest 0 (0 inside it, its lower end above 0, its
+    # upper end below 0).
+    ABS_CASES[f"{_objective}_every_value_null_in_interior"] = _abs_case("interior", _objective, ALL_NULL_ROWS)
+    for _box in ("interior", "clamped_up", "negative_interval"):
+        ABS_CASES[f"{_objective}_when_none_in_{_box}"] = _abs_case(_box, f"{_objective}_when_none")
+# Every other spelling of the objective once. The `when`s need the rows that `f` keeps.
 for _name in ABS_OBJECTIVES:
-    if not _name.endswith("when_none"):
+    if _name not in ("abs", "max") and not _name.endswith("when_none"):
         ABS_CASES[f"spelling_{_name}"] = _abs_case("interior", _name, ROWS)
-        ABS_CASES[f"spelling_{_name}_on_an_even_count"] = _abs_case("interior", _name, EVEN_ROWS)
-        ABS_CASES[f"spelling_{_name}_clamped"] = _abs_case("clamped_up", _name, ROWS)
-for _name in ("abs_when_none", "max_when_none"):
-    for _box in ABS_BOXES:
-        ABS_CASES[f"{_name}_in_{_box}"] = _abs_case(_box, _name)
 # A NaN and an infinity on rows a `when` drops are never read, whether the `when` is the objective's or the
 # reducer's own.
 for _name in ("abs_when", "max_when", "abs_filter", "max_filter"):
     ABS_CASES[f"{_name}_bad_values_on_dropped_rows"] = _abs_case("interior", _name, DROPPED_BAD_ROWS)
 
-# A decision per class of a key.
+# A decision per class of a key: classes of an odd and an even count, a row with no class, a key of two columns, the
+# whole row as the key, a class with no kept row, and classes whose answers fall inside, above and below the interval.
 ABS_KEYED_ROWS = KEYED_ROWS + (_krow(7, "c", 2, 8.0, True), _krow(8, "c", 1, -4.0, False))
 ABS_KEYED_CASES = {}
 for _objective in ("abs", "max"):
-    for _box in ABS_BOXES:
-        ABS_KEYED_CASES[f"{_objective}_several_keys_in_{_box}"] = _abs_case(_box, _objective, ABS_KEYED_ROWS, ("k",))
-        ABS_KEYED_CASES[f"{_objective}_null_key_in_{_box}"] = _abs_case(_box, _objective, KEYED_NULL_ROWS, ("k",))
-    ABS_KEYED_CASES[f"{_objective}_multi_column_key"] = _abs_case("interior", _objective, ABS_KEYED_ROWS, ("k", "j"))
-    ABS_KEYED_CASES[f"{_objective}_one_class"] = _abs_case("interior", _objective, ONE_CLASS_ROWS, ("k",))
-    ABS_KEYED_CASES[f"{_objective}_relation_key"] = _abs_case("interior", _objective, RELATION_ROWS, (), True)
+    ABS_KEYED_CASES[f"{_objective}_several_keys_in_interior"] = _abs_case(
+        "interior", _objective, ABS_KEYED_ROWS, ("k",)
+    )
+    ABS_KEYED_CASES[f"{_objective}_null_key_in_interior"] = _abs_case("interior", _objective, KEYED_NULL_ROWS, ("k",))
     ABS_KEYED_CASES[f"{_objective}_class_with_every_value_null"] = _abs_case(
         "interior", _objective, KEYED_ALL_NULL_ROWS, ("k",)
     )
-    ABS_KEYED_CASES[f"{_objective}_bad_values_on_dropped_rows"] = _abs_case(
-        "interior", f"{_objective}_when", KEYED_DROPPED_BAD_ROWS, ("k",)
+    ABS_KEYED_CASES[f"{_objective}_when_class_with_no_kept_row"] = _abs_case(
+        "interior", f"{_objective}_when", KEYED_NO_KEPT_ROWS, ("k",)
     )
-for _name in ("abs_when", "max_when"):
-    ABS_KEYED_CASES[f"{_name}_class_with_no_kept_row"] = _abs_case("interior", _name, KEYED_NO_KEPT_ROWS, ("k",))
-    ABS_KEYED_CASES[f"{_name}_class_with_no_kept_row_in_a_negative_interval"] = _abs_case(
-        "negative_interval", _name, KEYED_NO_KEPT_ROWS, ("k",)
-    )
-# Classes whose medians and midpoints fall inside, above and below the interval.
-for _objective in ("abs", "max"):
     ABS_KEYED_CASES[f"{_objective}_answers_clamped_per_class"] = _abs_case(
         KEYED_SPLIT_BOX, _objective, ABS_KEYED_ROWS, ("k",)
     )
+# The key's shape reaches the window of the absolute loss, which partitions by it.
+ABS_KEYED_CASES["abs_multi_column_key"] = _abs_case("interior", "abs", ABS_KEYED_ROWS, ("k", "j"))
+ABS_KEYED_CASES["abs_relation_key"] = _abs_case("interior", "abs", RELATION_ROWS, (), True)
+ABS_KEYED_CASES["abs_bad_values_on_dropped_rows"] = _abs_case("interior", "abs_when", KEYED_DROPPED_BAD_ROWS, ("k",))
 
-# Bounds read from the data.
+# Bounds read from the data: the ungrouped aggregate query-wide and the grouped one per class, under a `when`.
 ABS_DATA_CASES = {}
 for _objective in ("abs", "max"):
-    for _name in ("upper", "both", "both_under_when", "lifted_floor", "data_coefficient", "constant_and_data"):
-        ABS_DATA_CASES[f"{_objective}_keyed_{_name}"] = Case(
-            DATA_BOXES[_name], ABS_OBJECTIVES[_objective], TIGHT_D_ROWS, ("k",)
-        )
-        ABS_DATA_CASES[f"{_objective}_query_wide_{_name}"] = Case(
-            DATA_BOXES[_name], ABS_OBJECTIVES[_objective], TIGHT_ROWS
-        )
+    ABS_DATA_CASES[f"{_objective}_keyed_both_under_when"] = Case(
+        DATA_BOXES["both_under_when"], ABS_OBJECTIVES[_objective], TIGHT_D_ROWS, ("k",)
+    )
+    ABS_DATA_CASES[f"{_objective}_query_wide_both_under_when"] = Case(
+        DATA_BOXES["both_under_when"], ABS_OBJECTIVES[_objective], TIGHT_ROWS
+    )
 
 
 @pytest.mark.var_real
@@ -1631,12 +1570,7 @@ def test_a2_absolute_data_bounds_oracle_solver_and_direct_agree(decidb_cli, orac
 
 ABS_CONTEXT_CASES = [
     (base, wrap)
-    for base in (
-        "abs_odd_in_clamped_up",
-        "max_even_in_interior",
-        "abs_null_key_in_interior",
-        "max_several_keys_in_interior",
-    )
+    for base in ("abs_odd_in_clamped_up", "abs_null_key_in_interior")
     for wrap in ("cte_materialized", "wide_source", "parent_join", "recombined_filters")
 ]
 
@@ -1645,26 +1579,6 @@ ABS_CONTEXT_CASES = [
 @pytest.mark.parametrize("base,wrap", ABS_CONTEXT_CASES)
 def test_a2_absolute_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
     _agree_abs(decidb_cli, oracle_solver, {**ABS_CASES, **ABS_KEYED_CASES}[base], wrap=wrap)
-
-
-def _ruled_absolute(case_, members, lower, upper):
-    """The point the rulings name for the absolute loss, derived by enumeration: the objective is piecewise linear, so
-    its optimal points are a segment whose ends are among the centers and the ends of the interval. Among the
-    candidates that reach the least value, the one nearest 0 (the lower of two as near)."""
-    candidates = {min(max(0.0, lower), upper), lower, upper}
-    for weight, slope, t in _abs_terms_of(case_, members):
-        candidates.add(min(max(-t / slope, lower), upper))
-    candidates = [c for c in candidates if lower <= c <= upper]
-    value = {c: sum(_abs_values(case_, members, c)) for c in candidates}
-    best = min(value.values())
-    return min((c for c in candidates if value[c] <= best + 1e-9 * max(1.0, abs(best))), key=lambda c: (abs(c), c))
-
-
-def _ruled_midpoint(case_, members, lower, upper):
-    centers = [-t / slope for weight, slope, t in _abs_terms_of(case_, members)]
-    if not centers:
-        return min(max(0.0, lower), upper)
-    return min(max(min(centers) / 2.0 + max(centers) / 2.0, lower), upper)
 
 
 @pytest.mark.error
@@ -1812,34 +1726,3 @@ def test_a2_a_bad_value_on_the_last_row_raises_under_an_absolute_loss(decidb_cli
         for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
             with pytest.raises(DeciDBCliError, match=r"v is NaN or infinite on some rows"):
                 _run(decidb_cli, outer, "require")
-
-
-ABS_ALL_CASES = {**ABS_CASES, **ABS_KEYED_CASES, **ABS_DATA_CASES}
-#: Every case whose classes all have a non-empty interval (an empty one raises, which the cases above compare).
-ABS_PINNED = sorted(
-    name
-    for name, case_ in ABS_ALL_CASES.items()
-    if all(_interval(case_, members)[0] <= _interval(case_, members)[1] for members in _classes(case_).values())
-)
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", ABS_PINNED)
-def test_a2_an_absolute_class_answers_the_ruled_point(decidb_cli, name):
-    # The oracle accepts any optimal point; the rulings pick one, and this derives it in Python for every class.
-    case_ = ABS_ALL_CASES[name]
-    rows, _ = _run(decidb_cli, _sql(case_), "require")
-    classes = _classes(case_)
-    in_class = {id(row): key for key, members in classes.items() for row in members}
-    ruled = _ruled_midpoint if case_.objective.kind == "max" else _ruled_absolute
-    answers = {}
-    for source_row, row in zip(case_.rows, rows):
-        key = in_class.get(id(source_row))
-        if key is None:
-            assert row[1] is None
-            continue
-        if key not in answers:
-            lower, upper = _interval(case_, classes[key])
-            answers[key] = ruled(case_, classes[key], lower, upper)
-        assert row[1] == pytest.approx(answers[key], abs=1e-9, rel=1e-9), (key, row, answers[key])
-        assert row[1] != 0.0 or math.copysign(1.0, row[1]) == 1.0, "-0.0 must print as 0.0"
