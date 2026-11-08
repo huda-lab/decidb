@@ -19,14 +19,13 @@
 
 namespace duckdb {
 
-//! What a number the model reads is: a coefficient must be finite, a bound only has to be a number (an infinite bound
-//! means "no bound" or "nothing satisfies it"), and a bound a rewrite needs (ABS, MIN, MAX, `<>`) must be finite.
-//! TOO_LARGE is no number read but one the model computes from finite ones: like coefficients merged into one, a
-//! factor applied, a square, the fixed terms moved to the bound side. Past a DOUBLE it names the clause, as no row
-//! holds it. A coefficient computed from values a column holds is checked once, on the result; a row where it is not
+//! What a number the model reads is: a coefficient must be finite, and a bound only has to be a number (an infinite
+//! bound means "no bound" or "nothing satisfies it"). TOO_LARGE is no number read but one the model computes from
+//! finite ones: like coefficients merged into one, a factor applied, a square, the fixed terms moved to the bound side.
+//! Past a DOUBLE it names the clause, as no row holds it. A coefficient computed from values a column holds is checked once, on the result; a row where it is not
 //! finite names the first of those values that is not finite (COEFFICIENT), and the clause when each is (TOO_LARGE).
 //! The solver path (ThrowInvalidValue) and the direct-solve plans (DirectNumberMessage) apply the one rule.
-enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, FINITE_BOUND, TOO_LARGE };
+enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, TOO_LARGE };
 
 //! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as
 //! the user wrote it (the cut text of the query, or the tree rendered where no text was cut). The message gives the
@@ -35,12 +34,6 @@ enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, FINITE_BOUND, TOO_LAR
 inline string DecideInvalidValueMessage(DecideValueRole role, const string &written) {
 	if (role == DecideValueRole::TOO_LARGE) {
 		return "DECIDE: " + written + " computes a number too large for a DOUBLE. Scale its data down.";
-	}
-	if (role == DecideValueRole::FINITE_BOUND) {
-		return "DECIDE: the bound " + written +
-		       " is infinite on some rows, and this clause needs a finite one. "
-		       "Skip those rows with 'when isfinite(" +
-		       written + "):'.";
 	}
 	if (role == DecideValueRole::BOUND) {
 		return "DECIDE: the bound " + written + " is NaN on some rows. Skip those rows with 'when NOT isnan(" +

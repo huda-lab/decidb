@@ -20,6 +20,8 @@
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic_render.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -388,38 +390,54 @@ static unique_ptr<Expression> AbsReadRows(ClientContext &context, const Expressi
 	return calc.Out(calc.And(calc.Of(*clause_when), calc.Of(*reducer_when)));
 }
 
-//! Refuses a NaN or infinite value in the argument of an ABS where it is read, on the rows the ABS is read on, before
-//! the lowering turns it into a bound on the auxiliary. The values are the argument's terms that hold no decision
-//! (`v` in `ABS(x - v)`), named as the user wrote them with the message every other refused value raises
-//! (DecideInvalidValueMessage), and the first one in reading order that is not finite is the one a row names. A
-//! coefficient of a decision is a coefficient of the lowered row, which the solver path refuses by name already.
+//! The clause an ABS was written in, as the user wrote it, or the objective: what a message about a number computed
+//! from the ABS' argument names (DecideWrittenClause on the solver path).
+static string AbsWrittenClause(const LogicalDecide &decide, const string &clause_alias) {
+	idx_t source_clause_id;
+	if (TryParseSourceClauseTag(clause_alias, source_clause_id) &&
+	    source_clause_id < decide.constraint_sources.size()) {
+		return QuoteWrittenClause(decide.constraint_sources[source_clause_id]);
+	}
+	return DecideWrittenObjective(decide.decide_sense, decide.written_objective);
+}
+
+//! Refuses an argument of an ABS whose data is NaN or infinite where the ABS is read, on the rows it is read on, before
+//! the lowering turns the data into a bound on the auxiliary. The data is the sum of the argument's terms that hold no
+//! decision (`-v` in `ABS(x - v)`). A row where it is not finite raises the message every other number the model reads
+//! raises (DirectNumberMessage, as the direct-solve plans): the first of the values it is computed from that is not
+//! finite, as the user wrote it, or the clause when each is finite and their sum passes a DOUBLE. A coefficient of a
+//! decision is a coefficient of the lowered row, which the solver path refuses by name already.
 static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, const Expression &argument,
-                             const Expression *rows) {
+                             const Expression *rows, const string &clause) {
 	vector<DecideSplitTerm> terms;
 	DecideTermSplitter(context, decide.decide_index, decide.decide_variables).Split(argument, 1, terms);
 	ExpressionBuilder calc(context);
-	ExprPtr message = calc.Constant(Value(LogicalType::VARCHAR));
-	// Built from the last term back, so the first that is not finite is the one named.
-	for (idx_t i = terms.size(); i > 0; i--) {
-		auto &term = terms[i - 1];
-		if (!term.IsConstant() || !term.coefficient) {
+	DirectNumberNames names;
+	names.clause = clause;
+	ExprPtr total;
+	for (auto &term : terms) {
+		if (!term.IsConstant()) {
 			continue;
 		}
-		auto &value = DecideUnguarded(*term.coefficient);
-		if (value.IsFoldable() ||
-		    (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE)) {
-			continue;
+		ExprPtr value = term.coefficient ? calc.Cast(calc.Of(*term.coefficient), LogicalType::DOUBLE) : calc.Num(1.0);
+		value = term.sign < 0 ? calc.Neg(value) : value;
+		total = total ? calc.Add(total, value) : value;
+		// A literal is no column's value, so a message does not name it.
+		if (term.coefficient && !DecideUnguarded(*term.coefficient).IsFoldable()) {
+			names.inputs.push_back(term.coefficient->Copy());
+			names.texts.push_back(
+			    RenderDecideSource(*term.coefficient, decide.source_fragments, decide.keyed_scopes, &decide.keys));
 		}
-		auto written =
-		    RenderDecideSource(*term.coefficient, decide.source_fragments, decide.keyed_scopes, &decide.keys);
-		auto finite = calc.Fn("isfinite", calc.Cast(calc.Of(*term.coefficient), LogicalType::DOUBLE));
-		message =
-		    calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, finite, calc.Bool(false)),
-		            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, written))), message);
 	}
-	if (message->type == ExpressionType::VALUE_CONSTANT) {
+	if (!total) {
 		return;
 	}
+	double constant;
+	if (total->IsFoldable() && TryEvaluateFoldableDouble(context, *calc.Out(total), constant, DIRECT_CONSTANT) &&
+	    std::isfinite(constant)) {
+		return;
+	}
+	auto message = DirectNumberMessage(calc, total, names, [&](const Expression &input) { return calc.Of(input); });
 	ExprPtr kept = rows ? calc.Wrap(DirectActiveWhen(calc, rows)) : nullptr;
 	auto check_message = calc.Out(DirectOnKeptRows(calc, kept, message));
 	for (auto &check : decide.scope_checks) {
@@ -489,7 +507,8 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 		// The rows the ABS is read on: the envelope rows below, and the check of its values, are made for those only.
 		auto read_rows = AbsReadRows(optimizer.context, scope.Condition(), reducer_when);
-		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get());
+		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get(),
+		                 AbsWrittenClause(decide, clause_alias));
 
 		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm, std::move(read_rows),
 		                     std::move(label), aux_scope});

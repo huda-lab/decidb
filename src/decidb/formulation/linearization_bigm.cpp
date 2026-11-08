@@ -217,17 +217,10 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
             continue;
         }
         double rhs = DecideRowEffectiveBound(ec, r, written);
-        // An infinite bound reaches the model unchanged everywhere else — it is
-        // simply "no constraint" or "no solution" — but it cannot be linearized:
-        // M has to dominate the row's slack, and nothing finite dominates
-        // infinity. Refuse it here, in SQL terms, rather than let a non-finite
-        // coefficient reach the model validator as an internal error. Callers that
-        // can read an infinity by direction (`<>`, MIN/MAX) classify it before
-        // getting here, so what still arrives is a bound with no reading at all.
-        if (!std::isfinite(rhs)) {
-            throw InvalidInputException(DecideInvalidValueMessage(
-                std::isnan(rhs) ? DecideValueRole::BOUND : DecideValueRole::FINITE_BOUND, ec.rhs_written));
-        }
+        // Finite: the only rows asking for an M here are the links of a count of nonzeros, whose bound is the
+        // constant of the norm's argument, and RewriteAbs refuses that where it reads the argument (a NaN, an
+        // infinity, or finite values whose sum passes a DOUBLE).
+        D_ASSERT(std::isfinite(rhs));
         double rhs_mag = std::abs(rhs);
         double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
                                                     r, lower_bounds, upper_bounds, has_unbounded, instances);

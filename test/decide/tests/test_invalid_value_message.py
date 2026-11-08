@@ -33,13 +33,6 @@ def _bound(value):
     return f"DECIDE: the bound {value} is NaN on some rows. Skip those rows with 'when NOT isnan({value}):'."
 
 
-def _finite_bound(value):
-    return (
-        f"DECIDE: the bound {value} is infinite on some rows, and this clause needs a finite one. "
-        f"Skip those rows with 'when isfinite({value}):'."
-    )
-
-
 def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
 
@@ -248,6 +241,26 @@ TOO_LARGE = [
         "member_of_an_extremum_in_the_objective",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(x) + MAX(x + b + b)",
         "MINIMIZE SUM(x) + MAX(x + b + b)",
+        "1e308",
+    ),
+    # The data of an ABS' argument, `-b - b`, is not finite though each `b` is: raised where the ABS is read, naming the
+    # clause as written, on each way the ABS is stated (pressed by the objective, Big-M, or a constraint).
+    (
+        "abs_the_objective_presses_down",
+        "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(ABS(x - b - b))",
+        "MINIMIZE SUM(ABS(x - b - b))",
+        "1e308",
+    ),
+    (
+        "abs_the_objective_presses_up",
+        "x(REAL) SUCH THAT x BETWEEN 0 AND 10 MAXIMIZE SUM(ABS(x - b - b))",
+        "MAXIMIZE SUM(ABS(x - b - b))",
+        "1e308",
+    ),
+    (
+        "abs_in_a_constraint",
+        "x(REAL) SUCH THAT x BETWEEN 0 AND 10 AND ABS(x - b - b) >= 1 MINIMIZE SUM(x)",
+        "ABS(x - b - b) >= 1",
         "1e308",
     ),
     (
@@ -676,10 +689,11 @@ def test_a_null_value_is_still_skipped_not_refused(decidb_cli, decide):
 
 @pytest.mark.error
 def test_a_rewrite_that_needs_a_finite_bound_names_the_infinite_one_as_written(decidb_cli):
-    # `norm(e, 0)` states its links with a Big-M, which no infinite bound can dominate; a NaN there keeps the bound text.
+    # `norm(e, 0)` states its links with a Big-M, which no infinite bound can dominate: the value is refused where the
+    # norm's `ABS` is read, as written, whether it is infinite or NaN.
     decide = "x(REAL) SUCH THAT x <= 10 AND norm(x + b, 0) <= 2 MAXIMIZE SUM(a * x)"
-    assert _finite_bound("b") in _stderr(decidb_cli, _query(decide, INFINITY), "off")
-    assert _bound("b") in _stderr(decidb_cli, _query(decide, NAN), "off")
+    assert _coefficient("b") in _stderr(decidb_cli, _query(decide, INFINITY), "off")
+    assert _coefficient("b") in _stderr(decidb_cli, _query(decide, NAN), "off")
 
 
 # A constant bound as a literal, as an expression that is NaN, and with a factor on the decision.

@@ -1676,6 +1676,18 @@ def test_a2_a_class_weight_past_a_double_raises_too_large(decidb_cli):
         _run(decidb_cli, sql, "require")
 
 
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective", ["MINIMIZE SUM(ABS(c - v - v))", "MINIMIZE MAX(ABS(c - v - v))"])
+def test_a2_values_that_sum_past_a_double_raise_too_large_on_both_paths(decidb_cli, objective):
+    # Each v is finite; the negated constant of the argument, -v - v, is not. Neither path names a bound or a row.
+    sql = _problem(_with(1, v=1e308), obj=objective)
+    for mode in ("off", "require"):
+        with pytest.raises(DeciDBCliError) as error:
+            _run(decidb_cli, sql, mode)
+        assert f"DECIDE: {objective} computes a number too large for a DOUBLE. Scale its data down." in str(error.value)
+
+
 @pytest.mark.var_real
 @pytest.mark.correctness
 @pytest.mark.parametrize(

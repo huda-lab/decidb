@@ -254,18 +254,11 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
         double hi = 0.0;
         bool seen_row = false;
         for (idx_t r = 0; r < num_rows; r++) {
-            // The link's bound carries the constant part of the expression the user
-            // wrote inside ABS. An infinity there is a data problem, not a bounding
-            // one, and it defeats the native path too — |inf| is still inf — so it is
-            // refused whichever path follows.
+            // The link's bound carries the constant part of the expression the user wrote inside ABS. It is
+            // finite: an infinity there is a data problem, which defeats the native path too (|inf| is still inf),
+            // and RewriteAbs refuses it where it reads the argument, whichever path follows.
             double link_rhs = c1.rhs_values.Get(r);
-            if (!std::isfinite(link_rhs)) {
-                throw InvalidInputException(
-                    "The expression inside ABS() evaluates to Infinity at row %llu, "
-                    "so DECIDE cannot bound it. Check that column for an overflow, "
-                    "or exclude the row with WHERE.",
-                    r);
-            }
+            D_ASSERT(std::isfinite(link_rhs));
             double vars_lo = 0.0;
             double vars_hi = 0.0;
             DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx,

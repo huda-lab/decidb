@@ -696,8 +696,8 @@ vector<ClauseEdit> FanOutByClass(ClauseEdit edit, const ConstraintProvenance &pr
 //!
 //! A USER_MECHANISM row is safe to read here because its bound is derived as `K ± M`
 //! with both terms finite by construction: ClassifyMinMaxBound sends a group to the
-//! Big-M rewrite only when `K` is finite, and DecideTightPerRowBigM refuses a non-finite
-//! `M`. So an infinite bound on a mechanism row is never a helper's own bound — it is a
+//! Big-M rewrite only when `K` is finite, and the links DecideTightPerRowBigM sizes carry a bound RewriteAbs read
+//! finite. So an infinite bound on a mechanism row is never a helper's own bound — it is a
 //! user bound re-emitted per row, which is exactly what we want to name.
 vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, const vector<ColumnProvenance> &columns,
                                                     bool expanded) {

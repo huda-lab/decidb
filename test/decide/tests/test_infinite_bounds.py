@@ -32,7 +32,7 @@ Covers:
   - test_vacuous_minmax_bound_drops: ``MIN(x) <= +inf`` constrains nothing
   - test_unreachable_minmax_bound_is_infeasible: ``MAX(x) >= +inf`` has no solution
   - test_nan_bound_is_still_rejected: inf - inf is not a bound
-  - test_infinite_value_inside_abs_is_named: the Big-M refusal names ABS, not M
+  - test_infinite_value_inside_abs_is_named: the refusal names the value as written, not M
 
 A bound can also be reduced from a column instead of typed, and that path kept the
 strict guard for longer: one infinite row in ``cap`` refused ``MIN(x) <= MAX(cap)``
@@ -271,7 +271,7 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
 
     ``ABS`` is linearized with a sign indicator whose constant must dominate the
     expression's range; infinity has no such constant. The user never wrote an
-    ``M``, so the message names ``ABS()`` and the row instead.
+    ``M``, so the message names the value as written, where the ``ABS`` is read.
     """
     decidb_cli.assert_error("""
         WITH data AS (
@@ -282,7 +282,7 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
         DECIDE x(REAL)
         SUCH THAT x <= 5
         MAXIMIZE SUM(ABS(x - big))
-    """, match=r"ABS\(\).*Infinity")
+    """, match=r"DECIDE: big is NaN or infinite on some rows\. Skip those rows with 'when isfinite\(big\):'\.")
 
 
 # ---------------------------------------------------------------------------
