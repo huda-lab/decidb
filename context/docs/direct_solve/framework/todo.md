@@ -26,6 +26,14 @@ solver path answers those queries, so none of them is wrong, only slower.
   `decidb-architect` review.
 - Never without the owner: large-tier benchmarks or other long CPU-bound runs, regenerating goldens before reading the
   diff, pushing, new branches or worktrees, `git stash`.
+- **Removing bloat (the BLOAT tasks, in every area).** Bloat is code or test that removing changes no answer, error
+  text, warning or plan cost: a branch no query reaches and the tests that reach only it; a helper or type that
+  duplicates another (the second copy goes, and a helper two callers share moves to shared code); a wrapper or
+  parameter that only forwards; a grid case that reaches no branch another case reaches (`.claude/CLAUDE.md`
+  § Testing); a comment that restates the code. Behavior stays as it is: a removal that changes an answer, an error
+  text or a golden is not bloat, so stop and report it. Each removal names its evidence (no caller, a mutation that
+  fails no test, the case that already reaches the branch). Record the lines and the `lizard` figures of the area
+  before and after in the report.
 
 ## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
 
@@ -35,7 +43,8 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read the two-level objective into the IR through the nested-reducer reading.
 - **Done when.** `test_decidb_direct_ir.cpp`, "declines a two-level objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
 - **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
-  reached only by an IR test, so it was removed; this task waits for A2–A4 (`../todo.md`).
+  reached only by an IR test, so it was removed; this task waits for a rule that takes the shape (A3 or A4,
+  `../todo.md`).
 
 ## H-08 — VALUE-shape clauses (helper decisions)
 
@@ -49,7 +58,7 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
 
-## H-48 — A class's answer is computed once per row, and a query-wide window runs on one thread
+## H-48 — A2 computes a class's answer once per row, and a query-wide window runs on one thread
 
 - **Decision needed.** Whether a rule that repeats one answer per class computes it once per class and joins it back,
   in place of a window that repeats the class's sums on every row.
@@ -72,8 +81,31 @@ solver path answers those queries, so none of them is wrong, only slower.
      still runs on every row first. Plain-SQL sizing at `sf=1` with a light answer: 26 ms against 3 to 4 ms
      query-wide, 15 ms against 7 ms keyed.
   2. Keep the window and leave it. Cost: A2's query-wide squared loss stays slower than the solver.
-- **Recommendation.** 1, as a shared plan fragment beside `DirectProjectScope` and `DirectWindowSink`, taken by A2 and
-  N1 first; S1's and R1's per-group plans are measured before they move. It changes the plan skeleton's W and P4
-  stages, not any loss.
-- **Done when.** `a2` and `n1` run faster on all threads than on one, `a2` is ahead of Gurobi at every size, and the
-  matrix passes with no answer changed.
+- **Recommendation.** 1, as a shared plan fragment beside `DirectProjectScope` and `DirectWindowSink`, taken by A2
+  here; N1, S1 and R1 follow in H-49. It changes A2's plan skeleton's W and P4 stages, not any loss.
+- **Done when.** `a2` runs faster on all threads than on one and is ahead of Gurobi at every size
+  (`benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs`), and the matrix passes
+  with no answer changed.
+
+## H-49 — N1, S1 and R1 take the group-then-join plan where it is faster
+
+- **Problem.** N1's query-wide plan has A2's shape (H-48): `n1` times the same on all threads and on one (0.080 s and
+  0.079 s at 800,000 rows). S1's and R1's per-group plans repeat a group's values on every row through a window too,
+  and are not measured against the group-then-join shape.
+- **Change.** N1 takes H-48's shared fragment. S1's and R1's per-group plans are measured against it on their
+  benchmark queries, and move only where it is faster.
+- **Needs.** H-48.
+- **Done when.** `n1` runs faster on all threads than on one; each of S1 and R1 either moves with a faster time or keeps
+  its plan with the measurement recorded in its `done.md` § Performance; the matrix passes with no answer changed.
+
+## BLOAT-1 — Bloat in the direct-solve engine
+
+- **Problem.** The engine (`src/optimizer/decide/direct/` apart from the rule files, its headers, the C++ tests in
+  `test/common/`, and the shared tests `test_direct_user_facing.py`, `test_direct_rule_conformance.py`,
+  `test_direct_source_values.py`, `test_direct_binding_boundary.py` and `_direct_*.py`) has not been read for bloat
+  since five rules grew on it. Known cases: `DirectAbsTerm` and `DirectSquareTerm` hold the same fields (A2-10 owns
+  that one).
+- **Change.** Remove the bloat by § How to work any task (Removing bloat). The rule files are BLOAT-2 to BLOAT-5 and
+  A2-10 to A2-12.
+- **Done when.** The matrix passes with no answer, error text or golden changed, and the report lists each removal
+  with its evidence and the area's lines and `lizard` figures before and after.

@@ -50,6 +50,7 @@ observations. The class is in [definition.md](definition.md). How to work and th
 - **Change.** For each grid, name the branches of the plan it is for (the lower and the upper median, a clamp up, down
   or none, the nearest-0 tie, no kept row, a NULL value, a point interval; each spelling once for the IR reading) and
   keep one case per branch, named for it. Check the ruled point inside the oracle test, on the same run, and delete
-  the separate ruled-point tests. Done after A2-10, A2-11 and H-48, which change the branches.
+  the separate ruled-point tests.
+- **Needs.** A2-10, A2-11 and H-48, which change the branches.
 - **Done when.** Every remaining case names the branch it reaches, removing that branch fails it, and the matrix
   passes.
