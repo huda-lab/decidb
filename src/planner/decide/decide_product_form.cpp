@@ -4,9 +4,9 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -272,23 +272,12 @@ DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &ex
 	return form;
 }
 
-static unique_ptr<Expression> Bind(ClientContext &context, const string &name,
-                                   vector<unique_ptr<Expression>> children) {
-	FunctionBinder function_binder(context);
-	ErrorData error;
-	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
-	if (error.HasError()) {
-		throw InternalException("DECIDE failed to bind '%s' while writing a product: %s", name, error.Message());
-	}
-	return result;
-}
-
 static unique_ptr<Expression> Bind(ClientContext &context, const string &name, unique_ptr<Expression> left,
                                    unique_ptr<Expression> right) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
-	return Bind(context, name, std::move(children));
+	return DecideRebindOperator(context, name, std::move(children));
 }
 
 //! A factor as the spelling writes it: its base, or POWER of its base and the whole exponent as its number, however the
@@ -323,7 +312,7 @@ unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const Deci
 	if (form.sign < 0) {
 		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(result));
-		result = Bind(context, "-", std::move(children));
+		result = DecideRebindOperator(context, "-", std::move(children));
 	}
 	for (auto *term : form.zero_terms) {
 		auto zero = Bind(context, "*", make_uniq<BoundConstantExpression>(Value::INTEGER(0)), term->Copy());

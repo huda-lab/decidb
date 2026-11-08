@@ -295,14 +295,13 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // The other half of the integer-step gate. The parsed-tree validator above
                 // read the decision's declared type off the DECIDE clause; every other
                 // operand's type is only known now that binding has resolved it. Together
-                // they are the whole refusal, so the model builder no longer raises one.
+                // they are the whole refusal; the model builder raises none.
 			    DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
 			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
 			    result.decide_constraint_sources =
 			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
 			                                       result.decide_index, &keys, &statement.decide_text);
 		    }
-            // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {
             DecideObjectiveBinder decide_objective_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);

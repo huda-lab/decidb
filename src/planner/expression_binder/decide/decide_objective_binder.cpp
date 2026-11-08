@@ -34,16 +34,8 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (!when) {
 		return BindResult(std::move(bound));
 	}
-	ErrorData condition_error;
 	is_top_expression = false;
-	binding_when_condition = true;
-	try {
-		BindChild(when->children[1], depth, condition_error);
-	} catch (...) {
-		binding_when_condition = false;
-		throw;
-	}
-	binding_when_condition = false;
+	auto condition_error = BindDataChild(when->children[1], depth);
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
 	}

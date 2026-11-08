@@ -44,12 +44,9 @@ static bool IsSupportedComparison(ExpressionType type) {
 
 //! Does this side of a comparison constrain a decision at all?
 //!
-//! This used to be `IsDecideConstraintLHS`, and the name was the whole problem: it
-//! gated a *position*, so the binder required the DECIDE expression on the left and
-//! flipped the comparison when it was not (the canonicalization refactor). Which side a term
-//! belongs on is DecideCanonicalizer's decision, and it makes the same flip itself on
-//! the bound tree -- so the question here is side-agnostic, and a comparison is a
-//! constraint when EITHER side answers yes.
+//! Which side a term belongs on is DecideCanonicalizer's decision, made on the bound tree --
+//! so the question here is side-agnostic, and a comparison is a constraint when EITHER side
+//! answers yes.
 static bool IsDecideSide(DecideExpression type) {
     return type != DecideExpression::INVALID;
 }
@@ -85,14 +82,9 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                 if (func.function_name == QUALIFIED_REDUCER_TAG || func.function_name == REDUCER_BY_TAG) {
                     return !func.children.empty() && IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
                 }
-                // `-` used to be refused outright while `+` was allowed. Nothing
-                // downstream needs that asymmetry: a bound is evaluated as an
-                // expression over the row, so subtraction and negation compose from
-                // allowed operands exactly like addition does. The ban dated from the
-                // parsed-level symbolic layer, which moved terms across the comparison
-                // and is gone. It also refused `-5.0::DOUBLE`, where the minus is the
-                // literal's own sign, so a negative bound could not be written with a
-                // cast at all.
+                // A bound is evaluated as an expression over the row, so subtraction and
+                // negation compose from allowed operands exactly like addition does
+                // (`-5.0::DOUBLE` is a negative bound).
                 if (!IsAllowedOperatorChildren(func.children, variables)) {
                     return false;
                 }
@@ -172,20 +164,13 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
 		return UnsupportedConstraint(expr);
 	}
 
-    // This function no longer rewrites the parsed tree at all. It used to do two
-    // things beyond validating: flip the sides (the canonicalization refactor), and strip
-    // an `expr + 0` residue from the right side that the parsed-level symbolic
-    // layer left behind. That layer was deleted for constraints at C.4, so nothing
-    // rewrites a constraint before binding any more; a probe confirmed the strip
-    // never fired across the golden corpus or the suite, and it went at C.2.
+    // This function validates and never rewrites the parsed tree.
 
     // Classify BOTH sides. The comparison is a constraint when either one is a
     // DECIDE expression -- `SUM(x) <= cap` and `cap >= SUM(x)` are the same
     // constraint, and so are `x <= 5` and `5 >= x`. Nothing here rewrites the
     // comparison to make that true: DecideCanonicalizer swaps the sides on the
-    // BOUND tree when every decision term sits on the right (the canonicalization refactor),
-    // so a second, earlier, parsed-level flip was the last of the five duplicate
-    // shape decisions the canonicalization plan exists to remove.
+    // BOUND tree when every decision term sits on the right, so shape is decided once.
     string left_error, right_error;
     auto left_type = GetExpressionType(*comp.left, left_error);
     auto right_type = GetExpressionType(*comp.right, right_error);
@@ -327,16 +312,8 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	// The condition takes data only (ValidateDecideScopeSpellings): plain SQL, no
 	// parentheses needed around a compound one.
 	auto bind_condition = [&](unique_ptr<ParsedExpression> &parsed, unique_ptr<Expression> &bound) {
-		ErrorData error;
 		is_top_expression = false;
-		binding_when_condition = true;
-		try {
-			BindChild(parsed, depth, error);
-		} catch (...) {
-			binding_when_condition = false;
-			throw;
-		}
-		binding_when_condition = false;
+		auto error = BindDataChild(parsed, depth);
 		if (!error.HasError()) {
 			bound = BoundCastExpression::AddCastToType(context, std::move(BoundExpression::GetExpression(*parsed)),
 			                                           LogicalType::BOOLEAN);

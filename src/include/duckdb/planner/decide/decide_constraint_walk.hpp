@@ -15,12 +15,8 @@
 // wrong rather than loudly wrong.
 //
 // So every pass over the tree has to know the same rule: at a wrapper, descend only
-// into child 0. That rule used to be retyped as
-// `HasDecideTag(alias, WHEN_FILTER_TAG) || IsTwoLevelObjectiveTag(alias)` at fifteen
-// sites, which meant a third wrapper kind would have to be found at all fifteen --
-// and the one that got missed would start walking a condition as a constraint.
-//
-// It is stated once here instead. Every site asks the predicate, INCLUDING the
+// into child 0. The rule is stated once, here, so that a third wrapper kind is added in
+// one place and no site starts walking a condition as a constraint. Every site asks the predicate, INCLUDING the
 // handful that deliberately act differently on the answer: singleton-row folding refuses
 // to descend into a `when` at all (a conditional bound must not become a global one).
 // Those pass their own descent but not their own definition of what a wrapper is,

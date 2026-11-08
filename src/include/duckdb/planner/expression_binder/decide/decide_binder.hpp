@@ -144,7 +144,7 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 //! The companion to the validator above, and the same refusal: that one reads the
 //! decision's declared type off the DECIDE clause, this one reads every other operand's
 //! type off the bound tree. Together they are the whole of the integrality gate — the
-//! model builder no longer refuses anything a user can cause.
+//! model builder refuses nothing a user can cause.
 //!
 //! **This is a type judgement, not a value judgement.** A `DECIMAL(15,2)` column whose
 //! rows all happen to hold whole numbers is still refused, because the alternative makes
@@ -184,7 +184,7 @@ protected:
     //! `ExpressionBinder::Bind` does this at its own entry point, but the DECIDE
     //! binders dispatch through `BindExpression`, which bypasses it. The bound tree
     //! therefore reached the post-binding validators with no location, and every
-    //! refusal raised on it — the integrality gate, and now the degree gate — printed
+    //! refusal raised on it — the integrality gate and the degree gate — printed
     //! without the `LINE`/caret that makes a long SUCH THAT clause navigable.
     //! Applied in each `BindExpression` override, which is where the recursion enters
     //! a node, so inner nodes keep their own location rather than the root's.
@@ -250,10 +250,13 @@ protected:
     //! left-hand side and a MAXIMIZE/MINIMIZE objective accept different shapes).
     bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg);
 
+    //! Binds a data expression (a `when` condition, a `by` key element) through the base ExpressionBinder, which
+    //! bypasses DECIDE-specific dispatch since neither may reference a DECIDE variable. The error, if any, is
+    //! returned.
+    ErrorData BindDataChild(unique_ptr<ParsedExpression> &expr, idx_t depth);
+
     bool is_top_expression;
-    //! Set while binding a `when` condition or a `per` column: both bypass DECIDE-specific
-    //! dispatch and bind through the base ExpressionBinder instead, since neither may
-    //! reference a DECIDE variable.
+    //! Set while BindDataChild binds.
     bool binding_when_condition = false;
     case_insensitive_map_t<idx_t> variables;
     //! Subset of `variables` that are query-wide (`per (): x`).

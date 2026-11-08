@@ -694,9 +694,7 @@ public:
     //! This is the single place that
     //! knows LogicalDecide's expression layout -- generic DuckDB passes (the
     //! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
-    //! call through it instead of each re-listing these fields by hand, which is how
-    //! a field (composed_minmax_*) previously went missing
-    //! from one visitor while another already had it.
+    //! call through it instead of each re-listing these fields by hand, so no visitor can miss one.
     void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
 	//! aggregates the path has not built yet (bound_aggregates).

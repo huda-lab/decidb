@@ -93,12 +93,9 @@
 // reducer by a helper decision). Only a decision on the bound side and the shapes
 // ClassifyScoped names in its refusal are rejected.
 //
-// K1 is now load-bearing rather than advisory. The physical operator's duplicate
-// partition logic (its per-row branch and lhs_offset_expr) was deleted at
-// the canonicalization refactor after being verified unreachable across the golden corpus
-// and the full suite; what stands in its place is a check that throws when a
-// decision variable reaches the RHS. So a rewrite that breaks K1 now fails
-// loudly instead of being silently folded -- but it does fail. Any new
+// K1 is load-bearing: the physical operator has no partition logic of its own, and a
+// check throws when a decision variable reaches the RHS. So a rewrite that breaks K1
+// fails loudly instead of being silently folded. Any new
 // optimizer pass that mutates a constraint in place must go through
 // LogicalDecide::AddConstraint (which canonicalizes) rather than editing the
 // tree directly.
@@ -127,9 +124,8 @@ class BoundFunctionExpression;
 
 //! One-level reducer scale consumed after canonicalization. Exactly two spellings
 //! reach any consumer -- `factor * AGG` and `AGG / factor` -- because BuildAdditive
-//! re-attaches every peeled factor on the LEFT. Objectives used to additionally admit
-//! `AGG * factor`, which is what an unnormalized clause looks like; they go through
-//! CanonicalizeObjective now, so that third spelling no longer exists.
+//! re-attaches every peeled factor on the LEFT; objectives go through CanonicalizeObjective, so
+//! `AGG * factor` (an unnormalized clause) never reaches a consumer.
 struct ScaledAggregateMatch {
 	const BoundAggregateExpression *aggregate = nullptr;
 	const Expression *scale = nullptr;
@@ -306,11 +302,9 @@ public:
 	//! to exercise the rest.
 	void VerifyCanonical(const Expression &constraints) const;
 
-	//! The objective counterpart of VerifyCanonical. Step 6 shipped the constraint
-	//! verifier with objectives explicitly not inspected, because objectives had no
-	//! canonical form to check against; CanonicalizeObjective gives them one.
-	//! Non-mutating, and throws InternalException for the same reason: past this
-	//! boundary a non-canonical objective is an engine bug, not user input.
+	//! The objective counterpart of VerifyCanonical, against the canonical form
+	//! CanonicalizeObjective gives an objective. Non-mutating, and throws InternalException for the same reason:
+	//! past this boundary a non-canonical objective is an engine bug, not user input.
 	//!
 	//! DEBUG-ONLY -- see VerifyCanonical.
 	void VerifyCanonicalObjective(const Expression &objective) const;
@@ -328,13 +322,8 @@ private:
 	//!   RIGHT   everything else: constants, per-row columns, and data-only
 	//!           reducers alike -- must be on the bound side
 	//!
-	//! There used to be a third case, NEUTRAL, for a data-only reducer: it carries
-	//! no decision variable so it need not be on the left, but it collapses rows to
-	//! one value so it is a legitimate bound and need not be on the right either.
-	//! That was scaffolding for a right-hand side that could not evaluate one
-	//! (D8). B.5 built the evaluator, so K1 now means what it should -- decisions
-	//! left, data right -- rather than the half-rule that left data floating on
-	//! both sides.
+	//! A data-only reducer is RIGHT: the right-hand side evaluates any DuckDB aggregate over its
+	//! groups, so K1 reads decisions left, data right, with no third case.
 	enum class Placement : uint8_t { LEFT, RIGHT };
 
 	//! One additive term of a comparison side. `expr` is borrowed from the input
@@ -501,12 +490,11 @@ private:
 	                              unique_ptr<Expression> right) const;
 	//! Unary form, for the leading negative term of a rebuilt spine.
 	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> operand) const;
-	unique_ptr<Expression> BindOp(const string &name, vector<unique_ptr<Expression>> children) const;
 
 	ClientContext &context;
 	idx_t decide_index;
 	//! Scope assignment indexed by decide-column index. Missing entries fail safe
-	//! as row-scoped, which is also the historical default for old plans.
+	//! as row-scoped.
 	vector<DecideVarScopeInfo> variable_scopes;
 	//! The key of each decision column's scope (JoinDecideKeys): the empty key for a query-wide decision, its key for
 	//! a keyed one, DECIDE_ROW_KEY for one per row. Missing entries are per row.

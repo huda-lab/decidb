@@ -10,6 +10,7 @@
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -973,24 +974,13 @@ unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_pt
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
-	return BindOp(name, std::move(children));
+	return DecideRebindOperator(context, name, std::move(children));
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> operand) const {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(operand));
-	return BindOp(name, std::move(children));
-}
-
-unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name,
-                                                   vector<unique_ptr<Expression>> children) const {
-	FunctionBinder function_binder(context);
-	ErrorData error;
-	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
-	if (error.HasError()) {
-		throw InternalException("DECIDE canonicalizer failed to bind '%s': %s", name, error.Message());
-	}
-	return result;
+	return DecideRebindOperator(context, name, std::move(children));
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &atoms, bool negate) const {
@@ -1131,10 +1121,9 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	}
 
 	// Decision terms on BOTH sides. Migrating the right-hand ones left negates
-	// them, which is only sound because the two downstream analyses that used to
-	// classify by syntactic position now consult sign: ABS Big-M pinning
-	// (ClassifyAbsConstraints) and composed MIN/MAX easy-vs-hard (WalkComposedLhs).
-	// Both were made sign-aware before this branch was allowed to fall through.
+	// them, which is only sound because the two downstream analyses consult sign, not
+	// syntactic position: ABS Big-M pinning (ClassifyAbsConstraints) and composed MIN/MAX
+	// easy-vs-hard (WalkComposedLhs).
 
 	// General partition: decision terms migrate left, everything else migrates
 	// right. A term that crosses the relation flips sign.
@@ -1742,6 +1731,27 @@ static bool KeyHolds(const DecideScopeChecks &scope, idx_t key, const DecideVarS
 	return true;
 }
 
+//! A check for each of `decisions` that `key` does not determine by construction (KeyHolds). `state_scope` adds the
+//! decision's declared scope to the check's context.
+template <class MAKE_CHECK>
+static void AddDecisionChecks(const vector<const BoundColumnRefExpression *> &decisions, idx_t key,
+                              const vector<DecideVarScopeInfo> &variable_scopes, bool state_scope,
+                              MAKE_CHECK &&make_check, DecideScopeChecks &scope) {
+	for (auto *decision : decisions) {
+		auto var_idx = decision->binding.column_index;
+		if (KeyHolds(scope, key, variable_scopes[var_idx])) {
+			continue;
+		}
+		auto check = make_check();
+		check.decision = var_idx;
+		check.object = decision->GetName();
+		if (state_scope) {
+			check.context = DeclaredScope(variable_scopes[var_idx]);
+		}
+		scope.checks.push_back(std::move(check));
+	}
+}
+
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
 	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
@@ -1780,16 +1790,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 		check.object = RenderDecideSource(*value, names);
 		scope.checks.push_back(std::move(check));
 	}
-	for (auto *decision : body.decisions) {
-		auto var_idx = decision->binding.column_index;
-		if (KeyHolds(scope, key, variable_scopes[var_idx])) {
-			continue;
-		}
-		auto check = make_check();
-		check.decision = var_idx;
-		check.object = decision->GetName();
-		scope.checks.push_back(std::move(check));
-	}
+	AddDecisionChecks(body.decisions, key, variable_scopes, false, make_check, scope);
 }
 
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
@@ -1824,17 +1825,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 			check.object = RenderDecideSource(*value, names);
 			scope.checks.push_back(std::move(check));
 		}
-		for (auto *decision : parts.decisions) {
-			auto var_idx = decision->binding.column_index;
-			if (KeyHolds(scope, key, variable_scopes[var_idx])) {
-				continue;
-			}
-			auto check = make_check();
-			check.decision = var_idx;
-			check.object = decision->GetName();
-			check.context = DeclaredScope(variable_scopes[var_idx]);
-			scope.checks.push_back(std::move(check));
-		}
+		AddDecisionChecks(parts.decisions, key, variable_scopes, true, make_check, scope);
 		for (auto *reducer : parts.reducers) {
 			idx_t group_key;
 			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key) || group_key >= scope.keys.size()) {
@@ -1894,17 +1885,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		check.object = RenderDecideSource(*value, names);
 		scope.checks.push_back(std::move(check));
 	}
-	for (auto *decision : parts.decisions) {
-		auto var_idx = decision->binding.column_index;
-		if (KeyHolds(scope, DConstants::INVALID_INDEX, variable_scopes[var_idx])) {
-			continue;
-		}
-		auto check = make_check();
-		check.decision = var_idx;
-		check.object = decision->GetName();
-		check.context = DeclaredScope(variable_scopes[var_idx]);
-		scope.checks.push_back(std::move(check));
-	}
+	AddDecisionChecks(parts.decisions, DConstants::INVALID_INDEX, variable_scopes, true, make_check, scope);
 	for (auto *reducer : parts.reducers) {
 		idx_t group_key;
 		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key) && group_key < scope.keys.size()) {

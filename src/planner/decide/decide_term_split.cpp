@@ -31,8 +31,7 @@ unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string
 	ErrorData error;
 	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
 	if (error.HasError()) {
-		throw InternalException("DECIDE failed to rebind '%s' while rebuilding a coefficient: %s", name,
-		                        error.Message());
+		throw InternalException("DECIDE failed to bind '%s': %s", name, error.Message());
 	}
 	return result;
 }

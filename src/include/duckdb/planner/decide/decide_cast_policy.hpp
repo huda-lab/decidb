@@ -13,11 +13,8 @@
 // that takes an expression apart reaches a BoundCastExpression and has to decide
 // whether to look through it.
 //
-// Historically each walker decided for itself: a census found 45 unwrap sites,
-// 42 of them independent, including three byte-identical helpers in different
-// files. Only 12 carried any guard. Every unguarded one was a place a
-// value-changing cast could be dropped silently, which is why cast bugs kept
-// recurring in different shapes rather than staying fixed.
+// A walker that decides for itself is a place a value-changing cast can be dropped
+// silently, so the decision is made once, here.
 //
 // THE POLICY. DECIDE carries ONE numeric domain: DOUBLE. That is not a choice
 // made here -- `solver_input.hpp` hands the backend `vector<double>` for every

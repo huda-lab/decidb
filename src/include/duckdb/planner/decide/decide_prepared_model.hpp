@@ -188,8 +188,7 @@ struct DecideObjective {
 //! LogicalDecide and moved into PhysicalDecide at physical planning.
 //!
 //! `objective` is null when the query has no objective, or when the objective
-//! is neither an aggregate nor a query-wide decision -- the same two cases in
-//! which physical analysis used to leave its `objective` pointer unset.
+//! is neither an aggregate nor a query-wide decision.
 struct DecidePreparedModel {
 	vector<unique_ptr<DecideConstraint>> constraints;
 	//! Scoped bounds the optimizer folded into a column box (SINGLETON_ROW_BOUND_TAG). The box

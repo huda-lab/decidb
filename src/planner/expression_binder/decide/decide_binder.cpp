@@ -1078,9 +1078,7 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 		                 ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
 		                   "whole numbers"
 		                 : "stepping the bound is exact only on whole numbers";
-		// Pass the comparison so the message carries a caret. The bound tree only started
-		// carrying source locations when DecideBinder::BindExpression began stamping them;
-		// before that these two throws named no node because there was nothing to name.
+		// Pass the comparison so the message carries a caret (DecideBinder::BindExpression stamps locations).
 		if (bad.is_castable_column) {
 			throw BinderException(
 			    comp,
@@ -1201,6 +1199,19 @@ BindResult DecideBinder::TagWrittenColumn(optional_idx location, BindResult resu
 	AddDecideTag(alias, MakeSourceFragmentTag(qualifier_context->source_fragments->size() - 1));
 	result.expression->SetAlias(std::move(alias));
 	return result;
+}
+
+ErrorData DecideBinder::BindDataChild(unique_ptr<ParsedExpression> &expr, idx_t depth) {
+	ErrorData error;
+	binding_when_condition = true;
+	try {
+		BindChild(expr, depth, error);
+	} catch (...) {
+		binding_when_condition = false;
+		throw;
+	}
+	binding_when_condition = false;
+	return error;
 }
 
 BindResult DecideBinder::PreserveQueryLocation(optional_idx location, BindResult result) {
@@ -1496,15 +1507,7 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 	if (condition) {
 		// The condition takes data only (ValidateDecideScopeSpellings), so it binds as plain
 		// SQL: a compound condition needs no parentheses.
-		ErrorData condition_error;
-		binding_when_condition = true;
-		try {
-			BindChild(condition, depth, condition_error);
-		} catch (...) {
-			binding_when_condition = false;
-			throw;
-		}
-		binding_when_condition = false;
+		auto condition_error = BindDataChild(condition, depth);
 		if (condition_error.HasError()) {
 			return BindResult(std::move(condition_error));
 		}
@@ -1556,15 +1559,7 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 			}
 		}
 		auto name = element->ToString();
-		ErrorData key_error;
-		binding_when_condition = true;
-		try {
-			BindChild(element, depth, key_error);
-		} catch (...) {
-			binding_when_condition = false;
-			throw;
-		}
-		binding_when_condition = false;
+		auto key_error = BindDataChild(element, depth);
 		if (key_error.HasError()) {
 			return BindResult(std::move(key_error));
 		}
