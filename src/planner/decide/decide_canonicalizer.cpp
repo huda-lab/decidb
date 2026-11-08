@@ -177,8 +177,7 @@ DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_in
                                          vector<DecideVarScopeInfo> variable_scopes_p,
                                          const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, keyed_scopes)), boolean_decisions(is_boolean),
-      judge_column_refs(false) {
+      decision_keys(DecisionKeys(variable_scopes, keyed_scopes)), boolean_decisions(is_boolean) {
 }
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
@@ -1246,14 +1245,6 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		out_constant_offset += atom.sign * value;
 	}
 
-	// Every term was decision-free despite the subtree containing a decision
-	// reference -- only reachable if Classify and ReferencesDecideVar disagree, which
-	// is an engine bug rather than a user error.
-	if (decision_atoms.empty()) {
-		throw InternalException(
-		    "DECIDE canonicalizer: objective references a decision but decomposed into no "
-		    "decision-bearing term");
-	}
 	auto result = BuildAdditive(decision_atoms, false);
 	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
 	// reducer in a helper decision, and the product with it is a Boolean product.
@@ -1414,7 +1405,6 @@ void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints) c
 	auto validate = [&](const Expression &expression) {
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			ValidateCanonicalComparison(expression.Cast<BoundComparisonExpression>());
-			return true;
 		}
 		return true;
 	};
@@ -1792,7 +1782,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	}
 	for (auto *decision : body.decisions) {
 		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && KeyHolds(scope, key, variable_scopes[var_idx])) {
+		if (KeyHolds(scope, key, variable_scopes[var_idx])) {
 			continue;
 		}
 		auto check = make_check();
@@ -1836,14 +1826,13 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 		}
 		for (auto *decision : parts.decisions) {
 			auto var_idx = decision->binding.column_index;
-			if (var_idx < variable_scopes.size() && KeyHolds(scope, key, variable_scopes[var_idx])) {
+			if (KeyHolds(scope, key, variable_scopes[var_idx])) {
 				continue;
 			}
 			auto check = make_check();
 			check.decision = var_idx;
 			check.object = decision->GetName();
-			check.context =
-			    var_idx < variable_scopes.size() ? DeclaredScope(variable_scopes[var_idx]) : string("declared per row");
+			check.context = DeclaredScope(variable_scopes[var_idx]);
 			scope.checks.push_back(std::move(check));
 		}
 		for (auto *reducer : parts.reducers) {
@@ -1907,14 +1896,13 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	}
 	for (auto *decision : parts.decisions) {
 		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && KeyHolds(scope, DConstants::INVALID_INDEX, variable_scopes[var_idx])) {
+		if (KeyHolds(scope, DConstants::INVALID_INDEX, variable_scopes[var_idx])) {
 			continue;
 		}
 		auto check = make_check();
 		check.decision = var_idx;
 		check.object = decision->GetName();
-		check.context =
-		    var_idx < variable_scopes.size() ? DeclaredScope(variable_scopes[var_idx]) : string("declared per row");
+		check.context = DeclaredScope(variable_scopes[var_idx]);
 		scope.checks.push_back(std::move(check));
 	}
 	for (auto *reducer : parts.reducers) {
