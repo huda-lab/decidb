@@ -45,22 +45,10 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Needs (owner, 2026-10-29).** A rule that takes the shape (A3 or A4, `../todo.md`): read into the IR with no rule
   taking it, the objective's reading would be reached only by an IR test.
 
-## H-08 — VALUE-shape clauses (helper decisions)
-
-- **Decision needed.** The rule and clause shape this is for. No rule's definition takes a VALUE-shape clause, so
-  reading the helper into the IR alone reaches no code.
-- **Problem.** `ReadConstraint` (`direct_ir.cpp`) declines a leaf tagged `VALUE_REWRITE_TAG`. The solver builds a
-  helper decision from `reducer_value_links`.
-- **Options.** 1. Leave it until a rule names the shape it needs; the task then becomes that rule's. 2. The owner names
-  a rule and shape now.
-- **Recommendation.** 1.
-- **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
-- **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
-
 ## H-48 — A2 computes a class's answer once per row, and a query-wide window runs on one thread
 
-- **Decision needed.** Whether a rule that repeats one answer per class computes it once per class and joins it back,
-  in place of a window that repeats the class's sums on every row.
+- **Ruling (owner, 2026-11-08).** A rule that repeats one answer per class computes it once per class and joins it
+  back (option 1), in place of a window that repeats the class's sums on every row.
 - **Problem.** A2's plan (and N1's, the same aggregate-then-repeat shape) puts the class's sums in a window, then
   computes the answer, its clamps and its checks in a projection over every row: one long `CASE` chain evaluated
   800,000 times at `sf=1` for one query-wide answer. A window with no `PARTITION BY` also hands its rows to a single
@@ -80,7 +68,7 @@ solver path answers those queries, so none of them is wrong, only slower.
      still runs on every row first. Plain-SQL sizing at `sf=1` with a light answer: 26 ms against 3 to 4 ms
      query-wide, 15 ms against 7 ms keyed.
   2. Keep the window and leave it. Cost: A2's query-wide squared loss stays slower than the solver.
-- **Recommendation.** 1, as a shared plan fragment beside `DirectProjectScope` and `DirectWindowSink`, taken by A2
+- **Change.** Option 1, as a shared plan fragment beside `DirectProjectScope` and `DirectWindowSink`, taken by A2
   here; N1, S1 and R1 follow in H-49. It changes A2's plan skeleton's W and P4 stages, not any loss.
 - **Done when.** `a2` runs faster on all threads than on one and is ahead of Gurobi at every size
   (`benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs`), and the matrix passes
