@@ -98,7 +98,7 @@ static bool IsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	return StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1 &&
+	return StringUtil::CIEquals(func.function.name, "abs") &&
 	       BoundExpressionReferencesDecide(*func.children[0], decide_index);
 }
 
@@ -235,9 +235,6 @@ static void ClassifyAbsObjective(ClientContext &context, Expression &objective, 
 	Expression *body = &objective;
 	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = body->Cast<BoundConjunctionExpression>();
-		if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
-			break;
-		}
 		body = conjunction.children[0].get();
 	}
 	const int pinning_sign = sense == DecideSense::MINIMIZE ? 1 : -1;
@@ -251,9 +248,7 @@ static void ClassifyAbsObjective(ClientContext &context, Expression &objective, 
 }
 
 void decide_rewrite::TagAbsForBigM(ClientContext &context, LogicalDecide &decide) {
-	if (decide.decide_constraints) {
-		ClassifyAbsConstraints(context, *decide.decide_constraints, decide.decide_index);
-	}
+	ClassifyAbsConstraints(context, *decide.decide_constraints, decide.decide_index);
 	if (decide.decide_objective) {
 		ClassifyAbsObjective(context, *decide.decide_objective, decide.decide_index, decide.decide_sense);
 	}
@@ -270,10 +265,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	vector<AbsPairInfo> abs_pairs;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.is_boolean_var);
-	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope(),
-		                  nullptr);
-	}
+	FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope(),
+	                  nullptr);
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		FindAndReplaceAbs(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope(),
@@ -455,9 +448,6 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
                                         const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
                                         const string &source_alias, DecideEnclosingScope scope,
                                         const Expression *reducer_when) {
-	if (!expr) {
-		return;
-	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 	scope = EnterDecideScope(*expr, scope);
 
@@ -480,7 +470,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 		// in ilp_model_builder would reject valid integer-valued strict cases.
 		// A copy: the argument is rewritten below, and the node it was may go.
 		const LogicalType inner_type = func.children[0]->return_type;
-		bool inner_is_integer = inner_type.IsIntegral() || inner_type.id() == LogicalTypeId::BOOLEAN;
+		bool inner_is_integer = inner_type.IsIntegral();
 		LogicalType aux_type = inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
 		// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner) --
