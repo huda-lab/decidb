@@ -119,14 +119,10 @@ string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, co
 //! RenderDecideSource. Used by the logical and
 //! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
 //! includes the rows linearization emitted as well as the ones the user wrote.
-//! `sources`, when supplied, lets a comparison that canonicalization rewrote print as
-//! the user wrote it instead of as the algebra stage 04 produced. Optional so callers
-//! without the registry keep the plain canonical rendering.
 //! `out_source_ids`, when supplied, receives the source_clause_id behind each emitted
 //! string -- DConstants::INVALID_INDEX for a row no clause claims. This is what lets a
 //! caller group the post-optimizer rows under the clause they came from.
 void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                    const vector<ConstraintSourceInfo> *sources = nullptr,
                                     vector<idx_t> *out_source_ids = nullptr);
 
 //! Render a whole objective tree as one display string.
@@ -234,7 +230,7 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 	if (op.decide_objective) {
 		string sense_prefix = (op.decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs, nullptr, nullptr);
+		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs);
 		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
 		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
 		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its

@@ -41,10 +41,6 @@ void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments)
 	if (expr.GetExpressionClass() != ExpressionClass::CAST && expr.GetExpressionClass() != ExpressionClass::SUBQUERY) {
 		return;
 	}
-	idx_t existing;
-	if (TryParseSourceFragmentTag(expr.GetAlias(), existing)) {
-		return;
-	}
 	idx_t fragment_id = fragments.size();
 	fragments.push_back(expr.ToString());
 	auto alias = expr.GetAlias();
@@ -109,16 +105,6 @@ const Expression &DecideUnguarded(const Expression &expr) {
 	return *expr.Cast<BoundOperatorExpression>().children[0];
 }
 
-//! A column name as SQL spells it: quoted where it would otherwise not parse -- a
-//! keyword of DuckDB's, or of the DECIDE clause (`per`, `row`), or a name with spaces.
-static string QuoteDecideIdentifier(const string &name) {
-	auto lower = StringUtil::Lower(name);
-	if (lower == "per" || lower == "row") {
-		return KeywordHelper::WriteQuoted(name, '"');
-	}
-	return KeywordHelper::WriteOptionallyQuoted(name);
-}
-
 //! The binary arithmetic operator `expr` applies, looking through the casts the binder
 //! inserted (which print as nothing); empty for anything else.
 static string BinaryOperatorOf(const Expression &expr) {
@@ -170,7 +156,7 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 	if (func.is_operator && func.children.size() == 1) {
 		return name + "(" + RenderSource(*func.children[0], ctx) + ")";
 	}
-	if (func.is_operator && func.children.size() == 2) {
+	if (func.is_operator) {
 		return "(" + RenderSource(*func.children[0], ctx) + " " + name + " " + RenderSource(*func.children[1], ctx) +
 		       ")";
 	}
@@ -193,8 +179,7 @@ static string MinMaxCarrierName(const BoundAggregateExpression &agg) {
 	if (!ExtractDecideTagPayload(agg.GetAlias(), MINMAX_CLAUSE_TAG_PREFIX, payload)) {
 		return string();
 	}
-	auto sep = payload.find('_');
-	return sep == string::npos ? string() : payload.substr(sep + 1);
+	return payload.substr(payload.find('_') + 1);
 }
 
 //! The order a `norm` marker carries (`1`, `2`, `inf`, `0_auto`, `0_<m>`) as the user
@@ -211,11 +196,7 @@ static string NormOrder(const BoundAggregateExpression &agg) {
 		}
 	} else {
 		auto begin = marker_pos + strlen(NORM_MARKER_TAG_PREFIX);
-		auto end = agg.GetAlias().find("__", begin);
-		if (end == string::npos) {
-			return string();
-		}
-		payload = agg.GetAlias().substr(begin, end - begin);
+		payload = agg.GetAlias().substr(begin, agg.GetAlias().find("__", begin) - begin);
 	}
 	if (payload == "0_auto") {
 		return "0";
@@ -253,10 +234,7 @@ static string RenderWrittenWhen(const Expression &filter, const RenderContext &c
 	string written;
 	if (filter.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 		for (auto &child : filter.Cast<BoundConjunctionExpression>().children) {
-			auto part = RenderWrittenWhen(*child, ctx);
-			if (!part.empty()) {
-				written += (written.empty() ? "" : " AND ") + part;
-			}
+			written += RenderWrittenWhen(*child, ctx);
 		}
 	}
 	return written;
@@ -265,7 +243,7 @@ static string RenderWrittenWhen(const Expression &filter, const RenderContext &c
 //! A reducer's `by` key as it wrote it, else as the key it shares was first written.
 static string ByText(const BoundAggregateExpression &agg, const RenderContext &ctx, idx_t group_key) {
 	idx_t fragment_id;
-	if (TryParseGroupKeyTextTag(agg.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
+	if (TryParseGroupKeyTextTag(agg.GetAlias(), fragment_id)) {
 		return ctx.fragments[fragment_id];
 	}
 	return (*ctx.keys)[group_key].text;
@@ -283,24 +261,21 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	}
 	auto order = NormOrder(agg);
 	auto carrier = MinMaxCarrierName(agg);
-	if (carrier.empty() && order.empty() && agg.children.empty() &&
-	    StringUtil::CIEquals(agg.function.name, "count_star")) {
+	if (carrier.empty() && order.empty() && agg.children.empty()) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
-		bool has_by =
-		    ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size();
-		return (scope.empty() ? "count(*)" : "sum(" + scope + ": 1)") +
-		       (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
+		bool has_by = ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key);
+		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
 	string result = (!carrier.empty() ? carrier
 	                 : order.empty()  ? StringUtil::Lower(agg.function.name)
 	                                  : string("norm")) +
 	                "(";
 	idx_t scope_idx;
-	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < ctx.keyed_scopes.size()) {
+	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx)) {
 		auto key_text = DecideKeyText(*ctx.keys, ctx.keyed_scopes[scope_idx].key);
 		idx_t text_fragment;
-		if (TryParseQualifiedReducerTextTag(agg.GetAlias(), text_fragment) && text_fragment < ctx.fragments.size()) {
+		if (TryParseQualifiedReducerTextTag(agg.GetAlias(), text_fragment)) {
 			key_text = ctx.fragments[text_fragment]; // the key as this reducer wrote it
 		}
 		if (HasDecideTag(agg.GetAlias(), COLON_FORM_TAG)) {
@@ -311,20 +286,14 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
-	if (ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size()) {
+	if (ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key)) {
 		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
 	return result;
 }
 
 static string RenderAggregate(const BoundAggregateExpression &agg, const RenderContext &ctx) {
-	string body;
-	for (idx_t i = 0; i < agg.children.size(); i++) {
-		if (i > 0) {
-			body += ", ";
-		}
-		body += RenderSource(*agg.children[i], ctx);
-	}
+	string body = agg.children.empty() ? string() : RenderSource(*agg.children[0], ctx);
 	// A norm's definition reads as written, `norm(e, p)`.
 	if (auto written_body = DecideWrittenNormBody(agg)) {
 		body = RenderSource(*written_body, ctx);
@@ -366,8 +335,8 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 template <class CALLBACK>
 static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
-		if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
-		    node.type == ExpressionType::COMPARE_IN) {
+		// The constraint binder admits no other operator as a clause.
+		if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 			callback(node);
 		}
 	});
@@ -375,10 +344,10 @@ static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
 	idx_t fragment_id;
-	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
+	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id)) {
 		return ctx.fragments[fragment_id];
 	}
-	if (ctx.written && TryParseWrittenTermTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
+	if (ctx.written && TryParseWrittenTermTag(expr.GetAlias(), fragment_id)) {
 		// The text the parser cut excludes the parentheses around it, so it takes them where its operator needs them.
 		int precedence = ArithmeticPrecedence(BinaryOperatorOf(expr));
 		auto &text = ctx.fragments[fragment_id];
@@ -413,7 +382,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		}
 		auto name = StripDecideTags(colref.GetName());
 		if (!name.empty()) {
-			return QuoteDecideIdentifier(name);
+			return KeywordHelper::WriteOptionallyQuoted(name);
 		}
 		break;
 	}
@@ -421,7 +390,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		// A column the physical plan resolved to a chunk position keeps its name as alias.
 		auto name = StripDecideTags(expr.GetAlias());
 		if (!name.empty()) {
-			return QuoteDecideIdentifier(name);
+			return KeywordHelper::WriteOptionallyQuoted(name);
 		}
 		break;
 	}
@@ -438,11 +407,11 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 			if (i > 0) {
 				result += op;
 			}
-			// AND binds tighter than OR: an OR under an AND keeps its parentheses.
+			// AND binds tighter than OR: an OR under an AND keeps its parentheses. The parser flattens an AND under
+			// an AND, so a conjunction under an AND is an OR.
 			auto &child = *conj.children[i];
 			bool nested_or = conj.type == ExpressionType::CONJUNCTION_AND &&
-			                 child.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-			                 child.type == ExpressionType::CONJUNCTION_OR;
+			                 child.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION;
 			auto rendered = RenderSource(child, ctx);
 			result += nested_or ? "(" + rendered + ")" : rendered;
 		}
@@ -505,7 +474,7 @@ static string PerClassQualifier(const BoundConjunctionExpression &conj, const ve
 static string WrittenWhen(const BoundConjunctionExpression &conj, const vector<string> &fragments,
                           const vector<KeyedScopeInfo> &keyed_scopes) {
 	idx_t fragment_id;
-	if (TryParseSourceFragmentTag(conj.GetAlias(), fragment_id) && fragment_id < fragments.size()) {
+	if (TryParseSourceFragmentTag(conj.GetAlias(), fragment_id)) {
 		return fragments[fragment_id];
 	}
 	return RenderSource(*conj.children[1], fragments, keyed_scopes);
@@ -722,10 +691,10 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
 	VisitSourceComparisons(mutable_constraints, fragments, keyed_scopes, DecideEnclosingScope(),
 	                       [&](BoundComparisonExpression &cmp, const string &) {
-		                       idx_t source_id;
-		                       if (!TryParseSourceClauseTag(cmp.GetAlias(), source_id) || source_id >= sources.size()) {
-			                       return;
-		                       }
+		                       // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
+		                       idx_t source_id = DConstants::INVALID_INDEX;
+		                       TryParseSourceClauseTag(cmp.GetAlias(), source_id);
+		                       D_ASSERT(source_id < sources.size());
 		                       auto &info = sources[source_id];
 		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys, true);
 		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys, true);
@@ -737,23 +706,6 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 		                                                info.written_cmp != info.canonical_cmp;
 		                       info.rendered_lhs.clear();
 		                       info.rendered_rhs.clear();
-		                       // The written spelling is only worth carrying when it differs
-		                       // from the canonical one. Two cases retire it here. When both
-		                       // sides render identically nothing moved, so the canonical text
-		                       // already IS the user's. When the sides were merely SWAPPED
-		                       // (`100000 <= SUM(x)` canonicalizing to `SUM(x) >= 100000`) the
-		                       // canonical form is a faithful, better-oriented reading of the
-		                       // same clause, and the repair's offset belongs on the bound it
-		                       // now names -- quoting the written order would put the offset on
-		                       // the wrong side.
-		                       bool unchanged = info.source_lhs == info.canonical_lhs &&
-		                                        info.source_rhs == info.canonical_rhs;
-		                       bool swapped = info.source_lhs == info.canonical_rhs &&
-		                                      info.source_rhs == info.canonical_lhs;
-		                       if (unchanged || swapped) {
-			                       info.source_lhs.clear();
-			                       info.source_rhs.clear();
-		                       }
 		                       if (!IsQueryWideBoundTag(cmp.GetAlias()) &&
 		                           !ContainsSubquerySource(*cmp.right)) {
 			                       info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
@@ -818,8 +770,7 @@ DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, c
                                         const vector<KeyedScopeInfo> &keyed_scopes) {
 	DecideTwoLevelParts parts;
 	parts.body = per.children[0].get();
-	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-	    IsWhenFilterWrapper(parts.body->Cast<BoundConjunctionExpression>())) {
+	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &wrapper = parts.body->Cast<BoundConjunctionExpression>();
 		parts.when = WrittenWhen(wrapper, fragments, keyed_scopes);
 		parts.body = wrapper.children[0].get();
@@ -843,15 +794,12 @@ static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpressi
                                                   const vector<string> &fragments,
                                                   const vector<KeyedScopeInfo> &keyed_scopes) {
 	auto parts = SplitDecideTwoLevel(per, fragments, keyed_scopes);
-	if (parts.body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
 	auto &outer = parts.body->Cast<BoundAggregateExpression>();
-	if (outer.children.size() != 1 || outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return nullptr;
 	}
 	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
-	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], fragments, keyed_scopes);
+	string inner_body = RenderSource(*inner.children[0], fragments, keyed_scopes);
 	auto inner_text =
 	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
 	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
@@ -860,25 +808,20 @@ static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpressi
 
 //! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
 //! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
-//! inner value per class); null when the body is not a single reducer.
-static unique_ptr<string> RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
+//! inner value per class).
+static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
 	auto parts = SplitDecideTwoLevel(per, names.fragments, names.keyed_scopes);
-	if (parts.body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return nullptr;
-	}
 	auto &inner = parts.body->Cast<BoundAggregateExpression>();
 	auto ctx = ContextOf(names);
 	ctx.print_by = false; // the `by` is the per key, written once below
-	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], ctx);
-	return make_uniq<string>(
-	    (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
-	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key));
+	string inner_body = RenderSource(*inner.children[0], ctx);
+	return (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
+	       RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
 }
 
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                     const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids,
-                                     DecideEnclosingScope scope) {
+                                     vector<idx_t> *out_source_ids, DecideEnclosingScope scope) {
 	auto &fragments = names.fragments;
 	auto &keyed_scopes = names.keyed_scopes;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -892,15 +835,8 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 			}
 			// The two-level objective after its rewrite: the inner reducer, once per class,
 			// written in front, with the `by` the form fixes to its `per` key.
-			auto inner = RenderTwoLevelInner(conj, names);
-			if (inner) {
-				PushClause(out, out_source_ids, AppendQualifier(FrontQualifier(front), *inner),
-				           DConstants::INVALID_INDEX);
-				return;
-			}
-			auto keyed = scope;
-			keyed.per_wrapper = &conj;
-			CollectExpressionStrings(*conj.children[0], names, out, sources, out_source_ids, keyed);
+			PushClause(out, out_source_ids, AppendQualifier(FrontQualifier(front), RenderTwoLevelInner(conj, names)),
+			           DConstants::INVALID_INDEX);
 			return;
 		}
 		// A clause's `when c per K:` prints in front. A plain AND is the constraint list itself, so each child is its
@@ -908,14 +844,12 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		auto inner = EnterDecideScope(conj, scope);
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			if (IsConstraintChild(conj, i)) {
-				CollectExpressionStrings(*conj.children[i], names, out, sources, out_source_ids, inner);
+				CollectExpressionStrings(*conj.children[i], names, out, out_source_ids, inner);
 			}
 		}
 		return;
 	}
-	// A clause canonicalization rewrote reads back as it was written, for the same
-	// reason a diagnosis quotes the written form: `ship - capacity * open <= 0` is not
-	// a clause anyone can find in their query. Only set when the two forms differ.
+	// The clause a row came from: its tag, or the objective's for a row a rewrite added for it.
 	idx_t leaf_source_id = DConstants::INVALID_INDEX;
 	if (!TryParseSourceClauseTag(expr.GetAlias(), leaf_source_id) && HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)) {
 		leaf_source_id = OBJECTIVE_ROW_SOURCE_ID;
@@ -929,42 +863,21 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		return;
 	}
 	auto front_qualifier = FrontQualifier(ScopeQualifier(scope, fragments, keyed_scopes));
-	if (sources && expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		if (leaf_source_id != DConstants::INVALID_INDEX && leaf_source_id < sources->size()) {
-			auto &info = (*sources)[leaf_source_id];
-			if (!info.source_lhs.empty()) {
-				auto &cmp = expr.Cast<BoundComparisonExpression>();
-				PushClause(out, out_source_ids,
-				           AppendQualifier(front_qualifier, info.source_lhs + " " + DecideComparisonOperator(cmp.type) +
-				                                                " " + info.source_rhs),
-				           leaf_source_id);
-				return;
-			}
-		}
-	}
 	PushClause(out, out_source_ids, AppendQualifier(front_qualifier, RenderSource(expr, ContextOf(names))),
 	           leaf_source_id);
 }
 
 void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                    const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids) {
-	CollectExpressionStrings(expr, names, out, sources, out_source_ids, DecideEnclosingScope());
+                                    vector<idx_t> *out_source_ids) {
+	CollectExpressionStrings(expr, names, out, out_source_ids, DecideEnclosingScope());
 }
 
 string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names) {
 	vector<string> parts;
-	CollectDecideExpressionStrings(expr, names, parts, nullptr, nullptr);
-	string result;
-	for (auto &part : parts) {
-		if (part.empty()) {
-			continue;
-		}
-		if (!result.empty()) {
-			result += "\n";
-		}
-		result += part;
-	}
-	return result;
+	CollectDecideExpressionStrings(expr, names, parts);
+	// An objective is one clause: its `when` and `per` wrappers hold it in their first child.
+	D_ASSERT(parts.size() == 1);
+	return parts[0];
 }
 
 vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expression> constraints,
@@ -972,13 +885,11 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
                                                      const vector<LogicalDecide::RewriteAccount> &accounts) {
-	// Every row the solver will see, tagged with the clause it came from. `sources` is
-	// deliberately not passed: this walk wants the tree AS IT IS, not the written
-	// substitution the flat renderer performs.
+	// Every row the solver will see, tagged with the clause it came from.
 	vector<string> rows;
 	vector<idx_t> row_ids;
 	if (constraints) {
-		CollectDecideExpressionStrings(*constraints, names, rows, nullptr, &row_ids);
+		CollectDecideExpressionStrings(*constraints, names, rows, &row_ids);
 	}
 	vector<vector<string>> by_clause(sources.size());
 	// Display follows the tree, not the registry. Source ids are handed out in two
