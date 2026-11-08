@@ -48,9 +48,7 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 		FindAndReplaceBilinear(objective, decide, OBJECTIVE_ROW_TAG);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
-	if (decide.decide_constraints) {
-		FindAndReplaceBilinear(decide.decide_constraints, decide, string());
-	}
+	FindAndReplaceBilinear(decide.decide_constraints, decide, string());
 }
 
 //! Recursively find all DECIDE variable indices referenced in an expression
@@ -212,7 +210,9 @@ bool ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index
 //! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
 //! factor's box. Returns the auxiliary's decision index.
 idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t first, idx_t second) {
-	auto is_bool = [&](idx_t var) { return var < decide.is_boolean_var.size() && decide.is_boolean_var[var]; };
+	auto is_bool = [&](idx_t var) {
+		return decide.is_boolean_var[var];
+	};
 	const bool both_bool = is_bool(first) && is_bool(second);
 	const idx_t bool_var_idx = is_bool(first) ? first : second;
 	const idx_t other_var_idx = bool_var_idx == first ? second : first;
@@ -229,17 +229,14 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t
 	// which matters for the strict-inequality rewrite (`< K → <= K-1`) in
 	// ilp_model_builder.cpp.
 	auto &other_type = decide.decide_variables[other_var_idx]->return_type;
-	const bool other_is_integer_typed = !(other_type == LogicalType::DOUBLE || other_type == LogicalType::FLOAT);
+	const bool other_is_integer_typed = other_type != LogicalType::DOUBLE;
 	LogicalType aux_type = (both_bool || other_is_integer_typed) ? LogicalType::INTEGER : LogicalType::DOUBLE;
 	// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
 	string label = "(" + RenderForPlan(*decide.decide_variables[first], decide) + " * " +
 	               RenderForPlan(*decide.decide_variables[second], decide) + ")";
 	// The auxiliary has one instance per instance of the finer of its factors (a query-wide factor has one for all): a
 	// query-wide product is one column and a keyed one a column per key, not a copy per row.
-	auto scope_of = [&](idx_t var) {
-		return var < decide.variable_scopes.size() ? decide.variable_scopes[var] : DecideVarScopeInfo::Row();
-	};
-	auto scope = JoinScopes(scope_of(first), scope_of(second));
+	auto scope = JoinScopes(decide.variable_scopes[first], decide.variable_scopes[second]);
 	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
 	AddRewriteAccount(decide, clause_alias,
 	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
@@ -264,7 +261,6 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                               const string &source_alias) {
-	if (!expr) return;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
 	if (IsDecideProductNode(optimizer.context, *expr, decide.decide_index)) {
@@ -283,7 +279,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 			// Each side is an affine expression in the decisions, and the product distributes over its terms.
 			Affine left, right;
 			auto is_bool = [&](idx_t var) {
-				return var < decide.is_boolean_var.size() && decide.is_boolean_var[var];
+				return decide.is_boolean_var[var];
 			};
 			auto has_bool = [&](const Affine &affine) {
 				return std::any_of(affine.terms.begin(), affine.terms.end(),
@@ -306,8 +302,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 						second = DConstants::INVALID_INDEX;
 					}
 					auto same = std::find_if(product.begin(), product.end(), [&](const ProductTerm &term) {
-						const bool swapped = term.first == second && term.second == first &&
-						                     second != DConstants::INVALID_INDEX;
+						const bool swapped = term.first == second && term.second == first;
 						return (term.first == first && term.second == second) || swapped;
 					});
 					if (same == product.end()) {
