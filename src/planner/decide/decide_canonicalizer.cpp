@@ -712,6 +712,12 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 		    if (factor) {
 			    scale = ComposeScale(factor, factor_divides, std::move(scale), divides, divides);
 		    }
+		    // The factors peeled off a spine (`((SUM(x) - 1) / 3) / 2`, whatever its depth) distribute onto its terms
+		    // as a factor written in front of one does, so the constant it holds reaches the bound side.
+		    if (scale && scale->IsFoldable() && IsAdditiveSpine(term, decide_index) && ReferencesDecideVar(term)) {
+			    Decompose(term, term_sign, out, clause, scale.get(), divides);
+			    return;
+		    }
 		    if (DecomposeExtremumAddends(term_sign, term, whole, scale, divides, out)) {
 			    return;
 		    }

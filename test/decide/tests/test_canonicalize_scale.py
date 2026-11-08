@@ -1524,3 +1524,34 @@ def test_a_refusal_names_a_norm_as_it_was_written(decidb_cli, norm, written):
     """,
         match=re.escape(f"'x' is a decision, so it cannot multiply {written}."),
     )
+
+
+# ---------------------------------------------------------------------------
+# The canonical comparison holds no constant on its decision side (C3), however deep the factors nest.
+# ---------------------------------------------------------------------------
+
+
+def _canonical_reading(cli, clause):
+    """The canonical layer of a clause as EXPLAIN prints it, without box glyphs or whitespace."""
+    out = cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(
+        f"EXPLAIN SELECT id, x FROM {_NESTED_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)"
+    )
+    assert out.returncode == 0 and not out.stderr.strip(), out.stderr
+    return "".join("".join(" " if ch in "│┌┐└┘├┤┬┴┼─" else ch for ch in out.stdout).split())
+
+
+@pytest.mark.explain
+@pytest.mark.parametrize(
+    "clause, canonical",
+    [
+        pytest.param("((SUM(x) - 1) / 3) / 2 <= 0.5", "≡sum(x)/(2*3)<=1/(2*3)+0.5", id="two-quotients"),
+        pytest.param("(((SUM(x) - 1) / 3) / 2) / 5 <= 0.5", "≡sum(x)/(5*2*3)<=1/(5*2*3)+0.5", id="three-quotients"),
+        pytest.param("((SUM(x) + 4) * 3) * 2 <= 90", "≡3*2*sum(x)<=-(3*2*4)+90", id="two-products"),
+        pytest.param("((SUM(x) - 1) * 3) / 2 <= 4.5", "≡3/2*sum(x)<=3/2*1+4.5", id="product-then-quotient"),
+    ],
+)
+def test_the_constant_inside_nested_factors_reaches_the_bound_side(decidb_cli, clause, canonical):
+    """A factor known before the query runs distributes onto the terms of the spine it is peeled off, so the `- 1` of
+    `((SUM(x) - 1) / 3) / 2` is on the bound side whichever way the factors around it nest."""
+    packed = _canonical_reading(decidb_cli, clause)
+    assert canonical in packed, packed
