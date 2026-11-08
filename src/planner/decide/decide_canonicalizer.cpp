@@ -436,13 +436,10 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 	if (expr.IsFoldable()) {
 		return DConstants::INVALID_INDEX;
 	}
-	bool saw_child = false;
 	idx_t key = DConstants::INVALID_INDEX;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		saw_child = true;
-		key = JoinDecideKeys(key, ScopeKeyOf(child, data_key));
-	});
-	return saw_child ? key : DECIDE_ROW_KEY;
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { key = JoinDecideKeys(key, ScopeKeyOf(child, data_key)); });
+	return key;
 }
 
 unique_ptr<Expression>
