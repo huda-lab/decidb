@@ -173,14 +173,15 @@ def test_a_strict_bound_on_a_fractional_reducer_is_refused_for_less_than(request
 
 @pytest.mark.parametrize("backend", ["gurobi", "highs"])
 def test_dividing_an_abs_by_a_zero_literal_is_refused_where_the_number_is_read(request, backend):
-    """WalkPolarity reads a zero divisor as a factor that is exactly zero (`ZERO` and `is_divisor`)."""
+    """WalkPolarity reads a zero divisor as a factor that is exactly zero (`ZERO` and `is_divisor`). SQL makes the
+    coefficient 1 / 0 infinite, a constant no `when` skips, so the message names it and not the clause."""
     cli = request.getfixturevalue(f"decidb_cli_{backend}")
     sql = f"""
         SELECT id, y FROM {_ROWS}
         DECIDE y(INT)
         SUCH THAT y <= 6 AND SUM(ABS(y) / 0) <= 30
         MAXIMIZE SUM(y)"""
-    cli.assert_error(sql, match=re.escape("SUM(ABS(y) / 0) <= 30 computes a number too large for a DOUBLE"))
+    cli.assert_error(sql, match=re.escape("DECIDE: 1 / 0 is NaN or infinite. Use a finite value."))
 
 
 def test_highs_names_the_negated_square_when_the_objective_minimizes_it(decidb_cli_highs):
