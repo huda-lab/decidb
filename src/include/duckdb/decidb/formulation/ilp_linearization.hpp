@@ -53,7 +53,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! an unbounded range, so there is no M to compute — only a guess, and a guess the
 //! true range exceeds silently cuts the feasible region rather than failing. The
 //! refusal names a column to bound, and it is the same refusal `LinearizeAbsMaximize`
-//! has always made. `var_names` supplies that name.
+//! has always made. `var_names` supplies that name, and `construct` the text of the construct that asked for the
+//! constant (`norm(e, 0)` for the links of a count of nonzeros), which the refusal quotes.
 //!
 //! `box` is the box the returned constant is valid for, and it is the caller's job to
 //! pass the one the constant will be used against — see `FormulationBox`. Widening a
@@ -61,7 +62,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! `instances` gives each row's instance its own box (InstanceBox), so an instance the default floor of 0 holds on is
 //! sized from 0 and not from a lowered instance's floor.
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances, const string &written);
+                             const vector<string> &var_names, const InstanceBox &instances, const string &written,
+                             const char *construct);
 
 //! The instances of a decision whose default floor of 0 a constant lower bound under a `when` replaces (a constraint's
 //! `lifted_floor`). A constant lower bound replaces the default floor on the instances whose rows it keeps; a decision

@@ -175,20 +175,9 @@ idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec,
 }
 
 
-//! Which construct asked for this Big-M, for the refusal above. Read off the
-//! indicator the rewrite attached, so the message names what the user wrote.
-static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
-    if (ec.ne_clause_idx != DConstants::INVALID_INDEX) {
-        return "<>";
-    }
-    if (ec.abs_aux_idx != DConstants::INVALID_INDEX) {
-        return "ABS";
-    }
-    return "MIN/MAX";
-}
-
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances, const string &written) {
+                             const vector<string> &var_names, const InstanceBox &instances, const string &written,
+                             const char *construct) {
     const vector<double> &lower_bounds = box.lower;
     const vector<double> &upper_bounds = box.upper;
     bool has_unbounded = false;
@@ -212,7 +201,7 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
     // to return, so the slack term below would only be computed and thrown away.
     if (has_unbounded) {
         ThrowUnboundedBigMNaming(true, FindUnboundedContributor(ec, lower_bounds, upper_bounds), var_names,
-                                 DescribeBigMConstruct(ec), written);
+                                 construct, written);
     }
     return M + 1.0;
 }

@@ -788,3 +788,31 @@ def test_reducer_helper_with_an_open_closing_side(
         {objective}"""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         _refused(_lowered(cli), sql, message)
+
+
+# ---------------------------------------------------------------------------
+# The L0 norm's Big-M (DecideTightPerRowBigM)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    ["x >= -1e30", "x >= -1e30 AND x <= 20"],
+    ids=["open both ends", "open below"],
+)
+def test_l0_norm_over_an_unbounded_decision_names_the_norm(
+    decidb_cli_gurobi, decidb_cli_highs, bounds
+):
+    """`norm(x - w, 0)` links a 0/1 indicator to `x - w` with a Big-M, which needs a finite box on `x`. The refusal
+    names the construct that asked, the norm, and the variable to bound (it said MIN/MAX before).
+    """
+    sql = f"""
+        SELECT id, x FROM (VALUES (1, 3.0), (2, 7.0)) t(id, w) DECIDE x(REAL)
+        SUCH THAT SUM(x) = 10 AND {bounds}
+        MINIMIZE norm(x - w, 0)"""
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        _refused(
+            cli,
+            sql,
+            r"Rewriting norm\(e, 0\) requires a finite bound on 'x'\. Add constraints 'x >= <lower>' and 'x <= <upper>'\.",
+        )

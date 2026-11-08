@@ -3343,7 +3343,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
                 ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
                 double M = DecideTightPerRowBigM(ec, box, num_rows, decide_var_names,
                                                  InstanceBox {solver_input, var_indexer},
-                                                 DecideWrittenClause(solver_input, ec.source_clause_id));
+                                                 DecideWrittenClause(solver_input, ec.source_clause_id), "norm(e, 0)");
                 ec.row_coefficients[z_term].AssignScalar(num_rows, M);
             }
         }
