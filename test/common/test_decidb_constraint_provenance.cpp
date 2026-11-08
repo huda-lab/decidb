@@ -2,6 +2,10 @@
 
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "test_helpers.hpp"
 
@@ -209,4 +213,87 @@ TEST_CASE("A bound that is one value for the query is quoted by its value, not a
 	CHECK(sources[2].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
 	CHECK(sources[3].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
 	CHECK(sources[4].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
+}
+
+namespace {
+
+//! `<n> <= <n + 1>`, stamped with a source clause id (none when `source_id` is INVALID_INDEX).
+duckdb::unique_ptr<Expression> TaggedRow(idx_t source_id, int64_t n) {
+	auto row = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+	                                                make_uniq<BoundConstantExpression>(Value::BIGINT(n)),
+	                                                make_uniq<BoundConstantExpression>(Value::BIGINT(n + 1)));
+	if (source_id != DConstants::INVALID_INDEX) {
+		row->alias = MakeSourceClauseTag(source_id);
+	}
+	return std::move(row);
+}
+
+ConstraintSourceInfo WrittenClause(const string &text) {
+	ConstraintSourceInfo source;
+	source.written_lhs = text;
+	return source;
+}
+
+//! The layers of an AND over `rows`, for a registry of `sources`.
+duckdb::vector<DecideClauseLayers> LayersOf(duckdb::vector<duckdb::unique_ptr<Expression>> rows, const duckdb::vector<ConstraintSourceInfo> &sources,
+                                    duckdb::vector<string> &unattributed) {
+	auto tree = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	tree->children = std::move(rows);
+	duckdb::vector<string> fragments;
+	duckdb::vector<KeyedScopeInfo> keyed_scopes;
+	duckdb::vector<DecideKey> keys;
+	DecideSourceNames names {fragments, keyed_scopes, keys};
+	duckdb::vector<string> objective_rows;
+	return CollectDecideClauseLayers(*tree, names, sources, unattributed, objective_rows, {});
+}
+
+} // namespace
+
+TEST_CASE("A plan lists a clause by its source id, wherever the walk meets its rows", "[decidb][provenance][explain]") {
+	SECTION("a row that no clause claims is listed apart, not under a clause") {
+		duckdb::vector<duckdb::unique_ptr<Expression>> rows;
+		rows.push_back(TaggedRow(0, 1));
+		rows.push_back(TaggedRow(DConstants::INVALID_INDEX, 2));
+		rows.push_back(TaggedRow(7, 3)); // an id the registry does not hold
+		duckdb::vector<string> unattributed;
+		auto layers = LayersOf(std::move(rows), {WrittenClause("clause 0")}, unattributed);
+		REQUIRE(layers.size() == 1);
+		CHECK(layers[0].written == "clause 0");
+		REQUIRE(unattributed.size() == 2);
+		CHECK(unattributed[0] == "2 <= 3");
+		CHECK(unattributed[1] == "3 <= 4");
+		auto text = RenderDecideClauseLayers(layers, unattributed);
+		CHECK(text.find("added by formulation:") != string::npos);
+	}
+	SECTION("a clause the tree does not mention still prints, after the ones it does") {
+		duckdb::vector<duckdb::unique_ptr<Expression>> rows;
+		rows.push_back(TaggedRow(1, 1));
+		duckdb::vector<string> unattributed;
+		auto layers = LayersOf(std::move(rows), {WrittenClause("clause 0"), WrittenClause("clause 1")}, unattributed);
+		REQUIRE(layers.size() == 2);
+		CHECK(layers[0].written == "clause 1");
+		CHECK(layers[1].written == "clause 0");
+		CHECK(unattributed.empty());
+	}
+	SECTION("a BETWEEN prints its lower half first even when the walk meets the upper half first") {
+		ConstraintSourceInfo lower = WrittenClause("x BETWEEN 1 AND 3");
+		lower.spelled_lhs = "x";
+		lower.canonical_cmp = ">=";
+		lower.spelled_rhs = "1";
+		lower.between_partner = 1;
+		ConstraintSourceInfo upper = lower;
+		upper.canonical_cmp = "<=";
+		upper.spelled_rhs = "3";
+		upper.between_partner = 0;
+		upper.between_upper = true;
+		duckdb::vector<duckdb::unique_ptr<Expression>> rows;
+		rows.push_back(TaggedRow(1, 3));
+		rows.push_back(TaggedRow(0, 1));
+		duckdb::vector<string> unattributed;
+		auto layers = LayersOf(std::move(rows), {lower, upper}, unattributed);
+		REQUIRE(layers.size() == 1);
+		REQUIRE(layers[0].canonical.size() == 2);
+		CHECK(layers[0].canonical[0] == "x >= 1");
+		CHECK(layers[0].canonical[1] == "x <= 3");
+	}
 }

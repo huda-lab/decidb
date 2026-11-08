@@ -891,7 +891,7 @@ string RenderDecideObjective(const Expression &expr, const DecideSourceNames &na
 	return parts[0];
 }
 
-vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expression> constraints,
+vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints,
                                                      const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
@@ -899,9 +899,7 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 	// Every row the solver will see, tagged with the clause it came from.
 	vector<string> rows;
 	vector<idx_t> row_ids;
-	if (constraints) {
-		CollectDecideExpressionStrings(*constraints, names, rows, &row_ids);
-	}
+	CollectDecideExpressionStrings(constraints, names, rows, &row_ids);
 	vector<vector<string>> by_clause(sources.size());
 	// Display follows the tree, not the registry. Source ids are handed out in two
 	// passes -- every comparison first, then the DECIDE-variable INs -- so registry

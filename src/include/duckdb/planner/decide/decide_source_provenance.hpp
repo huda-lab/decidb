@@ -165,7 +165,7 @@ struct DecideClauseLayers {
 //! rows; the objective's (INVALID_INDEX) are left to RenderDecideObjectiveLayers, and so
 //! are the rows a rewrite added for the objective (OBJECTIVE_ROW_TAG), returned in
 //! `objective_rows`.
-vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expression> constraints,
+vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints,
                                                      const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
@@ -221,12 +221,10 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 	// Constraints first: they also hand back the rows the rewrites added for the objective.
 	vector<string> unattributed;
 	vector<string> objective_rows;
-	string constraints_text;
-	if (op.decide_constraints || !op.constraint_sources.empty()) {
-		auto layers = CollectDecideClauseLayers(op.decide_constraints.get(), names, op.constraint_sources, unattributed,
-		                                        objective_rows, op.rewrite_accounts);
-		constraints_text = RenderDecideClauseLayers(layers, unattributed);
-	}
+	// The parser requires a SUCH THAT clause, so a plan always has constraints (transform_select_node.cpp).
+	auto layers = CollectDecideClauseLayers(*op.decide_constraints, names, op.constraint_sources, unattributed,
+	                                        objective_rows, op.rewrite_accounts);
+	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	if (op.decide_objective) {
 		string sense_prefix = (op.decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
@@ -246,9 +244,7 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}
-	if (op.decide_constraints || !op.constraint_sources.empty()) {
-		result["Constraints"] = constraints_text;
-	}
+	result["Constraints"] = constraints_text;
 	return result;
 }
 
