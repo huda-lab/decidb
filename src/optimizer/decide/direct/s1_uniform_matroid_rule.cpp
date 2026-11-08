@@ -6,9 +6,7 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
-#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
@@ -18,12 +16,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_columnref_expression.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
-#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -76,7 +69,6 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<const DirectIRConstraint *> bound_factors;
 	vector<const DirectIRConstraint *> local_fixes;
 
-	idx_t decide_index;
 	idx_t lower = 0;
 	idx_t upper = 0;
 	bool has_upper = false;
@@ -154,16 +146,8 @@ struct CountBody {
 //! solver's like-term collection sums them. Any other term, a constant included, is a decline: a constant term in the
 //! body shifts the limit by an amount that depends on the group's row count, and the solver answers that.
 bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body) {
-	double slope = 0;
-	for (auto &term : terms) {
-		double value;
-		if (!term.IsLinear() || term.var_a != 0 || !term.coefficient ||
-		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
-			return false;
-		}
-		slope += term.sign * value;
-	}
-	if (slope != 1.0 && slope != -1.0) {
+	double slope;
+	if (!OnlyDecisionTerms(terms) || !ConstantSlope(context, terms, slope) || (slope != 1.0 && slope != -1.0)) {
 		return false;
 	}
 	body.direction = slope > 0 ? 1 : -1;
@@ -203,7 +187,7 @@ const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
 //! [0, 2^53]. A bound below zero on an upper side is infeasible; one at or below zero on a lower side is no bound.
 //! False when `expr` is not an exactly representable finite constant.
 bool NormalizeCapacity(ClientContext &context, const Expression &expr, ExpressionType comparison, idx_t &capacity,
-                       bool &impossible, bool negate = false) {
+                       bool &impossible, bool negate) {
 	double as_double;
 	if (!TryEvaluateFoldableDouble(context, expr, as_double, DIRECT_FINITE_CONSTANT)) {
 		return false;
@@ -273,7 +257,7 @@ public:
 		    !ir.keyed_scopes.empty()) {
 			return nullptr;
 		}
-		if (ir.constraints.empty() || ir.source_clause_count != ir.constraints.size()) {
+		if (ir.source_clause_count != ir.constraints.size()) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
@@ -300,7 +284,6 @@ public:
 		if (ir.objective.parts.empty() && ir.objective.sense != DecideSense::FEASIBILITY) {
 			return nullptr;
 		}
-		condition->decide_index = ir.decide_index;
 		condition->sense = ir.objective.sense;
 		if (!ProveScope(ir, *condition) || !ProveFixedVariables(ir, context, *condition) ||
 		    !ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {

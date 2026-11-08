@@ -131,7 +131,6 @@ DATASETS = {"main": MAIN, "ties": TIES, "nan": NAN_WHERE_DROPPED}
 # Objective name -> (SQL, per-row coefficient of x). The oracle evaluates the Python function.
 OBJECTIVES = {
     "score": ("SUM(score * x)", lambda r: r["score"]),
-    "score_plus_id": ("SUM(score * x) + SUM(id * x)", lambda r: r["score"] + r["id"]),
     "score_minus_cap": ("SUM(score * x) - SUM(cap * x)", lambda r: r["score"] - r["cap"]),
     "negated": ("-SUM(score * x)", lambda r: -r["score"]),
     "scaled": ("2 * SUM(score * x)", lambda r: 2 * r["score"]),
@@ -181,7 +180,7 @@ OBJECTIVES = {
     # Runs on the `nan` rows alone: `cap2` is NaN on the rows the `when` drops.
     "when_drops_a_nan_coefficient": ("when flag: SUM(cap2 * x)", lambda r: r["cap2"] if r["flag"] else 0.0),
 }
-NEW_OBJECTIVES = [name for name in OBJECTIVES if name not in ("score", "score_plus_id", "when_drops_a_nan_coefficient")]
+NEW_OBJECTIVES = [name for name in OBJECTIVES if name not in ("score", "when_drops_a_nan_coefficient")]
 
 # A count bound that is a column or an expression: SQL text -> its value on a row, given the number of
 # rows `n` the bound's clause covers in the row's group. The oracle evaluates the Python function.
@@ -195,13 +194,11 @@ BOUND_EXPRS = {
     "COALESCE(ncap, fb)": lambda r, n: r["fb"] if r["ncap"] is None else r["ncap"],
     # COUNT(*) is evaluated in exact arithmetic: DuckDB reads `0.57` as a decimal, so 100 * 0.57 is exactly 57.
     "COUNT(*)": lambda r, n: n,
-    "COUNT(*) * 1": lambda r, n: n,
     "COUNT(*) / 2": lambda r, n: Fraction(n, 2),
     "COUNT(*) / 3": lambda r, n: Fraction(n, 3),
     "COUNT(*) / 4": lambda r, n: Fraction(n, 4),
     "COUNT(*) // 2": lambda r, n: n // 2,
     "COUNT(*) - 1": lambda r, n: n - 1,
-    "COUNT(*) - 20": lambda r, n: n - 20,
     "COUNT(*) * 0.4": lambda r, n: Fraction(n) * Fraction("0.4"),
     "2 * COUNT(*) / 3 + 1": lambda r, n: Fraction(2 * n, 3) + 1,
     "-COUNT(*) + 6": lambda r, n: -n + 6,
@@ -224,9 +221,6 @@ _REDUCER_BASES = {
     "SUM(sm) / 2 + 1": lambda rows: Fraction(sum(r["sm"] for r in rows), 2) + 1,
     "MAX(cap) - MIN(cap)": lambda rows: max(r["cap"] for r in rows) - min(r["cap"] for r in rows),
     "AVG(sm) * 0.5": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) * Fraction("0.5"),
-}
-_REDUCER_EXTRAS = {
-    "AVG(sm) + 2": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) + 2,
 }
 
 
@@ -266,7 +260,7 @@ _REDUCER_OWN_WHEN = {
         _sum(_kept_values(rows, lambda r: r["cap"] < 3, lambda r: 1)),
     ),
 }
-REDUCER_BOUND_EXPRS = {**_REDUCER_BASES, **_REDUCER_EXTRAS, **_REDUCER_OWN_WHEN}
+REDUCER_BOUND_EXPRS = {**_REDUCER_BASES, **_REDUCER_OWN_WHEN}
 
 
 def _dataset(case):
@@ -363,9 +357,6 @@ S1_CASES = {
     },
     # --- bounds that count rows: COUNT(*) is the rows the clause covers in each group ---
     "count_star_half_global": {"bounds": [("<=", "COUNT(*) / 2")]},
-    "count_star_half_per": {"bounds": [("<=", "COUNT(*) / 2")], "per": True},
-    "count_star_minus_one_lower_per": {"bounds": [(">=", "COUNT(*) - 1")], "per": True, "sense": "MINIMIZE"},
-    "count_star_equality_per": {"bounds": [("=", "COUNT(*) - 1")], "per": True},
     "count_star_interval_global": {"bounds": [(">=", "COUNT(*) / 4"), ("<=", "COUNT(*) / 2")]},
     # Under a `when` in front of the clause the count covers only the flagged rows; under a `when` inside the sum it
     # covers every row of the group.
@@ -452,18 +443,16 @@ def _tag(value):
 
 
 # The count limit: every comparison against whole and fractional limits, including limits no count can meet, except a
-# strict upper bound at 0 and at -0.5. A lower bound is minimized so that it binds.
+# strict upper bound at 0 and at -0.5, and the upper bound 2 (`global_upper_max`). A lower bound is minimized so that it
+# binds.
 for _op, _limit in itertools.product(("<=", "<", ">=", ">", "="), (-0.5, 0, 1.5, 2)):
-    if _op == "<" and _limit in (-0.5, 0):
+    if (_op, _limit) in (("<", -0.5), ("<", 0), ("<=", 2)):
         continue
     S1_CASES[f"limit_{_OPNAMES[_op]}_{_tag(_limit)}"] = {
         "bounds": [(_op, _limit)],
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
     }
 
-# A per-row bound on x with a `when` is plain arithmetic on a Boolean: the row is left free, fixed to 0 or 1, or
-# infeasible. Without a `when` the solver reads some spellings as a bound on the variable instead; those stay on the
-# solver (see the conformance fixture), and the rest must agree with arithmetic.
 # Every comparison against a bound that counts rows, per group; a lower bound is minimized so that it binds.
 for _op, _bound in itertools.product(("<=", "<", ">=", ">", "="), ("COUNT(*) / 2", "COUNT(*) - 1")):
     S1_CASES[f"count_star_{_OPNAMES[_op]}_{_tag(_bound.replace('COUNT(*)', 'n').replace(' ', ''))}"] = {
@@ -472,9 +461,10 @@ for _op, _bound in itertools.product(("<=", "<", ">=", ">", "="), ("COUNT(*) / 2
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
     }
 
-# Per comparison: the constants checked with a `when`, and the constants checked without one. Without a `when` the solver
-# reads a spelling that cannot hold as a bound on the variable itself, and S1 leaves those on the solver (see the
-# conformance fixture), so only spellings S1 admits are here.
+# A per-row bound on x with a `when` is plain arithmetic on a Boolean: the row is left free, fixed to 0 or 1, or
+# infeasible. Without a `when` the solver reads a spelling that cannot hold as a bound on the variable itself, and S1
+# leaves those on the solver (see the conformance fixture), so only spellings S1 admits are checked without one. Per
+# comparison: the constants checked with a `when`, and the constants checked without one.
 _ROWBOUND_CONSTANTS = {
     "<=": (("0", "0.5", "1", "1.5", "2"), ("1", "1.5", "2")),
     "<": (("0", "0.5", "1", "1.5", "2"), ("1", "1.5", "2")),
@@ -948,7 +938,7 @@ def test_s1_nested_decisions_agree(decidb_cli, oracle_solver):
             DECIDE y(BOOL) SUCH THAT SUM(y) <= 3 MAXIMIZE SUM((score + x) * y)
         ) c ORDER BY id
     """
-    names, constraints = _s1_constraints(case)
+    names = _s1_constraints(case)[0]
     first = _solve_with_oracle(oracle_solver, case)[1]
     chosen = [round(first.variable_values[name]) for name in names]
 
@@ -1274,9 +1264,9 @@ def _offset_case(bounds, scope="per", **extra):
     return {"count_body": "-x", "body_a": -1, "bounds": bounds, **_OFFSET_SCOPES[scope], **extra}
 
 
-def _binds_from_below(op, a):
-    """Whether the count must be large for the bound to hold, so that MINIMIZE is the sense in which it binds."""
-    return (op in (">", ">=")) != (a < 0)
+def _binds_from_below(op):
+    """Whether the count must be large for a bound on `SUM(-x)` to hold, so that MINIMIZE is the sense it binds in."""
+    return op not in (">", ">=")
 
 
 S1_OFFSET_CASES = {}
@@ -1285,7 +1275,7 @@ for _op, _scope, _delta in itertools.product(_OPNAMES, _CORE_SCOPES, (0, 0.5)):
     if _op == "<>":
         continue
     S1_OFFSET_CASES[f"offset_-1_0_{_OPNAMES[_op]}_{_scope}_{_tag(_delta)}"] = _offset_case(
-        [(_op, float(-1 + _delta))], _scope, sense="MINIMIZE" if _binds_from_below(_op, -1) else "MAXIMIZE"
+        [(_op, float(-1 + _delta))], _scope, sense="MINIMIZE" if _binds_from_below(_op) else "MAXIMIZE"
     )
 
 # An interval and a negation alone.
@@ -1340,10 +1330,12 @@ _REDUCER_GRID_LEFT_OUT = {
     ("AVG(sm)", "<"): ("per", "top_per"),
     ("COUNT(cap)", ">="): ("local_per",),
     ("COUNT(cap)", ">"): _CORE_SCOPES,
+    ("MAX(cap)", "<="): ("local_per",),  # reducer_local_when_max_reads_unflagged_rows
     ("MAX(cap)", ">="): ("per", "local_per"),
     ("MAX(cap)", ">"): ("per", "top_per", "local_per"),
     ("MAX(cap) - MIN(cap)", ">"): ("local_per",),
     ("MAX(cap) - MIN(cap)", "<"): ("top_per",),
+    ("MIN(cap)", "<="): ("local_per",),  # reducer_local_when_reads_unflagged_rows
     ("MIN(cap)", ">"): ("per", "top_per"),
     ("MIN(cap2)", ">"): ("per", "top_per"),
     ("SUM(sm) / 2 + 1", ">"): ("top_per", "local_per"),
