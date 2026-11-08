@@ -100,6 +100,7 @@ class TestCaseOverDataIsACoefficient:
         )
         assert _dot([r[2] for r in _ROWS], _x(rows, cols)) == pytest.approx(expected)
 
+    # The objective's sense is the branch: it picks the direction the model is built in.
     @pytest.mark.parametrize("sense", [ObjSense.MAXIMIZE, ObjSense.MINIMIZE])
     def test_case_in_the_objective_answers(self, decidb_cli, oracle_solver, sense):
         word, cmp = ("MAXIMIZE", "<=") if sense == ObjSense.MAXIMIZE else ("MINIMIZE", ">=")
@@ -133,6 +134,7 @@ class TestCaseOverDataIsACoefficient:
         )
         assert _dot([_case(r[1]) / n for r in _ROWS], _x(rows, cols)) == pytest.approx(expected)
 
+    # MIN and MAX are linearized by different encodings (the oracle model below differs for each).
     @pytest.mark.parametrize("agg", ["MIN", "MAX"])
     def test_case_inside_min_max_answers(self, decidb_cli, oracle_solver, agg):
         rows, cols = decidb_cli.execute(
@@ -213,6 +215,7 @@ class TestCaseOverADecisionIsRefused:
         "in a CTE or subquery before the DECIDE clause."
     )
 
+    # One per place the shape check walks: a reducer's argument, the objective, a side of a per-row constraint.
     @pytest.mark.parametrize(
         "constraint,objective",
         [

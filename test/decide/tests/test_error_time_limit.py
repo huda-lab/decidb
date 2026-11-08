@@ -331,7 +331,9 @@ class TestTimeLimit:
             f"  stderr: {result.stderr[:400]}"
         )
 
-    @pytest.mark.parametrize("garbage", ["abc", "-5", "0", ""])
+    # `ResolveDecideTimeLimit`: `stod` throws on text (`abc`; an empty string throws the same way) into one catch, and
+    # `parsed > 0.0` refuses a negative (`-5`) and the boundary (`0`).
+    @pytest.mark.parametrize("garbage", ["abc", "-5", "0"])
     def test_invalid_env_var_falls_back_to_default(self, decidb_cli_gurobi, garbage):
         """Garbage DECIDB_TIME_LIMIT values must silently fall back to default.
 

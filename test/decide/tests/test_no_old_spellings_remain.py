@@ -36,6 +36,7 @@ SURFACES = sorted(
 )
 
 
+# One case per scanned file: each file is its own input to the scan, so no two cases repeat a branch.
 @pytest.mark.parametrize("surface", SURFACES)
 def test_no_old_spelling_remains(surface):
     hits = scan_file(ROOT / surface)

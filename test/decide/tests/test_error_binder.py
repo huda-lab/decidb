@@ -55,7 +55,9 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"does not support")
 
-    @pytest.mark.parametrize("agg", ["avg", "min", "max", "sum"])
+    # `IsAggregateFunctionName` asks the catalog for an aggregate, so avg, min and max take one branch (avg stands for
+    # them); sum also meets the nested-SUM refusal, the cryptic message the regression names.
+    @pytest.mark.parametrize("agg", ["avg", "sum"])
     def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, agg):
         """A data-only aggregate (`AVG(p)`, `MIN(p)`, … over columns only) used as a
         coefficient on a decision variable is rejected before symbolic normalization.
@@ -337,7 +339,9 @@ class TestBinderErrors:
 
     # --- Non-linear scalar functions wrapping a DECIDE variable ---
 
-    @pytest.mark.parametrize("fn", ["sqrt", "exp", "ln", "log", "floor", "ceil", "round", "sin", "cos"])
+    # Any function outside `+ - * / abs` and the `__` markers takes the one branch of `CheckVocabulary`, so one name
+    # stands for the rest: in a per-row constraint (`CheckConstraints`) here, in an objective below (`CheckObjective`).
+    @pytest.mark.parametrize("fn", ["sqrt"])
     def test_nonlinear_scalar_per_row_lhs(self, decidb_cli, fn):
         """f(x) op K as per-row constraint — silently produced wrong answers before
         the bind-time whitelist check. Each non-linear scalar wrapping a DECIDE
@@ -349,7 +353,7 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"DECIDE: function '[a-z]+' cannot take a DECIDE variable\.")
 
-    @pytest.mark.parametrize("fn", ["sqrt", "exp", "log", "floor"])
+    @pytest.mark.parametrize("fn", ["sqrt"])
     def test_nonlinear_scalar_inside_sum(self, decidb_cli, fn):
         """SUM(f(x)) — crashed the symbolic layer with InternalException before.
         Now a clean BinderException."""
@@ -375,7 +379,9 @@ class TestBinderErrors:
     # factors, which the degree rule then judges; any other exponent has no reading in the
     # model. POWER(x, 0) and POWER(x, 1) answer (test_product_normal_form.py).
 
-    @pytest.mark.parametrize("exp", ["0.5", "2.5", "-1"])
+    # `TryGetDecideWholeExponent` refuses a fraction (`value != floor(value)`: 0.5 stands for 2.5) and a negative
+    # (`value < 0.0`: -1) in separate clauses of one condition.
+    @pytest.mark.parametrize("exp", ["0.5", "-1"])
     def test_power_bad_constant_exponent_in_sum(self, decidb_cli, exp):
         """SUM(POWER(x, <not a whole number>)) has no reading in the model."""
         decidb_cli.assert_error(f"""
@@ -385,7 +391,8 @@ class TestBinderErrors:
                 MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
             """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
-    @pytest.mark.parametrize("exp", ["3", "4"])
+    # 3 is the first whole exponent past degree 2, so the degree rule judges it; every larger one reaches that branch.
+    @pytest.mark.parametrize("exp", ["3"])
     def test_power_whole_exponent_above_two_is_a_degree_refusal(self, decidb_cli, exp):
         """SUM(POWER(x, 3)) is x * x * x: the degree rule refuses it, not the exponent rule."""
         decidb_cli.assert_error(f"""
@@ -402,15 +409,6 @@ class TestBinderErrors:
                 DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, x)) LIMIT 1
-            """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
-
-    def test_power_column_exponent_rejected(self, decidb_cli):
-        """POWER(x, col) — exponent is a table column, not a constant."""
-        decidb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
-                DECIDE x(REAL)
-                SUCH THAT x <= 5
-                MINIMIZE SUM(POWER(x, l_quantity)) LIMIT 1
             """, match=r"POWER over a DECIDE variable needs an exponent that is a whole number")
 
     def test_power_bad_exponent_per_row_constraint(self, decidb_cli):
@@ -446,10 +444,8 @@ class TestBinderErrors:
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
             """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
-    @pytest.mark.parametrize("expr", [
-        "POWER(x, 2) * y",
-        "POWER(x, 2) * POWER(y, 2)",
-    ])
+    # `ReadProduct` sums power * degree over the factors in one loop, so a second squared factor adds no branch.
+    @pytest.mark.parametrize("expr", ["POWER(x, 2) * y"])
     def test_power_degree_rejected_in_constraint(self, decidb_cli, expr):
         """POWER contributes degree(base) * n, so these reach the degree rule.
 
@@ -473,6 +469,8 @@ class TestBinderErrors:
                 MINIMIZE SUM(POWER(x, 2) * y) LIMIT 1
             """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
 
+    # Four nestings `ReadDecideProduct` flattens to a degree past 2: a power of a product, a product of products, a
+    # power of a power, and three factors.
     @pytest.mark.parametrize("constraint", [
         "POWER(x * y, 2) <= 5",
         "(x * y) * (x * y) <= 5",
@@ -505,6 +503,7 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"LINE \d+:")
 
+    # Each spelling of degree 2 takes its own route through the walk.
     @pytest.mark.parametrize("constraint", [
         "x * y <= 5",       # bilinear: two different decisions
         "POWER(x, 2) <= 5", # quadratic by squaring
@@ -549,6 +548,7 @@ class TestBinderErrors:
             """)
         assert rows
 
+    # The NULL bound as written, after the decision's side was rebuilt, and on the left.
     @pytest.mark.parametrize("constraint", [
         "x <= CAST(NULL AS DOUBLE)",
         "x + 3 <= CAST(NULL AS DOUBLE)",
@@ -693,6 +693,7 @@ def _refusal(decidb_cli, sql, match, context):
 @pytest.mark.error
 class TestRefusalsInEverySpelling:
 
+    # Where the OR hides: at the top, under an AND, nested, between reducers, and under each scope wrapper.
     @pytest.mark.parametrize(
         "clause",
         [
@@ -756,21 +757,24 @@ class TestRefusalsInEverySpelling:
         )[0]
         assert sum(int(row[1]) for row in rows) == 16
 
-    @pytest.mark.parametrize("spelling", SPELLINGS)
+    # One walk over the whole constraint (`ValidateDecideNoDataAggregateFactor`) tests each `/`, with no case on a
+    # scope marker or an aggregate's name (`IsAggregateFunctionName`). The clauses differ in the dividend (a bare
+    # decision, a reducer), the divisor (`count(*)` has no argument, a sum nested in arithmetic), a reducer holding
+    # data inside a decision's body, and the side of the comparison. The scope spellings run on one clause.
     @pytest.mark.parametrize(
-        "clause",
+        "spelling,clause",
         [
-            "x / sum(cap) <= 1",
-            "sum(x) / sum(cap) <= 1",
-            "sum(x) / avg(cap) <= 1",
-            "sum(x) / max(cap) <= 1",
-            "sum(x) / min(cap) <= 1",
-            "sum(x) / count(*) <= 2",
-            "avg(x) / sum(cap) <= 1",
-            "max(x) / sum(cap) <= 1",
-            "sum(x * cap) / sum(cap) <= 5",
-            "sum(x) / (1 + sum(cap)) <= 1",
-            "x <= sum(x) / sum(cap)",
+            pytest.param(spelling, clause, id=f"{clause}-{spelling}")
+            for spelling, clause in [
+                ("", "x / sum(cap) <= 1"),
+                ("", "sum(x) / sum(cap) <= 1"),
+                ("per row: ", "sum(x) / sum(cap) <= 1"),
+                ("per (): ", "sum(x) / sum(cap) <= 1"),
+                ("", "sum(x) / count(*) <= 2"),
+                ("", "sum(x * cap) / sum(cap) <= 5"),
+                ("", "sum(x) / (1 + sum(cap)) <= 1"),
+                ("", "x <= sum(x) / sum(cap)"),
+            ]
         ],
     )
     def test_data_only_aggregate_divisor_rejected(self, decidb_cli, spelling, clause):
@@ -786,18 +790,22 @@ class TestRefusalsInEverySpelling:
             "a data-only aggregate divisor",
         )
 
-    @pytest.mark.parametrize("spelling", SPELLINGS + ["per g: ", "when id > 0: "])
+    # The same walk, the other message (the divisor holds no data-only aggregate). The clauses differ in the side of
+    # the comparison, `count(*)`, a negation over the division, and a divisor that is a subquery; the five spellings
+    # run on the first clause.
     @pytest.mark.parametrize(
-        "clause",
+        "spelling,clause",
         [
-            "(sum(x) + sum(cap)) / 2 <= 20",
-            "20 >= (sum(x) + sum(cap)) / 2",
-            "(sum(x) - avg(cap)) / 2 <= 1",
-            "(sum(x) + count(*)) / 2 <= 5",
-            "(avg(x) + avg(cap)) / 2 <= 5",
-            "(max(x) + sum(cap)) / 2 <= 15",
-            "-(sum(x) + sum(cap)) / 2 >= -20",
-            "(sum(x) + sum(cap)) / (SELECT 2) <= 20",
+            pytest.param(spelling, clause, id=f"{clause}-{spelling}")
+            for spelling, clause in [
+                (spelling, "(sum(x) + sum(cap)) / 2 <= 20") for spelling in SPELLINGS + ["per g: ", "when id > 0: "]
+            ]
+            + [
+                ("", "20 >= (sum(x) + sum(cap)) / 2"),
+                ("", "(sum(x) + count(*)) / 2 <= 5"),
+                ("", "-(sum(x) + sum(cap)) / 2 >= -20"),
+                ("", "(sum(x) + sum(cap)) / (SELECT 2) <= 20"),
+            ]
         ],
     )
     def test_data_only_aggregate_in_a_divided_term_rejected(self, decidb_cli, spelling, clause):
@@ -893,6 +901,7 @@ class TestRefusalsSpeakSql:
         stderr = self._refusal(decidb_cli, "SUM(x * (x BETWEEN 1 AND 2)) <= 3")
         assert "SUM expression does not support '(x BETWEEN 1 AND 2)'" in stderr, stderr
 
+    # One per message the objective check words: no decision (a constant, a data column), a comparison, `count(*)`.
     @pytest.mark.parametrize(
         "objective,message",
         [

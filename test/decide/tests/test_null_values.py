@@ -129,6 +129,7 @@ def test_avg_divides_by_the_rows_it_keeps(decidb_cli, oracle_solver):
 
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
+# The two shapes of objective term a NULL factor can sit on: linear and bilinear.
 @pytest.mark.parametrize(
     "term",
     [
@@ -209,6 +210,7 @@ def test_a_null_factor_on_an_unreduced_objective_term_drops_only_that_term(decid
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
+# The two sides of one decision: statistics prove `c` never NULL (the test is not read), or a NULL is there (it is).
 @pytest.mark.parametrize("c_on_row_2, reads_the_test", [(4.0, False), (None, True)], ids=["never_null", "null"])
 def test_a_null_test_the_statistics_decide_is_not_read(decidb_cli, oracle_solver, c_on_row_2, reads_the_test):
     """`SUM(c * x)` skips a row whose `c` is NULL. On a table whose statistics prove `c` never NULL, the test is decided

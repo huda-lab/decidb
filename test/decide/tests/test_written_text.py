@@ -26,6 +26,8 @@ def _packed(text):
     return re.sub(r"\s", "", text)
 
 
+# One per span the parser keeps: a `by` key, a `when` condition (four writings of one), a side of a comparison and a
+# `per` key with its `by`.
 @pytest.mark.explain
 @pytest.mark.parametrize(
     "clause",
@@ -48,6 +50,7 @@ def test_a_clause_echoes_exactly_as_typed(decidb_cli, clause):
     assert _packed(clause) in _plan(decidb_cli, clause)
 
 
+# The case of a function and of a column in a side, and inside a `when` scope's text.
 @pytest.mark.explain
 @pytest.mark.parametrize("clause", ["SUM(x) <= 10", "Sum(X) <= 10", "when ID > 1 AND G IS NOT NULL: SUM(x) <= 10"])
 def test_mixed_case_echoes_as_typed(decidb_cli, clause):

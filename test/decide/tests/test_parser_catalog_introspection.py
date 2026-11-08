@@ -25,6 +25,8 @@ from decidb_cli import DeciDBCliError
 class TestNoGlobalGrammarPollution:
     """The DECIDE grammar must stay confined; global SQL parsing is untouched."""
 
+    # Each view's stored body is another SQL text through the one grammar (the regression broke them all); reading the
+    # views cannot show that two share every production, so none is dropped.
     @pytest.mark.parametrize(
         "view_sql",
         [
@@ -42,12 +44,13 @@ class TestNoGlobalGrammarPollution:
         # Should not raise: these views parse and execute. (LIMIT keeps it cheap.)
         decidb_cli.execute(f"{view_sql} LIMIT 5")
 
+    # The two productions of `func_application` the DECIDE rule sat beside: `func_name '(' ')'` and one with a
+    # `func_arg_list` (any number of arguments, so a single argument adds no production).
     @pytest.mark.parametrize(
         "call_sql",
         [
             "SELECT not_a_registered_function()",
             "SELECT my_udf(a, b) FROM (VALUES (1, 2)) v(a, b)",
-            "SELECT another_unknown_fn(1) FROM (VALUES (1)) v(a)",
         ],
     )
     def test_unregistered_function_reaches_binder_not_parser(

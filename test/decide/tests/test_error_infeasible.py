@@ -284,7 +284,10 @@ class TestDegenerateConstraintRows:
             match=r"(?i)infeasible",
         )
 
-    @pytest.mark.parametrize("clause", DEGENERATE_CLAUSES)
+    # Every spelling ends as one kept coefficient-free row (`PushNormalizedConstraint`, `TryFoldPerRowBound`), and
+    # the first test above runs all of them. The diagnosis the regression crashed in reads that row: one per
+    # construction site (per-row bound, reducer) and one per sense `ConstantRowFails` judges (`<=`, `>=`, `=`).
+    @pytest.mark.parametrize("clause", ["0 * x <= -1", "SUM(0 * x) <= -1", "0 * x >= 1", "x - x = 1"])
     def test_degenerate_row_leaves_the_connection_usable(self, decidb_cli, clause):
         """The failure must be an ordinary error, not a fatal one.
 

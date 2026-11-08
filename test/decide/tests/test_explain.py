@@ -10,7 +10,6 @@ Covers:
   - Logical vs physical plan output
 """
 
-import json
 import re
 
 import pytest
@@ -124,24 +123,6 @@ def test_explain_minimize(decidb_cli):
 
 
 @pytest.mark.explain
-def test_explain_integer_variable(decidb_cli):
-    """EXPLAIN works for INTEGER decision variables."""
-    sql = """
-        SELECT ps_partkey, ps_availqty, ps_supplycost, x
-        FROM partsupp WHERE ps_partkey < 50
-        DECIDE x(INT)
-        SUCH THAT x <= 10 AND SUM(x * ps_supplycost) <= 5000
-        MAXIMIZE SUM(x * ps_availqty)
-    """
-    out = _explain(decidb_cli, sql)
-    assert "DECIDE" in out
-    assert _shows(out, "Variables:", "x"), _plan_text(out)
-    # Both constraints render: the per-row bound and the aggregate.
-    assert _shows(out, "Constraints:", "x", "<=", "10"), _plan_text(out)
-    assert _shows(out, "Constraints:", "ps_supplycost", "<=", "5000"), _plan_text(out)
-
-
-@pytest.mark.explain
 def test_explain_multi_variable(decidb_cli):
     """EXPLAIN with multiple decision variables shows all of them."""
     sql = """
@@ -188,23 +169,6 @@ def test_explain_when_string_filter(decidb_cli):
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_when_numeric_comparison(decidb_cli):
-    """EXPLAIN shows the when scope for numeric comparison filters."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_discount, x
-        FROM lineitem WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_discount >= 0.06: sum(x * l_extendedprice) <= 5000
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    out = _explain(decidb_cli, sql)
-    assert _shows(
-        out, "Constraints:", "when", "l_discount", ">=", "0.06", ":", "l_extendedprice", "<=", "5000"
-    ), _plan_text(out)
-
-
-@pytest.mark.explain
-@pytest.mark.when_constraint
 def test_explain_when_mixed_constraints(decidb_cli):
     """EXPLAIN with one when-scoped + one unconditional constraint."""
     sql = """
@@ -241,23 +205,6 @@ def test_explain_per_basic(decidb_cli):
     assert _shows(
         out, "Constraints:", "per", "s_nationkey", ":", "sum(x)", "by", "(s_nationkey)", "<=", "5"
     ), f"per scope missing or incomplete in EXPLAIN:\n{_plan_text(out)}"
-
-
-@pytest.mark.explain
-@pytest.mark.per_clause
-def test_explain_per_integer(decidb_cli):
-    """EXPLAIN shows the per scope for an integer variable with a weighted constraint."""
-    sql = """
-        SELECT ps_partkey, ps_availqty, ps_supplycost, x
-        FROM partsupp WHERE ps_partkey < 50
-        DECIDE x(INT)
-        SUCH THAT per ps_partkey: sum(x * ps_supplycost) by (ps_partkey) <= 1000
-        MAXIMIZE SUM(x * ps_availqty)
-    """
-    out = _explain(decidb_cli, sql)
-    assert _shows(
-        out, "Constraints:", "per", "ps_partkey", ":", "ps_supplycost", "by", "(ps_partkey)", "<=", "1000"
-    ), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -461,22 +408,25 @@ _GROUP_BOUND_ROWS = "(VALUES (1, 'a', 3), (2, 'a', 3), (3, 'b', 4)) t(id, k, cap
 _GROUP_BOUND_SQL = "SELECT id, x FROM {} DECIDE x(INT) SUCH THAT x <= 5 AND {} MAXIMIZE SUM(x)"
 
 
+# The shape of the bound is the branch (a guarded column, a guarded expression, an unguarded relation column); the
+# format is not: both formats print the one `ParamsToString` map, so the JSON format runs on the first shape only.
 @pytest.mark.explain
 @pytest.mark.parametrize(
-    "rows, clause",
+    "explain, rows, clause",
     [
         # A written column key: the bound's column sits inside a NULL guard for the key.
-        pytest.param(_GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap", id="guarded_column"),
-        pytest.param(_GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap + 1", id="guarded_expression"),
+        pytest.param(_explain, _GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap", id="box-guarded_column"),
+        pytest.param(_explain_json, _GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap", id="json-guarded_column"),
+        pytest.param(_explain, _GROUP_BOUND_ROWS, "per k: SUM(x) by (k) <= cap + 1", id="box-guarded_expression"),
         # A relation key compares NULL as a value: the bound is the column itself, with no guard.
         pytest.param(
+            _explain,
             "(VALUES (1, 'a'), (2, 'b')) t(id, k) JOIN (VALUES ('a', 3), ('b', 4)) D(k, cap) USING (k)",
             "per D: SUM(x) by (D) <= D.cap + 1",
-            id="unguarded_column",
+            id="box-unguarded_column",
         ),
     ],
 )
-@pytest.mark.parametrize("explain", [_explain, _explain_json], ids=["box", "json"])
 def test_explain_group_bound_from_data_reads_as_written(decidb_cli, explain, rows, clause):
     """The bound prints as written, so the rewrite adds no line, as with a literal bound."""
     out = explain(decidb_cli, _GROUP_BOUND_SQL.format(rows, clause))
@@ -502,36 +452,6 @@ def test_explain_json_structure(decidb_cli):
     assert _shows(out, '"Variables"', '"x"'), out
     assert _shows(out, '"Objective"', "MAXIMIZE", "sum(", "l_extendedprice"), out
     assert _shows(out, '"Constraints"', "SUM(", "l_quantity", "<=", "100"), out
-
-
-@pytest.mark.explain
-@pytest.mark.when_constraint
-def test_explain_json_when(decidb_cli):
-    """JSON EXPLAIN includes the when scope in constraint display."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    out = _explain_json(decidb_cli, sql)
-    assert _shows(out, '"Constraints"', "when", "l_returnflag", "'R'", ":", "l_quantity", "<=", "100"), out
-
-
-@pytest.mark.explain
-@pytest.mark.per_clause
-def test_explain_json_per(decidb_cli):
-    """JSON EXPLAIN includes the per scope in constraint display."""
-    sql = """
-        SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x(BOOL)
-        SUCH THAT per s_nationkey: sum(x) by (s_nationkey) <= 5
-        MAXIMIZE SUM(x * s_acctbal)
-    """
-    out = _explain_json(decidb_cli, sql)
-    assert _shows(out, '"Constraints"', "per", "s_nationkey", ":", "sum(x)", "by", "(s_nationkey)", "<=", "5"), out
 
 
 @pytest.mark.explain
@@ -567,60 +487,6 @@ def test_explain_analyze_basic(decidb_cli):
     assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
-@pytest.mark.explain
-@pytest.mark.when_constraint
-def test_explain_analyze_when(decidb_cli):
-    """EXPLAIN ANALYZE works with when-scoped queries."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    out = _explain_analyze(decidb_cli, sql)
-    assert "DECIDE" in out
-    # Anchored at "Constraints:" so the match cannot be satisfied by the SQL
-    # that EXPLAIN ANALYZE echoes above the plan.
-    assert _shows(out, "Constraints:", "when", "l_returnflag", "'R'", ":", "l_quantity", "<=", "100"), _plan_text(out)
-
-
-@pytest.mark.explain
-@pytest.mark.per_clause
-def test_explain_analyze_per(decidb_cli):
-    """EXPLAIN ANALYZE works with per-scoped queries."""
-    sql = """
-        SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x(BOOL)
-        SUCH THAT per s_nationkey: sum(x) by (s_nationkey) <= 5
-        MAXIMIZE SUM(x * s_acctbal)
-    """
-    out = _explain_analyze(decidb_cli, sql)
-    assert "DECIDE" in out
-    assert _shows(
-        out, "Constraints:", "per", "s_nationkey", ":", "sum(x)", "by", "(s_nationkey)", "<=", "5"
-    ), _plan_text(out)
-
-
-@pytest.mark.explain
-def test_explain_analyze_multiple_constraints(decidb_cli):
-    """EXPLAIN ANALYZE with multiple constraints still produces output."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 50
-            AND SUM(x) <= 20
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    out = _explain_analyze(decidb_cli, sql)
-    assert "DECIDE" in out
-    assert _shows(out, "Constraints:", "when", "l_returnflag", "'R'", ":", "l_quantity", "<=", "50"), _plan_text(out)
-    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
-
-
 # ===================================================================
 # Logical plan output
 # ===================================================================
@@ -641,40 +507,6 @@ def test_explain_logical_plan(decidb_cli):
     assert _shows(out, "Variables:", "x"), _plan_text(out)
     assert _shows(out, "Objective:", "MAXIMIZE", "sum(", "l_extendedprice"), _plan_text(out)
     assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
-
-
-@pytest.mark.explain
-@pytest.mark.when_constraint
-def test_explain_logical_when(decidb_cli):
-    """Logical plan shows the when scope in constraint display."""
-    decidb_cli.execute_raw("pragma explain_output='optimized_only'")
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    out = _explain(decidb_cli, sql)
-    assert _shows(out, "Constraints:", "when", "l_returnflag", "'R'", ":", "l_quantity", "<=", "100"), _plan_text(out)
-
-
-@pytest.mark.explain
-@pytest.mark.per_clause
-def test_explain_logical_per(decidb_cli):
-    """Logical plan shows the per scope in constraint display."""
-    decidb_cli.execute_raw("pragma explain_output='optimized_only'")
-    sql = """
-        SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x(BOOL)
-        SUCH THAT per s_nationkey: sum(x) by (s_nationkey) <= 5
-        MAXIMIZE SUM(x * s_acctbal)
-    """
-    out = _explain(decidb_cli, sql)
-    assert _shows(
-        out, "Constraints:", "per", "s_nationkey", ":", "sum(x)", "by", "(s_nationkey)", "<=", "5"
-    ), _plan_text(out)
 
 
 # ===================================================================

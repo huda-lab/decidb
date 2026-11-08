@@ -39,6 +39,7 @@ class TestParserErrors:
             match=r"DECIDE requires a SUCH THAT clause",
         )
 
+    # The DECIDE tail's declarations sit in two grammar positions, before the FROM clause and after it.
     @pytest.mark.parametrize(
         "query",
         [

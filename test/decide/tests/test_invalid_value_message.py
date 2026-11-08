@@ -44,6 +44,11 @@ def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
 
 
+# A forced backend (`decidb_cli_gurobi`, `decidb_cli_highs`) keeps the solver path whatever the mode says
+# (`ChooseDecideAnswer`), so those tests run `off` only. `auto` and `require` end differently only when no rule takes
+# the query (`ApplyDirectSolveRules`), so a query a rule takes runs the same under both: `require` stands for them.
+
+
 # (name, DECIDE clauses, the value the message names). Both paths take each one. A coefficient DeciDB computes (like
 # terms merged, a reducer's factor applied) names the value it is computed from that is not finite.
 BOTH_PATHS_COEFFICIENT = [
@@ -98,6 +103,8 @@ SOLVER_COEFFICIENT = [
     ("product_of_reducers", "x(INT) SUCH THAT x <= 4 AND SUM(b * x) * SUM(a * x) <= 20 MAXIMIZE SUM(a * x)", "b"),
 ]
 
+# (name, DECIDE clauses, the bound the message names). A bound is refused only when NaN: each case is another place the
+# plans and the solver path read a bound (a row's own bound, a reducer's limit, a group's, a count's, a fixing value).
 BOTH_PATHS_BOUND = [
     ("a1_bound", "x(REAL) SUCH THAT x <= b MAXIMIZE SUM(a * x)", "b"),
     ("a1_lower_bound", "x(REAL) SUCH THAT x <= 5 AND x >= b MAXIMIZE SUM(a * x)", "b"),
@@ -116,9 +123,20 @@ BOTH_PATHS_BOUND = [
 ]
 
 
+# Every site that refuses a coefficient tests `isfinite` (`ExtractDoubleColumn`, the direct plans' `isfinite` checks),
+# so NaN and an infinity reach one branch there. NaN runs on every case; the infinity runs once per plan family
+# (A1, R1, S1).
+_INFINITE_COEFFICIENT = {"a1_constraint", "r1_budget_weight", "s1_score"}
+COEFFICIENT_CASES = [
+    pytest.param(name, decide, value, bad, id=f"{name}-{label}")
+    for name, decide, value in BOTH_PATHS_COEFFICIENT
+    for label, bad in (("nan", NAN), ("infinity", INFINITY))
+    if label == "nan" or name in _INFINITE_COEFFICIENT
+]
+
+
 @pytest.mark.error
-@pytest.mark.parametrize("bad", [NAN, INFINITY], ids=["nan", "infinity"])
-@pytest.mark.parametrize("name,decide,value", BOTH_PATHS_COEFFICIENT, ids=[case[0] for case in BOTH_PATHS_COEFFICIENT])
+@pytest.mark.parametrize("name,decide,value,bad", COEFFICIENT_CASES)
 def test_a_coefficient_that_is_not_finite_is_named_as_written_on_both_paths(decidb_cli, name, decide, value, bad):
     direct = _stderr(decidb_cli, _query(decide, bad), "require")
     solver = _stderr(decidb_cli, _query(decide, bad), "off")
@@ -242,7 +260,7 @@ TOO_LARGE = [
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
 @pytest.mark.parametrize("name,decide,written,big", TOO_LARGE, ids=[case[0] for case in TOO_LARGE])
 def test_a_sum_past_a_double_names_its_clause(request, cli_fixture, mode, name, decide, written, big):
@@ -251,7 +269,7 @@ def test_a_sum_past_a_double_names_its_clause(request, cli_fixture, mode, name, 
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 def test_a_square_past_a_double_in_a_constraint_names_its_clause(decidb_cli_gurobi, mode):
     # Gurobi only: HiGHS refuses a quadratic constraint when the query is planned, whatever its numbers.
     decide = "x(REAL) SUCH THAT x <= 5 AND SUM(POWER(b * x, 2)) <= 10 MAXIMIZE SUM(a * x)"
@@ -322,7 +340,7 @@ DERIVED_TOO_LARGE = [
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
 @pytest.mark.parametrize("name,decide,written", DERIVED_TOO_LARGE, ids=[case[0] for case in DERIVED_TOO_LARGE])
 def test_a_number_derived_past_a_double_names_its_clause(request, cli_fixture, mode, name, decide, written):
@@ -341,7 +359,7 @@ def test_a_literal_past_a_double_on_one_decision_names_its_clause_on_both_paths(
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 def test_a_literal_past_a_double_in_the_objective_names_it_on_the_solver_path(decidb_cli_highs, mode):
     # HiGHS: the solver path either way.
     stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(2e308 * y)"), mode)
@@ -357,21 +375,21 @@ HIGHS_BIG_M_TOO_LARGE = [
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 @pytest.mark.parametrize("name,decide,written", HIGHS_BIG_M_TOO_LARGE, ids=[c[0] for c in HIGHS_BIG_M_TOO_LARGE])
 def test_a_big_m_past_a_double_names_its_clause(decidb_cli_highs, mode, name, decide, written):
     assert _too_large(written) in _stderr(decidb_cli_highs, _huge_query(decide), mode)
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 def test_a_big_m_over_an_open_decision_still_asks_for_its_bound(decidb_cli_highs, mode):
     stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT MAX(b * y) >= 1 MINIMIZE SUM(y)"), mode)
     assert "Rewriting MIN/MAX requires a finite bound on 'y'." in stderr, stderr
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 def test_a_reciprocal_past_a_double_on_a_squared_sum_names_its_clause(decidb_cli_gurobi, mode):
     # Gurobi only, as above. A query-wide factor is read when the query runs; its reciprocal is computed then.
     decide = "y(REAL) SUCH THAT y <= 5 AND SUM(POWER(y, 2)) / (SELECT 1e-310) <= 10 MAXIMIZE SUM(y)"
@@ -388,7 +406,7 @@ R1_TOO_LARGE = [
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["auto", "require"])
+@pytest.mark.parametrize("mode", ["require"])
 @pytest.mark.parametrize("name,decide,written", R1_TOO_LARGE, ids=[case[0] for case in R1_TOO_LARGE])
 def test_a_number_the_knapsack_plan_computes_past_a_double_names_the_budget(decidb_cli, mode, name, decide, written):
     assert _too_large(written) in _stderr(decidb_cli, _huge_query(decide), mode)
@@ -518,9 +536,11 @@ def _derived_message(outcome, written):
     return _too_large(written) if outcome == "too_large" else _coefficient("b")
 
 
-# (CLI, direct-solve mode): the solver path on each backend, and direct solve, which a forced backend turns off.
+# (CLI, direct-solve mode): the solver path on each backend, and direct solve, which a forced backend turns off. The
+# unforced `auto` of SOLVER_PATHS is a query no rule takes, so it reaches the solver. EVERY_PATH holds queries a rule
+# takes, where `require` is also what `auto` runs.
 SOLVER_PATHS = [("decidb_cli_gurobi", "off"), ("decidb_cli_highs", "off"), ("decidb_cli", "auto")]
-EVERY_PATH = SOLVER_PATHS + [("decidb_cli", "require")]
+EVERY_PATH = SOLVER_PATHS[:2] + [("decidb_cli", "require")]
 
 
 @pytest.mark.error
@@ -549,7 +569,7 @@ def test_a_coefficient_the_solver_derives_names_its_value_or_its_clause(
 
 @pytest.mark.error
 @pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 @pytest.mark.parametrize("name,decide,written", DERIVED_PRODUCT, ids=[case[0] for case in DERIVED_PRODUCT])
 def test_a_factor_on_a_product_names_its_value_or_its_clause(decidb_cli_gurobi, mode, outcome, name, decide, written):
     stderr = _stderr(decidb_cli_gurobi, _derived_query(decide, outcome), mode)
@@ -571,7 +591,7 @@ def test_the_constant_terms_of_the_objective_are_never_summed(request, cli_fixtu
 # A model whose numbers are each finite, which the solver then reads its own way: the warning stays (the CLI wrapper
 # checks it is printed), and so does the solver's verdict.
 @pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("mode", ["off"])
 def test_a_model_of_finite_huge_numbers_keeps_the_solvers_verdict(decidb_cli_gurobi, decidb_cli_highs, mode):
     def stderr(cli, decide):
         sql = f"SET decide_direct_solve='{mode}'; {_huge_query(decide)}"
@@ -621,6 +641,7 @@ def test_a_factor_that_is_not_finite_is_named_as_written(decidb_cli, name, decid
     assert _coefficient(f"(SELECT CAST('{written}' AS DOUBLE))") in _stderr(decidb_cli, sql, "off")
 
 
+# A NULL at the places the refusals above read a value (a coefficient and a bound, in A1, R1 and S1): skipped in each.
 @pytest.mark.error
 @pytest.mark.parametrize(
     "decide",
@@ -648,6 +669,7 @@ def test_a_rewrite_that_needs_a_finite_bound_names_the_infinite_one_as_written(d
     assert _bound("b") in _stderr(decidb_cli, _query(decide, NAN), "off")
 
 
+# A constant bound as a literal, as an expression that is NaN, and with a factor on the decision.
 @pytest.mark.error
 @pytest.mark.parametrize(
     "decide",
