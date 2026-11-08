@@ -50,6 +50,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A term of degree above 2 (three decisions in one product, `POWER(x, 3)`) | plan | `DECIDE: the SUCH THAT clause \`SUM(x*x*x) <= 10\` has a term of degree 3, which no solver DeciDB supports can optimize. Instead, write each term with at most two decision factors, as in x, POWER(x, 2) or x * y.` |
 | A `BOOL` bound that cannot hold (`x >= 2`) | before reading rows | `DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable.` |
 | A NaN in the data, an infinite coefficient, or an infinite value under `ABS`, `MIN` or `MAX` | run | `DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.` (a bound: `DECIDE: the bound v is NaN on some rows. Skip those rows with 'when NOT isnan(v):'.`) |
+| A constant coefficient that SQL computes as NaN or infinite (`x / 0`) | run | `DECIDE: 1 / 0 is NaN or infinite. Use a finite value.` |
 | A number past a DOUBLE that DeciDB derives (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`, a Big-M or range over the decisions' bounds) or a literal coefficient (`2e308*x`) | run | `DECIDE: SUM(b * x) <= 10 computes a number too large for a DOUBLE. Scale its data down.` (names the clause, or the objective) |
 | An unbounded member under a lowered hard `MIN`/`MAX`, `<>`, Big-M `ABS`, `norm(e, 0)` or McCormick product | run | names the variable and the bound to add |
 | A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi; a quadratic limit is quoted: `DECIDE: the SUCH THAT clause \`SUM(POWER(x, 2)) <= 25\` squares or multiplies decision variables, which needs Gurobi — not available on this machine. Install Gurobi, or rewrite that constraint so each term holds at most one decision variable.` |
@@ -64,8 +65,10 @@ query has two refusals, the one the pipeline reaches first is reported: the bind
 DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the number-range
 warning (`../pipeline/07_solver/done.md`), and the solver's verdict on them stands. An infinite bound is no bound. A
 coefficient that is NaN or infinite where DeciDB reads it raises one of the two messages above: the first when a column
-holds it, quoting that column's value even inside a merged or scaled coefficient (`2 * b` names `b`), TOO_LARGE naming
-the clause otherwise.
+holds it, quoting that column's value even inside a merged or scaled coefficient (`2 * b` names `b`); the constant
+one when no column holds it but SQL's arithmetic made it so (`1 / 0` is infinite in DuckDB); TOO_LARGE naming the
+clause when a literal is past a DOUBLE as written (`2e308 * x`) or a sum of finite numbers overflows
+(`x*1e308 + x*1e308`).
 
 ## 2. Not supported yet
 

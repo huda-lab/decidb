@@ -210,7 +210,7 @@ times decision-bearing factors, each a linear form or an opaque term raised to a
 
 `NormalizeProducts` (`decide_product_form.cpp`) is a bottom-up rewrite rule over every decision-bearing `*` and
 whole-exponent `POWER` node, as DuckDB's `ArithmeticSimplificationRule` is over constant arithmetic. It runs after
-`DesugarNorms`, at the head of `CanonicalizeTree`, `CanonicalizeComparison` and `CanonicalizeObjective`, so the
+`DesugarNorms`, at the head of `CanonicalizeTree` and `CanonicalizeObjective`, so the
 additive pass below reads one spelling. The rule:
 
 - flattens `*`, the binder's casts over decisions, unary minus and `POWER(b, k)` for a whole `k`;
@@ -724,6 +724,25 @@ To see a diagnosis, prefix the query with `DIAGNOSE` — it returns findings ins
 raising, so a single statement is enough and nothing has to survive an error.
 
 ---
+
+## 7a. Arms no test reaches, kept (BLOAT-27)
+
+Each is a precondition on an earlier stage's promise ([`../architecture.md`](../architecture.md) § 3), a typed read,
+or debug-only:
+
+- **The verifier.** `VerifyCanonicalComparison`, `VerifyCanonicalTree` and `VerifyCanonicalObjectiveBody` run only in
+  a debug build (`test_decidb_canonical_verifier.cpp` drives them there).
+- **The binder.** A comparison with no decision on either side never reaches the orientation pass (the constraints
+  binder refuses it first); without that, the pass would swap it forever. The shape check admits only functions
+  whose NULL handling is the default, so the special-NULL guard is a precondition.
+- **Typed reads.** Tag parsing, `ReadProduct`'s coefficient of a one-factor product, and `SourceClauseOf` throw an
+  `InternalException` naming the stage that broke its promise.
+- **Source text.** The span cuts of `DecideSourceText` fall back to a reprint when a macro's tail substitutes an
+  argument, which keeps no source text (the macro `BETWEEN` test reaches it).
+- **Provenance tripwires.** A row no clause claims, a clause no row mentions, and the upper half of a `BETWEEN` met
+  before its lower are formulation failures: every rewrite stamps its rows (`decide_optimizer.cpp`), and EXPLAIN
+  marks such a row "added by formulation" ([`../../language/explain.md`](../../language/explain.md)). A C++ test
+  reaches each.
 
 ## 8. Source map
 

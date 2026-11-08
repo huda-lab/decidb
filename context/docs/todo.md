@@ -6,8 +6,8 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: T1 and X15 beside
-the A batches; B2 after A2; M1 after X15.
+Each batch finishes completely. Lanes: B2 first; then T1 and M1 side by side; the
+A2 measurement after B2.
 
 ## A2. A2's slow all-rows query
 
@@ -17,15 +17,11 @@ the A batches; B2 after A2; M1 after X15.
 
 - [ ] TEST-2 Direct-solve arms no test reaches — direct_solve/framework/todo.md § TEST-2
 
-## X15. Other areas' arms no test reaches (one lane per task)
-
-- [ ] BLOAT-27 Canonicalizer and provenance: arms no test reaches — testing/todo.md § BLOAT-27
-
-## B2. The faster plan for the other rules (needs: A2)
+## B2. The faster plan for the other rules
 
 - [ ] H-49 N1, S1 and R1 take group-then-join where faster — direct_solve/framework/todo.md § H-49
 
-## M1. Messages quote the query as written (needs: X15)
+## M1. Messages quote the query as written
 
 - [ ] MSG-1 Messages reprint expression trees instead of quoting the source text — issues/code_quality.md § MSG-1
 

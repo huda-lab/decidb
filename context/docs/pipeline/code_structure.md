@@ -221,7 +221,7 @@ classDiagram
 - **`BindQualifiedReducer()` / `BindScopedReducer()` / `BindReducerBy()`**.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
-- **`CanonicalizeTree()` / `CanonicalizeComparison()` / `CanonicalizeObjective()`** — pure.
+- **`CanonicalizeTree()` / `CanonicalizeObjective()`** — pure; a comparison is canonicalized inside the tree.
 - **`Decompose()` / `PeelScale()` / `BuildAdditive()`** — shared by both clauses.
 - **`ClassifyScoped()` / `ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `VALUE` / `INVALID`.
 - **`BuildConstraintScopeChecks()` / `BuildObjectiveScopeChecks()`** — the run-time checks.
