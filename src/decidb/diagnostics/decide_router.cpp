@@ -25,11 +25,9 @@ DiagnosisTerminal RouteSolveResult(const SolverResult &result, bool armed) {
 		// solution is present whenever it reports SUBOPTIMAL.
 		return DiagnosisTerminal::SOLVED;
 	case SolverStatus::UNBOUNDED:
-		return DiagnosisApplies(armed, result.status) ? DiagnosisTerminal::UNBOUNDED
-		                                             : DiagnosisTerminal::UNDIAGNOSED;
+		return armed ? DiagnosisTerminal::UNBOUNDED : DiagnosisTerminal::UNDIAGNOSED;
 	case SolverStatus::INFEASIBLE:
-		return DiagnosisApplies(armed, result.status) ? DiagnosisTerminal::INFEASIBLE
-		                                             : DiagnosisTerminal::UNDIAGNOSED;
+		return armed ? DiagnosisTerminal::INFEASIBLE : DiagnosisTerminal::UNDIAGNOSED;
 	case SolverStatus::TIME_LIMIT:
 		// Not a diagnosis state. A slow solve is handled on the ordinary execution path
 		// — checkpoint report, then continue or take the incumbent — with or without the
@@ -37,7 +35,7 @@ DiagnosisTerminal RouteSolveResult(const SolverResult &result, bool armed) {
 		// Reaching here means the timeout was not handled, so fall to the plain error.
 		return DiagnosisTerminal::UNDIAGNOSED;
 	case SolverStatus::INF_OR_UNBD:
-		if (!DiagnosisApplies(armed, result.status)) {
+		if (!armed) {
 			return DiagnosisTerminal::UNDIAGNOSED;
 		}
 		return result.ray.empty() ? DiagnosisTerminal::INFEASIBLE : DiagnosisTerminal::UNBOUNDED;

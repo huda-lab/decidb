@@ -12,8 +12,6 @@ the small half of a repair spanning four orders of magnitude, and a rounding ste
 reported `x <= 3.33333` for a bound that had to reach `10/3`. All three produced advice
 that looked reasonable and did not work.
 """
-import csv
-import io
 import itertools
 
 import pytest

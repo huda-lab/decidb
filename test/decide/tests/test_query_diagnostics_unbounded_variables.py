@@ -31,12 +31,10 @@ from . import _diagnose_relation
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
 
-def _diagnose(cli, decide_sql):
-    return _diagnose_relation.run(cli, decide_sql)
+_diagnose = _diagnose_relation.run
 
 
-def _rows(result):
-    return _diagnose_relation.eav_rows(result)
+_rows = _diagnose_relation.eav_rows
 
 
 def _attrs(rows, subject):
@@ -155,8 +153,7 @@ class TestUnboundedVariableDiagnostics:
         assert "diagnose" in err
 
 
-def _flat(result):
-    return _diagnose_relation.rows(result)
+_flat = _diagnose_relation.rows
 
 
 def _dump_of(cli, sql):

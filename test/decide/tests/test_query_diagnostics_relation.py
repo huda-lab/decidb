@@ -47,19 +47,14 @@ _EXPECTED_SCHEMA = [
 ]
 
 
-def _diagnose(cli, decide_sql, scope=None, expect_number_range=False):
-    """Run `DIAGNOSE <decide_sql>` on one stdin session and return the result."""
-    return _diagnose_relation.run(cli, decide_sql, scope=scope, expect_number_range=expect_number_range)
+#: Run `DIAGNOSE <decide_sql>` on one stdin session and return the result.
+_diagnose = _diagnose_relation.run
 
 
-def _rows(result):
-    """The findings, expressed as long-form (subject, attribute, value) facts."""
-    return _diagnose_relation.eav_rows(result)
-
-
-def _flat(result):
-    """The findings as the relation actually returns them, one dict per row."""
-    return _diagnose_relation.rows(result)
+#: The findings, expressed as long-form (subject, attribute, value) facts.
+_rows = _diagnose_relation.eav_rows
+#: The findings as the relation actually returns them, one dict per row.
+_flat = _diagnose_relation.rows
 
 
 def _errors(result):
@@ -162,12 +157,6 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_number_range
         f"edited query returned no rows:\n{fixed_sql}"
     )
     return fixed_sql
-
-
-def _diagnosis_marker(stdout, label):
-    match = re.search(rf"{label}=(\d+):(\d+):(\d+)", stdout)
-    assert match, f"Missing {label!r} diagnosis marker in stdout:\n{stdout}"
-    return tuple(int(group) for group in match.groups())
 
 
 @pytest.mark.query_diagnostics

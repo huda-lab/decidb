@@ -661,9 +661,7 @@ static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &sl
 		return;
 	}
 	ModelConstraint row;
-	if (!AppendTierTerms(row, slacks, budget.tier)) {
-		return;
-	}
+	AppendTierTerms(row, slacks, budget.tier);
 	row.sense = '<';
 	row.rhs = budget.value;
 	row.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
@@ -869,6 +867,16 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 	SolverModel stage1_model = elastic.model;
 	vector<TierBudget> budgets;
 	SolverResult stage1;
+	// A pass that does not solve ends the candidate: an INFEASIBLE one rules the selection out, any other aborts the
+	// search.
+	auto solve_pass = [&](const SolverModel &model, SolverResult &pass) {
+		pass = input.solve_model(model);
+		if (pass.status == SolverStatus::INFEASIBLE) {
+			result.status = CandidateStatus::INFEASIBLE;
+			return false;
+		}
+		return pass.status == SolverStatus::OPTIMAL && !pass.solution.empty();
+	};
 	bool solved = false;
 	const ElasticRepairTier tier_order[] = {
 	    ElasticRepairTier::DATA_OFFSET,
@@ -879,12 +887,8 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 			continue;
 		}
 		SetTierObjective(stage1_model, slacks, tier);
-		SolverResult pass = input.solve_model(stage1_model);
-		if (pass.status == SolverStatus::INFEASIBLE) {
-			result.status = CandidateStatus::INFEASIBLE;
-			return result;
-		}
-		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
+		SolverResult pass;
+		if (!solve_pass(stage1_model, pass)) {
 			return result;
 		}
 		TierBudget budget = MakeTierBudget(pass.solution, slacks, tier);
@@ -893,21 +897,26 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		stage1 = std::move(pass);
 		solved = true;
 	}
-	if (!solved) {
-		SolverResult pass = input.solve_model(stage1_model);
-		if (pass.status == SolverStatus::INFEASIBLE) {
-			result.status = CandidateStatus::INFEASIBLE;
-			return result;
-		}
-		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
-			return result;
-		}
-		stage1 = std::move(pass);
+	if (!solved && !solve_pass(stage1_model, stage1)) {
+		return result;
 	}
 
 	result.data_cost = BudgetValue(budgets, ElasticRepairTier::DATA_OFFSET);
 	result.editable_cost = BudgetValue(budgets, ElasticRepairTier::EDITABLE_LOOSEN);
 	vector<double> repair_solution = stage1.solution;
+	// The source-order tie-break over the stage-1 repair; false when its solve gives no repair.
+	auto tie_break_stage1 = [&]() {
+		SolverModel tiebreak_model = stage1_model;
+		if (!BuildTieBreakModel(tiebreak_model, slacks, /*frozen_point=*/nullptr)) {
+			return true;
+		}
+		SolverResult tiebreak = input.solve_model(tiebreak_model);
+		if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
+			return false;
+		}
+		repair_solution = std::move(tiebreak.solution);
+		return true;
+	};
 	result.has_objective = HasObjective(candidate_model);
 	if (result.has_objective) {
 		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, candidate_model, budgets);
@@ -927,28 +936,16 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 			}
 		} else if (stage2.status == SolverStatus::UNBOUNDED) {
 			result.objective_unbounded = true;
-			SolverModel tiebreak_model = stage1_model;
-			if (BuildTieBreakModel(tiebreak_model, slacks, /*frozen_point=*/nullptr)) {
-				SolverResult tiebreak = input.solve_model(tiebreak_model);
-				if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
-					return result;
-				}
-				repair_solution = std::move(tiebreak.solution);
+			if (!tie_break_stage1()) {
+				return result;
 			}
 		} else {
 			// INF_OR_UNBD, timeout, suboptimal, and backend errors are not comparable
 			// candidates. Never return a partial diagnosis from a partially searched layer.
 			return result;
 		}
-	} else {
-		SolverModel tiebreak_model = stage1_model;
-		if (BuildTieBreakModel(tiebreak_model, slacks, /*frozen_point=*/nullptr)) {
-			SolverResult tiebreak = input.solve_model(tiebreak_model);
-			if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
-				return result;
-			}
-			repair_solution = std::move(tiebreak.solution);
-		}
+	} else if (!tie_break_stage1()) {
+		return result;
 	}
 
 	// Certify-then-report: the tidiest reading (to nearest, noise dropped) reads as the user

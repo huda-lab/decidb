@@ -171,6 +171,15 @@ static TermGrouping GroupTermsByVariable(const vector<int> &indices, const vecto
 	return g;
 }
 
+//! The symbolic coefficient label of each decide variable a clause carried (`weight_labels`).
+static std::map<idx_t, string> WeightLabelOf(const vector<std::pair<idx_t, string>> &weight_labels) {
+	std::map<idx_t, string> label_for;
+	for (const auto &wl : weight_labels) {
+		label_for[wl.first] = wl.second;
+	}
+	return label_for;
+}
+
 //! AVG rendering: an AVG→SUM-rewritten row stores coefficients pre-scaled by 1/N_g
 //! (`provenance.avg_scaled`), so a plain reconstruction would read `0.5*x + 0.5*x`.
 //! Recover `AVG(<inner>)` by collapsing the N equal-coefficient terms of each
@@ -215,10 +224,8 @@ static bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeff
 //! literal to quote) renders symbolically as `SUM(var * weight_label)` when the clause
 //! carried a coefficient label through `weight_labels`; without a label it returns false
 //! (caller falls back to the raw reconstruction), as does a row with no aggregate fan.
-static bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
-                  const vector<ColumnProvenance> &cols,
-                  const vector<std::pair<idx_t, string>> &weight_labels, string &out,
-                  const char *agg_name = "SUM") {
+static bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs, const vector<ColumnProvenance> &cols,
+                         const vector<std::pair<idx_t, string>> &weight_labels, string &out, const char *agg_name) {
 	// A column with no decide variable (an auxiliary column) never merges with another
 	// — give it a unique key so each stays its own term.
 	TermGrouping g = GroupTermsByVariable(indices, coeffs, cols, /*merge_auxiliaries=*/false);
@@ -229,11 +236,8 @@ static bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeff
 	auto &label_of = g.label_of;
 	// A data-varying summed variable has no single literal to quote, but if the clause
 	// carried a symbolic coefficient label (`buy → l_extendedprice`) we can still render
-	// it as `SUM(var * label)`. Look up the label per decide variable.
-	std::map<idx_t, string> label_for;
-	for (const auto &wl : weight_labels) {
-		label_for[wl.first] = wl.second;
-	}
+	// it as `SUM(var * label)`.
+	auto label_for = WeightLabelOf(weight_labels);
 	bool any_fan = false;
 	for (idx_t key : order) {
 		if (count_of[key] > 1) {
@@ -295,10 +299,7 @@ static bool FormatFoldedSumLhs(const vector<int> &indices, const vector<FoldedAg
 	for (const auto &t : folded) {
 		term_of[t.decide_var_idx] = &t;
 	}
-	std::map<idx_t, string> label_for;
-	for (const auto &wl : weight_labels) {
-		label_for[wl.first] = wl.second;
-	}
+	auto label_for = WeightLabelOf(weight_labels);
 
 	vector<idx_t> order; // distinct decide variables, first-seen order
 	std::map<idx_t, string> name_of;
@@ -486,10 +487,13 @@ static const char *SenseStr(char sense) {
 	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "=");
 }
 
-//! The clause as the user wrote it: `lhs sense rhs`, with the `when c per K:` qualifier
-//! in front (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
-//! baked into `rhs` at build time, so quote the user's typed literal (`typed_k`) and
-//! render `<` / `>` rather than the model's `<=` / `>=` (I2.d).
+//! The comparison a clause is quoted with: the row's own sense, except that a strict `<` / `>` (whose δ offset was
+//! baked into the row's RHS) keeps the operator the user typed.
+static string SenseText(const ConstraintProvenance &prov, char sense) {
+	bool strict = prov.strict && sense != '=';
+	return strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
+}
+
 //! The number to quote for a row whose own RHS is not what the user typed. Two things
 //! can shift it, and they never apply at once: the binder bakes a δ into a strict
 //! `<` / `>` (re-quote `typed_k`), and a lowering adds a mechanism term to build a Big-M
@@ -502,12 +506,14 @@ static double DisplayRhs(const ConstraintProvenance &prov, double rhs, char sens
 	return rhs - prov.rhs_mechanism_offset;
 }
 
+//! The clause as the user wrote it: `lhs sense rhs`, with the `when c per K:` qualifier
+//! in front (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
+//! baked into `rhs` at build time, so quote the user's typed literal (`typed_k`) and
+//! render `<` / `>` rather than the model's `<=` / `>=` (I2.d).
 static string MakeClauseLabel(const ConstraintProvenance &prov, const ConstraintSourceInfo *source, const string &lhs,
                               double rhs, char sense) {
-	bool strict = prov.strict && sense != '=';
-	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
-	return QuoteEditedClause(source, lhs, sense_str, FormatNum(base_rhs));
+	return QuoteEditedClause(source, lhs, SenseText(prov, sense), FormatNum(base_rhs));
 }
 
 //! The left side a half is edited and quoted with.
@@ -618,8 +624,7 @@ static string FormatPerGroupKey(const SolverModel &model, const GroupName &name)
 ClauseEdit MakeLoosenEdit(const SolverModel &model, const ConstraintProvenance &prov,
                           const ConstraintSourceInfo *source, const string &lhs, double rhs, char sense,
                           double amount) {
-	bool strict = prov.strict && sense != '=';
-	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
+	string sense_str = SenseText(prov, sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
 	// `≥` loosens downward (b − s), `≤` / `=` upward (b + s).
 	double new_rhs = (sense == '>') ? base_rhs - amount : base_rhs + amount;
@@ -744,8 +749,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 ClauseEdit MakeVirtualOffsetEdit(const SolverModel &model, const ConstraintProvenance &prov,
                                  const ConstraintSourceInfo *source, const string &lhs, const string &rhs_text,
                                  char sense, double delta) {
-	bool strict = prov.strict && sense != '=';
-	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
+	string sense_str = SenseText(prov, sense);
 	bool down = sense == '=' ? delta < 0.0 : sense == '>';
 	string op = down ? " - " : " + ";
 	string mag = FormatNum(std::fabs(delta));

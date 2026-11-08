@@ -34,8 +34,6 @@ driven through a pseudo-terminal (``execute_interactive``) so ``isatty`` is true
 """
 
 import random
-import csv
-import io
 
 import pytest
 

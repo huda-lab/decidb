@@ -21,7 +21,6 @@ Runs under both backends.
 
 import csv
 import io
-import re
 
 import pytest
 
@@ -39,14 +38,10 @@ def _diagnose(cli, decide_sql, extra_pragmas=""):
     return _diagnose_relation.run(cli, decide_sql, pragmas=extra_pragmas, timeout=300)
 
 
-def _flat(result):
-    """The findings as the relation returns them, one dict per row."""
-    return _diagnose_relation.rows(result)
-
-
-def _rows(result):
-    """The findings, expressed as long-form (subject, attribute, value) facts."""
-    return _diagnose_relation.eav_rows(result)
+#: The findings as the relation returns them, one dict per row.
+_flat = _diagnose_relation.rows
+#: The findings, expressed as long-form (subject, attribute, value) facts.
+_rows = _diagnose_relation.eav_rows
 
 
 def _attr(rows, subject_kind, attribute, subject=None):

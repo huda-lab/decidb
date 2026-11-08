@@ -31,8 +31,7 @@ def _diagnose(cli, decide_sql, setup="", extra_pragmas=""):
     return _diagnose_relation.run(cli, decide_sql, setup=setup, pragmas=extra_pragmas)
 
 
-def _rows(result):
-    return _diagnose_relation.rows(result)
+_rows = _diagnose_relation.rows
 
 
 def _remedy(rows, variable):

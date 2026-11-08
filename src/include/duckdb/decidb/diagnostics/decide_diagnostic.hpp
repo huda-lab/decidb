@@ -330,8 +330,4 @@ double GetDecideMipGap(ClientContext &context);
 //! min-categories floor) from the session settings, falling back to defaults.
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context);
 
-//! Filter predicate: is there an engine for a solve that ended in `status`, and was a
-//! diagnosis asked for? `armed` is the statement's DIAGNOSE prefix — nothing else.
-bool DiagnosisApplies(bool armed, SolverStatus status);
-
 } // namespace duckdb

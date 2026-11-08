@@ -167,17 +167,6 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 	return params;
 }
 
-bool DiagnosisApplies(bool armed, SolverStatus status) {
-	if (!armed) {
-		return false; // no DIAGNOSE prefix: the query never pays for a diagnosis
-	}
-	// TIME_LIMIT is deliberately absent. A slow solve is ordinary execution behaviour —
-	// it reports its checkpoint and offers to continue on the normal path, with or
-	// without the prefix — not a state for an engine to explain.
-	return status == SolverStatus::INFEASIBLE || status == SolverStatus::UNBOUNDED ||
-	       status == SolverStatus::INF_OR_UNBD;
-}
-
 //===----------------------------------------------------------------------===//
 // Diagnosis construction + statement-scoped handoff
 //===----------------------------------------------------------------------===//
@@ -361,6 +350,14 @@ static string PrescribeCap(const VarEscape &ve) {
 	return "when (" + StringUtil::Join(scope, " OR ") + "): " + cap;
 }
 
+//! The emitted row a finding covers (`expanded` slack scope); INVALID_INDEX leaves the `row` column NULL.
+static void SetFindingRow(DiagnosticFinding &finding, idx_t row) {
+	if (row != DConstants::INVALID_INDEX) {
+		finding.has_row = true;
+		finding.row = static_cast<int64_t>(row);
+	}
+}
+
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	// Precondition: at least one named escaping variable. The caller reports the bare
 	// `undiagnosed` finding when the ray names nothing (a quadratic model attaches no
@@ -384,17 +381,20 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 			diag.findings.push_back(std::move(base));
 			continue;
 		}
-		const char *instance_scope = ve.is_keyed ? "keyed" : "row";
+		// A finding counting `escaping` of `total` instances, rows or classes.
+		auto counted = [&](idx_t escaping, idx_t total) {
+			DiagnosticFinding f = base;
+			f.has_amount = true;
+			f.amount = static_cast<double>(escaping);
+			f.has_total = true;
+			f.total = static_cast<int64_t>(total);
+			f.scope = ve.is_keyed ? "keyed" : "row";
+			return f;
+		};
 		if (ve.all_escape) {
 			// Every instance escapes, so no categorical slice explains anything the
 			// whole-variable count does not: one finding covering all of them.
-			DiagnosticFinding f = base;
-			f.has_amount = true;
-			f.amount = static_cast<double>(ve.total);
-			f.has_total = true;
-			f.total = static_cast<int64_t>(ve.total);
-			f.scope = instance_scope;
-			diag.findings.push_back(std::move(f));
+			diag.findings.push_back(counted(ve.total, ve.total));
 			continue;
 		}
 		if (!ve.rules.empty()) {
@@ -402,26 +402,15 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 			// so `WHERE group IS NOT NULL` is the "which slice" question and `amount`
 			// answers "how many instances in it".
 			for (const auto &r : ve.rules) {
-				DiagnosticFinding f = base;
+				auto f = counted(r.escaping, r.total);
 				f.group = SlicePredicate(r);
-				f.has_amount = true;
-				f.amount = static_cast<double>(r.escaping);
-				f.has_total = true;
-				f.total = static_cast<int64_t>(r.total);
-				f.scope = instance_scope;
 				diag.findings.push_back(std::move(f));
 			}
 			continue;
 		}
 		// Scattered escape that no categorical group characterizes: report the count
 		// alone, with no slice to name.
-		DiagnosticFinding f = base;
-		f.has_amount = true;
-		f.amount = static_cast<double>(ve.escaping);
-		f.has_total = true;
-		f.total = static_cast<int64_t>(ve.total);
-		f.scope = instance_scope;
-		diag.findings.push_back(std::move(f));
+		diag.findings.push_back(counted(ve.escaping, ve.total));
 	}
 	return diag;
 }
@@ -441,10 +430,7 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 		DiagnosticFinding f;
 		f.clause = e.label;
 		f.group = e.group;
-		if (e.row != DConstants::INVALID_INDEX) {
-			f.has_row = true;
-			f.row = static_cast<int64_t>(e.row);
-		}
+		SetFindingRow(f, e.row);
 		if (e.kind == ClauseEditKind::DROP) {
 			// A remove-only clause (`<>`) cannot be loosened by any amount, so there is
 			// no re-quotable text and no magnitude — the change itself is the deletion.
@@ -496,10 +482,7 @@ DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause>
 		DiagnosticFinding f;
 		f.clause = c.label;
 		f.group = c.group;
-		if (c.row != DConstants::INVALID_INDEX) {
-			f.has_row = true;
-			f.row = static_cast<int64_t>(c.row);
-		}
+		SetFindingRow(f, c.row);
 		f.suggested_change = string(c.too_low ? "raise" : "lower") + " this bound — no assignment can reach it";
 		f.edit_source = "unreachable_bound";
 		diag.findings.push_back(std::move(f));

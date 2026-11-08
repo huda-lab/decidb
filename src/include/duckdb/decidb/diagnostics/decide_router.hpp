@@ -33,10 +33,10 @@ enum class DiagnosisTerminal {
 };
 
 //! Classify a solve result into its terminal. `armed` is the statement's DIAGNOSE
-//! prefix. Pure: depends only on `result.status` and that flag (`DiagnosisApplies`),
-//! plus the residual INF_OR_UNBD ray sub-signal. Existing solver/facade status probes
-//! still run first; if INF_OR_UNBD survives, a found ray routes to UNBOUNDED and no ray
-//! routes to INFEASIBLE.
+//! prefix. Pure: depends only on `result.status` and that flag, plus the residual
+//! INF_OR_UNBD ray sub-signal. An engine exists for INFEASIBLE, UNBOUNDED and INF_OR_UNBD
+//! only. Existing solver/facade status probes still run first; if INF_OR_UNBD survives, a
+//! found ray routes to UNBOUNDED and no ray routes to INFEASIBLE.
 DiagnosisTerminal RouteSolveResult(const SolverResult &result, bool armed);
 
 } // namespace duckdb
