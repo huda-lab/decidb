@@ -1258,20 +1258,6 @@ private:
 		return DirectJoinGroupRow(std::move(items), std::move(groups), std::move(item_keys), std::move(group_keys));
 	}
 
-	//! Takes the aggregates of the limits' group bounds into stage 2's hash aggregate.
-	class AggregateSink final : public DirectGroupSink {
-	public:
-		explicit AggregateSink(DirectAggregateStage &aggregate_p) : aggregate(aggregate_p) {
-		}
-		ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
-		                  unique_ptr<Expression> reads) override {
-			return aggregate.Add(DirectAggregateOf(function, std::move(argument), std::move(reads)));
-		}
-
-	private:
-		DirectAggregateStage &aggregate;
-	};
-
 	//! One side of the budget in a group: the constant limit and the limit each data limit gives on that side (the
 	//! group's MIN of an upper limit, its MAX of a lower one, an equality both). A value is the number it is, however
 	//! large (the solver loads a right side of 1e25 as that number), and an infinite one is infinite: an upper limit of
@@ -1324,7 +1310,7 @@ private:
 			imprecise_items.push_back(item.imprecise);
 		}
 		auto imprecise = aggregate.Add(Aggregate("bool_or", calc.Any(imprecise_items)));
-		AggregateSink sink(aggregate);
+		DirectAggregateSink sink(aggregate);
 		auto limit_eligible = condition.scoped ? BoolColumn(key[0]) : nullptr;
 		vector<DirectGroupValues> limits;
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {

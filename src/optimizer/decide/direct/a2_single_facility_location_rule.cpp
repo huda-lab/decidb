@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <tuple>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/function/aggregate_function.hpp"
@@ -627,18 +628,18 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!         keeps; the check of every value that can fail
 //!   P2    the loss's values for the row (a square's `a` and `b`, a center and its weight), each clause's lower and
 //!         upper end on the row (no bound where its `when` drops the row), and the row's checks
-//!   W     a hash aggregate on the key, one row per class (one row for a query-wide decision): the loss's aggregates,
-//!         the MAX of each clause's lower ends and the MIN of its upper ends, whether a floor-lifting clause keeps
-//!         some row, and whether the checks of the rows held
+//!   W     a hash aggregate on the class (whether the row has one, then its key), one row per class (one row for a
+//!         query-wide decision): the loss's aggregates, the MAX of each clause's lower ends and the MIN of its upper
+//!         ends, whether a floor-lifting clause keeps some row, and whether the checks of the rows held
 //!   P3    the class's interval as columns: each clause's tightest ends, and the floor
 //!   P4    the class's answer: the loss's target clamped into the interval (the box of DirectRowBox over the columns
 //!         of P3), NULL for a key with no class, and the column that keeps the checks live
 //!
-//! The second read is the scope (the key) and the join with the class plan, on the key. A query-wide decision joins
-//! the class's one row to every row. The class plan is the join's build side: the aggregate holds every row of the
-//! first read before it gives its row, so each check on a row (P2) has run on all of them, and each check on a class
-//! (P4) on the class's row, before the first row of the second read leaves, as the solver reads every row before it
-//! returns.
+//! The second read is the scope (the class and its key) and the join with the class plan, on them. A query-wide
+//! decision joins the class's one row to every row. No joined row exists before its class row has passed its checks:
+//! the aggregate holds every row of the first read before it gives its row, so each check on a row (P2) has run on all
+//! of them, and P4's checks on the class's row sit below the join (DirectJoinClassAnswers), as the solver reads every
+//! row before it returns.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -679,12 +680,17 @@ public:
 	}
 
 	//! The substitute over the second read `rows`: its source columns, then each row's class's answer, and the column
-	//! that keeps the class plan's checks live.
+	//! that keeps the class plan's checks live (P5).
 	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> classes) const {
 		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
 		auto carried = DirectCarriedOf(state, source_bindings.size());
-		auto joined = DirectJoinClassAnswers(binder, std::move(state.plan), carried.keys, carried.source,
-		                                     std::move(classes), carried.keys.size());
+		auto key = ClassKey(carried);
+		auto joined = DirectJoinClassAnswers(binder, std::move(state.plan), key.first, key.second, std::move(classes));
+		DirectProjectionStage p5(binder.GenerateTableIndex());
+		p5.Forward(carried.source, source_types);
+		D_ASSERT(joined.answers.size() == 2);
+		p5.Add(calc.Out(calc.Col(LogicalType::DOUBLE, joined.answers[0])));
+		p5.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, joined.answers[1])));
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
 		// The source columns, then c. The class plan's checks are read by the column after them.
@@ -694,7 +700,7 @@ public:
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
 		// The rows are probed against the class plan and held by nothing.
 		substitute.pipelined = true;
-		substitute.child = std::move(joined.plan);
+		substitute.child = p5.Finish(std::move(joined.plan));
 		return substitute;
 	}
 
@@ -712,20 +718,21 @@ private:
 		ColumnBinding upper;
 		ColumnBinding when;
 	};
-	//! Columns of P2: the key and whether the row has a class, which the aggregate reads, not the source's.
+	//! Columns of P2: the class, which the aggregate reads, not the source's. A keyed row's class is whether it has one
+	//! (a row with a NULL in a key element that puts it in no class has none), then its key.
 	struct Rows {
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;
-		ColumnBinding has_class;
 		vector<ClauseEnds> ends;
 		ColumnBinding valid;
 	};
-	//! Columns of W: the key, and the aggregates of the clauses over the results.
+	//! Columns of W: the class, and the aggregates of the clauses over the results.
 	struct Aggregates {
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;
-		//! Whether the key is a class: every row of a key is in a class, or none is.
-		ColumnBinding has_class;
+		//! The number of rows of a query-wide decision's one class: an aggregate without a key gives its one row over
+		//! no rows too, and with no row there is no class.
+		ColumnBinding rows;
 		ColumnBinding valid;
 		vector<DirectGroupValues> lowers;
 		vector<DirectGroupValues> uppers;
@@ -756,6 +763,19 @@ private:
 		return !condition.keys.empty();
 	}
 
+	//! The class of a row as DirectJoinClassAnswers keys it, from the scope: whether the row has one, then its key.
+	//! Nothing for a query-wide decision, which has one class.
+	std::pair<vector<ColumnBinding>, vector<LogicalType>> ClassKey(const DirectCarried &carried) const {
+		std::pair<vector<ColumnBinding>, vector<LogicalType>> key;
+		if (IsKeyed()) {
+			key.first.push_back(carried.eligible);
+			key.second.push_back(LogicalType::BOOLEAN);
+			key.first.insert(key.first.end(), carried.keys.begin(), carried.keys.end());
+			key.second.insert(key.second.end(), carried.key_types.begin(), carried.key_types.end());
+		}
+		return key;
+	}
+
 	//===------------------------------------------------------------------===//
 	// P1: raw values
 	//===------------------------------------------------------------------===//
@@ -784,10 +804,7 @@ private:
 		auto carried = raw.carried;
 		carried.source.clear();
 		carried = p2.Forward(carried, {}, IsKeyed());
-		result.keys = carried.keys;
-		result.key_types = carried.key_types;
-		// A query-wide decision has one class, and every row is in it.
-		result.has_class = IsKeyed() ? carried.eligible : p2.Add(calc.Out(calc.Bool(true)));
+		std::tie(result.keys, result.key_types) = ClassKey(carried);
 		for (auto &columns : raw.clauses) {
 			ExprPtr lower, upper;
 			DirectClauseBounds(calc, columns, lower, upper);
@@ -836,8 +853,9 @@ private:
 				result.lowering_whens.push_back(classes.Add("bool_or", ends.when, LogicalType::BOOLEAN));
 			}
 		}
-		// An aggregate without a key gives its one row over no rows too: with no row there is no class, and it says so.
-		result.has_class = classes.Add("bool_and", rows.has_class, LogicalType::BOOLEAN);
+		if (!IsKeyed()) {
+			result.rows = stage.Add(optimizer.BindAggregateFunction("count_star", vector<unique_ptr<Expression>>()));
+		}
 		result.valid = classes.Add("bool_and", rows.valid, LogicalType::BOOLEAN);
 		plan = stage.Finish(std::move(plan));
 		return result;
@@ -863,7 +881,11 @@ private:
 		Interval result;
 		result.keys = p3.Forward(aggregates.keys, aggregates.key_types);
 		result.key_types = aggregates.key_types;
-		result.has_class = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.has_class)));
+		// The class's own flag is the first column of a key. A query-wide decision has a class when it has a row.
+		result.has_class = IsKeyed() ? result.keys[0]
+		                             : p3.Add(calc.Out(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN,
+		                                                        calc.Col(LogicalType::BIGINT, aggregates.rows),
+		                                                        calc.Constant(Value::BIGINT(0)))));
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
@@ -918,13 +940,9 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	auto classes = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
 		return plan_builder.BuildClasses(std::move(rows));
 	});
-	DirectSubstitute substitute;
-	auto plan = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
-		substitute = plan_builder.JoinAnswers(std::move(rows), std::move(classes));
-		return std::move(substitute.child);
+	return DirectBuildOverOneRead(reader, [&](unique_ptr<LogicalOperator> rows) {
+		return plan_builder.JoinAnswers(std::move(rows), std::move(classes));
 	});
-	substitute.child = reader.Finish(std::move(plan));
-	return substitute;
 }
 
 } // namespace direct_a2_single_facility_location

@@ -1,7 +1,5 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
-#include <algorithm>
-
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -332,34 +330,20 @@ unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows,
 }
 
 DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOperator> rows,
-                                           const vector<ColumnBinding> &row_keys, const vector<ColumnBinding> &forward,
-                                           unique_ptr<LogicalOperator> classes, idx_t key_count) {
-	D_ASSERT(row_keys.size() == key_count);
+                                           const vector<ColumnBinding> &row_keys, const vector<LogicalType> &key_types,
+                                           unique_ptr<LogicalOperator> classes) {
+	D_ASSERT(row_keys.size() == key_types.size());
 	ExpressionBuilder calc(binder.context);
-	rows->ResolveOperatorTypes();
-	classes->ResolveOperatorTypes();
-	auto row_bindings = rows->GetColumnBindings();
 	auto class_bindings = classes->GetColumnBindings();
-	auto type_of = [&](ColumnBinding binding) {
-		auto at = std::find(row_bindings.begin(), row_bindings.end(), binding);
-		D_ASSERT(at != row_bindings.end());
-		return rows->types[NumericCast<idx_t>(at - row_bindings.begin())];
-	};
+	D_ASSERT(class_bindings.size() >= key_types.size());
 	vector<unique_ptr<Expression>> on_rows, on_classes;
-	for (idx_t i = 0; i < key_count; i++) {
-		on_rows.push_back(calc.Out(calc.Col(type_of(row_keys[i]), row_keys[i])));
-		on_classes.push_back(calc.Out(calc.Col(classes->types[i], class_bindings[i])));
+	for (idx_t i = 0; i < key_types.size(); i++) {
+		on_rows.push_back(calc.Out(calc.Col(key_types[i], row_keys[i])));
+		on_classes.push_back(calc.Out(calc.Col(key_types[i], class_bindings[i])));
 	}
 	DirectJoinedAnswers result;
-	DirectProjectionStage stage(binder.GenerateTableIndex());
-	for (auto binding : forward) {
-		result.rows.push_back(stage.Add(calc.Out(calc.Col(type_of(binding), binding))));
-	}
-	for (idx_t i = key_count; i < class_bindings.size(); i++) {
-		result.answers.push_back(stage.Add(calc.Out(calc.Col(classes->types[i], class_bindings[i]))));
-	}
-	auto joined = DirectJoinGroupRow(std::move(rows), std::move(classes), std::move(on_rows), std::move(on_classes));
-	result.plan = stage.Finish(std::move(joined));
+	result.answers.assign(class_bindings.begin() + NumericCast<int64_t>(key_types.size()), class_bindings.end());
+	result.plan = DirectJoinGroupRow(std::move(rows), std::move(classes), std::move(on_rows), std::move(on_classes));
 	return result;
 }
 
