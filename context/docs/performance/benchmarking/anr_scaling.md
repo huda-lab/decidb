@@ -15,21 +15,44 @@ workload's growth exponent: the slope of log(own time) against log(n) between th
 grows linearly. Direct solve is off (`decide_direct_solve = 'off'`), since it answers a flat sum without a model, and
 `decide_frame_limit` is raised so a range of fifty over a million anchors is not refused.
 
+It also records the peak memory of the process that ran the query, `peak_rss_mb`: its whole peak resident set, so the
+solver's share is in it. It is what `wait4` reports for that child alone; `getrusage(RUSAGE_CHILDREN)` keeps the largest
+child so far, so a small workload after a large one would report the large one's peak. `ru_maxrss` counts bytes on macOS
+and KiB on Linux; only the macOS count has been checked against `/usr/bin/time -l`.
+
+Each workload runs three times at each size (`--runs`), and every time and the peak are stored as their median over
+those runs. One run moves by more than the 1.5x the evaluator rewrite's gates allow: five runs at 10^5 rows on a loaded
+host gave `range-w5` 88 to 300 ms of own time and 258 to 293 MB of peak. Each measure is its own median, so `own_ms`
+need not equal the stored `optimizer_ms` plus `model_ms`. A run that fails is stored as the row, and that size is not
+run again.
+
 ## Running
 
 ```bash
 python3 benchmark/decide/anr_scaling.py                  # 10^3 .. 10^5 rows
 python3 benchmark/decide/anr_scaling.py --max 1000000    # up to 10^6
 python3 benchmark/decide/anr_scaling.py --only range     # the workloads whose name matches
+python3 benchmark/decide/anr_scaling.py --runs 5         # the median of five runs
+python3 benchmark/decide/anr_scaling.py --phase P0       # store the numbers as P0's
+python3 benchmark/decide/anr_scaling.py --phase P2 --against P0
 ```
 
-Results go to `benchmark/decide/results/anr_scaling.csv`. No database is needed.
+Results go to `benchmark/decide/results/anr_scaling.csv`, or with `--phase P` to `anr_scaling_P.csv`. No database is
+needed. Each row holds the `phase`, the workload and size, `status`, `own_ms`, `peak_rss_mb`, `optimizer_ms`,
+`model_ms`, `solver_ms`, `runs`, the counters above, the exponent and any `error`.
+
+A phase is a stored baseline that a later phase of the evaluator rewrite is held to: P0 is taken before the rewrite,
+and its gates allow a later phase at most 1.5x P0's peak memory and own time. A run with `--phase` replaces only the
+workloads and sizes it measured and keeps the rest, so `--only` runs add up to one phase. `--against P` prints each
+workload's time and peak as a multiple of P's, read before this run writes, so `--phase P --against P` compares a rerun
+with P's stored numbers.
 
 ## Measured
 
 Apple M1 Pro, 16 GB, Gurobi 13.0.3, branch `Sami-ANR` with the deck's model sizes (D89: a bound on a sum helper a row
 it is written into, a group of one member written in), 2026-11-04, `python3 benchmark/decide/anr_scaling.py` (10^3 to
-10^5 rows). Own time in ms at 10^5 rows and the growth exponent between 10^4 and 10^5:
+10^5 rows), one run per size, before peak memory was recorded. Own time in ms at 10^5 rows and the growth exponent
+between 10^4 and 10^5:
 
 | Workload | Own ms at 10^5 | Exponent | Helpers (inlined) at 10^5 |
 |---|---:|---:|---:|

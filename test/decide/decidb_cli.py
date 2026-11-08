@@ -106,6 +106,20 @@ _VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
 #: as ``DECIDB_FORCE_SOLVER`` runs it against one backend. A test that sets the mode itself wins.
 _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 
+#: Names a directory to turn the suite log on (see ``_log_query``). Unset, nothing is written.
+_SUITE_LOG_ENV = "DECIDB_SUITE_LOG"
+
+#: This run's mode of ``run_direct_matrix.sh``: a log compares with another log of the same mode. Read here and not per
+#: query, because a test may unset a switch for itself (``monkeypatch.delenv``) and the run stays the mode it was.
+_SUITE_MODE = (
+    ",".join(
+        f"{name}={os.environ[name]}"
+        for name in (_DIRECT_SOLVE_ENV, _VERIFY_SERIALIZER_ENV, "DECIDB_FORCE_SOLVER")
+        if os.environ.get(name)
+    )
+    or "auto"
+)
+
 _MODEL_DUMP_BEGIN = "=== DECIDB MODEL DUMP ==="
 _MODEL_DUMP_END = "=== END MODEL DUMP ==="
 
@@ -145,10 +159,39 @@ def assert_no_removed_spelling(result: subprocess.CompletedProcess, sql: str) ->
     )
 
 
-def _check(result: subprocess.CompletedProcess, sql: str, removed_spelling: bool) -> subprocess.CompletedProcess:
+def _log_query(result: subprocess.CompletedProcess, sql: str, env: dict[str, str] | None) -> None:
+    """Append what ``sql`` printed to the suite log, when ``DECIDB_SUITE_LOG`` names a directory.
+
+    One JSON line per query, written as the CLI printed it: what may legally vary is settled when two logs are
+    compared (``suite_log.py``), so a rule can change without capturing again. Each pytest-xdist worker
+    appends to a file of its own, so no two processes share one. ``env`` keeps only what this wrapper set beside the
+    run's environment, since the same SQL under another overlay is another query.
+    """
+    directory = os.environ.get(_SUITE_LOG_ENV)
+    if not directory:
+        return
+    record = {
+        "mode": _SUITE_MODE,
+        "test": os.environ.get("PYTEST_CURRENT_TEST", ""),
+        "env": {k: v for k, v in (env or {}).items() if os.environ.get(k) != v and k not in _PER_TEST_ENV},
+        "sql": sql,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    with (Path(directory) / f"{os.environ.get('PYTEST_XDIST_WORKER', 'main')}.jsonl").open("a") as log:
+        log.write(json.dumps(record) + "\n")
+
+
+def _check(
+    result: subprocess.CompletedProcess, sql: str, removed_spelling: bool, env: dict[str, str] | None
+) -> subprocess.CompletedProcess:
     """Fail the calling test if the query showed the user an internal error or an internal
     tag: no query, accepted or refused, may do either. Unless ``removed_spelling`` says the
-    test is about one, a removed-spelling error fails it too."""
+    test is about one, a removed-spelling error fails it too. Every query this wrapper runs
+    comes through here, so this is where the suite log hears of it, before a failure can end the test."""
+    _log_query(result, sql, env)
     assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
     if not removed_spelling:
         assert_no_removed_spelling(result, sql)
@@ -157,7 +200,8 @@ def _check(result: subprocess.CompletedProcess, sql: str, removed_spelling: bool
 
 def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs) -> subprocess.CompletedProcess:
     """Run the CLI on ``sql`` in a process of its own (see ``_check``)."""
-    return _check(subprocess.run(argv, capture_output=True, text=True, **kwargs), sql, removed_spelling)
+    result = subprocess.run(argv, capture_output=True, text=True, **kwargs)
+    return _check(result, sql, removed_spelling, kwargs.get("env"))
 
 
 #: Set to ``0`` to start a new process for every query, as the wrapper did before sessions.
@@ -295,7 +339,7 @@ def _run_in_session(
     if not session.alive():
         session.close()
         del _SESSIONS[key]
-    return _check(result, sql, removed_spelling)
+    return _check(result, sql, removed_spelling, env)
 
 
 def _last_complete_model_dump(text: str) -> str:
@@ -625,13 +669,14 @@ class DeciDBCli:
             # the controlling terminal. Other non-interactive tests exercise the same
             # plan fields under the suite-wide serializer guard.
             argv = [self.exe, self.db, "-readonly"]
+            env = self._subprocess_env()
             proc = subprocess.Popen(
                 argv + ["-c", sql],
                 stdin=slave_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=self._subprocess_env(),
+                env=env,
             )
             os.close(slave_fd)  # parent keeps only the master end
             slave_fd = -1
@@ -642,10 +687,7 @@ class DeciDBCli:
             os.close(master_fd)
             if slave_fd >= 0:
                 os.close(slave_fd)
-        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
-        assert_no_removed_spelling(result, sql)
-        return result
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env)
 
     def execute_interrupted(
         self, sql: str, *, after: float, timeout: float = 30
@@ -656,12 +698,13 @@ class DeciDBCli:
         Like ``execute_interactive``, it skips the serializer self-check: that wrapper
         re-runs the query, so the interrupt would not land on the first solve.
         """
+        env = self._subprocess_env()
         proc = subprocess.Popen(
             [self.exe, self.db, "-readonly", "-c", sql],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=self._subprocess_env(),
+            env=env,
         )
         time.sleep(after)
         signalled = time.time()
@@ -672,10 +715,7 @@ class DeciDBCli:
             proc.kill()
             stdout, stderr = proc.communicate()
         latency = time.time() - signalled
-        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
-        assert_no_removed_spelling(result, sql)
-        return result, latency
+        return _check(subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr), sql, False, env), latency
 
     def assert_error(
         self,

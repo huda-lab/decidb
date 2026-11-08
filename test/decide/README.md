@@ -326,12 +326,56 @@ merged set. These files are never pruned automatically, so `results/` grows by
 one file per run — delete `results/perf_*.json` periodically (it reached 549
 files / 83MB before its first cleanup).
 
+## Suite Log
+
+A log of what every query of the suite prints, in each mode, so that a change to the evaluator can be measured
+against the output from before it: each query must print what it printed then.
+
+```bash
+test/decide/capture_suite_log.sh capture                       # four modes into results/suite_log_<short hash>/
+test/decide/capture_suite_log.sh capture --modes auto -k anr   # one mode, part of the suite
+test/decide/capture_suite_log.sh compare OLD NEW [--limit N]   # query by query
+```
+
+**Capture.** `DECIDB_SUITE_LOG=<dir>` turns on `_log_query` in `decidb_cli.py`; unset, nothing is written. Each query
+the wrapper runs becomes one JSON line in its xdist worker's file: the mode, the test, the environment the wrapper
+added, the SQL, the exit code, stdout and stderr. The script runs the four modes of `run_direct_matrix.sh` (`auto`,
+`off`, `serializer`, `highs`). Each mode's folder also holds `junit.xml`, `pytest.log` and a manifest of the commit, the
+uncommitted `src` files and the binary's checksum. Any other `DECIDB_` variable stays on, so a capture under
+`DECIDB_EVALUATOR=tree` is a log to compare with flat's. Only queries that go through the wrapper are logged:
+`golden/capture.sh` and the fuzz runner call the binary themselves.
+
+**Compare.** `suite_log.py` pairs queries by SQL and wrapper environment, never by test, since a session fixture's query
+runs under whichever test a worker reached first. A query's runs compare as a set. What a run may vary is listed in its
+docstring:
+- numbers: stdout alone goes through `golden/normalize_results.py`, since stderr's spaces place an error's caret;
+- row order: rows are sorted unless the query is an EXPLAIN or has an ORDER BY outside every parenthesis;
+- timings and the `DECIDB_BENCH`/`DECIDB_PROFILE` lines;
+- temporary paths in the SQL and the environment (no query has printed one);
+- `unproven`: a solve every run stopped before it proved an answer. What it held at the stop is waived: its report past
+  what stopped it, and in its box the values of each column a declarator names (`x` of `x(BOOL)`). That holds only
+  when every test that ran the query passed in both logs and the rest of the output matches: the row count, the keys,
+  the types and every other column. A stop's rows come back only in a box (`execute_interrupted`,
+  `execute_interactive`), so rows in another form, or a column computed from a decision, keep their values and differ.
+
+Any other change is a difference, a changed value included. No output states the objective, so the log cannot tell an
+alternate optimum from a wrong answer, and a person reads each one. The exit code is 0 with no difference, 1 with some
+(a query or a mode only one log holds counts), and 2 when a log holds no mode. `tests/test_suite_log_compare.py` tests
+each rule on logged records: a pair of two captures where a rule waives what moved between them, otherwise a record
+changed in what the rule is about.
+
+`test_r1_a_volatile_source_is_read_once` reads an unseeded `random()`, so it differs in every compare, even between
+two captures of one binary. Compare a first capture with a second one of the same commit before using it as a
+baseline.
+
 ## Architecture
 
 ```
 test/decide/
 ├── conftest.py          # Fixtures (CLI wrapper, duckdb conn, solver, cache, perf)
 ├── decidb_cli.py        # Subprocess wrapper for build/release/decidb executable
+├── capture_suite_log.sh # Capture the suite log in each mode; compare two (see Suite Log)
+├── suite_log.py         # Compare two suite logs, query by query
 ├── oracle_cache.py      # Oracle result cache + CachedOracleSolver wrapper
 ├── solver/              # Gurobi-only oracle solver abstraction
 ├── comparison/          # Solution comparison (objective + variable vector)
