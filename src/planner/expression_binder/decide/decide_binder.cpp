@@ -1233,7 +1233,19 @@ bool DecideBinder::IsDataOperand(const ParsedExpression &expr) const {
 	}
 }
 
+//! Whether `expr`, or a subquery body in it, names a decision that is not query-wide.
+bool DecideBinder::ReadsRowDecision(const ParsedExpression &expr) const {
+	bool reads = IsVariableExpression(expr, variables) && !IsScalarDecideVariable(expr);
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) { reads |= ReadsRowDecision(child); });
+	return reads;
+}
+
 bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const {
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		// A subquery's body is a query of its own, whose tables' columns are not this row's; it varies with the row only
+		// through the per-row decisions it names.
+		return !ReadsRowDecision(expr);
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		if (!IsVariableExpression(expr, variables)) {
 			return false; // a plain data column varies per row

@@ -1000,6 +1000,8 @@ class TestBinderRefusalBranches:
             # A non-scalar subquery, first among a product's factors (the second is then not asked).
             ("EXISTS (SELECT 1) * x", r"Subquery in DECIDE SUM expression must be scalar"),
             ("x * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
+            # A subquery over a per-row decision is not "a query-wide decision": IsRowInvariantExpression reads its body.
+            ("2 * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
         ],
     )
     def test_reducer_argument(self, decidb_cli, argument, message):

@@ -208,13 +208,15 @@ protected:
     //! and conversely may not appear inside one on its own.
     bool IsScalarDecideVariable(const ParsedExpression &expr) const;
     //! True when `expr` holds the same value on every input row: every leaf is
-    //! either a literal/constant, an uncorrelated subquery, or a query-wide
+    //! either a literal/constant, a subquery that names no per-row decision, or a query-wide
     //! (`per ()`) decision — no data column and no per-row or keyed decision
     //! appears anywhere inside it. A reducer around a row-invariant body has
     //! nothing to reduce over (SUM(cap), SUM(cap1 + cap2)); a reducer whose body
     //! mixes a scalar with row-varying data (SUM(cost * cap)) is not row-invariant
     //! and is legal — the scalar just contributes uniformly to every term.
     bool IsRowInvariantExpression(const ParsedExpression &expr) const;
+    //! True when `expr`, or the body of a subquery in it, names a decision that is not query-wide.
+    bool ReadsRowDecision(const ParsedExpression &expr) const;
     //! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
     //! own rules: it reads no decision, and it is not a function (a reducer or a scope
     //! marker) or a subquery, which keep their DECIDE handling. A CASE over data is plain data.
