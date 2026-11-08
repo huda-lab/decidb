@@ -476,6 +476,10 @@ def test_a_product_and_its_reversal_are_one_term(decidb_cli_gurobi):
         pytest.param("SUM(x * POWER(x + x, 0))", 0, id="one-decision-twice"),
         pytest.param("SUM(x * POWER(-y, 0))", 0, id="negated-decision"),
         pytest.param("POWER(SUM(y), 0) + SUM(x)", 1, id="reducer"),
+        # Each factor raised to 0 has degree 0, so a product of any number of them stays a product of degree 1.
+        pytest.param("SUM(x * POWER(x, 0) * POWER(x, 0))", 0, id="the-same-zero-power-twice"),
+        pytest.param("SUM(x * POWER(x, 0) * POWER(y, 0))", 0, id="two-zero-powers"),
+        pytest.param("SUM(POWER(y, 0) * x * POWER(x, 0) * POWER(y, 0))", 0, id="zero-powers-around-a-factor"),
     ],
 )
 def test_a_factor_raised_to_zero_is_one(decidb_cli, objective, constant):
@@ -489,6 +493,23 @@ def test_a_factor_raised_to_zero_is_one(decidb_cli, objective, constant):
     """,
     )
     judge_rows(rows, _PAIR_DOMAINS, lambda a: True, lambda a: constant + a["x0"] + a["x1"])
+
+
+@pytest.mark.correctness
+def test_a_factor_raised_to_zero_leaves_a_bound_on_the_product_as_written(decidb_cli):
+    """`x * POWER(x, 0) * POWER(x, 0) <= 2` is `x <= 2` on each row."""
+    rows = answer(
+        decidb_cli,
+        f"""
+        SELECT id, x FROM {_PAIR_ROWS} DECIDE x(INT)
+        SUCH THAT x <= 3 AND x * POWER(x, 0) * POWER(x, 0) <= 2
+        MAXIMIZE SUM(x)
+        ORDER BY id
+    """,
+    )
+    judge_rows(
+        rows, {"x0": range(4), "x1": range(4)}, lambda a: all(v <= 2 for v in a.values()), lambda a: sum(a.values())
+    )
 
 
 @pytest.mark.correctness

@@ -208,6 +208,17 @@ struct ProductReader {
 			Read(*node.Cast<BoundFunctionExpression>().children[0], power);
 			return;
 		}
+		const Expression *extended;
+		const Expression *zero;
+		if (ReadZeroExtension(node, extended, zero)) {
+			// The spelling of a zero term (BuildDecideProductForm): its decision joins the form's own, and what it
+			// extends is read as the product it is. The unit it extends when a form has no factor is no factor.
+			AddZeroDecisions(*zero);
+			if (!IsUnit(*extended)) {
+				Read(*extended, power);
+			}
+			return;
+		}
 		idx_t exponent;
 		if (IsDecidePowerCall(node) &&
 		    TryGetDecideWholeExponent(context, *node.Cast<BoundFunctionExpression>().children[1], exponent)) {
@@ -227,6 +238,34 @@ struct ProductReader {
 			return;
 		}
 		AddFactor(form.factors, node, power);
+	}
+
+	//! `base + 0 * t`, the way BuildDecideProductForm spells the zero term `t` of a product: reading it back keeps a
+	//! product that holds a factor raised to 0 one product, in which the term is not a factor of its own.
+	bool ReadZeroExtension(const Expression &node, const Expression *&base, const Expression *&zero) const {
+		if (!IsFunctionNamed(node, "+", 2)) {
+			return false;
+		}
+		auto &sum = node.Cast<BoundFunctionExpression>();
+		auto &second = *UnwrapDecideCasts(*sum.children[1], decide_index);
+		if (!IsFunctionNamed(second, "*", 2)) {
+			return false;
+		}
+		auto &product = second.Cast<BoundFunctionExpression>();
+		double coefficient;
+		if (!TryEvaluateFoldableDouble(context, *product.children[0], coefficient, FOLD_CATCH_ALL) ||
+		    coefficient != 0.0 || !BoundExpressionReferencesDecide(*product.children[1], decide_index)) {
+			return false;
+		}
+		base = sum.children[0].get();
+		zero = product.children[1].get();
+		return true;
+	}
+
+	//! Whether `expr` is the constant 1.
+	bool IsUnit(const Expression &expr) const {
+		double value;
+		return TryEvaluateFoldableDouble(context, expr, value, FOLD_CATCH_ALL) && value == 1.0;
 	}
 
 	//! The decisions of a term raised to 0, which the product keeps at coefficient 0, as the merge keeps `x - x`.
