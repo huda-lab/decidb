@@ -86,6 +86,15 @@ That is stage 04's whole reason to exist as a stage;
 [`04_canonicalizer/done.md`](04_canonicalizer/done.md) §1 explains why a pass that
 may decline can never be a single home.
 
+### A stage's promise is checked where it is read
+
+Each stage leans on what an earlier one promises: the binder refuses a decision in a divisor, the shape check refuses
+a degree above two, the canonicalizer writes each marker once. A reader that relies on such a promise checks it with
+`throw InternalException("DECIDE: ...; <stage> promises ...")` (a precondition, in design-by-contract terms), so a
+broken promise in a release build is an error that names the stage, not a wrong answer. `D_ASSERT`, compiled out of a
+release build as in DuckDB, checks only what the same function established a few lines above. A query never reaches
+these checks; each area's `done.md` names the ones it keeps.
+
 ### Execution is stop-and-go
 
 `PhysicalDecide` is a pipeline breaker. The optimal value of any one decision

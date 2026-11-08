@@ -16,31 +16,7 @@ make decide-coverage`) at `73b52ab1d1` finds 1,093 of 10,624 arms that no test r
 - **Done when, for each task.** Every unreached arm in its files is deleted, named as kept in the area's `done.md`, or
   reached, and `make decide-test` passes.
 
-## BLOAT-25 — Execution: arms no test reaches
-
-- **Problem.** Six arms in `physical_decide.cpp` are kept as guards with no proof that a query cannot reach them; the
-  other unreached arms are deleted, reached, or named in `../pipeline/08_execution/done.md` § 7c.
-  - `ScaleAvgRows`: a group with no rows (`group_counts[gid] == 0`).
-  - The sink state's constructor: the `written_bound` fallback when no recorded bound matches, and a bound recorded
-    without a source clause (`bound.source_clause_id < constraint_sources.size()`).
-  - The MIN/MAX drop: `row_group_ids.empty()` (a clause with no group, no `when` and a term filter).
-  - The two-level objective: `objective_has_unfiltered_part`.
-  - `FormulateModel`'s L0 path: a constant term (`v == INVALID_INDEX`) beside an L0 norm.
-  - The demand check: `isfinite(demand)` for `|rhs| / coef` past the double range.
-- **Change.** For each: build the query that reaches it and test it (oracle-compared where it answers), or prove no
-  query reaches it from the stage that feeds it and delete it, or name the invariant that makes it a stage-handoff
-  guard in § 7c.
-
 ## BLOAT-27 — Canonicalizer and provenance: arms no test reaches
 
 - **Problem.** 298 of 1,928 arms in `planner/decide/` are unreached; `decide_canonicalizer.cpp` has 149 and
   `decide_source_provenance.cpp` 85.
-
-## BLOAT-29 — Optimizer passes: arms no test reaches
-
-- **Problem.** 238 of the 1,968 arms in `optimizer/decide/` outside `direct/` are unreached (three more are in
-  `decide_rewrite_rhs_bounds.cpp`, under TEST-2).
-
-## BLOAT-30 — Formulation: arms no test reaches
-
-- **Problem.** 141 of 1,436 arms in `decidb/formulation/` are unreached.

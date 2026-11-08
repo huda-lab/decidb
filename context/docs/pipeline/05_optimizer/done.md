@@ -1066,6 +1066,30 @@ stage 07.
 
 ---
 
+## 5a. Arms no test reaches, kept (BLOAT-29)
+
+Each is a precondition on an earlier stage's promise ([`../architecture.md`](../architecture.md) § 3) or a typed read:
+
+- **The binder.** One scope per declared decision, and every rewrite adds a scope with its decision
+  (`AddAuxiliaryDecision`); `StrToAggType` sees sum, min or max only; only a `when` stands under the two-level `per`
+  wrapper; a reducer's marker covers one expression (`RewriteNorm`); a comparison carries its source-clause tag
+  (`SourceClauseOf`).
+- **The shape check.** A side of a degree-2 product is affine and no divisor holds a decision (`ReadAffine`); a factor's
+  form is linear (`AppendLinearTerms`); a data factor has power 1 (`FindAndReplaceBilinear`).
+- **The canonicalizer.** A NORM marker is closed (`TryParseNormMarker`); the IN marker is built over a decision with a
+  domain (`RewriteInDomain`); a clause with a `by` or a non-constant bound never reaches the composed MIN/MAX rewrite
+  (`AssertComposable`); a canonical class is never `INVALID`.
+- **Earlier rewrites.** Every reducer is a SUM before extraction; the value rewrite replaces every `VALUE` clause;
+  `RewriteMinMax` keeps an easy clause's reducer; `RewriteComposedMinMax` takes every extremum whose factor has no
+  plan-time sign; no NORM marker and no non-linear extremum member leave stage 05 (`VerifyNormMarkersLowered`,
+  `VerifyExtremumBodiesLinear`); the singleton-row bounds parallel the prepared constraints; `AddLowered` is asked for
+  `>` and `=` only; a bound's upper end folds when its lower does (`FoldKnownBound`).
+- **The solver gate.** A non-convex class has an objective group to name, a quadratic gap a quadratic row to quote, and
+  `DescribeGap` is asked only for an unmet class.
+- **Typed reads.** An `opaque` term has no coefficient to read; a null coefficient means 1; a composed left side's
+  aggregate is found before it is read; `FLOAT` beside `DOUBLE` in `IsIntegralColumnType`, as the model builder reads
+  integrality; a data column beside a product of decisions in `ReadsOnlyQueryWideDecisions`.
+
 ## 6. Source map
 
 | Concern | Location |

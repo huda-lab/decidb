@@ -825,7 +825,10 @@ Each is a guard the type system or a stage boundary needs, or a path only a nond
 - **Typed reads and stage handoffs.** A NULL `Value` before `GetValue<double>` (`IsFiniteOnRow`); `ExtractDoubleColumn`
   without `null_rows` (the canonicalizer promises no NULL there); `GroupKeyReader`'s `Seek` result; the backend the plan
   names by string (`PlannedSolverBackend`); a bound side that must be foldable (the optimizer asserts it); the solution
-  index read from a backend (`GetData`).
+  index read from a backend (`GetData`); the sink state's `written_bound` fallback and its
+  `bound.source_clause_id < constraint_sources.size()` test (a recorded singleton-row bound indexes `constraint_sources`
+  through the source-clause tag the binder stamps on every written comparison and rewrites copy,
+  `CopyClauseProvenanceTags`; a bound with no source names the variable and its value).
 - **Loops.** The settling loop's pass bound, and the fixed-point comparison that must read every value it writes.
 - **The OS.** `getrusage` failing, a process past 1 GiB, and Windows' zero peak memory.
 - **Nondeterministic runs.** A Ctrl-C after the solver's last check; the "Keep searching?" prompt and its

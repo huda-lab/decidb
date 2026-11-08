@@ -132,9 +132,11 @@ on these shapes is in [todo.md](todo.md).
   decline, L0 among them, and forms that apply, keyed, with data bounds, a data weight and an `ABS` among them; late
   NaN values and bounds, query-wide and keyed, and a too-large error, on the last of 5,000 rows).
 - Differential oracle: `test/decide/tests/test_direct_a2_single_facility_location.py`: query-wide, keyed, data-bound,
-  weighted, absolute and maximum-absolute case tables against the oracle; each ruled tie point derived by enumeration
-  (`test_a2_a_weighted_class_answers_the_ruled_point`, `test_a2_an_absolute_class_answers_the_ruled_point`, the
-  no-kept-row tests); parent contexts; random problems; error and boundary tables, a turning point past a DOUBLE
+  weighted, absolute and maximum-absolute case tables against the oracle, one case per branch of the plan, each named
+  for it (the lower and the upper median, a clamp up, down or none, the nearest-0 tie, no kept row, a NULL value, a
+  point interval; each spelling once). The oracle accepts any optimal point; the same test checks, on its `require`
+  run, the ruled tie point derived by enumeration (`_ruled_point`) and that `-0.0` prints as `0.0`. Parent contexts;
+  random problems; error and boundary tables, a turning point past a DOUBLE
   among them (`test_a2_a_turning_point_past_a_double_*`: a finite end answers it, an open end is too large); the
   infeasible and unbounded texts on both backends; the warnings; HiGHS's refusal of a data weight.
 - Error text: `test_a2_*_word_for_word` in `test_direct_user_facing.py` (values, keyed values, NaN data bounds, NaN
