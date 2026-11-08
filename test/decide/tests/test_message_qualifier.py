@@ -12,6 +12,9 @@ import io
 import pytest
 
 _DATA = "(VALUES (1, true, 'a', 5), (2, true, 'a', 5)) t(id, p, g, cap)"
+#: The four shapes of `ScopeQualifier` (`decide_source_provenance.cpp`): a `when` alone, a `per` alone, both and
+#: `per ()`. The qualifier is a string by the time a site quotes it (`AttachDecideQualifier`), so one site carries all
+#: four shapes and each other site one.
 _SCOPES = ["when p:", "per g:", "when p per g:", "per ():"]
 
 
@@ -35,7 +38,7 @@ def test_minmax_not_equal_refusal_quotes_the_scope(decidb_cli, scope):
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("scope", _SCOPES)
+@pytest.mark.parametrize("scope", ["when p per g:"])
 def test_product_not_equal_refusal_quotes_the_scope(decidb_cli, scope):
     """`decide_rewrite_notequal_avg.cpp`: the `<>` refusal over a product of decisions names its scope."""
     stderr = decidb_cli.execute_raw(_select(f"x <= 3 AND {scope} x * x <> 2")).stderr

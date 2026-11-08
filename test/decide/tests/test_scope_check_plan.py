@@ -84,6 +84,7 @@ FAILING = [
 ]
 
 
+# mode: the solver path and the direct rule each read the source; sql: one NULL ordering or source shape per case.
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("sql, message", FAILING)
 def test_a_failing_check_reports_its_least_class(decidb_cli, sql, message, mode):

@@ -141,7 +141,7 @@ def test_per_multi_column_all_qualified(
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_multi_column_mixed_qualified_and_bare(decidb_cli, duckdb_conn):
+def test_per_multi_column_mixed_qualified_and_bare(decidb_cli):
     """`per col, t.col:` and `per t.col, col:` both parse and run.
 
     Confirms the rule doesn't accidentally require all-or-nothing on the

@@ -29,7 +29,7 @@ from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, Scop
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable on nation table: pick nations to maximize customer acctbal.
 
     Join customer x nation, decide keepN per nation (not per customer).
@@ -110,7 +110,7 @@ def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver):
     """Verify rows from the same entity always have the same variable value.
     Use tight constraint to ensure some nations are excluded."""
     sql = """
@@ -189,7 +189,7 @@ def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped(INT) variable — tests the INTEGER readback path with VarIndexer."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, qty
@@ -262,7 +262,7 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver):
     """Mixed query: entity-scoped keepN (per nation) + row-scoped x (per customer row).
     This exercises the VarIndexer three-block layout where row-scoped and entity-scoped
     variables coexist with different indexing schemes."""
@@ -349,7 +349,7 @@ def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver, per
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable with WHEN condition on constraint."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, keepN
@@ -412,7 +412,7 @@ def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_keyed_nonexistent_table(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_nonexistent_table(decidb_cli):
     """Scoping to a nonexistent table should produce a clear error."""
     sql = """
         SELECT c.c_custkey, x
@@ -431,7 +431,7 @@ def test_keyed_nonexistent_table(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
-def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable with `per` constraint on region.
 
     Tests VarIndexer entity dedup + `per` group partitioning interaction.
@@ -529,7 +529,7 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable with MAX(expr) <= K constraint (easy case).
 
     MAX(keepN * c.c_acctbal) <= 8000 means every customer in a selected
@@ -602,7 +602,7 @@ def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
 @pytest.mark.correctness
 @pytest.mark.avg_rewrite
-def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable with AVG constraint.
 
     AVG(keepN * c.c_acctbal) <= 3000 tests the AVG→SUM scaling
@@ -684,7 +684,7 @@ def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
-def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver):
     """Triple interaction: entity-scoped variable + `when` + `per`.
 
     when c.c_acctbal > 5000 per r.r_name: sum(keepN * c.c_acctbal) by (r.r_name) <= 50000
@@ -2141,7 +2141,7 @@ def test_keyed_subquery_per_three_way(
 
 @pytest.mark.correctness
 def test_keyed_null_key(
-    decidb_cli, duckdb_conn, oracle_solver
+    decidb_cli, oracle_solver
 ):
     """NULL-keyed rows have no decision.
 
@@ -2533,7 +2533,7 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
 # share the same underlying var.
 
 @pytest.mark.correctness
-def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped var with per-row `x + 3 <= 10`. Each entity gets constrained
     once per join row; all copies agree on the same upper bound (7), so the
     shared variable's feasible range is x <= 7."""

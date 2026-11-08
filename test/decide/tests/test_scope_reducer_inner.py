@@ -227,7 +227,7 @@ def test_inner_per_in_the_objective_counts_a_class_from_its_first_kept_row(decid
 
 
 @pytest.mark.error
-def test_an_inner_key_must_determine_the_body(decidb_cli, scope_solver):
+def test_an_inner_key_must_determine_the_body(decidb_cli):
     """`per D.region` does not determine D.capacity (East has 25 and 40); `per D.depotID`
     does, and the same reducer runs."""
     result = decidb_cli.execute_raw(_open_query("sum(per D.region: D.capacity * open) <= 60"))
@@ -250,7 +250,7 @@ def test_an_inner_key_must_determine_the_body(decidb_cli, scope_solver):
 
 
 @pytest.mark.correctness
-def test_a_when_in_front_leaves_the_groups_it_keeps_no_row_of_out(decidb_cli, scope_solver):
+def test_a_when_in_front_leaves_the_groups_it_keeps_no_row_of_out(decidb_cli):
     """D1 and D3 have no shipment on hold, so only D2's group is bounded."""
     rows, _ = decidb_cli.execute(_open_query("when S.status = 'hold' per D.depotID: sum(ship) by (D.depotID) <= 3"))
     assert [ship for _, ship, _ in rows] == [10, 20, 30, 3, 25]

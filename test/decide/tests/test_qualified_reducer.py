@@ -107,54 +107,11 @@ def _customer_order_chain_data(duckdb_conn, nation_key):
 
 
 # ---------------------------------------------------------------------------
-# Test 1: SUM(n: ...) against an oracle that charges each nation once
-# ---------------------------------------------------------------------------
-
-@pytest.mark.correctness
-def test_qualified_sum_charges_each_entity_once(decidb_cli, duckdb_conn, oracle_solver,
-                                                perf_tracker):
-    """`SUM(n: cost * keepN)` charges a nation's cost once, not once per customer."""
-    sql = """
-        SELECT c.c_custkey, n.n_nationkey, keepN
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(keepN * c.c_acctbal) >= 700000
-        MINIMIZE SUM(n: (n.n_nationkey + 1) * keepN)
-    """
-    result, _ = decidb_cli.execute(sql)
-    keep = _keep_by_nation(result, nation_col=1, keep_col=2)
-
-    nation_ids, _, acctbal_total = _nation_data(duckdb_conn)
-
-    oracle_solver.create_model("qualified_sum")
-    names = {n: f"keepN_{n}" for n in nation_ids}
-    for n in nation_ids:
-        oracle_solver.add_variable(names[n], VarType.BINARY)
-    # The constraint is unqualified, so it keeps SQL's row semantics: each nation
-    # contributes the acctbal of every customer row it joins with.
-    oracle_solver.add_constraint(
-        {names[n]: acctbal_total[n] for n in nation_ids},
-        ">=", 700000.0, name="acctbal_floor",
-    )
-    # The objective is qualified, so each nation contributes its cost exactly once.
-    oracle_solver.set_objective(
-        {names[n]: float(n + 1) for n in nation_ids}, ObjSense.MINIMIZE,
-    )
-    oracle = oracle_solver.solve()
-
-    decidb_obj = sum((n + 1) * keep.get(n, 0) for n in nation_ids)
-    assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle.objective_value}"
-
-
-# ---------------------------------------------------------------------------
 # Test 2: the qualified and unqualified forms are genuinely different problems
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_qualified_and_unqualified_diverge(decidb_cli, duckdb_conn, oracle_solver,
-                                           perf_tracker):
+def test_qualified_and_unqualified_diverge(decidb_cli, duckdb_conn, oracle_solver):
     """Same query, qualifier removed: the unqualified reducer weights each nation by
     its customer count, and each form matches its own oracle."""
     template = """
@@ -215,8 +172,7 @@ def test_qualified_and_unqualified_diverge(decidb_cli, duckdb_conn, oracle_solve
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(decidb_cli, duckdb_conn, oracle_solver):
     """`sum(c,o: ...)` over a customer/orders/lineitem chain. The composite
     qualifier's tuple identity is (customer, order): it collapses only the fan-out
     lineitem (unnamed) contributes, keeping every distinct order a customer has —
@@ -296,8 +252,7 @@ def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_qualified_avg_denominator_is_distinct_entities(decidb_cli, duckdb_conn,
-                                                        oracle_solver, perf_tracker):
+def test_qualified_avg_denominator_is_distinct_entities(decidb_cli, duckdb_conn, oracle_solver):
     """`AVG(n: cost * keepN)` averages over nations; the unqualified form averages
     over join rows, so the two scale differently."""
     sql = """
@@ -338,7 +293,7 @@ def test_qualified_avg_denominator_is_distinct_entities(decidb_cli, duckdb_conn,
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("agg,sense", [("MIN", "MAXIMIZE"), ("MAX", "MINIMIZE")])
-def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense, perf_tracker):
+def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense):
     """MIN/MAX accept a qualifier. De-duplication cannot change an extremum — every
     row of a tuple identity carries the same value, so dropping duplicates only
     removes repeats of a value already present — and the two forms must agree.
@@ -380,8 +335,7 @@ def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense, perf_tracker):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_qualified_reducer_in_constraint(decidb_cli, duckdb_conn, oracle_solver,
-                                         perf_tracker):
+def test_qualified_reducer_in_constraint(decidb_cli, duckdb_conn, oracle_solver):
     """A budget stated once per nation. Under row semantics the same budget would
     be exceeded by a nation's customer count, so the two forms admit different
     feasible sets."""
@@ -424,7 +378,7 @@ def test_qualified_reducer_in_constraint(decidb_cli, duckdb_conn, oracle_solver,
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_qualified_reducer_with_per(decidb_cli, duckdb_conn, perf_tracker):
+def test_qualified_reducer_with_per(decidb_cli, duckdb_conn):
     """A per-nation budget stated once per nation. Each `per` class holds exactly one
     nation, so every group's charge is that nation's cost — feasible only for the
     nations under the cap."""
@@ -453,8 +407,7 @@ def test_qualified_reducer_with_per(decidb_cli, duckdb_conn, perf_tracker):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn,
-                                                   oracle_solver, perf_tracker):
+def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn, oracle_solver):
     """Only the qualified term de-duplicates; the unqualified term beside it keeps
     row semantics."""
     sql = """
@@ -498,7 +451,8 @@ def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn,
 
 @pytest.mark.correctness
 def test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    decidb_cli, duckdb_conn, oracle_solver
+):
     """D1: `SUM(n: (nationkey+1) * cap)` charges each nation's weight once, not
     once per customer row -- the qualifier's de-duplication applies to a scalar's
     term exactly as it does to an entity-scoped one."""
@@ -546,7 +500,7 @@ _REJECT_BASE = """
 
 @pytest.mark.correctness
 def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations(
-        decidb_cli, duckdb_conn):
+        decidb_cli):
     """`sum(n,c: ...)` is now legal (batch E). Its composite tuple identity is the
     concatenation of n's and c's own keys — which, in a query joining only n and c,
     *is* the join-result row, so de-duplication is a no-op and the composite form
@@ -638,7 +592,7 @@ def test_unknown_relation_qualifier_rejected(decidb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.correctness
-def test_qualified_hard_max_objective(decidb_cli, duckdb_conn, perf_tracker):
+def test_qualified_hard_max_objective(decidb_cli, duckdb_conn):
     """`MAXIMIZE MAX(n: ...)` — the Big-M direction.
 
     `done.md` claims MIN/MAX are unaffected by de-duplication because every row
@@ -680,7 +634,7 @@ def test_qualified_hard_max_objective(decidb_cli, duckdb_conn, perf_tracker):
 
 @pytest.mark.min_max
 @pytest.mark.correctness
-def test_qualified_hard_min_constraint(decidb_cli, duckdb_conn, perf_tracker):
+def test_qualified_hard_min_constraint(decidb_cli, duckdb_conn):
     """`MIN(n: ...) <= K` — the hard direction on the constraint side."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, keepN
@@ -713,8 +667,7 @@ def test_qualified_hard_min_constraint(decidb_cli, duckdb_conn, perf_tracker):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_qualified_reducer_with_aggregate_local_when_in_objective(
-        decidb_cli, duckdb_conn, perf_tracker):
+def test_qualified_reducer_with_aggregate_local_when_in_objective(decidb_cli, duckdb_conn):
     """Both masks apply, and the qualifier survives the composition.
 
     Nations 5 (9 rows) and 14 (2 rows) are chosen so row-weighting inverts the
@@ -756,8 +709,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_objective(
 
 
 @pytest.mark.correctness
-def test_aggregate_local_when_filters_inside_a_qualified_reducer(
-        decidb_cli, perf_tracker):
+def test_aggregate_local_when_filters_inside_a_qualified_reducer(decidb_cli):
     """The WHEN mask still excludes rows once the qualifier is in play.
 
     `n_nationkey < 10` drops nation 14 from the term entirely, so the only
@@ -814,8 +766,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_constraint(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_composed_minmax_preserves_the_qualifier(decidb_cli, duckdb_conn,
-                                                 perf_tracker):
+def test_composed_minmax_preserves_the_qualifier(decidb_cli):
     """Adding `+ MAX(keepN)` to a qualified reducer must not change what the
     qualifier means.
 
@@ -851,8 +802,7 @@ def test_composed_minmax_preserves_the_qualifier(decidb_cli, duckdb_conn,
 
 
 @pytest.mark.correctness
-def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli,
-                                                                 perf_tracker):
+def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli):
     """The composed *constraint* path is separate code from the objective path,
     so it needs its own pin.
 

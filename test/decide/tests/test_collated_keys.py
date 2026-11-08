@@ -37,6 +37,13 @@ def _judged(cli, solver, sql, decisions, clauses, objective):
     return result
 
 
+def _assert_no_check_planned(cli, explain_sql):
+    """The solver path's plan of `explain_sql` holds no determination check."""
+    plan = cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(explain_sql)
+    assert plan.returncode == 0, plan.stderr
+    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+
+
 @pytest.mark.correctness
 def test_a_by_group_groups_its_key_under_the_collation(decidb_cli, scope_solver):
     """`sum(x) by (g) <= 1`: 'a' and 'A' are one group, so one of rows 1 and 2 is picked, and one of rows 3-5."""
@@ -53,9 +60,7 @@ def test_a_collated_per_key_determines_its_own_by_group(decidb_cli, scope_solver
     sql = f"""
         SELECT id, x {_source()}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN {sql}")
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+    _assert_no_check_planned(decidb_cli, f"EXPLAIN {sql}")
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     result = _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
     assert sum(row["x"] for row in result) == 2
@@ -77,9 +82,7 @@ def test_a_by_key_written_under_the_columns_collation_is_the_same_key(decidb_cli
     sql = f"""
         SELECT id, x {_source()}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE nocase) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(f"EXPLAIN {sql}")
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+    _assert_no_check_planned(decidb_cli, f"EXPLAIN {sql}")
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
 
@@ -92,11 +95,7 @@ def test_the_default_collation_and_the_same_written_collation_are_one_key(decidb
         SET default_collation='nocase';
         SELECT id, x {_source(collation="")}
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) by (t.g COLLATE NOCASE) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
-    plan = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).execute_raw(
-        sql.replace("SELECT", "EXPLAIN SELECT", 1)
-    )
-    assert plan.returncode == 0, plan.stderr
-    assert "notdetermine" not in re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", plan.stdout)  # the box wraps text mid-token
+    _assert_no_check_planned(decidb_cli, sql.replace("SELECT", "EXPLAIN SELECT", 1))
     clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("gk",))]
     _judged(decidb_cli, scope_solver, sql, [X], clauses, MAXIMIZE_PX)
 

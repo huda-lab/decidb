@@ -111,6 +111,7 @@ def test_no_class_when_every_key_is_null(decidb_cli, oracle_solver, shape):
     _agree(decidb_cli, oracle_solver, [(row[0], None) + row[2:] for row in ROWS], shape, bound="1")
 
 
+# shape: the BOOL rule (S1) and the REAL rule (R1); mode: the solver path and the direct rule, which raise one message.
 @pytest.mark.cons_aggregate
 @pytest.mark.error
 @pytest.mark.parametrize("shape", ["bool", "real"])

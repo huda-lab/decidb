@@ -28,7 +28,6 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
-from ._oracle_helpers import group_indices
 from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
@@ -365,7 +364,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_abs_aggregate(decidb_cli, oracle_solver, perf_tracker):
     """per grp: sum(abs(x - target)) by (grp) <= 5 — ABS auxiliary variables must be
     partitioned by `per` group. A global-scoping bug would let cross-group
     deviations cancel against each other in the aggregate, relaxing the
@@ -472,7 +471,7 @@ def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_multi_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
     """Two decision variables (BOOLEAN x, INTEGER y) under `per` grouping.
     The variable-indexing layer must produce the right column mapping for
     each group's constraint, with each variable's coefficients partitioned

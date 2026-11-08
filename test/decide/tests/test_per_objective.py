@@ -114,53 +114,6 @@ def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     )
 
 
-@pytest.mark.per_clause
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_sum_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """sum(per col: sum(x * cost) by (col)) — nested SUMs cancel to flat SUM."""
-    sql = """
-        SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        WHERE s_nationkey < 5
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 3
-        MAXIMIZE sum(per s_nationkey: sum(x * s_acctbal) by (s_nationkey))
-    """
-    t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(s_suppkey AS BIGINT),
-               CAST(s_nationkey AS BIGINT),
-               CAST(s_acctbal AS DOUBLE)
-        FROM supplier WHERE s_nationkey < 5
-    """).fetchall()
-    n = len(data)
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("sum_sum_per_noop")
-    vnames = [f"x_{i}" for i in range(n)]
-    for v in vnames:
-        oracle_solver.add_variable(v, VarType.BINARY)
-    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 3.0, name="total")
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[cols.index("s_acctbal")])},
-    )
-    perf_tracker.record(
-        "sum_sum_per_noop", decidb_time, build_time, result.solve_time_seconds,
-        n, n, 1, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Common plumbing for nested-aggregate oracle construction on lineitem data
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ import pytest
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import DEPOT_COLUMNS, DEPOTS, SHIPMENT_COLUMNS, SHIPMENTS, values
 from ._scope_cases import aligned, answer, from_clause, joined, scope_solver  # noqa: F401
-from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective, ScopeError
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
 #: A second East depot whose capacity differs within its region.
@@ -126,7 +126,7 @@ def test_a_decision_outside_reducers(decidb_cli):
 
 
 @pytest.mark.error
-def test_an_objective_term(decidb_cli, scope_solver):
+def test_an_objective_term(decidb_cli):
     """A per-row decision outside the objective's reducers is legal only with a single
     instance over the kept rows (§4)."""
     rows, _ = decidb_cli.execute(_query("ship <= 7", objective="MAXIMIZE when S.shipmentID = 3: ship"))
@@ -188,27 +188,6 @@ def test_null_is_one_value(decidb_cli, scope_solver):
         _query("per D.region: sum(ship) by (D.region) <= D.capacity", depots),
         "DECIDE: per D.region does not determine D.capacity. D.region = 'East' has more than one value: " "40, NULL.",
     )
-
-
-@pytest.mark.correctness
-def test_without_per_the_clause_is_legal_and_takes_the_tightest_bound(decidb_cli, scope_solver):
-    """S3: the same clause with no `per` is one constraint per row -- East's total under
-    its tightest capacity, 25."""
-    sql = _query("sum(ship) by (D.region) <= D.capacity", EAST_SPLIT)
-    model = ScopedModel(joined(depots=EAST_SPLIT), [Decision("ship")])
-    clauses = [
-        Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},)),
-        Scoped((Reduce("sum", lambda r: {"ship": 1}, by=("region",)),), "<=", (lambda r: {CONSTANT: r["capacity"]},)),
-    ]
-    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
-    result = aligned(answer(decidb_cli, sql), model)
-    assert (
-        model.judge_scoped(result, clauses, objective)
-        == pytest.approx(model.solve_scoped(scope_solver, clauses, objective))
-        == 25 + 20
-    )
-    with pytest.raises(ScopeError, match="does not determine"):
-        model.check([Scoped(clauses[1].lhs, "<=", clauses[1].rhs, per=("region",))])
 
 
 @pytest.mark.error

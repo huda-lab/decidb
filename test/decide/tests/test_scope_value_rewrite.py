@@ -194,6 +194,8 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
     assert [row["open"] for row in result] == [True, True, True, True, False]
 
 
+# cli_fixture: both backends load the helper and the plain row; link: the five ways the term beside the reducer is,
+# or is not, one value per `by` group (`helpers` is how many helper decisions that adds).
 @pytest.mark.correctness
 @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
 @pytest.mark.parametrize(

@@ -13,12 +13,14 @@ import pytest
 from ._brute_force import judge_rows
 from ._scope_cases import answer, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
-from solver.types import ObjSense, VarType
+from solver.types import ObjSense
 
 COLUMNS = ("id", "cap", "g", "w")
 ROWS = ((1, 3, "A", 2.0), (2, 5, "A", 4.0), (3, 7, "B", 1.0))
 CAPS = [cap for _, cap, _, _ in ROWS]
 
+# Gurobi and HiGHS load a model by different code, and what one refuses the other builds (a product, a square), so a
+# test whose model either could refuse runs on both.
 BOTH_SOLVERS = pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
 
 X = lambda r: {"x": 1}  # noqa: E731
@@ -458,21 +460,13 @@ def test_easy_max_bound_builds_the_model_of_a_column_bound(decidb_cli, tmp_path,
 _X_TIMES = lambda c: (lambda r: {"x": c})  # noqa: E731
 _SIGNED_X = (Decision("x", lb=float("-inf")),)
 
+# The spellings `test_affine_bound_builds_the_model_of_a_column_bound` does not list. It pins the others to the model
+# `x >= -2` builds, which a backend answers as `x-folded-bound` below does, so they need no answer-level case.
 NEGATIVE_FLOOR_SPELLINGS = [
-    pytest.param("x - 1 >= -3", Scoped((X, _const(-1)), ">=", (_const(-3),)), id="x-shift"),
     pytest.param("x >= -2 + 0", Scoped((X,), ">=", (_const(-2),)), id="x-folded-bound"),
-    pytest.param("2 * x >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-factor"),
     pytest.param("x * 2 >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-factor-right"),
-    pytest.param("-x <= 2", Scoped((_X_TIMES(-1),), "<=", (_const(2),)), id="x-negated"),
     pytest.param("x / 2 >= -1", Scoped((_X_TIMES(0.5),), ">=", (_const(-1),)), id="x-divided"),
     pytest.param("2 * x > -5", Scoped((_X_TIMES(2),), ">", (_const(-5),)), id="x-strict-factor"),
-    pytest.param("min(x) - 1 >= -3", Scoped((Reduce("min", X), _const(-1)), ">=", (_const(-3),)), id="min-shift"),
-    pytest.param(
-        "2 * min(x) >= -4", Scoped((Reduce("min", X, factor=lambda r: 2.0),), ">=", (_const(-4),)), id="min-factor"
-    ),
-    pytest.param(
-        "-min(x) <= 2", Scoped((Reduce("min", X, factor=lambda r: -1.0),), "<=", (_const(2),)), id="min-negated"
-    ),
     pytest.param(
         "min(x) / 2 >= -1", Scoped((Reduce("min", X, factor=lambda r: 0.5),), ">=", (_const(-1),)), id="min-divided"
     ),
@@ -481,15 +475,7 @@ NEGATIVE_FLOOR_SPELLINGS = [
         Scoped((Reduce("min", X, by=("g",)), _const(-1)), ">=", (_const(-3),), per=("g",)),
         id="min-per-shift",
     ),
-    pytest.param(
-        "2 * (x - 1) >= -6", Scoped((_X_TIMES(2), _const(-2)), ">=", (_const(-6),)), id="x-shift-under-factor"
-    ),
     pytest.param("-(x - 1) <= 3", Scoped((_X_TIMES(-1), _const(1)), "<=", (_const(3),)), id="x-shift-under-minus"),
-    pytest.param(
-        "2 * (min(x) - 1) >= -6",
-        Scoped((Reduce("min", X, factor=lambda r: 2.0), _const(-2)), ">=", (_const(-6),)),
-        id="min-shift-under-factor",
-    ),
     pytest.param(
         "(min(x) - 1) * 2 >= -6",
         Scoped((Reduce("min", X, factor=lambda r: 2.0), _const(-2)), ">=", (_const(-6),)),
@@ -505,24 +491,12 @@ NEGATIVE_FLOOR_SPELLINGS = [
         Scoped((_const(3), Reduce("min", X, factor=lambda r: -1.0)), "<=", (_const(5),)),
         id="min-subtracted-from-constant",
     ),
-    pytest.param("x + x >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-repeated"),
     pytest.param("2 * x + x >= -6", Scoped((_X_TIMES(3),), ">=", (_const(-6),)), id="x-repeated-under-factor"),
     pytest.param("x - 3 * x <= 4", Scoped((_X_TIMES(-2),), "<=", (_const(4),)), id="x-repeated-cancelling-to-negative"),
-    pytest.param(
-        "min(x) + min(x) >= -4",
-        Scoped((Reduce("min", X, factor=lambda r: 2.0),), ">=", (_const(-4),)),
-        id="min-repeated",
-    ),
     pytest.param(
         "2 * min(x) + min(x) >= -6",
         Scoped((Reduce("min", X, factor=lambda r: 3.0),), ">=", (_const(-6),)),
         id="min-repeated-under-factor",
-    ),
-    pytest.param("3 * x >= x - 4", Scoped((_X_TIMES(3),), ">=", (X, _const(-4))), id="x-repeated-across"),
-    pytest.param(
-        "3 * min(x) >= min(x) - 4",
-        Scoped((Reduce("min", X, factor=lambda r: 3.0),), ">=", (Reduce("min", X), _const(-4))),
-        id="min-repeated-across",
     ),
 ]
 
@@ -576,7 +550,7 @@ def test_affine_bound_builds_the_model_of_a_column_bound(decidb_cli, tmp_path, b
 
 
 @pytest.mark.parametrize("bound", ["x >= w - 4", "2 * x >= (SELECT -4)", "w * x >= -4", "max(-w * x) <= 4"])
-def test_a_data_bound_keeps_the_default_floor(decidb_cli, tmp_path, bound):
+def test_a_data_bound_keeps_the_default_floor(decidb_cli, bound):
     """A side that is data -- a column, a subquery, a column factor, inside a MIN/MAX too --
     is not a bound known before the query runs: each narrows the decision's box and never
     replaces its default floor (D41)."""
@@ -787,6 +761,8 @@ def test_count_star_by_group(request, scope_solver, cli_fixture):
 # ---------------------------------------------------------------------------
 
 
+# spelling: the three fronts a bare clause can be written under; clause: the three operator shapes the message names
+# with a verb (multiply, divide, divide a sum).
 @pytest.mark.parametrize("spelling", ["", "per row: ", "per (): "])
 @pytest.mark.parametrize(
     "clause, verb",

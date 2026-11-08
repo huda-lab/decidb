@@ -34,6 +34,11 @@ CAP = lambda r: {CONSTANT: r["cap"]}  # noqa: E731
 X_BOUND = Scoped((X,), "<=", (lambda r: {CONSTANT: r["v"]},))
 MAXIMIZE_X = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", X),))
 
+# The dimensions, by what each reaches in the clause generator: `declaration` how many instances the decision has
+# (one per row, or one per `h`); `front` the clause's own `when`/`per` spelling (bare, `per row`, `per ()`, a key);
+# `body` where the reducer stands (none, the bound, beside a decision, two `by` keys); `agg` the function (the AVG
+# scaling, the MIN/MAX link) and `inner` the reducer's own `when`/`per`. A cell whose data breaks the determination
+# rule is that front, body and inner meeting a key that does not determine them: it refuses and has no answer.
 #: The scope in front: SQL prefix -> (when, per).
 FRONTS = {
     "": (None, PER_ROW),

@@ -87,7 +87,7 @@ def _oracle_objective(oracle_solver, trailing_when: bool) -> float:
 @pytest.mark.correctness
 @pytest.mark.sql_subquery
 @pytest.mark.when
-def test_nested_decide_then_outer_when_oracle(decidb_cli, oracle_solver, perf_tracker):
+def test_nested_decide_then_outer_when_oracle(decidb_cli, oracle_solver):
     """The regression: a constraint using ``WHEN`` *after* a nested DECIDE subquery.
 
     This is the shape that used to raise `syntax error at or near "WHEN"`, because
@@ -103,7 +103,7 @@ def test_nested_decide_then_outer_when_oracle(decidb_cli, oracle_solver, perf_tr
 @pytest.mark.correctness
 @pytest.mark.sql_subquery
 @pytest.mark.when
-def test_nested_split_order_inner_then_outer_when(decidb_cli, oracle_solver, perf_tracker):
+def test_nested_split_order_inner_then_outer_when(decidb_cli, oracle_solver):
     """The inner clause in the paper's split order restores the outer state too.
 
     The split order routes through ``decide_declaration`` rather than
@@ -118,7 +118,7 @@ def test_nested_split_order_inner_then_outer_when(decidb_cli, oracle_solver, per
 
 @pytest.mark.correctness
 @pytest.mark.sql_subquery
-def test_nested_decide_without_outer_when(decidb_cli, oracle_solver, perf_tracker):
+def test_nested_decide_without_outer_when(decidb_cli, oracle_solver):
     """Nesting with no trailing ``WHEN`` worked before the fix and still does."""
     rows, _ = decidb_cli.execute(_outer(_INNER, trailing_when=False))
     assert len(rows) == 2
@@ -128,7 +128,7 @@ def test_nested_decide_without_outer_when(decidb_cli, oracle_solver, perf_tracke
 
 
 @pytest.mark.sql_subquery
-def test_case_when_after_a_nested_clause_lexes_as_sql(decidb_cli, perf_tracker):
+def test_case_when_after_a_nested_clause_lexes_as_sql(decidb_cli):
     """Restoring the outer state must not leave ``WHEN`` armed once the whole clause
     closes: an ordinary ``CASE WHEN`` in ``ORDER BY`` still has to parse."""
     sql = f"""
@@ -224,7 +224,7 @@ def _oracle_chain(oracle_solver, levels) -> float:
 
 @pytest.mark.correctness
 @pytest.mark.sql_subquery
-def test_three_levels_of_decide_nesting(decidb_cli, oracle_solver, perf_tracker):
+def test_three_levels_of_decide_nesting(decidb_cli, oracle_solver):
     """A DECIDE subquery inside a DECIDE subquery. Two levels always planned; the
     third is the level whose subquery was still unplanned at canonicalization."""
     rows, _ = decidb_cli.execute(_outer(_LEVEL_2, trailing_when=False))
@@ -241,7 +241,7 @@ def test_three_levels_of_decide_nesting(decidb_cli, oracle_solver, perf_tracker)
 
 @pytest.mark.correctness
 @pytest.mark.sql_subquery
-def test_plain_subquery_inside_a_nested_decide_constraint(decidb_cli, oracle_solver, perf_tracker):
+def test_plain_subquery_inside_a_nested_decide_constraint(decidb_cli, oracle_solver):
     """The same failure without a third DECIDE: an ordinary scalar subquery used as
     a bound inside the *inner* clause is enough to trigger it."""
     inner = (
@@ -257,7 +257,7 @@ def test_plain_subquery_inside_a_nested_decide_constraint(decidb_cli, oracle_sol
 
 @pytest.mark.correctness
 @pytest.mark.sql_subquery
-def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solver, perf_tracker):
+def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solver):
     """The objective passes through the same canonicalization boundary, so a
     subquery scaling the inner objective has to be flattened there too."""
     inner = (

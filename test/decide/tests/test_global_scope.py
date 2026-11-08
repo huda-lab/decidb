@@ -26,7 +26,7 @@ from solver.types import VarType, ObjSense
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver):
     """One query-wide cap constrains every row's ship, and is penalised in the
     objective. This is the paper's §3.1 shape: `demand - sum(ship) <= cap`
     reduced to a per-row bound plus a scalar penalty.
@@ -83,8 +83,7 @@ def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_objective_coefficient_applied_once(decidb_cli, duckdb_conn,
-                                                   oracle_solver, perf_tracker):
+def test_scalar_objective_coefficient_applied_once(decidb_cli, oracle_solver):
     """`MINIMIZE 2*cap - SUM(x)` discriminates the coefficient.
 
     With the coefficient applied once (correct) the objective is 2*cap - n*cap =
@@ -131,7 +130,7 @@ def test_scalar_objective_coefficient_applied_once(decidb_cli, duckdb_conn,
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_is_one_column_regardless_of_cardinality(decidb_cli, perf_tracker):
+def test_scalar_is_one_column_regardless_of_cardinality(decidb_cli):
     """The same scalar problem over two very different row counts must give the
     same answer. A row-scoped variable would decouple per row and let each row
     pick its own minimum, so the shared-maximum answer would not survive."""
@@ -165,7 +164,7 @@ def test_scalar_is_one_column_regardless_of_cardinality(decidb_cli, perf_tracker
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_value_repeated_on_every_row(decidb_cli, perf_tracker):
+def test_scalar_value_repeated_on_every_row(decidb_cli):
     """"A scalar assignment is repeated on every output row" (paper §3.1)."""
     sql = """
         SELECT l_orderkey, l_linenumber, cap
@@ -246,8 +245,7 @@ class TestScalarReducerRejected:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, duckdb_conn,
-                                                                   oracle_solver, perf_tracker):
+def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, duckdb_conn, oracle_solver):
     """`SUM(l_linenumber * cap) <= K` must use the coefficient `SUM(l_linenumber)`
     over the counted rows -- not 1 (bare scalar misreading) and not the row count
     (uniform-weight misreading). MAXIMIZE cap makes the constant discriminate the
@@ -283,7 +281,7 @@ def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, du
 
 
 @pytest.mark.correctness
-def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli, perf_tracker):
+def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli):
     """`SUM(x + cap)` is not row-invariant -- `x` varies per row -- so it means
     `SUM(x) + n*cap`, not a rejection. Discriminates the row-count weighting from
     the `x + cap` misreading of a naive "contains a scalar" test."""
@@ -313,7 +311,7 @@ def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli, perf_tr
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_still_usable_as_identifier(decidb_cli, perf_tracker):
+def test_scalar_still_usable_as_identifier(decidb_cli):
     """SCALAR is an unreserved keyword, so existing queries that use it as a
     column alias or CTE name keep working."""
     rows, _ = decidb_cli.execute("""
@@ -324,7 +322,7 @@ def test_scalar_still_usable_as_identifier(decidb_cli, perf_tracker):
 
 
 @pytest.mark.correctness
-def test_query_wide_decision_beside_a_column_named_scalar(decidb_cli, perf_tracker):
+def test_query_wide_decision_beside_a_column_named_scalar(decidb_cli):
     """A query-wide decision (`per (): cap(INT)`) beside an output column named
     `scalar`, an ordinary identifier (language/guide.md §1.2)."""
     rows, cols = decidb_cli.execute(
@@ -347,7 +345,7 @@ def test_query_wide_decision_beside_a_column_named_scalar(decidb_cli, perf_track
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_empty_input(decidb_cli, perf_tracker):
+def test_scalar_empty_input(decidb_cli):
     """An empty selection returns an empty relation, exactly as it would for a
     row-scoped decision — the scalar gets no special case."""
     sql = """
@@ -375,8 +373,7 @@ def test_scalar_empty_input(decidb_cli, perf_tracker):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_scalar_with_abs_per_row_constraint(decidb_cli, duckdb_conn,
-                                            oracle_solver, perf_tracker):
+def test_scalar_with_abs_per_row_constraint(decidb_cli, oracle_solver):
     """`ABS(x - cap) <= 2` couples every row's `x` to the one shared `cap`.
 
     ABS linearization adds two auxiliary columns per row. The scalar sits
@@ -425,8 +422,7 @@ def test_scalar_with_abs_per_row_constraint(decidb_cli, duckdb_conn,
 
 
 @pytest.mark.correctness
-def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver,
-                                          perf_tracker):
+def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver):
     """`POWER(x - cap, 2) <= 4` is the QCQP form of the ABS case above.
 
     Gurobi only — HiGHS has no quadratic constraints. The two formulations
@@ -471,8 +467,7 @@ def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver,
 
 @pytest.mark.bilinear
 @pytest.mark.correctness
-def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver,
-                                                 perf_tracker):
+def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver):
     """`b * cap <= 4` is a Boolean x scalar product, McCormick-linearized.
 
     The instance is built so the scalar's value trades against how many rows can
@@ -522,7 +517,7 @@ def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver,
 
 
 @pytest.mark.correctness
-def test_scalar_with_not_equal(decidb_cli, perf_tracker):
+def test_scalar_with_not_equal(decidb_cli):
     """`cap <> 8` on a query-wide decision goes through the Big-M disjunction,
     which adds a global auxiliary binary — the block immediately above the
     scalar's.
@@ -703,8 +698,7 @@ def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
 # makes that plausible; these two tests make it checked.
 
 @pytest.mark.correctness
-def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
-                                                oracle_solver, perf_tracker):
+def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn, oracle_solver):
     """`norm(l_linenumber * cap - 3, 1) <= 85` means `SUM_i |d_i*cap - 3| <= 85`.
 
     The bound is chosen so the three readings of the scalar's coefficient give
@@ -765,9 +759,7 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
 
 @pytest.mark.quadratic
 @pytest.mark.correctness
-def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckdb_conn,
-                                                               oracle_solver,
-                                                               perf_tracker):
+def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckdb_conn, oracle_solver):
     """`MINIMIZE SUM(POWER(l_linenumber * cap - 4, 2))` weights cap^2 by SUM(d^2)
     and cap by SUM(d), not by the row count.
 

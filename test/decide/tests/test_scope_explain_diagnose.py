@@ -42,6 +42,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
 # ---------------------------------------------------------------------------
 
 
+# One case per rewrite (each leaves its own account line); `row` and `absent` pin the solver rows that rewrite emits.
 @pytest.mark.explain
 @pytest.mark.parametrize(
     "decide, clause, account, row, absent",

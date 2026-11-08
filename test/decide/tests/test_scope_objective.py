@@ -189,11 +189,24 @@ def _two_level_query(outer, inner, sense, clause="x <= t.cap AND sum(x) >= 6", w
         ORDER BY id"""
 
 
+def _two_level_cells():
+    """Each (outer, inner, sense) cell that reaches a branch of `LinearizeMinMaxObjective` (PATH B) no other cell does.
+
+    Its inner phase reads only `per_inner_*` and its outer phase only `per_outer_*`, and each easy flag comes from
+    its own reducer's name and the sense (`decide_rewrite_minmax.cpp`, `per_inner_is_easy` and `per_outer_is_easy`).
+    So an extremum over an extremum needs the cells whose two names agree, which reach every (name, easy or hard)
+    pair of each phase once; a min over a max adds no pair. A sum over a sum reads no sense, so it runs under one."""
+    for sense in ("MINIMIZE", "MAXIMIZE"):
+        for outer, inner in itertools.product(("sum", "min", "max"), repeat=2):
+            if {outer, inner} == {"min", "max"} or (outer, inner, sense) == ("sum", "sum", "MAXIMIZE"):
+                continue
+            yield pytest.param(outer, inner, sense, id=f"{sense}-{outer}-{inner}")
+
+
 @pytest.mark.correctness
-@pytest.mark.parametrize("outer, inner", list(itertools.product(("sum", "min", "max"), repeat=2)))
-@pytest.mark.parametrize("sense", ["MINIMIZE", "MAXIMIZE"])
+@pytest.mark.parametrize("outer, inner, sense", list(_two_level_cells()))
 def test_two_level_form(decidb_cli, scope_solver, outer, inner, sense):
-    """All nine combinations in both directions; the NULL-key rows are in no group."""
+    """The nine combinations in both directions, less the cells above; the NULL-key rows are in no group."""
     sql = _two_level_query(outer, inner, sense)
     model = ScopedModel(table_rows(GROUPS, GROUP_ROWS), [Decision("x")])
     clauses = [
