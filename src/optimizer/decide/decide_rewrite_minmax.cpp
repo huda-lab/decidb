@@ -85,9 +85,7 @@ static LogicalDecide::RewriteAccount::Kind ExtremumAccount(bool is_easy, const B
 // constraints at sink-finalize time.
 
 void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
-	if (decide.decide_constraints) {
-		RewriteComposedMinMaxInConstraint(decide.decide_constraints, decide);
-	}
+	RewriteComposedMinMaxInConstraint(decide.decide_constraints, decide);
 	RewriteComposedMinMaxObjectiveTop(decide);
 }
 
@@ -102,13 +100,11 @@ static bool IsFunctionNode(const Expression &e, idx_t decide_index, const char *
 //! factor, else null. The factor is `match.scale`.
 static const BoundAggregateExpression *MatchLoneScaledExtremum(const Expression &e, idx_t decide_index,
                                                                ScaledAggregateMatch &match) {
-	if (!TryMatchScaledAggregate(e, decide_index, match) || !match.scale) {
+	if (!TryMatchScaledAggregate(e, decide_index, match)) {
 		return nullptr;
 	}
 	auto &agg = *match.aggregate;
-	if (!IsExtremumName(StringUtil::Lower(agg.function.name)) || agg.children.size() != 1 ||
-	    !BoundExpressionReferencesDecide(*agg.children[0], decide_index) ||
-	    BoundExpressionReferencesDecide(*match.scale, decide_index)) {
+	if (!IsExtremumName(StringUtil::Lower(agg.function.name))) {
 		return nullptr;
 	}
 	return &agg;
@@ -122,8 +118,7 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 	if (u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = u.Cast<BoundAggregateExpression>();
 		auto name = StringUtil::Lower(agg.function.name);
-		if (IsExtremumName(name) && agg.children.size() == 1 &&
-		    BoundExpressionReferencesDecide(*agg.children[0], decide_index)) {
+		if (IsExtremumName(name)) {
 			return true;
 		}
 	}
@@ -175,20 +170,10 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 			                out_terms, names, beside);
 			return;
 		}
-		if (fn.children.size() == 1) {
-			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], -sign, decide_index, outer_push,
-			                out_terms, names, beside);
-			return;
-		}
-	}
-	// A zero constant contributes nothing. It reaches here as the head of the
-	// canonicalizer's `0 - term` idiom for a leading negative term, so rejecting
-	// it would reject shapes purely on how the negation was spelled.
-	if (u.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		auto &val = u.Cast<BoundConstantExpression>().value;
-		if (!val.IsNull() && val.type().IsNumeric() && val.GetValue<double>() == 0.0) {
-			return;
-		}
+		// A leading negative term is a unary minus (DecideCanonicalizer), not `0 - term`.
+		WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], -sign, decide_index, outer_push, out_terms,
+		                names, beside);
+		return;
 	}
 	// A factor on this term (`2 * MIN(...)`) rides alongside it rather than being
 	// pushed into the aggregate. Its sign joins the easy/hard classification below.
@@ -211,13 +196,6 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet", RenderDecideSource(e, names));
 	}
 	auto &agg = *found;
-	if (name != "sum" && name != "avg" && !IsExtremumName(name)) {
-		throw BinderException("Composed MIN/MAX in DECIDE v1 does not support aggregate '%s'; "
-		                      "only SUM/AVG/MIN/MAX are supported.", name);
-	}
-	if (agg.children.size() != 1) {
-		throw BinderException("Composed MIN/MAX: aggregate '%s' must have a single inner expression.", name);
-	}
 
 	LogicalDecide::ComposedMinMaxTerm term;
 	term.kind = IsExtremumName(name) ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
@@ -289,10 +267,6 @@ static void AssertComposable(const BoundComparisonExpression &comparison) {
 
 void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                         DecideEnclosingScope scope) {
-	if (!expr) {
-		return;
-	}
-
 	// Walk through AND conjunctions and the `when` / `per K:` wrappers. Inside `when c:` a
 	// composed clause's terms read the rows `c` keeps; a `per K:` over a composed clause
 	// names the classes its one row stands for (the checks hold K to it) and adds no row,
@@ -307,10 +281,9 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 		}
 		// The `when c:` folds into the terms, which then read only the rows it keeps; the
 		// wrapper goes with the clause it held.
-		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
+		if (IsWhenFilterWrapper(conj)) {
 			auto &inner = *conj.children[0];
-			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-			    inner.return_type == LogicalType::BOOLEAN) {
+			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 				expr = std::move(conj.children[0]); // the placeholder of a composed clause
 			}
 		}
@@ -402,8 +375,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	const Expression *scoped_when = nullptr;
 	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
-		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2 &&
-		    AdditiveContainsMinMax(*conj.children[0], decide.decide_index)) {
+		if (IsWhenFilterWrapper(conj) && AdditiveContainsMinMax(*conj.children[0], decide.decide_index)) {
 			body = conj.children[0].get();
 			scoped_when = conj.children[1].get();
 		}
@@ -475,9 +447,6 @@ void DecideOptimizer::RewriteMinMax(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
-	if (!decide.decide_constraints) {
-		return;
-	}
 	vector<unique_ptr<Expression>> new_constraints;
 	RewriteMinMaxInConstraint(decide.decide_constraints, decide, new_constraints);
 
@@ -489,10 +458,6 @@ void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                 vector<unique_ptr<Expression>> &new_constraints,
                                                 DecideEnclosingScope scope) {
-	if (!expr) {
-		return;
-	}
-
 	// The `when` and `per K:` travel with the clause they hold, so a row this rewrite adds
 	// for the clause keeps the clause's rows and classes. A wrapper's key or condition
 	// children are data (decide_constraint_walk.hpp).
@@ -530,19 +495,6 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	if (fname != "min" && fname != "max") {
 		return;
 	}
-	if (agg.children.size() != 1) {
-		return;
-	}
-	// Guard: only rewrite MIN/MAX over decide variables
-	if (!BoundExpressionReferencesDecide(*agg.children[0], decide.decide_index)) {
-		return;
-	}
-	// A factor that is itself decision-bearing is bilinear, not a scale; the
-	// canonicalizer rejects those, so reaching one here would be a bug rather than a
-	// user error. Leave the shape alone rather than mis-linearize it.
-	if (scale && BoundExpressionReferencesDecide(*scale, decide.decide_index)) {
-		return;
-	}
 
 	bool is_max = (fname == "max");
 	auto cmp_type = comp.type;
@@ -561,9 +513,10 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	// quantifiers, and a negative factor swaps which one the constraint means, so a
 	// factor whose value is not known until the query runs cannot pick between them.
 	// RewriteComposedMinMax claims that shape first (it runs earlier and emits both
-	// halves); reaching here means it declined, so decline too rather than guess.
+	// halves), so scale_sign is never 0 here.
 	if (scale_sign == 0) {
-		return;
+		throw InternalException("DECIDE: a MIN/MAX factor of unknown sign reached the single-term rewrite; "
+		                        "RewriteComposedMinMax promises to take it");
 	}
 	// Classify: easy (`MAX(expr) <= K` is every row's `expr <= K`; `MIN(expr) >= K` the
 	// mirror) against hard (`MAX(expr) >= K` needs an indicator: some row reaches K).
@@ -718,7 +671,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsTwoLevelObjectiveWrapper(conj) && !conj.children.empty()) {
+		if (IsTwoLevelObjectiveWrapper(conj)) {
 			has_per = true;
 			per_wrapper = &conj;
 			obj_owner = &conj.children[0];
@@ -728,16 +681,13 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsWhenFilterWrapper(conj) && !conj.children.empty()) {
-			obj_owner = &conj.children[0];
-			obj_expr = conj.children[0].get();
+		if (!IsWhenFilterWrapper(conj)) {
+			throw InternalException("DECIDE: objective wrapper '%s' is not a `when`; BindObjective promises that only "
+			                        "a `when` stands under the two-level `per`",
+			                        conj.ToString());
 		}
-	}
-
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = obj_expr->Cast<BoundCastExpression>();
-		obj_owner = &cast.child;
-		obj_expr = cast.child.get();
+		obj_owner = &conj.children[0];
+		obj_expr = conj.children[0].get();
 	}
 
 	// A factor peeled onto the objective's reducer (`2 * MAX(x*v)`, `MAX(x*v) * 2`).
@@ -753,86 +703,71 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	auto &outer_agg = scaled_obj_agg ? const_cast<BoundAggregateExpression &>(*scaled_obj_agg)
 	                                : obj_expr->Cast<BoundAggregateExpression>();
 	auto outer_name = StringUtil::Lower(outer_agg.function.name);
-	// A decision-bearing factor is bilinear, not a scale; the canonicalizer rejects
-	// those, so leave the shape alone rather than mis-linearize it.
-	if (obj_scale && BoundExpressionReferencesDecide(*obj_scale, decide.decide_index)) {
-		return;
-	}
 
 	// The objective's sense pushes every term the same way: MINIMIZE down, MAXIMIZE up.
 	const ExtremumPush objective_push =
 	    decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
 
-	// Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX/AVG
-	if (has_per && (outer_name == "sum" || IsExtremumName(outer_name)) && outer_agg.children.size() == 1) {
-		Expression *inner_expr = outer_agg.children[0].get();
-		if (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			inner_expr = inner_expr->Cast<BoundCastExpression>().child.get();
+	// The two-level form: OUTER(per k: INNER(expr) by (k)). The binder builds it with a single-argument INNER over
+	// decisions (BindTwoLevelObjective).
+	if (has_per) {
+		auto &inner_agg = outer_agg.children[0]->Cast<BoundAggregateExpression>();
+		auto inner_name = StringUtil::Lower(inner_agg.function.name);
+
+		// Found the two-level pattern: set metadata. (The binder refuses an outer
+		// avg: BindTwoLevelObjective.)
+		decide.per_outer_agg = StrToAggType(outer_name);
+		if (inner_name == "avg") {
+			decide.per_inner_agg = ObjectiveAggregateType::SUM;
+			decide.per_inner_was_avg = true;
+		} else {
+			decide.per_inner_agg = StrToAggType(inner_name);
 		}
-		if (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto &inner_agg = inner_expr->Cast<BoundAggregateExpression>();
-			auto inner_name = StringUtil::Lower(inner_agg.function.name);
 
-			if ((inner_name == "sum" || inner_name == "avg" || IsExtremumName(inner_name)) &&
-			    inner_agg.children.size() == 1 &&
-			    BoundExpressionReferencesDecide(*inner_agg.children[0], decide.decide_index)) {
-				// Found the two-level pattern: set metadata. (The binder refuses an outer
-				// avg: BindTwoLevelObjective.)
-				decide.per_outer_agg = StrToAggType(outer_name);
-				if (inner_name == "avg") {
-					decide.per_inner_agg = ObjectiveAggregateType::SUM;
-					decide.per_inner_was_avg = true;
-				} else {
-					decide.per_inner_agg = StrToAggType(inner_name);
-				}
-
-				if (IsExtremumName(inner_name)) {
-					decide.per_inner_is_easy = IsEasyExtremum(inner_name == "max", objective_push);
-				}
-				if (IsExtremumName(outer_name)) {
-					decide.per_outer_is_easy = IsEasyExtremum(outer_name == "max", objective_push);
-				}
-				// What the plan says the two levels became, read before the inner is rebuilt.
-				// The `by` of the inner reducer is the `per` key, which the wrapper holds, so the
-				// subjects spell it out as written.
-				{
-					using Kind = LogicalDecide::RewriteAccount::Kind;
-					const string key =
-					    SplitDecideTwoLevel(*per_wrapper, decide.source_fragments, decide.keyed_scopes).key;
-					auto inner_text = RenderDecideTwoLevelInner(RenderForPlan(inner_agg, decide), key);
-					// Defined members have no box, so every extremum over them, the outer one's
-					// included, is stated natively.
-					const bool defined = HasDecideTag(inner_agg.alias, BODY_DEFINITION_TAG);
-					if (IsExtremumName(inner_name)) {
-						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-						                  decide.per_inner_is_easy ? Kind::EXTREMUM_PER_GROUP
-						                  : defined                ? Kind::EXTREMUM_PER_GROUP_NATIVE
-						                                           : Kind::EXTREMUM_PER_GROUP_PINNED,
-						                  inner_text);
-					}
-					if (inner_name == "avg") {
-						AddRewriteAccount(decide, DConstants::INVALID_INDEX, Kind::AVG_SUM, inner_text);
-					}
-					if (IsExtremumName(outer_name)) {
-						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-						                  decide.per_outer_is_easy ? Kind::EXTREMUM
-						                  : defined                ? Kind::EXTREMUM_NATIVE
-						                                           : Kind::EXTREMUM_PINNED,
-						                  RenderDecideTwoLevelOuter(outer_name, key, inner_text));
-					}
-				}
-
-				if (IsExtremumName(inner_name) || inner_name == "avg") {
-					auto new_sum = BindSumOver(optimizer, inner_agg.children[0]->Copy(), inner_agg.filter.get());
-					// The inner reducer's tags (its `by` key) stay on the sum that stands in
-					// for it, so a plan still prints it as written.
-					new_sum->alias = inner_agg.alias;
-					outer_agg.children[0] = std::move(new_sum);
-				}
-				*obj_owner = std::move(outer_agg.children[0]);
-				return;
+		if (IsExtremumName(inner_name)) {
+			decide.per_inner_is_easy = IsEasyExtremum(inner_name == "max", objective_push);
+		}
+		if (IsExtremumName(outer_name)) {
+			decide.per_outer_is_easy = IsEasyExtremum(outer_name == "max", objective_push);
+		}
+		// What the plan says the two levels became, read before the inner is rebuilt.
+		// The `by` of the inner reducer is the `per` key, which the wrapper holds, so the
+		// subjects spell it out as written.
+		{
+			using Kind = LogicalDecide::RewriteAccount::Kind;
+			const string key = SplitDecideTwoLevel(*per_wrapper, decide.source_fragments, decide.keyed_scopes).key;
+			auto inner_text = RenderDecideTwoLevelInner(RenderForPlan(inner_agg, decide), key);
+			// Defined members have no box, so every extremum over them, the outer one's
+			// included, is stated natively.
+			const bool defined = HasDecideTag(inner_agg.alias, BODY_DEFINITION_TAG);
+			if (IsExtremumName(inner_name)) {
+				AddRewriteAccount(decide, DConstants::INVALID_INDEX,
+				                  decide.per_inner_is_easy ? Kind::EXTREMUM_PER_GROUP
+				                  : defined                ? Kind::EXTREMUM_PER_GROUP_NATIVE
+				                                           : Kind::EXTREMUM_PER_GROUP_PINNED,
+				                  inner_text);
+			}
+			if (inner_name == "avg") {
+				AddRewriteAccount(decide, DConstants::INVALID_INDEX, Kind::AVG_SUM, inner_text);
+			}
+			if (IsExtremumName(outer_name)) {
+				AddRewriteAccount(decide, DConstants::INVALID_INDEX,
+				                  decide.per_outer_is_easy ? Kind::EXTREMUM
+				                  : defined                ? Kind::EXTREMUM_NATIVE
+				                                           : Kind::EXTREMUM_PINNED,
+				                  RenderDecideTwoLevelOuter(outer_name, key, inner_text));
 			}
 		}
+
+		if (IsExtremumName(inner_name) || inner_name == "avg") {
+			auto new_sum = BindSumOver(optimizer, inner_agg.children[0]->Copy(), inner_agg.filter.get());
+			// The inner reducer's tags (its `by` key) stay on the sum that stands in
+			// for it, so a plan still prints it as written.
+			new_sum->alias = inner_agg.alias;
+			outer_agg.children[0] = std::move(new_sum);
+		}
+		*obj_owner = std::move(outer_agg.children[0]);
+		return;
 	}
 
 	// Flat MIN/MAX objective (not the two-level form).
@@ -845,8 +780,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	if (obj_scale) {
 		return;
 	}
-	if (!has_per && IsExtremumName(outer_name) && outer_agg.children.size() == 1 &&
-	    BoundExpressionReferencesDecide(*outer_agg.children[0], decide.decide_index)) {
+	if (IsExtremumName(outer_name)) {
 		decide.flat_objective_agg = StrToAggType(outer_name);
 		decide.flat_objective_is_easy = IsEasyExtremum(outer_name == "max", objective_push);
 		AddRewriteAccount(decide, DConstants::INVALID_INDEX, ExtremumAccount(decide.flat_objective_is_easy, outer_agg),
