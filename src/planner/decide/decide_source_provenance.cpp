@@ -1188,18 +1188,7 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 		}
 		result += line;
 	};
-	string top = written;
-	if (top.empty()) {
-		// No written snapshot (a plan from before the objective layers existed): fall
-		// back to the post-optimizer render, which is what EXPLAIN always showed.
-		for (auto &row : rewritten) {
-			append_line(sense_prefix + row);
-		}
-		return result;
-	}
-	append_line(sense_prefix + top);
-	// A rewrite row is DeciDB's rendering, so it is compared with the canonical rendering, never with the text.
-	const string &above = canonical.empty() ? top : canonical;
+	append_line(sense_prefix + written);
 	if (canonical_differs) {
 		append_line(LAYER_CANONICAL_PREFIX + canonical);
 	}
@@ -1210,7 +1199,8 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 		append_line(LAYER_REWRITTEN_PREFIX + account);
 	}
 	for (auto &row : rewritten) {
-		if (row != above) {
+		// A rewrite row is DeciDB's rendering, so it is compared with the canonical rendering, never with the text.
+		if (row != canonical) {
 			append_line(LAYER_REWRITTEN_PREFIX + row);
 		}
 	}
