@@ -6,15 +6,13 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: A1, A2, A3 in order; B1, T1 and X13 beside the A
-batches; B2 after A2.
+Each batch finishes completely. Lanes: A1, A2, A3 in order; B1, T1, X13 and X14 beside
+the A batches; B2 after A2.
 
 ## Owner decisions
 
 - [ ] A2-9 Data weights on the absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-9
 - [ ] H-08 VALUE-shape clauses: which rule takes them — direct_solve/framework/todo.md § H-08
-- [ ] BLOAT-21 How to trim S1's oracle grid — direct_solve/rules/s1_uniform_matroid/todo.md § BLOAT-21
-- [ ] BLOAT-23 Keep or trim the scope combination grid — testing/todo.md § BLOAT-23
 
 ## A1. A2 code cleanup
 
@@ -42,6 +40,10 @@ batches; B2 after A2.
 ## X13. Arms no test reaches
 
 - [ ] BLOAT-25 Arms no test reaches in the rest of the DECIDE pipeline — testing/todo.md § BLOAT-25
+
+## X14. S1 oracle grid trim
+
+- [ ] BLOAT-21 S1 grid cases that share one plan — direct_solve/rules/s1_uniform_matroid/todo.md § BLOAT-21
 
 ## B2. The faster plan for the other rules (needs: A2)
 

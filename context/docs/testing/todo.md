@@ -3,19 +3,6 @@
 Open coverage gaps, one section each. Coverage that exists is in [coverage.md](coverage.md) and
 [scope_suite.md](scope_suite.md).
 
-## BLOAT-23 — Scope combination cells that share one branch
-
-- **Problem.** `test_scope_combinations` runs 784 cells, a cross product of scope, clause and shape. Reading the code
-  does not show which cells reach a branch no other cell reaches.
-- **Coverage (`73b52ab1d1`, § BLOAT-25's run).** Removing one cell at a time while every arm stays reached by some
-  test removes 783 of the 784 cells; but no two cells reach the same set of arms, so every cell takes a path of its
-  own through the binder, canonicalizer, optimizer and formulation.
-- **Decision needed.** Whether a cross-product grid of interactions is trimmed by the arm rule (783 go) or kept
-  because each cell is a distinct path (none go). The grid exists to find bugs that only a combination shows, which no
-  single arm records. Recommendation: keep it, and close this task.
-- **Change.** As decided.
-- **Done when.** `coverage_report.py compare` shows no arm lost, and `make decide-test` passes.
-
 ## TEST-1 — Expectations computed by hand
 
 - **Problem.** Some tests compare DeciDB's answer with a number worked out by hand, not with the independent oracle:

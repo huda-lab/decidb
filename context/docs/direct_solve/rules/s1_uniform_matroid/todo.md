@@ -23,9 +23,9 @@ not enough.
   of boundary values (`x_le_1`, `x_le_1p5`, `x_le_2`; `global_upper_at_2_pow_53` and `global_upper_max`; `per_0` and
   `per_0p5` of each offset). The values reach DuckDB's sort, rank and filter operators, which are not instrumented, and
   the oracle compares the answers, so equal arms do not make two cases equal.
-- **Decision needed.** Which rule trims an oracle grid: (a) the arm rule as written (482 cases go); (b) one case per
-  path (60 go, every boundary group loses all but one value); (c) one case per path that keeps the boundary values of
-  each group, which needs reading each group; or (d) planted value changes (mutation) as the measure, which coverage
-  cannot give. Recommendation: (c).
-- **Change.** As decided, from the coverage run.
+- **Ruling (owner, 2026-11-08).** One case per path, and within a group that shares a path, every case whose value
+  sits on a boundary the code or DuckDB's operators treat differently (zero, a whole number against a fraction, the
+  largest exact double). The arm rule alone does not trim an oracle grid.
+- **Change.** From the coverage run's groups of cases that share a path: read each group, keep the boundary values,
+  delete the rest.
 - **Done when.** `coverage_report.py compare` shows no arm lost, and the matrix passes.

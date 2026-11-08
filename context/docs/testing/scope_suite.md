@@ -170,7 +170,9 @@ one group at a time. No test asserts an answer its docstring derives.
   `when`, `per`, both) × SUM / AVG / MIN / MAX, over a per-row decision and a keyed one
   — 784 cells. Each cell has two allowed outcomes: the oracle's optimum, or the error
   the language defines for the data with the same phrase. Never "not supported yet", a
-  wrong answer or an internal error. Oracle.
+  wrong answer or an internal error. Oracle. The grid is kept whole: no two cells reach
+  the same set of branches (`make decide-coverage` over the whole DECIDE pipeline), and
+  it exists to find bugs that only a combination shows.
 - **`test_scope_deck_examples.py`** — deck examples 1–8, as written and in their fully
   explicit form, over `DECIDE ship(INT), per D.depotID: reserve(REAL)`. Both forms build
   the same model, the model has one row per generated class (plus one definition row per
