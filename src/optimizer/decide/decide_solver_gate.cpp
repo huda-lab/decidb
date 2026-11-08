@@ -93,14 +93,14 @@ DecideModelShape ReadPreparedModelShape(const LogicalDecide &op) {
 }
 
 //! The objective's first product group that is non-convex under the sense (IsNonconvexProductGroup), which the
-//! refusal names; null for none.
-const DecideProductGroup *FirstNonconvexGroup(const LogicalDecide &op) {
+//! refusal names. The gate asks only for a non-convex class, which an objective's group makes.
+const DecideProductGroup &FirstNonconvexGroup(const LogicalDecide &op) {
 	for (auto &group : op.prepared.objective->product_groups) {
 		if (IsNonconvexProductGroup(group.square, group.weight_sign, op.decide_sense)) {
-			return &group;
+			return group;
 		}
 	}
-	return nullptr;
+	throw InternalException("DECIDE solver gate found no non-convex product group to name");
 }
 
 //! One line naming what the query does, in the user's own vocabulary, plus the
@@ -131,13 +131,12 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 		return {"the SUCH THAT clause `" + FirstQuadraticClause(op) + "` squares or multiplies decision variables",
 		        "rewrite that constraint so each term holds at most one decision variable"};
 	case SolverModelClassGap::NONCONVEX_QUADRATIC: {
-		auto *group = FirstNonconvexGroup(op);
-		D_ASSERT(group);
-		if (!group->square) {
+		auto &group = FirstNonconvexGroup(op);
+		if (!group.square) {
 			return {"the objective multiplies two decision variables",
 			        "use an objective that is linear in the decisions"};
 		}
-		if (group->weight_sign == 0) {
+		if (group.weight_sign == 0) {
 			return {"the objective multiplies a squared decision term by a value whose sign is known only when the "
 			        "query runs",
 			        "multiply the square by a constant, or use a linear objective"};
@@ -203,12 +202,9 @@ void RequireDecideSolverSupport(const LogicalDecide &op) {
 
 void ThrowDecideSolverGap(const SolverModelClass &needed, const string &cause, const string &remedy) {
 	// Name the solvers that could run it, from the registry rather than from a
-	// hard-coded name here, so the sentence stays true as backends are added.
+	// hard-coded name here, so the sentence stays true as backends are added. The list is never empty: a backend's
+	// model classes are a static table, so Gurobi is named on a host without its library or licence too.
 	vector<string> capable = SolverRegistry::BackendsSupporting(needed);
-	if (capable.empty()) {
-		throw InvalidInputException("DECIDE: %s, which no solver DeciDB supports can optimize. Instead, %s.", cause,
-		                            remedy);
-	}
 	// A solver the override excludes is not missing: the host has one that could run the query, and the override is
 	// what keeps it out. The sentence then names the override, not an install.
 	if (!ForcedSolverName().empty() && AnyAvailable(needed)) {
