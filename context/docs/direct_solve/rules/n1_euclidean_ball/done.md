@@ -17,7 +17,7 @@ One row-scoped `REAL` decision, with:
 - **The limit's value.** A constant of magnitude below 1e20, or a value of the source row
   (`DirectIsSourceOnlyNumericMayRaise`). The tightest value in a group applies and a NULL has no limit, so a group with
   no value has no ball. Or an aggregate of the rows (`<= SUM(budget) by (k)`, `<= 0.5 * SUM(l)`), a value of its group
-  that the plan computes in a window over the ball's group, as S1 and R1 do (`DirectGroupBoundIsReadable`,
+  that the plan computes in a window over the ball's group (`DirectGroupBoundIsReadable`,
   `DirectWindowSink`); a NULL sum has no limit, and a NaN sum raises the solver's error. A sum with its own `when` is
   computed first by the driver, and the rule reads it as a column.
 - **The box.** Exactly `[0, inf)` (`x >= 0`, or nothing written) or `(-inf, inf)` (`x >= -1e30`).
@@ -98,7 +98,11 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 ## How it works
 
-One read of the source, and one pipeline breaker for a limit that is a constant:
+Group-then-join over two reads of the source, as A2 is (`DirectJoinClassAnswers`): the first read computes each
+ball's sum of squared lengths once, on the group's one row; the second gives every row its target and joins its
+group's row on the key.
+
+The first read:
 
 1. `[W0]`, for a `per K:` a NULL in K can leave with no instance: whether the clause has one (`DirectAddInstanceFlag`).
 2. The scope projection: the row's membership and key (`DirectProjectScope`).
@@ -108,21 +112,26 @@ One read of the source, and one pipeline breaker for a limit that is a constant:
 6. `P3`: the target or direction in the domain, whether the row is in a ball, and the ball's limit.
 7. `P4`: the row's squared length, masked to NULL outside a ball, and the checks: the target and its square past a DOUBLE,
    infeasible, unbounded, and with a square the target's precision warning.
-8. `W2`: `SUM(squared length) OVER (PARTITION BY key)`, `h`. It holds every row before it releases one.
-9. `P5`: the source columns, the answer, and the validation column that keeps the checks and the warning live.
+8. `H`: a hash aggregate on the group key (`DirectHashAggregate`), one row per group: `h`, the sum of the squared
+   lengths; whether every row's checks held (`bool_and`); and the group's limit, for a limit from the data.
 
-Each check on a row stands below the last breaker, so a bad last row raises under `LIMIT 1`; the target's precision
-warning is one of them. Two checks stand above it: `h` past a DOUBLE with every square in range, and the scale warning
-from `h`. Only this plan computes `h`, and a parent that reads no row of that group sees neither. The solver has no
-such error, and the framework's [Number-range warning](../../framework/done.md) gives the rule for the warning. A row
-outside every ball reads NULL in the windows' input, so the windows need not partition on membership; the answer reads
-what they return only for a row in a ball.
+The second read takes `[W0]`, the scope, `P1` and `P2` again and the row's value in the domain, joins the group's row,
+and ends in `P5`: the source columns, the answer, and the validation column that keeps the checks and the warning live.
 
-A stored column the parent reads and the rule does not use comes from a second read of the table, joined on the row id
-(`direct_late_materialization.cpp`), so `W2` does not hold it.
+`H` holds every row of the first read before it gives one, and each check on a row stands below it, so a bad last row
+raises under `LIMIT 1`; the target's precision warning is one of them. The second read raises nothing: the first has
+raised on any value it would. Two checks stand above the join: `h` past a DOUBLE with every square in range, and the
+scale warning from `h`. Only this plan computes `h`, and a parent that reads no row of that group sees neither. The
+solver has no such error, and the framework's [Number-range warning](../../framework/done.md) gives the rule for the
+warning. A row outside every ball reads NULL in `H`'s input, so it adds nothing to the group whose key it shares, and
+the answer does not read what the join gives it. The aggregate runs on every thread, which the window it replaces did
+not (§ Performance).
+
+The plan reads the source twice by itself (`pipelined`), so late materialization adds no third read for a stored
+column the parent reads and the rule does not use.
 
 This departs from the standard construction in two ways. A limit read from the data adds `W1`, so that an all-NULL group's
-checks can stand below the last breaker, where one window would have to read its own output. The answer is
+checks can stand below `H`, where the aggregate would have to read its own output. The answer is
 `(value / SQRT(h)) * (SQRT(B) / SQRT(q))` and not `SQRT(B / (q * h)) * value`: the first factor is at most 1 and the
 radius stays in range where `B / q` or `B / h` passes a DOUBLE (a limit of 1e300 over a factor of 1e-10, or a subnormal
 `h`). The unbounded check reads the user's `B`, so a finite `B` over a small `q` is a ball. The radius is taken in `P5`

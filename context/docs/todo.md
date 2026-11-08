@@ -6,8 +6,8 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: B2 first; then T1 and M1 side by side; the
-A2 measurement after B2.
+Each batch finishes completely. Lanes: T1 and M1 side by side; the A2 measurement on a quiet
+machine.
 
 ## A2. A2's slow all-rows query
 
@@ -16,10 +16,6 @@ A2 measurement after B2.
 ## T1. Tests against the oracle
 
 - [ ] TEST-2 Direct-solve arms no test reaches — direct_solve/framework/todo.md § TEST-2
-
-## B2. The faster plan for the other rules
-
-- [ ] H-49 N1, S1 and R1 take group-then-join where faster — direct_solve/framework/todo.md § H-49
 
 ## M1. Messages quote the query as written
 

@@ -81,11 +81,12 @@ too-large message names, is held once, by the rule's condition.
 4. C (`AggregateClasses`): one hash aggregate grouped by the key (ungrouped for a query-wide decision) holding the
    loss's aggregates (the sums of `a` and `b`; the least and greatest center), each clause's tightest ends through
    `DirectAggregateSink`, the `bool_or` of each floor-lifting `when`, and the `bool_and` of the rows' validity. The
-   absolute loss first puts a window of its own under it, on one sort of the centers per class: the class's total
-   weight `M` and the running sum `R` of the weights (`DirectRunningSum`); the aggregate then takes the lower median as
-   `MIN` of the centers where `2R >= M` and the upper one as `MAX` of the centers where `2(M - R + m) >= M`. The
-   aggregate holds every row before it gives one, so each row's check has run on all of them first, as the solver
-   reads every row before it answers.
+   absolute loss adds the lower median `quantile_disc(c, 0.5)` and the upper median `-quantile_disc(-c, 0.5)` of the
+   centers, and their total weight for the too-large check. A plain median is the weighted one here because every
+   center has the same weight `m = k*|w|`: A2 admits only a constant positive `k` and a constant nonzero slope `w`
+   (`ProveAbsolute`), and a NULL guard that skips a row's center takes its weight with it. The aggregate holds every
+   row before it gives one, so each row's check has run on all of them first, as the solver reads every row before it
+   answers. No step of the plan is a window, so every step runs on every thread.
 5. P3 (`ComputeInterval`): the class's interval as columns, with the floor; the loss forwards its class values
    through it (`CarryClasses`), since P4 reads only P3's columns.
 6. P4 (`ComputeAnswer`), on the class's row: the target clamped into the interval (`DirectRowBox`; `+ 0.0` turns

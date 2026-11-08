@@ -65,7 +65,7 @@ Independent row decisions do not belong to A2. Applying AVG(value) to them would
 | **Loss** | **Best shared value** |
 |----|----|
 | Squared distance | Weighted mean; an end of the interval when the total weight is 0 or less |
-| Absolute distance | Weighted median |
+| Absolute distance | Weighted median (a plain median when every weight is equal, the only case A2 admits) |
 | Maximum absolute distance | Midpoint of the smallest and largest observations |
 
 The L0 distance (the most frequent tolerance-safe value) stays on the solver path: its proof is long for a rare loss.

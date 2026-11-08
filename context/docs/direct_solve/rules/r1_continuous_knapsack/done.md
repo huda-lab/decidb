@@ -103,7 +103,7 @@ infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the 
 
 `DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage (`SOURCE_READS`, 4); when
 it copies the source and when it re-scans it is in [framework/done.md](../../framework/done.md) § Row checks. The
-SINGLE join of items to group rows (`definition.md` § The plan) is never flipped by `BUILD_SIDE_PROBE_SIDE`, and
+SINGLE join of items to group rows (`definition.md` § The plan; `DirectJoinClassAnswers`, which A2 and N1 share) is never flipped by `BUILD_SIDE_PROBE_SIDE`, and
 JOIN_ORDER estimates it as its item side, so the hash table is always built on the group rows; an inner join would be
 estimated far larger than either side and flipped to build on the items.
 
