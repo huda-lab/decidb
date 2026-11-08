@@ -891,8 +891,7 @@ string RenderDecideObjective(const Expression &expr, const DecideSourceNames &na
 	return parts[0];
 }
 
-vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints,
-                                                     const DecideSourceNames &names,
+vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
                                                      const vector<LogicalDecide::RewriteAccount> &accounts) {

@@ -235,8 +235,9 @@ ConstraintSourceInfo WrittenClause(const string &text) {
 }
 
 //! The layers of an AND over `rows`, for a registry of `sources`.
-duckdb::vector<DecideClauseLayers> LayersOf(duckdb::vector<duckdb::unique_ptr<Expression>> rows, const duckdb::vector<ConstraintSourceInfo> &sources,
-                                    duckdb::vector<string> &unattributed) {
+duckdb::vector<DecideClauseLayers> LayersOf(duckdb::vector<duckdb::unique_ptr<Expression>> rows,
+                                            const duckdb::vector<ConstraintSourceInfo> &sources,
+                                            duckdb::vector<string> &unattributed) {
 	auto tree = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	tree->children = std::move(rows);
 	duckdb::vector<string> fragments;

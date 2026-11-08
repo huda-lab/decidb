@@ -165,8 +165,7 @@ struct DecideClauseLayers {
 //! rows; the objective's (INVALID_INDEX) are left to RenderDecideObjectiveLayers, and so
 //! are the rows a rewrite added for the objective (OBJECTIVE_ROW_TAG), returned in
 //! `objective_rows`.
-vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints,
-                                                     const DecideSourceNames &names,
+vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
                                                      const vector<ConstraintSourceInfo> &sources,
                                                      vector<string> &unattributed, vector<string> &objective_rows,
                                                      const vector<LogicalDecide::RewriteAccount> &accounts);
