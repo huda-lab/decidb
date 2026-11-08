@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <sstream>
 
@@ -109,7 +110,9 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	return facts;
 }
 
-namespace {
+//! The construction's helpers, in a namespace of their own rather than an anonymous one: the header's
+//! DecideTreeConstruction::Builder derives from DecideTreeBuilder.
+namespace decide_tree_build {
 
 static unique_ptr<Expression> CopyOrNull(const unique_ptr<Expression> &expression) {
 	return expression ? expression->Copy() : nullptr;
@@ -196,7 +199,8 @@ public:
 		record_nodes.assign(op.retained_bound_aggregates.size(), DConstants::INVALID_INDEX);
 	}
 
-	unique_ptr<DecideTree> Build() {
+	//! The nodes, their edges, sigma, gates and definitions, before stage 05 lowers the clauses.
+	void Structure() {
 		for (auto &check : op.retained_row_checks) {
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			auto &node = *tree->nodes[index];
@@ -228,7 +232,7 @@ public:
 				condition = op.retained_expressions[op.retained_objective_when].get();
 			}
 			auto index = NewNode(DecideNodeKind::SCOPE);
-			objective_root = index;
+			objective_root = sources.objective_root = index;
 			auto &node = *tree->nodes[index];
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
@@ -252,7 +256,6 @@ public:
 		// semantic roots, not prepared coefficients; reconstruct their G/E operands.
 		for (auto &composed : op.composed_minmax_constraints) {
 			auto index = NewNode(DecideNodeKind::SCOPE);
-			composed_clauses.push_back(index);
 			auto &node = *tree->nodes[index];
 			node.root = true;
 			node.comparison_type = composed.outer_cmp;
@@ -274,8 +277,10 @@ public:
 				node.rhs = Lower(index, *composed.rhs_expr);
 				node.facts->rhs_expr = node.rhs->Copy();
 			}
+			sources.composed_roots.push_back(index);
+			sources.composed_reducers.emplace_back();
 			for (auto &term : composed.terms) {
-				Composed(index, term);
+				Composed(index, term, sources.composed_reducers.back());
 			}
 			GroupClass(node);
 			tree->roots.push_back(index);
@@ -290,8 +295,9 @@ public:
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
 			node.text = op.written_objective.empty() ? "composed objective" : op.written_objective;
+			sources.composed_reducers.emplace_back();
 			for (auto &term : op.composed_minmax_objective_terms) {
-				composed_terms.push_back(Composed(index, term));
+				Composed(index, term, sources.composed_reducers.back());
 			}
 			UseSignature(node, op.objective_signature);
 		}
@@ -309,10 +315,30 @@ public:
 		}
 		RemoveInheritedPathGates();
 		Definitions();
+	}
+
+	//! The bodies from what stage 05 lowered, then the order and ranks they read.
+	unique_ptr<DecideTree> Finish() {
+		sources.link_nodes = link_nodes;
+		CompileDecideTree(op, *tree, sources);
 		PostOrder();
 		ErrorRanks();
 		tree->Validate();
 		return std::move(tree);
+	}
+
+	//! The G a reducer stage 05 lowers ranges over (DecideTreeConstruction::ReducerChild).
+	idx_t ReducerChild(const BoundAggregateExpression &reducer) const {
+		static const bool inject = [] {
+			const char *setting = std::getenv("DECIDB_EVALUATOR_INJECT");
+			return setting && string(setting) == "g1";
+		}();
+		auto found = inject ? sources.reducer_nodes.end() : sources.reducer_nodes.find(&reducer);
+		if (found == sources.reducer_nodes.end()) {
+			throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",
+			                        reducer.ToString());
+		}
+		return DecideTreeMembersOf(*tree, found->second);
 	}
 
 private:
@@ -323,9 +349,7 @@ private:
 	vector<idx_t> link_nodes;
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
-	//! The roots of the composed MIN/MAX clauses, and the reducers of the objective's composed terms.
-	vector<idx_t> composed_clauses;
-	vector<idx_t> composed_terms;
+	DecideTreeSources sources;
 
 	//! A node's errors rank at the earliest phase that reads it, in flat's order of phases: a bound's reducer is read
 	//! after the data checks on the rows, a composed MIN/MAX clause after the objective, and the objective's composed
@@ -344,8 +368,10 @@ private:
 				rank = {DecideErrorPhase::KEYED_MAPPING, 0, rank.clause, 0};
 			} else if (node.link != DConstants::INVALID_INDEX) {
 				rank = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
-			} else if (std::find(composed_terms.begin(), composed_terms.end(), index) != composed_terms.end()) {
-				rank = {DecideErrorPhase::COMPOSED, 1, rank.clause, 0};
+			} else if (node.compiled.phase != DecideErrorPhase::INVALID) {
+				// A body stage 05 lowered ranks by the list flat's evaluation reads it from: a constraint by its place
+				// there, the objective, the composed clauses, then the objective's composed terms.
+				rank = {node.compiled.phase, 0, node.compiled.order, 0};
 			}
 			if (assigned[index] && !(rank < node.value_rank)) {
 				return;
@@ -369,8 +395,6 @@ private:
 			}
 			if (node.objective) {
 				rank.phase = DecideErrorPhase::OBJECTIVE;
-			} else if (std::find(composed_clauses.begin(), composed_clauses.end(), root) != composed_clauses.end()) {
-				rank.phase = DecideErrorPhase::COMPOSED;
 			}
 			visit(root, rank);
 			if (node.objective && op.objective_signature != DConstants::INVALID_INDEX) {
@@ -569,6 +593,7 @@ private:
 		node.rhs = Lower(index, *comparison.right);
 		node.facts->rhs_expr = node.rhs->Copy();
 		UseSignature(node, signature);
+		sources.clause_roots.push_back(index);
 		auto end = std::remove_if(node.signature.begin(), node.signature.end(), [&](const DecideSignatureField &field) {
 			return field.kind == DecideSignatureFieldKind::DECISION && field.decision == node.defined_var;
 		});
@@ -638,7 +663,15 @@ private:
 			if (retained >= op.retained_expressions.size()) {
 				throw InternalException("DECIDE tree: a retained expression is missing");
 			}
-			return Lower(owner, *op.retained_expressions[retained], carried);
+			auto lowered = Lower(owner, *op.retained_expressions[retained], carried);
+			// Stage 05 lowers the inlined reducer this tag marks; it ranges over the nest the copy became.
+			if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+			    lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			    lowered->Cast<BoundReferenceExpression>().index >= tree->input_column_count) {
+				sources.reducer_nodes[&expression] =
+				    lowered->Cast<BoundReferenceExpression>().index - tree->input_column_count;
+			}
+			return lowered;
 		}
 		carried = carried || IsQueryWideValueTag(expression.GetAlias()) || IsQueryWideBoundTag(expression.GetAlias()) ||
 		          HasDecideTag(expression.GetAlias(), BOUND_REDUCER_TAG);
@@ -651,8 +684,9 @@ private:
 			return Read(owner, Frame(frame, &expression), expression.return_type, expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			return Read(owner, Aggregate(expression.Cast<BoundAggregateExpression>()), expression.return_type,
-			            expression.GetAlias());
+			auto reducer = Aggregate(expression.Cast<BoundAggregateExpression>());
+			sources.reducer_nodes[&expression] = reducer;
+			return Read(owner, reducer, expression.return_type, expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto &reference = expression.Cast<BoundColumnRefExpression>();
@@ -681,9 +715,15 @@ private:
 			Column(node, expression, !carried);
 			return expression.Copy();
 		}
+		// The children are lowered from the operator's own expressions, so a reducer's address is the one stage 05
+		// lowers (reducer_nodes); the copy only holds the results.
 		auto result = expression.Copy();
+		vector<const Expression *> originals;
+		ExpressionIterator::EnumerateChildren(expression,
+		                                      [&](const Expression &child) { originals.push_back(&child); });
+		idx_t next = 0;
 		ExpressionIterator::EnumerateChildren(
-		    *result, [&](unique_ptr<Expression> &child) { child = Lower(owner, *child, carried); });
+		    *result, [&](unique_ptr<Expression> &child) { child = Lower(owner, *originals[next++], carried); });
 		return result;
 	}
 
@@ -868,8 +908,9 @@ private:
 		return index;
 	}
 
-	idx_t Composed(idx_t owner, const LogicalDecide::ComposedMinMaxTerm &term) {
+	void Composed(idx_t owner, const LogicalDecide::ComposedMinMaxTerm &term, vector<idx_t> &reducers) {
 		auto reducer = NewNode(DecideNodeKind::REDUCER);
+		reducers.push_back(reducer);
 		auto &node = *tree->nodes[reducer];
 		node.aggregate = term.agg_name;
 		node.text = term.inner_expr ? term.agg_name + "(" + Text(*term.inner_expr) + ")" : term.agg_name;
@@ -917,7 +958,6 @@ private:
 		} else {
 			tree->nodes[owner]->body = std::move(value);
 		}
-		return reducer;
 	}
 
 	void AddOrphan(idx_t child) {
@@ -1057,10 +1097,26 @@ private:
 	}
 };
 
-} // namespace
+} // namespace decide_tree_build
 
-unique_ptr<DecideTree> BuildDecideTree(ClientContext &context, const LogicalDecide &op) {
-	return DecideTreeBuilder(context, op).Build();
+struct DecideTreeConstruction::Builder : decide_tree_build::DecideTreeBuilder {
+	using decide_tree_build::DecideTreeBuilder::DecideTreeBuilder;
+};
+
+DecideTreeConstruction::DecideTreeConstruction(ClientContext &context, const LogicalDecide &op)
+    : builder(make_uniq<Builder>(context, op)) {
+	builder->Structure();
+}
+
+DecideTreeConstruction::~DecideTreeConstruction() {
+}
+
+idx_t DecideTreeConstruction::ReducerChild(const BoundAggregateExpression &reducer) const {
+	return builder->ReducerChild(reducer);
+}
+
+unique_ptr<DecideTree> DecideTreeConstruction::Finish() {
+	return builder->Finish();
 }
 
 void DecideTree::Validate() const {

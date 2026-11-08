@@ -2787,6 +2787,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 			gstate.descent_rows += chunk.size();
 		});
 		gstate.descent->Finish();
+		if (std::getenv("DECIDB_DUMP_BODIES")) {
+			fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
+		}
 		DecideTreeEvaluation values(*tree, *gstate.descent, context);
 		values.Evaluate();
 		values.RequireSupported();
@@ -2984,6 +2987,9 @@ void PhysicalDecide::Evaluate(ClientContext &context, DecideGlobalSinkState &gst
 		descent = make_uniq<DecideDescent>(*tree, context);
 		if (!silent && std::getenv("DECIDB_DUMP_TREE")) {
 			fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
+		}
+		if (!silent && std::getenv("DECIDB_DUMP_BODIES")) {
+			fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
 		}
 	}
 	row_store.Build([&](DataChunk &chunk, idx_t offset) {

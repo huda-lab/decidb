@@ -63,6 +63,10 @@ struct DecideTerm {
 	//! the row itself. Its coefficient reads a READ frame column (DecideFrameColumn).
 	//! INVALID_INDEX for every other term.
 	idx_t frame_read = DConstants::INVALID_INDEX;
+	//! The tree's G whose operand entries this term ranges over (DecideTreeConstruction::ReducerChild): written by
+	//! stage 05 on the terms a reducer produced, INVALID for a term outside every reducer and whenever no tree is
+	//! built. Neither stage 05 nor the flat evaluator reads it.
+	idx_t child = DConstants::INVALID_INDEX;
 
 	DecideTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
 	    : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {
@@ -84,6 +88,8 @@ struct BilinearConstraintTerm {
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 	//! The values `coefficient` is computed from (DecideTerm::inputs).
 	vector<unique_ptr<Expression>> inputs;
+	//! As DecideTerm::child.
+	idx_t child = DConstants::INVALID_INDEX;
 };
 
 //! The scope of a clause that has left the constraint tree, owned: the rows its `when` keeps and what its `per K:`
@@ -191,6 +197,8 @@ struct DecideConstraint {
 		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+		//! As DecideTerm::child, for the group's scale; its inner terms carry it too.
+		idx_t child = DConstants::INVALID_INDEX;
 
 		QuadraticGroup() = default;
 	};
@@ -236,6 +244,8 @@ struct DecideObjective {
 		LinearTermReduction reduction = LinearTermReduction::NONE;
 		//! The values `coefficient` is computed from (DecideTerm::inputs).
 		vector<unique_ptr<Expression>> inputs;
+		//! As DecideTerm::child.
+		idx_t child = DConstants::INVALID_INDEX;
 	};
 	vector<BilinearTerm> bilinear_terms;
 	bool has_bilinear = false;

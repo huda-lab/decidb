@@ -146,7 +146,7 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 			}
 		}
 		// A tree-only data reducer has no side-table result column. Preserve
-		// its logical identity until BuildDecideTree replaces every such read
+		// its logical identity until the tree's construction replaces every such read
 		// with a typed child-result reference. A result the child DOES produce
 		// (the shadow evaluator's side table) is resolved normally.
 		for (auto &retained : decide_op.retained_bound_aggregates) {

@@ -6,6 +6,7 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/execution/operator/decide/decide_evaluator.hpp"
@@ -59,14 +60,25 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
     // expressions after the DECIDE optimizer runs -- copies taken earlier would keep
     // bindings that no longer name the right input columns.
-    auto tree = DecideTreeRequested() ? BuildDecideTree(context, op) : nullptr;
-    BuildDecidePreparedModel(context, op);
+    // The tree is built in two halves around stage 05 (DecideTreeConstruction): its nodes from the final clauses, its
+    // bodies from what stage 05 lowers, whose reducers name the tree's G each ranges over.
+    unique_ptr<DecideTreeConstruction> construction;
+    if (DecideTreeRequested()) {
+        construction = make_uniq<DecideTreeConstruction>(context, op);
+    }
+    DecideReducerChild child;
+    if (construction) {
+        child = [&](const BoundAggregateExpression &reducer) { return construction->ReducerChild(reducer); };
+    }
+    BuildDecidePreparedModel(context, op, child);
     // With the shape of every constraint and the objective settled, check the model
     // class this query needs against the backend chosen for it. A model class is a
     // gate, not an optimization -- nothing lowers a quadratic constraint into linear
     // rows -- so an unsupported one is refused here, before the query reads a row,
     // and the message blames the host rather than the query.
     RequireDecideSolverSupport(op);
+    // After the refusal, so a query the backend cannot answer is refused in SQL terms first.
+    auto tree = construction ? construction->Finish() : nullptr;
     // Capture child column bindings BEFORE CreatePlan: several logical operators
     // (notably LogicalProjection) move their `expressions` vector into the physical
     // op during CreatePlan, which leaves GetColumnBindings() returning an empty

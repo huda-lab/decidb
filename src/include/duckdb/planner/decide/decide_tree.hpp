@@ -12,6 +12,8 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
+#include <unordered_map>
+
 namespace duckdb {
 
 class ClientContext;
@@ -30,9 +32,36 @@ struct DecideTreeRead {
 	bool decision_value;
 };
 
+//! Where one term of a body is computed (language/guide.md §6.1): the E or O whose entries it ranges over.
+struct DecideTermSite {
+	idx_t node = DConstants::INVALID_INDEX;
+};
+
+//! f(e1..ep, G1..Gq): stage 05's own records for what a node holds, copied once stage 05 lowered them, so a term keeps
+//! its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
+struct DecideBody {
+	//! A constraint root's clause: its terms, products, squares, bound, admitted ends and facts.
+	unique_ptr<DecideConstraint> clause;
+	//! The clause's place in stage 05's lists, which flat's repair_group_id numbers: constraints, then singleton rows.
+	idx_t clause_index = DConstants::INVALID_INDEX;
+	//! The objective root's objective.
+	unique_ptr<DecideObjective> objective;
+	//! A value link's or a composed term's G: its inner terms; a frame link's else terms.
+	vector<DecideTerm> members;
+	vector<DecideTerm> fallback;
+	vector<DecideTermSite> linear, products, fallback_sites;
+	//! Per quadratic group (the objective has one, its squared terms), its inner terms' sites.
+	vector<vector<DecideTermSite>> squares;
+	//! The rank flat's evaluation gives the stage-05 list the body was copied from (PhysicalDecide::Evaluate):
+	//! constraints by their place, the objective, composed clauses, then the objective's composed terms.
+	DecideErrorPhase phase = DecideErrorPhase::INVALID;
+	idx_t order = DConstants::INVALID_INDEX;
+};
+
 //! Composite: E owns entries, G groups an operand E, and O holds ordered positions.
-//! Expressions are owned copies, with source columns resolved to chunk references.
-//! No node borrows the optimizer's expression addresses or its prepared terms.
+//! Expressions are owned copies, with source columns resolved to chunk references. The construction borrows the
+//! addresses of the operator's reducers only between building the nodes and stage 05 lowering them
+//! (DecideTreeConstruction); `compiled` holds copies of stage 05's terms.
 struct DecideNode {
 	explicit DecideNode(DecideNodeKind kind) : kind(kind) {
 	}
@@ -90,6 +119,8 @@ struct DecideNode {
 	//! Immutable clause metadata shared with flat lowering. Its term vectors are
 	//! empty: the graph's bodies and child results supply the model's terms.
 	unique_ptr<DecideConstraint> facts;
+	//! Stage 05's terms for what the node holds (CompileDecideTree).
+	DecideBody compiled;
 };
 
 struct DecideTree {
@@ -117,13 +148,55 @@ struct DecideTree {
 	void Validate() const;
 	//! Stable plan-order dump of nodes, sigma, routing and computation dependencies.
 	string ToString() const;
+	//! Each body's terms with the node they range over and where they are computed (DECIDB_DUMP_BODIES).
+	string BodiesToString() const;
 };
 
-//! Rebuild the graph after bindings settle, before prepared-model frame lowering.
-//! Records still present in bound_aggregates are expanded into data G nodes; a
-//! source placeholder without its record remains a source column and is visible
-//! in the dump rather than being misrepresented as a data reducer.
-unique_ptr<DecideTree> BuildDecideTree(ClientContext &context, const LogicalDecide &op);
+//! What the compile reads of the construction: the node each of the operator's reducers became, and the nodes stage
+//! 05's lists bind to, in the order stage 05 walks them.
+struct DecideTreeSources {
+	//! The operator's own reducer -> its G (DecideTreeConstruction's Lower).
+	std::unordered_map<const Expression *, idx_t> reducer_nodes;
+	//! The clause roots in constraint-leaf order, the order stage 05 lowers the clauses in.
+	vector<idx_t> clause_roots;
+	idx_t objective_root = DConstants::INVALID_INDEX;
+	//! [spec][term] -> the composed term's G; the objective's composed terms last.
+	vector<vector<idx_t>> composed_reducers;
+	//! [spec] -> the composed clause's root.
+	vector<idx_t> composed_roots;
+	//! [link] -> its helper's G, or its O for a frame.
+	vector<idx_t> link_nodes;
+};
+
+//! Builder with a director (plan_decide.cpp): the nodes come from the final clauses before stage 05 lowers them, the
+//! bodies from what stage 05 lowered (language/guide.md §6.4). Between the two, ReducerChild is stage 05's hook.
+class DecideTreeConstruction {
+public:
+	//! Builds the nodes, their edges, sigma, gates and definitions.
+	DecideTreeConstruction(ClientContext &context, const LogicalDecide &op);
+	~DecideTreeConstruction();
+	//! The node whose operand entries a reducer stage 05 lowers ranges over (DecideReducerChild).
+	idx_t ReducerChild(const BoundAggregateExpression &reducer) const;
+	//! Copies stage 05's terms into the bodies, orders the nodes and ranks their errors, and validates the tree.
+	unique_ptr<DecideTree> Finish();
+
+private:
+	struct Builder;
+	unique_ptr<Builder> builder;
+};
+
+//! Binds the clause roots to stage 05's clauses in leaf order, copies stage 05's terms into each node's body and finds
+//! where each is computed; a binding that does not match is an internal error.
+void CompileDecideTree(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources);
+
+//! A G's operand: its one SCOPE child.
+idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer);
+
+//! The G whose operand entries `reducer`'s terms range over: `reducer` itself, or, while its operand's body is exactly
+//! a read of another G (a nest stage 05 reads inlined), that G. Such a G is over decisions with no helper: stage 05
+//! lowers a reducer of decisions, the binder refuses a cast over one, and a reducer of a helper's value is a helper
+//! itself, whose terms stage 05 lowers with no G.
+idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
 
 //! The semantic name a carrier represents, shared by tree consumers.
 string DecideTreeReducerName(const BoundAggregateExpression &aggregate);

@@ -91,8 +91,8 @@ struct ExprVarRef {
 //! It never reads a data row.
 class DecideLinearFormBuilder {
 public:
-	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op)
-	    : context(context), op(op), decide_index(op.decide_index),
+	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, const DecideReducerChild &child)
+	    : context(context), op(op), child(child), decide_index(op.decide_index),
 	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var),
 	      splitter(context, op.decide_index, op.decide_variables) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
@@ -856,6 +856,45 @@ private:
 		return all;
 	}
 
+	//! Names, on every term `agg`'s body produced since the marks, the tree node it ranges over (DecideTerm::child).
+	void Stamp(const BoundAggregateExpression &agg, DecideConstraint &constraint, idx_t linear, idx_t bilinear,
+	           idx_t quadratic) const {
+		if (!child) {
+			return;
+		}
+		const auto node = child(agg);
+		for (idx_t i = linear; i < constraint.lhs_terms.size(); i++) {
+			constraint.lhs_terms[i].child = node;
+		}
+		for (idx_t i = bilinear; i < constraint.bilinear_terms.size(); i++) {
+			constraint.bilinear_terms[i].child = node;
+		}
+		for (idx_t i = quadratic; i < constraint.quadratic_groups.size(); i++) {
+			constraint.quadratic_groups[i].child = node;
+			for (auto &inner : constraint.quadratic_groups[i].inner_terms) {
+				inner.child = node;
+			}
+		}
+	}
+
+	//! The same for the objective's terms, products and squared terms.
+	void Stamp(const BoundAggregateExpression &agg, DecideObjective &objective, idx_t linear, idx_t bilinear,
+	           idx_t squared) const {
+		if (!child) {
+			return;
+		}
+		const auto node = child(agg);
+		for (idx_t i = linear; i < objective.terms.size(); i++) {
+			objective.terms[i].child = node;
+		}
+		for (idx_t i = bilinear; i < objective.bilinear_terms.size(); i++) {
+			objective.bilinear_terms[i].child = node;
+		}
+		for (idx_t i = squared; i < objective.squared_terms.size(); i++) {
+			objective.squared_terms[i].child = node;
+		}
+	}
+
 	//===------------------------------------------------------------------===//
 	// Constraints
 	//===------------------------------------------------------------------===//
@@ -918,8 +957,7 @@ private:
 			constraint.quadratic_groups[i].avg_scale = is_avg;
 			constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
 		}
-
-
+		Stamp(agg, constraint, linear_before, bilinear_before, quadratic_before);
 	}
 
 	//! The per-row terms of a scoped easy MIN/MAX, `[s *] max(when c: e)`: the terms of `e`,
@@ -940,6 +978,7 @@ private:
 		         constraint.quadratic_groups.empty());
 		ExtractConstraintTerms(*agg->children[0], constraint, 1);
 		AttachReducerFilter(constraint, 0, 0, 0, agg->filter.get());
+		Stamp(*agg, constraint, 0, 0, 0);
 		if (scale_match.aggregate) {
 			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint, 0, 0, 0);
 		}
@@ -1226,6 +1265,7 @@ private:
 			obj.squared_terms[i].avg_group_key = avg_group_key;
 			obj.squared_terms[i].qualifier_scope_idx = qualifier_scope;
 		}
+		Stamp(agg, obj, before, bilinear_before, squared_before);
 	}
 
 	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr) {
@@ -1277,6 +1317,7 @@ private:
 				objective->squared_terms[i].avg_group_key = avg_group_key;
 				objective->squared_terms[i].qualifier_scope_idx = qualifier_scope;
 			}
+			Stamp(agg, *objective, before, bilinear_before, squared_before);
 
 			objective->when_condition = std::move(when_cond);
 		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
@@ -1291,6 +1332,8 @@ private:
 private:
 	ClientContext &context;
 	LogicalDecide &op;
+	//! The tree's hook, null when no tree is built (BuildDecidePreparedModel).
+	const DecideReducerChild &child;
 	idx_t decide_index;
 	DecideTermSplitter splitter;
 	DecideCanonicalizer canonicalizer;
@@ -1300,8 +1343,8 @@ private:
 	unordered_map<idx_t, idx_t> frame_aggregate_slots;
 };
 
-void BuildDecidePreparedModel(ClientContext &context, LogicalDecide &decide) {
-	DecideLinearFormBuilder builder(context, decide);
+void BuildDecidePreparedModel(ClientContext &context, LogicalDecide &decide, const DecideReducerChild &child) {
+	DecideLinearFormBuilder builder(context, decide, child);
 	builder.Build();
 }
 
