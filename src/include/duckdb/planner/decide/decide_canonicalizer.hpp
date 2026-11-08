@@ -252,9 +252,6 @@ public:
 	//! a CORRELATED subquery, which is per-row and must not qualify.
 	bool IsQueryWideConstant(const Expression &expr) const;
 
-	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
-	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
-
 	//! Canonicalize a bound DECIDE objective. Pure -- `objective` is untouched.
 	//!
 	//! An objective is structurally ONE SIDE of a comparison. There is no relation to
@@ -262,7 +259,7 @@ public:
 	//! left, data right) have no analogue here. Everything else this boundary owns
 	//! applies unchanged -- wrapper recursion, additive decomposition, decision-aware
 	//! cast transparency, and one spelling for a reducer scale -- and is SHARED with
-	//! CanonicalizeComparison rather than reimplemented, which is the whole reason
+	//! CanonicalizeTree rather than reimplemented, which is the whole reason
 	//! objectives get a boundary instead of their own normalizer.
 	//!
 	//! Additive decision-free terms are folded into `out_constant_offset`, which is
@@ -475,9 +472,8 @@ private:
 	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
 	                             DecideScopeChecks &scope) const;
 
-	//! Rebuild an additive chain from terms, negating every sign when `negate`
-	//! is set (used for the terms that crossed the relation).
-	unique_ptr<Expression> BuildAdditive(const vector<Atom> &atoms, bool negate) const;
+	//! Rebuild an additive chain from terms.
+	unique_ptr<Expression> BuildAdditive(const vector<Atom> &atoms) const;
 	//! Whether `atoms` is one negated reducer (`-max(e)`, `-(2 * max(e))`).
 	bool IsLoneNegatedReducer(const vector<Atom> &atoms) const;
 	//! Whether `side` spells one term with signs around it (`-(-max(e))`): its canonical

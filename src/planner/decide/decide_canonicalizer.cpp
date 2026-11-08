@@ -67,7 +67,7 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	auto &func = current->Cast<BoundFunctionExpression>();
 	bool is_mult = func.function.name == "*";
 	bool is_div = func.function.name == "/";
-	if ((!is_mult && !is_div) || func.children.size() != 2) {
+	if (!is_mult && !is_div) {
 		return false;
 	}
 
@@ -101,7 +101,7 @@ template <class IS_DECISION, class CALLBACK>
 static void WalkAdditiveSpine(const Expression &expr, int sign, IS_DECISION &&is_decision, CALLBACK &&callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.function.name == "+" && !func.children.empty()) {
+		if (func.function.name == "+") {
 			for (auto &child : func.children) {
 				WalkAdditiveSpine(*child, sign, is_decision, callback);
 			}
@@ -112,7 +112,7 @@ static void WalkAdditiveSpine(const Expression &expr, int sign, IS_DECISION &&is
 			WalkAdditiveSpine(*func.children[1], -sign, is_decision, callback);
 			return;
 		}
-		if (func.function.name == "-" && func.children.size() == 1) {
+		if (func.function.name == "-") {
 			WalkAdditiveSpine(*func.children[0], -sign, is_decision, callback);
 			return;
 		}
@@ -133,7 +133,7 @@ ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index) {
 	};
 	ExtremumBody split;
 	WalkAdditiveSpine(body, 1, is_decision, [&](int sign, const Expression &term) {
-		(term.IsFoldable() && !is_decision(term) ? split.moved : split.kept).emplace_back(sign, &term);
+		(term.IsFoldable() ? split.moved : split.kept).emplace_back(sign, &term);
 	});
 	return split;
 }
@@ -167,8 +167,7 @@ static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_sco
 		idx_t key = DECIDE_ROW_KEY;
 		if (scope.IsGlobal()) {
 			key = DConstants::INVALID_INDEX;
-		} else if (scope.IsKeyed() && scope.keyed_scope_idx < keyed_scopes.size() &&
-		           keyed_scopes[scope.keyed_scope_idx].key != DConstants::INVALID_INDEX) {
+		} else if (scope.IsKeyed()) {
 			key = keyed_scopes[scope.keyed_scope_idx].key;
 		}
 		keys.push_back(key);
@@ -287,8 +286,7 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
 		auto var = binding.column_index;
-		if (binding.table_index != decide_index || var >= variable_scopes.size() ||
-		    variable_scopes[var].scope != DecideVarScope::KEYED) {
+		if (binding.table_index != decide_index || variable_scopes[var].scope != DecideVarScope::KEYED) {
 			return;
 		}
 		for (auto &element : DecideKeyElements(keys, scopes[variable_scopes[var].keyed_scope_idx].key)) {
@@ -359,7 +357,7 @@ bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
 	if (cur->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		// A decision column: a factor reaches here only for bearing one.
 		auto column = cur->Cast<BoundColumnRefExpression>().binding.column_index;
-		return column < boolean_decisions.size() && boolean_decisions[column];
+		return boolean_decisions[column];
 	}
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return false;
@@ -368,7 +366,7 @@ bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
 	if (func.function.name == "-" && func.children.size() == 1) {
 		return IsBooleanFactor(*func.children[0]); // the sign FoldNegationIntoFactor gives a negated reducer
 	}
-	if (func.function.name == "*" && func.children.size() == 2) {
+	if (func.function.name == "*") {
 		// Data times the Boolean. A product of two decisions beside a reducer is degree 3, which the shape check
 		// refuses after canonicalization, so reading its first decision here only decides the shape it is refused in.
 		return IsBooleanFactor(*func.children[ReferencesDecideVar(*func.children[0]) ? 0 : 1]);
@@ -398,12 +396,6 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 		return query_wide_table_indexes.find(colref.binding.table_index) !=
 		       query_wide_table_indexes.end();
 	}
-	// An unflattened uncorrelated scalar subquery is one value by definition. A
-	// correlated one is genuinely per-row and must not qualify.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
-		auto &subq = expr.Cast<BoundSubqueryExpression>();
-		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated();
-	}
 	if (expr.IsFoldable()) {
 		return true;
 	}
@@ -416,9 +408,6 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// `2 * (SELECT k FROM p) * SUM(x)` work: neither factor folds on its own.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.children.empty()) {
-			return false;
-		}
 		for (auto &child : func.children) {
 			if (!IsQueryWideConstant(*child)) {
 				return false;
@@ -440,21 +429,9 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		if (colref.binding.table_index == decide_index) {
 			auto var_idx = colref.binding.column_index;
-			return var_idx < decision_keys.size() ? decision_keys[var_idx] : DECIDE_ROW_KEY;
+			return decision_keys[var_idx];
 		}
-		return judge_column_refs &&
-		               query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end()
-		           ? DConstants::INVALID_INDEX
-		           : data_key;
-	}
-	// A reducer is one value per group of its own `by`: ClassifyScoped reads it as a reducer term, not here.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		return DECIDE_ROW_KEY;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
-		auto &subq = expr.Cast<BoundSubqueryExpression>();
-		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated() ? DConstants::INVALID_INDEX
-		                                                                          : data_key;
+		return data_key;
 	}
 	if (expr.IsFoldable()) {
 		return DConstants::INVALID_INDEX;
@@ -488,9 +465,6 @@ DecideCanonicalizer::FinalizeBoundProvenance(unique_ptr<BoundComparisonExpressio
 //! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm carries
 //! its order in a display tag, and an L0 norm is still the binder's marker.
 static const Expression *WrittenNormBody(const BoundAggregateExpression &aggregate, string &order) {
-	if (aggregate.children.size() != 1) {
-		return nullptr;
-	}
 	const Expression *body;
 	if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
 		body = aggregate.children[0].get();
@@ -514,10 +488,7 @@ static string UserFacingName(const Expression &expr) {
 		if (auto body = WrittenNormBody(agg, order)) {
 			return "NORM(" + UserFacingName(*body) + ", " + order + ")";
 		}
-		if (agg.children.size() == 1) {
-			return StringUtil::Upper(agg.function.name) + "(" + UserFacingName(*agg.children[0]) + ")";
-		}
-		return StringUtil::Upper(agg.function.name) + "(...)";
+		return StringUtil::Upper(agg.function.name) + "(" + UserFacingName(*agg.children[0]) + ")";
 	}
 	auto name = StripDecideTags(cur->GetName());
 	return name.empty() ? cur->ToString() : name;
@@ -562,7 +533,7 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		auto &func = cur->Cast<BoundFunctionExpression>();
 		bool is_mult = func.function.name == "*";
 		bool is_div = func.function.name == "/";
-		if ((!is_mult && !is_div) || func.children.size() != 2) {
+		if (!is_mult && !is_div) {
 			break;
 		}
 
@@ -675,8 +646,7 @@ static bool IsAdditiveSpine(const Expression &expr, idx_t decide_index) {
 		return false;
 	}
 	auto &func = cur->Cast<BoundFunctionExpression>();
-	return (func.function.name == "+" && func.children.size() == 2) ||
-	       (func.function.name == "-" && (func.children.size() == 1 || func.children.size() == 2));
+	return (func.function.name == "+" && func.children.size() == 2) || func.function.name == "-";
 }
 
 unique_ptr<Expression> DecideCanonicalizer::ComposeScale(const Expression *outer, bool outer_divides,
@@ -716,13 +686,13 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 		    // or a subquery, stays on the spine as one atom: its value is the VALUE shape's.
 		    if (whole.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 			    auto &func = whole.Cast<BoundFunctionExpression>();
-			    if ((func.function.name == "*" || func.function.name == "/") && func.children.size() == 2) {
+			    if (func.function.name == "*" || func.function.name == "/") {
 				    const bool divides = func.function.name == "/";
 				    for (idx_t side = divides ? 1 : 0; side < 2; side++) {
 					    auto &candidate = *func.children[side];
 					    auto &spine = *func.children[1 - side];
-					    if (candidate.IsFoldable() && !ReferencesDecideVar(candidate) &&
-					        IsAdditiveSpine(spine, decide_index) && ReferencesDecideVar(spine)) {
+					    if (candidate.IsFoldable() && IsAdditiveSpine(spine, decide_index) &&
+					        ReferencesDecideVar(spine)) {
 						    bool composed_divides;
 						    auto composed =
 						        ComposeScale(factor, factor_divides, candidate.Copy(), divides, composed_divides);
@@ -763,7 +733,7 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 	}
 	auto &aggregate = reducer.Cast<BoundAggregateExpression>();
 	const auto &name = aggregate.function.name;
-	if ((name != "min" && name != "max") || aggregate.children.size() != 1) {
+	if (name != "min" && name != "max") {
 		return false;
 	}
 	auto split = SplitExtremumBody(*aggregate.children[0], decide_index);
@@ -774,7 +744,7 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 	for (auto &part : split.kept) {
 		kept.push_back(Atom {part.first, part.second, Classify(*part.second)});
 	}
-	auto owned = RebindReducer(aggregate, name, BuildAdditive(kept, false));
+	auto owned = RebindReducer(aggregate, name, BuildAdditive(kept));
 	auto *rebuilt = owned.get();
 	auto *factor = scale.get();
 	out.push_back(Atom {sign, rebuilt, Classify(whole), std::move(scale), divides, std::move(owned)});
@@ -880,7 +850,6 @@ static const Expression &PeelConstantDivisors(ClientContext &context, const Expr
 	double divisor;
 	while (node->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
 	       node->Cast<BoundFunctionExpression>().function.name == "/" &&
-	       node->Cast<BoundFunctionExpression>().children.size() == 2 &&
 	       TryEvaluateFoldableDouble(context, *node->Cast<BoundFunctionExpression>().children[1], divisor,
 	                                 FOLD_CATCH_ALL) &&
 	       std::isfinite(divisor) && divisor != 0.0) {
@@ -985,10 +954,10 @@ unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_pt
 	return DecideRebindOperator(context, name, std::move(children));
 }
 
-unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &atoms, bool negate) const {
+unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &atoms) const {
 	unique_ptr<Expression> acc;
 	for (auto &atom : atoms) {
-		int sign = negate ? -atom.sign : atom.sign;
+		int sign = atom.sign;
 		auto term = atom.expr->Copy();
 		if (atom.scale) {
 			// Re-attach the peeled factor in the one canonical spelling: multiplication
@@ -998,8 +967,7 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 			// A data factor on a decision-bearing term that is not a scaled reducer (a merged
 			// `2 * POWER(x, 2)`, a distributed `2 * (x * y)`) is a product, written as every
 			// product is.
-			const bool product = !atom.scale_divides && !ContainsReducer(*atom.expr) &&
-			                     ReferencesDecideVar(*atom.expr) && !ReferencesDecideVar(*atom.scale);
+			const bool product = !atom.scale_divides && !ContainsReducer(*atom.expr) && ReferencesDecideVar(*atom.expr);
 			term = atom.scale_divides ? BindOp("/", std::move(term), atom.scale->Copy())
 			       : product          ? BuildDecideProduct(context, decide_index, atom.scale->Copy(), std::move(term))
 			                          : BindOp("*", atom.scale->Copy(), std::move(term));
@@ -1042,12 +1010,6 @@ void DecideCanonicalizer::FoldNegationIntoFactor(Atom &atom) const {
 	atom.scale = atom.scale ? BindOp("-", std::move(atom.scale))
 	                        : make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(-1));
 	atom.sign = -atom.sign;
-}
-
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
-	auto desugared = DesugarNorms(expr);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : expr, written_terms);
-	return CanonicalizeComparisonInternal(*written);
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const Expression &expr) const {
@@ -1119,7 +1081,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 		auto swapped = make_uniq<BoundComparisonExpression>(FlipComparisonExpression(cmp.type),
 		                                                    cmp.right->Copy(), cmp.left->Copy());
 		swapped->SetAlias(cmp.GetAlias());
-		return CanonicalizeComparison(*swapped);
+		return CanonicalizeComparisonInternal(*swapped);
 	}
 
 	// Decision terms on BOTH sides. Migrating the right-hand ones left negates
@@ -1158,8 +1120,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	if (IsLoneNegatedReducer(new_left)) {
 		FoldNegationIntoFactor(new_left[0]);
 	}
-	auto new_lhs = BuildAdditive(new_left, false);
-	auto new_rhs = BuildAdditive(new_right, false);
+	auto new_lhs = BuildAdditive(new_left);
+	auto new_rhs = BuildAdditive(new_right);
 	if (!new_rhs) {
 		new_rhs = make_uniq<BoundConstantExpression>(Value::DOUBLE(0));
 	}
@@ -1187,15 +1149,13 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	// wrapper predicate, so the two clauses cannot drift apart on what a wrapper is.
 	if (objective.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = objective.Cast<BoundConjunctionExpression>();
-		if (IsConstraintWrapper(conjunction) && !conjunction.children.empty()) {
-			auto result = make_uniq<BoundConjunctionExpression>(conjunction.type);
-			result->children.push_back(CanonicalizeObjectiveInternal(*conjunction.children[0], out_constant_offset));
-			for (idx_t i = 1; i < conjunction.children.size(); i++) {
-				result->children.push_back(conjunction.children[i]->Copy());
-			}
-			result->SetAlias(conjunction.GetAlias());
-			return std::move(result);
+		auto result = make_uniq<BoundConjunctionExpression>(conjunction.type);
+		result->children.push_back(CanonicalizeObjectiveInternal(*conjunction.children[0], out_constant_offset));
+		for (idx_t i = 1; i < conjunction.children.size(); i++) {
+			result->children.push_back(conjunction.children[i]->Copy());
 		}
+		result->SetAlias(conjunction.GetAlias());
+		return std::move(result);
 	}
 
 	// No decision content anywhere. Not a shape this pass owns -- and a legitimate
@@ -1236,7 +1196,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		out_constant_offset += atom.sign * value;
 	}
 
-	auto result = BuildAdditive(decision_atoms, false);
+	auto result = BuildAdditive(decision_atoms);
 	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
 	// reducer in a helper decision, and the product with it is a Boolean product.
 	if (std::any_of(decision_atoms.begin(), decision_atoms.end(),
@@ -1305,7 +1265,7 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 			continue;
 		}
 		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
-		if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(*root)) {
+		if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 			only_plain_avgs = false;
 			value = true; // a reducer inside another expression: `abs(sum(e) by (g) - 40)`
 			continue;
@@ -1355,7 +1315,7 @@ bool DecideCanonicalizer::TakesComposedMinMax(const vector<Atom> &atoms) const {
 	bool has_minmax = false;
 	for (auto &atom : atoms) {
 		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
-		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && ReferencesDecideVar(*root)) {
+		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			auto name = StringUtil::Lower(root->Cast<BoundAggregateExpression>().function.name);
 			has_minmax = has_minmax || name == "min" || name == "max";
 		}
@@ -1773,8 +1733,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	// body within each `by` group, over the rows its `when` keeps; one of the key's own
 	// elements, or a decision keyed by some of them, it determines by construction (KeyHolds).
 	idx_t scope_idx;
-	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.keyed_scopes.size() ||
-	    reducer.children.empty()) {
+	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
 		return;
 	}
 	vector<idx_t> per_order, by_order, key_order;
@@ -1826,10 +1785,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 		auto key = enclosing.PerKey();
 		vector<idx_t> key_order;
 		TryParsePerKeyOrder(per.GetAlias(), key_order);
-		idx_t fragment;
-		auto key_text = TryParseSourceFragmentTag(per.GetAlias(), fragment) && fragment < scope.source_fragments.size()
-		                    ? scope.source_fragments[fragment]
-		                    : DecideKeyText(scope.keys, key);
+		auto key_text = RenderDecidePerKey(per, scope.source_fragments);
 		auto make_check = [&]() {
 			DecideScopeCheck check;
 			check.kind = DecideScopeCheckKind::DETERMINES;
@@ -1851,7 +1807,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 		AddDecisionChecks(parts.decisions, key, variable_scopes, true, make_check, scope);
 		for (auto *reducer : parts.reducers) {
 			idx_t group_key;
-			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key) || group_key >= scope.keys.size()) {
+			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key)) {
 				continue;
 			}
 			auto &by = scope.keys[group_key];
@@ -1879,9 +1835,6 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	bool two_level = false;
 	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (!IsConstraintWrapper(conj) || conj.children.empty()) {
-			break;
-		}
 		two_level = two_level || IsTwoLevelObjectiveWrapper(conj);
 		enclosing = EnterDecideScope(conj, enclosing);
 		body = conj.children[0].get();
@@ -1911,7 +1864,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	AddDecisionChecks(parts.decisions, DConstants::INVALID_INDEX, variable_scopes, true, make_check, scope);
 	for (auto *reducer : parts.reducers) {
 		idx_t group_key;
-		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key) && group_key < scope.keys.size()) {
+		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key)) {
 			auto &by = scope.keys[group_key];
 			for (auto &element : by.elements) {
 				auto check = make_check();
