@@ -1,0 +1,127 @@
+diff --git a/highs/lp_data/Highs.cpp b/highs/lp_data/Highs.cpp
+index 9f73475798..0aae872c06 100644
+--- a/highs/lp_data/Highs.cpp
++++ b/highs/lp_data/Highs.cpp
+@@ -3812,6 +3812,8 @@ HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
+     // Use presolve for LP
+     presolve_.init(original_lp, timer_);
+     presolve_.options_ = &options_;
++    // DeciDB patch (BUG-53)
++    presolve_.callback_ = &callback_;
+     if (options_.time_limit > 0 && options_.time_limit < kHighsInf) {
+       double current = timer_.read();
+       double time_init = current - start_presolve;
+diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
+index 0e25bf7aef..3b18f534b6 100644
+--- a/highs/presolve/HPresolve.cpp
++++ b/highs/presolve/HPresolve.cpp
+@@ -69,10 +69,11 @@ void HPresolve::debugPrintRow(HighsPostsolveStack& postsolve_stack,
+ 
+ bool HPresolve::okSetInput(HighsLp& model_, const HighsOptions& options_,
+                            const HighsInt presolve_reduction_limit,
+-                           HighsTimer* timer) {
++                           HighsTimer* timer, HighsCallback* callback) {
+   model = &model_;
+   options = &options_;
+   this->timer = timer;
++  this->callback = callback;
+ 
+   if (!okResize(colLowerSource, model->num_col_, HighsInt{-1})) return false;
+   if (!okResize(colUpperSource, model->num_col_, HighsInt{-1})) return false;
+@@ -167,8 +168,11 @@ bool HPresolve::okSetInput(HighsMipSolver& mipsolver,
+         mipsolver.mipdata_->getDomain().col_upper_;
+   }
+ 
++  // DeciDB patch (BUG-53): a sub-MIP is never interrupted by the user, as in
++  // HighsMipSolverData::checkLimits
+   return okSetInput(mipsolver.mipdata_->presolvedModel, *mipsolver.options_mip_,
+-                    presolve_reduction_limit, &mipsolver.timer_);
++                    presolve_reduction_limit, &mipsolver.timer_,
++                    mipsolver.submip ? nullptr : mipsolver.callback_);
+ }
+ 
+ bool HPresolve::rowCoefficientsIntegral(HighsInt row, double scale) const {
+@@ -6112,10 +6116,24 @@ HPresolve::Result HPresolve::removeSlacks(
+   return Result::kOk;
+ }
+ 
++// DeciDB patch (BUG-53): every limit check of presolve comes here, so a user
++// interrupt is asked here too, as the solve after presolve asks it beside its
++// clock: the MIP interrupt for MIP presolve, the simplex interrupt for LP
++// presolve. Presolve then ends as it does at the time limit, and the solve's
++// own first check reports the interrupt. Tested by
++// test_highs_interrupt_reaches_presolve.
+ HPresolve::Result HPresolve::checkTimeLimit() {
+   assert(timer);
+   if (options->time_limit < kHighsInf && timer->read() >= options->time_limit)
+     return Result::kStopped;
++  const HighsCallbackType interrupt =
++      mipsolver != nullptr ? kCallbackMipInterrupt : kCallbackSimplexInterrupt;
++  if (callback != nullptr && callback->user_callback &&
++      callback->active[interrupt]) {
++    callback->clearHighsCallbackOutput();
++    if (callback->callbackAction(interrupt, "Presolve interrupt"))
++      return Result::kStopped;
++  }
+   return Result::kOk;
+ }
+ 
+diff --git a/highs/presolve/HPresolve.h b/highs/presolve/HPresolve.h
+index d70a3c4a2b..63ddddf6b1 100644
+--- a/highs/presolve/HPresolve.h
++++ b/highs/presolve/HPresolve.h
+@@ -40,6 +40,9 @@ class HPresolve {
+   const HighsOptions* options;
+   HighsTimer* timer;
+   HighsMipSolver* mipsolver = nullptr;
++  // DeciDB patch (BUG-53): the callback whose user interrupt checkTimeLimit
++  // asks beside the clock; null when nobody can interrupt this presolve
++  HighsCallback* callback = nullptr;
+   double primal_feastol;
+ 
+   // triplet storage
+@@ -369,7 +372,8 @@ class HPresolve {
+   // for LP presolve
+   bool okSetInput(HighsLp& model_, const HighsOptions& options_,
+                   const HighsInt presolve_reduction_limit,
+-                  HighsTimer* timer = nullptr);
++                  HighsTimer* timer = nullptr,
++                  HighsCallback* callback = nullptr);
+ 
+   // for MIP presolve
+   bool okSetInput(HighsMipSolver& mipsolver,
+diff --git a/highs/presolve/PresolveComponent.cpp b/highs/presolve/PresolveComponent.cpp
+index dcaa16d736..efaba15a06 100644
+--- a/highs/presolve/PresolveComponent.cpp
++++ b/highs/presolve/PresolveComponent.cpp
+@@ -31,7 +31,8 @@ void PresolveComponent::negateReducedLpColDuals() {
+ HighsPresolveStatus PresolveComponent::run() {
+   presolve::HPresolve presolve;
+   if (!presolve.okSetInput(data_.reduced_lp_, *options_,
+-                           options_->presolve_reduction_limit, timer)) {
++                           options_->presolve_reduction_limit, timer,
++                           callback_)) {
+     presolve_status_ = HighsPresolveStatus::kOutOfMemory;
+     return presolve_status_;
+   }
+diff --git a/highs/presolve/PresolveComponent.h b/highs/presolve/PresolveComponent.h
+index d331719f19..39d6096e6f 100644
+--- a/highs/presolve/PresolveComponent.h
++++ b/highs/presolve/PresolveComponent.h
+@@ -19,6 +19,7 @@
+ #include <string>
+ #include <utility>
+ 
++#include "lp_data/HighsCallback.h"
+ #include "lp_data/HighsLp.h"
+ #include "presolve/HighsPostsolveStack.h"
+ #include "util/HighsComponent.h"
+@@ -81,6 +82,8 @@ class PresolveComponent : public HighsComponent {
+   PresolveComponentData data_;
+   const HighsOptions* options_;
+   HighsTimer* timer;
++  // DeciDB patch (BUG-53): the callback presolve asks for a user interrupt
++  HighsCallback* callback_ = nullptr;
+ 
+   HighsPresolveStatus presolve_status_ = HighsPresolveStatus::kNotPresolved;
+   HighsPostsolveStatus postsolve_status_ = HighsPostsolveStatus::kNotPresolved;

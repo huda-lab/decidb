@@ -40,6 +40,9 @@ class HPresolve {
   const HighsOptions* options;
   HighsTimer* timer;
   HighsMipSolver* mipsolver = nullptr;
+  // DeciDB patch (BUG-53): the callback whose user interrupt checkTimeLimit
+  // asks beside the clock; null when nobody can interrupt this presolve
+  HighsCallback* callback = nullptr;
   double primal_feastol;
 
   // triplet storage
@@ -369,7 +372,8 @@ class HPresolve {
   // for LP presolve
   bool okSetInput(HighsLp& model_, const HighsOptions& options_,
                   const HighsInt presolve_reduction_limit,
-                  HighsTimer* timer = nullptr);
+                  HighsTimer* timer = nullptr,
+                  HighsCallback* callback = nullptr);
 
   // for MIP presolve
   bool okSetInput(HighsMipSolver& mipsolver,

@@ -3812,6 +3812,8 @@ HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
     // Use presolve for LP
     presolve_.init(original_lp, timer_);
     presolve_.options_ = &options_;
+    // DeciDB patch (BUG-53)
+    presolve_.callback_ = &callback_;
     if (options_.time_limit > 0 && options_.time_limit < kHighsInf) {
       double current = timer_.read();
       double time_init = current - start_presolve;

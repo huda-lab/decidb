@@ -19,6 +19,7 @@
 #include <string>
 #include <utility>
 
+#include "lp_data/HighsCallback.h"
 #include "lp_data/HighsLp.h"
 #include "presolve/HighsPostsolveStack.h"
 #include "util/HighsComponent.h"
@@ -81,6 +82,8 @@ class PresolveComponent : public HighsComponent {
   PresolveComponentData data_;
   const HighsOptions* options_;
   HighsTimer* timer;
+  // DeciDB patch (BUG-53): the callback presolve asks for a user interrupt
+  HighsCallback* callback_ = nullptr;
 
   HighsPresolveStatus presolve_status_ = HighsPresolveStatus::kNotPresolved;
   HighsPostsolveStatus postsolve_status_ = HighsPostsolveStatus::kNotPresolved;

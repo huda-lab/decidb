@@ -35,3 +35,5 @@ Each patch's edits are marked `DeciDB patch (<id>)` in the source. Why each exis
 - `0007-BUG-34` (`presolve/HPresolve.*`): dual fixing's substitution and singleton column stuffing, which still scan a
   long row once per column of it when the row has other integer columns, stop at the time limit; they check it once
   per 2^20 scanned row entries.
+- `0008-BUG-53` (`presolve/HPresolve.*`, `presolve/PresolveComponent.*`, `lp_data/Highs.cpp`): presolve's limit
+  check asks the user interrupt beside the clock, so a Ctrl-C stops presolve.

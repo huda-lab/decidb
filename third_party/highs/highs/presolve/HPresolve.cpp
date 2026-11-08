@@ -69,10 +69,11 @@ void HPresolve::debugPrintRow(HighsPostsolveStack& postsolve_stack,
 
 bool HPresolve::okSetInput(HighsLp& model_, const HighsOptions& options_,
                            const HighsInt presolve_reduction_limit,
-                           HighsTimer* timer) {
+                           HighsTimer* timer, HighsCallback* callback) {
   model = &model_;
   options = &options_;
   this->timer = timer;
+  this->callback = callback;
 
   if (!okResize(colLowerSource, model->num_col_, HighsInt{-1})) return false;
   if (!okResize(colUpperSource, model->num_col_, HighsInt{-1})) return false;
@@ -167,8 +168,11 @@ bool HPresolve::okSetInput(HighsMipSolver& mipsolver,
         mipsolver.mipdata_->getDomain().col_upper_;
   }
 
+  // DeciDB patch (BUG-53): a sub-MIP is never interrupted by the user, as in
+  // HighsMipSolverData::checkLimits
   return okSetInput(mipsolver.mipdata_->presolvedModel, *mipsolver.options_mip_,
-                    presolve_reduction_limit, &mipsolver.timer_);
+                    presolve_reduction_limit, &mipsolver.timer_,
+                    mipsolver.submip ? nullptr : mipsolver.callback_);
 }
 
 bool HPresolve::rowCoefficientsIntegral(HighsInt row, double scale) const {
@@ -6112,10 +6116,24 @@ HPresolve::Result HPresolve::removeSlacks(
   return Result::kOk;
 }
 
+// DeciDB patch (BUG-53): every limit check of presolve comes here, so a user
+// interrupt is asked here too, as the solve after presolve asks it beside its
+// clock: the MIP interrupt for MIP presolve, the simplex interrupt for LP
+// presolve. Presolve then ends as it does at the time limit, and the solve's
+// own first check reports the interrupt. Tested by
+// test_highs_interrupt_reaches_presolve.
 HPresolve::Result HPresolve::checkTimeLimit() {
   assert(timer);
   if (options->time_limit < kHighsInf && timer->read() >= options->time_limit)
     return Result::kStopped;
+  const HighsCallbackType interrupt =
+      mipsolver != nullptr ? kCallbackMipInterrupt : kCallbackSimplexInterrupt;
+  if (callback != nullptr && callback->user_callback &&
+      callback->active[interrupt]) {
+    callback->clearHighsCallbackOutput();
+    if (callback->callbackAction(interrupt, "Presolve interrupt"))
+      return Result::kStopped;
+  }
   return Result::kOk;
 }
 
