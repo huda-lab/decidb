@@ -3101,22 +3101,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 			if (node.objective || node.hidden || node.folded || node.repair_rows) {
 				continue;
 			}
-			auto &container = gstate.descent->Containers()[root];
 			auto &result = values.Results()[root];
-			vector<idx_t> settled_per_instance(container.instance_entries.size(), 0);
-			for (auto entry : result.instance_entries) {
-				settled_per_instance[container.entries[entry].instance]++;
-			}
-			idx_t grouped = 0;
-			for (auto count : settled_per_instance) {
-				grouped += MaxValue<idx_t>(count, 1);
-			}
-			idx_t kept = result.instance_entries.size();
-			if (node.facts && node.facts->lhs_is_aggregate && node.facts->group_key == DConstants::INVALID_INDEX) {
-				grouped = grouped ? 1 : 0;
-				kept = kept ? 1 : 0;
-			}
-			gstate.CountInstances(node.source_clause_id, grouped, kept);
+			gstate.CountInstances(node.source_clause_id, result.held, result.instance_entries.size());
 		}
 		ReportSkippedInstances(gstate, false);
 		if (std::getenv("DECIDB_DUMP_TREE")) {

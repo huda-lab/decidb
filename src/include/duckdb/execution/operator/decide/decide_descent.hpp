@@ -29,6 +29,10 @@ struct DecideDescentEntry {
 	idx_t instance = DConstants::INVALID_INDEX;
 	vector<Value> signature;
 	vector<Value> columns;
+	//! A set E's, per node it depends on, where its row reads that node's value: a G's group, an O's timeline, or the
+	//! row where the O has an `else`, INVALID where the row did not reach it or an E's, read by class (D88). Rows
+	//! equal in sigma, columns and reads are one entry.
+	vector<idx_t> reads;
 	//! Raw and comparison forms of a frame's over key.
 	Value order;
 	Value order_key;
@@ -110,10 +114,14 @@ private:
 	};
 	struct NodeIndex {
 		unordered_map<hash_t, vector<idx_t>> groups;
+		//! A set E's instances by (slot, sigma), and its entries by (slot, sigma, columns, reads).
 		unordered_map<hash_t, vector<idx_t>> signatures;
+		unordered_map<hash_t, vector<idx_t>> entries;
 		//! Shared DAG edges may route the same row/context twice. Its input
 		//! value is inserted once, independently of which reader visits first.
 		unordered_map<hash_t, vector<pair<idx_t, idx_t>>> seen;
+		//! A G's or O's, for the current chunk: where each row it reaches reads its value (DecideDescentEntry::reads).
+		unordered_map<idx_t, idx_t> landed;
 	};
 	//! A group of a collated key and its least spelling so far: a hash aggregate over every read of the key (Key),
 	//! whose label Label returns.
@@ -157,6 +165,9 @@ private:
 	idx_t FindDecisionGroup(idx_t scope, vector<Value> key, idx_t row);
 	vector<idx_t> DecisionClasses(idx_t variable, DataChunk &chunk, const vector<RoutingRow> &rows, idx_t row_base);
 	void Insert(idx_t node, DecideDescentEntry entry, bool distinct);
+	idx_t FindInstance(idx_t node, hash_t variant, const DecideDescentEntry &entry);
+	//! A set E's entries of the current chunk, inserted once every root has descended (DecideDescentEntry::reads).
+	vector<pair<idx_t, DecideDescentEntry>> pending;
 };
 
 } // namespace duckdb

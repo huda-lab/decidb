@@ -274,30 +274,18 @@ private:
 		}
 	}
 
-	vector<idx_t> SurvivingEntries(idx_t node, bool with_rhs) const {
-		auto &container = descent.Containers()[node];
+	//! Each instance's representative, or with `every` each entry an instance holds.
+	vector<idx_t> SurvivingEntries(idx_t node, bool with_rhs, bool every = false) const {
 		auto &values = evaluation.Results()[node];
-		vector<bool> taken(container.instance_entries.size(), false);
 		vector<idx_t> result;
-		if (!values.instances.empty()) {
-			for (auto entry : values.instance_entries) {
-				if (!with_rhs || (entry < values.rhs.size() && values.rhs[entry] && values.rhs[entry]->Present())) {
-					result.push_back(entry);
-				}
-			}
-			return result;
-		}
-		for (idx_t entry = 0; entry < container.entries.size(); entry++) {
-			const auto instance = container.entries[entry].instance;
-			if (taken[instance] || entry >= values.entries.size() || !values.entries[entry] ||
-			    !values.entries[entry]->Present()) {
+		for (idx_t entry = 0; entry < values.instances.size(); entry++) {
+			const auto instance = values.instances[entry];
+			if (instance == DConstants::INVALID_INDEX || (!every && values.instance_entries[instance] != entry)) {
 				continue;
 			}
-			if (with_rhs && (entry >= values.rhs.size() || !values.rhs[entry] || !values.rhs[entry]->Present())) {
-				continue;
+			if (!with_rhs || (entry < values.rhs.size() && values.rhs[entry] && values.rhs[entry]->Present())) {
+				result.push_back(entry);
 			}
-			taken[instance] = true;
-			result.push_back(entry);
 		}
 		return result;
 	}
@@ -1049,11 +1037,13 @@ private:
 			TreeLinearForm form;
 			idx_t row;
 			bool quadratic;
+			idx_t instance;
 		};
 		vector<EmittedGroup> emitted;
 		std::unordered_map<size_t, vector<idx_t>> grouped;
+		// A clause in the grouped shape folds each instance's entries into its rows (language/guide.md §5, §6.4).
 		const bool collapse = node.facts && (node.facts->lhs_is_aggregate || node.facts->was_minmax_easy);
-		for (auto index : SurvivingEntries(root, true)) {
+		for (auto index : SurvivingEntries(root, true, collapse)) {
 			if (index >= state.entries.size() || !state.entries[index] || !state.entries[index]->Present()) {
 				continue;
 			}
@@ -1128,8 +1118,8 @@ private:
 				row.strict = strict;
 				row.typed_k = typed;
 				Provenance(root, container.entries[index], row);
-				if (collapse && sense != '!') {
-					size_t hash = 0;
+				if (collapse) {
+					size_t hash = state.instances[index];
 					for (auto &term : form.terms) {
 						hash = MurmurHash64(hash ^ std::hash<int>()(term.first) ^ std::hash<double>()(term.second));
 					}
@@ -1141,11 +1131,17 @@ private:
 					bool merged = false;
 					for (auto position : bucket) {
 						auto &prior = emitted[position];
-						if (prior.form.terms != form.terms || prior.form.quadratic != form.quadratic) {
+						if (prior.instance != state.instances[index] || prior.form.terms != form.terms ||
+						    prior.form.quadratic != form.quadratic) {
 							continue;
 						}
-						auto &previous = prior.quadratic ? input.raw_quadratic_constraints[prior.row].linear
-						                                 : input.global_constraints[prior.row];
+						auto &previous = sense == '!'      ? not_equals[prior.row].row
+						                 : prior.quadratic ? input.raw_quadratic_constraints[prior.row].linear
+						                                   : input.global_constraints[prior.row];
+						// `<>` keeps each value its own exclusion.
+						if (sense == '!' && previous.rhs != row.rhs) {
+							continue;
+						}
 						if (sense == '=' && previous.rhs != row.rhs) {
 							const auto bound = source < input.constraint_sources.size()
 							                       ? input.constraint_sources[source].written_rhs
@@ -1169,9 +1165,10 @@ private:
 					}
 					bucket.push_back(emitted.size());
 					emitted.push_back({form,
-					                   form.quadratic.empty() ? input.global_constraints.size()
-					                                          : input.raw_quadratic_constraints.size(),
-					                   !form.quadratic.empty()});
+					                   sense == '!'             ? not_equals.size()
+					                   : form.quadratic.empty() ? input.global_constraints.size()
+					                                            : input.raw_quadratic_constraints.size(),
+					                   !form.quadratic.empty(), state.instances[index]});
 				}
 				if (sense == '!') {
 					not_equals.push_back({std::move(form), std::move(row), written});

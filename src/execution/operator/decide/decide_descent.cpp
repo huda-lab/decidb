@@ -439,24 +439,46 @@ vector<idx_t> DecideDescent::DecisionClasses(idx_t variable, DataChunk &chunk, c
 void DecideDescent::Insert(idx_t node, DecideDescentEntry entry, bool distinct) {
 	auto &container = containers[node];
 	if (distinct) {
-		auto &bucket = indexes[node].signatures[DescentHash(entry.slot, entry.signature)];
-		for (auto index : bucket) {
-			auto &existing = container.entries[index];
-			if (existing.slot == entry.slot && DescentEqual(existing.signature, entry.signature)) {
-				entry.instance = existing.instance;
-				if (DescentEqual(existing.columns, entry.columns)) {
-					return;
-				}
+		// Sigma numbers the instance. An entry stays apart where it reads another value -- a carried column, a G's
+		// group, an O's timeline or `else` -- so a set E is finer than its instances until it settles bottom-up, once
+		// the frames and the absence of what it reads are known (language/guide.md §7.1, §7.2). Each is hashed whole,
+		// so an instance of many entries costs an insert one probe.
+		auto &index = indexes[node];
+		const auto variant = DescentHash(entry.slot, entry.signature);
+		auto hash = DescentHash(variant, entry.columns);
+		for (auto read : entry.reads) {
+			hash = MurmurHash64(hash ^ Hash<uint64_t>(read));
+		}
+		auto &copies = index.entries[hash];
+		for (auto copy : copies) {
+			auto &existing = container.entries[copy];
+			if (existing.slot == entry.slot && DescentEqual(existing.signature, entry.signature) &&
+			    DescentEqual(existing.columns, entry.columns) && existing.reads == entry.reads) {
+				return;
 			}
 		}
-		bucket.push_back(container.entries.size());
-	}
-	if (entry.instance == DConstants::INVALID_INDEX) {
+		copies.push_back(container.entries.size());
+		entry.instance = FindInstance(node, variant, entry);
+	} else {
 		entry.instance = container.instance_entries.size();
 		container.instance_entries.push_back(container.entries.size());
 	}
 	container.groups[entry.slot].entries.push_back(container.entries.size());
 	container.entries.push_back(std::move(entry));
+}
+
+idx_t DecideDescent::FindInstance(idx_t node, hash_t variant, const DecideDescentEntry &entry) {
+	auto &container = containers[node];
+	auto &bucket = indexes[node].signatures[variant];
+	for (auto instance : bucket) {
+		auto &known = container.entries[container.instance_entries[instance]];
+		if (known.slot == entry.slot && DescentEqual(known.signature, entry.signature)) {
+			return instance;
+		}
+	}
+	bucket.push_back(container.instance_entries.size());
+	container.instance_entries.push_back(container.entries.size());
+	return bucket.back();
 }
 
 void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
@@ -526,6 +548,9 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		slots.push_back(slot);
 		if (node.kind != DecideNodeKind::SCOPE) {
 			child.parent_slot = slot;
+			// A reader reads a G's or O's value at its group or timeline, and an `else` at the anchor's own row
+			// (language/guide.md §5.6; DecideDescentEntry::reads).
+			index.landed.emplace(row_base + rows[i].row, node.fallback ? row_base + rows[i].row : slot);
 		}
 		children.push_back(child);
 	}
@@ -603,7 +628,11 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 				entry.partition_present = partition_present[i];
 			}
 		}
-		Insert(node_index, std::move(entry), node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW);
+		if (node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW) {
+			pending.emplace_back(node_index, std::move(entry));
+			continue;
+		}
+		Insert(node_index, std::move(entry), false);
 	}
 	children.erase(
 	    std::remove_if(children.begin(), children.end(), [&](const RoutingRow &row) { return Failed(row.row); }),
@@ -645,9 +674,22 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 	for (auto root : tree.roots) {
 		Visit(root, chunk, row_base, rows);
 	}
+	// A set E's row reads the G and O nodes it depends on, its children and the helpers its decisions stand for, which
+	// another root may route later in the chunk. So its entries wait for every root.
+	for (auto &waiting : pending) {
+		auto &entry = waiting.second;
+		for (auto dependency : tree.nodes[waiting.first]->dependencies) {
+			auto &landed = indexes[dependency].landed;
+			auto read = landed.find(entry.row);
+			entry.reads.push_back(read == landed.end() ? DConstants::INVALID_INDEX : read->second);
+		}
+		Insert(waiting.first, std::move(entry), true);
+	}
+	pending.clear();
 	// Seen is chunk-local: containers retain values, not an input-sized visited set.
 	for (auto &index : indexes) {
 		index.seen.clear();
+		index.landed.clear();
 	}
 }
 

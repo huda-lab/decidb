@@ -729,14 +729,36 @@ void DecideTreeEvaluation::Scope(idx_t node_index) {
 			result.rhs.push_back(std::move(rhs));
 		}
 	}
-	result.instances.assign(container.entries.size(), DConstants::INVALID_INDEX);
-	vector<vector<Value>> signatures;
-	unordered_map<hash_t, vector<idx_t>> buckets;
-	for (idx_t index = 0; index < container.entries.size(); index++) {
-		if (!result.entries[index]->Present()) {
-			continue;
+	// E settles into variants (§7.1): its class, its sigma, and a frame's fallback where the anchor reaches it (D82).
+	// A variant with a value is an instance, except in the grouped shape, which is one instance per group of its `by`
+	// key, as a child keyed by it holds the entry's row: sigma holds that key, so a variant lies in one group, and
+	// formulation folds each variant of a group once into the group's tightest bound (language/guide.md §5.6, §6.4).
+	idx_t groups = DConstants::INVALID_INDEX;
+	if (node.facts && (node.facts->lhs_is_aggregate || node.facts->was_minmax_easy)) {
+		for (auto &read : node.child_reads) {
+			if (tree.nodes[read.node]->key == node.facts->group_key) {
+				groups = read.node;
+				break;
+			}
 		}
+	}
+	result.instances.assign(container.entries.size(), DConstants::INVALID_INDEX);
+	vector<pair<idx_t, vector<Value>>> signatures;
+	vector<idx_t> variant_instances;
+	unordered_map<hash_t, vector<idx_t>> buckets;
+	unordered_map<idx_t, idx_t> group_instances;
+	std::unordered_set<idx_t> held;
+	for (idx_t index = 0; index < container.entries.size(); index++) {
 		auto &entry = container.entries[index];
+		auto base = entry.instance;
+		if (groups != DConstants::INVALID_INDEX) {
+			// A row whose `by` key is NULL is in no group (D5), so it is no instance.
+			const auto member = ChildEntry(groups, entry);
+			if (member == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			base = descent.Containers()[groups].entries[member].slot;
+		}
 		auto signature = entry.signature;
 		for (auto &read : node.child_reads) {
 			if (tree.nodes[read.node]->kind != DecideNodeKind::FRAME) {
@@ -754,27 +776,48 @@ void DecideTreeEvaluation::Scope(idx_t node_index) {
 			hash ^= value.Hash() + 0x9e3779b9 + (hash << 6) + (hash >> 2);
 		}
 		auto &bucket = buckets[hash];
-		idx_t instance = DConstants::INVALID_INDEX;
+		idx_t variant = DConstants::INVALID_INDEX;
 		for (auto candidate : bucket) {
-			const auto representative = result.instance_entries[candidate];
-			bool equal = container.entries[representative].slot == entry.slot &&
-			             signatures[candidate].size() == signature.size();
+			auto &known = signatures[candidate];
+			bool equal = known.first == entry.slot && known.second.size() == signature.size();
 			for (idx_t field = 0; equal && field < signature.size(); field++) {
-				equal = Value::NotDistinctFrom(signatures[candidate][field], signature[field]);
+				equal = Value::NotDistinctFrom(known.second[field], signature[field]);
 			}
 			if (equal) {
-				instance = candidate;
+				variant = candidate;
 				break;
 			}
 		}
-		if (instance == DConstants::INVALID_INDEX) {
-			instance = result.instance_entries.size();
+		if (variant == DConstants::INVALID_INDEX) {
+			variant = signatures.size();
+			bucket.push_back(variant);
+			signatures.emplace_back(entry.slot, std::move(signature));
+			variant_instances.push_back(DConstants::INVALID_INDEX);
+		}
+		// D90 holds each instance, with a value or not (§7.4): a variant, or a group in the grouped shape.
+		held.insert(groups == DConstants::INVALID_INDEX ? variant : base);
+		if (!result.entries[index]->Present()) {
+			continue;
+		}
+		auto &instance = variant_instances[variant];
+		if (instance != DConstants::INVALID_INDEX) {
+			// Its variant's first entry with a value reads what it reads. A reducer over this E counts the variant
+			// once; a group's fold holds it once.
+			if (groups == DConstants::INVALID_INDEX) {
+				result.instances[index] = instance;
+			}
+			continue;
+		}
+		instance = result.instance_entries.size();
+		if (groups != DConstants::INVALID_INDEX) {
+			instance = group_instances.emplace(base, instance).first->second;
+		}
+		if (instance == result.instance_entries.size()) {
 			result.instance_entries.push_back(index);
-			signatures.push_back(std::move(signature));
-			bucket.push_back(instance);
 		}
 		result.instances[index] = instance;
 	}
+	result.held = held.size();
 }
 
 void DecideTreeEvaluation::Reducer(idx_t node_index) {
@@ -1258,6 +1301,11 @@ string DecideTreeEvaluation::Dump() const {
 			if (!result.rhs.empty()) {
 				out << " " << ExpressionTypeToString(tree.nodes[node]->comparison_type) << " "
 				    << result.rhs[entry]->ToString();
+			}
+			// An E's settled instance, `-` where the entry has no value or its variant's first entry stands for it.
+			if (entry < result.instances.size()) {
+				const auto instance = result.instances[entry];
+				out << " instance " << (instance == DConstants::INVALID_INDEX ? "-" : std::to_string(instance));
 			}
 			out << "\n";
 		}

@@ -367,3 +367,121 @@ def test_an_interrupt_stops_the_bottom_up_evaluation(decidb_cli):
         DECIDE x(REAL) SUCH THAT {frames} MAXIMIZE sum(x))"""
     result, _ = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}).execute_interrupted(sql, after=1.5, timeout=60)
     assert "Interrupted!" in result.stderr, result.stderr[:800]
+
+
+#: A clause in the grouped shape is one instance per group of its `by` key, whatever else tells its entries apart
+#: (language/guide.md §6.4, §7.4; decide_tree_evaluation.cpp, Scope), so D90 counts groups, as flat does: a and b, whose
+#: rows the reducer's `when` leaves empty. Each case reaches an arm no other case reaches. Counting entries said 4, and
+#: 5 with row 6.
+GROUPED_COUNT_ROWS = ((1, "a", 3, 1), (2, "a", 4, 2), (3, "a", 9, 3), (4, "b", 2, 1), (5, "b", 6, 1))
+GROUPED_COUNT_CASES = {
+    # A `per` class across groups: the root's slot is the class (1, 2, 3), its instance the group a child keyed by
+    # `by` holds.
+    "a-class-across-groups": ("per t.k: sum(when t.c > 100: x) by (t.g) <= 5", GROUPED_COUNT_ROWS),
+    # A bound that varies in a group: its value, a field of sigma, tells entries apart, not instances.
+    "a-bound-that-varies-in-a-group": ("sum(when t.c > 100: x) by (t.g) <> t.k", GROUPED_COUNT_ROWS),
+    # A row whose `by` key is NULL is in no group (D5), so row 6's entry in class 1 is no instance.
+    "a-row-in-no-group": (
+        "per t.k: sum(when t.c > 100: x) by (t.g) <= 5",
+        GROUPED_COUNT_ROWS + ((6, None, 7, 1),),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(GROUPED_COUNT_CASES))
+def test_a_grouped_clause_counts_its_groups(decidb_cli, case):
+    clause, rows = GROUPED_COUNT_CASES[case]
+    values = ", ".join(f"({i}, {'NULL' if g is None else repr(g)}, {c}, {k})" for i, g, c, k in rows)
+    sql = f"""SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES {values}) t(id, g, c, k)
+        DECIDE x(INT) SUCH THAT x <= 10 AND {clause} MAXIMIZE SUM(x) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    found = answer(cli, sql, warnings=["each of its 2 instances has no value"])
+    assert found == [{"id": row[0], "x": 10} for row in rows]
+
+
+def _fallback_split(second):
+    return f"""SELECT id, x FROM (VALUES (1, 'A', 1, 4, 5), (2, 'A', 1, 4, {second}), (3, 'A', 2, 6, 1),
+            (4, 'B', 1, 7, NULL), (5, 'C', 1, 7, NULL)) t(id, product, period, v, w)
+        DECIDE per t.product: x(INT) SUCH THAT x <= 9
+            AND per t.product: x <= at(previous else t.w: t.v) over (t.period within t.product)
+        MAXIMIZE sum(x) ORDER BY id"""
+
+
+#: D90 counts each instance once, with a value or not (language/guide.md §7.4; decide_tree_evaluation.cpp, Scope), as
+#: flat counts. Each case reaches an arm no other case reaches.
+INSTANCE_COUNT_CASES = {
+    # Under `per t.product`, a variant per fallback its anchors reach (D82). A's first period falls back to its rows'
+    # `t.w`, 5 and 2, two instances with a value; its second period reads 4; B and C fall back to a NULL, none.
+    # Counting the variants the descent held, A's first period once, said 2 of 4.
+    "a-fallback-of-two-values": (_fallback_split("2"), "2of5"),
+    # 5 and NULL: one instance with a value and one with none. Counting only the variants the descent held with no
+    # value at all said 2 of 4.
+    "a-fallback-of-a-value-and-none": (_fallback_split("NULL"), "3of5"),
+    # The grouped shape counts a group once however many variants it holds: a has three classes of t.k reading row
+    # 3's x, and b no row the `when` keeps. One instance per variant of a said 1 of 4.
+    "a-group-of-several-variants": (
+        """SELECT id, x FROM (VALUES (1, 'a', 3, 1), (2, 'a', 4, 2), (3, 'a', 9, 3), (4, 'b', 2, 1), (5, 'b', 6, 1))
+            t(id, g, c, k)
+        DECIDE x(INT) SUCH THAT x <= 10 AND per t.k: sum(when t.c > 6: x) by (t.g) <= 5 MAXIMIZE SUM(x) ORDER BY id""",
+        "1of2",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(INSTANCE_COUNT_CASES))
+def test_explain_counts_each_instance_once(decidb_cli, case):
+    sql, skipped = INSTANCE_COUNT_CASES[case]
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    result = cli.execute_raw("SET decide_direct_solve='off'; EXPLAIN ANALYZE " + sql)
+    assert result.returncode == 0, result.stderr
+    text = "".join(line.strip().strip("│").strip() for line in result.stdout.splitlines()).replace(" ", "")
+    assert f"↳{skipped}instanceshavenovalueandareskipped" in text, text
+
+
+def test_a_grouped_clause_folds_only_its_own_groups_entries(decidb_cli, tmp_path):
+    """Formulation folds a grouped instance's entries into its row under the tightest bound
+    (decide_tree_formulation.cpp, Constraints), one row per group as flat makes. Groups a and b of region R read the
+    same terms, 2 y_R + 2 z_R, under 5 and 3: two rows. Folding by terms alone merged them into one."""
+    sql = """SET decide_direct_solve='off';
+        SELECT id, y, z FROM (VALUES (1, 'R', 'a', 5), (2, 'R', 'a', 7), (3, 'R', 'b', 3), (4, 'R', 'b', 8))
+            t(id, r, g, c)
+        DECIDE per t.r: y(INT), per t.r: z(INT) SUCH THAT y <= 9 AND z <= 9 AND sum(y + z) by (t.g) <= t.c
+        MAXIMIZE sum(2 * y + z) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, sql) == [{"id": i, "y": 1, "z": 0} for i in range(1, 5)]
+    assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump"))["num_rows"] == 2
+
+
+#: `<>` keeps each value of a group's bound its own exclusion (language/guide.md §5): formulation folds an entry into
+#: an earlier exclusion of its instance only where the two values agree (decide_tree_formulation.cpp, Constraints).
+#: Each case reaches one side of that test.
+GROUPED_NOT_EQUAL_CASES = {
+    # Depots D1 and D2 of region E both exclude 5: one exclusion, as flat makes, where an exclusion per entry made
+    # three indicators and six rows.
+    "one-value": (
+        """SELECT id, x FROM (VALUES (1, 'D1', 'E', 10), (2, 'D1', 'E', 20), (3, 'D2', 'E', 30), (4, 'D3', 'W', 15))
+            t(id, depot, region, cap)
+        DECIDE x(INT) SUCH THAT x <= t.cap AND per t.depot: sum(x) by (t.region) <> 5 MAXIMIZE SUM(x)""",
+        {"num_vars": 6, "num_rows": 4},
+    ),
+    # Group a excludes 3 and 2, so its three x of at most 1 sum to 1, and b's one x is 0. Folding 2 into 3 let a reach
+    # 2.
+    "two-values": (
+        """SELECT sum(x) AS total FROM (SELECT * FROM (VALUES (1, 'a', 3), (2, 'a', 2), (3, 'a', 3), (4, 'b', 1))
+            t(id, g, k)
+        DECIDE x(INT) SUCH THAT x <= 1 AND sum(x) by (t.g) <> t.k MAXIMIZE SUM(x))""",
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(GROUPED_NOT_EQUAL_CASES))
+def test_a_grouped_not_equal_excludes_each_value_once(decidb_cli, tmp_path, case):
+    sql, counts = GROUPED_NOT_EQUAL_CASES[case]
+    sql = "SET decide_direct_solve='off'; " + sql
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_NATIVE_CONSTRUCTS": "off"})
+    if counts:
+        assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump")) == counts
+    else:
+        assert answer(cli, sql) == [{"total": 1}]

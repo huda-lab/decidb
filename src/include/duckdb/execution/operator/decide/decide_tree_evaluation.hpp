@@ -62,6 +62,8 @@ struct DecideTreeNodeResult {
 	//! witnesses can share one instance. Only instance_entries' representatives contribute to a reducer/model.
 	vector<idx_t> instances;
 	vector<idx_t> instance_entries;
+	//! Every instance E holds, with a value or not: D90's count beside instance_entries' (language/guide.md §7.4).
+	idx_t held = 0;
 	//! O's extra signature fields at each anchor, present only when that anchor reaches its fallback.
 	vector<vector<Value>> refinements;
 };
