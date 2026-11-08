@@ -103,11 +103,9 @@ public:
 	}
 
 	void Build() {
-		if (op.decide_constraints) {
-			ForEachScopedConstraintLeaf(
-			    *op.decide_constraints,
-			    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
-		}
+		ForEachScopedConstraintLeaf(
+		    *op.decide_constraints,
+		    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
 		if (op.decide_objective) {
 			AnalyzeObjective(op.decide_objective);
 		}
@@ -183,7 +181,7 @@ private:
 		}
 		bool found = false;
 		EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
-			if (!found && child && BoundExpressionContainsAggregate(*child)) {
+			if (!found && BoundExpressionContainsAggregate(*child)) {
 				found = true;
 			}
 		});
@@ -213,7 +211,7 @@ private:
 	//! offset folded into the RHS, not a repeated column, and they are not what any
 	//! consumer iterating `variable_indices` can trip over.
 	static bool TermsAreLike(const DecideTerm &a, const DecideTerm &b) {
-		if (a.variable_index == DConstants::INVALID_INDEX || a.variable_index != b.variable_index) {
+		if (a.variable_index == DConstants::INVALID_INDEX) {
 			return false;
 		}
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
@@ -357,13 +355,6 @@ private:
 		}
 	}
 
-	//! Name an expression the way the user wrote it: strip the casts the binder added.
-	static string ScaleUserName(const Expression &expr) {
-		const Expression *cur = StripCastsForIdentity(expr);
-		auto name = StripDecideTags(cur->GetName());
-		return name.empty() ? cur->ToString() : name;
-	}
-
 	//! Multiply a coefficient by a factor that stayed outside a reducer, keeping the
 	//! operand types the original `*` / `/` node was bound for and then binding the
 	//! rebuilt node through `FunctionBinder`. Casting first preserves the division
@@ -421,12 +412,11 @@ private:
 	bool ReadsOnlyQueryWideDecisions(const Expression &expr) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			idx_t var_idx = FindDecideVariable(expr);
-			return var_idx == DConstants::INVALID_INDEX ||
-			       (var_idx < op.variable_scopes.size() && op.variable_scopes[var_idx].IsGlobal());
+			return var_idx == DConstants::INVALID_INDEX || op.variable_scopes[var_idx].IsGlobal();
 		}
 		bool all = true;
 		EnumerateChildrenConst(
-		    expr, [&](unique_ptr<Expression> &child) { all = all && (!child || ReadsOnlyQueryWideDecisions(*child)); });
+		    expr, [&](unique_ptr<Expression> &child) { all = all && ReadsOnlyQueryWideDecisions(*child); });
 		return all;
 	}
 
@@ -448,7 +438,7 @@ private:
 				if (FindDecideVariable(*scale) != DConstants::INVALID_INDEX) {
 					throw InternalException("DECIDE constraint: '%s' is a decision, so it cannot multiply an "
 					                        "aggregate. Only data can scale SUM/AVG/MIN/MAX.",
-					                        ScaleUserName(*scale));
+					                        scale->ToString());
 				}
 				idx_t linear_before = constraint.lhs_terms.size();
 				idx_t group_before = constraint.product_groups.size();
@@ -632,11 +622,9 @@ private:
 
 				if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 					// Simple single-variable constraint (e.g., x <= 5)
-					idx_t var_idx = FindDecideVariable(*lhs);
-					if (var_idx != DConstants::INVALID_INDEX) {
-						constraint->lhs_terms.push_back(DecideTerm {
-						    var_idx, make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
-					}
+					constraint->lhs_terms.push_back(
+					    DecideTerm {FindDecideVariable(*lhs),
+					                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
 				} else {
 					// Multi-variable per-row constraint with complex LHS
 					// (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0,
@@ -707,15 +695,6 @@ private:
 			// multiply the factor into everything it produced.
 			if (atom.scaled) {
 				auto obj_scale = atom.scale.scale;
-				// A decision on both sides of the `*` is a product of two decisions
-				// (bilinear), not a scaled reducer; treating it as a coefficient reads a
-				// decision column as data and crashes in evaluation.
-				if (FindDecideVariable(*obj_scale) != DConstants::INVALID_INDEX) {
-					throw InvalidInputException("DECIDE objective: '%s' is a decision, so it cannot multiply an "
-					                            "aggregate. Only constants and query-wide values can scale "
-					                            "SUM/AVG/MIN/MAX.",
-					                            ScaleUserName(*obj_scale));
-				}
 				idx_t linear_before = obj.terms.size();
 				idx_t group_before = obj.product_groups.size();
 				ExtractReducerObjectiveTerms(*atom.scale.aggregate, obj, atom.sign);
@@ -723,18 +702,12 @@ private:
 				                      obj.product_groups, linear_before, group_before);
 				continue;
 			}
-			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
-			    FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
-				ExtractObjectiveBodyTerms(expr, obj, atom.sign);
-				continue;
-			}
 			// The objective reads a decision outside its reducers once, on the first kept row
 			// (a scope check made sure it has one instance there), a query-wide one included.
 			// A product of decisions has no once-only reading in the model -- except a product
 			// of two query-wide decisions (`s * u`), one `NONE` term execution counts once
 			// (CountOnce in physical_decide.cpp).
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE &&
-			    !BoundExpressionContainsAggregate(expr) && FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 				idx_t group_before = obj.product_groups.size();
 				ExtractObjectiveBodyTerms(expr, obj, atom.sign, nullptr);
 				bool square = false;
@@ -747,14 +720,6 @@ private:
 					    RenderDecideSource(expr, op.source_fragments, op.keyed_scopes, &op.keys));
 				}
 				continue;
-			}
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-				throw InvalidInputException(
-				    "DECIDE objective contains a non-aggregate term: %s.\n"
-				    "The objective must be a SUM/MIN/MAX/AVG of an expression in decision variables.\n"
-				    "If you wrapped an aggregate inside another function (e.g. POWER(AVG(x), 2)), "
-				    "use the supported shape SUM(POWER(x, 2)) instead.",
-				    expr.ToString());
 			}
 			ExtractReducerObjectiveTerms(expr.Cast<BoundAggregateExpression>(), obj, atom.sign);
 		}
@@ -781,7 +746,7 @@ private:
 		idx_t two_level_key = DConstants::INVALID_INDEX;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsTwoLevelObjectiveWrapper(conj) && !conj.children.empty()) {
+			if (IsTwoLevelObjectiveWrapper(conj)) {
 				// `per ()` groups nothing: the objective is read once.
 				two_level_key = PerWrapperKey(conj);
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
@@ -792,10 +757,8 @@ private:
 		unique_ptr<Expression> when_cond;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
-				when_cond = conj.children[1]->Copy();
-				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
-			}
+			when_cond = conj.children[1]->Copy();
+			expr = UnwrapDecideCasts(*conj.children[0], decide_index);
 		}
 
 		auto &objective = op.prepared.objective;
