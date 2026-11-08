@@ -148,8 +148,12 @@ def _check(result: subprocess.CompletedProcess, sql: str, removed_spelling: bool
 
 
 def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs) -> subprocess.CompletedProcess:
-    """Run the CLI on ``sql`` in a process of its own (see ``_check``)."""
-    return _check(subprocess.run(argv, capture_output=True, text=True, **kwargs), sql, removed_spelling)
+    """Run the CLI on ``sql`` in a process of its own (see ``_check``). Its return code follows the session's rule
+    (``_ERROR_HEADER``): the shell exits 0 after an error under ``-c`` unless ``-bail`` is given."""
+    proc = subprocess.run(argv, capture_output=True, text=True, **kwargs)
+    if _ERROR_HEADER.search(proc.stderr):
+        proc = subprocess.CompletedProcess(proc.args, proc.returncode or 1, proc.stdout, proc.stderr)
+    return _check(proc, sql, removed_spelling)
 
 
 #: Set to ``0`` to start a new process for every query, as the wrapper did before sessions.
@@ -170,7 +174,7 @@ _SESSION_STATE = re.compile(
 _DIRECT_MODE_PREFIX = re.compile(r"\A\s*SET\s+decide_direct_solve\s*=\s*'(\w+)'\s*;", re.IGNORECASE)
 
 #: The header DuckDB's shell prints in front of every error (``Parser Error:``,
-#: ``Invalid Input Error:``). Under ``-c`` the shell exits 1 after one; a session reports the same.
+#: ``Invalid Input Error:``). A query whose stderr shows one failed: the session and ``_run`` both report 1 for it.
 _ERROR_HEADER = re.compile(r"^[A-Za-z ]*Error:", re.MULTILINE)
 
 
