@@ -66,18 +66,15 @@ bool DecideSplitTerm::IsAbs() const {
 	return opaque && IsAbsFunction(*opaque);
 }
 
-//! `left * right` for two coefficients, either of which may be null (1). A bare decision's literal 1 stays out of the
-//! product, so `w * x` reads `w`: a product of a coefficient and 1 could overflow where the coefficient cannot.
-static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const Expression *left,
+//! `left * right` for two coefficients, `right` null for 1. A bare decision's literal 1 stays out of the product, so
+//! `w * x` reads `w`: a product of a coefficient and 1 could overflow where the coefficient cannot.
+static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const Expression &left,
                                                    unique_ptr<Expression> right) {
-	if (!left) {
-		return right;
-	}
 	if (!right || (right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 	               right->Cast<BoundConstantExpression>().value == Value::INTEGER(1))) {
-		return left->Copy();
+		return left.Copy();
 	}
-	return RebindMultiply(context, left->Copy(), std::move(right));
+	return RebindMultiply(context, left.Copy(), std::move(right));
 }
 
 //===--------------------------------------------------------------------===//
@@ -125,32 +122,19 @@ void DecideTermSplitter::ReadProduct(const Expression &expr, int sign, vector<De
 	auto form = ReadDecideProduct(context, expr, decide_index);
 	auto coefficient = BuildDecideProductCoefficient(context, form);
 	sign *= form.sign;
-	// A factor raised to 0 keeps its decisions at coefficient 0 (ReadDecideProduct's zero terms).
-	for (auto *zero : form.zero_terms) {
+	if (form.factors.size() == 1 && form.factors[0].power == 1) {
+		// A product of one factor carries a coefficient: canonicalization writes the factor alone otherwise.
+		D_ASSERT(coefficient);
 		auto begin = out.size();
-		Split(*zero, sign, out);
+		Split(*form.factors[0].base, sign, out);
 		for (idx_t i = begin; i < out.size(); i++) {
-			out[i].coefficient = make_uniq<BoundConstantExpression>(Value::INTEGER(0));
+			out[i].coefficient = MultiplyCoefficients(context, *coefficient, std::move(out[i].coefficient));
 		}
+		return;
 	}
 	idx_t degree = 0;
 	for (auto &factor : form.factors) {
 		degree += factor.power * DecideDegreeOf(context, *factor.base, decide_index).degree;
-	}
-	if (form.factors.empty()) {
-		DecideSplitTerm term;
-		term.sign = sign;
-		term.coefficient = coefficient ? std::move(coefficient) : make_uniq<BoundConstantExpression>(Value::INTEGER(1));
-		out.push_back(std::move(term));
-		return;
-	}
-	if (form.factors.size() == 1 && form.factors[0].power == 1) {
-		auto begin = out.size();
-		Split(*form.factors[0].base, sign, out);
-		for (idx_t i = begin; i < out.size(); i++) {
-			out[i].coefficient = MultiplyCoefficients(context, coefficient.get(), std::move(out[i].coefficient));
-		}
-		return;
 	}
 	if (degree != 2) {
 		throw InternalException("DECIDE: a term of degree %llu reached the term reader; the shape check refuses a "
@@ -228,12 +212,11 @@ void DecideTermSplitter::Split(const Expression &expr, int sign, vector<DecideSp
 	} else if (name == "-" && func.children.size() == 2) {
 		Split(*func.children[0], sign, out);
 		Split(*func.children[1], -sign, out);
-	} else if (name == "-" && func.children.size() == 1) {
+	} else if (name == "-") {
 		Split(*func.children[0], -sign, out);
 	} else if (IsDecideProductNode(context, func, decide_index)) {
 		ReadProduct(func, sign, out);
-	} else if (name == "/" && func.children.size() == 2 &&
-	           FindVariable(*func.children[1]) == DConstants::INVALID_INDEX) {
+	} else if (name == "/" && FindVariable(*func.children[1]) == DConstants::INVALID_INDEX) {
 		ReadQuotient(func, sign, out);
 	} else {
 		AddOpaque(func, sign, out);
