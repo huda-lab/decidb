@@ -28,13 +28,17 @@ enum class DecideErrorPhase : uint8_t {
 
 struct DecideErrorRank {
 	DecideErrorPhase phase = DecideErrorPhase::INVALID;
+	//! A part of a phase that runs whole before the next, whatever the clauses: SOURCE_CHECK runs the data checks (0)
+	//! before it reads a bound's reducer (1), FRAMES checks every frame's timelines (0) before it reads any frame's
+	//! values (1), and COMPOSED reads the clauses (0) before the objective (1).
+	idx_t step = 0;
 	idx_t clause = DConstants::INVALID_INDEX;
 	idx_t expression = DConstants::INVALID_INDEX;
 	idx_t row = DConstants::INVALID_INDEX;
 
 	bool operator<(const DecideErrorRank &other) const {
-		return std::tie(phase, clause, expression, row) <
-		       std::tie(other.phase, other.clause, other.expression, other.row);
+		return std::tie(phase, step, clause, expression, row) <
+		       std::tie(other.phase, other.step, other.clause, other.expression, other.row);
 	}
 };
 

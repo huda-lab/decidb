@@ -95,10 +95,17 @@ def _spans(column, frame):
     )
 
 
-def _peers(frame, column, position):
+def _peers(frame, column, position, timeline="A"):
     return (
-        f"Invalid Input Error: DECIDE: {frame} finds 2 rows at t.tl = 'A', t.{column} = {position}; a position must "
-        "hold one row."
+        f"Invalid Input Error: DECIDE: {frame} finds 2 rows at t.tl = '{timeline}', t.{column} = {position}; "
+        "a position must hold one row."
+    )
+
+
+def _limited(frame, limit):
+    return (
+        f"Invalid Input Error: DECIDE: {frame} reads more than {limit} values over its ranges, above "
+        f"decide_frame_limit ({limit}). Narrow the range, or raise the setting."
     )
 
 
@@ -256,6 +263,8 @@ PAIRS = [
     *((fault, MODEL_ROW) for fault in [*PHASES[: PHASES.index(MODEL_BUILD)], HELD_ROW_ERROR] if fault.clause),
     (FRAME_PEERS, HELD_CONSTANT),
     (HELD_CONSTANT, OBJECTIVE),
+    # The composed clauses are read after the objective, so a plain clause's constant raises before their row error.
+    (HELD_CONSTANT, HELD_ROW_ERROR),
 ]
 
 BOX = ("x <= 9", "s <= 9")
@@ -380,6 +389,8 @@ FRAME_VALUE = Fault(
 )
 SQUARED_TERM = Fault("squared_term", _coefficient("t.sq"), term="sum(power(t.sq * x, 2))", cells=(("sq", 0, NAN),))
 COMPOSED_TERM = Fault("composed_term", _coefficient("t.crest"), term="max(t.crest * x)", cells=(("crest", 0, NAN),))
+# A row error the objective's composed term holds, which waits for the composed phase's read of the objective.
+HELD_TERM_ERROR = Fault("held_term_error", SQRT, term="max(sqrt(t.crest) * x)", cells=(("crest", 0, -1.0),))
 EXTREMUM_ROW = Fault(
     "extremum_row",
     _too_large("max(x + t.far + t.far) >= 3"),
@@ -394,12 +405,14 @@ COMPOSED_ROW = Fault(
 )
 
 # (runs first, runs after): BuildFrames checks each frame's partition before any frame's column is read, the objective
-# reads its linear terms before its squares, the composed phase reads clauses before the objective, FormulateModel
-# works by construct, and SolverModel::Build sets up the objective before the rows.
+# reads its linear terms before its squares, the composed phase reads clauses before the objective, their coefficients
+# and the row errors they hold alike, FormulateModel works by construct, and SolverModel::Build sets up the objective
+# before the rows.
 SUB_STEPS = [
     (FRAMES, FRAME_VALUE),
     (OBJECTIVE, SQUARED_TERM),
     (COMPOSED, COMPOSED_TERM),
+    (HELD_ROW_ERROR, HELD_TERM_ERROR),
     (FORMULATION, EXTREMUM_ROW),
     (EXTREMUM_ROW, COMPOSED_ROW),
     (MODEL_BUILD, MODEL_ROW),
@@ -421,14 +434,46 @@ def test_each_frame_is_checked_before_the_next_is_built(decidb_cli):
     text = "sum(from first to last: t.pay) over (t.id)"
     limited = Fault(
         "limited",
-        f"Invalid Input Error: DECIDE: {text} reads more than 3 values over its ranges, above decide_frame_limit (3). "
-        "Narrow the range, or raise the setting.",
+        _limited(text, 3),
         clause="x <= sum(from first to first: t.pay) over (t.id) + 9",
         refused=f"x <= {text} + 9",
     )
     setup = "SET decide_frame_limit = 3; "
     _assert_wins(decidb_cli, limited, FRAMES, [limited, FRAMES], setup)
     _assert_wins(decidb_cli, FRAMES, limited, [FRAMES, limited], setup)
+
+
+# One frame is built as BuildDecideFrameMap builds it: the order of each row it routes is read, then its windows are
+# listed, raising decide_frame_limit, and CheckDecideFramePartition checks its partition after.
+NARROW = "sum(from first to first: t.pay) over (sqrt(t.q) within t.tl)"
+WIDE = "sum(from first to last: t.pay) over (sqrt(t.q) within t.tl)"
+LISTED = Fault(
+    "listed", _limited(WIDE, 2), clause=f"per t.cls: x <= {NARROW} + 9", refused=f"per t.cls: x <= {WIDE} + 9"
+)
+ROUTED = Fault("routed", SQRT, cells=(("q", 0, -1),))
+CHECKED = Fault("checked", _spans("cls", NARROW), cells=(("cls", 2, "c1"),))
+ONE_FRAME = [(ROUTED, LISTED), (LISTED, CHECKED)]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("first, after", ONE_FRAME, ids=[f"{pair[0].name}-{pair[1].name}" for pair in ONE_FRAME])
+def test_one_frame_is_routed_listed_and_checked_in_that_order(decidb_cli, first, after):
+    _assert_wins(decidb_cli, first, after, [LISTED], "SET decide_frame_limit = 2; ")
+
+
+# RunScopeChecks reads an objective's kept rows, its `when`, before it counts the objective's instances (D72). An
+# objective with no signature has no such check, and its `when` is read with the objective.
+KEPT_ROWS = Fault("kept_rows", SQRT, cells=(("root", 1, -1.0),))
+GATED = [(KEPT_ROWS, SCOPE_CHECK, [SCOPE_CHECK]), (FRAME_PEERS, KEPT_ROWS, [FRAME_PEERS])]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("winner, loser, written", GATED, ids=["with_a_signature", "without_one"])
+def test_the_scope_check_reads_the_objective_when(decidb_cli, winner, loser, written):
+    clauses = " AND ".join([*BOX, *(fault.clause for fault in written if fault.clause)])
+    decide = f"{DECLARATION} SUCH THAT {clauses} MINIMIZE when sqrt(t.root) > 0: {_objective(written)}"
+    for on in ([winner, loser], [winner], [loser]):
+        assert _error(decidb_cli, decide, on) == on[0].message
 
 
 @pytest.mark.error
@@ -476,6 +521,14 @@ ONE_CLAUSE = [
         "ln(t.root2) * x + sqrt(t.root) * s <= 100",
         LATER_ROW_ERROR,
         FIRST_ROW_ERROR,
+    ),
+    # Two positions of two rows: a frame reads its timelines in the order of their values, not of their rows, so 'B'
+    # raises though 'C' holds the first rows.
+    (
+        "positions_in_the_order_of_timelines",
+        f"x <= {AT_FIRST} + 20",
+        Fault("peer_in_b", _peers(AT_FIRST, "pos", 1, "B"), cells=(("pos", 3, 1),)),
+        Fault("peer_in_c", _peers(AT_FIRST, "pos", 1, "C"), cells=(("tl", 0, "C"), ("tl", 1, "C"), ("pos", 1, 1))),
     ),
 ]
 

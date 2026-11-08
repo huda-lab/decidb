@@ -36,8 +36,8 @@ struct DecideTreeValue {
 	unique_ptr<Expression> expression;
 	vector<shared_ptr<DecideTreeValue>> operands;
 	ErrorData error;
+	//! Where an ERROR was raised, which decides it against the other errors a surviving root reads.
 	DecideErrorRank error_rank;
-	bool error_ranked = false;
 
 	bool Present() const {
 		return kind != DecideTreeValueKind::ABSENT;

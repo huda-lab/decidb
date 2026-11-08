@@ -40,12 +40,87 @@ static DecideTreeValuePtr UnsupportedValue(const LogicalType &type, const string
 	return result;
 }
 
-static DecideTreeValuePtr ErrorValue(const LogicalType &type, const ErrorData &error,
-                                     DecideErrorPhase phase = DecideErrorPhase::INVALID) {
+//! An error ranked where it is raised: every root that reads it reports it at that phase and place.
+static DecideTreeValuePtr ErrorValue(const LogicalType &type, const ErrorData &error, DecideErrorRank rank) {
 	auto result = make_shared_ptr<DecideTreeValue>(DecideTreeValueKind::ERROR, type);
 	result->error = error;
-	result->error_rank.phase = phase;
+	result->error_rank = rank;
 	return result;
+}
+
+//! An expression's ordinal in its node's rank: what routes the node's rows (the descent's reads, a member test) counts
+//! from 0, and what the node computes once they are routed from AFTER_ROUTING.
+static constexpr idx_t AFTER_ROUTING = 1000000;
+
+//! Why an objective has more than one instance over its kept rows (D72): the first field of its sigma that differs
+//! between them, with the least and the greatest value it takes.
+static string ObjectiveDifference(const DecideTree &tree, const DecideNode &node, const DecideNodeContainer &container,
+                                  const vector<idx_t> &surviving) {
+	idx_t offset = 0;
+	string reason = "the kept rows have more than one variant";
+	auto varies = [&](idx_t column, string &values) {
+		const Value *least = nullptr, *greatest = nullptr;
+		auto before = [](const Value &left, const Value &right) {
+			return !left.IsNull() && (right.IsNull() || left < right);
+		};
+		for (auto entry : surviving) {
+			if (column >= container.entries[entry].signature.size()) {
+				return false;
+			}
+			auto &value = container.entries[entry].signature[column];
+			if (!least || before(value, *least)) {
+				least = &value;
+			}
+			if (!greatest || before(*greatest, value)) {
+				greatest = &value;
+			}
+		}
+		if (!least || Value::NotDistinctFrom(*least, *greatest)) {
+			return false;
+		}
+		values = DecideSqlLiteral(*least) + ", " + DecideSqlLiteral(*greatest);
+		return true;
+	};
+	bool found = false;
+	for (auto &field : node.signature) {
+		string values;
+		if (field.kind == DecideSignatureFieldKind::VALUE) {
+			if (varies(offset, values)) {
+				reason =
+				    StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text, values);
+				found = true;
+			}
+			offset++;
+		} else if (field.kind == DecideSignatureFieldKind::DECISION) {
+			if (varies(offset + 1, values)) {
+				auto &scope = tree.variable_scopes[field.decision];
+				reason = StringUtil::Format(
+				    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
+				    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
+				found = true;
+			}
+			offset += 2;
+		} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
+			for (auto &element : DecideKeyElements(tree.keys, field.key)) {
+				if (!found && varies(offset, values)) {
+					reason = StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
+					                            element.name, field.text, values);
+					found = true;
+				}
+				offset++;
+			}
+		} else {
+			reason = StringUtil::Format("'%s' has more than one variant over the kept rows", field.text);
+			found = true;
+		}
+		if (found) {
+			break;
+		}
+	}
+	return StringUtil::Format(
+	    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or fix it "
+	    "with when.",
+	    reason);
 }
 
 static bool StopsEvaluation(const ErrorData &error) {
@@ -87,25 +162,26 @@ DecideTreeEvaluation::DecideTreeEvaluation(const DecideTree &tree_p, const Decid
 			rows[node][entries[entry].row].push_back(entry);
 		}
 		auto &definition = *tree.nodes[node];
-		auto assign = [&](const Expression &root, DecideErrorPhase phase, idx_t clause, idx_t &ordinal) {
+		auto assign = [&](const Expression &root, DecideErrorRank rank, idx_t &ordinal) {
 			std::function<void(const Expression &)> visit = [&](const Expression &expression) {
-				expression_ranks[node][&expression] = {phase, clause, ordinal++, DConstants::INVALID_INDEX};
+				rank.expression = ordinal++;
+				expression_ranks[node][&expression] = rank;
 				ExpressionIterator::EnumerateChildren(expression, [&](const Expression &child) { visit(child); });
 			};
 			visit(root);
 		};
 		idx_t ordinal = 0;
 		for (auto &test : definition.member_tests) {
-			assign(*test, definition.route_phase, definition.route_order, ordinal);
+			assign(*test, definition.route_rank, ordinal);
 		}
-		ordinal = 1000000;
+		ordinal = AFTER_ROUTING;
 		for (auto *expression : {definition.body.get(), definition.rhs.get(), definition.fallback.get()}) {
 			if (expression) {
-				assign(*expression, definition.value_phase, definition.value_order, ordinal);
+				assign(*expression, definition.value_rank, ordinal);
 			}
 		}
 		for (auto &argument : definition.arguments) {
-			assign(*argument, definition.value_phase, definition.value_order, ordinal);
+			assign(*argument, definition.value_rank, ordinal);
 		}
 	}
 }
@@ -437,16 +513,16 @@ DecideTreeValuePtr DecideTreeEvaluation::ExpressionValue(const Expression &expre
 		if (StopsEvaluation(error)) {
 			throw;
 		}
-		auto value = ErrorValue(expression.return_type, error);
+		auto ranked = expression_ranks[node_index].find(&expression);
+		auto rank = tree.nodes[node_index]->value_rank;
+		rank.expression = AFTER_ROUTING;
+		if (ranked != expression_ranks[node_index].end()) {
+			rank = ranked->second;
+		}
+		rank.row = entry.row;
+		auto value = ErrorValue(expression.return_type, error, rank);
 		value->node = node_index;
 		value->row = entry.row;
-		auto ranked = expression_ranks[node_index].find(&expression);
-		value->error_rank = ranked == expression_ranks[node_index].end()
-		                        ? DecideErrorRank {tree.nodes[node_index]->value_phase,
-		                                           tree.nodes[node_index]->value_order, 1000000, entry.row}
-		                        : ranked->second;
-		value->error_rank.row = entry.row;
-		value->error_ranked = true;
 		return value;
 	}
 }
@@ -593,7 +669,7 @@ DecideTreeValuePtr DecideTreeEvaluation::Reduce(idx_t node_index, const BoundAgg
 		if (StopsEvaluation(error)) {
 			throw;
 		}
-		return ErrorValue(type, error);
+		return ErrorValue(type, error, node.value_rank);
 	}
 }
 
@@ -604,9 +680,11 @@ void DecideTreeEvaluation::Scope(idx_t node_index) {
 	for (auto &entry : container.entries) {
 		auto value = node.body ? ExpressionValue(*node.body, node_index, entry) : DataValue(Value::BOOLEAN(true));
 		if (node.value_check && value->kind == DecideTreeValueKind::DATA) {
-			value = value->data.IsNull()
-			            ? DataValue(Value::BOOLEAN(true))
-			            : ErrorValue(LogicalType::BOOLEAN, ErrorData(InvalidInputException(value->data.ToString())));
+			auto rank = node.value_rank;
+			rank.row = entry.row;
+			value = value->data.IsNull() ? DataValue(Value::BOOLEAN(true))
+			                             : ErrorValue(LogicalType::BOOLEAN,
+			                                          ErrorData(InvalidInputException(value->data.ToString())), rank);
 		}
 		DecideTreeValuePtr rhs;
 		if (node.rhs) {
@@ -742,8 +820,10 @@ void DecideTreeEvaluation::Reducer(idx_t node_index) {
 					           (raw->data.type().InternalType() == PhysicalType::DOUBLE ||
 					            raw->data.type().InternalType() == PhysicalType::FLOAT) &&
 					           std::isnan(raw->data.GetValue<double>())) {
+						auto rank = node.value_rank;
+						rank.row = entry.row;
 						value = ErrorValue(node.function ? node.function->return_type : raw->type,
-						                   ErrorData(InvalidInputException(DecideFrameNanMessage(node.text))));
+						                   ErrorData(InvalidInputException(DecideFrameNanMessage(node.text))), rank);
 					}
 				}
 				if (!value->Present()) {
@@ -810,9 +890,22 @@ void DecideTreeEvaluation::Frame(idx_t node_index) {
 	vector<DecideTreeValuePtr> payloads(container.entries.size());
 	const auto limit = GetDecideFrameLimit(context);
 	idx_t visits = 0;
+	// A frame's timelines are checked once its rows are routed, frame after frame: its range limit as its windows are
+	// listed, then its partition (language/guide.md §5.6).
+	auto limited = node.route_rank;
+	limited.expression = AFTER_ROUTING;
+	auto spanned = node.route_rank;
+	spanned.expression = AFTER_ROUTING + 1;
+	// A position of two rows (D73) is checked once the decisions' classes are known, after the scope checks, in the
+	// frame's order of timelines and positions.
+	auto peers = node.route_rank;
+	peers.phase = DecideErrorPhase::FRAME_PEERS;
+	idx_t positions_before = 0;
 	for (auto &timeline : container.timelines) {
 		const auto count = static_cast<int64_t>(timeline.positions.size());
 		unordered_map<string, DecideTreeValuePtr> windows;
+		const auto first_position = positions_before;
+		positions_before += timeline.positions.size();
 		auto selected = [&](idx_t position) {
 			auto &at = timeline.positions[position];
 			const auto first = at.entries[0];
@@ -821,9 +914,13 @@ void DecideTreeEvaluation::Frame(idx_t node_index) {
 				names.push_back(frame.order_name);
 				auto values = descent.Label(node.key, container.groups[timeline.slot].key);
 				values.push_back(at.order);
-				return ErrorValue(type, ErrorData(InvalidInputException(
-				                            "DECIDE: %s finds %llu rows at %s; a position must hold one row.",
-				                            frame.text, at.entries.size(), DescribeKeyValues(names, values))));
+				auto rank = peers;
+				rank.expression = first_position + position;
+				return ErrorValue(
+				    type,
+				    ErrorData(InvalidInputException("DECIDE: %s finds %llu rows at %s; a position must hold one row.",
+				                                    frame.text, at.entries.size(), DescribeKeyValues(names, values))),
+				    rank);
 			}
 			if (!payloads[first]) {
 				payloads[first] = ExpressionValue(*node.body, node_index, container.entries[first]);
@@ -882,12 +979,14 @@ void DecideTreeEvaluation::Frame(idx_t node_index) {
 				}
 				const auto reads = frame.cyclic ? requested : present + (node.fallback ? absent : 0);
 				if (reads > limit || visits > limit - reads) {
+					limited.row = anchor.row;
 					result.entries[anchor_entry] = ErrorValue(
 					    type,
 					    ErrorData(InvalidInputException(
 					        "DECIDE: %s reads more than %llu values over its ranges, above decide_frame_limit (%llu). "
 					        "Narrow the range, or raise the setting.",
-					        frame.text, limit, limit)));
+					        frame.text, limit, limit)),
+					    limited);
 					continue;
 				}
 				visits += reads;
@@ -1001,9 +1100,12 @@ void DecideTreeEvaluation::Frame(idx_t node_index) {
 						return describe(descent.Label(node.key, container.groups[at.slot].key));
 					};
 					auto timelines = timeline(first) + ", " + timeline(entry);
-					current.error = ErrorValue(
-					    type, ErrorData(InvalidInputException("DECIDE: %s. %s %s = %s.", frame.partition_subject, spans,
-					                                          timeline_names, timelines)));
+					spanned.row = entry.row;
+					current.error =
+					    ErrorValue(type,
+					               ErrorData(InvalidInputException("DECIDE: %s. %s %s = %s.", frame.partition_subject,
+					                                               spans, timeline_names, timelines)),
+					               spanned);
 				}
 			}
 			current.entries.push_back(row);
@@ -1082,9 +1184,9 @@ void DecideTreeEvaluation::Evaluate() {
 }
 
 //! Values form a DAG, in which every entry of a group reads the group's reducer. A value is walked again only under a
-//! fallback ranking before every one it was walked under. An error ranks by its own rank or by the fallback, so a
-//! walk under a later fallback would add each error after, and at a rank no earlier than, one already added: the
-//! error ThrowIfAny raises stays the same.
+//! fallback ranking before every one it was walked under. An error ranks where it was raised and an unsupported value
+//! by the fallback, so a walk under a later fallback would add each again at a rank no earlier than one already
+//! added: the error ThrowIfAny raises stays the same.
 static void RequireValue(const DecideTreeValuePtr &value, DecideErrorLedger &errors, DecideErrorRank fallback,
                          unordered_map<const DecideTreeValue *, DecideErrorRank> &walked, idx_t &walks) {
 	if (!value) {
@@ -1097,11 +1199,7 @@ static void RequireValue(const DecideTreeValuePtr &value, DecideErrorLedger &err
 	walked[value.get()] = fallback;
 	walks++;
 	if (value->kind == DecideTreeValueKind::ERROR) {
-		auto rank = value->error_ranked ? value->error_rank : fallback;
-		if (value->error_rank.phase != DecideErrorPhase::INVALID) {
-			rank.phase = value->error_rank.phase;
-		}
-		errors.Add(rank, value->error);
+		errors.Add(value->error_rank, value->error);
 	}
 	if (value->kind == DecideTreeValueKind::UNSUPPORTED) {
 		errors.Add(fallback, ErrorData(NotImplementedException("DECIDE tree evaluation: %s", value->operation)));
@@ -1121,12 +1219,20 @@ void DecideTreeEvaluation::RequireSupported() const {
 	for (auto root : tree.roots) {
 		auto &node = *tree.nodes[root];
 		auto &result = results[root];
+		if (node.objective && result.instance_entries.size() > 1) {
+			// The objective is produced once (D72, language/guide.md §7.3): a scope check, run once the frames and
+			// the keyed decisions' classes are known and before any clause is read.
+			errors.Add(DecideErrorRank {DecideErrorPhase::SCOPE_CHECK},
+			           ErrorData(InvalidInputException(
+			               ObjectiveDifference(tree, node, descent.Containers()[root], result.instance_entries))));
+		}
 		for (idx_t entry = 0; entry < result.entries.size(); entry++) {
 			auto &value = result.entries[entry];
 			if (!value->Present()) {
 				continue;
 			}
-			DecideErrorRank rank {node.value_phase, node.value_order, 0, descent.Containers()[root].entries[entry].row};
+			auto rank = node.value_rank;
+			rank.row = descent.Containers()[root].entries[entry].row;
 			RequireValue(value, errors, rank, walked, walks);
 			if (!result.rhs.empty()) {
 				rank.expression = 1;

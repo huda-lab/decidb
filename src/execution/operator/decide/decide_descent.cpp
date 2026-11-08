@@ -464,7 +464,7 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 	auto &node = *tree.nodes[node_index];
 	active_node = node_index;
 	active_row_base = row_base;
-	current_rank = {node.route_phase, node.route_order, 0, DConstants::INVALID_INDEX};
+	current_rank = node.route_rank;
 	if (context.interrupted) {
 		throw InterruptException();
 	}

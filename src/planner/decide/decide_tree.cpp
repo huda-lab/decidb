@@ -249,6 +249,7 @@ public:
 		// semantic roots, not prepared coefficients; reconstruct their G/E operands.
 		for (auto &composed : op.composed_minmax_constraints) {
 			auto index = NewNode(DecideNodeKind::SCOPE);
+			composed_clauses.push_back(index);
 			auto &node = *tree->nodes[index];
 			node.root = true;
 			node.comparison_type = composed.outer_cmp;
@@ -287,7 +288,7 @@ public:
 			node.per = DecideTreePer::ONE;
 			node.text = op.written_objective.empty() ? "composed objective" : op.written_objective;
 			for (auto &term : op.composed_minmax_objective_terms) {
-				Composed(index, term);
+				composed_terms.push_back(Composed(index, term));
 			}
 			UseSignature(node, op.objective_signature);
 		}
@@ -319,37 +320,61 @@ private:
 	vector<idx_t> link_nodes;
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
+	//! The roots of the composed MIN/MAX clauses, and the reducers of the objective's composed terms.
+	vector<idx_t> composed_clauses;
+	vector<idx_t> composed_terms;
 
+	//! A node's errors rank at the earliest phase that reads it, in flat's order of phases: a bound's reducer is read
+	//! after the data checks on the rows, a composed MIN/MAX clause after the objective, and the objective's composed
+	//! terms after the composed clauses.
 	void ErrorRanks() {
 		vector<bool> assigned(tree->nodes.size(), false);
-		std::function<void(idx_t, DecideErrorPhase, idx_t)> visit = [&](idx_t index, DecideErrorPhase phase,
-		                                                                idx_t order) {
+		std::function<void(idx_t, DecideErrorRank)> visit = [&](idx_t index, DecideErrorRank rank) {
 			auto &node = *tree->nodes[index];
-			if (node.value_check || std::find(record_nodes.begin(), record_nodes.end(), index) != record_nodes.end()) {
-				phase = DecideErrorPhase::SOURCE_CHECK;
+			if (node.value_check) {
+				rank = {DecideErrorPhase::SOURCE_CHECK, 0, rank.clause, 0};
+			} else if (std::find(record_nodes.begin(), record_nodes.end(), index) != record_nodes.end()) {
+				rank = {DecideErrorPhase::SOURCE_CHECK, 1, rank.clause, 0};
 			} else if (node.kind == DecideNodeKind::FRAME) {
-				phase = DecideErrorPhase::FRAMES;
-				order = node.frame;
+				rank = {DecideErrorPhase::FRAMES, 1, node.frame, 0};
 			} else if (node.defined_var != DConstants::INVALID_INDEX) {
-				phase = DecideErrorPhase::KEYED_MAPPING;
+				rank = {DecideErrorPhase::KEYED_MAPPING, 0, rank.clause, 0};
 			} else if (node.link != DConstants::INVALID_INDEX) {
-				phase = DecideErrorPhase::VALUE_LINKS;
-				order = node.link;
+				rank = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
+			} else if (std::find(composed_terms.begin(), composed_terms.end(), index) != composed_terms.end()) {
+				rank = {DecideErrorPhase::COMPOSED, 1, rank.clause, 0};
 			}
-			if (assigned[index] && std::make_pair(node.value_phase, node.value_order) <= std::make_pair(phase, order)) {
+			if (assigned[index] && !(rank < node.value_rank)) {
 				return;
 			}
 			assigned[index] = true;
-			node.route_phase = node.value_phase = phase;
-			node.route_order = node.value_order = order;
+			node.route_rank = node.value_rank = rank;
+			if (node.kind == DecideNodeKind::FRAME) {
+				// A frame's timelines are built and checked, frame after frame, before any frame's values are read
+				// (language/guide.md §5.6).
+				node.route_rank.step = 0;
+			}
 			for (auto child : node.children) {
-				visit(child, phase, order);
+				visit(child, rank);
 			}
 		};
 		for (auto root : tree->roots) {
 			auto &node = *tree->nodes[root];
-			visit(root, node.objective ? DecideErrorPhase::OBJECTIVE : DecideErrorPhase::CONSTRAINTS,
-			      node.source_clause_id == DConstants::INVALID_INDEX ? root : node.source_clause_id);
+			DecideErrorRank rank {DecideErrorPhase::CONSTRAINTS, 0, node.source_clause_id, 0};
+			if (node.source_clause_id == DConstants::INVALID_INDEX) {
+				rank.clause = root;
+			}
+			if (node.objective) {
+				rank.phase = DecideErrorPhase::OBJECTIVE;
+			} else if (std::find(composed_clauses.begin(), composed_clauses.end(), root) != composed_clauses.end()) {
+				rank.phase = DecideErrorPhase::COMPOSED;
+			}
+			visit(root, rank);
+			if (node.objective && op.objective_signature != DConstants::INVALID_INDEX) {
+				// An objective with a signature is checked to be produced once (D72, language/guide.md §7.3), and the
+				// check reads its kept rows and its signature before it counts its instances.
+				node.route_rank.phase = DecideErrorPhase::SCOPE_CHECK;
+			}
 		}
 	}
 
@@ -840,7 +865,7 @@ private:
 		return index;
 	}
 
-	void Composed(idx_t owner, const LogicalDecide::ComposedMinMaxTerm &term) {
+	idx_t Composed(idx_t owner, const LogicalDecide::ComposedMinMaxTerm &term) {
 		auto reducer = NewNode(DecideNodeKind::REDUCER);
 		auto &node = *tree->nodes[reducer];
 		node.aggregate = term.agg_name;
@@ -889,6 +914,7 @@ private:
 		} else {
 			tree->nodes[owner]->body = std::move(value);
 		}
+		return reducer;
 	}
 
 	void AddOrphan(idx_t child) {

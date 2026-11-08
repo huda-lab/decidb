@@ -1215,13 +1215,9 @@ private:
 		written = input.objective_written.empty() ? node.text : input.objective_written;
 		source = removal = DConstants::INVALID_INDEX;
 		auto &state = evaluation.Results()[root];
-		auto &container = descent.Containers()[root];
 		const auto push = input.sense == DecideSense::MAXIMIZE ? -1 : 1;
-		auto surviving = SurvivingEntries(root, false);
-		if (surviving.size() > 1) {
-			ObjectiveDifference(node, container, surviving);
-		}
-		for (auto index : surviving) {
+		// An objective of more than one instance was refused before formulation (D72).
+		for (auto index : SurvivingEntries(root, false)) {
 			if (index >= state.entries.size() || !state.entries[index] || !state.entries[index]->Present()) {
 				continue;
 			}
@@ -1258,75 +1254,6 @@ private:
 				AddCoefficient(coefficient, term.second, written);
 			}
 		}
-	}
-
-	[[noreturn]] void ObjectiveDifference(const DecideNode &node, const DecideNodeContainer &container,
-	                                      const vector<idx_t> &surviving) const {
-		idx_t offset = 0;
-		string reason = "the kept rows have more than one variant";
-		auto varies = [&](idx_t column, string &values) {
-			const Value *least = nullptr, *greatest = nullptr;
-			auto before = [](const Value &left, const Value &right) {
-				return !left.IsNull() && (right.IsNull() || left < right);
-			};
-			for (auto entry : surviving) {
-				if (column >= container.entries[entry].signature.size()) {
-					return false;
-				}
-				auto &value = container.entries[entry].signature[column];
-				if (!least || before(value, *least)) {
-					least = &value;
-				}
-				if (!greatest || before(*greatest, value)) {
-					greatest = &value;
-				}
-			}
-			if (!least || Value::NotDistinctFrom(*least, *greatest)) {
-				return false;
-			}
-			values = DecideSqlLiteral(*least) + ", " + DecideSqlLiteral(*greatest);
-			return true;
-		};
-		bool found = false;
-		for (auto &field : node.signature) {
-			string values;
-			if (field.kind == DecideSignatureFieldKind::VALUE) {
-				if (varies(offset, values)) {
-					reason = StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text,
-					                            values);
-					found = true;
-				}
-				offset++;
-			} else if (field.kind == DecideSignatureFieldKind::DECISION) {
-				if (varies(offset + 1, values)) {
-					auto &scope = tree.variable_scopes[field.decision];
-					reason = StringUtil::Format(
-					    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
-					    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
-					found = true;
-				}
-				offset += 2;
-			} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
-				for (auto &element : DecideKeyElements(tree.keys, field.key)) {
-					if (!found && varies(offset, values)) {
-						reason = StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
-						                            element.name, field.text, values);
-						found = true;
-					}
-					offset++;
-				}
-			} else {
-				reason = StringUtil::Format("'%s' has more than one variant over the kept rows", field.text);
-				found = true;
-			}
-			if (found) {
-				break;
-			}
-		}
-		throw InvalidInputException(
-		    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or "
-		    "fix it with when.",
-		    reason);
 	}
 };
 

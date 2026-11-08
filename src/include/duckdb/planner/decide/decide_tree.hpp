@@ -44,11 +44,11 @@ struct DecideNode {
 	vector<idx_t> dependencies;
 	vector<DecideTreeRead> child_reads;
 	string text;
-	//! Stable reporting priority, independent of when top-down/bottom-up visits the node.
-	DecideErrorPhase route_phase = DecideErrorPhase::CONSTRAINTS;
-	DecideErrorPhase value_phase = DecideErrorPhase::CONSTRAINTS;
-	idx_t route_order = 0;
-	idx_t value_order = 0;
+	//! Stable reporting priority, independent of when top-down/bottom-up visits the node: of what routes its rows and
+	//! of what it computes. A frame's differ, since its timeline is checked before any value is read, and so do the
+	//! objective's when the scope check reads its kept rows (D72).
+	DecideErrorRank route_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
+	DecideErrorRank value_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
 	vector<unique_ptr<Expression>> member_tests;
