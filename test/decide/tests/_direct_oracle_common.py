@@ -52,10 +52,11 @@ def outcome(cli, sql, mode, expect_number_range=False):
         return "error", error_class(str(error))
 
 
-def without_gurobi(exe_path, tmp_path):
-    """Returns `run(sql)`, which runs a statement in a process that cannot reach a Gurobi licence."""
+def without_gurobi(exe_path, tmp_path, extra_env=None):
+    """Returns `run(sql)`, which runs a statement in a process that cannot reach a Gurobi licence. `extra_env` is set
+    after the `DECIDB_FORCE*` variables are stripped, as in `{"DECIDB_FORCE_SOLVER": "highs"}`."""
     env = {key: value for key, value in os.environ.items() if not key.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
-    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
+    env.update(GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path), **(extra_env or {}))
 
     def run_sql(sql):
         return subprocess.run([exe_path, "-noheader", "-list", "-c", sql], env=env, capture_output=True, text=True)

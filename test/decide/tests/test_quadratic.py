@@ -20,7 +20,6 @@ Covers:
 
 import os
 import re
-import subprocess
 import tempfile
 import time
 
@@ -28,6 +27,8 @@ import pytest
 
 from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
+
+from ._direct_oracle_common import without_gurobi
 
 
 # ---------------------------------------------------------------------------
@@ -1883,10 +1884,8 @@ class TestHighsRejection:
     def test_highs_refusal_asks_for_an_install_when_gurobi_is_missing(self, decidb_exe_path, tmp_path):
         """With no Gurobi licence the override is not what keeps Gurobi out, so unsetting it would not help and the
         refusal asks for an install."""
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("GRB", "GUROBI", "DECIDB_FORCE"))}
-        env.update(DECIDB_FORCE_SOLVER="highs", GRB_LICENSE_FILE=str(tmp_path / "missing.lic"), HOME=str(tmp_path))
         sql = "SELECT x FROM (VALUES (1), (2)) t(id) DECIDE x(REAL) SUCH THAT POWER(x, 2) <= 4 MAXIMIZE SUM(x)"
-        refused = subprocess.run([decidb_exe_path, "-c", sql], env=env, capture_output=True, text=True)
+        refused = without_gurobi(decidb_exe_path, tmp_path, {"DECIDB_FORCE_SOLVER": "highs"})(sql)
         assert "which needs Gurobi — not available on this machine. Install Gurobi, or" in refused.stderr, refused.stderr
         assert "DECIDB_FORCE_SOLVER selects" not in refused.stderr
 
