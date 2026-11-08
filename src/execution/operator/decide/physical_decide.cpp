@@ -1745,7 +1745,7 @@ struct UnboundedCandidateProvider {
 		return keyed_candidates.emplace(scope_idx, std::move(cands)).first->second;
 	}
 
-	vector<ColumnGrouping> operator()(idx_t decide_var_idx, idx_t) {
+	vector<ColumnGrouping> operator()(idx_t decide_var_idx) {
 		auto scope = decide_var_idx < var_indexer.var_scope.size()
 		                 ? var_indexer.var_scope[decide_var_idx]
 		                 : DecideVarScope::ROW;

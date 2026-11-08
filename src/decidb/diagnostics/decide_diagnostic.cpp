@@ -171,10 +171,8 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 // Diagnosis construction + statement-scoped handoff
 //===----------------------------------------------------------------------===//
 
-vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t total_instances,
-                                      const vector<ColumnGrouping> &candidates,
+vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vector<ColumnGrouping> &candidates,
                                       double escape_rate_threshold) {
-	(void)total_instances; // counts come from instance_to_group; param documents the contract
 	vector<EscapeRule> rules;
 	// Which escaping instances each kept rule covers, and whether the rule's column was
 	// named in the DECIDE clause. Two columns that pick out exactly the same escaping

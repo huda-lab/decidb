@@ -48,7 +48,7 @@ ColumnGrouping TagGrouping() {
 TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostics][unbounded]") {
 	SECTION("one categorical value fully escapes -> single sufficient rule") {
 		std::set<idx_t> escaping = {0, 1, 2}; // all export rows
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].column == "channel");
 		REQUIRE(rules[0].value == "export");
@@ -59,9 +59,9 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 	SECTION("threshold gates a partially-escaping group") {
 		std::set<idx_t> escaping = {0, 1, 3}; // export 2/3, domestic 1/3
 		// 0.8 threshold: neither group clears it.
-		REQUIRE(CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.8).empty());
+		REQUIRE(CharacterizeEscape(escaping, {ChannelGrouping()}, 0.8).empty());
 		// 0.6 threshold: export (0.667) clears, domestic (0.333) does not.
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.6);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.6);
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].column == "channel");
 		REQUIRE(rules[0].value == "export");
@@ -74,14 +74,14 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// (export), row 3 does not -> APAC 1/2. US = {1,4}: row 1 escapes -> 1/2.
 		// EU = {2,5}: row 2 escapes -> 1/2. Only channel=export clears 0.8.
 		std::set<idx_t> escaping = {0, 1, 2};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping(), RegionGrouping()}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), RegionGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].column == "channel");
 		REQUIRE(rules[0].value == "export");
 
 		// Lower the bar: every region half-escapes (0.5), export fully (1.0). export
 		// must sort first (highest rate).
-		auto all = CharacterizeEscape(escaping, 6, {ChannelGrouping(), RegionGrouping()}, 0.5);
+		auto all = CharacterizeEscape(escaping, {ChannelGrouping(), RegionGrouping()}, 0.5);
 		REQUIRE(all.size() == 4); // export + APAC + US + EU
 		REQUIRE(all[0].column == "channel");
 		REQUIRE(all[0].value == "export");
@@ -89,7 +89,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 
 	SECTION("scattered escape clears nothing") {
 		std::set<idx_t> escaping = {0, 4}; // export 1/3, domestic 1/3
-		REQUIRE(CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.8).empty());
+		REQUIRE(CharacterizeEscape(escaping, {ChannelGrouping()}, 0.8).empty());
 	}
 
 	SECTION("columns describing the same escaping rows collapse to one rule") {
@@ -97,12 +97,12 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// `tag = 'a'` state one fact twice. Neither is clause-referenced, so the
 		// leftmost candidate is the representative.
 		std::set<idx_t> escaping = {0, 1, 2};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping(), TagGrouping()}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), TagGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		CHECK(rules[0].column == "channel");
 
 		// Order decides it only among equals: reverse the candidates and `tag` wins.
-		auto reversed = CharacterizeEscape(escaping, 6, {TagGrouping(), ChannelGrouping()}, 0.8);
+		auto reversed = CharacterizeEscape(escaping, {TagGrouping(), ChannelGrouping()}, 0.8);
 		REQUIRE(reversed.size() == 1);
 		CHECK(reversed[0].column == "tag");
 	}
@@ -114,7 +114,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		std::set<idx_t> escaping = {0, 1, 2};
 		ColumnGrouping tag = TagGrouping();
 		tag.clause_referenced = true;
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping(), tag}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), tag}, 0.8);
 		REQUIRE(rules.size() == 1);
 		CHECK(rules[0].column == "tag");
 		CHECK(rules[0].value == "a");
@@ -124,7 +124,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// Rules covering different escaping rows are different facts; dedupe must leave
 		// all of them queryable.
 		std::set<idx_t> escaping = {0, 1, 2};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping(), RegionGrouping()}, 0.5);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), RegionGrouping()}, 0.5);
 		REQUIRE(rules.size() == 4); // export {0,1,2} + APAC {0} + US {1} + EU {2}
 	}
 
@@ -132,7 +132,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// The single rule accounts for every escaping row and its whole group escapes,
 		// so the caller may scope the prescribed cap to it.
 		std::set<idx_t> escaping = {0, 1, 2};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		CHECK(rules[0].covers_scope);
 	}
@@ -141,7 +141,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// Row 3 escapes but its group (domestic, 1/3) never clears the threshold, so the
 		// rules explain 3 of 4 escapers. A cap scoped to them would leave row 3 free.
 		std::set<idx_t> escaping = {0, 1, 2, 3};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.8);
 		REQUIRE(rules.size() == 1);
 		CHECK(rules[0].column == "channel");
 		CHECK_FALSE(rules[0].covers_scope);
@@ -151,7 +151,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// export escapes 2 of 3 at a 0.6 threshold, and those 2 are every escaper. The
 		// rule still cannot scope the cap: row 2 shares the group but never ran away.
 		std::set<idx_t> escaping = {0, 1};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping()}, 0.6);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping()}, 0.6);
 		REQUIRE(rules.size() == 1);
 		CHECK(rules[0].escaping == 2);
 		CHECK(rules[0].total == 3);
@@ -163,7 +163,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		// reported, but only `channel = 'export'` is needed to cover the escapers, and
 		// the region rules are not whole-group anyway.
 		std::set<idx_t> escaping = {0, 1, 2};
-		auto rules = CharacterizeEscape(escaping, 6, {ChannelGrouping(), RegionGrouping()}, 0.5);
+		auto rules = CharacterizeEscape(escaping, {ChannelGrouping(), RegionGrouping()}, 0.5);
 		REQUIRE(rules.size() == 4);
 		for (const auto &r : rules) {
 			CHECK(r.covers_scope == (r.column == "channel"));
@@ -174,7 +174,7 @@ TEST_CASE("DeciDB unbounded escape characterization", "[decidb][query_diagnostic
 		ColumnGrouping cg = ChannelGrouping();
 		cg.instance_to_group[2] = DConstants::INVALID_INDEX; // row 2 has a NULL key, say
 		std::set<idx_t> escaping = {0, 1, 2};                // row 2 still "escapes" but uncharacterized
-		auto rules = CharacterizeEscape(escaping, 6, {cg}, 0.8);
+		auto rules = CharacterizeEscape(escaping, {cg}, 0.8);
 		// export group now has only rows {0,1}, both escaping -> 2/2.
 		REQUIRE(rules.size() == 1);
 		REQUIRE(rules[0].escaping == 2);

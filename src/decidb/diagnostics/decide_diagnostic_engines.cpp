@@ -71,9 +71,7 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 		ve.escaping = agg.instances.size();
 		ve.all_escape = ve.escaping >= ve.total;
 		if (!agg.is_aux && ve.escaping < ve.total && ve.total > 1 && input.get_candidates) {
-			ve.rules = CharacterizeEscape(agg.instances, ve.total,
-			                              input.get_candidates(agg.vidx, ve.total),
-			                              input.params.escape_rate);
+			ve.rules = CharacterizeEscape(agg.instances, input.get_candidates(agg.vidx), input.params.escape_rate);
 		}
 		escapes.push_back(std::move(ve));
 	}

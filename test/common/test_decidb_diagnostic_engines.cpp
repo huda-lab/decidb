@@ -210,7 +210,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagParams params;
 		params.escape_rate = 0.8;
 
-		auto get_candidates = [](idx_t decide_var_idx, idx_t total_instances) {
+		auto get_candidates = [](idx_t decide_var_idx) {
 			ColumnGrouping grouping;
 			grouping.column = "channel";
 			grouping.instance_to_group = {0, 0, 1};
@@ -262,7 +262,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    labels,
 		    is_aux,
 		    params,
-		    [](idx_t, idx_t) { return duckdb::vector<ColumnGrouping>(); },
+		    [](idx_t) { return duckdb::vector<ColumnGrouping>(); },
 		};
 		DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
 
@@ -294,7 +294,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    labels,
 		    is_aux,
 		    params,
-		    [](idx_t, idx_t) { return duckdb::vector<ColumnGrouping>(); },
+		    [](idx_t) { return duckdb::vector<ColumnGrouping>(); },
 		};
 		CHECK(!DiagnoseUnbounded(diag_input).valid);
 	}

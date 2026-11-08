@@ -171,8 +171,7 @@ static constexpr const char *DECIDE_DIAGNOSTIC_STATE_KEY = "decide_diagnostics";
 //! `escape_rate_threshold`, sorted by rate descending then column/value for
 //! determinism. The "sufficient-direction" rules: when `column = value` holds in an
 //! instance, that instance's variable escapes (a of b of the time).
-vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t total_instances,
-                                      const vector<ColumnGrouping> &candidates,
+vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, const vector<ColumnGrouping> &candidates,
                                       double escape_rate_threshold);
 
 //! Build the unbounded diagnosis from the per-variable characterizations the operator

@@ -28,7 +28,7 @@ struct UnboundedDiagnosisInput {
 	//! Return categorical candidates for a partially escaping user variable.
 	//! The callback is injected by the caller because building these groupings
 	//! depends on executor-local chunks and keyed-scope metadata.
-	std::function<vector<ColumnGrouping>(idx_t decide_var_idx, idx_t total_instances)> get_candidates;
+	std::function<vector<ColumnGrouping>(idx_t decide_var_idx)> get_candidates;
 };
 
 //! Build the unbounded diagnosis from an attached ray. Returns valid=false when
