@@ -85,6 +85,14 @@ public:
 		if (names.size() < input.num_decide_vars) {
 			names.resize(input.num_decide_vars, "decision");
 		}
+		// The rigid box is the decision's box without the user's folded bounds (solver_input.hpp), so where the two
+		// floors differ the decision's floor is one the user wrote.
+		folded_floors.assign(input.lower_bounds.size(), -std::numeric_limits<double>::infinity());
+		for (idx_t variable = 0; variable < input.rigid_lower_bounds.size(); variable++) {
+			if (input.rigid_lower_bounds[variable] != input.lower_bounds[variable]) {
+				folded_floors[variable] = input.lower_bounds[variable];
+			}
+		}
 	}
 
 	void Run() {
@@ -116,6 +124,12 @@ public:
 				Objective(root);
 			}
 		}
+		// A `<>` sizes its Big-M from the box, so it is lowered once every bound and derived range has settled, as
+		// stage 06 lowers it after the bounds it reads.
+		for (auto &deferred : not_equals) {
+			written = deferred.written;
+			NotEqual(std::move(deferred.form), std::move(deferred.row));
+		}
 	}
 
 private:
@@ -127,6 +141,13 @@ private:
 	NativeConstructPolicy policy;
 	vector<string> names;
 	bool repair;
+	vector<double> folded_floors;
+	struct DeferredNotEqual {
+		TreeLinearForm form;
+		SolverInput::RawConstraint row;
+		string written;
+	};
+	vector<DeferredNotEqual> not_equals;
 	std::unordered_map<const DecideTreeValue *, TreeExtremumColumn> extrema;
 	std::unordered_map<idx_t, idx_t> objective_term;
 	std::unordered_map<idx_t, vector<idx_t>> instance_rows;
@@ -419,8 +440,10 @@ private:
 		if (upper.empty()) {
 			upper.assign(indexer.NamedInstances(variable), std::numeric_limits<double>::infinity());
 		}
-		lower[instance] = lo;
-		upper[instance] = hi;
+		// A derived range is one more fact about the auxiliary: it narrows what a folded bound left, never replaces it.
+		// The decision's floor lowers to admit the range, so a floor the user wrote moves into the instance first.
+		lower[instance] = MaxValue(MaxValue(lower[instance], lo), folded_floors[variable]);
+		upper[instance] = MinValue(upper[instance], hi);
 		input.lower_bounds[variable] = MinValue(input.lower_bounds[variable], lo);
 	}
 
@@ -799,7 +822,8 @@ private:
 	}
 
 	bool FoldBound(const DecideNode &node, const TreeLinearForm &form, char sense, double rhs) {
-		if (repair || (!node.child_reads.empty() && !(node.facts && node.facts->was_minmax_easy)) ||
+		// A box holds one interval, and `<>` admits two.
+		if (sense == '!' || repair || (!node.child_reads.empty() && !(node.facts && node.facts->was_minmax_easy)) ||
 		    !form.quadratic.empty() || form.terms.size() != 1 || node.defined_var != DConstants::INVALID_INDEX) {
 			return false;
 		}
@@ -1126,7 +1150,7 @@ private:
 					                   !form.quadratic.empty()});
 				}
 				if (sense == '!') {
-					NotEqual(std::move(form), std::move(row));
+					not_equals.push_back({std::move(form), std::move(row), written});
 				} else if (form.quadratic.empty()) {
 					input.global_constraints.push_back(std::move(row));
 				} else {
