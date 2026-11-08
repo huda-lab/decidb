@@ -224,6 +224,9 @@ public:
 					condition = wrapper.children[1].get();
 				}
 			}
+			if (!condition && op.retained_objective_when < op.retained_expressions.size()) {
+				condition = op.retained_expressions[op.retained_objective_when].get();
+			}
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			objective_root = index;
 			auto &node = *tree->nodes[index];

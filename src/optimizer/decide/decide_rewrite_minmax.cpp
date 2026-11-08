@@ -485,13 +485,18 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	if (!rest) {
 		rest = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 	}
-	if (scoped_when && (has_rest || DecideTreeRequested())) {
+	if (scoped_when && has_rest) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
 		auto wrapper = make_uniq<BoundConjunctionExpression>(conj.type);
 		wrapper->children.push_back(std::move(rest));
 		wrapper->children.push_back(scoped_when->Copy());
 		wrapper->SetAlias(conj.GetAlias());
 		rest = std::move(wrapper);
+	} else if (scoped_when && DecideTreeRequested()) {
+		// The terms carry the `when` (ScopeComposedTerms) and the objective has none left; the tree's objective root
+		// still reaches only its rows, so it keeps a copy of the `when` and the objective stays as flat reads it.
+		decide.retained_objective_when = decide.retained_expressions.size();
+		decide.retained_expressions.push_back(scoped_when->Copy());
 	}
 	decide.SetObjective(optimizer.context, std::move(rest));
 }
