@@ -444,3 +444,28 @@ def test_two_level_form_spellings(decidb_cli, scope_solver, inner, tail):
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, objective)
     )
+
+
+@pytest.mark.correctness
+@pytest.mark.explain
+def test_two_level_form_plan_prints_its_key_as_written(decidb_cli, scope_solver):
+    """The plan names the per key as the user wrote it (`t.g,t.id`), not as the key's columns are listed (`t.g, t.id`):
+    BindTwoLevelObjective reads the written fragment before it moves the `per` marker that holds it."""
+    sql = f"""
+        SELECT id, x {table('t', GROUPS, GROUP_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND sum(x) >= 6
+        MINIMIZE sum(per t.g,t.id: max(x) by (t.g,t.id))
+        ORDER BY id"""
+    model = ScopedModel(table_rows(GROUPS, GROUP_ROWS), [Decision("x")])
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
+        Scoped((Reduce("sum", lambda r: {"x": 1}),), ">=", (lambda r: {CONSTANT: 6},), per=()),
+    ]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Nested("sum", ("g", "id"), "max", lambda r: {"x": 1}),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+    plan = decidb_cli.execute_raw(f"EXPLAIN {sql}").stdout
+    assert "↳ max(x) by (t.g,t.id)" in plan, plan

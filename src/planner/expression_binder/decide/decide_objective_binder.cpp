@@ -123,7 +123,13 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 		                                 "yet",
 		                                 form)));
 	}
-	// The key as written, read before the move below destroys the marker that holds it.
+	// The key as written, read before the move below destroys the marker that holds it (`per`, `inner_by` and `inner`
+	// with it). The plan prints it rather than the key's columns (RenderDecidePerKey).
+	auto key_fragment = qualifier_context->WrittenFragment(per, DecideSpanRole::PER);
+	if (key_fragment == DConstants::INVALID_INDEX) {
+		key_fragment = qualifier_context->source_fragments->size();
+		qualifier_context->source_fragments->push_back(key_text);
+	}
 	// The bound form: `outer(inner(e))` under a PER wrapper naming the key.
 	outer.children[0] = std::move(inner_by.children[0]);
 	auto result = BindExpression(*outer_slot, depth);
@@ -135,12 +141,6 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	wrapper->alias = TWO_LEVEL_OBJECTIVE_TAG;
 	// The per key lists at least one name, and every relation stores a column.
 	AddDecideTag(wrapper->alias, MakePerKeyTag(key));
-	// The plan prints the key as written rather than its columns (RenderDecidePerKey).
-	auto key_fragment = qualifier_context->WrittenFragment(per, DecideSpanRole::PER);
-	if (key_fragment == DConstants::INVALID_INDEX) {
-		key_fragment = qualifier_context->source_fragments->size();
-		qualifier_context->source_fragments->push_back(key_text);
-	}
 	AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
 	return BindResult(std::move(wrapper));
 }
