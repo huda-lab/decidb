@@ -38,6 +38,7 @@ struct DecideDescentEntry {
 };
 
 struct DecideDescentGroup {
+	//! The G or O slot an E's class lies in; INVALID for a G's or O's group, whose key is its whole path key.
 	idx_t parent_slot;
 	vector<Value> key;
 	idx_t first_row;

@@ -444,7 +444,11 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		if (node.kind == DecideNodeKind::SCOPE && node.per == DecideTreePer::ROW) {
 			key.push_back(Value::UBIGINT(row_base + rows[i].row));
 		}
-		const auto slot = FindGroup(node_index, rows[i].parent_slot, std::move(key), row_base + rows[i].row);
+		// An E's classes lie within the group it feeds. A G's or O's key is already its whole path key (the path rule,
+		// language/guide.md §5.5; DecideReducerPath::KeysOf), so no enclosing slot adds a level. A G a rewrite
+		// generates, as S3's tightest bound, is on no reducer's path: the reducers its operand reads keep their groups.
+		const auto within = node.kind == DecideNodeKind::SCOPE ? rows[i].parent_slot : DConstants::INVALID_INDEX;
+		const auto slot = FindGroup(node_index, within, std::move(key), row_base + rows[i].row);
 		stored.push_back(rows[i]);
 		slots.push_back(slot);
 		if (node.kind != DecideNodeKind::SCOPE) {

@@ -52,6 +52,35 @@ def test_changing_a_data_child_changes_the_answer(decidb_cli):
     assert [row["x"] for row in json.loads(changed.stdout)] == [8, 8]
 
 
+#: Each query reaches one arm of the descent's nesting rule (decide_descent.cpp, Visit: an E's classes lie within the
+#: group it feeds, a G's or O's groups within none), with its answer worked by hand. The default suite runs flat.
+NESTING_CASES = {
+    # The G arm. `max(t.v) by (t.r)` is p: 30, q: 6, so the row bounds are 30, 6, 30, 6, and S3's hidden min over
+    # each class of t.g bounds a and b by 6. Grouped within that min's slot, a read only its own rows (10, 4) and
+    # got 4. The id weights leave one optimum: x2 = 6 and x4 = 6.
+    "a-generated-bound-opens-no-level": (
+        """SELECT id, x FROM (VALUES (1, 'a', 'p', 10), (2, 'a', 'q', 4), (3, 'b', 'p', 30), (4, 'b', 'q', 6))
+        t(id, g, r, v) DECIDE x(INT) SUCH THAT x <= 100 AND per t.g: sum(x) by (t.g) <= max(t.v) by (t.r)
+        MAXIMIZE SUM(t.id * x) ORDER BY id""",
+        [{"id": 1, "x": 0}, {"id": 2, "x": 6}, {"id": 3, "x": 0}, {"id": 4, "x": 6}],
+    ),
+    # The E arm. Group a counts its one class k1 once (5); b counts k1 and k2 (5 + 7 = 12). With b's k1 class in a's,
+    # b would read 7.
+    "a-class-lies-in-the-group-it-feeds": (
+        """SELECT id, x FROM (VALUES (1, 'a', 'k1', 5), (2, 'a', 'k1', 5), (3, 'b', 'k1', 5), (4, 'b', 'k2', 7))
+        t(id, g, k, v) DECIDE x(INT) SUCH THAT x <= sum(per t.k: t.v) by (t.g) MAXIMIZE SUM(x) ORDER BY id""",
+        [{"id": 1, "x": 5}, {"id": 2, "x": 5}, {"id": 3, "x": 12}, {"id": 4, "x": 12}],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(NESTING_CASES))
+def test_the_tree_nesting_rule(decidb_cli, case):
+    sql, expected = NESTING_CASES[case]
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
+
+
 #: Each query reaches a branch of the tree formulator's column box (decide_tree_formulation.cpp) that no other case
 #: reaches, with its answer worked by hand. The default suite runs flat, which never reaches that file.
 BOX_CASES = {
