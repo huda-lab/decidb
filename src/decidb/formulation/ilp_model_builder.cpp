@@ -665,7 +665,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 continue;
             }
             // Every row's coefficient counts. A term beside the reducers counts once: execution kept its
-            // coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
+            // coefficient on one row and zeroed the others (CountOnce, decide_value_extraction.cpp).
             auto &col = input.objective_coefficients[term_idx];
             // A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed
             // without a check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.

@@ -5,6 +5,7 @@
 #include "duckdb/execution/operator/decide/decide_row_store.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_tree_evaluation.hpp"
+#include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/decidb/formulation/decide_tree_formulation.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
@@ -12,7 +13,6 @@
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include <algorithm>
@@ -26,11 +26,7 @@
 #include <unordered_set>
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/decide_profile.hpp"
-#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
-#include "duckdb/optimizer/expression_rewriter.hpp"
-#include "duckdb/optimizer/rule/constant_folding.hpp"
-#include "duckdb/planner/operator/logical_projection.hpp"
 
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
@@ -70,78 +66,6 @@
 
 namespace duckdb {
 
-//===--------------------------------------------------------------------===//
-// Expression Transform Helpers
-//===--------------------------------------------------------------------===//
-// These static functions replace BoundColumnRefExpression nodes with
-// BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
-// evaluate expressions against data chunks (which use positional indices).
-
-//! Transform a coefficient/value expression for ExpressionExecutor.
-//! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_COMPARISON,
-//! BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
-static unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		vector<unique_ptr<Expression>> new_children;
-		for (auto &child : func.children) {
-			new_children.push_back(ToChunkReferences(*child, context));
-		}
-		unique_ptr<FunctionData> new_bind_info;
-		if (func.bind_info) {
-			new_bind_info = func.bind_info->Copy();
-		}
-		return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function,
-		                                                           std::move(new_children), std::move(new_bind_info));
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = expr.Cast<BoundCastExpression>();
-		auto transformed_child = ToChunkReferences(*cast.child, context);
-		return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		// The operator evaluates row values only. A reducer of data is a column by now (the optimizer's bound-side
-		// window rewrite); one of a decision is a set of terms, never evaluated.
-		throw InternalException("DECIDE: a reducer reached row evaluation: %s", expr.ToString());
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto &comp = expr.Cast<BoundComparisonExpression>();
-		auto left = ToChunkReferences(*comp.left, context);
-		auto right = ToChunkReferences(*comp.right, context);
-		return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
-		for (auto &child : conj.children) {
-			result->children.push_back(ToChunkReferences(*child, context));
-		}
-		return std::move(result);
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-		auto &op_expr = expr.Cast<BoundOperatorExpression>();
-		auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
-		for (auto &child : op_expr.children) {
-			result->children.push_back(ToChunkReferences(*child, context));
-		}
-		return std::move(result);
-	} else {
-		return expr.Copy();
-	}
-}
-
-//! `expr` as stage 08 evaluates it: over the chunk's columns, and constant-folded once by DuckDB's own rule, as the
-//! expression rewriter folds a query's own expressions. Every tree stage 08 evaluates passes through here, the ones
-//! the DECIDE optimizer builds among them, so no constant subtree (`CAST(CAST(45 AS DECIMAL(18,2)) AS DOUBLE)`,
-//! `45 >= 1e20`) is evaluated on every row. A message names the prepared tree, not this one, so it reads as written.
-static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context) {
-	ExpressionRewriter rewriter(context);
-	rewriter.rules.push_back(make_uniq<ConstantFoldingRule>(rewriter));
-	vector<unique_ptr<Expression>> tree;
-	tree.push_back(ToChunkReferences(expr, context));
-	LogicalProjection holder(DConstants::INVALID_INDEX, std::move(tree));
-	rewriter.VisitOperator(holder);
-	return std::move(holder.expressions[0]);
-}
-
 idx_t &DecideInputScans() {
 	static thread_local idx_t scans = 0;
 	return scans;
@@ -169,174 +93,13 @@ const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache, const 
 	return *raw;
 }
 
-//! Runs each expression of `executor` over `chunk`, whose first row is row `row_offset` of
-//! the data, into `results`: expression i only on the rows `*reads[i]` marks (every row
-//! when null), NULL on the others. A scoped clause filters before it generates
-//! (language/guide.md §6.1), so nothing is computed on a row its `when` drops:
-//! `when w > 0: x <= ln(w)` takes no logarithm of 0.
-static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
-                              const vector<const vector<bool> *> &reads, DataChunk &results) {
-	const idx_t count = chunk.size();
-	results.SetCardinality(count);
-	if (count == 0) {
-		return;
-	}
-	SelectionVector read_sel(count);
-	for (idx_t expr_idx = 0; expr_idx < results.ColumnCount(); expr_idx++) {
-		auto &result = results.data[expr_idx];
-		auto *rows = reads[expr_idx];
-		idx_t read_count = 0;
-		for (idx_t i = 0; i < count; i++) {
-			if (!rows || (*rows)[row_offset + i]) {
-				read_sel.set_index(read_count++, i);
-			}
-		}
-		if (read_count == count) {
-			executor.SetChunk(chunk);
-			executor.ExecuteExpression(expr_idx, result);
-			continue;
-		}
-		// The read rows' values, then one NULL slot every other row points at.
-		Vector values(result.GetType(), read_count + 1);
-		if (read_count > 0) {
-			DataChunk read_chunk;
-			read_chunk.InitializeEmpty(chunk.GetTypes());
-			read_chunk.Slice(chunk, read_sel, read_count);
-			Vector read_result(result.GetType());
-			executor.SetChunk(read_chunk);
-			executor.ExecuteExpression(expr_idx, read_result);
-			VectorOperations::Copy(read_result, values, read_count, 0, 0);
-		}
-		FlatVector::SetNull(values, read_count, true);
-		// The result keeps this selection, so each expression gets its own.
-		SelectionVector back(count);
-		for (idx_t i = 0, slot = 0; i < count; i++) {
-			bool read = slot < read_count && read_sel.get_index(slot) == i;
-			back.set_index(i, read ? slot++ : read_count);
-		}
-		result.Slice(values, back, count);
-	}
-}
-
-//! The same, with one set of rows for every expression; without one, every row.
-static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
-                              const vector<bool> *rows, DataChunk &results) {
-	if (!rows) {
-		executor.Execute(chunk, results);
-		return;
-	}
-	ExecuteOnReadRows(executor, chunk, row_offset, vector<const vector<bool> *>(results.ColumnCount(), rows), results);
-}
-
-//! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and the window of rows the coefficient was
-//! computed over, whose failing row reads them.
-struct ValueInputs {
-	const vector<unique_ptr<Expression>> &values;
-	DecideRowWindows &window;
-	ClientContext &context;
-};
-
-//! A number read from the source, and what the message that refuses it calls it: `value` is the expression the number
-//! comes from, printed as the user wrote it (DecideInvalidValueMessage). `clause` is the clause (or the objective) it
-//! belongs to, which a coefficient past a DOUBLE that no column's value made so names (TOO_LARGE), as AddCoefficient
-//! does. `inputs` are what a coefficient DeciDB computed is computed from; none for one as written.
-struct ValueSource {
-	DecideValueRole role;
-	const Expression &value;
-	const DecideSourceNames &names;
-	string clause = string();
-	const ValueInputs *inputs = nullptr;
-};
-
-//! Whether `input` is a finite number or NULL on row `row` of the window, the one row a failing coefficient reads.
-static bool IsFiniteOnRow(const ValueInputs &inputs, const Expression &input, idx_t row) {
-	auto transformed = TransformToChunkExpression(input, inputs.context);
-	auto value = inputs.window.ValueAt(*transformed, row);
-	return value.IsNull() || std::isfinite(value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>());
-}
-
-//! Refuses a number the model cannot read (NaN, or infinite where a bound is not allowed to be), naming `source`. A
-//! coefficient names the first value it is computed from that a column holds and that is not finite on `row`, the row
-//! it fails on; with none, DeciDB's own arithmetic (or a literal) left the DOUBLE range, and it names its clause. A
-//! coefficient as written is the one value it is computed from.
-[[noreturn]] static void ThrowInvalidValue(const ValueSource &source, idx_t row = 0) {
-	auto refuse = [&](DecideValueRole role, const Expression &value) {
-		return InvalidInputException(DecideInvalidValueMessage(role, RenderDecideSource(value, source.names)));
-	};
-	auto too_large = InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
-	if (source.role != DecideValueRole::COEFFICIENT) {
-		throw refuse(source.role, source.value);
-	}
-	if (!source.inputs || source.inputs->values.empty()) {
-		if (source.value.IsFoldable()) {
-			throw too_large;
-		}
-		throw refuse(DecideValueRole::COEFFICIENT, source.value);
-	}
-	for (auto &input : source.inputs->values) {
-		if (!input->IsFoldable() && !IsFiniteOnRow(*source.inputs, *input, row)) {
-			throw refuse(DecideValueRole::COEFFICIENT, *input);
-		}
-	}
-	throw too_large;
-}
-
-//! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
-//! Throws InvalidInputException on a number the model cannot read, naming `source`. A NULL reads
-//! 0 and marks its row in `null_rows`: the caller skips what it reaches (deck p. 50). With
-//! no `null_rows` the value cannot be NULL (a reducer's `when` tests its data,
-//! DecideCanonicalizer::SkipNullData).
-//! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
-//!
-//! A BOUND relaxes the check to NaN-only, and is used exclusively for values
-//! on the path to a model row's `rhs` — the row's own bound, and the reducer input
-//! that a per-group bound is folded from. An infinite bound is not an error there:
-//! it is the absence of a constraint (`<= +inf`) or a constraint nothing satisfies
-//! (`>= +inf`), both of which the solver contract already expresses — the model
-//! validator accepts a non-finite rhs and rejects only NaN, and the constant and
-//! singleton-row-bound RHS paths have always passed infinities straight through. A
-//! coefficient has no such reading, so every other caller stays strict.
-static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, vector<double> &out,
-                                const ValueSource &source, vector<bool> *null_rows = nullptr,
-                                const vector<bool> *read_rows = nullptr, idx_t row_offset = 0) {
-	const bool allow_infinite = source.role == DecideValueRole::BOUND;
-	if (count == 0) {
-		return;
-	}
-	UnifiedVectorFormat format;
-	Vector cast_tmp(LogicalType::DOUBLE);
-	Vector *src;
-	if (result_vec.GetType().id() == LogicalTypeId::DOUBLE) {
-		src = &result_vec;
-	} else {
-		VectorOperations::DefaultCast(result_vec, cast_tmp, count, false);
-		src = &cast_tmp;
-	}
-	src->ToUnifiedFormat(count, format);
-	auto data = UnifiedVectorFormat::GetData<double>(format);
-	for (idx_t i = 0; i < count; i++) {
-		// A row the clause never reads (outside its `when`, or a reducer's) contributes
-		// nothing, whatever it holds.
-		if (read_rows && !(*read_rows)[row_offset + i]) {
-			out.push_back(0.0);
-			continue;
-		}
-		idx_t idx = format.sel->get_index(i);
-		if (!format.validity.RowIsValid(idx)) {
-			if (!null_rows) {
-				throw InternalException("DECIDE: a %s is NULL on a row its reducer reads",
-				                        allow_infinite ? "bound" : "coefficient");
-			}
-			(*null_rows)[row_offset + i] = true;
-			out.push_back(0.0);
-			continue;
-		}
-		double dv = data[idx];
-		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
-			ThrowInvalidValue(source, i);
-		}
-		out.push_back(dv * sign);
-	}
+//! The inputs of a coefficient computed over `window` (DecideTerm::inputs): a message reads one at the row the
+//! coefficient fails on, from the same window.
+static DecideValueInputs WindowInputs(const vector<unique_ptr<Expression>> &values, DecideRowWindows &window,
+                                      ClientContext &context) {
+	return {values, [&window, &context](const Expression &input, idx_t row) {
+		        return window.ValueAt(*TransformToChunkExpression(input, context), row);
+	        }};
 }
 
 //! The order-preserving encoding of a row's key columns: byte strings compare as the rows compare under `ORDER BY`
@@ -1443,75 +1206,6 @@ static void ReadTermFilters(const vector<TermFilterSlot> &slots, const vector<bo
 	}
 }
 
-//! A decision outside the reducers (`MAXIMIZE when c: sum(x) + w * s`, `sum(x) by (g) + s <= 8`) is counted once
-//! (language/guide.md §4): once in the objective, once in each group's row of a clause in the aggregate shape. Its
-//! coefficient stays on one row -- the first kept row, the group's first row -- and every other row is zeroed; the
-//! scope checks made sure that row stands for all of them (one instance, one value of its data). This is the one
-//! place the rule is applied: the model sums every row of every term (ilp_model_builder.cpp).
-static idx_t FirstKeptRow(const vector<bool> *kept, idx_t num_rows) {
-	for (idx_t row = 0; row < num_rows; row++) {
-		if (!kept || (*kept)[row]) {
-			return row;
-		}
-	}
-	return DConstants::INVALID_INDEX;
-}
-
-//! Keeps the coefficient a term has on each row of `counted`, and zeroes every other row.
-static void CountOnce(CoefficientColumn &coefficients, const vector<idx_t> &counted) {
-	auto &values = coefficients.MutableDense();
-	vector<double> kept(values.size(), 0.0);
-	for (auto row : counted) {
-		if (row < values.size()) {
-			kept[row] = values[row];
-		}
-	}
-	values = std::move(kept);
-	coefficients.SyncSize();
-}
-
-//! Whether a term stands outside every reducer, which counts once.
-static bool CountsOnce(const DecideTerm &term) {
-	return term.reduction == LinearTermReduction::NONE;
-}
-
-//! The objective's terms outside its reducers, counted on its first kept row.
-static void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColumn> &coefficients,
-                                const vector<bool> *kept, idx_t num_rows) {
-	idx_t first_kept = FirstKeptRow(kept, num_rows);
-	vector<idx_t> counted;
-	if (first_kept != DConstants::INVALID_INDEX) {
-		counted.push_back(first_kept);
-	}
-	for (idx_t term_idx = 0; term_idx < terms.size() && term_idx < coefficients.size(); term_idx++) {
-		if (CountsOnce(terms[term_idx])) {
-			CountOnce(coefficients[term_idx], counted);
-		}
-	}
-}
-
-//! The first row of each group of a clause in the aggregate shape: every row for `row_group_ids` empty (one group),
-//! none for a group with no row.
-static vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows) {
-	if (row_group_ids.empty()) {
-		return num_rows > 0 ? vector<idx_t> {0} : vector<idx_t>();
-	}
-	vector<idx_t> first(num_groups, DConstants::INVALID_INDEX);
-	for (idx_t row = 0; row < row_group_ids.size(); row++) {
-		auto group = row_group_ids[row];
-		if (group < num_groups && first[group] == DConstants::INVALID_INDEX) {
-			first[group] = row;
-		}
-	}
-	vector<idx_t> rows;
-	for (auto row : first) {
-		if (row != DConstants::INVALID_INDEX) {
-			rows.push_back(row);
-		}
-	}
-	return rows;
-}
-
 #ifdef DEBUG
 //! Verify (DuckDB's Verify() style): no writer left a term outside the reducers with its coefficient on more than one
 //! row of a group, which the model would count once per row.
@@ -1606,7 +1300,7 @@ EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<Term
 			for (idx_t j = 0; j < bl_route.size(); j++) {
 				idx_t term_idx = bl_route[j];
 				auto &col = ebts[term_idx].row_coefficients.MutableDense();
-				ValueInputs inputs {terms[term_idx].inputs, bl_windows, context};
+				auto inputs = WindowInputs(terms[term_idx].inputs, bl_windows, context);
 				ExtractDoubleColumn(
 				    bl_results.data[j], bl_windows.Count(), terms[term_idx].sign, col,
 				    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names, clause, &inputs}, null_rows,
@@ -3924,27 +3618,6 @@ static void MarkAbsentDecisionReads(const DecideTerm &term, const vector<DecideV
 	}
 }
 
-//! The instances `row_group_ids` names: in the aggregate shape each group a row stands in, else each row in a group.
-//! Empty is every row in one group.
-static idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped) {
-	if (row_group_ids.empty()) {
-		return grouped ? MinValue<idx_t>(num_rows, 1) : num_rows;
-	}
-	if (!grouped) {
-		return NumericCast<idx_t>(std::count_if(row_group_ids.begin(), row_group_ids.end(),
-		                                        [](idx_t group) { return group != DConstants::INVALID_INDEX; }));
-	}
-	vector<bool> seen(num_groups, false);
-	idx_t count = 0;
-	for (auto group : row_group_ids) {
-		if (group != DConstants::INVALID_INDEX && !seen[group]) {
-			seen[group] = true;
-			count++;
-		}
-	}
-	return count;
-}
-
 //! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
 //! each group's instance takes its tightest value among all its kept rows where the bound has one, a row its reducers'
 //! own `when`s drop included (a group's every kept row bounds it) -- the least under `<`
@@ -4006,36 +3679,6 @@ static void TakeTightestFrameBound(ExpressionType comparison, const string &writ
 			                            written, least[group], greatest[group]);
 		}
 		rhs[row] = upper ? least[group] : greatest[group];
-	}
-}
-
-//! A NULL that reaches a comparison unreduced makes that instance NULL, and a NULL instance
-//! is skipped (deck p. 50): in the aggregate shape the group the row is in (its bound and its
-//! terms beside the reducers are one value per group), else the row. `row_group_ids` empty
-//! is every row in one group.
-static void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t num_rows, vector<idx_t> &row_group_ids,
-                              idx_t &num_groups) {
-	if (std::find(null_rows.begin(), null_rows.end(), true) == null_rows.end()) {
-		return;
-	}
-	if (row_group_ids.empty()) {
-		row_group_ids.assign(num_rows, 0);
-		num_groups = 1;
-	}
-	vector<bool> skipped(num_groups, false);
-	for (idx_t row = 0; row < num_rows; row++) {
-		if (null_rows[row] && row_group_ids[row] != DConstants::INVALID_INDEX) {
-			if (grouped) {
-				skipped[row_group_ids[row]] = true;
-			} else {
-				row_group_ids[row] = DConstants::INVALID_INDEX;
-			}
-		}
-	}
-	for (auto &group : row_group_ids) {
-		if (group != DConstants::INVALID_INDEX && skipped[group]) {
-			group = DConstants::INVALID_INDEX;
-		}
 	}
 }
 
@@ -4239,7 +3882,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 				auto &col = eval_const.row_coefficients[term_idx].MutableDense();
 				auto &term = constraint->lhs_terms[term_idx];
-				ValueInputs inputs {term.inputs, coef_windows, context};
+				auto inputs = WindowInputs(term.inputs, coef_windows, context);
 				ExtractDoubleColumn(coef_results.data[term_idx], coef_windows.Count(), term.sign, col,
 				                    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs},
 				                    &null_rows, &term_reads[term_idx], coefficient_row_base);
@@ -4795,7 +4438,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 						for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
 							auto &col = eqg.row_coefficients[inner_idx].MutableDense();
 							auto &term = qg.inner_terms[inner_idx];
-							ValueInputs inputs {term.inputs, q_windows, context};
+							auto inputs = WindowInputs(term.inputs, q_windows, context);
 							ExtractDoubleColumn(
 							    q_results.data[inner_idx], q_windows.Count(), term.sign, col,
 							    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs}, &null_rows,
@@ -5029,7 +4672,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 					auto &filter = (*b.out_term_filters)[term_idx];
 					// A NULL term was read as 0 before like terms merged (DropNullObjectiveTerms).
 					auto &term = (*b.src_terms)[term_idx];
-					ValueInputs inputs {term.inputs, obj_windows, context};
+					auto inputs = WindowInputs(term.inputs, obj_windows, context);
 					ExtractDoubleColumn(obj_results.data[j], obj_windows.Count(), static_cast<double>(term_sign), out,
 					                    {DecideValueRole::COEFFICIENT, *term.coefficient, names, objective, &inputs},
 					                    nullptr, filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
@@ -5153,7 +4796,7 @@ static void EvaluateTermColumns(ClientContext &context, ChunkExprCache &chunk_ex
 		results.Reset();
 		windows.Execute(executor, &read, results);
 		for (idx_t t = 0; t < terms.size(); t++) {
-			ValueInputs inputs {terms[t].inputs, windows, context};
+			auto inputs = WindowInputs(terms[t].inputs, windows, context);
 			ExtractDoubleColumn(results.data[t], windows.Count(), terms[t].sign, columns[t].MutableDense(),
 			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause, &inputs}, nullptr,
 			                    &read, windows.Offset());

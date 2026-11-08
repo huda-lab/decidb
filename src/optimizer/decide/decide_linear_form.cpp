@@ -1169,7 +1169,7 @@ private:
 			// (a scope check made sure it has one instance there), a query-wide one included.
 			// A product of decisions has no once-only reading in the model -- except a product
 			// of two query-wide decisions (`s * u`), one `NONE` term execution counts once
-			// (CountOnce in physical_decide.cpp).
+			// (CountOnce in decide_value_extraction.cpp).
 			if (!BoundExpressionContainsAggregate(expr) && FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
 				idx_t bilinear_before = obj.bilinear_terms.size();
 				idx_t squared_before = obj.squared_terms.size();
