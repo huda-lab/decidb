@@ -363,6 +363,19 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	}
 }
 
+void LogicalDecide::NameRetainedRecordReads(Expression &expression, idx_t first_fragment) const {
+	for (idx_t i = 0; i < retained_bound_aggregates.size(); i++) {
+		idx_t existing;
+		if (retained_bound_aggregates[i].placeholder->Equals(expression) &&
+		    !HasDecideTag(expression.alias, BOUND_REDUCER_TAG) &&
+		    !TryParseSourceFragmentTag(expression.alias, existing)) {
+			AddDecideTag(expression.alias, MakeSourceFragmentTag(first_fragment + i));
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expression,
+	                                      [&](Expression &child) { NameRetainedRecordReads(child, first_fragment); });
+}
+
 vector<ColumnBinding> LogicalDecide::SourceBindings() {
 	auto result = children[0]->GetColumnBindings();
 	for (auto &aggregate : bound_aggregates) {

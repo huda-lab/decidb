@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from ._anr_cases import F15, FRAME_EXAMPLE_3, FRAME_NULL_REDUCED
+from ._anr_cases import F3_AVG_LIMIT, F15, FRAME_EXAMPLE_3, FRAME_NULL_REDUCED
 from ._scope_cases import answer
 
 
@@ -28,6 +28,15 @@ def test_data_reducers_have_no_aggregate_or_check_source_plan(decidb_cli):
         {"x": 1},
         {"x": 1},
     ]
+
+
+def test_an_outer_reducers_spelling_names_its_inner_reducers(decidb_cli):
+    """The plan is the tree's, so a read of a data reducer shows the reducer as written. The outer reducer here, the
+    group's limit, reads avg(P.lim) by (P.lim): its spelling is rendered once that read is named, else it shows the
+    inner result as an internal column."""
+    plan = native(decidb_cli).execute_raw("SET decide_direct_solve='off'; EXPLAIN " + F3_AVG_LIMIT.sql)
+    assert plan.returncode == 0, plan.stderr
+    assert "#[" not in plan.stdout and "avg(P.lim) by (P.lim) END" in plan.stdout, plan.stdout
 
 
 @pytest.mark.parametrize("case", [F15, FRAME_EXAMPLE_3, FRAME_NULL_REDUCED], ids=lambda case: case.name)

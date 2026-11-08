@@ -702,6 +702,10 @@ public:
 		unique_ptr<Expression> placeholder;
 	};
 	vector<RetainedBoundAggregate> retained_bound_aggregates;
+	//! Names each read of retained record i in `expression` by the source fragment `first_fragment + i`, unless the
+	//! read already has a name. Tree-noside names its plan so, which is the tree's there; otherwise the plan keeps what
+	//! the user wrote, so requesting the tree changes no flat output.
+	void NameRetainedRecordReads(Expression &expression, idx_t first_fragment) const;
 	//! The checks side plans execute during the transition, retained for tree execution.
 	vector<unique_ptr<Expression>> retained_row_checks;
 	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
