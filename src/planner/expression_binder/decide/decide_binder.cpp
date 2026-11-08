@@ -496,14 +496,17 @@ static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) 
 
 idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes) {
-	auto key = BindKey(context, bind_context, per, decision_names, key_text, keys);
+                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes,
+                           vector<idx_t> *written_order) {
+	auto key = BindKey(context, bind_context, per, decision_names, key_text, keys, written_order);
 	return FindOrCreateScope(key, keyed_scopes);
 }
 
 idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
-              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys) {
-	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(bind_context, per, decision_names)), key_text, keys);
+              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys,
+              vector<idx_t> *written_order) {
+	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(bind_context, per, decision_names)), key_text, keys,
+	                             written_order);
 }
 
 //! The relation `element` names when it names no column of the FROM clause: `by (D)`
@@ -1421,8 +1424,9 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	}
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
 	// classes and the same check that the key determines the body.
-	auto scope_idx = FindOrCreateScope(FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys),
-	                                   *ctx.keyed_scopes);
+	vector<idx_t> written_order;
+	auto scope_idx = FindOrCreateScope(
+	    FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys, &written_order), *ctx.keyed_scopes);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1449,7 +1453,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		ctx.source_fragments->push_back(StringUtil::Join(written_relations, ", "));
 		text_fragment = ctx.source_fragments->size() - 1;
 	}
-	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx, text_fragment));
+	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx, text_fragment, written_order));
 	AddDecideTag(aggregate->alias, COLON_FORM_TAG);
 	return BindResult(std::move(aggregate_expr));
 }
@@ -1505,11 +1509,13 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 	}
 	if (per) {
 		auto &marker = per->Cast<FunctionExpression>();
-		auto scope_idx =
-		    FindOrCreateKeyScope(context, binder.bind_context, marker, DecisionNames(variables),
-		                         DecideKeyToString(marker), *qualifier_context->keys, *qualifier_context->keyed_scopes);
+		vector<idx_t> written_order;
+		auto scope_idx = FindOrCreateKeyScope(context, binder.bind_context, marker, DecisionNames(variables),
+		                                      DecideKeyToString(marker), *qualifier_context->keys,
+		                                      *qualifier_context->keyed_scopes, &written_order);
 		AddDecideTag(aggregate->alias,
-		             MakeQualifiedReducerTag(scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER)));
+		             MakeQualifiedReducerTag(scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER),
+		                                     written_order));
 	}
 	return result;
 }
@@ -1555,10 +1561,11 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		key_text = (*qualifier_context->source_fragments)[text_fragment];
 	}
 	// Every relation stores a column, so a `by` that lists anything is a key (not INVALID_INDEX).
-	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
+	vector<idx_t> written_order;
+	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys, &written_order);
 	D_ASSERT(group_key != DConstants::INVALID_INDEX);
 	(*qualifier_context->keys)[group_key].written_as_by = true;
-	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key, text_fragment));
+	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key, text_fragment, written_order));
 	return result;
 }
 

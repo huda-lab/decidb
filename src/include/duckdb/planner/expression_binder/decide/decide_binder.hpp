@@ -32,14 +32,16 @@ case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variab
 //! belongs to.
 idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes);
+                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes,
+                           vector<idx_t> *written_order = nullptr);
 
 //! The entry of `keys` for the columns of `per K` (the parser's `SCOPE_PER_TAG` marker),
 //! created when no key so far has them: a column element compares NULL as SQL's `=`
 //! does, a relation element stands for its stored columns, which compare NULL as a
 //! value. `key_text` is the key as written, kept for display.
 idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
-              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys);
+              const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys,
+              vector<idx_t> *written_order = nullptr);
 
 //! What a reducer's own key (`sum(per K: e)`, `SUM(D: e)`) and `by` need in order to
 //! resolve. Owned by the declarations binder, which is still filling `keyed_scopes` when

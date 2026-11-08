@@ -490,6 +490,7 @@ void DecideScopeCheck::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(108, "context", context);
 	/* [Deleted] (vector<string>) "key_names" */
 	serializer.WritePropertyWithDefault<idx_t>(110, "key", key);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(111, "key_order", key_order);
 }
 
 DecideScopeCheck DecideScopeCheck::Deserialize(Deserializer &deserializer) {
@@ -505,6 +506,7 @@ DecideScopeCheck DecideScopeCheck::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<string>(108, "context", result.context);
 	deserializer.ReadDeletedProperty<vector<string>>(109, "key_names");
 	deserializer.ReadPropertyWithDefault<idx_t>(110, "key", result.key);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(111, "key_order", result.key_order);
 	return result;
 }
 

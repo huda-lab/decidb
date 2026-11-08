@@ -79,10 +79,26 @@ struct DecideDeterminesText {
 	string subject;
 	string object;
 	string context;
+	//! The order the clause wrote the key in, as indices into the key's elements; empty for the elements' order. The
+	//! values of a class are listed in it, as the subject names the key.
+	vector<idx_t> key_order;
 	//! The empty key: one class, so no group is named.
 	bool one_class = false;
 	//! The check is on a decision rather than on a value.
 	bool decision = false;
+
+	//! `items`, one per element of the key, in the order the clause wrote the key.
+	template <class T>
+	vector<T> InKeyOrder(const vector<T> &items) const {
+		if (key_order.size() != items.size()) {
+			return items;
+		}
+		vector<T> ordered;
+		for (auto index : key_order) {
+			ordered.push_back(items[index]);
+		}
+		return ordered;
+	}
 
 	//! A printf format: `%s` for the group (none for one class), then for a value check `%s, %s` for the least and the
 	//! greatest value.

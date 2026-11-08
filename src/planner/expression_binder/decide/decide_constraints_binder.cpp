@@ -323,6 +323,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	}
 	idx_t key = DConstants::INVALID_INDEX;
 	idx_t key_fragment = DConstants::INVALID_INDEX;
+	vector<idx_t> key_order;
 	if (per) {
 		// The key as written (`per D`), read before its elements bind. It cannot ride on
 		// the marker's alias: the expression binder gives the bound wrapper that alias.
@@ -333,7 +334,8 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			key_fragment = qualifier_context->source_fragments->size();
 			qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
 		}
-		key = BindKey(context, binder.bind_context, *per, DecisionNames(variables), key_text, *qualifier_context->keys);
+		key = BindKey(context, binder.bind_context, *per, DecisionNames(variables), key_text, *qualifier_context->keys,
+		              &key_order);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
@@ -362,7 +364,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			wrapper->children.push_back(std::move(constraint));
 			wrapper->alias = PER_CLASS_TAG;
 			if (key != DConstants::INVALID_INDEX) {
-				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
+				AddDecideTag(wrapper->alias, MakePerKeyTag(key, key_order));
 			}
 			AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
 			constraint = std::move(wrapper);

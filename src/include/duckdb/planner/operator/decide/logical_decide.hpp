@@ -76,7 +76,11 @@ struct DecideKey {
 //! compared as rows group on them (Grouping) -- appending it, as written, when no key so
 //! far holds them; INVALID_INDEX for no elements. An element written on its own and
 //! through its relation is the written one.
-idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys);
+//! `written_order`, when given, gets the index in the key's `elements` of each element in the order they were written
+//! (each once); empty when an element cannot be found again (a subquery). A clause that names the key keeps it, so its
+//! message lists the key as the clause wrote it.
+idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys,
+                            vector<idx_t> *written_order = nullptr);
 //! The elements of `keys[key]`; none for INVALID_INDEX, the empty key.
 const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys, idx_t key);
 //! The key as first written; `()` for the empty key.
@@ -126,6 +130,9 @@ struct DecideScopeCheck {
 	string subject;
 	string object;
     string context;
+	//! DETERMINES: the order the clause wrote `key` in, as indices into the key's elements (`subject` is the key in
+	//! that order); empty for the elements' order. A message lists the class's values in it.
+	vector<idx_t> key_order;
 
 	//! The text of the error this check raises, as the solver path and the direct-solve plans both write it.
 	DecideDeterminesText DeterminesText() const {
@@ -133,6 +140,7 @@ struct DecideScopeCheck {
 		text.subject = subject;
 		text.object = object;
 		text.context = context;
+		text.key_order = key_order;
 		text.one_class = key == DConstants::INVALID_INDEX;
 		text.decision = decision != DConstants::INVALID_INDEX;
 		return text;

@@ -1,6 +1,8 @@
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 
+#include <numeric>
+
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 
@@ -1680,19 +1682,28 @@ static void CollectClauseParts(const Expression &expr, idx_t decide_index,
 }
 
 //! The key of a scope check over `key` within each group of `by`: their union, added to
-//! `keys` when no key holds it yet. INVALID_INDEX is the empty key.
-static idx_t WithinGroups(idx_t key, idx_t by, vector<DecideKey> &keys) {
+//! `keys` when no key holds it yet. INVALID_INDEX is the empty key. `key_order` and `by_order` are the orders the
+//! reducer wrote the two in (empty: the key's elements' order); `order` gets the union's, the key's elements first.
+static idx_t WithinGroups(idx_t key, const vector<idx_t> &key_order, idx_t by, const vector<idx_t> &by_order,
+                          vector<DecideKey> &keys, vector<idx_t> &order) {
 	if (key == DConstants::INVALID_INDEX || by == DConstants::INVALID_INDEX) {
+		order = key == DConstants::INVALID_INDEX ? by_order : key_order;
 		return key == DConstants::INVALID_INDEX ? by : key;
 	}
 	vector<DecideKeyElement> elements;
-	for (auto index : {key, by}) {
-		for (auto &element : keys[index].elements) {
-			elements.push_back(element.Copy());
+	for (auto &part : {std::make_pair(key, &key_order), std::make_pair(by, &by_order)}) {
+		auto &members = keys[part.first].elements;
+		vector<idx_t> written = *part.second;
+		if (written.empty()) {
+			written.resize(members.size());
+			std::iota(written.begin(), written.end(), 0);
+		}
+		for (auto index : written) {
+			elements.push_back(members[index].Copy());
 		}
 	}
 	auto text = keys[key].text + ", " + keys[by].text;
-	return FindOrCreateDecideKey(std::move(elements), text, keys);
+	return FindOrCreateDecideKey(std::move(elements), text, keys, &order);
 }
 
 //! How a message describes a decision's own key: `declared per row`, `declared per
@@ -1766,8 +1777,16 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	    reducer.children.empty()) {
 		return;
 	}
-	auto key = WithinGroups(scope.keyed_scopes[scope_idx].key, by, scope.keys);
-	auto subject = DecideKeyText(scope.keys, scope.keyed_scopes[scope_idx].key);
+	vector<idx_t> per_order, by_order, key_order;
+	TryParseQualifiedReducerOrder(reducer.GetAlias(), per_order);
+	TryParseGroupKeyOrder(reducer.GetAlias(), by_order);
+	auto key = WithinGroups(scope.keyed_scopes[scope_idx].key, per_order, by, by_order, scope.keys, key_order);
+	// The key as this reducer wrote it, which another clause's spelling of the same columns does not change.
+	idx_t text_fragment;
+	auto subject = TryParseQualifiedReducerTextTag(reducer.GetAlias(), text_fragment) &&
+	                       text_fragment < scope.source_fragments.size()
+	                   ? scope.source_fragments[text_fragment]
+	                   : DecideKeyText(scope.keys, scope.keyed_scopes[scope_idx].key);
 	ClauseParts body;
 	CollectClauseParts(
 	    *reducer.children[0], decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, body);
@@ -1776,6 +1795,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 		check.kind = DecideScopeCheckKind::DETERMINES;
 		check.rows = rows ? rows->Copy() : nullptr;
 		check.key = key;
+		check.key_order = key_order;
 		check.filter = reducer.filter ? reducer.filter->Copy() : nullptr;
 		check.subject = subject;
 		check.context = "in " + reducer_text;
@@ -1804,6 +1824,8 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 	if (enclosing.per_wrapper) {
 		auto &per = *enclosing.per_wrapper;
 		auto key = enclosing.PerKey();
+		vector<idx_t> key_order;
+		TryParsePerKeyOrder(per.GetAlias(), key_order);
 		idx_t fragment;
 		auto key_text = TryParseSourceFragmentTag(per.GetAlias(), fragment) && fragment < scope.source_fragments.size()
 		                    ? scope.source_fragments[fragment]
@@ -1813,6 +1835,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 			check.kind = DecideScopeCheckKind::DETERMINES;
 			check.rows = enclosing.Condition() ? enclosing.Condition()->Copy() : nullptr;
 			check.key = key;
+			check.key_order = key_order;
 			check.subject = key_text;
 			return check;
 		};

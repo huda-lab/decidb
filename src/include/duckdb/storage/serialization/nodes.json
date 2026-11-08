@@ -1247,6 +1247,11 @@
         "id": 110,
         "name": "key",
         "type": "idx_t"
+      },
+      {
+        "id": 111,
+        "name": "key_order",
+        "type": "vector<idx_t>"
       }
     ],
     "pointer_type": "none"

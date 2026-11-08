@@ -71,7 +71,8 @@ static bool ElementBefore(const DecideKeyElement &a, const DecideKeyElement &b) 
 	return a.expression->ToString() < b.expression->ToString();
 }
 
-idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys) {
+idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys,
+                            vector<idx_t> *written_order) {
 	vector<DecideKeyElement> unique;
 	for (auto &element : elements) {
 		auto kept = std::find_if(unique.begin(), unique.end(), [&](const DecideKeyElement &member) {
@@ -86,7 +87,39 @@ idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &tex
 	if (unique.empty()) {
 		return DConstants::INVALID_INDEX;
 	}
+	// The order the elements were written in, as groupings to find in the key's elements once it is known.
+	bool subquery = false;
+	for (auto &element : unique) {
+		subquery |= HoldsSubquery(*element.expression);
+	}
+	vector<unique_ptr<Expression>> written;
+	if (written_order && !subquery) { // a subquery equals nothing and cannot be copied: its key keeps no order
+		for (auto &element : unique) {
+			written.push_back(element.Grouping().Copy());
+		}
+	}
 	std::stable_sort(unique.begin(), unique.end(), ElementBefore);
+	auto write_order = [&](idx_t index) {
+		if (!written_order) {
+			return index;
+		}
+		written_order->clear();
+		if (subquery) {
+			return index;
+		}
+		for (auto &grouping : written) {
+			auto &members = keys[index].elements;
+			auto found = std::find_if(members.begin(), members.end(), [&](const DecideKeyElement &member) {
+				return member.Grouping().Equals(*grouping);
+			});
+			if (found == members.end()) {
+				written_order->clear();
+				break;
+			}
+			written_order->push_back(NumericCast<idx_t>(found - members.begin()));
+		}
+		return index;
+	};
 	auto holds = [](const vector<DecideKeyElement> &set, const DecideKeyElement &element) {
 		for (auto &member : set) {
 			if (member.null_mode == element.null_mode && member.Grouping().Equals(element.Grouping())) {
@@ -95,10 +128,6 @@ idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &tex
 		}
 		return false;
 	};
-	bool subquery = false;
-	for (auto &element : unique) {
-		subquery |= HoldsSubquery(*element.expression);
-	}
 	for (idx_t i = 0; i < keys.size(); i++) {
 		auto &existing = keys[i].elements;
 		bool equal = existing.size() == unique.size();
@@ -108,14 +137,14 @@ idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &tex
 		// A key holding a subquery is recognised by its text: written the same way in one
 		// query, it is the same key.
 		if (equal || (subquery && keys[i].text == text)) {
-			return i;
+			return write_order(i);
 		}
 	}
 	DecideKey key;
 	key.elements = std::move(unique);
 	key.text = text;
 	keys.push_back(std::move(key));
-	return keys.size() - 1;
+	return write_order(keys.size() - 1);
 }
 
 const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys, idx_t key) {
