@@ -609,6 +609,19 @@ def test_a_coefficient_only_the_solver_reads_is_named_as_written(decidb_cli, nam
     assert _coefficient(value) in _stderr(decidb_cli, _query(decide, NAN), "off")
 
 
+# `ABS` is lowered to bounds on a helper, which would word its argument's value as a bound the user never wrote ("the
+# bound -v is NaN", or "infeasible" for an infinity). The value is refused where the term is read, as written, on
+# each backend (the direct-solve plans word it the same, in test_direct_a2_single_facility_location.py).
+@pytest.mark.error
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("bad", [NAN, INFINITY], ids=["nan", "infinity"])
+def test_a_value_under_abs_is_named_as_written_not_as_a_bound(request, cli_fixture, bad):
+    cli = request.getfixturevalue(cli_fixture)
+    decide = "per (): x(REAL) SUCH THAT x BETWEEN 0 AND 10 MINIMIZE SUM(ABS(x - b))"
+    stderr = _stderr(cli, _query(decide, bad), "off")
+    assert _coefficient("b") in stderr, stderr
+
+
 @pytest.mark.error
 @pytest.mark.parametrize("name,decide,value", BOTH_PATHS_BOUND, ids=[case[0] for case in BOTH_PATHS_BOUND])
 def test_a_bound_that_is_nan_is_named_as_written_on_both_paths(decidb_cli, name, decide, value):

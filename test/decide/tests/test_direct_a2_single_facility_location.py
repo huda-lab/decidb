@@ -1732,32 +1732,30 @@ def test_a2_centers_near_the_double_limit_have_no_overflow(decidb_cli, objective
     assert answers == [pytest.approx(expected, rel=1e-12)] * 3
 
 
-# name -> (sql, error class of direct solve, error class of the solver). Both raise. For a NaN or infinite value the
-# wording differs: the solver turns `ABS(c - v)` into bounds and words the NaN as "the bound -v is NaN on some rows" and
-# an infinite one as infeasible, where direct solve words both as the value ("v is NaN or infinite on some rows").
-# Reported to the owner as a decision (the solver names the negated constant term, which the IR does not render).
+# name -> (sql, error class of direct solve, error class of the solver). Both raise, and a NaN or infinite value reads
+# as the value on both ("v is NaN or infinite on some rows"), checked where the `ABS` term is read.
 ABS_ERROR_CASES = {
-    "nan_value": (_problem(_with(1, v=math.nan), obj="MINIMIZE SUM(ABS(c - v))"), "invalid_value", "null_bound"),
-    "infinite_value": (_problem(_with(1, v=INF), obj="MINIMIZE SUM(ABS(c - v))"), "invalid_value", "infeasible"),
+    "nan_value": (_problem(_with(1, v=math.nan), obj="MINIMIZE SUM(ABS(c - v))"), "invalid_value", "invalid_value"),
+    "infinite_value": (_problem(_with(1, v=INF), obj="MINIMIZE SUM(ABS(c - v))"), "invalid_value", "invalid_value"),
     "nan_value_in_a_computed_value": (
         _problem(_with(1, v=math.nan), obj="MINIMIZE SUM(ABS(c - 2*v))"),
         "invalid_value",
-        "null_bound",
+        "invalid_value",
     ),
     "nan_value_under_a_maximum": (
         _problem(_with(1, v=math.nan), obj="MINIMIZE MAX(ABS(c - v))"),
         "invalid_value",
-        "null_bound",
+        "invalid_value",
     ),
     "infinite_value_under_a_maximum": (
         _problem(_with(1, v=INF), obj="MINIMIZE MAX(ABS(c - v))"),
         "invalid_value",
-        "infeasible",
+        "invalid_value",
     ),
     "nan_value_of_a_keyed_row": (
         _problem(KEYED_ROWS[:1] + (_krow(9, "a", 1, math.nan, True),), obj="MINIMIZE SUM(ABS(c - v))", key="k"),
         "invalid_value",
-        "null_bound",
+        "invalid_value",
     ),
     "empty_interval": (
         _problem(ROWS, "c >= 5 AND c <= 3", "MINIMIZE SUM(ABS(c - v))"),

@@ -113,7 +113,6 @@ void DecideOptimizer::InstallRowChecks(LogicalDecide &decide, LogicalOperator &r
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
 	RunPass("optimizer.record_bounds", [&] { RecordReducedBounds(optimizer, decide); });
-	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
@@ -121,6 +120,8 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.tag_abs", [&] { TagAbsForBigM(optimizer.context, decide); });
 	// Creates aux vars replacing ABS nodes
 	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
+	// After every pass that adds a check: RewriteAbs refuses a bad value of an ABS term where it is read.
+	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
 	// McCormick linearization for Boolean × anything bilinear products
 	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
 	// A non-linear reducer body a MIN/MAX reads becomes a helper per row

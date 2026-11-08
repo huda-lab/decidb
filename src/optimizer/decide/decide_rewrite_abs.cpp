@@ -9,12 +9,17 @@
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 
 #include <cstdlib>
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -370,6 +375,51 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	}
 }
 
+//! Refuses a NaN or infinite value in the argument of an ABS where it is read, on the rows the ABS is read on, before
+//! the lowering turns it into a bound on the auxiliary. The values are the argument's terms that hold no decision
+//! (`v` in `ABS(x - v)`), named as the user wrote them with the message every other refused value raises
+//! (DecideInvalidValueMessage), and the first one in reading order that is not finite is the one a row names. A
+//! coefficient of a decision is a coefficient of the lowered row, which the solver path refuses by name already.
+static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, const Expression &argument,
+                             const Expression *rows) {
+	vector<DecideSplitTerm> terms;
+	DecideTermSplitter(context, decide.decide_index, decide.decide_variables).Split(argument, 1, terms);
+	ExpressionBuilder calc(context);
+	ExprPtr message = calc.Constant(Value(LogicalType::VARCHAR));
+	// Built from the last term back, so the first that is not finite is the one named.
+	for (idx_t i = terms.size(); i > 0; i--) {
+		auto &term = terms[i - 1];
+		if (!term.IsConstant() || !term.coefficient) {
+			continue;
+		}
+		auto &value = DecideUnguarded(*term.coefficient);
+		if (value.IsFoldable() ||
+		    (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE)) {
+			continue;
+		}
+		auto written =
+		    RenderDecideSource(*term.coefficient, decide.source_fragments, decide.keyed_scopes, &decide.keys);
+		auto finite = calc.Fn("isfinite", calc.Cast(calc.Of(*term.coefficient), LogicalType::DOUBLE));
+		message =
+		    calc.If(calc.Cmp(ExpressionType::COMPARE_EQUAL, finite, calc.Bool(false)),
+		            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, written))), message);
+	}
+	if (message->type == ExpressionType::VALUE_CONSTANT) {
+		return;
+	}
+	ExprPtr kept = rows ? calc.Wrap(DirectActiveWhen(calc, rows)) : nullptr;
+	auto check_message = calc.Out(DirectOnKeptRows(calc, kept, message));
+	for (auto &check : decide.scope_checks) {
+		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*check_message)) {
+			return;
+		}
+	}
+	DecideScopeCheck check;
+	check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
+	check.value = std::move(check_message);
+	decide.scope_checks.push_back(std::move(check));
+}
+
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                         const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
                                         const string &source_alias, DecideEnclosingScope scope) {
@@ -412,6 +462,9 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 		// constraint and for the objective, for an ABS nested in another (which it
 		// collects as unknown sign) and for a dead one (which it leaves untagged).
 		const bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
+
+		// A value of the argument that is not finite is refused here, before the lowering turns it into a bound.
+		AddAbsValueCheck(optimizer.context, decide, *func.children[0], scope.Condition());
 
 		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
 		                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label), aux_scope});
