@@ -135,6 +135,85 @@ def test_a_message_quotes_the_least_spelling_of_the_group(decidb_cli):
     decidb_cli.assert_error(sql, match=r"t\.g = 'A' has more than one value")
 
 
+def _written_order_source(cap_of_a, lo_of_a):
+    """Rows 1 and 2 are one class of (g NOCASE, k): `a` and `A`, and `cap` / `lo` hold the given values on row 2."""
+    rows = ((1, 1, "a", 5, 0, 5.0), (2, 1, "A", cap_of_a, lo_of_a, 4.0))
+    columns = ("id", "k", "g", "cap", "lo", "p")
+    return f"FROM (SELECT id, k, g COLLATE NOCASE AS g, cap, lo, p FROM {values(rows, 'v', columns)}) t"
+
+
+#: The class of rows 1 and 2, named by the least spelling of g, then the value of k.
+_CLASS_GK = "t.g = 'A', t.k = 1"
+_CLASS_KG = "t.k = 1, t.g = 'A'"
+
+
+@pytest.mark.parametrize(
+    "clauses, cap, lo, subject, cls, body, values_text",
+    [
+        # Only the first clause fails; it wrote `t.g, t.k`, which is not the order the key keeps its elements in.
+        pytest.param(
+            "per t.g, t.k: sum(x) <= t.cap AND per t.k, t.g: sum(x) >= t.lo",
+            9,
+            0,
+            "t.g, t.k",
+            _CLASS_GK,
+            "t.cap",
+            "5, 9",
+            id="first-clause-fails",
+        ),
+        # Only the second fails, and it writes the key in another order than the first clause: its own words.
+        pytest.param(
+            "per t.k, t.g: sum(x) <= t.cap AND per t.g, t.k: sum(x) >= t.lo",
+            5,
+            9,
+            "t.g, t.k",
+            _CLASS_GK,
+            "t.lo",
+            "0, 9",
+            id="second-clause-fails",
+        ),
+        pytest.param(
+            "per t.k, t.g: sum(x) <= t.cap AND per t.g, t.k: sum(x) >= t.lo",
+            9,
+            0,
+            "t.k, t.g",
+            _CLASS_KG,
+            "t.cap",
+            "5, 9",
+            id="first-clause-fails-in-the-keys-order",
+        ),
+    ],
+)
+def test_a_message_quotes_its_clauses_key_and_lists_the_values_in_that_order(
+    decidb_cli, clauses, cap, lo, subject, cls, body, values_text
+):
+    """Two clauses write one key in two orders. The message that names a clause quotes that clause's key as it wrote it
+    and lists the class's values in the same order, on the direct path and on the solver path alike."""
+    sql = f"""
+        SELECT id, x {_written_order_source(cap, lo)}
+        DECIDE x(BOOL) SUCH THAT {clauses} MAXIMIZE SUM(t.p * x)"""
+    message = f"DECIDE: per {subject} does not determine {body}. {cls} has more than one value: {values_text}."
+    decidb_cli.assert_error(sql, match=re.escape(message))
+    decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"}).assert_error(sql, match=re.escape(message))
+
+
+@pytest.mark.parametrize("direct", ["auto", "off"])
+def test_a_reducers_message_quotes_the_key_that_reducer_wrote(decidb_cli, direct):
+    """Two reducers qualify by the same columns written in two orders; they share one key, and each message quotes its own
+    reducer's `per` and lists the class's values in that order, not in the first reducer's."""
+    sql = f"""
+        SET decide_direct_solve='{direct}';
+        SELECT id, x {_written_order_source(5, 9)}
+        DECIDE per t.g, t.k: x(BOOL)
+        SUCH THAT sum(per t.k, t.g: t.cap * x) <= 100 AND sum(per t.g, t.k: t.lo * x) >= 0
+        MAXIMIZE SUM(x)"""
+    message = (
+        "DECIDE: per t.g, t.k does not determine t.lo (in sum(per t.g, t.k: t.lo * x)). "
+        f"{_CLASS_GK} has more than one value: 0, 9."
+    )
+    decidb_cli.assert_error(sql, match=re.escape(message))
+
+
 KEYED_COLUMNS = ("id", "k", "g", "cap", "p")
 # `cap` is one value per NOCASE group, so an inner `per g` reads one per class.
 KEYED_ROWS = ((1, 1, "a", 1, 5.0), (2, 1, "A", 1, 4.0), (3, 2, "b", 2, 3.0), (4, 2, "B", 2, 2.0))
