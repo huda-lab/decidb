@@ -28,7 +28,9 @@ enum class DecideEvaluator : uint8_t {
 //! of a running process does not change. It is no setting, so it stays off the wire and out of every plan.
 DecideEvaluator SelectedDecideEvaluator();
 
-//! Build the semantic graph for a tree execution or a requested structural dump.
+//! Build the semantic graph for a tree execution or a requested structural dump. `verify` is neither while its second
+//! run is flat: the tree-only rewrites and the descent would change the plan its flat run reads, and nothing compares
+//! the tree.
 bool DecideTreeRequested();
 
 //! What a run of an evaluator leaves for the model, in the form two runs compare, taken before BuildSolverInput

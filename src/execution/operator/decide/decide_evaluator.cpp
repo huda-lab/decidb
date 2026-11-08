@@ -37,8 +37,9 @@ static int64_t OrderedBits(double value) {
 }
 
 bool DecideTreeRequested() {
-	return SelectedDecideEvaluator() != DecideEvaluator::FLAT || std::getenv("DECIDB_DUMP_TREE") ||
-	       std::getenv("DECIDB_DUMP_CONTAINERS");
+	const auto selected = SelectedDecideEvaluator();
+	return selected == DecideEvaluator::TREE || selected == DecideEvaluator::TREE_NOSIDE ||
+	       std::getenv("DECIDB_DUMP_TREE") || std::getenv("DECIDB_DUMP_CONTAINERS");
 }
 
 //! Within a few representable values of each other; NaN equals NaN, as both runs read one.

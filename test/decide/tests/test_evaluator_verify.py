@@ -76,6 +76,12 @@ def test_an_error_both_runs_raise_is_raised_once(decidb_cli):
     assert "is NaN on some rows" in result.stderr and "differ" not in result.stderr, result.stderr
 
 
+def test_verify_builds_no_tree(decidb_cli):
+    """Until its second run is the tree, `verify` reads the plan flat reads. A descent would refuse this chunk size."""
+    result = _verify(decidb_cli, PLAIN, DECIDB_DESCENT_CHUNK="0")
+    assert result.returncode == 0 and "DECIDB_DESCENT_CHUNK" not in result.stderr, result.stderr
+
+
 def test_an_answer_does_not_change(decidb_cli):
     flat, _ = decidb_cli.execute(f"{PLAIN} ORDER BY id")
     verified, _ = decidb_cli.with_env({"DECIDB_EVALUATOR": "verify"}).execute(f"{PLAIN} ORDER BY id")
