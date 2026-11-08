@@ -6,30 +6,19 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: X1 to X8 side by side, at most three at a time; X9 to X11 after them; then A1,
+Each batch finishes completely. Lanes: X1, X5 to X8 side by side, at most three at a time; X9 to X11 after them; then A1,
 A2, A3 in order; B1 beside the A batches; B2 after A2.
 
 ## Owner decisions
 
 - [ ] A2-9 Data weights on the absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-9
 - [ ] H-08 VALUE-shape clauses: which rule takes them — direct_solve/framework/todo.md § H-08
+- [ ] BLOAT-20 Guards only an edited IR reaches: dead or contract — direct_solve/framework/todo.md § BLOAT-20
 
 ## X1. Bloat: direct-solve engine
 
 - [ ] BLOAT-1 Bloat in the direct-solve engine — direct_solve/framework/todo.md § BLOAT-1
-
-## X2. Bloat: S1
-
-- [ ] BLOAT-2 Bloat in S1 — direct_solve/rules/s1_uniform_matroid/todo.md § BLOAT-2
-
-## X3. Bloat: R1
-
-- [ ] BLOAT-3 Bloat in R1 — direct_solve/rules/r1_continuous_knapsack/todo.md § BLOAT-3
-
-## X4. Bloat: A1 and N1
-
-- [ ] BLOAT-4 Bloat in A1 — direct_solve/rules/a1_separable_box/todo.md § BLOAT-4
-- [ ] BLOAT-5 Bloat in N1 — direct_solve/rules/n1_euclidean_ball/todo.md § BLOAT-5
+- [ ] BLOAT-20 Decline guards that only an edited IR reaches — direct_solve/framework/todo.md § BLOAT-20
 
 ## X5. Bloat: parser, binder, logical plan and canonicalizer
 
@@ -91,3 +80,4 @@ A2, A3 in order; B1 beside the A batches; B2 after A2.
 ## Blocked
 
 - [ ] H-06 The two-level objective — direct_solve/framework/todo.md § H-06 (needs: a rule that takes it)
+- [ ] BLOAT-21 S1 grid cases that share one plan — direct_solve/rules/s1_uniform_matroid/todo.md § BLOAT-21 (needs: a coverage pass the owner asks for)
