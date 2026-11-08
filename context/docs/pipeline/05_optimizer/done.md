@@ -186,27 +186,30 @@ one query. Neither changes the answer's optimum. Tests that compare models run o
 ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes
 below.
 
-`DecideOptimizer::OptimizeDecide` runs twelve passes, and the order is load-bearing:
+`DecideOptimizer::RewriteForSolver` runs fifteen passes, and the order is load-bearing:
 
 | # | Pass | Why here |
 |---|---|---|
-| 1 | `RewriteNorm` | Lowers L0 NORM markers to their indicator links and drops the display tag canonicalization left on desugared L1/L2/infinity norms, before later passes see them. |
-| 2 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
-| 3 | `TagAbsForBigM` | Marks the ABS nodes, in the constraints and the objective, that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
-| 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
-| 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 6 | `DefineNonlinearReducerBodies` | Names each non-linear body a MIN/MAX formulation reads by a helper decision per row. After bilinear, whose Boolean products are then linear; before the value and MIN/MAX rewrites, which read members as linear. |
-| 7 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
-| 8 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
-| 9 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 10 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 11 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
-| 12 | `FoldSingletonRows` | Must be last of all — see below. |
+| 1 | `RecordReducedBounds` | Records the aggregates of the bounds the bound-side rewrite left to a rule as bound aggregates, with their checks in the scope checks; the solver path reads them. |
+| 2 | `TagAtomicRemovalGroups` | Gives each source clause a written-order identity before any one-to-many rewrite, so a diagnostic repair removes a clause's rows together. |
+| 3 | `RewriteNorm` | Lowers L0 NORM markers to their indicator links and drops the display tag canonicalization left on desugared L1/L2/infinity norms, before later passes see them. |
+| 4 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
+| 5 | `TagAbsForBigM` | Marks the ABS nodes, in the constraints and the objective, that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
+| 6 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes, and the check of each ABS argument's data; first of the remaining rewrites so later passes see plain variables. |
+| 7 | `InstallRowChecks` | Puts the scope checks a plan can make under the node's child (`DirectInstallRowChecks`, shared with direct solve). After every pass that adds one: `RecordReducedBounds` and `RewriteAbs`. |
+| 8 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
+| 9 | `DefineNonlinearReducerBodies` | Names each non-linear body a MIN/MAX formulation reads by a helper decision per row. After bilinear, whose Boolean products are then linear; before the value and MIN/MAX rewrites, which read members as linear. |
+| 10 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
+| 11 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
+| 12 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
+| 13 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 14 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
+| 15 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
 
-A thirteenth pass, `BuildDecidePreparedModel`, belongs to this stage but is
+A sixteenth pass, `BuildDecidePreparedModel`, belongs to this stage but is
 **triggered later** — see §1a. It also flattens each `ReducerValueLink`'s body into
 `inner_terms`, as it does a composed term's.
 
@@ -360,6 +363,19 @@ preserved. **Ownership is unaffected**: the code lives in
 Detects `BoundFunctionExpression` for `ABS` over decision variables, creates
 auxiliary `REAL` variables, replaces the ABS nodes with references to them, and
 emits `aux >= inner` and `aux >= -inner`.
+
+The data of an ABS argument is checked where the ABS is read, before the envelope turns
+it into a bound on the auxiliary (`AddAbsValueCheck`): the sum of the argument's terms
+that hold no decision (`-v` in `ABS(x - v)`) must be finite on every row the ABS is read
+on. A row where it is not raises the message every number the model reads raises
+(`DirectNumberMessage`, shared with the direct-solve plans): the first of its values that
+is NaN or infinite, as the user wrote it, or, when each is finite and their sum passes a
+DOUBLE, the clause or objective with `computes a number too large for a DOUBLE`. So the
+solver path and direct solve's A2 raise the same text, and no message names a bound the
+user never wrote. The rows an ABS is read on are those its clause's `when` keeps that also
+pass the `when` of each reducer around it (`SUM(when f: ABS(x - v))`), and the envelope
+rows carry the same condition, so a row a reducer's own `when` drops is never read. The
+check is a value scope check, so `install_row_checks` runs after this pass.
 
 `AbsPairInfo::needs_bigm` records whether the auxiliary needs an upper envelope.
 It is false when solver pressure or the clause's shape pins `aux` to `|inner|`

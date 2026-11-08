@@ -1,12 +1,5 @@
 # Known bugs
 
-## Open
-
-- **BUG-51 — A bad value under `ABS` is worded as a bound the user never wrote.** Task:
-  `../pipeline/05_optimizer/todo.md` § BUG-51.
-- **BUG-52 — A sum's own `when` does not keep `ABS` from reading a dropped row.** Task:
-  `../pipeline/05_optimizer/todo.md` § BUG-52.
-
 ## Limitations (not bugs)
 
 - **Gurobi's non-convex tolerance.** On `SUM(POWER(x, 2)) BY (k) <= 25 MAXIMIZE SUM(POWER(x, 2))`, with optimum 50,

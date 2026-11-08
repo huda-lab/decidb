@@ -6,7 +6,7 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: A2, A3 in order; B1, T1, X13 and X15 beside
+Each batch finishes completely. Lanes: A2, A3 in order; T1, X13 and X15 beside
 the A batches; B2 after A2.
 
 ## A2. A2's slow all-rows query
@@ -17,11 +17,6 @@ the A batches; B2 after A2.
 
 - [ ] A2-12 The test grids reach the same branches many times — direct_solve/rules/a2_single_facility_location/todo.md § A2-12
 
-## B1. Solver-path bugs
-
-- [ ] BUG-51 A bad value under ABS worded as a bound — pipeline/05_optimizer/todo.md § BUG-51
-- [ ] BUG-52 A sum's own when and ABS on a dropped row — pipeline/05_optimizer/todo.md § BUG-52
-
 ## T1. Tests against the oracle
 
 - [ ] TEST-1 Expectations computed by hand — testing/todo.md § TEST-1
@@ -31,7 +26,7 @@ the A batches; B2 after A2.
 
 - [ ] BLOAT-25 Execution: arms no test reaches — testing/todo.md § BLOAT-25
 
-## X15. Other areas' arms no test reaches (one lane per task; BLOAT-29 after B1)
+## X15. Other areas' arms no test reaches (one lane per task)
 
 - [ ] BLOAT-26 Binder: arms no test reaches — testing/todo.md § BLOAT-26
 - [ ] BLOAT-27 Canonicalizer and provenance: arms no test reaches — testing/todo.md § BLOAT-27

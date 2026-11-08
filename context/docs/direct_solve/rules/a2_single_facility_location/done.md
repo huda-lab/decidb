@@ -111,9 +111,6 @@ on these shapes is in [todo.md](todo.md).
 - **Ties.** Where several points are optimal, the solver may return any of them; A2 returns the one nearest 0.
 - **HiGHS and a weight read from the data.** The solver path refuses a data weight on a square under HiGHS (its sign is
   known only when the query runs); A2 answers it, as Gurobi does.
-- **A bad value under `ABS`.** The solver path words a NaN value under `ABS` as a bound on `-v` and an infinite one as
-  infeasible, and raises for a NaN on a row a sum's own `when` drops ([bugs.md](../../../issues/bugs.md) BUG-51,
-  BUG-52); A2 raises the value error as written, and answers the second.
 - **A square's constant past a DOUBLE** (`v = 1e200`): the solver path expands the square and refuses once its
   constant `k*t^2` passes a DOUBLE; A2 answers the true center, which never reads that constant
   (`../../architecture/rules.md` § What every rule must match from the solver).
