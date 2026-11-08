@@ -82,3 +82,33 @@ def test_the_tree_column_box(decidb_cli, case):
     sql, expected = BOX_CASES[case]
     cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
+
+
+#: Each query reaches a rule of the tree builder's sigma (decide_tree.cpp, Lower's `carried`) that no other case
+#: reaches, with its answer worked by hand: the columns a generated NULL test reads are carried, never fields (D83).
+SIGNATURE_CASES = {
+    # A bound's nested reducer value is its key alone (deck p. 81), whatever its NULL test reads: k = u is one class of
+    # the group upper(g) = 'A', so the bound is 4. Reading g as a field made 'a' and 'A' two instances of it: x <= 8.
+    # This is test_anr_nested's function-of-one-column case, run by the tree.
+    "a-nested-reducer-value-is-its-key": (
+        """SELECT id, x FROM (VALUES (1, 'u', 'a', 4), (2, 'u', 'A', 4)) t(id, k, g, v) DECIDE x(INT)
+        SUCH THAT x <= 100 AND x <= sum(per t.k: max(t.v) by (t.k)) by (upper(t.g))
+        MAXIMIZE sum(t.id * x) ORDER BY id""",
+        [{"id": 1, "x": 4}, {"id": 2, "x": 4}],
+    ),
+    # A member test reads a NOCASE key's raw spelling: y has the classes {a, A} and {b}, so y_a + y_b <= 12, and
+    # 9 y_a + 3 y_b peaks at y_a = 10, y_b = 2. Reading g as a field counted y_a once per spelling: 6, 6, 0.
+    "a-member-test-is-no-field": (
+        """SELECT id, y FROM (SELECT id, g COLLATE NOCASE AS g, p FROM (VALUES (1, 'a', 5.0), (2, 'A', 4.0),
+        (3, 'b', 3.0)) v(id, g, p)) t DECIDE per t.g: y(INT) SUCH THAT y <= 10 AND sum(per t.g: y) <= 12
+        MAXIMIZE sum(t.p * y) ORDER BY id""",
+        [{"id": 1, "y": 10}, {"id": 2, "y": 10}, {"id": 3, "y": 2}],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(SIGNATURE_CASES))
+def test_the_tree_signature_carries_null_tests(decidb_cli, case):
+    sql, expected = SIGNATURE_CASES[case]
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected

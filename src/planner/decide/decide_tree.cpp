@@ -428,16 +428,6 @@ private:
 		}
 	}
 
-	void Carry(DecideNode &node, const Expression &expression) {
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-			if (expression.Cast<BoundReferenceExpression>().index < tree->input_column_count) {
-				Column(node, expression, false);
-			}
-			return;
-		}
-		ExpressionIterator::EnumerateChildren(expression, [&](const Expression &child) { Carry(node, child); });
-	}
-
 	void Gates(idx_t owner, const Expression *condition) {
 		auto &node = *tree->nodes[owner];
 		if (!condition) {
@@ -450,8 +440,7 @@ private:
 			if (node.kind == DecideNodeKind::FRAME) {
 				return;
 			}
-			node.member_tests.push_back(Lower(owner, *condition));
-			Carry(node, *node.member_tests.back());
+			node.member_tests.push_back(Lower(owner, *condition, true));
 			return;
 		}
 		if (condition->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
@@ -588,17 +577,21 @@ private:
 		return DConstants::INVALID_INDEX;
 	}
 
-	unique_ptr<Expression> Lower(idx_t owner, const Expression &expression, bool query_wide = false) {
+	//! With `carried`, the columns `expression` reads are carried, and neither they nor its decisions are sigma fields
+	//! (D83). A query-wide value has one value everywhere. A generated NULL test only settles membership: a member
+	//! test, or the test around a bound's reducer value (NamedReducerValue), which is its key alone (D70, deck p. 81).
+	//! A child read adds its key field either way.
+	unique_ptr<Expression> Lower(idx_t owner, const Expression &expression, bool carried = false) {
 		auto &node = *tree->nodes[owner];
 		idx_t retained;
 		if (TryParseDecideIndexTag(expression.GetAlias(), TREE_RETAINED_EXPRESSION_TAG_PREFIX, retained)) {
 			if (retained >= op.retained_expressions.size()) {
 				throw InternalException("DECIDE tree: a retained expression is missing");
 			}
-			return Lower(owner, *op.retained_expressions[retained], query_wide);
+			return Lower(owner, *op.retained_expressions[retained], carried);
 		}
-		query_wide =
-		    query_wide || IsQueryWideValueTag(expression.GetAlias()) || IsQueryWideBoundTag(expression.GetAlias());
+		carried = carried || IsQueryWideValueTag(expression.GetAlias()) || IsQueryWideBoundTag(expression.GetAlias()) ||
+		          HasDecideTag(expression.GetAlias(), BOUND_REDUCER_TAG);
 		auto record = FindRecord(expression);
 		if (record != DConstants::INVALID_INDEX) {
 			return Read(owner, Record(record), expression.return_type, expression.GetAlias());
@@ -621,8 +614,7 @@ private:
 					}
 				}
 				node.decision_value = true;
-				if (!query_wide &&
-				    (variable >= op.variable_scopes.size() || !op.variable_scopes[variable].IsGlobal())) {
+				if (!carried && (variable >= op.variable_scopes.size() || !op.variable_scopes[variable].IsGlobal())) {
 					DecideSignatureField field;
 					field.kind = DecideSignatureFieldKind::DECISION;
 					field.decision = variable;
@@ -632,16 +624,16 @@ private:
 				return expression.Copy();
 			}
 			auto resolved = Resolve(expression);
-			Column(node, *resolved, !query_wide);
+			Column(node, *resolved, !carried);
 			return resolved;
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-			Column(node, expression, !query_wide);
+			Column(node, expression, !carried);
 			return expression.Copy();
 		}
 		auto result = expression.Copy();
 		ExpressionIterator::EnumerateChildren(
-		    *result, [&](unique_ptr<Expression> &child) { child = Lower(owner, *child, query_wide); });
+		    *result, [&](unique_ptr<Expression> &child) { child = Lower(owner, *child, carried); });
 		return result;
 	}
 
