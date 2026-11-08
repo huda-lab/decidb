@@ -459,7 +459,6 @@ private:
 		idx_t source_id;
 		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
 			D_ASSERT(source_id < decide.constraint_sources.size());
-			ir_node.source_clause_id = source_id;
 			ir_node.written = QuoteWrittenClause(decide.constraint_sources[source_id]);
 		} else {
 			MarkNotProved(ir_node.status);

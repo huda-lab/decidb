@@ -129,7 +129,6 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(ir.objective.parts.size() == 1);
 	REQUIRE(ir.constraints.size() == 1);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
-	REQUIRE(ir.constraints[0].source_clause_id == 0);
 	auto rules = RegisteredDirectRules();
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
@@ -137,12 +136,11 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(condition != nullptr);
 	REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 
-	// Missing provenance must become a not-proved IR node, never an invented source id.
+	// Missing provenance must become a not-proved IR node.
 	decide->decide_constraints->SetAlias("");
 	auto damaged = DirectIR::Read(*con.context, *decide);
 	REQUIRE(damaged.constraints.size() == 1);
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(damaged.constraints[0].source_clause_id == DConstants::INVALID_INDEX);
 	// The rule driver offers no rule an IR with a not-proved constraint.
 	REQUIRE(!DirectIRIsReadable(damaged));
 }
@@ -351,8 +349,7 @@ TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides"
 	REQUIRE(constraints[1].comparison == ExpressionType::COMPARE_NOTEQUAL);
 	REQUIRE(constraints[2].comparison == ExpressionType::COMPARE_IN);
 	REQUIRE(constraints[3].aggregate);
-	// BETWEEN is two written comparisons, each with its own clause.
-	REQUIRE(constraints[6].source_clause_id == constraints[5].source_clause_id + 1);
+	// BETWEEN is two written comparisons.
 	REQUIRE(constraints[5].comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
 	REQUIRE(constraints[6].comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO);
 }

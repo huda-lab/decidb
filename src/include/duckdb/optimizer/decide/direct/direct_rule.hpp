@@ -138,9 +138,6 @@ struct DirectIRScope {
 
 struct DirectIRConstraint {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	//! Index into the source-clause registry: the comparison this constraint was read from. Each comparison has its own
-	//! id (the two halves of a BETWEEN have two), and the id is INVALID when the leaf carries no source tag.
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! The clause as a message names it (QuoteWrittenClause), as the solver path names it: a number the plan computes
 	//! past a DOUBLE names its clause (DecideValueRole::TOO_LARGE).
 	string written;
