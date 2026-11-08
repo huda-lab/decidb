@@ -456,8 +456,12 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		}
 		children.push_back(child);
 	}
-	if (node.defined_var < tree.variable_scopes.size() && tree.variable_scopes[node.defined_var].IsKeyed()) {
-		DecisionClasses(node.defined_var, chunk, stored, row_base);
+	// A node records the classes of the keyed decisions it defines or reads where it is reached. Its sigma need not
+	// name them: a root's names only what its written clause reads.
+	for (auto variable : node.decisions) {
+		if (variable < tree.variable_scopes.size() && tree.variable_scopes[variable].IsKeyed()) {
+			DecisionClasses(variable, chunk, stored, row_base);
+		}
 	}
 	auto signatures = Signature(node, chunk, stored, row_base);
 	vector<vector<Value>> columns(stored.size());

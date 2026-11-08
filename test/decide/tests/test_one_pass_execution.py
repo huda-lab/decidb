@@ -141,3 +141,65 @@ def test_the_tree_signature_carries_null_tests(decidb_cli, case):
     sql, expected = SIGNATURE_CASES[case]
     cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
+
+
+# A class root's sigma (the objective, `per K`, `per ()`) is the binder's signature of its written clause; with none
+# it has no field (decide_tree.cpp, UseSignature's root branch). The lowered body reads more than was written. The
+# objective reaches the branch from Build and the `per` clause from Root; a root per row keeps its reads.
+def test_a_lowered_auxiliary_is_no_field_of_the_objective(decidb_cli):
+    """The ABS argument reads a reducer, so its auxiliary is per row. sum(x) is in [0, 8], so |sum(x) - 9| is
+    greatest only at sum(x) = 0: every x is 0. With the auxiliary as a field the objective had three instances and
+    was refused."""
+    sql = """SELECT id, x FROM (VALUES (1, 3), (2, 3), (3, 2)) t(id, cap)
+        DECIDE x(INT) SUCH THAT x <= cap MAXIMIZE 0 * sum(x) + abs(sum(x) - 9) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [{"id": i, "x": 0} for i in (1, 2, 3)]
+
+
+def test_a_member_test_is_no_field_of_a_per_clause(decidb_cli):
+    """`per g` holds `by (g)`, so the clause is one instance per class. The easy MIN's member test reads p, which
+    is no field of what was written: as one, class A had an instance for row 2, which is no member, and bound it.
+    The members are rows 1 and 3, so x1 + 1 >= 2 and x3 + 1 >= 2, and MINIMIZE takes x = 1, 0, 1."""
+    sql = """SELECT id, x FROM (VALUES (1, 'A', true), (2, 'A', false), (3, 'B', true)) t(id, g, p)
+        DECIDE x(INT) SUCH THAT x <= 5 AND per g: min(when p: x + 1) by (g) >= 2 MINIMIZE SUM(x) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [
+        {"id": 1, "x": 1},
+        {"id": 2, "x": 0},
+        {"id": 3, "x": 1},
+    ]
+
+
+def test_a_root_records_the_classes_of_a_helper_it_reads(decidb_cli):
+    """The product b * SUM(x) by (t.g) is a helper keyed on its group, with no defining node: its classes come from
+    the nodes that read it (decide_descent.cpp, Visit), not from a field of the reader's sigma, which here is the
+    binder's (t.cap). Class a holds b * (x1 + x2) <= 4 and <= 5. With b = 1 that leaves x1 + x2 <= 4 and x3 <= 2,
+    and SUM(id * x) takes x2 = 3, x1 = 1, x3 = 2: 13 + 9 = 22, above b = 0's 3 + 6 + 9 = 18."""
+    sql = """SELECT id, x, b FROM (VALUES (1, 'a', 4), (2, 'a', 5), (3, 'b', 2)) t(id, g, cap)
+        DECIDE x(INT), per (): b(BOOL) SUCH THAT x <= 3 AND per t.g: b * SUM(x) by (t.g) <= t.cap
+        MAXIMIZE SUM(id * x) + 9 * b ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [
+        {"id": 1, "x": 1, "b": True},
+        {"id": 2, "x": 3, "b": True},
+        {"id": 3, "x": 2, "b": True},
+    ]
+
+
+def test_a_root_per_row_keeps_the_window_of_the_helper_it_defines(decidb_cli):
+    """The ABS of a range over decisions is a helper per window, defined by rows per row whose reads (the window)
+    key its instances (decide_descent.cpp, DecisionClasses). The windows are x1 + x2, x1 + x2 + x3, x2 + x3 + x4 and
+    x3 + x4, with x1 = 2, x2 in [2, 3], x3 in [0, 3] and x4 in [1, 2]. At x2 = 2 the sum of |w - 4| is
+    x3 + |x3 + x4 - 2| + |x3 + x4 - 4| >= 2, met only at x3 = 0 and x4 = 2; at x2 = 3 the first two terms are 2 + x3
+    and the last two at least 3. So x = 2, 2, 0, 2. With the definitions' sigma cleared, one auxiliary stood for every
+    window and was charged 4 * max |w - 4|, which takes x3 = 1."""
+    sql = """SELECT id, x FROM (VALUES (1, 2, 2), (2, 2, 3), (3, 0, 3), (4, 1, 2)) t(id, lo, hi)
+        DECIDE x(INT) SUCH THAT x >= lo AND x <= hi
+        MINIMIZE SUM(abs(sum(from previous to next: x) over (t.id) - 4)) ORDER BY id"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [
+        {"id": 1, "x": 2},
+        {"id": 2, "x": 2},
+        {"id": 3, "x": 0},
+        {"id": 4, "x": 2},
+    ]

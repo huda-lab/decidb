@@ -454,6 +454,14 @@ private:
 
 	void UseSignature(DecideNode &node, idx_t signature) {
 		if (signature == DConstants::INVALID_INDEX) {
+			// A class root's sigma is the binder's signature of its written clause, and none means no field: one
+			// instance per class (D70, D72). Lower read what the rewrites made of the clause, and its helpers and
+			// member tests (an ABS auxiliary, an easy extremum's member) are not fields of it. A root per row has no
+			// class to split: its reads tell apart the instances of a keyed helper it defines (a range frame's
+			// windows). An operand the binder did not sign keeps the values its body reads.
+			if (node.root && node.per != DecideTreePer::ROW) {
+				node.signature.clear();
+			}
 			return;
 		}
 		if (signature >= op.signatures.size()) {
@@ -940,7 +948,7 @@ private:
 		}
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
-			vector<idx_t> variables;
+			auto &variables = node.decisions;
 			for (auto *expression : {node.body.get(), node.rhs.get(), node.fallback.get()}) {
 				if (expression) {
 					Decisions(*expression, variables);

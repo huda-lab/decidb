@@ -56,6 +56,8 @@ struct DecideNode {
 	//! E: per key, G: by/path key, O: timeline key.
 	idx_t key = DConstants::INVALID_INDEX;
 	vector<DecideSignatureField> signature;
+	//! The decisions its own expressions read, a defined one among them, whether or not sigma names them.
+	vector<idx_t> decisions;
 	//! Bare source references carried by entries, including reads outside sigma.
 	vector<unique_ptr<Expression>> columns;
 	//! Scalar algebra with child results replaced by child_reads' physical columns.
