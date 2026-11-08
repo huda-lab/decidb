@@ -240,8 +240,16 @@ HiGHS's presolve checks the clock once per 1,024 reductions, and its dominated-c
 (`HPresolve::dominatedColumns`) scans each column's rows in full while it may make none: Q3 at `large`, with rows over
 all 120,000 adjustments, stays in it 339 s past a 300 s limit upstream. The vendored pass (`DeciDB patch (BUG-23)`) checks the
 clock once per 1,024 columns, before a column's work starts, and stops through presolve's own `kStopped`. Test:
-`test_error_time_limit.py` (`test_highs_limit_bounds_dominated_columns`). Presolve calls no interrupt callback, so a
-Ctrl-C waits for presolve to end.
+`test_error_time_limit.py` (`test_highs_limit_bounds_dominated_columns`).
+
+Every limit check of presolve, upstream's once per 1,024 reductions and each vendored one above, goes through
+`HPresolve::checkTimeLimit`, which upstream reads only the clock: a Ctrl-C waited for presolve to end, about 1 s on
+the clique-partition test model and many times that on a loaded machine, and a model presolve solves outright ignored
+it. The vendored check (`DeciDB patch (BUG-53)`) also asks the interrupt callback the solve after presolve asks: the
+MIP interrupt in MIP presolve, the simplex interrupt in LP presolve (`Highs::runPresolve` hands presolve its
+callback); a sub-MIP's presolve asks none, as `HighsMipSolverData::checkLimits` does not. Presolve then ends through
+its `kStopped`, as at the time limit, and the solve's first check reports the interrupt. Tests:
+`test_decidb_highs_presolve_interrupt.cpp` (each kind of presolve, with an interrupt already due).
 
 Upstream, Q1 at `large` (1M binaries over 8 rows, a MIP gap of 0) runs past 420 s under a 300 s limit in one of two
 loops, depending on the run. Presolve's probing extracts variable bounds from each row by pairing every binary with every

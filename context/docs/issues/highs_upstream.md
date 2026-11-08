@@ -95,8 +95,10 @@ workerDeque->checkInterrupt();
   through its existing `kStopped` path. The check runs before a column's work starts, so every earlier column is
   complete when it stops.
 - **With the patch:** the 638 s model stops at 301 s.
-- **Not patched:** `HPresolve.cpp` never calls the user interrupt callback, so a Ctrl-C during a long presolve pass
-  waits for presolve to end.
+- **Also:** `HPresolve::checkTimeLimit()`, where every presolve limit check ends, reads only the clock, so the user
+  interrupt callback is never called during presolve, and a model presolve solves never sees it. We patched it to ask
+  the callback the solve after presolve asks (`kCallbackMipInterrupt` in MIP presolve, `kCallbackSimplexInterrupt` in
+  LP presolve, none in a sub-MIP) and stop through `kStopped`.
 
 ```cpp
 for (HighsInt j = 0; j < model->num_col_; ++j) {
