@@ -178,6 +178,33 @@ unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows,
                                                vector<unique_ptr<Expression>> row_keys,
                                                vector<unique_ptr<Expression>> group_keys);
 
+//! What DirectJoinClassAnswers gives back: the plan, whose columns are the forwarded columns of the rows, then the
+//! class's answer columns, and where each of them is.
+struct DirectJoinedAnswers {
+	unique_ptr<LogicalOperator> plan;
+	//! The forwarded columns of the rows, in the order asked.
+	vector<ColumnBinding> rows;
+	//! The answer columns of the class each row's key names, in the class plan's order.
+	vector<ColumnBinding> answers;
+};
+
+//! Group-then-join: a class's answer is computed once on the class's own row and joined back to every row of the
+//! class, in place of a window that repeats the class's aggregates on every row (the shape DuckDB gives a decorrelated
+//! scalar subquery). `classes` is a plan of one row per class: the `key_count` key columns, then the answer columns; a
+//! rule makes it as a hash aggregate of a first read of its source on the key (DirectAggregateOver, or an ungrouped
+//! aggregate for a query-wide decision, whose one row `key_count == 0` joins to every row), computes the answer and its
+//! checks on the aggregate's rows, and passes it here with a second read as `rows`. `row_keys` are the key columns of
+//! `rows`, pairwise with the class's, compared as DirectJoinGroupRow compares them (a NULL key is a class of its own);
+//! `forward` are the columns of `rows` the plan keeps.
+//!
+//! The class plan is the build side of the join: the join consumes all of it before it releases a row, and the class
+//! plan consumes all of its input before it gives its one row, so every check on a row of the first read, and on a
+//! class's row, has run before the first row of the second read leaves, as the solver reads every row before it
+//! answers. A key with no row in `classes` joins NULL answers.
+DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOperator> rows,
+                                           const vector<ColumnBinding> &row_keys, const vector<ColumnBinding> &forward,
+                                           unique_ptr<LogicalOperator> classes, idx_t key_count);
+
 //! A verdict on every row of `rows` (DirectSourceReader::Gate): one row whose one BOOLEAN column is true when `valid`,
 //! over `rows`' columns, is true on every row, and otherwise the error of a row that raises it. It is NULL for no rows,
 //! which a gate passes none of and which have no row to raise on. The solver reads every input row before it returns,
@@ -288,6 +315,20 @@ public:
 private:
 	LogicalWindow &window;
 	std::function<void(BoundWindowExpression &)> partition;
+};
+
+//! The hash form of a DirectGroupSink: each aggregate is added to `aggregate`, and its column is the aggregate's, one
+//! per group. A rule that groups its rows with a hash aggregate, and computes the group's values on its rows, takes
+//! the bound's aggregates through it.
+class DirectAggregateSink final : public DirectGroupSink {
+public:
+	explicit DirectAggregateSink(DirectAggregateStage &aggregate_p) : aggregate(aggregate_p) {
+	}
+	ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
+	                  unique_ptr<Expression> reads) override;
+
+private:
+	DirectAggregateStage &aggregate;
 };
 
 //! What the rule reads of the bound once its group is computed, over the results: the limit as an upper and as a lower

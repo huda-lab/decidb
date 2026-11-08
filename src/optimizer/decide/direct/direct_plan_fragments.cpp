@@ -1,5 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
+#include <algorithm>
+
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -329,6 +331,38 @@ unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows,
 	return std::move(join);
 }
 
+DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOperator> rows,
+                                           const vector<ColumnBinding> &row_keys, const vector<ColumnBinding> &forward,
+                                           unique_ptr<LogicalOperator> classes, idx_t key_count) {
+	D_ASSERT(row_keys.size() == key_count);
+	ExpressionBuilder calc(binder.context);
+	rows->ResolveOperatorTypes();
+	classes->ResolveOperatorTypes();
+	auto row_bindings = rows->GetColumnBindings();
+	auto class_bindings = classes->GetColumnBindings();
+	auto type_of = [&](ColumnBinding binding) {
+		auto at = std::find(row_bindings.begin(), row_bindings.end(), binding);
+		D_ASSERT(at != row_bindings.end());
+		return rows->types[NumericCast<idx_t>(at - row_bindings.begin())];
+	};
+	vector<unique_ptr<Expression>> on_rows, on_classes;
+	for (idx_t i = 0; i < key_count; i++) {
+		on_rows.push_back(calc.Out(calc.Col(type_of(row_keys[i]), row_keys[i])));
+		on_classes.push_back(calc.Out(calc.Col(classes->types[i], class_bindings[i])));
+	}
+	DirectJoinedAnswers result;
+	DirectProjectionStage stage(binder.GenerateTableIndex());
+	for (auto binding : forward) {
+		result.rows.push_back(stage.Add(calc.Out(calc.Col(type_of(binding), binding))));
+	}
+	for (idx_t i = key_count; i < class_bindings.size(); i++) {
+		result.answers.push_back(stage.Add(calc.Out(calc.Col(classes->types[i], class_bindings[i]))));
+	}
+	auto joined = DirectJoinGroupRow(std::move(rows), std::move(classes), std::move(on_rows), std::move(on_classes));
+	result.plan = stage.Finish(std::move(joined));
+	return result;
+}
+
 unique_ptr<LogicalOperator> DirectAllRowsValid(Optimizer &optimizer, unique_ptr<LogicalOperator> rows,
                                                unique_ptr<Expression> valid) {
 	vector<unique_ptr<Expression>> arguments;
@@ -634,6 +668,11 @@ ColumnBinding DirectWindowSink::Add(const Expression &function, unique_ptr<Expre
 	partition(*aggregate);
 	window.expressions.push_back(std::move(aggregate));
 	return ColumnBinding(window.window_index, window.expressions.size() - 1);
+}
+
+ColumnBinding DirectAggregateSink::Add(const Expression &function, unique_ptr<Expression> argument,
+                                       unique_ptr<Expression> reads) {
+	return aggregate.Add(DirectAggregateOf(function, std::move(argument), std::move(reads)));
 }
 
 DirectGroupInputLayout DirectGroupLayout(const DecideGroupBound::Input &input, bool scoped) {

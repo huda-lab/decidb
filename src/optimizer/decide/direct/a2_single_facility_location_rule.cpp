@@ -13,6 +13,8 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
@@ -39,30 +41,32 @@ struct PlanTools {
 	const string &written;
 };
 
-//! The window over the rows of a row's class: an aggregate added to it holds the class's value on every row.
-class ClassWindow {
+//! The hash aggregate over the rows of a class: an aggregate added to it holds the class's value on the class's one
+//! row (group-then-join, DirectJoinClassAnswers). The loss that needs a window of its own over the rows of the class
+//! partitions it by `Partitions()`.
+class ClassAggregate {
 public:
-	ClassWindow(LogicalWindow &window_p, vector<ExprPtr> partitions_p, Optimizer &optimizer_p,
-	            const ExpressionBuilder &calc_p)
-	    : window(window_p), partitions(std::move(partitions_p)), optimizer(optimizer_p), calc(calc_p) {
+	ClassAggregate(DirectAggregateStage &aggregate_p, vector<ExprPtr> partitions_p, Optimizer &optimizer_p,
+	               const ExpressionBuilder &calc_p)
+	    : aggregate(aggregate_p), partitions(std::move(partitions_p)), optimizer(optimizer_p), calc(calc_p) {
 	}
 
 	//! The aggregate `function` of a column over the class, on the rows where `reads` holds (null: every row).
 	ColumnBinding Add(const char *function, ColumnBinding column, const LogicalType &type,
 	                  const ExprPtr &reads = nullptr) const {
-		auto aggregate = DirectWindowExtremum(optimizer, function, calc.Out(calc.Col(type, column)));
+		vector<unique_ptr<Expression>> children;
+		children.push_back(calc.Out(calc.Col(type, column)));
+		auto bound = optimizer.BindAggregateFunction(function, std::move(children));
 		if (reads) {
-			aggregate->filter_expr = calc.Out(reads);
+			bound->Cast<BoundAggregateExpression>().filter = calc.Out(reads);
 		}
-		Partition(*aggregate);
-		window.expressions.push_back(std::move(aggregate));
-		return ColumnBinding(window.window_index, window.expressions.size() - 1);
+		return aggregate.Add(std::move(bound));
 	}
 
-	//! Makes `aggregate` run over the rows of the row's class.
-	void Partition(BoundWindowExpression &aggregate) const {
+	//! Makes `window` run over the rows of the row's class.
+	void Partition(BoundWindowExpression &window) const {
 		for (auto &partition : partitions) {
-			aggregate.partitions.push_back(calc.Out(partition));
+			window.partitions.push_back(calc.Out(partition));
 		}
 	}
 
@@ -71,12 +75,8 @@ public:
 		return partitions;
 	}
 
-	LogicalWindow &Window() const {
-		return window;
-	}
-
 private:
-	LogicalWindow &window;
+	DirectAggregateStage &aggregate;
 	vector<ExprPtr> partitions;
 	Optimizer &optimizer;
 	const ExpressionBuilder &calc;
@@ -127,9 +127,9 @@ public:
 	//! P2: the row's values the class aggregates read, from the raw values. Appends the row's checks.
 	virtual void PerRow(const PlanTools &tools, DirectProjectionStage &p2, LossColumns &columns,
 	                    vector<unique_ptr<Expression>> &checks) const = 0;
-	//! W: the class's values, DOUBLE columns, from the aggregates the loss adds to the class window. A loss that
-	//! needs a window of its own first puts it over `plan`.
-	virtual void Aggregate(const PlanTools &tools, const ClassWindow &window, unique_ptr<LogicalOperator> &plan,
+	//! W: the class's values, DOUBLE columns, from the aggregates the loss adds to the class aggregate. A loss that
+	//! needs a window of its own first puts it over `plan`, under the class aggregate.
+	virtual void Aggregate(const PlanTools &tools, const ClassAggregate &classes, unique_ptr<LogicalOperator> &plan,
 	                       LossColumns &columns) const = 0;
 	//! P3: forwards the class's values through the interval's projection, which is all P4 reads.
 	virtual void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const = 0;
@@ -198,11 +198,11 @@ public:
 		square.row_b = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b)));
 	}
 
-	void Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
+	void Aggregate(const PlanTools &, const ClassAggregate &classes, unique_ptr<LogicalOperator> &,
 	               LossColumns &columns) const override {
 		auto &square = columns.Cast<SquareColumns>();
-		square.a = window.Add("sum", square.row_a, LogicalType::DOUBLE);
-		square.b = window.Add("sum", square.row_b, LogicalType::DOUBLE);
+		square.a = classes.Add("sum", square.row_a, LogicalType::DOUBLE);
+		square.b = classes.Add("sum", square.row_b, LogicalType::DOUBLE);
 	}
 
 	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
@@ -340,21 +340,21 @@ public:
 		return make_uniq<MedianColumns>();
 	}
 
-	void Aggregate(const PlanTools &tools, const ClassWindow &window, unique_ptr<LogicalOperator> &plan,
+	void Aggregate(const PlanTools &tools, const ClassAggregate &classes, unique_ptr<LogicalOperator> &plan,
 	               LossColumns &columns) const override {
 		auto &median = columns.Cast<MedianColumns>();
 		auto &calc = tools.calc;
 		auto center = calc.Col(LogicalType::DOUBLE, median.center);
 		auto weight = calc.Col(LogicalType::DOUBLE, median.weight);
-		// A window of its own under the class window: both aggregates share the class and its order of centers. A row
-		// with no center sorts last, and its weight is 0.
+		// A window of its own under the class aggregate: both aggregates share the class and its order of centers. A
+		// row with no center sorts last, and its weight is 0.
 		auto sorted = make_uniq<LogicalWindow>(tools.binder.GenerateTableIndex());
 		auto total = DirectWindowExtremum(tools.optimizer, "sum", calc.Out(weight));
-		window.Partition(*total);
+		classes.Partition(*total);
 		total->orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST, calc.Out(center));
 		sorted->expressions.push_back(std::move(total));
 		sorted->expressions.push_back(
-		    DirectRunningSum(tools.optimizer, calc, weight, center, OrderType::ASCENDING, window.Partitions()));
+		    DirectRunningSum(tools.optimizer, calc, weight, center, OrderType::ASCENDING, classes.Partitions()));
 		median.total = ColumnBinding(sorted->window_index, 0);
 		auto up_to = calc.Col(LogicalType::DOUBLE, ColumnBinding(sorted->window_index, 1));
 		sorted->children.push_back(std::move(plan));
@@ -364,11 +364,13 @@ public:
 		auto two = calc.Num(2.0);
 		auto from_here = calc.Add(calc.Sub(total_weight, up_to), weight);
 		median.lower =
-		    window.Add("min", median.center, LogicalType::DOUBLE,
-		               calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, up_to), total_weight));
+		    classes.Add("min", median.center, LogicalType::DOUBLE,
+		                calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, up_to), total_weight));
 		median.upper =
-		    window.Add("max", median.center, LogicalType::DOUBLE,
-		               calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, from_here), total_weight));
+		    classes.Add("max", median.center, LogicalType::DOUBLE,
+		                calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, from_here), total_weight));
+		// The window repeats the class's total on each of its rows; the class's row takes it once.
+		median.total = classes.Add("max", median.total, LogicalType::DOUBLE);
 	}
 
 	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
@@ -403,11 +405,11 @@ public:
 		return make_uniq<ExtremeColumns>();
 	}
 
-	void Aggregate(const PlanTools &, const ClassWindow &window, unique_ptr<LogicalOperator> &,
+	void Aggregate(const PlanTools &, const ClassAggregate &classes, unique_ptr<LogicalOperator> &,
 	               LossColumns &columns) const override {
 		auto &extreme = columns.Cast<ExtremeColumns>();
-		extreme.least = window.Add("min", extreme.center, LogicalType::DOUBLE);
-		extreme.greatest = window.Add("max", extreme.center, LogicalType::DOUBLE);
+		extreme.least = classes.Add("min", extreme.center, LogicalType::DOUBLE);
+		extreme.greatest = classes.Add("max", extreme.center, LogicalType::DOUBLE);
 	}
 
 	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
@@ -466,6 +468,8 @@ public:
 		}
 		auto condition = make_uniq<Condition>();
 		condition->written = ir.objective.written;
+		// The class plan reads the source, and the rows read it again to be given their class's answer.
+		condition->source_reads = 2;
 		if (ir.decisions[0].scope == DecideVarScope::KEYED) {
 			// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it takes.
 			for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
@@ -613,23 +617,28 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 // Plan
 //===--------------------------------------------------------------------===//
 
-//! Builds the relational plan for one A2 problem whose condition holds, over one read of the source, as the skeleton of
-//! a Template Method; the loss (Loss) fills in its stages. Each stage reads only the columns of the stage before it:
+//! Builds the relational plan for one A2 problem whose condition holds, as group-then-join (DirectJoinClassAnswers)
+//! over two reads of the source, as the skeleton of a Template Method; the loss (Loss) fills in its stages. The first
+//! read computes the answer of each class once, on the class's one row; the second gives every row its class's answer.
+//! Each stage of the first reads only the columns of the stage before it:
 //!
 //!   scope the row's class: whether it has one, and its key (DirectProjectScope), for a keyed decision
 //!   P1    raw values: the loss's values on the rows the objective keeps; each bound clause's ends on the rows it
 //!         keeps; the check of every value that can fail
 //!   P2    the loss's values for the row (a square's `a` and `b`, a center and its weight), each clause's lower and
 //!         upper end on the row (no bound where its `when` drops the row), and the row's checks
-//!   W     over the rows of the row's class (one window partitioned by the key): the loss's aggregates, the MAX of
-//!         each clause's lower ends and the MIN of its upper ends, and whether a floor-lifting clause keeps some row
+//!   W     a hash aggregate on the key, one row per class (one row for a query-wide decision): the loss's aggregates,
+//!         the MAX of each clause's lower ends and the MIN of its upper ends, whether a floor-lifting clause keeps
+//!         some row, and whether the checks of the rows held
 //!   P3    the class's interval as columns: each clause's tightest ends, and the floor
-//!   P4    the answer: the loss's target clamped into the interval (the box of DirectRowBox over the columns of P3),
-//!         repeated on every row of the class, and the column that keeps the checks live
+//!   P4    the class's answer: the loss's target clamped into the interval (the box of DirectRowBox over the columns
+//!         of P3), NULL for a key with no class, and the column that keeps the checks live
 //!
-//! Aggregate-then-repeat: the window is the aggregate and the row's own columns are what it repeats on, so the source
-//! is read once. A query-wide decision is the partition with no key. The window holds every row before it releases one,
-//! so each check on a row (P2) has run on all of them first, as the solver reads every row before it returns.
+//! The second read is the scope (the key) and the join with the class plan, on the key. A query-wide decision joins
+//! the class's one row to every row. The class plan is the join's build side: the aggregate holds every row of the
+//! first read before it gives its row, so each check on a row (P2) has run on all of them, and each check on a class
+//! (P4) on the class's row, before the first row of the second read leaves, as the solver reads every row before it
+//! returns.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -641,7 +650,9 @@ public:
 		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
-	DirectSubstitute Build(unique_ptr<LogicalOperator> rows) const {
+	//! The class plan over the first read `rows`: the key's columns, then the answer and the column that keeps the
+	//! checks live, one row per class.
+	unique_ptr<LogicalOperator> BuildClasses(unique_ptr<LogicalOperator> rows) const {
 		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
 		auto from_scope = DirectCarriedOf(state, source_bindings.size());
 
@@ -664,16 +675,26 @@ public:
 
 		DirectProjectionStage p4(binder.GenerateTableIndex());
 		ComputeAnswer(p4, interval, *loss_columns);
-		plan = p4.Finish(std::move(plan));
+		return p4.Finish(std::move(plan));
+	}
 
+	//! The substitute over the second read `rows`: its source columns, then each row's class's answer, and the column
+	//! that keeps the class plan's checks live.
+	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> classes) const {
+		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
+		auto carried = DirectCarriedOf(state, source_bindings.size());
+		auto joined = DirectJoinClassAnswers(binder, std::move(state.plan), carried.keys, carried.source,
+		                                     std::move(classes), carried.keys.size());
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
-		// The source columns, then c. The window holds every row, and the validation column reads it.
+		// The source columns, then c. The class plan's checks are read by the column after them.
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
 			substitute.slot_map.push_back(i);
 		}
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		substitute.child = std::move(plan);
+		// The rows are probed against the class plan and held by nothing.
+		substitute.pipelined = true;
+		substitute.child = std::move(joined.plan);
 		return substitute;
 	}
 
@@ -691,15 +712,20 @@ private:
 		ColumnBinding upper;
 		ColumnBinding when;
 	};
-	//! Columns of P2.
+	//! Columns of P2: the key and whether the row has a class, which the aggregate reads, not the source's.
 	struct Rows {
-		DirectCarried carried;
+		vector<ColumnBinding> keys;
+		vector<LogicalType> key_types;
+		ColumnBinding has_class;
 		vector<ClauseEnds> ends;
 		ColumnBinding valid;
 	};
-	//! Columns of W: the aggregates of the clauses, over the results.
+	//! Columns of W: the key, and the aggregates of the clauses over the results.
 	struct Aggregates {
-		DirectCarried carried;
+		vector<ColumnBinding> keys;
+		vector<LogicalType> key_types;
+		//! Whether the key is a class: every row of a key is in a class, or none is.
+		ColumnBinding has_class;
 		ColumnBinding valid;
 		vector<DirectGroupValues> lowers;
 		vector<DirectGroupValues> uppers;
@@ -708,7 +734,9 @@ private:
 	};
 	//! Columns of P3.
 	struct Interval {
-		DirectCarried carried;
+		vector<ColumnBinding> keys;
+		vector<LogicalType> key_types;
+		ColumnBinding has_class;
 		ColumnBinding valid;
 		vector<ColumnBinding> clause_lowers;
 		vector<ColumnBinding> clause_uppers;
@@ -752,7 +780,14 @@ private:
 
 	Rows ComputeRows(DirectProjectionStage &p2, Raw &raw, LossColumns &loss_columns) const {
 		Rows result;
-		result.carried = p2.Forward(raw.carried, source_types, IsKeyed());
+		// A class has no source columns: P1 carried them for the checks, which are computed here.
+		auto carried = raw.carried;
+		carried.source.clear();
+		carried = p2.Forward(carried, {}, IsKeyed());
+		result.keys = carried.keys;
+		result.key_types = carried.key_types;
+		// A query-wide decision has one class, and every row is in it.
+		result.has_class = IsKeyed() ? carried.eligible : p2.Add(calc.Out(calc.Bool(true)));
 		for (auto &columns : raw.clauses) {
 			ExprPtr lower, upper;
 			DirectClauseBounds(calc, columns, lower, upper);
@@ -774,23 +809,22 @@ private:
 	// W: the aggregates of a class
 	//===------------------------------------------------------------------===//
 
-	//! Puts one window over `plan` (the loss may put its own under it first): the loss's aggregates, and for each
-	//! clause the MAX of its lower ends and the MIN of its upper ends (DirectTightestBound), and whether some row a
-	//! floor-lifting clause keeps exists. A row with no class sits in a partition of its own, and its answer is NULL
-	//! whatever the partition holds.
+	//! Puts one hash aggregate on the key over `plan` (the loss may put a window of its own under it first): the
+	//! loss's aggregates, and for each clause the MAX of its lower ends and the MIN of its upper ends
+	//! (DirectTightestBound), and whether some row a floor-lifting clause keeps exists. A row with no class sits in a
+	//! key of its own, whose answer is NULL whatever the key holds.
 	Aggregates AggregateClasses(const Rows &rows, unique_ptr<LogicalOperator> &plan, LossColumns &loss_columns) const {
-		auto window = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-		auto &carried = rows.carried;
-		vector<ExprPtr> partitions;
-		for (idx_t i = 0; i < carried.keys.size(); i++) {
-			partitions.push_back(calc.Col(carried.key_types[i], carried.keys[i]));
-		}
-		ClassWindow class_window(*window, std::move(partitions), optimizer, calc);
+		DirectAggregateStage stage(binder);
 		Aggregates result;
-		result.carried = carried;
-		result.valid = rows.valid;
-		condition.loss->Aggregate(tools, class_window, plan, loss_columns);
-		DirectWindowSink sink(*window, [&](BoundWindowExpression &aggregate) { class_window.Partition(aggregate); });
+		result.key_types = rows.key_types;
+		vector<ExprPtr> partitions;
+		for (idx_t i = 0; i < rows.keys.size(); i++) {
+			partitions.push_back(calc.Col(rows.key_types[i], rows.keys[i]));
+			result.keys.push_back(stage.Group(calc.Out(partitions.back())));
+		}
+		ClassAggregate classes(stage, std::move(partitions), optimizer, calc);
+		condition.loss->Aggregate(tools, classes, plan, loss_columns);
+		DirectAggregateSink sink(stage);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
 			auto &ends = rows.ends[j];
@@ -799,11 +833,13 @@ private:
 			result.uppers.push_back(
 			    TightestEnd(sink, ExpressionType::COMPARE_LESSTHANOREQUALTO, *clause.upper, ends.upper));
 			if (clause.lifts_floor) {
-				result.lowering_whens.push_back(class_window.Add("bool_or", ends.when, LogicalType::BOOLEAN));
+				result.lowering_whens.push_back(classes.Add("bool_or", ends.when, LogicalType::BOOLEAN));
 			}
 		}
-		window->children.push_back(std::move(plan));
-		plan = std::move(window);
+		// An aggregate without a key gives its one row over no rows too: with no row there is no class, and it says so.
+		result.has_class = classes.Add("bool_and", rows.has_class, LogicalType::BOOLEAN);
+		result.valid = classes.Add("bool_and", rows.valid, LogicalType::BOOLEAN);
+		plan = stage.Finish(std::move(plan));
 		return result;
 	}
 
@@ -825,7 +861,9 @@ private:
 	//! clause keeps exists.
 	Interval ComputeInterval(DirectProjectionStage &p3, const Aggregates &aggregates, LossColumns &loss_columns) const {
 		Interval result;
-		result.carried = p3.Forward(aggregates.carried, source_types, IsKeyed());
+		result.keys = p3.Forward(aggregates.keys, aggregates.key_types);
+		result.key_types = aggregates.key_types;
+		result.has_class = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.has_class)));
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
@@ -841,14 +879,12 @@ private:
 	//===------------------------------------------------------------------===//
 
 	void ComputeAnswer(DirectProjectionStage &p4, const Interval &interval, LossColumns &loss_columns) const {
-		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p4.Add(calc.Out(calc.Col(source_types[i], interval.carried.source[i])));
-		}
+		p4.Forward(interval.keys, interval.key_types);
 		ExprPtr lower, upper;
 		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, interval.floor), condition.upper, interval.clause_lowers,
 		             interval.clause_uppers, lower, upper);
-		// A row with no class has no decision and shows NULL.
-		auto has_class = IsKeyed() ? calc.Col(LogicalType::BOOLEAN, interval.carried.eligible) : calc.Bool(true);
+		// A key with no class has no decision and shows NULL.
+		auto has_class = calc.Col(LogicalType::BOOLEAN, interval.has_class);
 		auto finish = condition.loss->Finish(tools, loss_columns, lower, upper, has_class);
 		// The loss's target clamped into the interval. A NULL target leaves every point optimal, and the point of the
 		// interval nearest 0 is the answer: the clamp of 0. Adding 0.0 turns -0.0 into 0.0.
@@ -858,8 +894,8 @@ private:
 
 		vector<unique_ptr<Expression>> checks;
 		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, interval.valid)));
-		// An empty interval raises on every row that has a class. The interval of a class is the same on every row of
-		// it, so a query whose only bounds are constants has two constants here, which DuckDB folds.
+		// An empty interval raises on every key that has a class. A query whose only bounds are constants has two
+		// constants here, which DuckDB folds.
 		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.And(has_class, DirectBoxIsEmpty(calc, lower, upper))),
 		                               DirectInfeasibleErrorPredicate(optimizer, errors)));
 		// The loss's checks, then the answer's, then the loss's warnings: a warning prints as it runs, so it follows
@@ -879,8 +915,16 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
-	return DirectBuildOverOneRead(
-	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
+	auto classes = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+		return plan_builder.BuildClasses(std::move(rows));
+	});
+	DirectSubstitute substitute;
+	auto plan = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+		substitute = plan_builder.JoinAnswers(std::move(rows), std::move(classes));
+		return std::move(substitute.child);
+	});
+	substitute.child = reader.Finish(std::move(plan));
+	return substitute;
 }
 
 } // namespace direct_a2_single_facility_location
