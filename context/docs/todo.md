@@ -6,7 +6,7 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: A1, A2, A3 in order; B1, X13, X14 and X15 beside
+Each batch finishes completely. Lanes: A1, A2, A3 in order; B1, X13 and X15 beside
 the A batches; T1 after A1; B2 after A2.
 
 ## A1. A2 code cleanup
@@ -43,10 +43,6 @@ the A batches; T1 after A1; B2 after A2.
 - [ ] BLOAT-28 Logical operator: arms no test reaches — testing/todo.md § BLOAT-28
 - [ ] BLOAT-29 Optimizer passes: arms no test reaches — testing/todo.md § BLOAT-29
 - [ ] BLOAT-30 Formulation: arms no test reaches — testing/todo.md § BLOAT-30
-
-## X14. S1 oracle grid trim
-
-- [ ] BLOAT-21 S1 grid cases that share one plan — direct_solve/rules/s1_uniform_matroid/todo.md § BLOAT-21
 
 ## B2. The faster plan for the other rules (needs: A2)
 

@@ -8,24 +8,3 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 An independent proof, behavior tests (the standard tests in `../../architecture/rules.md`), and end-to-end measurement that
 does not count timeouts, solver limits or unsupported cases as wins. Finding a relational expression in the catalogue is
 not enough.
-
-## BLOAT-21 — S1 grid cases that share one plan
-
-- **Problem.** Grouping S1's 497 oracle cases by identical `EXPLAIN` plan (under `require`, same dataset) gives 384
-  distinct plans: about 40 groups of 2 to 16 cases. The largest are the `x_*_when` and `x_*_everywhere` row-bound
-  grids, the `no_objective_*` fraction, whole and `gt` shapes per scope, and the `offset_-1_0_*` operator-by-delta
-  grid. One plan does not prove one branch (`x_ne_0_when` and `x_eq_1_when` share a plan through different `allows`
-  paths), and the near-miss shapes `x>1`, `x>1.5`, `x>2` run through shared code (`DecideWrittenBox::ContradictsDomain`,
-  `DecideFoldSingletonRow`).
-- **Coverage (`73b52ab1d1`, the whole DECIDE pipeline instrumented, `../../../testing/todo.md` § BLOAT-25).** The
-  grid has 491 cases. Removing one at a time while every arm stays reached by some test removes 482 and keeps 9. By
-  identical sets of arms reached, the grid has 431 paths: 60 cases repeat another's path, and each such group is a set
-  of boundary values (`x_le_1`, `x_le_1p5`, `x_le_2`; `global_upper_at_2_pow_53` and `global_upper_max`; `per_0` and
-  `per_0p5` of each offset). The values reach DuckDB's sort, rank and filter operators, which are not instrumented, and
-  the oracle compares the answers, so equal arms do not make two cases equal.
-- **Ruling (owner, 2026-11-08).** One case per path, and within a group that shares a path, every case whose value
-  sits on a boundary the code or DuckDB's operators treat differently (zero, a whole number against a fraction, the
-  largest exact double). The arm rule alone does not trim an oracle grid.
-- **Change.** From the coverage run's groups of cases that share a path: read each group, keep the boundary values,
-  delete the rest.
-- **Done when.** `coverage_report.py compare` shows no arm lost, and the matrix passes.
