@@ -373,9 +373,7 @@ rank window or a verified, streamed plan) and run on the same two central files.
   not read as lost. Arms no test reaches, kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every
   caller's earlier determinism check rules out but which the function's contract promises on its own; the `default` arm
   of the `ExpressionType` switch in S1's `NormalizeCapacity`; and the extension-name check in late materialization's
-  `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. The nested-reducer
-  reading in `ReadReducer` (`DirectPart::inner`) is reached by no query until the two-level objective is read (`todo.md`
-  H-06). The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from an IR against the solver with
+  `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from an IR against the solver with
   NULL-key rows (`test/common/ test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a
   query reaches it and a test runs it; a check on what a rule hands the engine raises in release builds and a stub-rule
   C++ test reaches it; a check on a plan, IR or setting the engine builds itself is a `D_ASSERT`, which debug builds

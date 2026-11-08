@@ -42,7 +42,3 @@ the A batches; B2 after A2.
 ## B2. The faster plan for the other rules (needs: A2)
 
 - [ ] H-49 N1, S1 and R1 take group-then-join where faster — direct_solve/framework/todo.md § H-49
-
-## Blocked
-
-- [ ] H-06 The two-level objective — direct_solve/framework/todo.md § H-06 (needs: a rule that takes it)

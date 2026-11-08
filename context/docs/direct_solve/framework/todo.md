@@ -35,16 +35,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   fails no test, the case that already reaches the branch). Record the lines and the `lizard` figures of the area
   before and after in the report.
 
-## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
-
-- **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. `ReadObjective`
-  (`direct_ir.cpp`) declines on `IsTwoLevelObjectiveWrapper`. The nested-reducer reading (`DirectPart::inner` in
-  `ReadReducer`) exists, but no query reaches it: the binder rejects a nested reducer anywhere else.
-- **Change.** Read the two-level objective into the IR through the nested-reducer reading.
-- **Done when.** `test_decidb_direct_ir.cpp`, "declines a two-level objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
-- **Needs (owner, 2026-10-29).** A rule that takes the shape (A3 or A4, `../todo.md`): read into the IR with no rule
-  taking it, the objective's reading would be reached only by an IR test.
-
 ## H-48 — A2 computes a class's answer once per row, and a query-wide window runs on one thread
 
 - **Ruling (owner, 2026-11-08).** A rule that repeats one answer per class computes it once per class and joins it
@@ -96,6 +86,12 @@ solver path answers those queries, so none of them is wrong, only slower.
     2,000-row sources are copied, so no test takes the re-read.
   - N1 with a limit input that has no argument, `SUM(POWER(x, 2)) <= COUNT(*)` with or without `by` (two arms in
     `n1_euclidean_ball_rule.cpp`): the rule takes it under `require`, and no test runs it.
+  - The nested-reducer reading (`DirectPart::inner`, set in `ReadReducer`, `direct_ir.cpp`) and every check of it
+    (`DirectPart::IsPlainSum`, A2's `plain`, the IR's own decline): the binder rejects a nested reducer everywhere but
+    the two-level objective `outer(per k: inner(e) by (k))`, and `ReadObjective` declines that first
+    (`IsTwoLevelObjectiveWrapper`), so no query reaches it. It is deleted with the IR test that only names it; the
+    two-level objective stays a decline (`../architecture/ir.md` § Not proved), and the rule that first takes it reads
+    it into the IR.
   The others are declines and guards in the IR readers, the bound reader, the plan fragments, late materialization and
   the S1, A1 and A2 rules.
 - **Change.** For each arm: add a test that reaches it (oracle-compared where it answers), or delete it as code no
