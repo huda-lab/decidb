@@ -43,8 +43,7 @@ DecideKeyElement DecideKeyElement::Bind(ClientContext &context, unique_ptr<Expre
 //! Whether `expr` holds a bound subquery, which equals nothing, not even itself.
 static bool HoldsSubquery(const Expression &expr) {
 	bool found = expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY;
-	ExpressionIterator::EnumerateChildren(expr,
-	                                      [&](const Expression &child) { found = found || HoldsSubquery(child); });
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { found |= HoldsSubquery(child); });
 	return found;
 }
 
@@ -98,7 +97,7 @@ idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &tex
 	};
 	bool subquery = false;
 	for (auto &element : unique) {
-		subquery = subquery || HoldsSubquery(*element.expression);
+		subquery |= HoldsSubquery(*element.expression);
 	}
 	for (idx_t i = 0; i < keys.size(); i++) {
 		auto &existing = keys[i].elements;
@@ -164,8 +163,7 @@ static const LogicalOperator *DecideBindingProducer(const LogicalOperator &plan,
 
 ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding) {
 	auto *producer = DecideBindingProducer(source, binding.table_index);
-	if (producer && producer->type == LogicalOperatorType::LOGICAL_PROJECTION &&
-	    binding.column_index < producer->expressions.size()) {
+	if (producer && producer->type == LogicalOperatorType::LOGICAL_PROJECTION) {
 		auto &expr = *producer->expressions[binding.column_index];
 		auto forwards = expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
 		                expr.GetExpressionClass() == ExpressionClass::BOUND_REF;
@@ -176,11 +174,11 @@ ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnB
 	}
 	auto &get = producer->Cast<LogicalGet>();
 	auto &column_ids = get.GetColumnIds();
-	idx_t slot = binding.column_index;
-	if (!get.projection_ids.empty()) {
-		// A column past the projection is a projected input of a table-in-out function.
-		slot = slot < get.projection_ids.size() ? get.projection_ids[slot] : column_ids.size();
-	}
+	// The remove-unused-columns pass prunes nothing below a DECIDE (it reads every column), so a scan under one has no
+	// projection_ids and its output slot is its column slot.
+	D_ASSERT(get.projection_ids.empty());
+	// A scan with no column ids answers (table, 0) from GetColumnBindings; that slot names no column.
+	auto slot = binding.column_index;
 	auto ordinal = slot >= column_ids.size() || column_ids[slot].IsRowIdColumn() ? DConstants::INVALID_INDEX
 	                                                                             : column_ids[slot].GetPrimaryIndex();
 	return ColumnBinding(binding.table_index, ordinal);
@@ -253,9 +251,7 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	// objective/constraint trees into these vectors and leaves a placeholder behind, so
 	// visiting decide_objective/decide_constraints above no longer reaches them.
 	for (auto &term : composed_minmax_objective_terms) {
-		if (term.inner_expr) {
-			callback(&term.inner_expr);
-		}
+		callback(&term.inner_expr);
 		if (term.filter) {
 			callback(&term.filter);
 		}
@@ -265,9 +261,7 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	}
 	for (auto &spec : composed_minmax_constraints) {
 		for (auto &term : spec.terms) {
-			if (term.inner_expr) {
-				callback(&term.inner_expr);
-			}
+			callback(&term.inner_expr);
 			if (term.filter) {
 				callback(&term.filter);
 			}
@@ -278,9 +272,7 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 		if (spec.scope.when) {
 			callback(&spec.scope.when);
 		}
-		if (spec.rhs_expr) {
-			callback(&spec.rhs_expr);
-		}
+		callback(&spec.rhs_expr);
 	}
 	// The value rewrite lifts each reducer it replaces out of the constraint tree too.
 	for (auto &link : reducer_value_links) {
