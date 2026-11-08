@@ -1265,23 +1265,24 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		return true;
 	}
 	if (IsDecideAggregateName(fname)) {
+		// A reducer takes one argument: MAX(x, n) and MIN(x, n) are DuckDB's top-n aggregates, which return a list.
+		if (func.children.size() != 1) {
+			error_msg =
+			    StringUtil::Format("%s needs one argument, found '%s'", StringUtil::Upper(fname), func.ToString());
+			result = DecideExpression::INVALID;
+			return true;
+		}
 		// The value reduced is the argument's body; a `when` or `per` in front of it only
 		// chooses the rows.
-		auto body = func.children.empty()
-		                ? nullptr
-		                : &const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
-		if (body && ExpressionContainsDecideVariable(*body, variables) && IsRowInvariantExpression(*body)) {
-			auto body_text = body->ToString();
+		auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
+		if (ExpressionContainsDecideVariable(body, variables) && IsRowInvariantExpression(body)) {
+			auto body_text = body.ToString();
 			error_msg = StringUtil::Format(
 			    "%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
 			    "use %s on its own",
 			    body_text, StringUtil::Upper(fname), body_text, body_text);
 			result = DecideExpression::INVALID;
-		} else if (!body) {
-			error_msg =
-			    StringUtil::Format("%s needs one argument, found '%s'", StringUtil::Upper(fname), func.ToString());
-			result = DecideExpression::INVALID;
-		} else if (!ValidateSumArgument(*body, variables, error_msg)) {
+		} else if (!ValidateSumArgument(body, variables, error_msg)) {
 			error_msg += ", found '" + func.ToString() + "'";
 			result = DecideExpression::INVALID;
 		} else {

@@ -1296,8 +1296,6 @@ def test_strict_over_a_power_in_every_spelling(decidb_cli, oracle_solver, power)
         ("SUM(x * w) <> 3", r"Comparison '<>' is not supported here: column 'w' has type DECIMAL"),
         # The compared side on the right: the left is the bound.
         ("5 < SUM(x * w)", r"Comparison '<' is not supported here: column 'w' has type DECIMAL"),
-        # A MAX of two arguments is a list, and no list is whole.
-        ("max(x, 2) < max(x, 2)", r"'max\(x, 2\)' has type BIGINT\[\]"),
     ],
 )
 def test_strict_gate_refusals(decidb_cli, clause, message):

@@ -954,6 +954,7 @@ class TestBinderRefusalBranches:
             # A `when` whose condition, or a reducer's, does not bind (BindScopedConstraint, BindScopedReducer).
             ("when nosuch > 0: x <= 3", r'Referenced column "nosuch" not found'),
             ("SUM(when nosuch > 0: x) <= 3", r'Referenced column "nosuch" not found'),
+            ("max(x, 2) <= 2", r"MAX needs one argument, found 'max\(x, 2\)'"),
             # A COALESCE over a reducer, in the body of a sum's left side (ContainsDecideAggregate's OPERATOR case).
             ("COALESCE(SUM(x), 0) + 1 <= 100", r"operator 'COALESCE' cannot take a DECIDE variable"),
         ],
@@ -1047,7 +1048,9 @@ class TestBinderRefusalBranches:
             # A reducer in a reducer under a product with a decision.
             ("SUM(2 * SUM(x))", r"an aggregate inside an aggregate is not supported yet"),
             # An aggregate with arguments no function takes.
-            ("SUM(w * x, 2)", r"No function matches the given name and argument types"),
+            ("SUM(w * x, 2)", r"SUM needs one argument, found 'sum\(\(w \* x\), 2\)'"),
+            # MAX(x, n) is DuckDB's top-n aggregate, a list: the objective refuses it as a constraint does.
+            ("max(x, 2)", r"MAX needs one argument, found 'max\(x, 2\)'"),
             # A scope whose body, or condition, does not bind.
             ("when c > 0: sum(nosuch * x)", r'Referenced column "nosuch" not found'),
             ("when nosuch > 0: sum(w * x)", r'Referenced column "nosuch" not found'),

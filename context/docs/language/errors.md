@@ -31,7 +31,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | An unknown key element (keys resolve in their own query's `FROM`) | bind | `DECIDE: depot is neither a column nor a relation of the FROM clause` |
 | `rowid` or a generated column in a key | bind | `DECIDE: g.b is not a stored column; a per key lists columns or relations of the FROM clause` |
 | An unqualified `FULL OUTER JOIN USING` column in a key | bind | `DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key` |
-| A reducer or `norm` with no argument | bind | `SUM needs one argument, found 'sum()'` · `NORM needs an expression and an order, as in norm(e, 1), found 'norm()'` |
+| A reducer with no argument or more than one, or `norm` with no argument | bind | `SUM needs one argument, found 'sum()'` · `MAX needs one argument, found 'max(x, 2)'` · `NORM needs an expression and an order, as in norm(e, 1), found 'norm()'` |
 | A colon form naming a relation not in `FROM` | bind | `Relation 'X' is not in the FROM clause, so a reducer cannot be qualified by it.` |
 | A reducer over query-wide decisions only, as a constraint's whole decision side | bind | `cap is a query-wide decision, so SUM(cap) has nothing to aggregate over; use cap on its own` |
 | An `INT` or `REAL` decision as a factor on a reducer, or a `BOOL` one on anything but a bare reducer | bind | `DECIDE constraint: 's' is a decision, so it cannot multiply SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX.` (objective: `... Only constants, query-wide values or a BOOL decision can scale ...`) |
