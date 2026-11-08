@@ -203,7 +203,7 @@ Changing either the test body or the underlying database invalidates only the af
 
 **Global invalidation**: the cache file stores the DB checksum at the top level. If the DB changes, the entire cache is dropped on next load.
 
-**GC**: on a full (unfiltered) test run that passes, `save(gc=True)` prunes entries that weren't accessed during the run. Filtered runs (`-k`, `-m`) and failed runs skip GC so unrelated entries survive. How xdist workers report to one writer is in [`test/decide/README.md`](../../../test/decide/README.md) § Oracle Cache.
+**GC**: on a full (unfiltered) test run that passes, `save(gc=True)` prunes entries that weren't accessed during the run. Filtered runs (`-k`, `-m`) and failed runs skip GC so unrelated entries survive. A test that skips is not accessed, so its entry is pruned and re-solved on the next run. How xdist workers report to one writer is in [`test/decide/README.md`](../../../test/decide/README.md) § Oracle Cache.
 
 **How it plugs in**: `CachedOracleSolver` wraps the real `OracleSolver` as a drop-in replacement. `create_model()` consults the cache:
 - **Hit** — all subsequent model-building calls (`add_variable`, `add_constraint`, `set_objective`, `set_quadratic_objective`, `add_quadratic_constraint`, `add_indicator_constraint`) become no-ops; `solve()` returns the cached `SolverResult` instantly.

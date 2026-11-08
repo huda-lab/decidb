@@ -71,16 +71,18 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
 | `optimizer/decide/decide_optimizer.cpp` | 05 | The pass dispatcher and the helpers the passes share |
 | `optimizer/decide/decide_rewrite_rhs_bounds.cpp` | 05 | `RewriteRhsAggregates`: a data-only reducer on a bound's right side becomes a placeholder column, recorded for the path to build as a side table (`direct_bound_tables.cpp`); runs before the other passes |
-| `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1) and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
+| `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1, N1, A2) and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
 | `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
 | `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | `<>` indicators and AVG→SUM |
 | `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
 | `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | MIN/MAX, plain and composed |
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
+| `optimizer/decide/decide_rewrite_define.cpp` | 05 | `DefineNonlinearReducerBodies`: a helper decision per row for each non-linear body a MIN/MAX formulation reads |
 | `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison becomes a helper decision per `by` group |
 | `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
 | `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
-| `optimizer/decide/decide_solver_gate.cpp` | 05 | `ChooseDecideSolver`, `DeriveDecideModelClass`, `RequireDecideSolverSupport` |
+| `optimizer/decide/decide_answer_choice.cpp` | 05 | `ChooseDecideAnswer`: tries the direct-solve rules; when none applies, records the backend for the formulation passes (`ChooseDecideSolver`) |
+| `optimizer/decide/decide_solver_gate.cpp` | 05 | `DeriveDecideModelClass`, `RequireDecideSolverSupport` |
 | `execution/column_binding_resolver.cpp` | 03 | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | Extraction, materialization, evaluation, emission, readback |

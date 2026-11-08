@@ -1,9 +1,8 @@
 # N1 (Euclidean ball) — what works today
 
-Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
-its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
-assertions in 82 cases.
-Code: `src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
+Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Code:
+`src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 
@@ -140,10 +139,11 @@ does not.
 | `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |
 | C++ `[decidb]` | N1's applicability condition: 28 forms that apply, and a case for each decline branch; no two rules apply to one N1, S1, A1 or R1 shape |
 
-Every decision point of the rule was checked by mutation: with its branch removed, at least one test above fails. No
-existing test is pinned to `off`, and none needs to be: logging the rule's `Apply` over the suite, no test outside
-this rule's own (`-k "not n1"`) reaches N1 under `auto`. Their quadratic limits have a bound beside them, so
-N1 declines, or they force a backend.
+Branch coverage at `73b52ab1d1` (`make decide-coverage`): the tests reach 161 of the rule's 164 arms. The three left are
+a limit input with no argument (`COUNT(*)`, two arms) and a square on some rows beside a part with no linear term
+(`../../framework/todo.md` § TEST-2). No existing test is pinned to `off`, and none needs to be: logging the rule's
+`Apply` over the suite, no test outside this rule's own (`-k "not n1"`) reaches N1 under `auto`. Their quadratic limits
+have a bound beside them, so N1 declines, or they force a backend.
 
 The objective tolerance (5e-6 relative) and the ball tolerances (1e-7 on `off`, 1e-14 on `require`) are measured on these
 cases and stated in the test file. They are that file's own.

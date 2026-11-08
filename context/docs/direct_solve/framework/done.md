@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
-its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
-assertions in 82 cases. Design: `../architecture/`.
+Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Design:
+`../architecture/`.
 
 ## What it does
 
@@ -359,31 +359,29 @@ rank window or a verified, streamed plan) and run on the same two central files.
   view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
   of results, an empty source and a prepared statement with a parameter.
 - Branch coverage: `make decide-coverage` (repository root) builds `build/coverage` when it is missing (an instrumented
-  copy of the build; `-fprofile-list` instruments only `src/optimizer/decide/direct/*.cpp` and
-  `decide_rewrite_rhs_bounds.cpp`; `build/release` is untouched; it needs Clang, `COVERAGE_CC` and `COVERAGE_CXX`, and
-  the LLVM tools of that Clang's version, which `coverage_report.py` asks the compiler for) and otherwise rebuilds what changed, runs the DECIDE
-  pytest suite with one profile per test (`test/decide/run_coverage.sh`) and `unittest "[decidb]"` as one combined
-  profile, and prints the report into `COVERAGE_RUN_DIR` (default `build/coverage/run`). A warm run takes about 4
-  minutes. `coverage_report.py report DIR` prints, per file, per test function and per test, the arms reached and the
-  arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
-  arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
-  (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. Arms no test reaches, kept on purpose: `ref.depth == 0` in
-  `DirectReferencesOnlySource`, which every caller's earlier determinism check rules out but which the function's
-  contract promises on its own; the `default` arm of the `ExpressionType` switch in S1's `NormalizeCapacity`; and the
-  extension-name check in late materialization's `VisitForAdapters`, which keeps an operator of another extension from
-  being cast to the adapter. The nested-reducer reading in `ReadReducer` (`DirectPart::inner`) is reached by no query
-  until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans run from
-  queries in the S1 and R1 suites, and from an IR against the solver with NULL-key rows (`test/common/
-  test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a query reaches it and a test runs it; a
-  check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,
-  IR or setting the engine builds itself is a `D_ASSERT`, which debug builds run; code no query reaches is deleted.
-  Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there, so 44
-  one-line changes to value-handling code (a comparison, a constant, an operator) were each planted and run against the six `test_direct_*.py` files. Every direct-solve test case reaches an
-  arm no other test reaches, catches one of these changes, or pins a behavior coverage does not measure (the solver
-  path's wording, prepared plans, `DIAGNOSE`, an empty source). 43 changes are caught. No query can tell the other one
-  apart: `inclusive <= 0.0` against `< 0.0` for a lower bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives
-  capacity 0 either way). A subset
-  run by hand needs `-m` (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
+  copy of the build; `-fprofile-list` instruments the files `COVERAGE_SOURCES` names, by default
+  `src/optimizer/decide/direct/*.cpp` and `decide_rewrite_rhs_bounds.cpp`; `build/release` is untouched; it needs Clang,
+  `COVERAGE_CC` and `COVERAGE_CXX`, and the LLVM tools of that Clang's version, which `coverage_report.py` asks the
+  compiler for) and otherwise rebuilds what changed, runs the DECIDE pytest suite with one profile per test
+  (`test/decide/run_coverage.sh`) and `unittest "[decidb]"` as one combined profile, and prints the report into
+  `COVERAGE_RUN_DIR` (default `build/coverage/run`). A warm run takes about 4 minutes. `coverage_report.py report DIR`
+  prints, per file, per test function and per test, the arms reached and the arms only that test reaches (`--unreached`
+  also lists every arm no test reaches), and writes `report.json` with each arm's condition text and function.
+  `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not (exit 1 when there are any) and the
+  reverse, matching an arm by file, function, condition text and its occurrence in the function, so lines that move are
+  not read as lost. Arms no test reaches, kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every
+  caller's earlier determinism check rules out but which the function's contract promises on its own; the `default` arm
+  of the `ExpressionType` switch in S1's `NormalizeCapacity`; and the extension-name check in late materialization's
+  `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. The nested-reducer
+  reading in `ReadReducer` (`DirectPart::inner`) is reached by no query until the two-level objective is read (`todo.md`
+  H-06). The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from an IR against the solver with
+  NULL-key rows (`test/common/ test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a
+  query reaches it and a test runs it; a check on what a rule hands the engine raises in release builds and a stub-rule
+  C++ test reaches it; a check on a plan, IR or setting the engine builds itself is a `D_ASSERT`, which debug builds
+  run; code no query reaches is deleted. Branch coverage shows which branches a test runs, not whether its assertion
+  would catch a wrong value there. One change no query can tell apart: `inclusive <= 0.0` against `< 0.0` for a lower
+  bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives capacity 0 either way). At `73b52ab1d1` the tests reach
+  2,397 of the 2,450 arms in these files; `todo.md` § TEST-2 lists the other 53. A subset run by hand needs `-m` (the
+  script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `when` 0.26 s, 3 decisions and 8 clauses 0.29 s.

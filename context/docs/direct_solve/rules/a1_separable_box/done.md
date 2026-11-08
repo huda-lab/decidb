@@ -1,10 +1,9 @@
 # A1 (separable box-constrained problem) — what works today
 
-Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
-its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
-assertions in 82 cases.
-Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds and the terms of its objective come
-from the shared reader in `direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
+Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Code:
+`src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds and the terms of its objective come from the
+shared reader in `direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 

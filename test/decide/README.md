@@ -71,7 +71,7 @@ make decide-test
 ./test/decide/run_tests.sh -m cons_perrow            # per-row bound tests
 ./test/decide/run_tests.sh -m cons_between           # BETWEEN constraint tests
 ./test/decide/run_tests.sh -m cons_comparison        # comparison operator tests (=, <, >)
-./test/decide/run_tests.sh -m cons_in                # IN domain tests (xfail)
+./test/decide/run_tests.sh -m cons_in                # IN domain tests
 ./test/decide/run_tests.sh -m edge_case              # boundary / degenerate input tests
 ./test/decide/run_tests.sh -m when_constraint        # when c: in front of a constraint
 ./test/decide/run_tests.sh -m when_objective         # when c: in front of the objective
@@ -101,68 +101,68 @@ make decide-test
 
 ### Variable Types
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `var_boolean` | `test_var_boolean.py` | 2 | passing |
-| `var_integer` | `test_var_integer.py` | 1 | passing |
-| `var_multi` | `test_var_multi.py` | 2 | xpass (multiple DECIDE variables) |
+| Marker | File |
+|--------|------|
+| `var_boolean` | `test_var_boolean.py` |
+| `var_integer` | `test_var_integer.py` |
+| `var_multi` | `test_var_multi.py` |
 
 ### Constraints
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `cons_aggregate` | `test_cons_aggregate.py` | 3 | passing |
-| `cons_perrow` | `test_cons_perrow.py` | 2 | passing |
-| `cons_mixed` | `test_cons_mixed.py` | 1 | passing |
-| `cons_between` | `test_cons_between.py` | 1 | passing |
-| `cons_multi` | `test_cons_multi.py` | 1 | passing |
-| `cons_subquery` | `test_cons_subquery.py` | 1 | passing |
-| `cons_comparison` | `test_cons_comparison.py` | 4 | 3 passing, 1 xfail (`<>` not-equal) |
-| `cons_in` | `test_cons_in.py` | 2 | xfail (IN domain constraints) |
+| Marker | File |
+|--------|------|
+| `cons_aggregate` | `test_cons_aggregate.py` |
+| `cons_perrow` | `test_cons_perrow.py` |
+| `cons_mixed` | `test_cons_mixed.py` |
+| `cons_between` | `test_cons_between.py` |
+| `cons_multi` | `test_cons_multi.py` |
+| `cons_subquery` | `test_cons_subquery.py` |
+| `cons_comparison` | `test_cons_comparison.py` |
+| `cons_in` | `test_cons_in.py` |
 
 ### Objectives
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `obj_maximize` | `test_obj_maximize.py` | — | covered by other files |
-| `obj_minimize` | `test_obj_minimize.py` | 3 | passing |
-| `obj_complex` | `test_obj_complex_coeffs.py` | 1 | passing |
+| Marker | File |
+|--------|------|
+| `obj_maximize` | tests across many files |
+| `obj_minimize` | `test_obj_minimize.py` |
+| `obj_complex` | `test_obj_complex_coeffs.py` |
 
 ### `when` in front of a clause
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `when_constraint` | `test_when_constraint.py` | 8 | passing |
-| `when_objective` | `test_when_objective.py` | 7 | passing |
-| `when_row` | `test_when_row.py` | 5 | passing |
-| `when_compound` | `test_when_compound.py` | 6 | passing |
+| Marker | File |
+|--------|------|
+| `when_constraint` | `test_when_constraint.py` |
+| `when_objective` | `test_when_objective.py` |
+| `when_row` | `test_when_row.py` |
+| `when_compound` | `test_when_compound.py` |
 
 ### SQL Features
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `sql_joins` | `test_sql_joins.py` | 2 | passing |
-| `sql_subquery` | `test_sql_subquery.py` | — | covered by `test_cons_subquery.py` |
+| Marker | File |
+|--------|------|
+| `sql_joins` | `test_sql_joins.py` |
+| `sql_subquery` | `test_cons_subquery.py`, `test_nested_decide.py` |
 
 ### Edge Cases
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `edge_case` | `test_edge_cases.py` | 4 | passing |
+| Marker | File |
+|--------|------|
+| `edge_case` | `test_edge_cases.py` |
 
 ### Error Cases
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `error_parser` | `test_error_parser.py` | 4 | passing |
-| `error_binder` | `test_error_binder.py` | 21 | passing |
-| `error_infeasible` | `test_error_infeasible.py` | 4 | passing |
+| Marker | File |
+|--------|------|
+| `error_parser` | `test_error_parser.py` |
+| `error_binder` | `test_error_binder.py` |
+| `error_infeasible` | `test_error_infeasible.py` |
 
 ### `per` in front of a constraint
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `per_clause` | `test_per_clause.py` | 3 | passing |
+| Marker | File |
+|--------|------|
+| `per_clause` | `test_per_clause.py` |
 
 ### The scope language
 
@@ -182,9 +182,9 @@ corpus, the benchmark queries and `run.sh` — for a removed DECIDE spelling. On
 
 ### EXPLAIN Output
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `explain` | `test_explain.py` | 21 | passing |
+| Marker | File |
+|--------|------|
+| `explain` | `test_explain.py` |
 
 ### Query Diagnostics
 
@@ -194,9 +194,9 @@ corpus, the benchmark queries and `run.sh` — for a removed DECIDE spelling. On
 
 ### Scale & Performance
 
-| Marker | File | Tests | Status |
-|--------|------|-------|--------|
-| `large_scale` | `test_large_scale.py` | 2 | |
+| Marker | File |
+|--------|------|
+| `large_scale` | `test_large_scale.py` |
 
 See `context/docs/performance/benchmarking/scale_tests.md`.
 
@@ -234,26 +234,8 @@ optimal solution at the same objective value.
 
 ## Oracle Cache
 
-Oracle solver results are cached in `results/oracle_cache.json`. On each
-test run, the cache is checked before invoking the real solver:
-
-- **Cache hit** — the solver is skipped entirely; the stored objective and
-  variable values are used for comparison. Model-building calls are no-ops.
-- **Cache miss** — the solver runs normally and the result (objective +
-  variable assignments) is stored for next time.
-
-Invalidation:
-
-- **Per-test**: a hash of the test function's source code + database checksum.
-  Changing a query, constraint, or any logic in the test invalidates only that
-  entry.
-- **Global**: the database file's size and modification time. Rebuilding
-  `decidb.db` invalidates the entire cache.
-- **GC**: stale entries (deleted/renamed tests) are pruned automatically on
-  full (unfiltered) test runs that pass. A filtered run never visits the entries
-  it would prune, and a failed run may be missing a worker's report, so neither
-  prunes. A test that skips is not "accessed" either, so its entry is pruned and
-  re-solved on the next run — cheap, and it keeps the cache honest.
+Oracle solver results are cached in `results/oracle_cache.json`. What a hit and a miss do, how an entry is keyed and
+invalidated, and when stale entries are pruned: `context/docs/testing/oracle.md` §3.4.
 
 Under xdist each worker builds its own `OracleCache` over the slice of tests it
 was handed, so **no worker writes the shared file**: its GC would prune every
@@ -274,15 +256,7 @@ rm test/decide/results/oracle_cache.json
 
 ## Adding a New Test
 
-1. Choose the appropriate test file based on the primary feature being tested
-2. Follow the existing pattern:
-   - Run the DECIDE query via `decidb_cli` (native executable, subprocess)
-   - Fetch the same data via `duckdb_conn` (vanilla duckdb, plain SQL, no DECIDE)
-   - Build an oracle model using `oracle_solver`
-   - Compare with `compare_solutions` (returns `ComparisonResult` with status and vectors)
-   - Record performance with `perf_tracker` (include `comparison_status` and `decide_vector`)
-3. Add appropriate markers (feature marker + `correctness` meta marker)
-4. The oracle cache updates automatically on the next run
+The steps, with a worked example: `context/docs/testing/oracle.md` §7.
 
 Write DECIDE in the current syntax (`context/docs/language/guide.md`).
 `decidb_cli` fails a test whose query is refused with an error that says "is removed"

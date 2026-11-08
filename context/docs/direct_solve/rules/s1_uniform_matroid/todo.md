@@ -17,6 +17,15 @@ not enough.
   grid. One plan does not prove one branch (`x_ne_0_when` and `x_eq_1_when` share a plan through different `allows`
   paths), and the near-miss shapes `x>1`, `x>1.5`, `x>2` run through shared code (`DecideWrittenBox::ContradictsDomain`,
   `DecideFoldSingletonRow`).
-- **Change.** From a coverage run, delete each case that reaches no arm another case reaches (`.claude/CLAUDE.md`
-  § Testing).
+- **Coverage (`73b52ab1d1`, the whole DECIDE pipeline instrumented, `../../../testing/todo.md` § BLOAT-25).** The
+  grid has 491 cases. Removing one at a time while every arm stays reached by some test removes 482 and keeps 9. By
+  identical sets of arms reached, the grid has 431 paths: 60 cases repeat another's path, and each such group is a set
+  of boundary values (`x_le_1`, `x_le_1p5`, `x_le_2`; `global_upper_at_2_pow_53` and `global_upper_max`; `per_0` and
+  `per_0p5` of each offset). The values reach DuckDB's sort, rank and filter operators, which are not instrumented, and
+  the oracle compares the answers, so equal arms do not make two cases equal.
+- **Decision needed.** Which rule trims an oracle grid: (a) the arm rule as written (482 cases go); (b) one case per
+  path (60 go, every boundary group loses all but one value); (c) one case per path that keeps the boundary values of
+  each group, which needs reading each group; or (d) planted value changes (mutation) as the measure, which coverage
+  cannot give. Recommendation: (c).
+- **Change.** As decided, from the coverage run.
 - **Done when.** `coverage_report.py compare` shows no arm lost, and the matrix passes.

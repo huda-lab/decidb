@@ -1,8 +1,8 @@
 # A2 (single-facility location) — what works today
 
-Verified on 2026-11-07, on top of `e4035614a5`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,523 passed; C++ `build/release/test/unittest "[decidb]"` 4,766 assertions in 86 cases.
-Code: `src/optimizer/decide/direct/a2_single_facility_location_rule.cpp`. Class definition: [definition.md](definition.md).
+Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Code:
+`src/optimizer/decide/direct/a2_single_facility_location_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 
