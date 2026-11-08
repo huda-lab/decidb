@@ -261,6 +261,13 @@ the data checks of [`../../language/guide.md`](../../language/guide.md)
 | `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
 | `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
 
+A `DETERMINES` message quotes its own clause's key as that clause wrote it, and lists the class's key values in the
+same order. The key itself is canonical (its elements sorted, so `per a, b` and `per b, a` are one key with one
+numbering); each writing of it carries its order in its tag (`__per_key_<i>_o<p>...__`, and the same suffix on a
+qualified reducer's and a `by` key's tag), which the check keeps as `DecideScopeCheck::key_order` and both message
+sites read through `DecideDeterminesText::InKeyOrder`. A reducer's check composes the order of its `per` key and its
+`by` key. A key holding a subquery keeps no order.
+
 `DETERMINES` comes from the canonicalizer (stage 04). The bound-side rewrite
 (`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a
 scope error is reported before a bad value, and a bad bound before a bad coefficient. An
@@ -349,24 +356,17 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 
 ### Expression transformation
 
-`BoundColumnRefExpression` nodes reference columns by table binding;
-`ExpressionExecutor` needs chunk positions. `TransformToChunkExpression` converts:
-
-| Node | Becomes |
-|---|---|
-| `BoundColumnRefExpression` | `BoundReferenceExpression` on `binding.column_index` |
-| `BoundFunctionExpression` | recurse into children, copy `bind_info` |
-| `BoundCastExpression` | recurse into child, re-wrap with `AddCastToType` |
-| `BoundAggregateExpression` | an `InternalException`: the bound-side rewrite made every reducer on the bound a column, and the binder keeps reducers out of coefficients and `when` conditions |
-| anything else | copied as-is |
+`TransformToChunkExpression` copies an expression and constant-folds it once with DuckDB's own
+`ConstantFoldingRule`, so no constant subtree is evaluated per row. It rewrites no node: `ColumnBindingResolver` has
+already turned every column reference into a chunk position, and the bound-side rewrite has made every reducer on a
+bound a column.
 
 Results are cached per `Finalize` call, and the cache outlives every
 `ExpressionExecutor` created below it, so executors may safely retain references
 into cached entries.
 
-**Precondition: resolution has already happened.** The `BoundColumnRefExpression`
-branch uses `binding.column_index` as a chunk position, and the two indexings agree
-only because `ColumnBindingResolver` already rewrote DECIDE's expressions. That
+**Precondition: resolution has already happened.** Stage 08 reads a column reference as a chunk position, which
+holds only because `ColumnBindingResolver` already rewrote DECIDE's expressions. That
 enumeration is maintained by hand — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md) §4.
 
@@ -786,8 +786,6 @@ last `num_auxiliary_vars` slots, and their columns are constant NULL: no one rea
 them, so no value is converted or range-checked (a helper of `sum(x * 1000000000)`
 past int32 would otherwise be refused under its internal name).
 
----
-
 ## 7b. `DIAGNOSE`: reporting on the run instead of returning it
 
 Two things change when the statement carried the prefix (`PhysicalDecide::diagnose`,
@@ -819,6 +817,23 @@ constructor), a model class the host's solver refuses — still raises, with the
 message that path already had. There is no solve outcome to report on.
 
 The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
+
+## 7c. Arms no test reaches, kept (BLOAT-25)
+
+Each is a guard the type system or a stage boundary needs, or a path only a nondeterministic run takes:
+
+- **Typed reads and stage handoffs.** A NULL `Value` before `GetValue<double>` (`IsFiniteOnRow`); `ExtractDoubleColumn`
+  without `null_rows` (the canonicalizer promises no NULL there); `GroupKeyReader`'s `Seek` result; the backend the plan
+  names by string (`PlannedSolverBackend`); a bound side that must be foldable (the optimizer asserts it); the solution
+  index read from a backend (`GetData`).
+- **Loops.** The settling loop's pass bound, and the fixed-point comparison that must read every value it writes.
+- **The OS.** `getrusage` failing, a process past 1 GiB, and Windows' zero peak memory.
+- **Nondeterministic runs.** A Ctrl-C after the solver's last check; the "Keep searching?" prompt and its
+  Enter-to-continue path (a pty, and a race the suite does not run); a `SUBOPTIMAL` stop (`DECIDB_STATUS_MARKERS`); a
+  time-limit stop with an incumbent and no bound; a residual `INF_OR_UNBD`; an unbounded ray that names nothing; a
+  repair solve that times out.
+
+---
 
 ## 8. Source map
 

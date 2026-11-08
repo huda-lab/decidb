@@ -18,7 +18,18 @@ make decide-coverage`) at `73b52ab1d1` finds 1,093 of 10,624 arms that no test r
 
 ## BLOAT-25 — Execution: arms no test reaches
 
-- **Problem.** 146 of 1,490 arms in `execution/operator/decide/` are unreached, all in `physical_decide.cpp`.
+- **Problem.** Six arms in `physical_decide.cpp` are kept as guards with no proof that a query cannot reach them; the
+  other unreached arms are deleted, reached, or named in `../pipeline/08_execution/done.md` § 7c.
+  - `ScaleAvgRows`: a group with no rows (`group_counts[gid] == 0`).
+  - The sink state's constructor: the `written_bound` fallback when no recorded bound matches, and a bound recorded
+    without a source clause (`bound.source_clause_id < constraint_sources.size()`).
+  - The MIN/MAX drop: `row_group_ids.empty()` (a clause with no group, no `when` and a term filter).
+  - The two-level objective: `objective_has_unfiltered_part`.
+  - `FormulateModel`'s L0 path: a constant term (`v == INVALID_INDEX`) beside an L0 norm.
+  - The demand check: `isfinite(demand)` for `|rhs| / coef` past the double range.
+- **Change.** For each: build the query that reaches it and test it (oracle-compared where it answers), or prove no
+  query reaches it from the stage that feeds it and delete it, or name the invariant that makes it a stage-handoff
+  guard in § 7c.
 
 ## BLOAT-27 — Canonicalizer and provenance: arms no test reaches
 
