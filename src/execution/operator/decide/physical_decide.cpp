@@ -67,57 +67,18 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 // Expression Transform Helpers
 //===--------------------------------------------------------------------===//
-// These static functions replace BoundColumnRefExpression nodes with
-// BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
-// evaluate expressions against data chunks (which use positional indices).
-
-//! Transform a coefficient/value expression for ExpressionExecutor.
-//! Handles: BOUND_FUNCTION, BOUND_CAST, BOUND_COMPARISON, BOUND_OPERATOR. Falls back to Copy() for others.
-//! A column is a BoundReferenceExpression by now: the column binding resolver resolves the operator's expressions
-//! before physical planning, and BuildDecidePreparedModel copies from them (plan_decide.cpp).
-static unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		vector<unique_ptr<Expression>> new_children;
-		for (auto &child : func.children) {
-			new_children.push_back(ToChunkReferences(*child, context));
-		}
-		unique_ptr<FunctionData> new_bind_info;
-		if (func.bind_info) {
-			new_bind_info = func.bind_info->Copy();
-		}
-		return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function,
-		                                                           std::move(new_children), std::move(new_bind_info));
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = expr.Cast<BoundCastExpression>();
-		auto transformed_child = ToChunkReferences(*cast.child, context);
-		return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto &comp = expr.Cast<BoundComparisonExpression>();
-		auto left = ToChunkReferences(*comp.left, context);
-		auto right = ToChunkReferences(*comp.right, context);
-		return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-		auto &op_expr = expr.Cast<BoundOperatorExpression>();
-		auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
-		for (auto &child : op_expr.children) {
-			result->children.push_back(ToChunkReferences(*child, context));
-		}
-		return std::move(result);
-	} else {
-		return expr.Copy();
-	}
-}
 
 //! `expr` as stage 08 evaluates it: over the chunk's columns, and constant-folded once by DuckDB's own rule, as the
 //! expression rewriter folds a query's own expressions. Every tree stage 08 evaluates passes through here, the ones
 //! the DECIDE optimizer builds among them, so no constant subtree (`CAST(CAST(45 AS DECIMAL(18,2)) AS DOUBLE)`,
 //! `45 >= 1e20`) is evaluated on every row. A message names the prepared tree, not this one, so it reads as written.
+//! A copy is enough: the column binding resolver resolves the operator's expressions before physical planning, and
+//! BuildDecidePreparedModel copies from them (plan_decide.cpp), so a column is already a BoundReferenceExpression.
 static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context) {
 	ExpressionRewriter rewriter(context);
 	rewriter.rules.push_back(make_uniq<ConstantFoldingRule>(rewriter));
 	vector<unique_ptr<Expression>> tree;
-	tree.push_back(ToChunkReferences(expr, context));
+	tree.push_back(expr.Copy());
 	LogicalProjection holder(DConstants::INVALID_INDEX, std::move(tree));
 	rewriter.VisitOperator(holder);
 	return std::move(holder.expressions[0]);
