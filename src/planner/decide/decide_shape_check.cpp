@@ -27,14 +27,7 @@ static string OperatorName(const Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		return expr.Cast<BoundFunctionExpression>().function.name;
 	}
-	auto name = ExpressionTypeToOperator(expr.type);
-	if (!name.empty()) {
-		return name;
-	}
-	name = EnumUtil::ToString(expr.type);
-	if (StringUtil::StartsWith(name, "OPERATOR_")) {
-		name = name.substr(strlen("OPERATOR_"));
-	}
+	auto name = EnumUtil::ToString(expr.type).substr(strlen("OPERATOR_"));
 	return StringUtil::Replace(name, "_", " ");
 }
 
@@ -42,25 +35,16 @@ void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &cla
 	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
 		return;
 	}
-	// A NULL guard the binder wrapped around a decision is not the user's CASE or COALESCE.
-	const bool guard = DecideIsGuarded(expr);
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CASE:
-		if (!guard) {
-			Refuse(expr,
-			       "CASE over a DECIDE variable is not supported. Write the condition as a scope in front of the "
-			       "clause (when category = 'A': sum(x) >= 1), split rows into classes with per, or pre-compute "
-			       "conditional values in a CTE or subquery before the DECIDE clause.",
-			       clause);
-		}
-		break;
+		Refuse(expr,
+		       "CASE over a DECIDE variable is not supported. Write the condition as a scope in front of the "
+		       "clause (when category = 'A': sum(x) >= 1), split rows into classes with per, or pre-compute "
+		       "conditional values in a CTE or subquery before the DECIDE clause.",
+		       clause);
 	case ExpressionClass::BOUND_OPERATOR:
-		// An IN over a decision is a marker the optimizer formulates.
-		if (!guard && expr.type != ExpressionType::COMPARE_IN) {
-			Refuse(expr, StringUtil::Format("DECIDE: operator '%s' cannot take a DECIDE variable.", OperatorName(expr)),
-			       clause);
-		}
-		break;
+		Refuse(expr, StringUtil::Format("DECIDE: operator '%s' cannot take a DECIDE variable.", OperatorName(expr)),
+		       clause);
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		auto name = StringUtil::Lower(func.function.name);
@@ -74,12 +58,11 @@ void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &cla
 				       clause);
 			}
 		} else if (name == "/") {
-			if (func.children.size() == 2 && BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
+			if (BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
 				Refuse(expr, "DECIDE: cannot divide by a DECIDE variable.", clause);
 			}
-		} else if (name != "+" && name != "-" && name != "*" && name != "abs" &&
-		           !(StringUtil::StartsWith(name, "__") && StringUtil::EndsWith(name, "__"))) {
-			// The vocabulary of the model; DeciDB's own markers are `__`-delimited.
+		} else if (name != "+" && name != "-" && name != "*" && name != "abs") {
+			// The vocabulary of the model.
 			Refuse(expr,
 			       StringUtil::Format("DECIDE: %s '%s' cannot take a DECIDE variable.",
 			                          func.is_operator ? "operator" : "function",
