@@ -90,7 +90,7 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 		result.degree *= exponent;
 		return result;
 	}
-	if (name == "/" && func.children.size() == 2 && !BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
+	if (name == "/" && !BoundExpressionReferencesDecide(*func.children[1], decide_index)) {
 		absorb(*func.children[0], false);
 		return result;
 	}
@@ -115,9 +115,6 @@ static bool DecisionAliasesEqual(const Expression &left, const Expression &right
 	vector<const Expression *> right_children;
 	ExpressionIterator::EnumerateChildren(left, [&](const Expression &child) { left_children.push_back(&child); });
 	ExpressionIterator::EnumerateChildren(right, [&](const Expression &child) { right_children.push_back(&child); });
-	if (left_children.size() != right_children.size()) {
-		return false;
-	}
 	for (idx_t i = 0; i < left_children.size(); i++) {
 		if (!DecisionAliasesEqual(*left_children[i], *right_children[i], decide_index)) {
 			return false;
@@ -357,10 +354,8 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 	}
 	auto alias = RebuiltAlias(rebuilt->GetAlias(), node.GetAlias());
 	// The text goes on the product itself, below the cast back, which a reader looks through.
-	idx_t fragment_id;
 	string text;
-	if (written && !TryParseWrittenTermTag(alias, fragment_id) &&
-	    written->text.Cut(node.GetQueryLocation(), DecideSpanRole::TERM, text)) {
+	if (written && written->text.Cut(node.GetQueryLocation(), DecideSpanRole::TERM, text)) {
 		auto tag = MakeWrittenTermTag(written->fragments.size());
 		written->fragments.push_back(std::move(text));
 		if (spelled == rebuilt.get()) {
