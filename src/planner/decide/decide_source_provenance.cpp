@@ -694,7 +694,11 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 		                       // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
 		                       idx_t source_id = DConstants::INVALID_INDEX;
 		                       TryParseSourceClauseTag(cmp.GetAlias(), source_id);
-		                       D_ASSERT(source_id < sources.size());
+		                       if (source_id >= sources.size()) {
+			                       throw InternalException(
+			                           "DECIDE: a comparison reached the clause registry without its clause tag; "
+			                           "InitializeConstraintSourceInfo tags every comparison of the tree");
+		                       }
 		                       auto &info = sources[source_id];
 		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys, true);
 		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys, true);
@@ -876,7 +880,10 @@ string RenderDecideObjective(const Expression &expr, const DecideSourceNames &na
 	vector<string> parts;
 	CollectDecideExpressionStrings(expr, names, parts);
 	// An objective is one clause: its `when` and `per` wrappers hold it in their first child.
-	D_ASSERT(parts.size() == 1);
+	if (parts.size() != 1) {
+		throw InternalException("DECIDE: an objective rendered as %llu clauses; the objective binder wraps it as one",
+		                        static_cast<uint64_t>(parts.size()));
+	}
 	return parts[0];
 }
 

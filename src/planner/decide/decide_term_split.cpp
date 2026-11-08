@@ -124,7 +124,10 @@ void DecideTermSplitter::ReadProduct(const Expression &expr, int sign, vector<De
 	sign *= form.sign;
 	if (form.factors.size() == 1 && form.factors[0].power == 1) {
 		// A product of one factor carries a coefficient: canonicalization writes the factor alone otherwise.
-		D_ASSERT(coefficient);
+		if (!coefficient) {
+			throw InternalException("DECIDE: a product of one factor with no coefficient reached the term reader; "
+			                        "canonicalization writes the factor alone, so a rewrite built it");
+		}
 		auto begin = out.size();
 		Split(*form.factors[0].base, sign, out);
 		for (idx_t i = begin; i < out.size(); i++) {
