@@ -37,7 +37,7 @@ double ObjectiveValue(const SolverModel &model, const duckdb::vector<double> &so
 duckdb::vector<double> SolveFallbackRayWithHighs(const SolverModel &model) {
 	SolverModel ray_model = BuildUnboundedRayFallbackModel(model);
 
-	SolverResult result = SolvePreparedModel(ray_model, SolverRegistry::Find("highs"));
+	SolverResult result = SolvePreparedModel(ray_model, SolverRegistry::Find("highs"), SolveModelOptions());
 	REQUIRE(result.status == SolverStatus::OPTIMAL);
 	REQUIRE(result.solution.size() == model.num_vars);
 

@@ -144,9 +144,8 @@ static std::vector<std::string> ListDir(const std::string &dir) {
 //===----------------------------------------------------------------------===//
 
 //! Extract version from a library name: "libgurobi130.so" / "gurobi130.dll" →
-//! (13, 0, 0), or "libgurobi.so.13.0.1" → (13, 0, 1). Returns false if
-//! unparseable (callers fall back to version 0.0.0).
-static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) {
+//! (13, 0, 0), or "libgurobi.so.13.0.1" → (13, 0, 1). An unparseable name gives 0.0.0.
+static void ExtractVersion(const char *name, int &major, int &minor, int &tech) {
 	// Pattern 1: [lib]gurobiXYZ.{so,dylib,dll}  (e.g., libgurobi130.so, gurobi130.dll)
 	const char *p = strstr(name, "gurobi");
 	if (p) {
@@ -162,7 +161,7 @@ static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) 
 				major = ver / 10;
 				minor = ver % 10;
 				tech = 0;
-				return true;
+				return;
 			}
 		}
 	}
@@ -172,7 +171,7 @@ static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) 
 	if (p) {
 		p += 4; // skip ".so."
 		if (sscanf(p, "%d.%d.%d", &major, &minor, &tech) >= 2) {
-			return true;
+			return;
 		}
 	}
 
@@ -180,7 +179,6 @@ static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) 
 	major = 0;
 	minor = 0;
 	tech = 0;
-	return false;
 }
 
 //! Search a directory for the Gurobi C API library and open the first match.

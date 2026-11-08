@@ -306,7 +306,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	duckdb::vector<string> labels {"x"};
 	duckdb::vector<bool> is_aux {false};
 	DecideDiagParams params;
-	auto solve_highs = [](const SolverModel &m) { return SolvePreparedModel(m, SolverRegistry::Find("highs")); };
+	auto solve_highs = [](const SolverModel &m) {
+		return SolvePreparedModel(m, SolverRegistry::Find("highs"), SolveModelOptions());
+	};
 
 	SECTION("elastic engine reports the minimal loosening of a relaxable row") {
 		// x <= 5 (relaxable) conflicts with the rigid x >= 10. The only fix is to

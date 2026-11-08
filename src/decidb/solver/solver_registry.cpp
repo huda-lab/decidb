@@ -105,9 +105,7 @@ SolverCapabilities SolverBackend::Capabilities() const {
 }
 
 unique_ptr<SolverSession> SolverBackend::CreateSession() const {
-	if (!info) {
-		throw InternalException("DECIDE solve reached the solver with no backend chosen");
-	}
+	D_ASSERT(info);
 	return info->create_session();
 }
 

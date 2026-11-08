@@ -22,10 +22,6 @@ namespace duckdb {
 namespace {
 
 double ComputeLinearObjectiveValue(const SolverModel &model, const vector<double> &solution) {
-	if (solution.size() != model.obj_coeffs.size()) {
-		return 0.0;
-	}
-
 	double objective = 0.0;
 	for (idx_t col = 0; col < solution.size(); col++) {
 		objective += model.obj_coeffs[col] * solution[col];
@@ -380,10 +376,6 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options) {
 	return DisambiguateInfOrUnbd(model, backend, options, SolveOnce(model, backend, options));
-}
-
-SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
-	return SolvePreparedModel(model, backend, SolveModelOptions());
 }
 
 //! No MIP solver can represent an unbounded integer. Both backends silently cap an

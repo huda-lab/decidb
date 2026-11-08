@@ -34,16 +34,11 @@ static constexpr int GRB_UNBOUNDED = 5;
 // Values must mirror Gurobi's gurobi_c.h. Drift here is silent: a wrong
 // integer here makes the branch in gurobi_solver.cpp unreachable while a
 // different real status falls through to the generic error message.
-static constexpr int GRB_CUTOFF = 6;
 static constexpr int GRB_ITERATION_LIMIT = 7;
-static constexpr int GRB_NODE_LIMIT = 8;
 static constexpr int GRB_TIME_LIMIT = 9;
-static constexpr int GRB_SOLUTION_LIMIT = 10;
 static constexpr int GRB_INTERRUPTED = 11;
 static constexpr int GRB_NUMERIC = 12;
 static constexpr int GRB_SUBOPTIMAL = 13;
-static constexpr int GRB_INPROGRESS = 14;
-static constexpr int GRB_USER_OBJ_LIMIT = 15;
 
 // Gurobi's infinity sentinel (gurobi_c.h GRB_INFINITY). Passed as the neutral
 // constant of a min/max general constraint so the extremum is taken over the listed

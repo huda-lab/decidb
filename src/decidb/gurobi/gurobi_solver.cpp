@@ -280,9 +280,8 @@ void GurobiSession::Load(const SolverModel &ilp) {
 
     // 3b'. General constraints — constructs DeciDB left native rather than lowering.
     // Pure translation: the model only ever holds a kind this backend declared in
-    // GurobiSolver::Capabilities(), and that declaration is itself gated on the loader
-    // having found the symbol. So an unknown kind or a null pointer here is a bug in
-    // the gate, not a user error.
+    // GurobiSolver::Capabilities() (checked by AssertBackendAcceptsBuiltModel), and that
+    // declaration is itself gated on the loader having found the symbol.
     phase.Next("gurobi.general_constraints");
     for (auto &gc : ilp.general_constraints) {
         switch (gc.kind) {
@@ -308,8 +307,6 @@ void GurobiSession::Load(const SolverModel &ilp) {
                                         gc.argument_columns.data(), -GRB_INFINITY_VALUE);
             break;
         }
-        default:
-            throw InternalException("Gurobi was handed a general constraint kind it did not declare");
         }
         if (error) {
             throw InvalidInputException("Failed to add general constraint to Gurobi: %s",

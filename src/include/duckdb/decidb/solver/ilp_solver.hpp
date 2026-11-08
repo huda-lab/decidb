@@ -76,9 +76,7 @@ SolverBackend SelectSolverBackend();
 //! engines use this to run transformed models without rebuilding SolverInput.
 //! A status the backend leaves ambiguous (INF_OR_UNBD) is settled by the same
 //! zero-objective probe SolveModel applies to the query's own solve.
-SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend);
-SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
-                                const SolveModelOptions &options);
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options);
 
 //! Builds a SolverModel from the given SolverInput, solves it on `backend`, and
 //! returns a SolverResult: the terminal status plus, when optimal, the solution vector of
