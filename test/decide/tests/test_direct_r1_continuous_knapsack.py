@@ -2399,8 +2399,10 @@ def test_r1_a_source_with_a_correlated_subquery_agrees_with_the_solver(decidb_cl
 def test_r1_a_volatile_source_is_read_once(decidb_cli):
     # random() changes on every evaluation, so the plan must not evaluate it once per stage: the rows it returns are one
     # set of rows, and the answer is an optimum for them. The check is independent of the solver: a greedy fill of the
-    # returned rows by v / w.
+    # returned rows by v / w. Seeded on one thread, so two runs print the same rows and a captured log compares; the
+    # seed is set through a table, which prints nothing.
     sql = (
+        "SET threads=1; CREATE TEMP TABLE _seed AS SELECT setseed(0.42); "
         "SELECT i, w, v, x FROM (FROM (SELECT i, 1.0 + floor(random() * 4) AS w, 1.0 + floor(random() * 9) AS v, 3.0 AS cap "
         "FROM range(300) t(i)) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 400 MAXIMIZE SUM(v*x)) q"
     )
