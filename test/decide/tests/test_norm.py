@@ -15,6 +15,7 @@ import re
 import pytest
 
 from decidb_cli import DeciDBCliError
+from solver.types import ObjSense, VarType
 from ._brute_force import judge_rows
 from ._scope_cases import answer, dump_counts
 
@@ -539,3 +540,28 @@ def test_norm_l0_indicator_takes_the_scope_the_counted_expression_reads(
     num_vars, num_rows = sizes[cli_fixture]
     assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump")) == {"num_vars": num_vars, "num_rows": num_rows}
     judge_rows(answer(cli, sql), domains, holds, objective)
+
+
+@pytest.mark.correctness
+def test_norm_l0_beside_a_reducer_with_a_constant_term(decidb_cli, oracle_solver):
+    """`SUM(x + 2) <= 100` holds a constant term (`2` per row, no decision) beside `x`, in a clause the L0 links are
+    searched through for their indicator. At most two of the three x are nonzero, each at most 5: the oracle states
+    the count with a binary per row."""
+    sql = """
+        SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT x <= 5 AND SUM(x + 2) <= 100 AND norm(x, 0) <= 2
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    oracle_solver.create_model("norm_l0_constant_term")
+    for i in range(3):
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=5.0)
+        oracle_solver.add_variable(f"z_{i}", VarType.BINARY)
+        oracle_solver.add_constraint({f"x_{i}": 1.0, f"z_{i}": -5.0}, "<=", 0.0, name=f"link_{i}")
+    oracle_solver.add_constraint({f"z_{i}": 1.0 for i in range(3)}, "<=", 2.0, name="count")
+    oracle_solver.add_constraint({f"x_{i}": 1.0 for i in range(3)}, "<=", 100.0 - 6.0, name="sum")
+    oracle_solver.set_objective({f"x_{i}": 1.0 for i in range(3)}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    assert sum(row[1] for row in rows) == pytest.approx(result.objective_value, abs=1e-3)
+    assert sum(1 for row in rows if row[1] > 1e-6) <= 2

@@ -1199,6 +1199,9 @@ static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<b
         return;
 	}
 
+	// A group that is still numbered has a row each of the reducer's terms reads: SkipGroupsWithAnEmptyReducer settles
+	// a clause's groups after every filter is known, a two-level objective's terms all carry the one reducer's filter,
+	// and a helper decision's groups are those with a member.
 	vector<idx_t> group_counts(num_groups, 0);
     for (idx_t row = 0; row < num_rows; row++) {
         idx_t gid = row_group_ids[row];
@@ -1211,10 +1214,10 @@ static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<b
     }
     for (idx_t row = 0; row < coefficients.size(); row++) {
         idx_t gid = row_group_ids[row];
-        if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
-            coefficients[row] = 0.0;
+		if (gid == DConstants::INVALID_INDEX) {
+			coefficients[row] = 0.0;
             continue;
-        }
+		}
 		double scale = 1.0 / static_cast<double>(group_counts[gid]);
 		coefficients[row] *= scale;
     }
@@ -2350,7 +2353,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		}
 		// A MIN/MAX reads the rows of its group as members, so a row the de-duplication
 		// drops leaves the group: left in with zero coefficients, it would be a member
-		// pinned at 0. (A SUM or AVG row is unchanged by a zero member.)
+		// pinned at 0. (A SUM or AVG row is unchanged by a zero member.) The hard clause's SUM is rebuilt from the
+		// reducer's body and filter alone (EmitHardMinMaxClause), so the filter that makes a row a non-member is the
+		// reducer's own `when` or NULL test, and a clause with one has its groups numbered above.
 		if (!constraint->minmax_agg_type.empty()) {
 			for (idx_t row = 0; row < num_rows; row++) {
 				bool member = constraint->lhs_terms.empty();
@@ -2359,10 +2364,6 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 				if (member) {
 					continue;
-				}
-				if (eval_const.row_group_ids.empty()) {
-					eval_const.row_group_ids.assign(num_rows, 0);
-					eval_const.num_groups = 1;
 				}
 				eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
 			}
@@ -2763,17 +2764,16 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
     // "does this row carry a term at all" test below reads the filter masks settled above.
 	if (gstate.objective && gstate.objective->two_level_key != DConstants::INVALID_INDEX) {
 		bool objective_has_local_filters = false;
-		bool objective_has_unfiltered_part = false;
 		for (auto *filters : {&result.linear_filters, &result.group_filters}) {
 			for (auto &f : *filters) {
 				objective_has_local_filters |= f.has_filter;
-				objective_has_unfiltered_part |= !f.has_filter;
 			}
 		}
 
-		// With a filter and no unfiltered part, every term has a filter: a row is read when one of them keeps it.
+		// Every term of a two-level objective comes from its one inner reducer and carries that reducer's filter
+		// (ExtractObjectiveBodyTerms), so all of them have a filter or none does. A row is read when one keeps it.
 		auto objective_row_has_local_term = [&](idx_t row) {
-			if (!objective_has_local_filters || objective_has_unfiltered_part) {
+			if (!objective_has_local_filters) {
 				return true;
 			}
 			for (auto *filters : {&result.linear_filters, &result.group_filters}) {

@@ -410,6 +410,21 @@ def test_diagnose_prints_once_for_a_number_only_the_repair_model_holds(request, 
     assert {row[columns.index("state")] for row in rows} == {"infeasible"}
 
 
+@pytest.mark.query_diagnostics
+def test_a_row_demand_past_the_double_range_does_not_open_the_repair_box(decidb_cli_gurobi):
+    """`SUM(0.00000001 * x) >= 1e308` asks of each x what no double holds (|rhs| / coefficient is 1e316), so the repair
+    box is opened by its floor, ten times the column's own magnitude, and not without bound: the cap on x is repaired
+    to 55, not to the solver's infinity. (HiGHS refuses the range, so only Gurobi runs it.)"""
+    cli = decidb_cli_gurobi
+    sql = """
+        DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(0.00000001 * x) >= 1e308
+        MAXIMIZE SUM(x)"""
+    rows, columns = cli.execute(sql, expect_number_range=True)
+    changes = {row[columns.index("clause")]: row[columns.index("suggested_change")] for row in rows}
+    assert changes["x <= 5"] == "x <= 55", rows
+
+
 @pytest.mark.parametrize("cli_fixture", _BACKENDS)
 def test_a_direct_solved_query_prints_nothing(request, decidb_cli, cli_fixture):
     """The A1 rule answers `x <= 5000000000` with no solver and no model, so no solver tolerance applies. The same
