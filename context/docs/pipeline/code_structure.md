@@ -35,7 +35,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |
 | `optimizer/decide/decide_optimizer_internal.hpp` | 05 | Helpers shared by the `decide_rewrite_*.cpp` passes; internal to `src/optimizer/decide/` |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
-| `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `EvaluatedProductGroup`, `CoefficientColumn`, `EntityMapping` |
+| `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `EvaluatedProductGroup`, `CoefficientColumn`, `KeyedMapping` |
 | `decidb/formulation/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
 | `decidb/formulation/ilp_linearization.hpp` | 06 | `LowerDecideConstructs` and the Big-M derivations: a tagged constraint becomes solver rows |
 | `decidb/formulation/ilp_linearization_internal.hpp` | 06 | Helpers shared by the `linearization_*.cpp` passes; internal to `src/decidb/formulation/` |
@@ -69,7 +69,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_term_split.cpp` | 04/05 | `DecideTermSplitter` |
 | `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
-| `optimizer/decide/decide_optimizer.cpp` | 05 | The eleven-pass dispatcher and the helpers the passes share |
+| `optimizer/decide/decide_optimizer.cpp` | 05 | The pass dispatcher and the helpers the passes share |
 | `optimizer/decide/decide_rewrite_rhs_bounds.cpp` | 05 | `RewriteRhsAggregates`: a data-only reducer on a bound's right side becomes a placeholder column, recorded for the path to build as a side table (`direct_bound_tables.cpp`); runs before the other passes |
 | `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1) and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
 | `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
@@ -273,14 +273,14 @@ a condition as another constraint.
   per-clause display registry, indexed by `source_clause_id`.
 
 ### `src/optimizer/decide/decide_optimizer.cpp` — stage 05
-- **`OptimizeDecide()`** — the eleven-pass sequence. Each pass body lives in a
+- **`OptimizeDecide()`** — the pass sequence. Each pass body lives in a
   `decide_rewrite_*.cpp` sibling (or `decide_singleton_row_folding.cpp`); this file keeps
-  the dispatcher, `AppendConstraint`, and the helpers the passes share, declared in
+  the dispatcher and the helpers the passes share, declared in
   `decide_optimizer_internal.hpp`.
 
 ### `src/execution/operator/decide/physical_decide.cpp` — stage 08
-- **`GetGlobalSinkState()`** — constructs the sink state, which folds bounds and
-  extracts terms before any data arrives.
+- **`GetGlobalSinkState()`** — constructs the sink state, which checks each decision's
+  folded box against its domain before any data arrives.
 - **`Sink()` / `Combine()`** — materialize into a `ColumnDataCollection`.
 - **`Finalize()`** — entity mappings, coefficient evaluation, model build, solve.
 - **`GetData()`** — readback with type-specific projection.
@@ -322,13 +322,13 @@ form `SUM(D: e)` use the same key scopes; only a declaration owns solver columns
 |---|---|---|
 | `DecideKey` | `logical_decide.hpp` | One entry of `LogicalDecide::keys`: `text` (the key as first written) and `elements` (`DecideKeyElement`: bound `expression`, `name`, `null_mode`) |
 | `KeyedScopeInfo` | `logical_decide.hpp` | `key` (an index into `keys`), `scoped_variable_indices`, `value_link` |
-| `EntityMapping` | `solver_input.hpp` | `num_entities`, `row_to_entity` — built at execution |
+| `KeyedMapping` | `solver_input.hpp` | `num_classes`, `row_to_class`, `absent_class` — built at execution |
 | `VarIndexer` | `ilp_model.hpp` | The four-block layout and `Get` / `InstanceColumn` / `NumInstances` |
 
 The path:
 
 1. **Grammar** — `decide_per ':' ColId '(' variable_type ')'` in `select.y`, which
-   wraps the name in the `SCOPE_PER` marker.
+   wraps the name in the `SCOPE_PER_TAG` marker.
 2. **Binder** — `FindOrCreateKeyScope` resolves each key element (a column, or a
    relation standing for its stored columns), finds or creates the key's entry of the
    key table and the one scope for that key, and `DecideVarScopeInfo::Keyed(idx, K)` records it (an `ENTITY`
@@ -342,8 +342,8 @@ The path:
    columns, and its entities are the `by` groups among the rows the link's clause keeps
    (over `by ()` it is query-wide). The other rewrites' auxiliaries are row-scoped; a
    MIN/MAX extremum is a global auxiliary stage 06 allocates.
-6. **Execution PHASE 1.5** — composite NULL-safe key → entity id → `row_to_entity`;
-   a NULL in a written key column is no entity (the row maps to the absent entity, fixed at 0), and a
+6. **Execution PHASE 1.5** — composite NULL-safe key → class id → `row_to_class`;
+   a NULL in a written key column is no class (the row maps to `absent_class`, fixed at 0), and a
    relation's columns compare NULL as a value.
 7. **Model building** — one solver column per entity; coefficients from rows sharing
    an entity **accumulate** through `SparseCoeffAccumulator`.

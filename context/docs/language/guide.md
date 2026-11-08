@@ -213,8 +213,8 @@ data and unaffected.
   as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda (`SUM(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared
   statement's `$1`, a table macro's parameter. A `CASE` that reads no decision is data as well, a per-row coefficient as
   `COALESCE` over data is (`SUM(x * CASE WHEN tier = 1 THEN 1 ELSE 2 END)`); a `CASE` over a decision is refused (§5).
-  A comparison that
-  reads a decision, used as a number (`x <= (x > 1)`), is refused: *"SUCH THAT does not support '(x > 1)'"*.
+  A comparison that reads a decision, used as a number (`x <= (x > 1)`), is refused: *"SUCH THAT does not support
+  '(x > 1)'"*.
 - **Subqueries**: scalar subqueries, uncorrelated or correlated, may be bounds or factors. A correlated one becomes a
   per-row value and follows the bound rule of §5. A subquery cannot reference the enclosing query's decisions.
 - **Nested DECIDE**: a scalar bound subquery may hold its own `DECIDE`; it solves first and its one-row result is the
@@ -280,7 +280,7 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
 ```
 
 - **Produced once.** No `per` means `per ()`; any other `per` is a parse error.
-- **`when c`** filters the rows for the whole objective; one that keeps no row is an error (§7.3).
+- **`when c`** filters the rows for the whole objective; a term that reads no row is dropped (D68).
 - **Body**: reducers (`SUM`, `AVG`, `MIN`, `MAX`, `norm`), decisions outside them, and sums of those, with at least one
   decision.
   - A decision outside the reducers is legal when it has one instance over the kept rows, and counts once: any
@@ -540,7 +540,7 @@ explicit, over `FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(
 | 7 | `per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity` | one per depot | its priority rows | `D.priorityCapacity` |
 | 8 | `per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)` | one per shipment | same depot and arrival day | `ship`, the key |
 
-Example 7 is an error on data where a depot has no priority shipment (§5.3). Example 9 (nested reducers) is not in the
+On data where a depot has no priority shipment, example 7 has no constraint for that depot (§5.3). Example 9 (nested reducers) is not in the
 language yet ([roadmap.md](roadmap.md)). Tests: `test/decide/tests/test_scope_deck_examples.py`.
 
 ## 7. Determination, NULL and empty sets

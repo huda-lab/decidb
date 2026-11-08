@@ -1,4 +1,4 @@
-# Work queue: remove bloat, then finish A2, then the rest
+# Work queue: finish A2, then the rest
 
 Scratchpad. Each line points to a task in a nested todo; details live there. Delete a line when its task ships; delete
 this file when it is empty.
@@ -6,24 +6,13 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: X11 beside X12; then A1, A2, A3 in order; B1 and
-T1 beside the A batches; B2 after A2.
+Each batch finishes completely. Lanes: A1, A2, A3 in order; B1 and T1 beside the A batches;
+B2 after A2.
 
 ## Owner decisions
 
 - [ ] A2-9 Data weights on the absolute loss — direct_solve/rules/a2_single_facility_location/todo.md § A2-9
 - [ ] H-08 VALUE-shape clauses: which rule takes them — direct_solve/framework/todo.md § H-08
-
-## X11. Bloat: docs, by the orchestrator
-
-- [ ] BLOAT-17 Bloat in the direct-solve docs — operations/todo.md § BLOAT-17
-- [ ] BLOAT-18 Bloat in the pipeline docs — operations/todo.md § BLOAT-18
-- [ ] BLOAT-19 Bloat in the other docs — operations/todo.md § BLOAT-19
-
-## X12. Bloat: copies the test passes found
-
-- [ ] BLOAT-22 Test helpers copied with the same body — testing/todo.md § BLOAT-22
-- [ ] BLOAT-24 `PhysicalDecide::ParamsToString` copies `LogicalDecide`'s — pipeline/08_execution/todo.md § BLOAT-24
 
 ## A1. A2 code cleanup
 

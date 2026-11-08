@@ -12,7 +12,7 @@ and when/during which task it was discovered.
 Location: `src/planner/decide/decide_source_provenance.cpp` (`RenderDecideSource`), `TagDecideSourceFragments`,
 `decide_source_info.hpp` (`DecideSourceText`). A message that names a value renders a bound tree, so it shows
 what the engine built, not what the user wrote, and the renderer carries a growing list of tags that exist only for
-it (`NULL_GUARD`, `L0_AUTO_BOUND`, `SKIP_NULL`, `COLON_FORM`, the text in `WRITTEN_VALUE_TAG`'s alias).
+it (`NULL_GUARD_TAG`, `L0_AUTO_BOUND_TAG`, `SKIP_NULL_TAG`, `COLON_FORM_TAG`, the text in `WRITTEN_VALUE_TAG`'s alias).
 `TagDecideSourceFragments` stores `ParsedExpression::ToString()`, itself a reprint. `DecideSourceText` already holds
 spans keyed by query location (Clang's SourceManager pattern) for eight roles, a product, power or function call
 (`TERM`) and the objective among them, which is how a respelled product is quoted as written. The fix with no case
@@ -22,4 +22,4 @@ reprinting anything. Risk: libpg_query keeps only start positions, so span ends 
 balancing or grammar work; messages and goldens that quote a reprint would change. Found 2026-10-30 while scoping
 PERF-16 (architect review). The same cause shows in two more messages: `if(c, a, b)` and `iif` reach the binder as
 the parser's CASE, so `SUM(if(s = 'F', x, 2 * x))` is refused as a CASE the user never wrote, and `per g: SUM(x) by
-(CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message (lane AW, BUG-42).
+(CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message.

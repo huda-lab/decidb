@@ -20,14 +20,9 @@ There is no setting for it:
 | user pressed Ctrl-C                | print the report, hand back the best so far with its caveat — terminal or not; the decision was already made |
 | user pressed Ctrl-C, nothing found | one interrupt error, `DECIDE stopped at your request before finding a solution.` |
 
-**Shared time limit (both backends).** The per-solve wall-clock cap is resolved in
-one solver-agnostic place — `ResolveDecideTimeLimit()` in
-`src/include/duckdb/decidb/solver/solver_config.hpp` — so Gurobi and HiGHS honor the same
-value and cannot drift. It returns `DECIDE_DEFAULT_TIME_LIMIT_SECONDS` (300s) unless
-the user overrides it via the global `DECIDB_TIME_LIMIT` env var (seconds, double;
-non-positive / unparseable values are ignored). Gurobi applies it as the `TimeLimit`
-parameter (`gurobi_solver.cpp`); HiGHS applies it as the `time_limit` option
-(`deterministic_naive.cpp`).
+**Shared time limit (both backends).** The per-solve wall-clock cap is
+`ResolveDecideTimeLimit()` (300 s unless `DECIDB_TIME_LIMIT` overrides it), the one
+limit both backends apply: [`../07_solver/done.md`](../07_solver/done.md) §2, "Time limits".
 
 ## Settled timeout policy
 
@@ -47,9 +42,8 @@ tempting inferences are deliberately not part of the contract:
   and the fact that the solution is not proven best. Unbounded guidance begins only
   after the backend proves `UNBOUNDED` (or the existing disambiguation establishes it).
 
-These are final policy decisions, not deferred diagnostic work. Timeout remains
-ordinary execution behavior; the diagnosis engines run only for their proven failure
-terminals.
+Timeout is ordinary execution behavior; the diagnosis engines run only for their proven
+failure terminals.
 
 ## A timeout produces a structured result
 
@@ -61,14 +55,11 @@ incumbent fields on `SolverResult`:
   `kWarning` fall through to the `kTimeLimit → TIME_LIMIT` mapping.
 - **Incumbent fields.** At `GRB_TIME_LIMIT` / `kTimeLimit` the backends fill
   `has_solution`, `best_bound`, `gap`, and (when `has_solution`) the incumbent
-  `solution` vector + `objective_value`. `has_solution` gates the incumbent reads so
-  the `-1e100` / `inf` / `nan` no-incumbent sentinels never leak; `best_bound` / `gap`
-  default to **NaN ("unavailable")** and are populated only when a proven bound exists —
-  MIP timeouts. On LP/QP timeouts (where Gurobi's `ObjBound` is the ±1e100 sentinel and
-  HiGHS's `mip_dual_bound` is a 0 default) they stay NaN, and every report/relation
-  writer skips the bound/closeness output when `!std::isfinite`. Field-by-field mapping
-  and the "gap is a fraction on both backends" note are in `../../diagnostics/foundations/done.md`
-  (Structured solver result / Time-limit behavior).
+  `solution` vector + `objective_value`; `best_bound` / `gap` stay NaN without a proven
+  bound (LP/QP timeouts, where Gurobi's `ObjBound` is the ±1e100 sentinel and HiGHS's
+  `mip_dual_bound` a 0 default). The contract is [`../07_solver/done.md`](../07_solver/done.md)
+  §1; the field-by-field mapping and the "gap is a fraction on both backends" note are in
+  `../../diagnostics/foundations/done.md` (Structured solver result / Time-limit behavior).
 
 ## Checkpoint report
 
@@ -197,16 +188,16 @@ the query. It also stops the running solve at the backend's next check (rather t
 - **Watcher cost.** Because the poll is armed on **every** solve, each spawns the watcher
   `std::thread` for the duration of `optimize()` and joins it immediately after — negligible
   (a 25 ms-polling sleeper), and the price of Ctrl-C working on any query. Internal
-  diagnostic re-solves (`SolvePreparedModel`, used by the `INF_OR_UNBD` probe, unbounded ray
-  fallback, and infeasible elastic passes) reuse the same interrupt poll, with their own
-  smaller helper budget
-  (`min(60s, primary solve limit)`).
+  diagnostic re-solves (the `INF_OR_UNBD` probe, and through `SolvePreparedModel` the
+  unbounded ray fallback and the infeasible elastic passes) reuse the same interrupt poll,
+  with their own smaller budget (`ResolveDecideDiagnosticTimeLimit`,
+  `min(60s, primary solve limit)`).
 
 **Every continue restarts the timer.** Each chunk is a fresh `ResolveDecideTimeLimit()`
 budget; the operator tracks *cumulative* elapsed and re-prints the report every boundary
-(elapsed climbs 1s → 2s → 3s …). Both backends were probed to honor a **per-call** limit
-and to **resume** (not restart) the MIP search after a time-limit stop, so `Continue()`
-just re-runs with a fresh chunk — no incumbent re-seeding.
+(elapsed climbs 1s → 2s → 3s …). Both backends honor a **per-call** limit and **resume**
+(not restart) the MIP search after a time-limit stop, so `Continue()` just re-runs with a
+fresh chunk — no incumbent re-seeding.
 
 **Stop delivery.** On a stop with an incumbent (`ask` `s` / `continue` Ctrl-C) or a
 proven optimum, control falls through to the shared success stores

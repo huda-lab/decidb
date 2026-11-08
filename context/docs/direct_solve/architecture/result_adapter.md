@@ -43,8 +43,8 @@ rank sort. The validated columns stay live even when no parent reads any output.
 The plan holds materialized CTEs: a copy of the source, a bound's side table, a gate's verdict. DuckDB's
 `RemoveUnusedColumns` prunes a definition to the union of the columns its references read and narrows each reference to
 that union at the end of the pass. This is projection pushdown across a CTE boundary, the column twin of DuckDB's
-`CTEFilterPusher` and what Spark's `PushdownPredicatesAndPruneColumnsForCTEDef` does. DuckDB kept a definition whole,
-because the pass does not follow a reference back to its definition. A definition with a reference the pass does not
+`CTEFilterPusher` and what Spark's `PushdownPredicatesAndPruneColumnsForCTEDef` does; upstream DuckDB keeps a definition
+whole, because its pass does not follow a reference back to its definition. A definition with a reference the pass does not
 reach (one read through a table in-out function) is still kept whole.
 
 ## Every row is read
@@ -84,13 +84,13 @@ it is read by a second scan (next section). "No DECIDE" is `SELECT COUNT(*), SUM
   14 MiB.
 - The solver path holds more than direct solve on the same query (S1 at 1,000,000 rows: 1,012 MiB against 652).
 
-Only peak memory is measured here; wall times were taken on a busy machine and are not recorded.
+Only peak memory is recorded here: the wall times came from a busy machine.
 
 ### Late materialization of a stored table
 
 Late materialization is the column-store technique of reading the narrow columns first and fetching the wide ones by
 row id after the plan has chosen its rows. DuckDB's own `LATE_MATERIALIZATION` pass uses it for Top-N; direct solve
-has a separate step, `ApplyDirectLateMaterialization`, for the reason at the end of this section.
+has a separate step, `ApplyDirectLateMaterialization`, for the reason under "Where it runs" below.
 
 When the source is one DuckDB base table under non-volatile projections and filters, the plan carries the table's
 `rowid` as a hidden column, passed along like any source column through the rule's windows, the side tables' joins, the
@@ -118,10 +118,6 @@ the rank, and the first read still checks every row, so a bad last row under `LI
   copy holds rows even under a pipelined plan, so a pipelined plan over a copy late-materializes too: A1 with a bound
   read from a reducer reads the source three times or more, so it is copied, and its whole-source CTAS on large.db
   lineitem (1M rows) took 251 ms copying the strings against 96 ms reading them back.
-
-## Result types
-
-A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the solver path.
 
 Details: `direct_result_adapter.cpp` (map checks, serialization, pruning hook), `direct_late_materialization.cpp` (late
 materialization), `direct_plan_fragments.cpp` and `direct_source_reader.cpp` (the verdict and the gate) and

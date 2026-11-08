@@ -2,7 +2,6 @@
 
 Verified on 2026-11-07, on top of `e4035614a5`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
 serializer, highs) 7,523 passed; C++ `build/release/test/unittest "[decidb]"` 4,766 assertions in 86 cases.
-`test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/a2_single_facility_location_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
@@ -33,8 +32,8 @@ One `REAL` decision shared by many rows, query-wide (`per ():`) or keyed (`per k
     constant.
 
 **The answer.** Each loss gives a target per class; the plan clamps it into the class's interval and repeats it on
-every row of the class. When several points are optimal, A2 returns the one nearest 0 (owner rulings, 2026-11-06 and
-2026-11-07). The clamp of 0 gives that point with no branch of its own, and it stays finite when an end is open.
+every row of the class. When several points are optimal, A2 returns the one nearest 0 (the owner's ruling). The clamp
+of 0 gives that point with no branch of its own, and it stays finite when an end is open.
 
 | Loss | Target |
 |---|---|

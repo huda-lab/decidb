@@ -96,8 +96,8 @@ A reducer over data only stays on the bound side of a comparison.
 Each is a parse error whose message carries the phrase `is removed` and names the spelling to write, built from the
 query's own text so it pastes back (`D.x` is the exception: a Binder Error). A condition is quoted whole as written, a
 name that needs quotes is quoted, and a removed form inside a subquery of a clause is refused the same way. A
-`WHEN` after a reducer followed by a bare comparison (`SUM(x) <= SUM(cap) WHEN cap > 2`) was never valid and stays a
-plain syntax error, as does a removed form after a clause that already has a scope in front. Messages below are for
+`WHEN` after a reducer followed by a bare comparison (`SUM(x) <= SUM(cap) WHEN cap > 2`) is a plain syntax
+error, as does a removed form after a clause that already has a scope in front. Messages below are for
 `FROM ... t(id, cap, g)`.
 
 | Removed | Write instead | Message (key phrase) |

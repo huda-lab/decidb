@@ -54,7 +54,7 @@ The `duckdb_extension_config.cmake` file separately configures extensions for CM
 HiGHS is compiled directly into the wheel — there is no external dependency or system library required.
 
 - **Sources**: `package_build.third_party_sources()` includes `third_party/highs`, which causes all HiGHS `.cpp`, `.cc`, and `.c` files to be gathered recursively.
-- **Includes**: `package_build.third_party_includes()` lists all HiGHS subdirectories (lines 42–62 in `scripts/package_build.py`): root, `highs/`, `extern/`, `extern/filereaderlp`, `extern/pdqsort`, and every HiGHS module directory (`interfaces`, `io`, `ipm`, `ipm/ipx`, `ipm/basiclu`, `lp_data`, `mip`, `model`, `parallel`, `pdlp`, `pdlp/cupdlp`, `presolve`, `qpsolver`, `simplex`, `test_kkt`, `util`).
+- **Includes**: `package_build.third_party_includes()` lists every HiGHS include directory (the root, `highs/`, its `extern/` directories and each HiGHS module directory).
 - **CMake build**: `third_party/highs/CMakeLists.txt` builds `duckdb_highs` as a static library. `src/CMakeLists.txt` links both `duckdb` and `duckdb_static` against `duckdb_highs`.
 
 ## 5. Package Structure
@@ -106,7 +106,7 @@ source venv/bin/activate
 pip install .
 ```
 
-A venv already exists at `tools/pythonpkg/venv/` (gitignored). To use it:
+With a venv at `tools/pythonpkg/venv/` (gitignored):
 ```bash
 cd tools/pythonpkg
 ./venv/bin/pip install .

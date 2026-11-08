@@ -48,9 +48,8 @@ Coverage of direct solve is in each rule's `done.md` under [../direct_solve/rule
 - **xfail**: a known defect or an unbuilt feature, kept so the fix is detected.
 - **error test**: an invalid query is rejected with the right message.
 
-A hand-computed expected answer (`expected = {1: 10.0, 2: 20.0}`) is not an oracle: it checks only the instance its
-author thought through, and an encoding bug that matches it passes. Every correctness test states the same problem
-independently, in gurobipy via `oracle_solver` and `compare_solutions`, or to `_scope_oracle` / `_brute_force`. For a
+A hand-computed expected answer is not an oracle ([oracle.md](oracle.md) §1). Every correctness test states the same
+problem independently, in gurobipy via `oracle_solver` and `compare_solutions`, or to `_scope_oracle` / `_brute_force`. For a
 non-linear objective, pass `decidb_objective_fn` to `compare_solutions`. The pattern is in [oracle.md](oracle.md) §7;
 shared primitives are in `test/decide/tests/_oracle_helpers.py`.
 

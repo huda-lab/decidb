@@ -3,7 +3,6 @@
 Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
 its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
 assertions in 82 cases.
-`test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds and the terms of its objective come
 from the shared reader in `direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
 
@@ -54,8 +53,8 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
 A NULL coefficient or bound skips its instance, as on the solver. It raises an error wherever the solver does: NaN or
 infinite coefficients and NaN bounds on a row that reads them, an empty box on any row (infeasible), an improving direction with no finite limit on any row (unbounded), an
 `INT` answer beyond 2^53 after rounding (with the solver's message word for word, naming the variable and its rounded
-value), and any expression that
-raises on a row that computes it. Every input row is read before one is released, so a late bad row raises under `LIMIT 1`,
+value), and any expression that raises on a row that computes it. A term whose `when` keeps no row is dropped, as on the
+solver (D68). Every input row is read before one is released, so a late bad row raises under `LIMIT 1`,
 `COUNT(*)` or a filter; only `LIMIT 0` skips it. An empty source returns no rows.
 
 ## What it does not admit (falls back to the solver)
@@ -70,7 +69,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 | An objective with a `per` or a two-level reducer; `AVG`, `MIN`, `MAX`, `norm` of order 1 or ∞ | Not a sum of one term per row. |
 | Entity-scoped (`T.x`) or scalar decisions | Not one decision per row. |
 | `random()`, a correlated subquery, a parameter, in a bound, a coefficient or a `when` | Not a deterministic source value. A scalar subquery that does not depend on the row is read as a source column and is admitted. |
-| A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | A1 reads a square only through `DirectReadSquareTerm`, which takes a constant coefficient and declines a data one, and reads one square. The solver path answers these on Gurobi (a data weight on a square is Gurobi only). |
+| A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | A1 reads one square and folds its weight to a constant (`DirectFoldConstantSum`), so it declines a weight read from the data. The solver path answers these on Gurobi (a data weight on a square is Gurobi only). |
 | Strict bounds on a `REAL` | The binder rejects them before any rule runs. |
 | A bound that contradicts the variable's built-in domain (`x <= -1` on a non-negative decision, `BOOL x >= 2`) | The solver rejects it before it reads a row, even on an empty source, so the solver reports it. |
 
@@ -80,14 +79,14 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
   and refuses once its constant `k*t^2` passes a DOUBLE; A1 answers `x = v`, which never reads that constant
   (`../../architecture/rules.md` § What every rule must match from the solver).
 - **Values within the solver's tolerance of an integer** (`INT x <= 1.9999999`). Direct solve reads every bound exactly,
-  as S1 decided; the solver accepts a violation of about 1e-6 and returns 2. The tests use values that are
+  as in S1 (`../s1_uniform_matroid/done.md`); the solver accepts a violation of about 1e-6 and returns 2. The tests use values that are
   exact in a double, so they never sit in that band.
 - **Error wording.** An empty box on a row reads `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
   ...` here. A bound that contradicts the built-in domain is left to the solver (see above), so its own message appears:
   for a non-negative decision it quotes the clause as typed (`x < 0 cannot hold because x is non-negative`), and for a
   `BOOL` too (`x >= 2 cannot hold for a BOOL variable.`). A NULL coefficient, target, weight or bound names the columns that are NULL
   on the failing row, in the solver's text, and a NaN value reads as the solver's message; both are built by the
-  functions the solver calls (`decide_value_messages.hpp`). The "at row N" suffix is left out.
+  functions the solver calls (`decide_value_messages.hpp`).
 - **Its own warning.** The divisor is a decision's square factor `a`, which the turning point `-b / 2a` divides by; the
   rule is the framework's [Number-range warning](../../framework/done.md). `MINIMIZE SUM(1e-322 * POWER(x - 1/3, 2))`
   answers 0.35 and warns. At 1e-300 it answers 1/3 and is silent, where `off` warns and returns 0 (Gurobi) or
@@ -97,15 +96,8 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 ## How it works
 
-One projection per stage, with no sort, no window and no join, and no row held:
-
-1. raw values (every coefficient, bound, mask), each evaluated on the rows its `when` keeps and NULL on the others
-   (`DirectOnKeptRows`), so its check passes there;
-2. each clause's lower and upper bound on its decision, each decision's objective coefficients `(a, b)`, and the check on
-   every raw value;
-3. each decision's box;
-4. each decision's answer and whether its box is empty;
-5. the typed answers: `INTEGER` for `BOOL`, `BIGINT` for `INT`, `DOUBLE` for `REAL`.
+One projection per stage of `definition.md` § Relational construction, with no sort, no window and no join, and no row
+held. A raw value is NULL on a row its `when` drops (`DirectOnKeptRows`), so its check passes there.
 
 The solver reads every row before it returns, so a bad value on the last row raises even under an outer `LIMIT 1`. A1
 keeps that by verifying, then streaming: one read of the source runs stages 1-4 into a one-row verdict, the `bool_and`
@@ -148,8 +140,8 @@ both paths finish in under 0.1 s.
 **Wide parent-read columns.** A 512-byte payload the parent reads back streams through the second read, and nothing
 holds it: at 1,000,000 rows direct takes 0.05 s and 57 MiB against the solver's 0.63 s and 1.7 GiB (13x), and an
 unused payload takes 0.04 s and 56 MiB. The speedup is smaller than S1's because the solver is already
-cheap on a bound-only problem. Footprint numbers for both rules are in `../../architecture/result_adapter.md`
-("Memory of holding rows").
+cheap on a bound-only problem. S1's footprint numbers are in `../../architecture/result_adapter.md` ("Memory of holding
+rows").
 
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):
 

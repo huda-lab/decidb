@@ -137,10 +137,10 @@ Construct flags declared today:
 `bilinear` stays false until the loader binds its symbols and stage 08 knows how to emit
 it: a capability may not be declared ahead of the code that honors it.
 
-There is deliberately **no** `in_list` field. SOS1 acceleration for `x IN (a, b, c)` was
+There is deliberately **no** `in_list` field. SOS1 acceleration for `x IN (a, b, c)` is
 measured and declined — the formulation's LP relaxation is already integral, so there is
 nothing to branch on. Across the measured domain sizes and row counts, the declaration
-was redundant work at the root and produced no meaningful win. A measured-and-rejected
+is redundant work at the root and gives no meaningful win. A measured-and-rejected
 capability is not a field: a permanently-false flag nobody reads cannot be told apart
 from one whose implementation is merely still pending.
 
@@ -179,9 +179,7 @@ It runs **once per query, at plan time** — `ChooseDecideSolver`, called first 
 in `DecideOptimizer::OptimizeDecide` — and the answer rides the plan as a **name**:
 `LogicalDecide::solver_backend_name` → `PhysicalDecide::solver_backend_name` →
 `PhysicalDecide::PlannedSolverBackend()` → `SolveModel` → every diagnostic re-solve.
-Nothing asks a second time. The reason is not tidiness: once a rewrite has consulted
-the backend's capabilities, a second selection that answered differently would run a
-model on a solver it was not built for. See
+Nothing asks a second time, and the choice is not serialized with the plan; why is
 [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
 
 A name and not a handle, because a `SolverBackend` can open a session and the plan
@@ -190,9 +188,6 @@ points that are about to solve — the primary solve and the diagnostic re-solve
 which is stage 07's side of the boundary. The other thing stage 05 reads off the
 backend, `SolverConstructSupport`, is copied onto the plan by value, so no stage
 below stage 05 needs the backend to know what was lowered.
-
-The choice is not serialized with the plan — which solver a host has is a property of
-the host, not of the query.
 
 `GurobiSolver::IsAvailable()` is a one-time lazy check (static local with lambda init)
 that dlopens the library and attempts to start an environment. It is purely a runtime
@@ -215,54 +210,55 @@ continuation chunks.
 
 `solver_config.hpp` is the one place a limit is read, which makes it
 solver-agnostic by construction. `ResolveDecideTimeLimit()` returns the default
-unless `DECIDB_TIME_LIMIT` (seconds, double) overrides it; non-positive or
+(`DECIDE_DEFAULT_TIME_LIMIT_SECONDS`, 300 s) unless `DECIDB_TIME_LIMIT` (seconds, double) overrides it; non-positive or
 unparseable values are ignored. It is applied to **both** backends — Gurobi
 `TimeLimit`, HiGHS `time_limit`.
 
 HiGHS reads the clock only at its checkpoints (MIP `checkLimits`, simplex bailout, IPX), and its MIP setup partitions
-the binary objective columns into cliques with a pairwise loop before the first one, so a model with many
-clique-sharing objective binaries (Q2) ran past any limit. The vendored `HighsCliqueTable::cliquePartition` calls
+the binary objective columns into cliques with a pairwise loop before the first one, so upstream a model with many
+clique-sharing objective binaries (Q2) runs past any limit. The vendored `HighsCliqueTable::cliquePartition` calls
 `checkLimits` once per 100,000 neighbourhood queries and, past a limit, leaves the remaining columns as singletons, a
 weaker but valid partition. Each hunk is marked `DeciDB patch (SOL-1)`; `third_party/highs/README.md` says how to
 find every DeciDB patch to carry over on an upgrade (upstream has the same loop). Ctrl-C reaches the same checkpoints: `HighsSession::SetInterruptPoll` sets HiGHS's MIP, simplex and IPM interrupt
 callbacks, and `kInterrupt` maps as Gurobi's `GRB_INTERRUPTED` does. Tests: `test_error_time_limit.py`
 (`test_highs_limit_bounds_clique_partition`, `test_highs_interrupt_reaches_clique_partition`).
 
-HiGHS's symmetry detection (`presolve/HighsSymmetry.cpp`) had no check: its search compares the whole model graph at
-each leaf, so its cost grows with leaves times edges, and Q10 at `large` (18M edges) stopped 380 s past a 300 s limit.
+Upstream, HiGHS's symmetry detection (`presolve/HighsSymmetry.cpp`) has no check: its search compares the whole model
+graph at each leaf, so its cost grows with leaves times edges, and Q10 at `large` (18M edges) stops 380 s past a 300 s
+limit.
 Neither the data's repeated quantities nor ABS's two-sided rows cause it: Q10 with distinct quantities stalls the same
 way, and dropping the rows slows the solve. The vendored detection (`DeciDB patch (BUG-3)`) stops at the time limit or
 a Ctrl-C, checked once per 100 refined cells and once per search node, and keeps the generators already found, as its
 own generator cap does. The check reads only: the search runs on a worker thread beside the root LP, so it reads the
 clock and calls the interrupt callback with local data instead of calling `checkLimits`, which writes the MIP's
-status. Each node also checks the task's cancellation, so a MIP solved during the search no longer waits for it.
+status. Each node also checks the task's cancellation, so a MIP solved during the search does not wait for it.
 Tests: `test_decidb_highs_symmetry.cpp` (each stop, with a stop already due) and `test_error_time_limit.py`
 (`test_highs_limit_bounds_symmetry_detection`, `test_highs_interrupt_reaches_symmetry_detection`,
 `test_highs_solved_mip_does_not_wait_for_symmetry_search`).
 
 HiGHS's presolve checks the clock once per 1,024 reductions, and its dominated-columns pass
 (`HPresolve::dominatedColumns`) scans each column's rows in full while it may make none: Q3 at `large`, with rows over
-all 120,000 adjustments, stayed in it 339 s past a 300 s limit. The vendored pass (`DeciDB patch (BUG-23)`) checks the
+all 120,000 adjustments, stays in it 339 s past a 300 s limit upstream. The vendored pass (`DeciDB patch (BUG-23)`) checks the
 clock once per 1,024 columns, before a column's work starts, and stops through presolve's own `kStopped`. Test:
 `test_error_time_limit.py` (`test_highs_limit_bounds_dominated_columns`). Presolve calls no interrupt callback, so a
 Ctrl-C waits for presolve to end.
 
-Q1 at `large` (1M binaries over 8 rows, a MIP gap of 0) ran past 420 s under a 300 s limit in one of two loops,
-depending on the run. Presolve's probing extracts variable bounds from each row by pairing every binary with every
+Upstream, Q1 at `large` (1M binaries over 8 rows, a MIP gap of 0) runs past 420 s under a 300 s limit in one of two
+loops, depending on the run. Presolve's probing extracts variable bounds from each row by pairing every binary with every
 non-binary column (`HighsCliqueTable::extractCliques`); after presolve merges duplicate binaries into integers a row
-holds about 146,000 of each, and the pass took 215 s. At the root, line-search rounding fixes every integer and runs
+holds about 146,000 of each, and the pass takes 215 s. At the root, line-search rounding fixes every integer and runs
 conflict analysis on the infeasible point; each explanation scans a row of about 700,000 entries, and one analysis
-outlasted the limit. The vendored loops (`DeciDB patch (BUG-25)`) call `checkLimits` once per 2^20 pairs or row
+outlasts the limit. The vendored loops (`DeciDB patch (BUG-25)`) call `checkLimits` once per 2^20 pairs or row
 entries, a stride by work rather than by iteration since one iteration costs up to a second here, and line-search
 rounding calls it before each rounded point. Past a limit, extraction keeps the bounds it found and skips the rest of
-the row; conflict analysis abandons the conflict and adds no cut. Q1 now stops at 300 s. Test:
+the row; conflict analysis abandons the conflict and adds no cut, so Q1 stops at 300 s. Test:
 `test_error_time_limit.py` (`test_highs_limit_bounds_clique_extraction`); the conflict-analysis stop has no small
 model that reaches it on every run, so Q1 at `large` is its check.
 
 Presolve's parallel rows and columns pass (`HPresolve::detectParallelRowsAndCols`) hashes every column and every
-row and compares each pair in a hash bucket; it read the clock only after a reduction, so a bucket whose members
-share a hash but never merge ran quadratically with no check: one row over 120,000 integers with distinct
-coefficients took 25 s under a 1 s limit, and 110,000 two-column inequalities 23.5 s. The vendored pass
+row and compares each pair in a hash bucket; upstream it reads the clock only after a reduction, so a bucket whose
+members share a hash but never merge runs quadratically with no check: one row over 120,000 integers with distinct
+coefficients takes 25 s under a 1 s limit, and 110,000 two-column inequalities 23.5 s. The vendored pass
 (`DeciDB patch (BUG-28)`) counts the candidates both bucket loops compare and calls `checkTimeLimit()` once per
 2^20 of them, before a candidate's work, stopping through presolve's `kStopped`; earlier reductions are complete
 on the postsolve stack. Tests: `test_error_time_limit.py` (`test_highs_limit_bounds_parallel_columns`,
@@ -270,10 +266,9 @@ on the postsolve stack. Tests: `test_error_time_limit.py` (`test_highs_limit_bou
 analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group), the probing loop after clique extraction,
 rounding's fixing loop and the other presolve passes between their checks every 1,024 reductions.
 
-Dual fixing (since HiGHS 1.12) and singleton column stuffing (since 1.13) scan a column's whole row once per column
-of it and make no reduction on a dense row, so presolve was quadratic there with no check: a symmetric MIP of
-100,000 columns spent 41 s in presolve (0.7 s on 1.11), and one row over 120,000 integer singleton columns 205 s
-under a 1 s limit. Dual fixing's substitution returns at once on a row with no integer column besides its own, where
+Dual fixing and singleton column stuffing scan a column's whole row once per column of it and make no reduction on a
+dense row, so upstream presolve is quadratic there with no check: a symmetric MIP of 100,000 columns spends 41 s in
+presolve, and one row over 120,000 integer singleton columns 205 s under a 1 s limit. Dual fixing's substitution returns at once on a row with no integer column besides its own, where
 its scan finds no binary (`DeciDB patch (PERF-H1)`, the same reductions in the same order); both scans count the row
 entries they read and check the time limit once per 2^20 (`DeciDB patch (BUG-34)`). Tests:
 `test_highs_solved_mip_does_not_wait_for_symmetry_search`, `test_highs_limit_bounds_parallel_columns`. The upstream
@@ -293,9 +288,9 @@ solver's default relative gap of 1e-4. The gap is the session setting `decide_mi
 facade hands it to the session (`SolverSession::SetMipGap`), and both backends apply it
 when they load the model: Gurobi `MIPGap` on the environment (`gurobi_solver.cpp`),
 HiGHS `mip_rel_gap` in `HighsSession::Load` (`deterministic_naive.cpp`), so it holds for
-every continuation chunk. Diagnostic follow-up solves keep 0. With the default, Gurobi returned
-a 1.6M-row selection up to 0.005% short of the optimum, a different incumbent on
-every run, while direct solve and HiGHS returned the optimum
+every continuation chunk. Diagnostic follow-up solves keep 0. With Gurobi's default gap, a
+1.6M-row selection comes back up to 0.005% short of the optimum, a different incumbent on
+every run, while direct solve and HiGHS return the optimum
 (`../../performance/benchmarking/direct_solve.md`). A solve that cannot prove the
 optimum in time stops at the time limit and reports `TIME_LIMIT` with its incumbent
 and gap.
@@ -358,7 +353,7 @@ order:
    from the client; the operator passes the same callback with the DIAGNOSE repair model. A
    direct-solved query builds no model, so these thresholds do not apply; a rule says the
    same line through `DirectWarnIf` and `__internal_decide_warn_numbers()` where its own
-   arithmetic loses precision (N1, A1 and R1; `direct_solve/framework/done.md`).
+   arithmetic loses precision (N1, A1 and R1; `../../direct_solve/framework/done.md`).
 5. Record `model_constraint_rows` before anything moves the model.
 6. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
    say so. That is a coefficient-free row against a bound it cannot meet
@@ -400,8 +395,8 @@ confident `OPTIMAL`.
 This is invisible on the normal path, because a query that leaves an integer column
 open is refused earlier — the Big-M lowering needs a finite box and says so (§5). But a
 backend that expresses a construct **natively** needs no Big-M, so it never meets that
-refusal. A native `<>` over an open column was the concrete case: `SUM(ship) <> 500`
-with `MAXIMIZE SUM(ship)` came back as `ship = 2147483647`.
+refusal. A native `<>` over an open column is the case: `SUM(ship) <> 500` with
+`MAXIMIZE SUM(ship)` would come back as `ship = 2147483647`.
 
 `RejectIntegerCeilingOptimum` closes it. An `OPTIMAL` whose value sits at
 `INTEGER_SOLVER_CEILING` on a column **the query left open** is not an answer, and is
@@ -448,7 +443,7 @@ path, exceptions included.
 
 | Step | Call |
 |---|---|
-| Environment | `GRBloadenv()`, `OutputFlag = 0` |
+| Environment | `GRBemptyenvinternal()` then `GRBstartenv()`, `OutputFlag = 0` (1 under `DECIDB_PROFILE_SOLVER_LOG`) |
 | Variables | one `GRBnewmodel()` with type/bound/objective arrays — `GRB_BINARY`, `GRB_INTEGER`, `GRB_CONTINUOUS` |
 | Sense | `GRBsetintattr(GRB_INT_ATTR_MODELSENSE, ...)` |
 | Constraints | `GRBaddconstr()` per row, taking COO directly |
@@ -467,8 +462,8 @@ it changes report wording ("you stopped it" vs "hit the time limit"), not routin
 ## 5. HiGHS backend
 
 HiGHS 1.15.1, vendored as upstream plus DeciDB's patch series (`third_party/highs/README.md`; `make upgrade-highs
-HIGHS_VERSION=<x.y.z>` moves it). On a large LP whose bounds are column bounds, 1.11's postsolve returned a basis
-primal simplex repaired for minutes (R1 at 1.6M decisions: 55 s); 1.15.1 solves it in 1.8 s.
+HIGHS_VERSION=<x.y.z>` moves it). It solves a large LP whose bounds are column bounds (R1 at 1.6M decisions) in
+1.8 s, where 1.11's postsolve returned a basis primal simplex repaired for 55 s.
 
 The floor of the registry: every capability flag is false. No construct is native, so
 everything arrives fully lowered; no model class beyond plain linear and **convex**
@@ -493,7 +488,7 @@ Gurobi solves the same model.
 
 An integer column is loaded with whole bounds: `ceil(lower)` and `floor(upper)`, each read
 within HiGHS's default `mip_feasibility_tolerance` (1e-6) of a whole number. Handed a
-fractional bound on an integer column whose other side is open, HiGHS answered below it
+fractional bound on an integer column whose other side is open, HiGHS answers below it
 (`x >= -2.5` minimized to -3; Gurobi rounds such bounds itself). A column whose bounds hold
 no whole number (`2.3 <= x <= 2.7`) is an empty model: `Solve` returns `INFEASIBLE` without
 loading it, since HiGHS refuses an inverted box. The neutral model, its dump and the
@@ -553,8 +548,8 @@ The factor is a power of two so that `ldexp` is exact in binary floating point a
 introduces no drift; both backends still solve bit-identical constraints. HiGHS's own
 internal scaling picks powers of two for the same reason.
 
-A row already inside the window is left exactly as it is rather than re-centred, so this
-changes nothing about the models that loaded correctly before it existed. An
+A row already inside the window is left exactly as it is rather than re-centred, so a
+model inside the window loads unchanged. An
 out-of-window row is centred in the window rather than shifted just far enough to clear
 the edge — a coefficient sitting a hair above the drop threshold is inside the window but
 still badly conditioned.
@@ -583,7 +578,7 @@ double at or above 1e20 is a multiple of any power of two the rule picks.
 The objective is multiplied by one power of two, which moves no optimum: the Hessian
 entries play the row's coefficients (`passHessian` refuses one at or above
 `large_matrix_value` and drops one at or below `small_matrix_value`, so `1e-12 *
-POWER(x - 1, 2)` was minimised as 0), and the largest linear cost plays the row's bound
+POWER(x - 1, 2)` would be minimised as 0), and the largest linear cost plays the row's bound
 (HiGHS reads a cost at or above `infinite_cost`, 1e20, as infinite). Readback multiplies
 each column value by its 2^e and divides the objective value and the MIP dual bound by
 the objective's factor; the MIP gap is relative and unchanged. The objective's constant
@@ -616,8 +611,8 @@ checks are its own and broader than the window, so one is still reported as a so
 HiGHS could not run (OTHER), never as an internal error. `kWarning` is HiGHS reporting a condition it
 expects the caller to proceed through: a dropped sub-tolerance entry, or an inconsistent
 bound pair left in place so the solve can deduce infeasibility from it. Treating those as
-fatal turned an ordinary query into an `InternalException` with a stack trace, and made a
-query's success depend on which solver happened to be installed.
+fatal would turn an ordinary query into an `InternalException` with a stack trace, and
+make a query's success depend on which solver happened to be installed.
 
 Logging is off (`log_to_console = false`). The session sets `time_limit` per chunk
 rather than once at load, which is what makes `Continue()` work: HiGHS resumes its
@@ -631,8 +626,8 @@ it just answers it wrong (see stage 05's note on `singular_quadratic`), so the r
 is a judgement about answer quality rather than about what the API accepts. In practice
 it means every Q reaching `passHessian` here is diagonal, though the conversion above
 stays written for the general case against the day the flag is lifted. The backend
-contains no model-class check: refusing at plan time saves a full scan and build. `SolveModel` re-derives the class from the built model and
-asserts the backend covers it, so nothing unsupported can reach `passModel`.
+contains no model-class check: refusing at plan time saves a full scan and build, and
+`SolveModel` asserts the built model's class (§3, step 2).
 
 HiGHS has no thread-safe terminate, so it never sets `user_interrupted`.
 

@@ -41,7 +41,7 @@ observations. The class is in [definition.md](definition.md). How to work and th
 
 ## A2-12 — The test grids reach the same branches many times
 
-- **Problem.** A2 has 1,172 tests; N1 has 172 and A1 247. The absolute loss alone has 530. The grids are full cross
+- **Problem.** A2 has 1,172 tests; N1 has 143 and A1 196. The absolute loss alone has 530. The grids are full cross
   products: both centered losses times 10 row sets times 6 intervals, every spelling on three row sets, every weight
   set in every interval. `test_a2_a_weighted_class_answers_the_ruled_point` and
   `test_a2_an_absolute_class_answers_the_ruled_point` run every case of the oracle tables a second time to check the

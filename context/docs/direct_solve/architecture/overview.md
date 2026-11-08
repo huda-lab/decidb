@@ -22,16 +22,15 @@ bound, canonical LogicalDecide
 
 ## Where it hooks in
 
-`DecideOptimizer::Optimize` (`src/optimizer/decide/decide_optimizer.cpp`) calls `ApplyDirectSolveRules` before
-`OptimizeDecide` marks the node solver-specific. If it returns a replacement, the DECIDE node is gone. If it
-returns the node unchanged, the solver path continues. There is no retry through a solver once a direct plan starts
+`DecideOptimizer::OptimizeDecide` (`src/optimizer/decide/decide_optimizer.cpp`) runs the bound-side rewrite, then
+`ChooseDecideAnswer`, which calls `ApplyDirectSolveRules` before any solver is chosen. If a rule applies, the DECIDE
+node is gone. Otherwise a solver is chosen and the solver path continues. There is no retry through a solver once a direct plan starts
 executing, so a rule's condition has to be complete before it applies.
 
 ## Modes
 
-`SET decide_direct_solve = 'auto' | 'off' | 'require'`. `auto` is the default: try direct, fall back silently. `off`
-always uses the solver. `require` raises one fixed error when no rule applies, without saying which clause kept a rule out. `DIAGNOSE`
-queries and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.md`.
+`SET decide_direct_solve = 'auto' | 'off' | 'require'`. `auto` is the default: try direct, fall back silently. What
+each mode does: [policy.md](policy.md).
 
 ## Principles
 

@@ -166,7 +166,7 @@ make decide-test
 
 ### The scope language
 
-The `per` / `when` / `by` language as a whole is covered by twelve suites,
+The `per` / `when` / `by` language as a whole is covered by the scope suites,
 `tests/test_scope_*.py`, which no single marker selects (`-k test_scope` does):
 declarations, constraint scopes, `by`, a reducer's own scope, the objective,
 determination, the helper-decision rewrite, the deck examples, bare clauses,

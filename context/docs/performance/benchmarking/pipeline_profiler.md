@@ -3,7 +3,7 @@
 `benchmark/decide/profile_pipeline.py` runs every benchmark query on Gurobi and on HiGHS and records where the time
 goes inside the solver path: parsing, rewriting, input, coefficient extraction, model build, backend load, solve and
 readback, plus model size and peak memory. Use it to find which stage of the pipeline is slow or holds the memory.
-The findings it produces live in the stage folders of [`../README.md`](../README.md).
+The findings it produces are in [`../findings.md`](../findings.md).
 
 ## Running
 

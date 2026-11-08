@@ -3,7 +3,6 @@
 Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
 its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
 assertions in 82 cases.
-`test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp`; its per-row bounds and the linear terms of the
 budget and the objective come from the shared reader in `direct_bound_reader.cpp`. Class definition and correctness
 argument: [definition.md](definition.md).
@@ -86,51 +85,34 @@ from S1, which counts `BOOL` decisions.
 - **Which error wins.** A NaN value raises before infeasible or unbounded, wherever the row lies, as on the solver.
 - **Error wording.** Infeasible, unbounded and NaN errors read as the solver's; `test_direct_user_facing.py`
   compares them in full.
-- **One unexplained garbage result.** Once, in a full `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
-  `test_correlated_subquery_is_real` (its source is materialized as a `LogicalMaterializedCTE`) returned an `l_orderkey`
-  near 4.6e18 and an `x` near 1e-317. The values look like one type's bits read as another. It has not recurred: not in
-  40 runs of the test alone, 10 parallel runs with every R1 test, or three full serializer suites, and not in 900
-  runs of its query on a Debug build with AddressSanitizer and UndefinedBehaviorSanitizer (300 with the serializer
-  check, 300 without, 300 concurrent with it; the plan shows the materialized CTE and its scan). Serialization of
-  `LogicalCTERef` (table and CTE index, chunk types, bound columns, materialize flag) and `LogicalMaterializedCTE`
-  (table index, column count, name) round-trips what the plan needs. No fault is known.
+- **One unexplained garbage result.** One full `DECIDB_VERIFY_SERIALIZER=1 make decide-test` run of
+  `test_correlated_subquery_is_real` (its source is a `LogicalMaterializedCTE`) returned an `l_orderkey` near 4.6e18 and
+  an `x` near 1e-317, as if one type's bits were read as another. It does not reproduce: 40 runs of the test alone, 10
+  parallel runs with every R1 test, three full serializer suites, and 900 runs of its query on a Debug build with
+  AddressSanitizer and UndefinedBehaviorSanitizer (with and without the serializer check, and concurrently). The
+  serialization of `LogicalCTERef` and `LogicalMaterializedCTE` round-trips what the plan needs. No fault is known.
 
 ## How it works
 
 `definition.md` § Relational construction and § The plan, built by `AggregatePlanBuilder` for every condition R1
 admits. The per-row values of an item (stage 1 of § The plan) come from `ItemStages`: every raw value (coefficient,
 bound, mask, data limit) evaluated on the rows that read it, with its NULL and NaN check (a row a `when` drops reads
-nothing), each clause's bounds, the value `v`
-(negated under `MINIMIZE`, zero with no objective, and zero in a part whose `when` drops the row), the box `[l, u]`, and per decision whether the box is empty, the
-anchor, the break-even price `t = v / w` (items with `w = 0` or outside every budget take their best end and enter no
+nothing), each clause's bounds, the value `v` (negated under `MINIMIZE`, zero with no objective, and zero in a part
+whose `when` drops the row), the box `[l, u]`, and per decision whether the box is empty, the anchor, the break-even price `t = v / w` (items with `w = 0` or outside every budget take their best end and enter no
 sum), and the finite room up and down. An infinite room is a flag, counted apart, so no sum adds infinity to minus
 infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the sums at the price and the answer.
 
-`DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage (`SOURCE_READS`, 4). A
-source that `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table
-scan) is copied once when `DirectSourceCopyIsCheaper` says so, else rebuilt per read with fresh table indexes, its
-pushed-down table filters copied. A read of the copy costs `COPY_READ_COST` (0.4) of a re-scan, so a source read three
-times or more is copied, provided the copy (estimated rows times its row width, which leaves out the variable-width
-columns late materialization reads back) is at most `1/COPY_MEMORY_SHARE` (1/8) of the memory limit; with no row
-estimate it is re-scanned. Both constants come from interleaved timings on partsupp and a 20-column wide table at 10K to
-1M rows: at 100K the copy took 68 ms against 96 (narrow) and 66 against 94 (wide), and past an eighth of the memory
-limit it lost. At 10K rows on partsupp it is 14 ms slower, in R1's sort, not in the reads. Re-measured on a copy of only
-the columns the plan reads (partsupp, lineitem and the wide table, 100K and 1M rows), the copy took 1.0 to 1.2 of the
-re-scans' time at two reads, 0.57 to 0.98 at three and 0.62 to 1.05 at four. Any constant from 1/3 to 1/2 copies at
-three reads and re-scans at two, so 0.4 stays. Any other source is one `LogicalMaterializedCTE`, defined through a
-projection that names its columns (a join under it may reorder its output in later passes) and read by `LogicalCTERef`s.
-The group key is the eligibility flag (the budget's `when` holds) and the `by` keys, joined with IS NOT DISTINCT FROM in
-a SINGLE join, the form DuckDB uses for a scalar subquery: every item finds its one group row. A SINGLE join is never
-flipped by `BUILD_SIDE_PROBE_SIDE` and JOIN_ORDER estimates it as its item side, so the hash table is always built on
-the group rows; an inner join would be estimated far larger than either side and flipped to build on the items. With no
-scope the aggregates are ungrouped and the joins are cross products with one row.
+`DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage (`SOURCE_READS`, 4); when
+it copies the source and when it re-scans it is in [framework/done.md](../../framework/done.md) § Row checks. The
+SINGLE join of items to group rows (`definition.md` § The plan) is never flipped by `BUILD_SIDE_PROBE_SIDE`, and
+JOIN_ORDER estimates it as its item side, so the hash table is always built on the group rows; an inner join would be
+estimated far larger than either side and flipped to build on the items.
 
 2. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
    every raw value and `v`, so a NaN raises here, before any verdict; a NULL weight or value leaves its row out of the
-   sums, and a NULL limit is no limit. A data limit is one value on the group's
-   rows, so its MIN (upper) or MAX (lower) carries it. A projection raises the data checks, then infeasible, then unbounded, and
-   gives the
-   stages after it `S`, `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one
+   sums, and a NULL limit is no limit. A data limit is one value on the group's rows, so its MIN (upper) or MAX
+   (lower) carries it. A projection raises the data checks, then infeasible, then unbounded, and gives the stages after
+   it `S`, `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one
    down, and which limit binds.
 3. The price: the narrow items (group key, `t`, finite room up plus finite room down) go through the plan's one window,
    partitioned by group and ordered by `t` highest first, with one running sum of the two rooms: the most the group can
@@ -148,7 +130,7 @@ Stages 2 and 4 sum over the decisions of a row inside one aggregate input, and t
 `greatest` and `least`. Stage 3 unpivots only the narrow items: the row, with each decision's price and room in columns of
 its own, is crossed with a constant relation of the decision numbers, and a projection picks the price and room of the
 decision a number names. That costs a fraction of DuckDB's `UNNEST` of two lists (10,000,000 items took 0.03 s in
-isolation against 0.85 s), which the plan used before. The sort carries the group key, the price, the room and its
+isolation against 0.85 s). The sort carries the group key, the price, the room and its
 running sum. Stage 5 gives one answer column per decision.
 
 No row number, breaker, group-back or window over source columns is in the plan, and the row id the driver appends to
@@ -168,7 +150,7 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 ## Performance
 
 Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/direct_solve/archive/profile_direct_r1.py`.
-The per-group rows were measured on the per-group plan before R1 read a `by` key from a query, and are not measured since.
+The per-group rows come from an earlier per-group plan and are not re-measured on the plan that reads a `by` key.
 Each run is a fresh `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs
 (median), each solver 1 run; the solver path is `off` with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent
 reads one aggregate row, so the time is the plan, not the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
@@ -215,9 +197,9 @@ rooms; one sort by `t`; a running sum; a join back that gives every row its answ
 read evaluates the per-row checks and item values the floor does not have. It keeps 6 to 8 cores busy. `PER` costs no
 more than one budget. Two decisions run about 2 times one decision at 5,000,000 rows (1.8 to 2.2 times over repeated
 runs with all threads, 2.03 on one thread, 2.1 times the CPU: 10.5 s against 4.9 s), because the one sort holds
-10,000,000 items and each read computes both decisions' item values. The cross-product unpivot of stage 3 brought this
-down from 4.2 times; what remains is the work of twice the items. The `two_decisions` rows of this table were measured
-on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot, three runs each. A budget from an aggregate over
+10,000,000 items and each read computes both decisions' item values; an `UNNEST` unpivot in stage 3 ran 4.2 times. The
+`two_decisions` rows of this table were measured on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot,
+three runs each. A budget from an aggregate over
 the clause's group is computed in R1's own aggregate; any other is a side table over another read of the source.
 
 **With an objective `when`** (`SUM(ship * ps_supplycost) <= 0.1 * SUM(ps_supplycost)` over TPC-H `partsupp`, `ship`

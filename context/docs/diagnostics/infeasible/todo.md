@@ -2,6 +2,13 @@
 
 Current behavior and the accepted repair-tie policy are recorded in [`done.md`](done.md).
 
+## Open
+
+- **No automated case for a data-weighted keyed clause.** A keyed decision summed with a data weight
+  (`SUM(keepS * cost)`) renders symbolically, but no test reaches it; the keyed-fold label tests in
+  `test_query_diagnostics_relation.py` cover only uniform coefficients. Add one that applies the reported edit with
+  `_apply_reported_fix`.
+
 ## Parked
 
 Recorded so it is not lost; not to be built until the owner picks it up.

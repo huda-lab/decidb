@@ -42,7 +42,7 @@ model builder and by the column labeller in diagnostics.
 | Block | Index formula |
 |---|---|
 | Per-row | `row * num_row_vars + row_var_offset[var_idx]` |
-| Keyed | `entity_var_base[var_idx] + row_to_entity[row]` |
+| Keyed | `keyed_var_base[var_idx] + row_to_class[row]` |
 | Query-wide | `scalar_column[var_idx]` — `row` is ignored |
 | Global | `global_block_start + g` |
 
@@ -56,14 +56,14 @@ Three accessors matter:
 
 Construction and ownership:
 
-- **`VarIndexer::Build()`** copies entity mappings so the indexer owns every part of
+- **`VarIndexer::Build()`** copies the keyed mappings so the indexer owns every part of
   its lookup state and can outlive the `SolverInput`. It is built once early in
   `Finalize`, threaded through `SolveModel` and `Build`, then moved onto
   `gstate.var_indexer` for readback in `GetData`. `total_vars` is refreshed just
   before the solve, once every auxiliary global has been appended.
 
 There is no non-owning constructor. Focused tests use the same owning path as
-production, so entity-mapping lifetime has one contract everywhere.
+production, so keyed-mapping lifetime has one contract everywhere.
 
 ---
 
@@ -82,7 +82,7 @@ Type-driven defaults:
 an INTEGER-typed IN-domain / L0 indicator both reach the `[0,1]` box through this
 one type-driven path.
 
-**Bound merging is asymmetric, and deliberately so** (`ilp_model_builder.cpp:210-223`):
+**Bound merging is asymmetric, and deliberately so** (`ilp_model_builder.cpp`):
 
 - **Lower** — taken **directly** from `input.lower_bounds`, not `max`-ed with the
   type default. The physical operator already resolved each variable's lower bound,
@@ -157,7 +157,7 @@ the range over finite boxes overflowed, and no decision lacks a bound. A literal
 into no box (`FoldKnownBound`), so its row's coefficient check refuses it. A coefficient the linear form computes
 (like terms merged, a reducer's factor applied) keeps its inputs (`DecideTerm::inputs`); the read that refuses it
 names the first input a column holds that is not finite on the failing row, else the clause
-(`direct_solve/framework/done.md`, "Number messages").
+(`../../direct_solve/framework/done.md`, "Number messages").
 
 `maximize` comes from `input.sense`.
 
@@ -167,22 +167,19 @@ names the first input a column holds that is not finite on the failing row, else
 
 Each `EvaluatedConstraint` becomes one or more `ModelConstraint`s.
 
-### The fast-path selector
+### Emitted rows
 
-`CanUseRowScopedFastPath()` inspects `variable_indices` once and returns true only
-when (a) every term references a **row-scoped** decide variable and (b) no decide
-variable appears in more than one term. Under those conditions each `(term, row)`
-pair yields a unique flat index, so coefficients push straight into
-`constr.indices` / `constr.coefficients`.
+`ClauseEmittedRows` builds a clause's rows once and keeps them on the clause, for every
+path below. `TermsHaveTheirOwnColumns()` inspects `variable_indices` once and returns true
+only when (a) every term references a **row-scoped** decide variable and (b) no decide
+variable appears in more than one term. Then each `(term, row)` pair has a column of its
+own, so coefficients are copied straight.
 
-Anything else — keyed or query-wide variables, or a repeated decide variable — falls
-back to `SparseCoeffAccumulator`, which handles `(entity, row)` collisions. The
-accumulator picks one strategy per constraint and reuses scratch across groups:
-a dense `vector<double>` indexed by flat var index plus a `touched` list when the
-decide-variable index span fits the cap (~1M slots), or a sorted/merged
-`(idx, coeff)` pair list otherwise.
-
-Both aggregate branches use the same selector.
+Anything else — keyed or query-wide variables, or a repeated decide variable — sums each
+row's terms per column in `SparseCoeffAccumulator`. The accumulator picks one strategy
+per clause and reuses scratch across rows: a dense `vector<double>` indexed by flat column
+plus a `touched` list when the decide-variable columns (`global_block_start`) fit 2^20
+slots, or a sorted/merged `(idx, coeff)` pair list otherwise.
 
 ### A term beside the reducers: counted once by execution
 
@@ -193,9 +190,8 @@ others (`CountOnce`, `../08_execution/done.md`). A query-wide decision inside a 
 (`SUM(opening_cost * cap)`) keeps every row, so its coefficient is the sum of the counted
 rows' data. The rule has one owner, so a writer cannot leave the builder a term whose
 count it reads from elsewhere; a debug build checks that no term outside the reducers
-reaches the builder on two rows of a group (`VerifyCountedOnce`). `CanUseRowScopedFastPath()`
-still sends a query-wide term to the accumulator, since its one solver index would collide
-with itself under the fast path. See `../../language/functions.md` ("Query-wide decisions").
+reaches the builder on two rows of a group (`VerifyCountedOnce`). `TermsHaveTheirOwnColumns()`
+sends a query-wide term to the accumulator, since its one column would collide with itself. See `../../language/functions.md` ("Query-wide decisions").
 
 ### Path 1 — aggregate, ungrouped
 
@@ -205,8 +201,8 @@ and subtracted.
 
 ### Path 2 — aggregate, grouped (a `when`, a reducer's own `when`, or a `by` key)
 
-A `group_to_rows` index is built, skipping `INVALID_INDEX` rows, and one
-`ModelConstraint` is emitted per non-empty group. Only that group's rows
+The group's rows come from `ClauseRows` (built once and kept on the clause, `INVALID_INDEX`
+rows skipped), and one `ModelConstraint` is emitted per non-empty group. Only that group's rows
 contribute; fixed LHS terms are summed over that group's rows and subtracted.
 
 ### Path 3 — per-row
@@ -228,7 +224,7 @@ data-valued bound differs per row and is known only here. The fold:
   keeps the meaning of the row: a negative data value does not lower a decision's floor of 0,
   unlike a literal `x >= -3` (D41). A constant floor under a `when` has already replaced
   the default on the instances it keeps (§2), so its row sets their exact value. Several
-  rows on one column (an entity-scoped decision, a keyed decision) all hold.
+  rows on one column (a keyed or query-wide decision) all hold.
 - **admits what DuckDB admits.** A whole-numbered decision's range ends on whole numbers that
   pass the written comparison as DuckDB evaluates it, so `0.1 * x <= c` with `c = 0.3` admits
   3, as SQL does; the builder does no division or rounding of its own.
@@ -304,18 +300,12 @@ backend does the same for its COO arrays.
 | `COMPARE_EQUAL` | `'='` | direct |
 
 `'>'` and `'<'` mean `>=` and `<=` — standard ILP convention. Strict inequalities
-are converted by adjusting the RHS, which is exact for integer variables and not for
-continuous ones, so `IsEvalConstraintLhsIntegerValued` gates the rewrite.
-
-**That gate raises no user-facing error.** The whole integer-step refusal is stated on
-declared types at stage 02, by `ValidateDecideNoIntegerStepComparisonOnReal` for the
-decision and `ValidateDecideIntegralComparisonOperands` for every other operand. Either
-failure reaching here — a REAL variable or a fractional coefficient — is an invariant
-violation and throws `InternalException`.
-
-The check stays rather than being deleted: if a future rewrite types an auxiliary REAL,
-or produces a fractional coefficient, inside a strict constraint, this fails loudly
-instead of silently stepping a bound that is not on the lattice.
+are converted by adjusting the RHS (`DecideStrictBound`), which is exact for an
+integer-valued left side and not for a continuous one. The builder checks nothing here:
+the whole integer-step refusal is stated on declared types at stage 02, by
+`ValidateDecideNoIntegerStepComparisonOnReal` for the decision and
+`ValidateDecideIntegralComparisonOperands` for every other operand, so only an
+integer-valued left side reaches a strict comparison.
 
 Whether a coefficient may be fractional is a *type* judgement made at bind time, not a
 value check here: reading values would make a query's **validity** depend on the table's
@@ -334,7 +324,7 @@ When `input.objective_product_groups` is non-empty, Q is built for the form
 stored value is the plain coefficient of its monomial: `q_vals[k]` multiplies
 `x[q_rows[k]] · x[q_cols[k]]` exactly once, so `3·x²` stores 3 and `4·x·y` stores 4.
 `ilp_model.hpp` states this convention on the struct, and every backend adapter
-converts to its own solver's spelling rather than assuming one (§7 of
+converts to its own solver's spelling rather than assuming one (§5 of
 `../07_solver/done.md`).
 
 Stage 08 evaluates every product group (`EvaluatedProductGroup`, `solver_input.hpp`) on each row: its weight `w`
@@ -411,7 +401,7 @@ each site repeating them:
   constraint has no reducer to name.
 
 No site stamps the clause's `when c per K:` qualifier: a diagnosis reads it from the
-source registry by `source_clause_id` (`SourceAwareProvenance`,
+source registry by `source_clause_id` (`FindConstraintSource`,
 `decide_diagnostic_render.cpp`), the one place it lives.
 
 `avg_scaled`, `weight_labels` and `folded_terms` stay hand-stamped at exactly the
@@ -420,10 +410,8 @@ not leftover drift: `FormatQuadraticLhs` (stage 07's diagnosis renderer) never
 reads those three fields — it reconstructs a quadratic row's LHS from
 `linear_coefficients`/`q_coefficients` directly, the same way `FormatLhs` (the
 linear renderer) reads `avg_scaled`/`folded_terms`/`weight_labels`. Stamping them
-on a `QuadraticConstraint` would be dead weight with no reader, not a fix. The
-comment marking these six sites is numbered 1-6 in emission order (was
-non-contiguous 1/2/3/5/6/7 before this consolidation, from a since-removed site
-4).
+on a `QuadraticConstraint` would be dead weight with no reader. The comment
+marking the six sites numbers them 1-6 in emission order.
 
 ---
 
@@ -615,17 +603,12 @@ may be told to edit. It is not one: it encodes `z = MIN/MAX(members)`, its slack
 auxiliary's units rather than the user's bound's, and `ExtremumLinkSpec` carries no
 `source_clause_id` for a diagnosis to name it by. Both MIN/MAX paths therefore mark closing
 rows `USER_MECHANISM`; the user's clause is the outer row, which holds the bound in the
-user's own units and already carries its source. See `../../diagnostics/infeasible/done.md`,
-I2.e, for what went wrong when the composed path diverged from this.
+user's own units and already carries its source (`../../diagnostics/infeasible/done.md`,
+"Rigid shapes").
 
-**A member becomes a column only when it is not one already.** `ExtremumArgumentColumn`
-hands the general constraint the member's own column where the member is an exact
-renaming — one surviving term, unit coefficient, no constant. `MAX(x)` is that shape,
-and pinning `t = x` there costs one column and one equality row per member to say
-nothing; a general constraint *reads* its arguments, so presolve cannot substitute the
-copies away. Measured on `MAXIMIZE MAX(x)` at 15K rows: 0.97s with the copies, 0.29s
-without, same answer. `MAX(2 * x)` and `MAX(x + 1)` are genuine expressions and still
-earn a column, boxed by that member's own reach.
+**A member becomes a column only when it is not one already** (`ExtremumArgumentColumn`,
+§9a). `MAX(2 * x)` and `MAX(x + 1)` are genuine expressions and earn a column, boxed by
+that member's own reach.
 
 **The closing Big-M is resolved by the caller**, because the family a link reduces
 over is not always the per-row family: an outer MIN/MAX over group *sums* reduces over
@@ -642,9 +625,6 @@ constant cancel in the `(aux - expr)` difference. A reach that ignores the const
 sound only while every row carries the same one: for `MAX(x + c)` with `c` a data column
 it gives an `M` too small to be valid, and a too-small `M` cuts off legal answers rather
 than merely loosening the relaxation. Corpus queries 89–92 cover it.
-
-So `AuxRange` carries one bracket and `Span()` is its only Big-M; there is no
-constant-free reading a caller could pick by mistake.
 
 ### MIN/MAX constraints
 
@@ -692,8 +672,8 @@ members it actually writes, so the native arm allocates none at all.
 
 ### Helper decisions of the value rewrite
 
-Stage 05 replaced each decision reducer of a VALUE-shape clause by a helper
-decision (`../05_optimizer/done.md`); stage 08 evaluated that reducer's members per `by`
+Stage 05 replaces each decision reducer of a VALUE-shape clause by a helper
+decision (`../05_optimizer/done.md`); stage 08 evaluates that reducer's members per `by`
 group into a `ReducerValueLinkSpec` (`solver_input.hpp`): an `EvaluatedConstraint` whose
 terms are the body's, nonzero only on the rows the clause and the reducer keep, grouped
 by the `by` key over the kept rows, with the link's label and provenance. The helper's
@@ -812,15 +792,13 @@ That is also why `<>` is stated as a conditional row rather than as a general
 constraint: a general constraint carries no row for diagnosis to reach, and dropping
 the clause is the only repair a `<>` has.
 
-Two guards run before anything is emitted, and the order matters:
+Two guards run before anything is emitted:
 
-- **`NELhsIsIntegerValued`** is an invariant check, not a user-facing refusal. The ±1 band
-  is only exact on the integer lattice; on a continuous quantity it would silently cut the
-  feasible points in `(K-1, K+1)`. Both ways an LHS can fail — a REAL decision, a
-  fractional coefficient — are refused on declared types at stage 02, so either arriving
-  here raises an `InternalException`. The check is kept rather than deleted so a future
-  rewrite introducing a REAL auxiliary or a fractional coefficient inside a `<>` fails
-  loudly instead of silently cutting the band.
+- **The left side is linear and integer-valued.** The ±1 band is exact only on the integer
+  lattice; on a continuous quantity it would cut the feasible points in `(K-1, K+1)`. The
+  stage 02 type gate admits only an integer-valued left side, so the builder does not
+  check it. A product or a power of decisions on the left raises an `InternalException`:
+  stage 05 refuses it.
 - **`NEIsIntegerValuedRhs`** *drops* a comparison whose bound no integer can equal,
   because every assignment already satisfies it. Emitting the pair anyway would
   wrongly exclude `floor(K)` and `ceil(K)`. An infinite `K` is the same case for the
@@ -881,8 +859,8 @@ up to three constraints with complementary row masks; instead the verdict must b
 across active rows, and a mixed one keeps the disjunction unsplit.
 
 A collapsed row **still allocates its binary**, appearing in no row, because the ordinary
-formulation keeps the same column layout across equivalent `<>` shapes. Atomic DROP no
-longer depends on that column: the source comparison's `removal_group_id` is propagated to
+formulation keeps the same column layout across equivalent `<>` shapes. Atomic DROP does
+not depend on that column: the source comparison's `removal_group_id` is propagated to
 every emitted descendant and the diagnostic candidate physically omits the whole group.
 A row dropped as a tautology allocates nothing at all.
 
@@ -958,10 +936,9 @@ leaves the auxiliary unboxed and answers. That divergence is the capability's pa
 **One binary, on one arm only.** The sign indicator `__abs_y_N__` exists to switch the
 Big-M envelope, and the native arm emits no envelope — it states `aux = |t|`. Stage 05
 therefore allocates it only on the lowering arm. It is a **row-scoped** variable, so
-leaving it in on the native arm cost one free binary *per data row*, referenced by no
-row and no general constraint: presolved away by the solver, so never a wrong answer,
-but built, stored and marshalled across the solver API for every row of the input, and
-growing with the relation. Suppressing it is only expressible because stage 05 owns the
+on the native arm it would cost one free binary *per data row*, referenced by no row and
+no general constraint: presolved away by the solver, so never a wrong answer, but built,
+stored and marshalled across the solver API for every row of the input. Suppressing it is only expressible because stage 05 owns the
 formulation choice — the arm is known at the moment the variable would be allocated.
 `AbsMaximizeLinkSpec::y_idx` is `INVALID_INDEX` on the native arm.
 
@@ -980,9 +957,7 @@ answer.
 Phase 1 also **narrows the auxiliary's column box** to `max(|lo|, |hi|)`, on both arms. The
 formulation pins `aux = |inner|`, so that is a valid upper bound — and the only one anything
 derives, since `aux >= inner` / `aux >= -inner` bound the auxiliary from below only.
-That box is why this runs before every other linearizer: they all derive their own
-`M` from column boxes, and without it an outer MIN/MAX over `ABS(...)` sees an
-unbounded column and refuses a query whose bound was computable.
+That box is why this runs before every other linearizer ("Big-M constants" above).
 
 ---
 

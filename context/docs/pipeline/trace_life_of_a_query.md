@@ -84,7 +84,7 @@ a copy produces an identical tree — the C7 / O5 fixed point.
 
 ## Stage 05 — Optimizer
 
-All eleven passes run and none of them changes anything: no `norm`, no `IN`, no
+Every pass runs and none of them changes anything: no `norm`, no `IN`, no
 `ABS`, no bilinear product, no comparison in the VALUE shape, no `MIN`/`MAX`, no `<>`,
 no `AVG`, no bound to fold. `LogicalDecide` comes out of `OptimizeDecide` as it went
 in.
@@ -127,8 +127,8 @@ fast path. Nothing is NULL, NaN or infinite.
 
 One row-scoped variable, three rows, no entities, no scalars, no globals: the
 `VarIndexer` layout is just block 1, three columns.
-`CanUseRowScopedFastPath` returns true — every term is row-scoped and `x` appears
-once — so coefficients push directly into COO.
+`TermsHaveTheirOwnColumns` returns true — every term is row-scoped and `x` appears
+once — so no two (term, row) pairs share a column and each row's terms are read without summing them.
 
 `variable_types[0]` is reported as `BOOLEAN` (because `is_boolean_var`), giving
 `[0,1]` and `is_binary`.

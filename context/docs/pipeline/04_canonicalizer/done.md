@@ -3,8 +3,7 @@
 > One planning boundary decides the structural shape of every DECIDE constraint
 > **and objective**. Downstream stages consume that shape and never re-decide it.
 
-This document is the authoritative specification for that shape. It describes
-current code.
+This document is the authoritative specification for that shape.
 
 **Key source files**
 
@@ -75,8 +74,7 @@ product's factors (§3.3b), which opens none of them.
 That restriction is the whole design. A pass that may decline can never be the
 single home for anything: every consumer downstream then has to handle both "it
 ran" and "it declined", and the declined branch is where duplicate
-implementations come from. That is exactly how canonicalization once came to be
-spread across five sites.
+implementations come from.
 
 ---
 
@@ -313,8 +311,8 @@ Three rules:
 
 **This is an authorship boundary, and that is why it cannot be reconstructed
 later.** A source cast and a binder cast are both `BoundCastExpression`. Whether a
-cast is widening does not answer whether the user wrote it, which is why the
-earlier resolution-based predicate was insufficient. `BindOp` also adds fresh
+cast is widening does not answer whether the user wrote it, so no predicate on how
+a cast resolves can stand in for rule 1. `BindOp` also adds fresh
 reconciliation casts while rebuilding, so decision-aware cast descent is required
 for the pass to remain a fixed point at all.
 
@@ -344,9 +342,9 @@ commute with a positive factor only — `MAX(-2x)` is `-2·MIN(x)`, not `-2·MAX
 Pushing a factor in therefore requires knowing its sign, and a scalar subquery's
 sign is not known until the query runs. Leaving it outside makes the sign
 irrelevant to *correctness*; it only selects which linearization is cheaper, so an
-unknown sign costs performance instead of failing. An earlier version did fold,
-swapping MIN/MAX for a negative factor — exact, but it made the sign load-bearing
-and had nothing to fall back on when the sign was unknown.
+unknown sign costs performance instead of failing. Folding with a MIN/MAX swap for a
+negative factor is exact, but makes the sign load-bearing, with nothing to fall back
+on when the sign is unknown.
 
 What may be a factor (`PeelScale`, the single place that judges it):
 
@@ -403,7 +401,7 @@ signed factors (`MergeLikeAtoms`): `x + x >= -4` is emitted as `2 * x >= -4`,
 `x*x + x*x <= 8` as `2 * POWER(x, 2) <= 8`. The
 merge runs on each written side and again on the partitioned decision side, where a term
 that crossed the relation meets its twin: `3 * x >= x - 4` is `2 * x >= -4`, and the
-result is a fixed point (C7). The linear form merged
+result is a fixed point (C7). The linear form merges
 like terms at extraction anyway, so merging here changes no model row; what it buys is
 that a bound written as a repeated term reaches the MIN/MAX rewrite and bound absorption
 as the scaled single term it is. A group whose factors cancel (`x - x`) is
@@ -536,8 +534,8 @@ factors' scopes on the key lattice (`JoinDecideKeys`: query-wide < a key < per r
 `by` key or query-wide. A decision brings its own key; data brings the enclosing `per`
 key, whose scope check makes it one value per class, or per row with no `per`. So the
 facility link `per D: sum(ship) by (D) <= cap * open`, with `open` declared `per D:`, is
-AGGREGATE: one row per depot with that depot's `open` column, where it used to take a
-helper per group. Execution counts the term once in each group's row (`CountOnce`, stage
+AGGREGATE: one row per depot with that depot's `open` column, with no helper per group.
+Execution counts the term once in each group's row (`CountOnce`, stage
 08). Only `CanonicalizeTree` sees the enclosing scope, so it decides the shape once and
 stamps it; the linear form, direct solve and the window rewrite read the stamp
 (`VALUE_REWRITE_TAG`, else AGGREGATE for a reducer on the decision side and PER_ROW for
@@ -623,8 +621,8 @@ all optimizer rewriting.
 
 `VerifyCanonical` / `VerifyCanonicalObjective` are **debug-only**, the same idiom
 as `LogicalOperator::Verify`: the body — including the re-canonicalize-and-compare
-fixed-point check — is wrapped in `#ifdef DEBUG`, so it compiles to an empty
-function in release. Call sites at all three points above call it unconditionally
+fixed-point check — is wrapped in `#ifdef DEBUG`, so in release only the one-scope-per-clause
+test of C0 (`VerifyOneScopePerClause`) remains. Call sites at all three points above call it unconditionally
 regardless of build type. This exists because the check re-canonicalizes the
 whole tree a second time purely to assert idempotency, which is too expensive to
 pay on every DECIDE query once release is the target; `ValidateCanonicalTree`'s
@@ -707,42 +705,20 @@ reinterprets a parsed expression tree.
 
 ## 7. Verification
 
-```bash
-make release
-
-test/decide/.venv/bin/python3 -m pytest \
-  test/decide/tests/test_canonicalize_cast.py \
-  test/decide/tests/test_canonicalize_scale.py \
-  test/decide/tests/test_canonicalize_sign.py \
-  test/decide/tests/test_canonicalize_side_agnostic.py \
-  test/decide/tests/test_canonicalize_homogeneity.py \
-  test/decide/tests/test_canonicalize_idempotence.py \
-  test/decide/tests/test_product_normal_form.py \
-  test/decide/tests/test_bilinear.py \
-  -v
-
-./test/decide/golden/check.sh    # diffs baseline.gurobi.dump and baseline.highs.dump
-
-make decide-test
-git diff --check
-```
-
-What each focused file pins:
+The focused files below, then `./test/decide/golden/check.sh` (diffs `baseline.gurobi.dump` and
+`baseline.highs.dump`); the commands to run them are in `.claude/CLAUDE.md`. What each file pins:
 
 | File | Contract |
 |---|---|
 | `test_canonicalize_cast.py` | Mixed BIGINT/DECIMAL against direct DuckDB evaluation around `2^53`; every explicit decision-cast spelling rejected; data casts remain part of bounds and coefficients |
-| `test_canonicalize_scale.py` | Composed query-wide multiplication and division around reducers are supported; a row-varying or correlated factor on a constraint's reducer is read per row; a decision factor is refused |
+| `test_canonicalize_scale.py` | Composed query-wide multiplication and division around reducers are supported; a row-varying or correlated factor on a constraint's reducer is read per row; an `INT` decision factor is refused and a `BOOL` one answers |
+| `test_canonicalize_sign.py` | A term that crosses the relation is classified by its sign: a negated ABS needs Big-M; a negated MIN/MAX reducer, a leading negative one and a subtracted objective reducer answer as the oracle's model |
 | `test_canonicalize_side_agnostic.py` | Correlated bounds on both sides |
 | `test_canonicalize_homogeneity.py` | A query-wide decision beside a reducer (aggregate shape, under `per` too); a per-row or keyed decision, or a row-varying coefficient on a query-wide one, beside a reducer answered per row |
 | `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `when` and `per` wrappers |
 | `test_query_diagnostics_relation.py` | Forward and reversed uncorrelated subquery bounds emit the same editable SQL suggestion |
 | `test_product_normal_form.py` | Each spelling of a square answers as the oracle's model of the polynomial it denotes, on Gurobi and (for a constant coefficient) HiGHS; `POWER(x, 0)` and `POWER(x, 1)`; a product of `BOOL` decisions; each shape-check refusal quotes the clause and points at the term; a data weight on a square is refused on HiGHS by the gate |
 | `test_bilinear.py` (`TestFactoredProductDegree`) | `SUM((x + y) * z)` is accepted in both clauses |
-
-Passing the suite is necessary but not sufficient. At the start of this work the
-tree passed 1,059 tests and all 80 golden models despite an undetected lossy-cast
-wrong answer and a reversed-subquery diagnostics defect.
 
 To see a diagnosis, prefix the query with `DIAGNOSE` — it returns findings instead of
 raising, so a single statement is enough and nothing has to survive an error.

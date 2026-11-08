@@ -10,7 +10,7 @@ flattened into terms.
 depends on the whole dataset, so it must consume its entire input before it can
 produce a row.
 
-**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~4,970 lines)
+**Key source file**: `src/execution/operator/decide/physical_decide.cpp`
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 `Finalize` itself is a short orchestrator; the phases below are private methods
@@ -171,14 +171,11 @@ The call is ordered here, immediately after the singleton-row bounds are resolve
 before any Big-M is computed, because every downstream constant depends on the
 tightened box.
 
-The pass is a single sweep, not a fixpoint: a bound derived for one variable is
-not fed back to tighten others in the same pass. It skips constraints it cannot
-reason about soundly — any negative coefficient, product groups (squares and products),
-MIN/MAX and `<>` indicator rows, and a clause with rows outside its row map, such as one
-under a `when` (whose bound would wrongly cap the excluded rows, since the derived bound
-is shared across all of a variable's rows). A `per K:` clause with no `when` is not
-skipped: each row it leaves out stands with its class's first row
-(`rows_stand_with_their_class`).
+The pass skips constraints it cannot reason about soundly — any negative coefficient,
+product groups (squares and products), MIN/MAX and `<>` indicator rows, and a clause with
+rows outside its row map, such as one under a `when` (whose bound would wrongly cap the
+excluded rows, since the derived bound is shared across all of a variable's rows); stage
+06 §9 gives the exception for a `per K:` clause.
 
 ---
 
@@ -219,7 +216,7 @@ produces them, and why it cannot live here, is
 
 ---
 
-## 4. PHASE 1.5 — entity mappings
+## 4. PHASE 1.5 — keyed mappings
 
 For each `KeyedScopeInfo` — a keyed decision's key (`per K: x`), a reducer's own `per`
 or colon form (`sum(per K: e)`, `SUM(D: e)`), a helper decision's `by` key — before
@@ -233,21 +230,21 @@ coefficient evaluation:
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
 2. A helper decision's scope (`KeyedScopeInfo::value_link`, the value rewrite) reads its
    link's `by` key on the rows the link's clause `when` keeps only, so the key is never
-   evaluated where the clause never reads: one entity per group that holds a member,
+   evaluated where the clause never reads: one class per group that holds a member,
    numbered as its definition numbers them. A group with no member has no helper (its
-   reducer is NULL there, D68), so its rows map to the absent entity below.
+   reducer is NULL there, D68), so its rows map to the absent class below.
 3. A row in no class (a NULL written key, or a row a helper's clause drops) has no
-   decision. It maps to one spare entity, `EntityMapping::absent_entity` (the Null Object
+   decision. It maps to one spare class, `KeyedMapping::absent_class` (the Null Object
    pattern), so every row has an id and `VarIndexer::Get` stays total. The model builder
    fixes the absent column at 0, so an objective term that reads it is dropped; a reducer
    over the decision never reads the row (`DecideCanonicalizer::SkipNullData` tests the
    key's written columns for NULL), and an unreduced read skips its instance
    (`MarkAbsentDecisionReads`, §5). The output shows NULL there.
-4. Entity ids are the key's group ids: numbered by key value (below), so a keyed
+4. Class ids are the key's group ids: numbered by key value (below), so a keyed
    decision's solver columns follow its key's values, not the rows' order.
-5. Fill a `row_to_entity` vector of size `num_rows`.
+5. Fill a `row_to_class` vector of size `num_rows`.
 
-The result is an `EntityMapping { num_entities, row_to_entity, absent_entity }` on the
+The result is a `KeyedMapping { num_classes, row_to_class, absent_class }` on the
 `SolverInput`, which is what makes several rows share one solver column.
 
 ---
@@ -281,7 +278,7 @@ the rows it looks at.
 Every clause is then read by these rules; §5 gives the row maps they produce:
 
 - **Kept rows first.** Its `when` is read before anything else, on every row, in one scan
-  (`KeepRowsWhere`), each chunk reading the parts of an AND or an OR left to right, each
+  (`KeepChunkRowsWhere`), each chunk reading the parts of an AND or an OR left to right, each
   only on the rows the earlier parts leave
   undecided -- an AND's on the rows they keep, an OR's on the rows they do not
   (`KeptRows`; the composed rewrite folds the clause's `when` in front of a term's own).
@@ -444,7 +441,7 @@ NULL), the clause has no instance.
 
 **An absent decision reads like a NULL.** After the terms are read,
 `MarkAbsentDecisionReads` marks each row where a linear term or a product group's form reads a
-decision on its absent entity (§4), and `SkipNullInstances` skips that row's instance as
+decision on its absent class (§4), and `SkipNullInstances` skips that row's instance as
 it skips one with a NULL coefficient. So `sum(x) by (g) <= 0.5 * sum(x)` gives a NULL-`g`
 row no limit (its `by (g)` helper is absent there) while the total still counts it.
 
@@ -495,7 +492,7 @@ drops is still counted once.
 
 De-duplication runs **inside** each `by` group, after the clause's `when`, the reducer's
 own `when` and the grouping. Group ids are dense in `[0, num_groups)` and class ids in
-`[0, num_entities)`, so `(group, class)` flattens into one dense index with no hashing.
+`[0, num_classes)`, so `(group, class)` flattens into one dense index with no hashing.
 The mask is folded into the term's filter (`ApplyQualifierToFilter`), so AVG's
 denominator counts classes. For a hard MIN/MAX, a row the de-duplication drops leaves the
 group (§4a).
@@ -534,11 +531,9 @@ Every coefficient and RHS value is checked after evaluation:
 
 **Infinity is admitted on one path only: the values that become a row's `rhs`.** An
 infinite bound is not an error there — it is the absence of a constraint (`<= +inf`)
-or one nothing satisfies (`>= +inf`) — and the model validator has always accepted a
-non-finite `rhs` while rejecting NaN. A constant bound was never checked at all, so
-the per-row expression path was the only one refusing what the rest of the pipeline
-handled; canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *same*
-bound on the strict path purely because of how it was written.
+or one nothing satisfies (`>= +inf`) — and the model validator accepts a non-finite
+`rhs` while rejecting NaN. Refusing it on the per-row path alone would treat one bound
+two ways by spelling: canonicalization rebuilds `x + v <= K` as `x <= K - v`.
 
 The input of a **bound-side reducer** follows the same rule: `min(x) by (g) <= max(cap)
 by (g)` is a window of DuckDB's over `cap`, and its value check (a VALUE_IS_VALID scope
@@ -565,59 +560,42 @@ whose `M` bounds an expression rather than answering a comparison, so there is n
 bound to classify. It calls `DecideTightPerRowBigM` across the stage boundary.
 
 A *variable* with no finite bound is the separate case, and the answer there is also
-refusal rather than a constant — there is no fixed Big-M anywhere in DeciDB. The
-order in which this stage calls the linearizers is load-bearing for it: ABS runs
-first, because pinning an ABS auxiliary is also what determines its column box, and
-every linearizer after it derives its `M` from column boxes. See
-[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
+refusal rather than a constant — there is no fixed Big-M anywhere in DeciDB. The order
+in which this stage calls the linearizers (ABS first) is load-bearing for it: see
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9, "Big-M constants".
 
 ### The construct routing — a decision this stage reads, not one it makes
 
 Whether a construct is lowered is a **formulation** choice, and formulation belongs to
-stage 05. This stage reads the answer off the operator and applies it.
-
-```cpp
-const bool native_abs = use_native_constructs.abs;          // decided by stage 05
-const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
-                                            force_native_constructs};
-const VarIndexer &var_indexer = ...;   // the flat column space, built by BuildSolverInput
-
-DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/!native_abs);
-if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }
-else            { LinearizeAbsMaximize(solver_input); }
-LinearizeMinMaxConstraints(solver_input, var_indexer, decide_var_names, native_min_max);
-LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
-LinearizeBilinear(solver_input, decide_var_names);
-...
-LowerDecideConstructs(solver_input, var_indexer, decide_var_names, use_native_constructs);
-```
+stage 05. This stage reads the answer off the operator and applies it. `FormulateModel`
+reads `use_native_constructs.abs` and a `NativeConstructPolicy` built from
+`use_native_constructs.min_max` and `force_native_constructs`; derives the ABS auxiliary
+boxes (refusing an unbounded contributor on the lowering arm only); emits ABS natively
+(`EmitNativeAbs`) or lowered (`LinearizeAbsMaximize`); then runs the value-link, MIN/MAX,
+`<>` and bilinear linearizers, and last `LowerDecideConstructs`.
 
 `use_native_constructs` is a `SolverConstructSupport` copied from
 `LogicalDecide::use_native_constructs`, which stage 05 filled in from the chosen
 backend before it rewrote anything. **This stage must not ask a backend what it
 supports.** The routing has to be the same answer the rewrites upstream were selected
 against, and a second, independently-derived answer is exactly how the plan and the
-solve come to disagree about what was lowered. Deferring the choice also kept stage 05
-from acting on it: see [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
+solve come to disagree about what was lowered. Choosing here would also keep stage 05
+from acting on the choice: see [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
 
 **The `VarIndexer` is built first, before the column box is settled.** It reads
-`num_rows`, the variable scopes and the entity mappings, all settled when
+`num_rows`, the variable scopes and the keyed mappings, all settled when
 `BuildSolverInput` starts, and only the global block grows afterwards, with
 `total_vars` refreshed before the solve. The floors a `when` lowers need its row to
 instance map before the first box pass, and every construct site emits in flat
 columns at the point it decides something, instead of stashing a decision for a
 second pass to execute.
 
-**MIN/MAX arrives as a policy, not an answer**, and the difference matters. It reaches
-this stage as a `NativeConstructPolicy` — the capability, plus whether a declared
-construct is used everywhere or only as a fallback — and the default policy is
-*fallback*: the lowering is the smaller model wherever it is valid, so native is
-reserved for the clause that has no valid Big-M at all. Whether a given clause has one
-is a question about **evaluated coefficients**, which nothing before this stage can
-answer, so this stage answers it — per clause, from the reach of that clause's own
-family. That is applying a decision to data, not making one; the distinction is the
-same one the `<>` range collapse already relies on. One statement can have a bounded
-clause and an unbounded one, and each gets the formulation it can actually use.
+**MIN/MAX arrives as a policy, not an answer** (`NativeConstructPolicy`: the capability,
+plus whether a declared construct is used everywhere or only as a fallback; why native is
+the fallback is [`../05_optimizer/done.md`](../05_optimizer/done.md) §0). Whether a given
+clause has a valid Big-M is a question about evaluated coefficients, so this stage answers
+it per clause, from the reach of that clause's own family. One statement can have a
+bounded clause and an unbounded one, and each gets the formulation it can use.
 
 `DECIDB_NATIVE_CONSTRUCTS` A/B-tests the two arms on one machine: `off` forces every
 construct down its lowering path, `force` states every declared one natively, and `on`
@@ -625,10 +603,8 @@ construct down its lowering path, `force` states every declared one natively, an
 A/B has to be `force` against `off`: on a bounded shape the default *is* the lowering,
 so comparing it against `off` would compare the lowering with itself.
 
-The backend itself reaches this stage as a **name**. `PlannedSolverBackend()` resolves
-`solver_backend_name` through the registry at the two points that are about to solve —
-the primary solve and each diagnostic re-solve — so nothing here holds a solver handle
-it is not immediately using, and nothing here re-selects.
+The backend itself reaches this stage as a **name**, resolved by `PlannedSolverBackend()`
+only where a solve is about to run ([`../07_solver/done.md`](../07_solver/done.md) §2).
 
 **Only two constructs choose between two emitters.** `<>` does not choose: it is emitted once, as conditional rows, and
 `LowerDecideConstructs` turns those into Big-M rows where the backend cannot state a
@@ -649,33 +625,17 @@ tags rather than fully lowering, because the Big-M constants are functions of ev
 data, and that tag *is* the native-construct record. Neither arm decides anything, which
 is what keeps the two comparable.
 
-**A member that is already a column is passed through, not copied.** A general
-constraint relates columns, so a member expression normally has to be pinned to a fresh
-one — but `MAX(x)`, `MIN(x)` and `ABS(x)` name a decision variable directly, and there
-`t = x` was a column and an equality row per data row to restate a column that already
-existed. Presolve cannot substitute a column a general constraint reads, so the copies
-survived into the solve: measured on `MAXIMIZE MAX(x)` at 15K rows, 0.97s with the
-copies against 0.29s without, for the same answer. Only an exact renaming qualifies —
-one variable term, coefficient 1, no constant — since `MAX(2 * x)` or `ABS(x - target)`
-is a genuine expression and still earns a column.
-
-The native columns that remain are **boxed**, not free, wherever a range is derivable —
-the same `AuxRange` walk that produces the Big-M constant. A free continuous column is a
-measured performance cliff, and it is earned only by the one case that has no range at
-all, which is precisely the query the native path exists to answer.
-
-The box is derived **per row**, on both constructs. Each argument column stands for one
-row's inner expression, so one row's reach is what bounds it; and because
-`AuxRange::CoverRowSided` folds the two ends in separately, a row open on one side keeps
-the side it can derive, and a row whose contributors are all bounded gets a real box
-even when another row's are not.
+A member that is already a column is passed through, not copied, and the native
+columns that remain are boxed per row wherever a range is derivable:
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9a and "ABS under
+MAXIMIZE".
 
 ### Output
 
 A `SolverInput` carrying `num_rows`, `num_decide_vars`, `variable_types`
 (reported as `BOOLEAN` wherever `is_boolean_var` is set), resolved
 `lower_bounds` / `upper_bounds`, the `EvaluatedConstraint` vector, objective
-coefficient and variable-index arrays, entity mappings, and `sense`.
+coefficient and variable-index arrays, keyed mappings, and `sense`.
 
 When the objective is quadratic, the same evaluation runs on `product_groups` **in
 addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /
@@ -686,10 +646,7 @@ for the quadratic half. Each term's filter — its own
 `CoefficientColumn` keeps this compact: a column that is uniform across rows — a
 broadcast Big-M coefficient, a constant RHS, a McCormick constant — stores one
 scalar rather than `vector<double>(num_rows, K)`. Reads via `Get(row)` are
-branchless on the storage kind, and mutation lazily promotes Scalar → Dense. A
-third kind, `SparseMasked`, stores a uniform value at a sorted index set with
-every other row implicitly 0, built for the `<>` per-row indicator path where
-every active row gets `-M` and every excluded row 0.
+branchless on the storage kind, and mutation lazily promotes Scalar → Dense.
 
 ---
 
@@ -776,9 +733,9 @@ value        = ilp_solution[solution_idx]
 ```
 
 A **per-row** decision (`DecideVarScope::ROW`) has its own column on each row. A
-**keyed** decision (`per K: x`, `ENTITY`) has one column per class of `K`: every row of
+**keyed** decision (`per K: x`, `KEYED`) has one column per class of `K`: every row of
 a class resolves to it and receives the same value, which is the point of the key. A
-**query-wide** decision (`per (): x`, `SCALAR`) is one column every row resolves to.
+**query-wide** decision (`per (): x`, `GLOBAL`) is one column every row resolves to.
 
 The readback indexer is the owning `VarIndexer::Build()` form, so it outlives the
 `SolverInput`.
@@ -872,7 +829,7 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
 | The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
-| Logical → physical, entity key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
+| Logical → physical, key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
 | The `DIAGNOSE` operator (sink the rows, emit the findings) | `src/execution/operator/decide/physical_decide_diagnose.cpp` |
 | `per`, `when` and `by` semantics; the scope test suites | [`../../language/scopes.md`](../../language/scopes.md), [`../../testing/scope_suite.md`](../../testing/scope_suite.md) |

@@ -35,19 +35,13 @@ routes to exactly one terminal. The states below are its leaves.
 ```
 
 - `[router/](router/)` — the **spine**: the dispatch tree above and the inf/unb
-  `check ray` disambiguation. Three terminals — solved, unbounded, infeasible — each an
-  engine dropped behind an existing classifier leaf without editing the classifier. A
-  time limit is deliberately *not* a leaf: see below.
+  `check ray` disambiguation. A time limit is not a leaf: see "Slow" below.
 - `[unbounded/](unbounded/)` — terminal `failed → unbounded`: names the escaping
   variable via the ray and prescribes a bound (**tighten** a too-open region).
 - `[infeasible/](infeasible/)` ★ — terminal `failed → infeasible`: elastic
   relaxation (**loosen** a too-small region). Its slack-scope policy has two modes:
   `query` folds each knob to one SQL edit and turns data conflicts into virtual offsets;
   `expanded` exposes the profile per kept row or per `per` class.
-- **A slow solve is not a diagnosis.** A solve that hits the wall-clock limit — or that
-  a user stops with Ctrl-C — is ordinary execution behaviour: it happens with or without
-  the prefix, no engine runs, and nothing is diagnosed. It lives in
-  `../pipeline/08_execution/slow_solves.md`.
 - `[foundations/](foundations/)` — the **substrate** every terminal sits on (not
   a terminal): structured solver result, constraint + variable provenance, the
   solver-behavior reference, the reporting relation.
@@ -70,24 +64,18 @@ too-open one.
   and native-general descendant of a drop-only source clause carries the same
   `removal_group_id`. Diagnosis removes that complete group before solving a candidate,
   so native and lowered formulations have the same repair semantics.
-- **A repair the model cannot represent is a repair the diagnosis cannot offer** — the
-  cost of the bullet above, stated plainly. The rows a lowering emits are sized from the
-  decision box *as the query states it*, and the elastic engine repairs by **widening**
-  that box: a ceiling baked in at the old width silently rules the widened repair out,
-  so the engine reports whatever else it can still see. That is worse advice, and where
-  one arm bakes in nothing it is worse advice **on one host only**. The rule that closes
-  it: a clause demanding more of an auxiliary than the box can supply sizes that
-  auxiliary itself. It fires only when the demand exceeds the box — only when the clause
-  cannot be met as written — so no query that solves has its Big-M loosened, which the
-  golden corpus checks. Applied to ABS and MIN/MAX. `<>`, McCormick and `norm` have
-  encodings of the same shape; they are covered because the repair model is formulated
-  afresh against the widened box, every constant re-derived, rather than patched onto
-  the solved one — see "The elastic model is a formulation, not a matrix patch" in
-  [`infeasible/done.md`](infeasible/done.md).
+- **A repair the model cannot represent is a repair the diagnosis cannot offer.** The
+  rows a lowering emits are sized from the decision box *as the query states it*, and the
+  elastic engine repairs by **widening** that box: a ceiling baked in at the old width
+  rules the widened repair out, so the engine reports worse advice, and where one arm
+  bakes in nothing, worse advice **on one host only**. The repair model is therefore
+  formulated afresh against the widened box, and a clause demanding more of an auxiliary
+  than the box can supply sizes that auxiliary itself — see "Elastic engine: repairs the
+  model can reach" in [`infeasible/done.md`](infeasible/done.md).
 - **Diagnosed on the solver that failed** — every re-solve (the elastic model, the
   `INF_OR_UNBD` probe, the unbounded-ray fallback) runs on the backend the *primary*
   solve ran on, resolved from `PhysicalDecide::solver_backend_name` through
-  `PlannedSolverBackend()`. That choice was made once,
+  `PlannedSolverBackend()`. That choice is made once,
   at plan time, before any rewrite. Diagnosis never re-selects: a second, independently
   answered selection would diagnose a failure on a solver that did not produce it, and
   once selection depends on the model the two answers can genuinely differ.
@@ -107,8 +95,8 @@ too-open one.
   canonicalization runs, and the diagnosis quotes that. The offset is valid against
   either form — moving a term across a comparison does not change what adding a constant
   to the bound means — so the repair reads `ship <= capacity * open + 25` off the same
-  `virtual_offset` machinery that already served column bounds. `EXPLAIN` reads the same
-  registry, so it stopped printing the algebra too.
+  `virtual_offset` machinery column bounds use. `EXPLAIN` reads the same
+  registry.
 
   A term canonicalization only respells, such as the product `x * w` into `w * x`
   (`../pipeline/04_canonicalizer/done.md` §3.3b), is quoted as written too: the canonical clause a repair edits keeps
@@ -126,12 +114,10 @@ too-open one.
 ## Invocation — the `DIAGNOSE` prefix
 
 `DIAGNOSE <select>` runs the query and returns its findings as a relation instead of its
-rows. It is a property of the *statement*, carried parser → binder → logical plan →
-stage 08 as `LogicalDecide::diagnose`; nothing reads it back out of a session setting.
-The full syntax and output schema are in `../language/guide.md` §8.
-The complete bound plan must contain exactly one DECIDE operator. A sole DECIDE may sit
-inside an ordinary subquery; plans containing several solves are rejected before any of
-them is armed.
+rows. The full syntax and output schema are in `../language/guide.md` §8. It is a
+property of the *statement*, never of a session setting, and the bound plan must contain
+exactly one DECIDE operator; how the flag travels and what it arms are in
+[`foundations/done.md`](foundations/done.md) ("The trigger").
 
 The engine's *tuning* knobs remain sticky session settings — they configure how it works
 once it is running, never whether it runs. The one that changes what you see most is
@@ -266,7 +252,7 @@ MAXIMIZE SUM(capacity * ps_supplycost);
 ┌───────────┬──────────┬───────────────────────────────────────────┬────────┬───────┬────────┬──────────────┬───────────────────┬──────┐
 │   state   │  clause  │             suggested_change              │ amount │ total │ scope  │ edit_source  │       group       │ row  │
 ├───────────┼──────────┼───────────────────────────────────────────┼────────┼───────┼────────┼──────────────┼───────────────────┼──────┤
-│ unbounded │ capacity │ when r_name = 'EUROPE': capacity <= <cap> │ 20.0   │ 20    │ entity │ runaway_+inf │ r_name = 'EUROPE' │ NULL │
+│ unbounded │ capacity │ when r_name = 'EUROPE': capacity <= <cap> │ 20.0   │ 20    │ keyed  │ runaway_+inf │ r_name = 'EUROPE' │ NULL │
 └───────────┴──────────┴───────────────────────────────────────────┴────────┴───────┴────────┴──────────────┴───────────────────┴──────┘
 ```
 
@@ -551,9 +537,6 @@ MAXIMIZE SUM(buy * p_retailprice);
 Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 ```
 
-That is not a mode you can turn off, and there is nothing to turn on: a query that is
-never prefixed never runs a diagnostic solve, so it never pays for one.
-
 ## Capturing examples
 
 `benchmark/decide/diagnose_examples/run.py` records what a SQL user reads for each query in
@@ -562,7 +545,7 @@ and on HiGHS, in one Markdown report under `benchmark/decide/results/diagnose_ex
 of the commit and versions. The report lists the examples whose relations differ between backends. The corpus reaches
 every `edit_source` in `language/guide.md` § 8.1 that SQL can reach, both slack scopes, a feasible query and an
 infeasible variant of each direct-solve rule. `rigid_conflict` has no example: every query tried was repaired. Open
-defects the corpus shows are in `issues/bugs.md` (BUG-29 to BUG-32).
+defects the corpus shows are in `issues/bugs.md`.
 
 ```bash
 python3 benchmark/decide/diagnose_examples/run.py

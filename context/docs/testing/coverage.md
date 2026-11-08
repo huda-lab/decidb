@@ -33,8 +33,8 @@ orders" and `../language/guide.md` §1.
   join's repeated rows, with a colon-form reducer `SUM(n: keep)`).
 - **The `in_decide_clause` lexer flag is cleared between the slots**:
   `test_case_when_in_join_on_between_slots` and
-  `test_case_when_in_where_between_slots`. This is the hazard the split order
-  introduced — the declaration arms the DECIDE lexer context, and the SQL
+  `test_case_when_in_where_between_slots`. This is the split order's hazard:
+  the declaration arms the DECIDE lexer context, and the SQL
   between it and `SUCH THAT` must not see it, or `CASE WHEN` would lex as the
   clause's `when`.
 - **Malformed splits are parser errors** (`TestClauseOrderErrors`): a declaration
@@ -86,10 +86,9 @@ Covers `BOOL`, `INT`, `REAL`, and multi-variable queries. Tests live in:
 - `test/decide/tests/test_var_real.py` — REAL
 - `test/decide/tests/test_var_multi.py` — multiple variables
 
-Note: keyed decisions (`per K: x(TYPE)`) are covered in
-[../entity_scope/](coverage.md#keyed-decisions) and by `test_scope_declare.py`
-([../scope/](scope_suite.md)); query-wide decisions (`per (): x(TYPE)`) in
-[../scalar_scope/](coverage.md#query-wide-decisions).
+Note: keyed decisions (`per K: x(TYPE)`) are covered in [Keyed decisions](#keyed-decisions) and by
+`test_scope_declare.py` ([scope_suite.md](scope_suite.md)); query-wide decisions (`per (): x(TYPE)`) in
+[Query-wide decisions](#query-wide-decisions).
 
 ### Scenarios covered
 
@@ -126,7 +125,7 @@ parser-level (`test_error_parser.py`).
 ## Keyed decisions
 
 Tests live in `test/decide/tests/test_keyed_scope.py` (keyed decisions over joins). The declaration
-itself — keys of columns and relations, NULL as a class, pruning, errors — is covered
+itself — keys of columns and relations, a NULL key, pruning, errors — is covered
 by `test_scope_declare.py` ([`scope_suite.md`](scope_suite.md)). Syntax:
 `../language/guide.md` §2.3.
 
@@ -151,9 +150,9 @@ Oracle-verified groups in `test_keyed_scope.py`:
   `BETWEEN`, `=`.
 - **Source shapes and NULL**: an uncorrelated scalar subquery bound shared across `per`
   classes; a three-table fan-out join with the decision keyed on the middle relation and
-  `per` on an outer one; a NULL key value as one shared class
+  `per` on an outer one; a NULL key value is in no class and has no decision
   (`test_keyed_null_key`, keyed `per n.nk:`); a keyed decision beside a `per`
-  constraint over the same nullable column, where NULL is one class in both
+  constraint over the same nullable column, where NULL is no class in either
   (`test_keyed_vs_per_null_semantics`, the `per` half judged by the scope
   oracle); a per-row baseline on a 1-to-many orders × lineitem join
   (`test_row_scoped_vars_on_fanout_join`).
@@ -194,14 +193,14 @@ Rows with unique caveats:
 | keyed decision | `<>` | ✓ |
 | keyed decision | `<>` + `per` | ✓ |
 | keyed decision | `BETWEEN` | ✓ |
-| keyed decision | bilinear (Boolean factor) | ✓ (`test_bilinear.py::test_bilinear_entity_scoped`) |
+| keyed decision | bilinear (Boolean factor) | ✓ (`test_bilinear.py::test_bilinear_keyed`) |
 | keyed decision | QP objective (convex) | ✓ (`test_quadratic.py::test_qp_entity_scoped_objective`) |
 | keyed decision | two keyed relations | ✓ |
 | keyed decision | uncorrelated scalar subquery bound + `per` (three-way) | ✓ |
-| keyed decision | NULL key value (one shared class) | ✓ |
+| keyed decision | NULL key value (no class, no decision) | ✓ |
 | keyed decision | three-table fan-out join + `per` on an outer relation | ✓ |
 | keyed decision | source is a subquery / CTE over a base table | ✓ |
-| keyed decision vs `per` | NULL key: one class in both | ✓ |
+| keyed decision vs `per` | NULL key: no class in either | ✓ |
 | per-row decision | 1-to-many fan-out join | ✓ |
 
 ## Query-wide decisions
@@ -321,8 +320,6 @@ makes the row-weighted and identity-weighted optima diverge.
 
 ### Scenarios covered
 
-- **Qualified SUM charges each entity once**
-  (`test_qualified_sum_charges_each_entity_once`, oracle-verified).
 - **Qualified and unqualified diverge** (`test_qualified_and_unqualified_diverge`,
   oracle-verified): the same query both ways, with two oracles. This is the test
   that would fail if the qualifier were parsed and then dropped — the failure
@@ -519,7 +516,7 @@ Tests live in:
 - `test/decide/tests/test_when_grammar.py` — parenthesized and bare conditions
 - `test/decide/tests/test_reducer_filter.py` — a reducer's own `when`, `agg(when c: e)`
 
-The scoping language's own suites (kept rows, NULL conditions, the empty-set errors,
+The scoping language's own suites (kept rows, NULL conditions, empty sets,
 the grid) are in [`scope_suite.md`](scope_suite.md). Syntax:
 `../language/guide.md` §4, §5.3, §6.3 and §7.2.
 
@@ -671,7 +668,7 @@ groups, `max(per k: avg(...))` and `min(per k: avg(...))`, the two-level form un
 | `per` | several key columns | ✓ |
 | `per` | qualified key columns | ✓ |
 | `per` | INT decisions | ✓ |
-| `per` | NULL key values (a class of their own) | ✓ |
+| `per` | NULL key values (no class) | ✓ |
 | `per` | `<>` | ✓ |
 | `per` | MIN/MAX (easy, a bound on every member) | ✓ |
 | `per` | MIN/MAX (two-level objective) | ✓ |
@@ -738,7 +735,7 @@ and subtraction such as `MAX(...) - MIN(...) <= K`. A composed clause under a
 scope oracle (`test_composed_minmax_per_scope_answers`,
 `test_composed_minmax_front_when_answers`, `test_composed_minmax_column_rhs_answers`,
 `test_composed_minmax_subquery_rhs_answers`). Composed MIN/MAX expressivity:
-`../language/functions.md` and `../language/functions.md`.
+`../language/functions.md`.
 
 #### Error cases (binder rejections)
 
@@ -845,8 +842,7 @@ classification.
 - **`per` interaction**: ABS in a reducer under `per` (per-group auxiliaries) — `test_per_interactions.py::test_per_abs_aggregate`, oracle-verified.
 - **Hard directions (Big-M)** — oracle-verified per-row `>=` and `=`, aggregate
   `SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`, `BETWEEN`, and ABS on both
-  sides of a comparison. The stress corpus C33–C37 supplies an additional model-shape
-  smoke check.
+  sides of a comparison.
 - **Hard direction composed with `when` and `per`** (oracle-verified in
   `test_abs_linearization.py`): the sign-indicator envelope that pins each `d_i`
   is per-row and unconditional, while `when` and `per` act on the reducer that
@@ -876,8 +872,8 @@ classification.
 | ABS (aggregate constraint, sound direction) | — | ✓ |
 | ABS (aggregate constraint) | `when` (kept rows reach the auxiliaries) | ✓ |
 | ABS (aggregate constraint) | `per` (auxiliaries summed per group) | ✓ |
-| ABS (per-row constraint, hard direction `>=`/`=`/BETWEEN) | Big-M sign-indicator | ✓ (oracle + stress C33–C37) |
-| ABS (aggregate constraint, hard direction `SUM(ABS)>=K` / `MIN(ABS)>=K` / `MAX(ABS)>=K`) | Big-M on each aux | ✓ (oracle + stress C35–C36) |
+| ABS (per-row constraint, hard direction `>=`/`=`/BETWEEN) | Big-M sign-indicator | ✓ |
+| ABS (aggregate constraint, hard direction `SUM(ABS)>=K` / `MIN(ABS)>=K` / `MAX(ABS)>=K`) | Big-M on each aux | ✓ |
 | ABS (aggregate constraint, hard direction) | `when` (kept rows over Path-B-pinned auxes) | ✓ |
 | ABS (aggregate constraint, hard direction) | `per` (per-group sums over Path-B-pinned auxes) | ✓ |
 
@@ -903,7 +899,6 @@ All oracle-verified, in `test_bilinear.py` unless noted:
 - **Objectives**: Bool × Bool (AND-linearization), Bool × Real, Bool × Int; data-coefficient scaling (`profit * b * x`); MINIMIZE with data coefficient (both McCormick and AND-linearization shapes).
 - **Constraints**: Bool × Bool constraints; Bool × Real constraint (McCormick feasibility).
 - **Composition**: bilinear under a `when`, under `per` (per-group McCormick auxiliaries), under `when` + `per`; a keyed Bool × a per-row Real; a reducer's own `when` on a bilinear constraint and objective (`test_reducer_filter.py`).
-- Backward compatibility: existing linear tests still pass.
 
 #### Non-convex (Gurobi only)
 
@@ -978,13 +973,11 @@ All oracle-verified, in `test_quadratic_constraints.py`:
 
 Every test above runs on the unforced fixture, which prefers Gurobi wherever it is
 linked — so on a developer machine they only ever exercise the Gurobi path.
-`TestHighsQuadratic` (`test_quadratic.py`) closes that gap for the one quadratic
-class HiGHS accepts, a convex continuous QP: it pins the reported repro, a mixed
-linear + quadratic objective, and a two-variable `POWER` group, each against
-`oracle_solver` through `decidb_cli_highs`. Before it, nothing in the suite solved
-a quadratic on HiGHS at all, which is how a HiGHS-only Hessian-convention defect
-survived — it returned wrong answers with no error for as long as the backend has
-existed.
+`TestHighsQuadratic` (`test_quadratic.py`) covers the one quadratic class HiGHS
+accepts, a convex continuous QP: a target objective and a mixed linear + quadratic
+objective, each against `oracle_solver` through `decidb_cli_highs`. It is the only
+place a quadratic is solved on HiGHS, so a HiGHS-only defect (a wrong Hessian
+convention returns wrong answers with no error) shows up nowhere else.
 
 A multi-variable `POWER` group is refused on HiGHS rather than solved, so the
 cross-term case is a *rejection* test (`TestHighsRejection`) rather than a correctness
@@ -1096,9 +1089,8 @@ scalar subquery returning multiple rows.
 
 ### Caveats
 
-Per [oracle.md](oracle.md) §8, caveat 5: subqueries inside
-SUCH THAT don't inherit the connection's `search_path`. Tables must be fully
-qualified (e.g. `tpch.customer`) when subqueries reference cross-schema data.
+Subqueries inside SUCH THAT don't inherit the connection's `search_path`
+([oracle.md](oracle.md) §8).
 
 ## Errors
 
@@ -1109,7 +1101,7 @@ Tests live in:
 
 ### Parser errors
 
-`test_error_parser.py`, all expecting `decidb.ParserException`: DECIDE without
+`test_error_parser.py`: DECIDE without
 SUCH THAT, DECIDE without a variable name, MAXIMIZE/MINIMIZE without an
 objective expression, an unknown type, comma-separated `SUCH THAT`
 constraints ("use AND between constraints").
@@ -1123,7 +1115,6 @@ expression in a key) are pinned in `test/decidb/test_scope_parser.test`. See
 
 ### Binder errors
 
-All expect `decidb.InvalidInputException` or `decidb.BinderException`.
 Categories covered in `test_error_binder.py` unless noted:
 
 - Name/scope conflicts: variable conflicts with column, duplicate DECIDE variables, unknown variable in constraint.
@@ -1142,14 +1133,12 @@ Categories covered in `test_error_binder.py` unless noted:
   (`test_correlated_subquery_aggregate_equality_rhs_rejected`).
 - `OR` between constraints, in every scope spelling, and data-only aggregates as
   divisors (`TestRefusalsInEverySpelling`).
-- The scope errors — a key that does not determine, a `when` that keeps no row, a
-  reducer with no row for a group, key errors — are in the `test_scope_*.py` suites
+- The scope errors — a key that does not determine, key errors — are in the `test_scope_*.py` suites
   ([`scope_suite.md`](scope_suite.md)).
 
 ### Infeasibility detection
 
-`test_error_infeasible.py::TestInfeasibleModels`, expecting
-`decidb.InvalidInputException` matching `"infeasible"`: contradictory per-row
+`test_error_infeasible.py::TestInfeasibleModels`, matching `"infeasible"`: contradictory per-row
 bounds (`x >= 10 AND x <= 5`), impossible SUM constraint (`SUM(x) >= 1000`
 with too few rows), negative SUM upper bound, a `when` that forces every row to
 zero beside `SUM(x) >= 1` (`when l_quantity > 0: x <= 0`), and
@@ -1244,12 +1233,8 @@ rejection message on HiGHS-only hosts. The `DECIDB_FORCE_SOLVER` env var pins
 DeciDB's backend for specific tests via the `decidb_cli_highs` and
 `decidb_cli_gurobi` fixtures.
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| HiGHS rejects non-convex QP (MAXIMIZE SUM(POWER)) | `test_quadratic.py::TestHighsRejection::test_highs_nonconvex_qp_rejected` | error test |
-| HiGHS rejects MIQP (integer vars + quadratic obj) | `test_quadratic.py::TestHighsRejection::test_highs_miqp_rejected` | error test |
-| Gurobi ↔ HiGHS objective agreement on linear IP | `test_edge_cases.py::test_gurobi_highs_agree_on_objective` | cross-check |
-| Infeasible QP constraint (tight `match=`) | `test_quadratic_constraints.py::test_infeasible_negative_budget` | error test |
+The HiGHS refusals are under [Solver-specific error paths](#solver-specific-error-paths). Gurobi and HiGHS agree on
+the objective of a linear IP (`test_edge_cases.py::test_gurobi_highs_agree_on_objective`, a cross-check).
 
 ### Infrastructure / meta-tests
 

@@ -3,22 +3,21 @@
 Covers the scoping language: `per` in front of a declaration (`per K: x(TYPE)`,
 `per (): x(TYPE)`), `when` and `per` in front of a constraint or the objective,
 `when` and `per` inside a reducer, and `by (G)` after one. Syntax:
-`../language/guide.md` §1.1, §2, §4–§7 and §10.3; semantics:
+[`../language/guide.md`](../language/guide.md) §1.1, §2 and §4–§7; semantics:
 [`../language/scopes.md`](../language/scopes.md).
 
 Tests live in:
 - `test/decide/tests/_scope_oracle.py` — the reference evaluator most suites below judge against
 - `test/decide/tests/_scope_cases.py` — the deck's data and shared helpers
 - `test/decide/tests/_brute_force.py` — enumeration for shapes the scope oracle cannot state
-- `test/decide/tests/test_scope_*.py` — twelve suites, one per part of the language
+- `test/decide/tests/test_scope_*.py` — one suite per part of the language
 - `test/decide/tests/test_no_old_spellings_remain.py` with `_old_spellings.py` — the scanner that keeps removed spellings out of every test surface
 - `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "not supported yet"), quoted keywords as names, the exact parse errors, and the removed spellings' messages
 
-The feature suites written in the same language are tracked by feature:
-[`../per/`](coverage.md#per-constraints-and-two-level-objectives) (`test_per_*.py`), [`../when/`](coverage.md#when)
-(`test_when_*.py`, `test_reducer_filter.py`),
-[`../entity_scope/`](coverage.md#keyed-decisions) (keyed decisions) and
-[`../scalar_scope/`](coverage.md#query-wide-decisions) (query-wide decisions).
+The feature suites written in the same language are tracked in [coverage.md](coverage.md):
+[`per`](coverage.md#per-constraints-and-two-level-objectives) (`test_per_*.py`), [`when`](coverage.md#when)
+(`test_when_*.py`, `test_reducer_filter.py`), [keyed decisions](coverage.md#keyed-decisions) and
+[query-wide decisions](coverage.md#query-wide-decisions).
 
 ## The reference pieces
 
@@ -97,15 +96,16 @@ one group at a time. No test asserts an answer its docstring derives.
   (every stored column of the relation), a key across two relations; `per ()` is one
   decision and no `per` is one per row; a key column absent from SELECT, WHERE and the
   clause survives column pruning on a base table, on VALUES and through a serialization
-  round trip; a key is a set (order and repetition do not matter); NULL is one class;
+  round trip; a key is a set (order and repetition do not matter); a NULL key value has
+  no decision (D5);
   both clause orders; several declarators, each with its own key; qualified key names
   and the kept side of a `USING` column; result types; EXPLAIN; every key error; a
   keyed decision inside a colon-form reducer and beside a reducer. Oracle, dump and
   pinned messages.
 - **`test_scope_generation.py`** — `[when c] [per K]: C`. One constraint per class
   (`per ()` one; `per row` or none, one per kept row); an unused `per` builds the bare
-  clause's model; a scope covers one constraint and both halves of a `BETWEEN`; NULL is
-  a class; classes and reducers read kept rows only; a NULL condition drops the row; a
+  clause's model; a scope covers one constraint and both halves of a `BETWEEN`; a NULL
+  key is no class; classes and reducers read kept rows only; a NULL condition drops the row; a
   compound condition needs no parentheses; a subquery in the condition; nothing is
   computed on a row the `when` drops, so a NULL or a failing function there is no
   error; a `when` that keeps no row generates nothing, as an input with no rows does;
@@ -114,7 +114,7 @@ one group at a time. No test asserts an answer its docstring derives.
   dump.
 - **`test_scope_reducer_by.py`** — `agg(e) by (G)`. No `by` is `by ()`; a reducer reads
   rows outside its class; a data-only reducer on the bound side reads its own group;
-  NULL is a group; a constant key and an all-NULL key are one group; a `by` key with a
+  a NULL key is no group; a constant key is one group and an all-NULL key none; a `by` key with a
   subquery; the tightest bound per group without `per`; MIN and MAX in both directions,
   under a factor, a strict bound and in a composed clause; AVG divides by the rows its
   `when` keeps; the refused shapes. Oracle, brute force (`test_avg_not_equal`,
@@ -130,15 +130,16 @@ one group at a time. No test asserts an answer its docstring derives.
   reducer; a query-wide decision, or a keyed decision with one instance, beside a
   reducer counts once; tuple terms that are not one value are errors; the two-level
   form, also under a `when`, and its refusals (an outer AVG); a reducer nested in a
-  constraint is refused; an objective `when` that keeps no row and an objective reducer
-  with no row are errors. Oracle, dump and pinned messages.
+  constraint is refused; an objective part that reads no row is dropped (D68). Oracle,
+  dump and pinned messages.
 - **`test_scope_determination.py`** — the determination rule. A `per` key must determine
   every tuple term (a bound, a factor), every decision outside reducers, every `by` key,
   and an inner key its reducer's body. Each case is a pair: the query runs on data where
   the key determines the value and stops with the named error where it does not. Only
   kept rows are compared and NULL is one value; without `per` the same clause is legal
-  and takes the tightest bound; the errors are raised under DIAGNOSE too; messages quote
-  the user's SQL only. Pinned messages.
+  and takes the tightest bound; the errors are raised under DIAGNOSE too, where an empty
+  set is no instance; messages quote the user's SQL only. Pinned
+  messages.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built
@@ -205,7 +206,7 @@ one group at a time. No test asserts an answer its docstring derives.
   `test/common/test_decidb_*.cpp`, `test/decide/golden/corpus.sql`,
   `benchmark/decide/queries/*.sql` and `run.sh` — one parametrized case per file. It
   flags the removed declarations, a `when` or `per` written after the clause it scopes,
-  and a relation-qualified reference to a declared decision (§10.3). It is token-aware:
+  and a relation-qualified reference to a declared decision (guide §2). It is token-aware:
   comments and string literals are skipped, `CASE ... END` and ordinary subqueries are
   skipped, and a `when` or `per` that reaches its colon is the scope spelling. From Python it
   reads string literals and f-strings, not docstrings, assertion messages or regex
@@ -229,7 +230,7 @@ one group at a time. No test asserts an answer its docstring derives.
 | Tier | Where |
 |------|-------|
 | Oracle (`_scope_oracle`) | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, bare_clauses, combinations, deck_examples |
-| Brute force (`_brute_force`) | bare_clauses, generation, reducer_by, value_rewrite |
+| Brute force (`_brute_force`) | bare_clauses, generation, reducer_by, reducer_inner, value_rewrite |
 | Model dump | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, deck_examples |
 | Error / message pins | determination, removed_syntax, and the error cases of every suite |
 | Output text pins | explain_diagnose, and the echo cases of generation and value_rewrite |

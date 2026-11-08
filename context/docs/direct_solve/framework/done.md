@@ -2,56 +2,42 @@
 
 Verified on 2026-11-06, on top of `eae1714ed5` (the code of `5f6fde4753`): `test/decide/run_direct_matrix.sh`, each of
 its four suites (auto, off, serializer, highs) 6,293 passed; C++ `build/release/test/unittest "[decidb]"` 3,876
-assertions in 82 cases.
-`test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Design: `../architecture/`.
+assertions in 82 cases. Design: `../architecture/`.
 
 ## What it does
 
-- **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. `ChooseDecideAnswer`
+- **Setting and fallback.** The modes are in [policy.md](../architecture/policy.md). `ChooseDecideAnswer`
   (`decide_answer_choice.cpp`; Strategy selection with fallback) offers the IR to the rules after the bound-side
-  rewrite and chooses a solver, lazily, only when none applies. `DIAGNOSE` and a forced backend (`ForcedSolverName()`;
-  empty is unset) use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
-  With the DECIDE optimizer off, every mode refuses the query (`../../pipeline/05_optimizer/done.md`).
-- **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
-  its reducer, the reducer's own `when` and `by` key (`DirectPart::by`, grouped on `DecideKeyElement::Grouping()`, the
-  collated expression), qualifier, factor, the clause's `when`, right side (with its `reduction` when the bound-side
-  rewrite left it raw), a `per K:` in front of an aggregate clause (`per_class` and `classes`: D6, the whole total
-  bounded once per class), and the objective, and the row checks the plan must run (`row_checks`: value checks and
-  determination checks). A key element that is NULL puts its row in no group (D5), except a relation column, where
-  NULL is a value. Parts the binder admits and no rule models are *not proved*, and building the IR never throws:
-  `norm(e, 0)` (it needs indicator variables), any norm tag the front end does not expect, a `per K:` in front of a
-  per-row clause, a clause whose reducer value became a helper decision and the two-level objective are not-proved
-  parts; the determination of an entity-scoped decision, which only the DECIDE operator checks, makes the whole IR not
-  proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
-  (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
+  rewrite and chooses a solver, lazily, only when none applies. A forced backend is `ForcedSolverName()` (empty is
+  unset). With the DECIDE optimizer off, every mode refuses the query (`../../pipeline/05_optimizer/done.md`).
+- **IR** ([ir.md](../architecture/ir.md)). The IR holds decision domains and scopes, each constraint with its reducer,
+  the reducer's own `when` and `by` key (`DirectPart::by`, grouped on `DecideKeyElement::Grouping()`, the collated
+  expression), qualifier, factor, the clause's `when`, right side (with its `reduction` when the bound-side rewrite
+  left it raw), a `per K:` in front of an aggregate clause (`per_class` and `classes`: D6, the whole total bounded once
+  per class), the objective, and the row checks the plan must run (`row_checks`). A key element that is NULL puts its
+  row in no group (D5), except a relation column, where NULL is a value. Building the IR never throws; what it cannot
+  model is not proved (`DirectIR::status` for the whole IR). No IR node is kept that no rule reads.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: every
   constraint and the objective proved, a finite offset, a known sense); an IR that fails is offered to no rule, so each
-  rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
-  raise an internal error naming both rules.
-- **Result adapter** (`DIRECT_RESULT_ADAPTER` in `EXPLAIN`). Keeps DECIDE's columns and types under bindings it owns
-  (`../architecture/result_adapter.md`), serializes, prunes outputs only when skipping is proved safe, and always keeps the
-  rule's validated columns live. What a rule hands it (a child, a slot map that fits the DECIDE outputs, the validated
-  columns and the source row id) is checked in release builds and a misfit raises an internal error, because rules are
-  plug-ins and a broken one must fail loudly. Checks on plans the engine builds itself, in the adapter and in late
-  materialization, are `D_ASSERT`s, which debug builds run. A plan that streams checks every row before it releases
-  one without holding them: one read computes a verdict over all rows (`DirectAllRowsValid`, `bool_and`, true or
-  raising), and the reader gates every later read on it (Row checks, below). A plan that holds its rows anyway (S1's
-  rank) checks them there (`../architecture/result_adapter.md`, "Every row is read").
-- **Late materialization of a stored table** (`direct_late_materialization.cpp`). The rule driver appends the table's
-  `rowid` to a single-base-table source, and after unused-column removal a late step moves each parent-read
-  variable-width column that the rule's plan only forwards to a second scan joined on `rowid`. Fixed-width columns,
-  joins, aggregates, volatile or computed columns, a source that already reads `rowid`, and a pipelined plan
-  (`DirectSubstitute::pipelined`, set by A1) over a source that is not copied keep the single read. Rules and
-  measurements: `../architecture/result_adapter.md`.
+  rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule (disjoint
+  rules: [rules.md](../architecture/rules.md)).
+- **Result adapter** ([result_adapter.md](../architecture/result_adapter.md)). It serializes, prunes outputs only when
+  skipping is proved safe, and always keeps the rule's validated columns live. What a rule hands it (a child, a slot
+  map that fits the DECIDE outputs, the validated columns and the source row id) is checked in release builds and a
+  misfit raises an internal error, because rules are plug-ins and a broken one must fail loudly. Checks on plans the
+  engine builds itself, in the adapter and in late materialization, are `D_ASSERT`s, which debug builds run.
+- **Late materialization of a stored table** (`direct_late_materialization.cpp`; rules and measurements in
+  [result_adapter.md](../architecture/result_adapter.md)). A rule whose plan streams sets
+  `DirectSubstitute::pipelined` (A1), which keeps the single read over a source that is not copied.
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
   form of a factory method). None of them knows which problem class it serves: among them `DirectActiveWhen`,
   `DirectWindowMatchingCount`, `DirectAllRowsValid`, `DirectScaledTerm` (sign and constant factor of a coefficient),
   `DirectSumOf` (the signed sum of proved values, each read as DOUBLE), `DirectOnKeptRows` and `DirectOverProjection`
   (a copy of a value re-pointed at a projection over the source). A rule assembles each projection of its plan in a
   `DirectProjectionStage`, which gives every column its binding as it is added and becomes a `LogicalProjection` over a
-  child. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
+  child. S1, R1 and N1 also share `DirectProveSharedScope` (the clauses read together have
   one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
   no kept class has no instance, D5).
   - **A separable quadratic objective** (A1, N1 and A2: `a*x^2 + b*x` per decision) takes three fragments, in plan
@@ -66,7 +52,7 @@ assertions in 82 cases.
     first integer whose next step no longer improves (the smaller one on a tie), with its precision flag (Number-range
     warning, below).
   - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
-    aggregate becomes a window over the whole partition, with the rule's group as the partition (S1 and N1). R1's own
+    aggregate becomes a window over the whole partition, with the rule's group as the partition (S1, N1 and A2). R1's own
     sink adds each aggregate to its hash aggregate with `DirectAggregateOf`, which the bound side tables use too.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),
@@ -87,7 +73,21 @@ assertions in 82 cases.
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
   One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
-  from the real total, whether to recompute or materialize the source. `DirectAddRowChecks` gives each check its own
+  from the real total, whether to recompute or materialize the source, the choice DuckDB makes for a CTE. A source
+  that `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table
+  scan) is copied once when `DirectSourceCopyIsCheaper` says so, else rebuilt per read with fresh table indexes, its
+  pushed-down table filters copied, so each read is a parallel scan. A read of the copy costs `COPY_READ_COST` (0.4) of
+  a re-scan, so a source read three times or more is copied, provided the copy (estimated rows times its row width,
+  which leaves out the variable-width columns late materialization reads back) is at most `1/COPY_MEMORY_SHARE` (1/8)
+  of the memory limit; with no row estimate it is re-scanned. Both constants come from interleaved timings on partsupp
+  and a 20-column wide table at 10K to 1M rows: at 100K the copy took 68 ms against 96 (narrow) and 66 against 94
+  (wide), and past an eighth of the memory limit it lost. At 10K rows on partsupp it is 14 ms slower, in R1's sort, not
+  in the reads. On a copy of only the columns the plan reads (partsupp, lineitem and the wide table, 100K and 1M rows),
+  the copy took 1.0 to 1.2 of the re-scans' time at two reads, 0.57 to 0.98 at three and 0.62 to 1.05 at four. Any
+  constant from 1/3 to 1/2 copies at three reads and re-scans at two, so 0.4 stays. Any other source (a join, a
+  subquery with an aggregate, a table function, a volatile expression) is one `LogicalMaterializedCTE`, defined through
+  a projection that names its columns (a join under it may reorder its output in later passes) and read by
+  `LogicalCTERef`s. Every read returns the same rows, and no plan depends on their order. `DirectAddRowChecks` gives each check its own
   read and a grouped aggregate over only the columns the check reads (counts, least and greatest value, the least label
   per key), then an ungrouped `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least
   failing group, NULL keys last. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row
@@ -105,8 +105,8 @@ assertions in 82 cases.
   `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
   - **Per-row bounds on a decision.** A per-row bound is read by the solver path's own classifier
     (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
-    values the solver admits, as DuckDB evaluates the comparison (D64). `DirectIsSingletonRow` is the shape a
-    per-row bound must have to be read: the classifier read it, on a declared decision. `DirectReadBounds` folds
+    values the solver admits, as DuckDB evaluates the comparison (D64). A per-row constraint is read as a bound only
+    when the classifier read it as a bound on one decision (`singleton_row`). `DirectReadBounds` folds
     `variable_bound`s into each decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude
     1e20 or more infinite): the written `(sense, k)` into a box the domain check reads, the admitted ends into the box
     the answer reads. Every other bound is a per-row clause carrying the classifier's admitted `lower` and `upper`
@@ -127,14 +127,10 @@ assertions in 82 cases.
     (linear terms, the rows kept, constants and squares); how many squares a rule admits, with which signs and weights,
     is the rule's to check. An `ABS` term stays out of it, so a rule that calls it sees an `ABS` as a term it does not
     read. The header also holds `DirectNamesOf` and `DirectIsFiniteWhereKept`, described under Number messages.
-  - **Who calls what.** Each rule keeps its own policy around the readers. S1 and R1 call `DirectReadLinearPart` and
-    `DirectObjectivePartKept`; S1 declines a filtered part, a non-linear term, a second decision and a coefficient that
-    may raise beside other terms, and flattens the part per term. A1, N1 and A2 call `DirectReadQuadraticPart`, and N1
-    reads the ball's square in its limit clause with `DirectReadSquareTerm`. N1 and A2 fold the objective square's slope
-    with `DirectFoldConstantSum`; A1 and N1 fold its weight the same way and so decline one read from the data, which A2
-    takes. A2 reads an `ABS` term with `DirectReadAbsTerm`. A1, N1 and A2 sum a part's linear terms per decision in
-    `DirectLayoutQuadraticPart` and apply the part's sign and scale in `DirectFoldQuadratic` (Plan fragments, above). No
-    rule keeps a copy of a reader.
+  - **Policy stays in the rule.** Each rule keeps its own policy around the readers, and no rule keeps a copy of one.
+    S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may raise beside other
+    terms, and flattens the part per term. N1 and A2 fold the objective square's slope with `DirectFoldConstantSum`; A1
+    and N1 fold its weight the same way and so decline one read from the data, which A2 takes.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
   build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
@@ -147,8 +143,8 @@ assertions in 82 cases.
   filter reverse their lists to test the last first.
 - **Rule-local helpers.** A helper only one rule uses stays in that rule's files, in its namespace, and moves to the
   shared files when a second rule needs it. Inside a rule's namespace, names drop the `Direct` and class prefixes. The
-  scope projection (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`, and
-  `DirectRowBoundMessage` for the same check as a per-row message) and `DirectWindowExtremum` are shared in
+  scope projection (`DirectProjectScope`), the message of a per-row bound read from the data
+  (`DirectRowBoundMessage`) and `DirectWindowExtremum` are shared in
   `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a group key, or whose bound comes from
   the data, needs them. `DirectRunningSum` (R1 and A2) is a window sum over the rows up to the current one in a given
   order, per partition. `DirectLayoutBoundClauses` (A1 and A2) lays out each per-row bound clause in a rule's first
@@ -163,8 +159,9 @@ assertions in 82 cases.
   - `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`; `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52);
     `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63).
   - `DecideIsExactFiniteDouble`: a converted double is exact when it is finite and converts back to the original value.
-  - `DecideStrictBound`: `x > 0.5` means `x >= 1`. The solver's folding, its model builder's linear and quadratic rows,
-    A1 and S1 all shift a strict bound with it, so none reads a strict comparison differently.
+  - `DecideStrictBound`: `x > 0.5` means `x >= 1`. The classifier's written box, the model builder's linear and
+    quadratic rows and S1's count limits all shift a strict bound with it, so none reads a strict comparison
+    differently.
   - `DecideRoundedAnswerWithin`: an integer answer is returnable when, rounded half away from zero, it lies within the
     column's range. Beyond it both paths raise one message, `DecideWholeNumberRangeMessage`, which names the variable and
     its rounded value. A1 spells the test in SQL once (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the
@@ -194,7 +191,7 @@ assertions in 82 cases.
   for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
   `DIRECT_FINITE_CONSTANT`.
 - **The bound-side rewrite is the one evaluator of a data bound** (`decide_rewrite_rhs_bounds.cpp`,
-  `RewriteRhsAggregates`, called by `DecideOptimizer::Optimize` before the direct rules, in every mode). Every reducer
+  `RewriteRhsAggregates`, called by `DecideOptimizer::OptimizeDecide` before the direct rules, in every mode). Every reducer
   over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed or colon
   reducer) becomes a placeholder column of the DECIDE source, recorded on the node (`LogicalDecide::bound_aggregates`;
   equal reducers share one). The path that answers the node builds each record as a side table of the source reader
@@ -220,7 +217,7 @@ assertions in 82 cases.
     (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule proves it can compute
     the bound (`DirectGroupBoundIsReadable`), lays out the columns of each input (`DirectGroupLayout`,
     `DirectGroupInputs`) and adds the aggregates to the group aggregate it already runs, with no branch per bound
-    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: S1 and N1 a window through `DirectWindowSink`, R1 its hash
+    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: S1, N1 and A2 a window through `DirectWindowSink`, R1 its hash
     aggregate), so a direct plan has no side table for them. Only the
     solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
     in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
@@ -245,7 +242,7 @@ assertions in 82 cases.
   for it: every coefficient, a square's weight and the implicit 1 of a term with no coefficient among them, each tagged
   as a guard so a rule that needs the constant reads through it (`DecideUnguarded`). A NULL limit or per-row bound is
   open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and
-  `DirectCheckRowBounds` and the singleton-row box (`AdmittedInterval`) give the instance no bound. The driver strips
+  `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the instance no bound. The driver strips
   every tag from the operators above the source (`StripTagsAbove`), so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
@@ -301,21 +298,18 @@ assertions in 82 cases.
   Meeting the whole row set there would take a second pass over the rows. The precision rule forbids it: a plan warns
   and solves, and mitigates only through free reorderings or the architecture, with DuckDB's own DOUBLE handling as the
   bar.
-- **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
-  physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
-  <= u, each row independent`. There is no number from the query. `require` explains why no rule applied; under `auto`
-  nothing is printed. `test_serializer_explain_and_model_dump` checks the rule and the condition line in the logical,
-  physical and profiled plans.
+- **`EXPLAIN` annotation** ([policy.md](../architecture/policy.md)). `test_serializer_explain_and_model_dump` checks
+  the rule and the condition line in the logical, physical and profiled plans.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box contradicts
   its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its floor stays
   0 whatever lower bound is written), or a `BOOL` lower bound above 1. The box is the bounds as written
   (`DecideWrittenBox` in `decide_singleton_row_folding.{hpp,cpp}`), and the error quotes the clause, under `DIAGNOSE`
   too. The solver's pre-check (`DecideGlobalSinkState`) raises it; direct solve reads the same box through
-  `DirectContradictsDomain`, which `DirectReadBounds` (A1, R1) and S1 call, and only declines these queries so the
+  `DirectContradictsDomain`, which `DirectReadBounds` and S1 call, and only declines these queries so the
   solver raises the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
-  solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` (A1, R1) all
+  solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` all
   call it. The box keeps a `lower_written` flag apart from the value: a written lower bound of -1e30 or below is no bound,
   like any bound of magnitude 1e20 or more, and only a decision with no lower bound written takes the default floor of 0
   (`EffectiveLower`). No value is reserved to mean "unset".
@@ -323,8 +317,8 @@ assertions in 82 cases.
   fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, `sql_literal` (one spelling of a constant: a `CAST` to the column's type, so a
   column's type does not depend on which row comes first, with infinities and NaN spelled as strings), and
   `agree_with_oracle` (oracle model, `off`,
-  `require`, then a rule-supplied check of one assignment). `test_direct_s1_uniform_matroid.py` and
-  `test_direct_a1_separable_box.py` keep their case tables, oracle-model builders and assignment checks. Every direct
+  `require`, then a rule-supplied check of one assignment). Each rule's suite keeps its own case tables, oracle-model
+  builder and assignment check. Every direct
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`../architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
@@ -335,13 +329,10 @@ assertions in 82 cases.
 
 ## Registering a rule
 
-A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
-(`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
+How to register one is in [rules.md](../architecture/rules.md) § Adding a rule. The rule driver
+(`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code: S1 and A1
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
-rank window or a verified, streamed plan) and run on the same two central files. An IR flag a rule needs about the
-solver's own reading comes from the solver's code, not a copy: `DirectIRConstraint::singleton_row`, `bound` and
-`variable_bound` come from the classifier `DecideReadSingletonRow` (`decide_singleton_row_folding.cpp`), so a rule
-asks the solver's own question about which values a bound admits and which bounds replace a variable's default box.
+rank window or a verified, streamed plan) and run on the same two central files.
 
 ## Verified by
 
@@ -358,7 +349,7 @@ asks the solver's own question about which values a bound admits and which bound
   applies; each case reaches an arm no other case of its rule reaches, and each rule has forms that apply). The IR comes
   from a query rather than from a hand-built struct because a hand-built IR has no resolved source columns, so the
   source-column checks would pass without checking anything.
-- Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1, A1, R1 and N1: schema, all-rows read,
+- Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE` and an empty source) and the
   parent-context rows of `test_direct_s1_uniform_matroid.py`. With A1's domain check disabled,
   `test_bool_bound_outside_domain.py` (a bound against the domain over an empty source) and two cases of
@@ -377,12 +368,12 @@ asks the solver's own question about which values a bound admits and which bound
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,857 of 1,864 arms are reached. Of the seven no test reaches, four are kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`,
-  which every caller's earlier determinism check rules out but which the function's contract promises on its own; the
-  `default` arms of the `ExpressionType` switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the
+  the function, so lines that move are not read as lost. Arms no test reaches, kept on purpose: `ref.depth == 0` in
+  `DirectReferencesOnlySource`, which every caller's earlier determinism check rules out but which the function's
+  contract promises on its own; the `default` arm of the `ExpressionType` switch in S1's `NormalizeCapacity`; and the
   extension-name check in late materialization's `VisitForAdapters`, which keeps an operator of another extension from
-  being cast to the adapter. The other three are the nested-reducer reading in `ReadReducer` (`DirectPart::inner`),
-  which no query reaches until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans run from
+  being cast to the adapter. The nested-reducer reading in `ReadReducer` (`DirectPart::inner`) is reached by no query
+  until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans run from
   queries in the S1 and R1 suites, and from an IR against the solver with NULL-key rows (`test/common/
   test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a query reaches it and a test runs it; a
   check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,

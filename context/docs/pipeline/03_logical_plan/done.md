@@ -32,7 +32,7 @@ expressions reference them and column-binding resolution has to find them.
 
 ## 2. Subquery planning and correlation provenance
 
-`plan_select_node.cpp:42-138`, and this ordering is load-bearing.
+In `plan_select_node.cpp`, and this ordering is load-bearing.
 
 `PlanSubqueries` flattens scalar subqueries into joins. After flattening, a
 row-varying column, an **uncorrelated** subquery and a **correlated** subquery are
@@ -79,11 +79,11 @@ throws by design. So the DECIDE block saves `is_outside_flattened`, forces it tr
 across the two `PlanSubqueries` calls, and restores it. Layer 4's input contract is
 a subquery-free bound tree, so the flattening is not optional at this point.
 
-Without it, *any* subquery written inside a nested DECIDE failed with
+Without it, *any* subquery written inside a nested DECIDE fails with
 `Serialization Error: Cannot copy BoundSubqueryExpression` — a DECIDE nested two
 deep, but equally a plain scalar subquery used as a bound inside a single nested
-clause, or one scaling its objective. One level of nesting worked only because the
-outermost `CreatePlan` is not itself inside a flattening. Pinned by
+clause, or one scaling its objective. Only the outermost `CreatePlan` escapes this,
+because it is not itself inside a flattening. Pinned by
 `test/decide/tests/test_nested_decide.py`.
 
 ---
@@ -118,7 +118,7 @@ Together with the call in `plan_select_node.cpp`, these are the only three place
 Grouped by who writes it:
 
 **From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
-`decide_sense`, `decide_objective`, `num_auxiliary_vars`, `is_boolean_var`,
+`decide_sense`, `decide_objective`, `is_boolean_var`,
 `variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
 reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
@@ -150,7 +150,8 @@ check within groups). `PlanSubqueries` runs on the key elements as on the trees,
 `EnumerateExpressions` visits the key table and the checks, so binding resolution and
 column pruning see their columns.
 
-**From the optimizer** — `solver_backend_name`, `use_native_constructs`,
+**From the optimizer** — `num_auxiliary_vars` (the decisions it appends after the declared
+ones), `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
 `composed_minmax_objective_terms`, `rewrite_accounts` (one fact per construct a rewrite
@@ -179,7 +180,7 @@ plan from here. What the plan carries is the *answers*, never the solver:
 - `use_native_constructs` — a `SolverConstructSupport`, which constructs this backend
   can state itself.
 - `force_native_constructs` — the policy over them: whether a declared construct is used
-  wherever it is declared, or only where the lowering has no valid Big-M. False ships.
+  wherever it is declared, or only where the lowering has no valid Big-M. It defaults to false.
 
 The third is a policy rather than a fact, and that is deliberate. Applying it needs a
 per-clause test on evaluated coefficients, which no stage before execution can run — so
@@ -296,8 +297,8 @@ honor. The composed MIN/MAX terms, the folded variable box and the prepared
 linear form are all rebuilt from the canonical tree by the optimizer, in
 milliseconds, wherever the plan lands.
 
-`Planner::VerifyPlan` runs twice — on the bound plan (`planner.cpp:84`) and again
-after every optimizer (`optimizer.cpp:305`). The first round-trips DECIDE; the
+`Planner::VerifyPlan` runs twice — on the bound plan (`Planner::CreatePlan`) and again
+at the end of `Optimizer::Optimize`. The first round-trips DECIDE; the
 second asks `OperatorSupportsSerialization` and is told no, so it returns without
 touching the plan. `LogicalOperator::Copy` asks the same question and raises rather
 than handing back a truncated plan.
@@ -311,8 +312,7 @@ exactly — which is why they are generated from one list, and why an id may be
 renumbered freely: a serialized logical plan lives for microseconds inside one
 process and is never persisted, so there is no older layout to stay readable for. A
 retired field stays in the list as a `"deleted": true` entry, for which the generated
-serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`):
-`LogicalDecide`'s id 219 and `KeyedScopeInfo`'s id 105.
+serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`).
 
 ### What exercises it
 
@@ -322,19 +322,15 @@ rather than a silent omission. Run over the existing suite, that is a guard nobo
 has to maintain per field:
 
 ```bash
-DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
+DECIDB_VERIFY_SERIALIZER=1 make decide-test
 ```
 
 `DECIDB_VERIFY_SERIALIZER=1` makes `test/decide/decidb_cli.py` attach the pragma to
 every non-interactive query it runs through shell startup commands, with the pragma's
-own result redirected away. Parsed DECIDE statements reparse from `ToString()`;
-see [`../01_parser/done.md`](../01_parser/done.md) §5. The parsed verifier does not run
-a second solver execution, because equally optimal assignments need not have identical
-rows. The two PTY-driven continuation cases are likewise outside DuckDB's materializing
-verifier. Model-dump assertions select one complete build when verifier paths append
-equivalent copies.
-
-The guarded suite passes every test.
+own result redirected away. Parsed DECIDE statements reparse from `ToString()`, with no
+second solve; see [`../01_parser/done.md`](../01_parser/done.md) §5. The two PTY-driven
+interactive continuation cases are outside DuckDB's materializing verifier. Model-dump
+assertions select one complete build when verifier paths append equivalent copies.
 
 ---
 
@@ -346,8 +342,7 @@ output, using `CollectDecideExpressionStrings` to print every clause in one styl
 defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as written (`sum(D: x)`,
 D38). The two-level objective prints as `outer(per k: inner(e) by (k))`, a `when` in
 front of it, its key as written: `RenderDecidePerKey` reads the source fragment both
-binders record for a `per` key, falling back to the key columns' names, which
-`BindKeyColumns` made SQL text. A row the solver receives is left out where it reads as
+binders record for a `per` key. A row the solver receives is left out where it reads as
 the clause above it. The renderers read the clause
 registries and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
 column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b * x)`,
@@ -384,8 +379,8 @@ spelling of every cast and scalar subquery before binding could obscure it, so a
 tagged node replays its own SQL out of `source_fragments` and an untagged cast is
 dropped as reconciliation noise.
 
-`source_fragments` therefore rides on `LogicalDecide` (serialized as field 238)
-and is copied to `PhysicalDecide`, alongside the `constraint_sources` registry
+`source_fragments` therefore rides on `LogicalDecide` (serialized) and is copied to
+`PhysicalDecide`, alongside the `constraint_sources` registry
 that shares the same renderer. The registry entry holds a clause's canonical text with each respelled term quoted as
 written (`canonical_lhs`, `canonical_rhs`) and the canonical spelling a plan shows (`spelled_lhs`, `spelled_rhs`). The
 objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span, and

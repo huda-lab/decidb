@@ -19,8 +19,8 @@ The front end models the whole language. Anything it cannot model is recorded as
 per objective part. A rule must decline a problem with a not-proved IR node in a clause it depends on, so a wrong
 rewrite cannot follow from a gap in the front end. A decline carries no reason: the rule applies or it does not.
 
-Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm,
-a `per K:` in front of a per-row clause, a clause whose reducer value became a helper decision
+Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm (it needs indicator
+variables), a norm tag the front end does not expect, a `per K:` in front of a per-row clause, a clause whose reducer value became a helper decision
 (`VALUE_REWRITE_TAG`) and the two-level objective. The determination of an entity-scoped decision, which only the
 DECIDE operator checks, makes the whole IR not proved; every other scope check is a row check the plan makes.
 The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison
@@ -43,10 +43,9 @@ mark it not proved.
   default lower bound of 0. A constant lower bound under a `when` replaces it on the rows the `when` keeps
   (`DecideSingletonRow::LiftsDefaultFloor`); every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
   an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
-- `row_checks` are the value checks the DECIDE operator runs before it reads a value
-  (`PhysicalDecide::RunScopeChecks`): the bound-side rewrite's `VALUE_IS_VALID` checks, each a per-row message, NULL on
-  a valid row. The rule driver puts them under every rule's plan (`AddRowChecks`: a window that takes the least
-  message and a filter that raises it), so a rule does not see them. A `DETERMINES` check is not one of them yet: it
+- `row_checks` are the bound-side rewrite's `VALUE_IS_VALID` checks, each a per-row message, NULL on a valid row. The
+  rule driver puts them under every rule's plan, as the solver path does under its own (`DirectAddRowChecks`,
+  [framework/done.md](../framework/done.md) § Row checks), so a rule does not see them. A `DETERMINES` check is not one of them yet: it
   makes the IR not proved. An empty group needs no check: a rule reads no row there, as the solver path skips its
   instance (D68).
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path

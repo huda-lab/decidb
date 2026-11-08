@@ -41,27 +41,14 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    rule does not re-check the IR's statuses, offset or sense; any other not-proved node is a decline. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
-   (`DirectProveValue`). Take these from the shared files; `../framework/done.md` lists every shared helper and what it
-   does.
-   - `direct_plan_fragments.cpp`: the all-rows verdict (`DirectAllRowsValid`), the scope projection
-     (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`),
-     `DirectWindowExtremum`, the projection under construction (`DirectProjectionStage`), the signed sum of values
-     (`DirectSumOf`) and, for a separable quadratic objective, `DirectLayoutQuadraticPart`, `DirectFoldQuadratic` and
-     `DirectTurningPoint`.
-   - `direct_runtime_checks.cpp`: the number checks (`DirectCheckNumber`, `DirectRaiseTooLarge`), the checks joined by
-     `DirectAllHold`, the error predicates (`DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate`, which
-     take the `DirectStateErrors` the rule driver hands to `Apply`) and the warning (`DirectWarnIf` over
-     `DirectBelowNormalRange`; when a rule warns is the framework's Number-range warning).
-   - `direct_bound_reader.cpp`: the per-row bounds on a decision (`DirectIsSingletonRow`, `DirectReadBounds`,
-     `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the terms of an objective part or a budget
-     (`DirectReadLinearPart`, `DirectReadConstantTerm`, `DirectReadSquareTerm`, `DirectObjectivePartKept`, and
-     `DirectReadQuadraticPart`, which composes them).
+   (`DirectProveValue`), and take plan fragments, runtime checks and bound and term reading from the shared files
+   (`direct_plan_fragments.cpp`, `direct_runtime_checks.cpp`, `direct_bound_reader.cpp`); `../framework/done.md`
+   lists every shared helper and what it does.
 
    Build every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the
    builder has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
    your rule's own files until a second rule needs it. Inside the rule's namespace, names carry no `Direct` or class
-   prefix (`Condition`,
-   `PlanBuilder`); names in `namespace duckdb` keep `Direct`.
+   prefix (`Condition`, `PlanBuilder`); names in `namespace duckdb` keep `Direct`.
 5. State the plan's slot map (where each DECIDE output lives), which decision outputs may be skipped, and its validated
    columns.
 6. Add the standard tests (below), then `rules/<id>_<slug>/done.md`. The class's `definition.md` already exists; correct
@@ -78,8 +65,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   (`DirectOnKeptRows`, which makes the value NULL there, so its check passes; `test_direct_source_values.py` checks
   each place a rule masks). Silently answering where the solver refuses is a wrong answer. What
   the rule does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
-  enough), the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
-  name, or a refusal over a number only the solver's own model computes. A square `k*(w*x + t)^2` expands to a
+  enough), or a refusal over a number only the solver's own model computes. A square `k*(w*x + t)^2` expands to a
   constant `k*t^2` that moves no answer, and DuckDB evaluates `SUM(POWER(x - v, 2))` at the answer without it; the
   solver path refuses such a query once its running constant passes a DOUBLE (and on Gurobi already from about 1e200,
   as unbounded), and a rule answers it. A rule raises a number past a DOUBLE only where its own plan computes one. Every other message the solver words for the user is the solver's text (see User-facing wording).
@@ -128,13 +114,11 @@ test, adding one is a task in that rule's `todo.md`.
    oracle cache is keyed on the test node id and the test function's source. All three must agree: both DeciDB runs must
    satisfy every constraint and reach the oracle's objective, or all must say infeasible. Inputs with no oracle model
    (bad data) go in the error table, where `off` and `require` must both fail (the choice among several errors need not
-   match; a NULL or NaN message must, apart from ` at row N`), and values the oracle cannot hold (infinities, 2^53) go
+   match; a NULL or NaN message must), and values the oracle cannot hold (infinities, 2^53) go
    in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
 3. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on. Each decline
    branch of `CheckCondition` gets a case in `test_decidb_direct_decline.cpp`, which hands the rule the IR of a small
    planned query; `make decide-coverage` shows each new case reaching an arm no other case of the rule reaches.
 
-Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
-`build/release/test/unittest "[decidb]"`. `test/decide/run_direct_matrix.sh` runs all five and prints one summary line
-each; run `make release` first. The exit code is 0 only when no check fails.
+The checks to run after any change are in [../framework/todo.md](../framework/todo.md) § How to work any task;
+`test/decide/run_direct_matrix.sh` runs them all, and its exit code is 0 only when no check fails.

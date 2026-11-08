@@ -9,9 +9,9 @@ prepared plan keeps its choice until it is rebound.
 |---|---|---|
 | `auto` (default) | direct plan | solver, silently |
 | `off` | solver | solver |
-| `require` | direct plan | error naming the clause, solver never runs |
+| `require` | direct plan | one fixed error, solver never runs |
 
-`DIAGNOSE` always uses the solver (`require` + `DIAGNOSE` is an error). The test-only `DECIDB_FORCE_SOLVER` does the same.
+`DIAGNOSE` and the test-only `DECIDB_FORCE_SOLVER` always use the solver; `require` with either is an error.
 
 ## Why `auto` is the default
 
@@ -26,26 +26,25 @@ When a rule applies, the plan carries one **`EXPLAIN` annotation** (`DirectExpla
 fixed `condition` line per rule that names the problem class (S1: `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`;
 A1: `min/max SUM(c*x), l <= x <= u, each row independent`). It holds no number from the query and no list of runtime
 checks. It shows in logical and physical `EXPLAIN` and in profiling. When no rule applies under `auto`, nothing is
-printed, so `EXPLAIN` of an ordinary DECIDE query is exactly what the solver path prints. To learn why no rule applied,
-set `require`.
+printed, so `EXPLAIN` of an ordinary DECIDE query is exactly what the solver path prints. `require` tells whether a rule
+applies, not why.
 
 ## What a user can notice
 
 - **Ties.** A tied query can return a different, equally optimal assignment than the solver. Tests compare row count
   and primary objective, never the tied vector.
 - **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `when`) gives `x >= 1`
-  and `x <= 2` on the solver, in A1 and in S1, which take the shift from one function (`DecideStrictBound`), so `auto` and
-  `off` agree on this shape.
+  and `x <= 2` on the solver, in A1 and in S1, which read the bound through the solver's classifier
+  (`DecideReadSingletonRow`, D64), so `auto` and `off` agree on this shape.
 - **Error wording and error choice.** Direct solve owes an error on the same inputs, and the solver's text for it (see
   `rules.md`), not the solver's pick among several errors. The NULL and NaN messages come from the functions the solver
   calls (`decide_value_messages.hpp`), so a NULL score, target, coefficient or bound names the NULL columns on the
-  failing row as the solver does. Direct omits the solver's "at row N" on purpose: N is a position in scan order, not a
-  key. A computed value with no NULL column is quoted as written on both paths (`RenderDecideSource`), and a NULL
+  failing row as the solver does. Neither path names a row: a row's place in the input depends on the scan. A computed value with no NULL column is quoted as written on both paths (`RenderDecideSource`), and a NULL
   flattened subquery is named as the subquery. The bound of an aggregate clause is checked before any rule runs, by
   the VALUE_IS_VALID scope checks the bound-side rewrite adds, so its NULL, NaN and `=`-disagreement messages are
   the solver's on both paths. Which bad row a message names is not specified when several are bad.
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers
-  disagreed with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons
+  disagree with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons
   allow a measured gap.
 
 ## Test controls

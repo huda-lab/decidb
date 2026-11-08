@@ -5,17 +5,14 @@ replaces the DECIDE node with ordinary DuckDB operators (sort, rank, filter) tha
 problem takes the existing solver path, unchanged. It is **on by default** (`decide_direct_solve = 'auto'`); `off` forces
 the solver and `require` raises an error when no rule applies.
 
-Five problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable), **A1**, "each row
+Five problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable); **A1**, "each row
 gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions with a linear or one-square
-objective), **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions), and **N1**, "stay inside
-one sum of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows), and **A2**,
-"one shared value closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or
-maximum absolute loss). On 5M-row sources S1 is
-about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. S1 and R1 also read a reducer's `by` key and a `per K:` clause, one group each; their per-group
-plans measured 50 to 98 and 15 to 16 times faster. N1 is 15 to 68 times faster at up to 800,000 rows, and needs no
-Gurobi license, where the solver path refuses a quadratic limit without one. A2's absolute loss is 15 to 86 times faster than
-Gurobi at up to 800,000 rows and its keyed squared loss 1.1 to 2.2 times; its query-wide squared loss is 0.8 to 0.9
-times Gurobi's speed (framework task H-48). The other 14 classes in the catalogue are not started.
+objective); **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions); **N1**, "stay inside one sum
+of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows); and **A2**, "one shared
+value closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute
+loss). Each class's `done.md` gives its speed against Gurobi; all are faster except A2's query-wide squared loss
+(framework task H-48). N1 also answers without a Gurobi license, where the solver path
+refuses a quadratic limit. The other 14 classes in the catalogue are not started.
 
 ## Where to look
 
@@ -24,13 +21,9 @@ times Gurobi's speed (framework task H-48). The other 14 classes in the catalogu
 | Understand how it works | [architecture/overview.md](architecture/overview.md), then the other files there |
 | Look up a term, its standard name and the identifiers it covers | [../glossary.md](../glossary.md) |
 | Add a new problem class | [architecture/rules.md](architecture/rules.md), then a new folder under `rules/` |
-| See what S1 covers, how it is tested, how fast it is | [rules/s1_uniform_matroid/done.md](rules/s1_uniform_matroid/done.md) |
-| See what A1 covers, where it differs from the solver, how fast it is | [rules/a1_separable_box/done.md](rules/a1_separable_box/done.md) |
-| See what R1 covers, where it differs from the solver, how fast it is | [rules/r1_continuous_knapsack/done.md](rules/r1_continuous_knapsack/done.md) |
-| See what N1 covers, where it differs from the solver, how fast it is | [rules/n1_euclidean_ball/done.md](rules/n1_euclidean_ball/done.md) |
-| See what A2 covers and where it differs from the solver | [rules/a2_single_facility_location/done.md](rules/a2_single_facility_location/done.md) |
-| See what is open for S1, A1, R1, N1 or A2 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md), [rules/r1_continuous_knapsack/todo.md](rules/r1_continuous_knapsack/todo.md), [rules/n1_euclidean_ball/todo.md](rules/n1_euclidean_ball/todo.md), [rules/a2_single_facility_location/todo.md](rules/a2_single_facility_location/todo.md) |
-| Work on the shared engine, a third rule, error wording | [framework/](framework/) |
+| See what a working class covers, where it differs from the solver, how it is tested and how fast it is | `rules/<id>_<slug>/done.md`: [S1](rules/s1_uniform_matroid/done.md), [A1](rules/a1_separable_box/done.md), [R1](rules/r1_continuous_knapsack/done.md), [N1](rules/n1_euclidean_ball/done.md), [A2](rules/a2_single_facility_location/done.md) |
+| See what is open for a working class | `rules/<id>_<slug>/todo.md`: [S1](rules/s1_uniform_matroid/todo.md), [A1](rules/a1_separable_box/todo.md), [R1](rules/r1_continuous_knapsack/todo.md), [N1](rules/n1_euclidean_ball/todo.md), [A2](rules/a2_single_facility_location/todo.md) |
+| Work on the shared engine or error wording | [framework/](framework/) |
 | See a class that is not built yet, or start one | [todo.md](todo.md) |
 | Time direct solve against Gurobi and HiGHS on TPC-H | [../performance/benchmarking/direct_solve.md](../performance/benchmarking/direct_solve.md) |
 | Rerun a measurement a rule's `done.md` cites | [../performance/benchmarking/archive_profilers.md](../performance/benchmarking/archive_profilers.md) |
@@ -43,7 +36,7 @@ times Gurobi's speed (framework task H-48). The other 14 classes in the catalogu
 | Class | Name | Catalogue status | Direct solve |
 |---|---|---|---|
 | [A1](rules/a1_separable_box/) | Separable box-constrained problem | Exact | **Works**, on by default |
-| [A2](rules/a2_single_facility_location/) | Single-facility location (1-D) | Exact | **Works** for one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute loss, with constant or data bounds |
+| [A2](rules/a2_single_facility_location/) | Single-facility location (1-D) | Exact | **Works**, on by default, including keyed decisions |
 | [A3](rules/a3_multilinear_box/) | Multilinear optimization over a box | Exact | Not started |
 | [A4](rules/a4_bounded_least_squares/) | Bounded-variable least squares | Prototype | Not started |
 | [A5](rules/a5_monotone/) | Monotone optimization | Exact | Not started |
@@ -73,5 +66,5 @@ The general rules are in [../README.md](../README.md). In this area:
 - A class that is started also has a `todo.md`, and once something works, a `done.md`. A class not started is a row in
   [todo.md](todo.md).
 - Each `done.md` starts with a stamp: the commit and command last used to verify it. Re-run and update the stamp when
-  you change the behavior it describes.
+  you change the behavior it describes; `test/decide/run_direct_matrix.sh` renews it in one command (about 3 minutes).
 - These docs are a map. For detail, read the code in `src/optimizer/decide/direct/`.

@@ -7,19 +7,12 @@ The objective improves without limit — the feasible region is too *open* in th
 improving direction. The fix is forced (the user must add a bound or correct a
 sign; you cannot relax your way out), but the diagnosis is rich: it **names the
 exact variables escaping to infinity** and **prescribes the forced remedy** (add
-an upper bound) without inventing the cap value. Opt-in: `DIAGNOSE <query>` starts it,
-and a query without the prefix gets the plain state-only error instead.
+an upper bound) without inventing the cap value.
 
 Shared plumbing it builds on (the trigger, provenance, the reporting relation) is in
-`../foundations/done.md`.
-
-## Status: reaching the unbounded engine
-
-A presolve can report the ambiguous "infeasible *or* unbounded." The solve facade
-normalizes that to a definitive status (a zero-objective feasibility probe) before
-the engine runs — see `../foundations/done.md` ("Structured solver result" and "Solver
-behavior" for the per-backend specifics). A genuinely-unbounded solve therefore
-arrives here as a clean `UNBOUNDED`.
+`../foundations/done.md`. A genuinely-unbounded solve reaches the engine as a clean
+`UNBOUNDED`: the solve facade first settles an ambiguous "infeasible *or* unbounded" with a
+zero-objective feasibility probe (`../foundations/done.md`, "Structured solver result").
 
 ## Ray extraction (portable box-LP)
 
@@ -34,8 +27,8 @@ maximize    σ · cᵀd            σ = +1 if the model maximizes, −1 if it mi
 subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j, and the linear part of every quadratic row
                                  (its sense preserved, RHS homogenized to 0)
             dᵢ = 0               where column i appears in a non-linear part
-            0 ≤ dᵢ ≤ 1          where the upper bound is open (uᵢ ≥ EFFECTIVE_INFINITY)
-            −1 ≤ dᵢ ≤ 0         where the lower bound is open (lᵢ ≤ −EFFECTIVE_INFINITY)
+            0 ≤ dᵢ ≤ 1          where the upper bound is open (uᵢ ≥ DECIDE_EFFECTIVE_INFINITY)
+            −1 ≤ dᵢ ≤ 0         where the lower bound is open (lᵢ ≤ −DECIDE_EFFECTIVE_INFINITY)
             −1 ≤ dᵢ ≤ 1         where both are open
             dᵢ = 0               where both are finite (that column cannot escape)
             d continuous         (integrality relaxed)
@@ -59,16 +52,11 @@ names only the linear runaway (`y`); a bound on it leaves the other.
 
 A recession ray exists iff this LP is `OPTIMAL` with objective > `DIAGNOSTIC_RAY_EPSILON`;
 then `d` is the ray and its nonzero entries are exactly the escaping columns. The ray
-is attached to `SolverResult::ray` only in that case. These two thresholds —
-`EFFECTIVE_INFINITY` (`1e20`) and `DIAGNOSTIC_RAY_EPSILON` (`1e-8`) — live together
-in `decidb/diagnostic_constants.hpp` so the builder, solver, and engine that share
-the box-LP "free suspect filter" invariant agree by construction (see
-`../foundations/done.md`). Ray extraction is gated (`SolveModelOptions::
-extract_unbounded_ray`) and armed only by the statement's `DIAGNOSE` prefix. An
-unprefixed query skips it, so its failure path pays nothing. When the ray names no
-variable — a runaway inside a non-linear part, or a ray in which only internal auxiliaries escaped —
-the operator returns one `edit_source='undiagnosed'` finding that explains why; the
-relation is never empty and never points the user at a second statement.
+is attached to `SolverResult::ray` only in that case. The builder, solver and engine share
+both thresholds ("Shared diagnostic constants" in `../foundations/done.md`). Ray extraction
+is gated (`SolveModelOptions::extract_unbounded_ray`) and armed only by the statement's
+`DIAGNOSE` prefix, so an unprefixed failure pays nothing. A ray that names no variable gets
+one `undiagnosed` finding (see "How the failure is surfaced" below).
 
 **Suspect filtering is free:** because the box-LP fixes finite-UB columns to 0, a
 non-zero ray entry *is already* the type/sign/bound-filtered set of suspects — no
@@ -99,7 +87,7 @@ aux ever escapes); the practical escapers are user INTEGER/REAL variables.
 ## The output relation
 
 The diagnosis surfaces through the flat relation `DIAGNOSE` returns (full schema in
-`../foundations/done.md`):
+`../../language/guide.md` §8):
 
     state | clause | suggested_change | amount | total | scope | edit_source | group | row
 
@@ -149,9 +137,6 @@ order cannot serve here, because it ranks by rate and every eligible rule ties a
 This stays inside the load-bearing limit ("names a variable, not a guilty clause",
 below): it is a scoped *addition*, never a claim that some clause's `when` was too narrow.
 
-The relation carries each component of the escape in its own typed field: the slice in `group`, escaping and total instance counts in `amount`
-and `total`, the instance kind in `scope`, and the remedy in `suggested_change`.
-
 ## How the failure is surfaced (error messaging)
 
 All failure text follows one rule (the **"user-facing output is for SQL users"**
@@ -167,12 +152,10 @@ lives in the opt-in relation, not the error.
   survives is the one that unblocks them.
 - **Under the prefix, no error at all.** The findings are the statement's answer, so the
   query returns rows rather than raising.
-- **No clause-blame caveat in the message.** Earlier the summary appended *"names the
-  runaway variable, not a single guilty clause."* That sentence was **removed** from
-  stderr: it answers a question a SQL user has not asked and spends the most prominent
-  line on a limitation rather than the fix. The limit itself still holds (a missing
-  bound and a flipped-sign constraint share a recession direction) — it lives in this
-  doc (see "Load-bearing limit"), not in the user's error.
+- **No clause-blame caveat in the message.** The limit (a missing bound and a
+  flipped-sign constraint share a recession direction) answers a question a SQL user has
+  not asked and would spend the most prominent line on a limitation rather than the fix,
+  so it lives in "Load-bearing limit" below, not in the user's error.
 - **"Unavailable" reason, not the re-run advert, when diagnosis ran but came up
   empty.** A content-free unbounded solve (a runaway inside a non-linear part, or a ray that escaped
   only via internal auxiliaries) still needs a result even though no variable was
@@ -215,7 +198,7 @@ column; a group's values are read at its row only for a column under the categor
 continuous / id-like columns (out of scope by design). A **decision per row** scans
 all named input columns. A **keyed decision** also scans named input columns, then
 lifts the row grouping to class granularity via the live key mapping on the
-`VarIndexer` (`EntityMapping`); the lift is accepted only when every joined row of a
+`VarIndexer` (`KeyedMapping`); the lift is accepted only when every joined row of a
 class has the same candidate value. This covers dimension-table labels such
 as supplier→nation while skipping genuinely one-to-many joined columns. The pure
 rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
@@ -234,11 +217,11 @@ name resolution itself used. Every source kind is therefore covered uniformly: a
 base table's catalog names, a `t(a, b, c)` alias list over `(VALUES ...)`, a
 subquery's or a CTE's output names.
 
-Reading names off the plan instead cannot work, and both ways of trying it failed
-differently. An alias list is recorded on the binding and never reaches the plan, whose
-projection carries the binder's positional `col0` / `col1` placeholders; and a scan — the
-ordinary `FROM <table>` case — has no projection to read at all. The visible symptom was
-that the same rows characterized differently through a `VALUES` list than through a table.
+Reading names off the plan cannot work. An alias list is recorded on the binding and never
+reaches the plan, whose projection carries the binder's positional `col0` / `col1`
+placeholders; and a scan — the ordinary `FROM <table>` case — has no projection to read at
+all. The same rows would characterize differently through a `VALUES` list than through a
+table.
 
 Two details are load-bearing:
 
@@ -257,17 +240,17 @@ A categorical candidate over a still-unnamed column is **suppressed** rather tha
 with a machine name the user never typed (`BuildRowGrouping` returns false on an empty
 name), and the variable falls back to the bare count.
 
-The map is serialized with the operator. `LogicalDecide`'s serializer is hand-written, so
-the three vectors carry explicit property ids (246-248); without them the names would
-compile, pass every test that does not prepare a statement, and silently drop on replay.
-`test_column_names_survive_a_prepared_statement` pins that.
+`source_columns` is serialized with the operator (property 216 in `logical_operator.json`);
+without it the names would pass every test that does not prepare a statement and silently
+drop on replay. `test_column_names_survive_a_prepared_statement` pins that.
 
 Alongside the names, `plan_decide.cpp` records **which columns the DECIDE clause itself
 references** (`PhysicalDecide::input_column_in_clause`, set by the same first-pass
 harvest). That is the signal the rule collapse above uses to prefer an explaining column
 over a coincidental one.
 
-**Pragma knobs** (extension options, `decide_diagnostic.cpp`):
+**Pragma knobs** (extension options registered by `RegisterDecideDiagnosticOptions`,
+`decide_diagnostic.cpp`):
 `diagnose_decide_escape_rate` (default 0.8), `diagnose_decide_categorical_ratio`
 (default 0.1), `diagnose_decide_min_categories` (default 20 — an absolute floor so
 small tables still qualify).

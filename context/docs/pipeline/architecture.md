@@ -79,9 +79,10 @@ so the user's result contains only what they declared.
 Which side of a comparison each term sits on, which way the relation points, and
 where a factor on a reducer lives are decided by `DecideCanonicalizer`, on the
 bound tree, before the optimizer runs. Every stage below consumes that shape and
-none re-decides it; a release-build verifier enforces it at three points.
+none re-decides it; a verifier checks it at three points (in full in debug builds,
+[`04_canonicalizer/done.md`](04_canonicalizer/done.md) §4).
 
-That is stage 04's whole reason to exist as a stage, and
+That is stage 04's whole reason to exist as a stage;
 [`04_canonicalizer/done.md`](04_canonicalizer/done.md) §1 explains why a pass that
 may decline can never be a single home.
 

@@ -43,7 +43,7 @@ Each platform job: checkout (full history) → setup Python 3.12 → build → v
 
 ### create-release job
 
-Runs `if: always() && inputs.create_release`, downloads all artifacts, generates release notes (download table, quick start, system requirements, unsigned-binary warnings), then:
+Runs when `create_release` is set and all three platform jobs succeeded; downloads all artifacts, generates release notes (download table, quick start, system requirements, unsigned-binary warnings), then:
 
 ```bash
 gh release create ${version} \
@@ -60,12 +60,8 @@ gh release create ${version} \
 
 ## Before triggering a release
 
-Run `python3 scripts/check_portability.py`. Windows compiles only during a
-release, so portability bugs otherwise surface one 25-minute build at a time. See `portability.md`.
-
-The Windows job also compiles `tools/shell/rc/duckdb.rc`, which embeds
-`logo/decidb.ico`. That icon is a build dependency: deleting or renaming it
-fails the Windows build in the resource compiler, after every C++ target has already compiled.
+Run `python3 scripts/check_portability.py`: Windows compiles only during a release
+([portability.md](portability.md), which also covers the Windows resource file and its icon).
 
 ## Website download links
 

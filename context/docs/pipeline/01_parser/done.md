@@ -56,7 +56,7 @@ Each builds a `PG_AEXPR_OF` node pairing a one-field `PGColumnRef` with the type
 a `per`, `applyDecideScope` wraps the name in its scope marker. The other alternatives
 exist **only to produce an actionable message** rather than a parse failure: a name with
 no type (`x`, or `per K: x`: *"DECIDE variable "x" needs a type; write x(INT), x(BOOL) or
-x(REAL)"*, with the scope repeated by `decideScopeText`), the retired `x IS INTEGER`
+x(REAL)"*, with the scope repeated by `decideScopeText`), the removed `x IS INTEGER`
 form, and the declarations ../../language/errors.md §3 lists as removed, whose messages
 name the `per` spelling that replaces them (`decideTypeWord` turns the type marker back
 into `INT`, `BOOL` or `REAL`). `scalar` is an unreserved keyword, so it still names a
@@ -220,7 +220,7 @@ does. Outside the clause nothing changes.
 
 ## 3. Transformer
 
-`src/parser/transform/statement/transform_select_node.cpp:104-121` moves the
+`TransformSelectNode` (`src/parser/transform/statement/transform_select_node.cpp`) moves the
 clause onto the `SelectNode`: `decide_variables` (via `TransformExpressionList`),
 `decide_constraints`, `decide_sense` (`MAXIMIZE` / `MINIMIZE` / `FEASIBILITY`
 when no objective was written), and `decide_objective`. It then calls
@@ -263,10 +263,10 @@ checked when it is transformed. Every message starts `DECIDE: `, carries the phr
 (`Written` drops the one pair of parentheses `ToString` puts around a comparison and
 prints `count_star()` as `count(*)`).
 
-The old grammar read a reducer's `WHEN` condition as one term (a column, a constant, a
-call, or a parenthesized expression), and the objective's also as one bare comparison of
-two terms; the rest of a longer condition parsed as operators around the marker
-(`SUM(cap) WHEN cap BETWEEN 2 AND 5` is `BETWEEN(SUM(cap) WHEN cap, 2, 5)`).
+The productions kept for a removed `WHEN` read a reducer's condition as one term (a
+column, a constant, a call, or a parenthesized expression), and the objective's also as
+one bare comparison of two terms (§1); the rest of a longer condition parses as operators
+around the marker (`SUM(cap) WHEN cap BETWEEN 2 AND 5` is `BETWEEN(SUM(cap) WHEN cap, 2, 5)`).
 `WrittenCondition` rebuilds the condition as written: it follows every operator written
 after the operand the condition ended with, up to the outermost one that yields a
 condition, and joins their text in order. A condition that was not one term was written
@@ -279,22 +279,20 @@ the scopes in front of its argument -- and `ReducerSpelling` spells it once, joi
 removed condition to the reducer's own `when`:
 
 - `RefusePostfixWhen` and `RefusePostfixPer`, after a constraint: the scope to write in
-  front, plus "by (g) after each of its reducers" when the constraint holds a reducer,
-  the NULL note (`NullNote`: a NULL key value is a class of `per`, so the message shows
-  the `when g is not null` that leaves those rows out), and a note for a `WHEN` after one
+  front, plus "by (g) after each of its reducers" when the constraint holds a reducer (a
+  constraint with no reducer is told to drop the `PER`), and a note for a `WHEN` after one
   of its reducers (`ReducerWhenNote`);
 - `RefuseReducerWhens`, after a reducer: every such `WHEN` of the clause, each as the
   reducer's own `when` -- `sum(when c: e)`, `sum(when c per D: e)` for the colon form,
   `sum(when d and c: e) by (g)` after a reducer with a scope or a `by`; `count(*)`
   becomes `sum(when c: 1)`, and `norm` (which takes no `when` inside it) is pointed at the
-  scope in front; a constraint with no reducer is told to drop a postfix `PER`;
+  scope in front;
 - `RefuseObjective` and `RefuseObjectivePer`, after the objective: the `when` in
   front, the two-level form `outer(per g: inner(e) by (g))` for a reducer over a reducer
   (an outer `avg` is pointed at `sum`, which ranks solutions the same way; a `WHEN` inside
   the inner reducer goes in front; an inner colon form or a term beside the form has no
-  spelling yet), with the NULL note the old form's dropped NULL keys call for, and *"an
-  objective is produced once"* for a flat reducer (a flat `avg` is pointed at the sum of
-  one average per class, NULL keys left out, which is what it meant);
+  spelling yet), and *"an objective is produced once"* for a flat reducer (a flat `avg` is
+  pointed at the sum of one average per class, or at one average over all rows);
 - `RefuseDeclaration`, for a declaration in a parse tree stored before the removal (a
   view or a macro): a qualified name or a `scalar_` type marker. A fresh query never
   reaches it; the grammar refuses both (§1).
@@ -322,9 +320,9 @@ In execution order:
 | # | Operation | What it does |
 |---|---|---|
 | 1 | `RefuseRemovedDecideSpellings` | §3, for a parse tree stored before the removal. |
-| 2 | `RefuseQualifiedDecisionReferences` | Refuses `D.x` where `D` is a relation of the FROM clause with no column `x` and `x` is a decision, in the constraints, the objective, the select list and `ORDER BY`: *"DECIDE: write x, not D.x; a decision is referenced by its bare name"*; in a `when` condition, a `per` key or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43). A qualified name that binds to a column, a struct field or a `USING` column is left to the SQL binder. |
+| 2 | `RefuseQualifiedDecisionReferences` | Refuses a decision referenced through a relation, `D.x` (`../02_binder/done.md` §1). |
 | 3 | `ValidateDecideScopeSpellings` | Where `when`, `per` and `by` may stand (`../02_binder/done.md` §4a). |
-| 4 | `ValidateDecideNoExplicitDecisionCasts` | Rejects `CAST`, `TRY_CAST` and `::` whose child subtree contains a decision reference, in `SUCH THAT` and the objective. Target type is irrelevant. Must run here: a source cast and a binder cast are both `BoundCastExpression`, so authorship cannot be recovered later. The post-solve `SELECT` projection is not scanned. |
+| 4 | `ValidateDecideNoExplicitDecisionCasts` | Rejects a user-written cast over a decision, in `SUCH THAT` and the objective; only the parsed tree shows who wrote a cast (`../04_canonicalizer/done.md` §3.6). |
 | 5 | `ValidateDecideNoDataAggregateFactor` | Rejects a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before symbolic normalization could distribute the decision into it. Every other refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11). |
 | 6 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
 | 7 | `TagDecideSourceFragments` | Stamps each cast and scalar subquery of the constraints and the objective with an id, so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
@@ -377,34 +375,23 @@ containing DECIDE, that is the end of this verifier: it does not execute a secon
 solve and compare rows. Two solves may choose different equally optimal assignments,
 and an interactive continuation cannot be replayed as a materialized verification
 run. The original execution still uses `PRAGMA verify_serializer`; its bound logical
-plan is replaced by the binary-deserialized copy before optimization and execution.
+plan is replaced by the binary-deserialized copy before optimization and execution
+(the suite guard is in [`../03_logical_plan/done.md`](../03_logical_plan/done.md) §5).
 Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
-
-The suite guard is:
-
-```bash
-DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
-```
-
-The CLI harness suppresses the pragma's own result, reduces repeated model-dump builds
-to one complete dump for shape assertions, and leaves the two PTY-driven interactive
-continuation cases outside the materializing verifier. The guarded release run passes
-every test.
 
 ---
 
 ## 6. What this stage does not do
 
 - Decide which side of a comparison a term sits on, or flip a relation.
-- Fold a factor into a reducer. `K * AGG(e)` → `AGG(K * e)` is a wrong answer for
-  `MIN`/`MAX` under negative `K`, since `MAX(-2x)` is `-2·MIN(x)`, and at the parsed
-  level the aggregate kind is not even settled yet. Nothing folds anywhere; the
-  canonicalizer peels the factor outward and it stays outside all the way to the
-  solver row.
+- Fold a factor into a reducer. At the parsed level the aggregate kind is not even
+  settled yet, and nothing folds anywhere: the canonicalizer peels the
+  factor outward and it stays outside all the way to the solver row
+  (`../04_canonicalizer/done.md` §3.7).
 - Any algebraic simplification: no expansion, no like-term collection, no
-  constant folding. Products over sums are distributed at extraction time
-  (`TryDistributeMultiplyOverAdd`) and coefficients accumulate per solver column
-  in the model builder.
+  constant folding. A coefficient on a sum is distributed over its terms when
+  stage 05 reads them (`DecideTermSplitter`), and coefficients accumulate per solver
+  column in the model builder.
 - Resolve names, types or table aliases — that is stage 02.
 
 ---

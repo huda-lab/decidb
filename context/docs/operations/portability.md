@@ -30,7 +30,7 @@ Upstream DuckDB files are excluded on purpose: upstream CI already builds them
 on Windows, and including them produces roughly 55 false positives from files
 that demonstrably compile, because upstream leans on transitive includes.
 
-Verified against the real pre-fix sources: it flags all four bugs above.
+Run against sources holding each of the four bugs above, it flags all four.
 
 **Known limitation.** The POSIX check skips any file that mentions `_WIN32`,
 `DUCKDB_WINDOWS`, or `_MSC_VER` anywhere, so a file that guards one call and
@@ -60,11 +60,11 @@ on a neighbour or on clang's transitive includes; the specific exception header
 Deliberate gap: `PeakProcessMemoryBytes()` in `physical_decide.cpp` returns 0 on
 Windows, so the slow-solve report omits its peak-memory line there. Implementing
 it means `GetProcessMemoryInfo` and a psapi link entry in both CMake and
-`setup.py`. Tracked in `todo.md`.
+`setup.py`.
 
 ## Resource files
 
 `tools/shell/rc/duckdb.rc` compiles only on Windows and is not C++, so no static
 check covers it. It references `logo/decidb.ico`; deleting or renaming that icon
-breaks the Windows build alone. Regeneration instructions are in the header
-comment of `logo/decidb-icon.svg`.
+breaks the Windows build alone, in the resource compiler after every C++ target has compiled. Regeneration
+instructions are in the header comment of `logo/decidb-icon.svg`.

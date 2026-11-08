@@ -8,13 +8,13 @@ decides shape, parses SQL, executes relations, or calls a solver.
 
 **Key source files**
 
-- `src/optimizer/decide/decide_optimizer.cpp` (~330 lines) — the pass dispatcher
+- `src/optimizer/decide/decide_optimizer.cpp` — the pass dispatcher
   and the helpers the passes share; each pass body lives in a sibling file:
   `decide_rewrite_norm_in.cpp`, `decide_rewrite_notequal_avg.cpp`,
   `decide_rewrite_abs.cpp`, `decide_rewrite_minmax.cpp`,
   `decide_rewrite_bilinear.cpp`, `decide_rewrite_scoped.cpp` (the value rewrite),
   `decide_singleton_row_folding.cpp`
-- `src/optimizer/decide/decide_linear_form.cpp` (~1,000 lines) — the flattening
+- `src/optimizer/decide/decide_linear_form.cpp` — the flattening
 - `src/include/duckdb/optimizer/decide/decide_optimizer.hpp`
 - `src/include/duckdb/optimizer/decide/decide_optimizer_internal.hpp` — helpers
   shared across the pass files
@@ -24,8 +24,7 @@ decides shape, parses SQL, executes relations, or calls a solver.
 
 Every constraint it emits re-enters through `LogicalDecide::AddConstraint` and
 every objective through `LogicalDecide::SetObjective`, both of which
-re-canonicalize and re-verify. `AppendConstraint` is a thin forwarder to the
-former.
+re-canonicalize and re-verify.
 
 ---
 
@@ -58,10 +57,10 @@ are available the choice is a performance one — and, measured, the lowering wi
 A general constraint relates *columns*, so every member expression that is not already
 a column has to be pinned to a fresh one that presolve cannot substitute away; and
 `z = MAX(t..)` is an *equality*, so the backend expands both directions while the
-lowering emits only the one the clause needs. On the Q9 benchmark shape at 30K rows the
-native arm ran 1.8x slower; on a `MAX(e) >= K` constraint at the same size, 41x, and
-its cost grew with row count while the lowering stayed flat. Neither arm branched, so
-there was no search quality to buy back.
+lowering emits only the one the clause needs. Measured on the Q9 benchmark shape at 30K
+rows, the native arm is 1.8x slower; on a `MAX(e) >= K` constraint at the same size, 41x,
+and its cost grows with row count while the lowering stays flat. Neither arm branches, so
+there is no search quality to buy back.
 
 So for MIN/MAX, native is the **fallback**: taken only where the lowering has no valid
 Big-M, which is the case it was built to answer and the only one where the lowering
@@ -80,8 +79,7 @@ clause index rides the tag.
 
 The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
 the solve → every diagnostic re-solve. Nothing downstream selects again — stage 08
-applies the recorded policy to the data, which is a different act from choosing it. That is not
-tidiness: once a rewrite has consulted the backend's capabilities, a second selection
+applies the recorded policy to the data, which is a different act from choosing it. Once a rewrite has consulted the backend's capabilities, a second selection
 that answered differently would run a model on a solver it was not built for.
 
 None of the three is **serialized**. Which solver a host has is a fact about the host,
@@ -133,9 +131,8 @@ different reasons:
   excludes an installed backend that could run the query, the sentence names the
   override (`... which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset
   DECIDB_FORCE_SOLVER, or ...`) instead of asking for an install.
-- **Not model load.** The old refusals lived in the HiGHS backend and fired after a
-  full scan and a full model build. Nothing about the four classes needs a single
-  row: `quadratic_constraints` is tree shape (a constraint with a product group), `miqp` is declared
+- **Not model load.** A refusal there would fire after a full scan and a full model
+  build, and nothing about the four classes needs a single row: `quadratic_constraints` is tree shape (a constraint with a product group), `miqp` is declared
   integrality, `nonconvex_quadratic` is judged per product group of the objective
   (`IsNonconvexProductGroup(square, weight_sign, sense)`) and `singular_quadratic` is whether a group couples
   two decisions. A product of two forms is always non-convex. A square is non-convex when the sign of its weight
@@ -149,7 +146,7 @@ different reasons:
 `ClassifyDecideModel(const DecideModelShape &)` (`decide_solver_capabilities.hpp`) is the one classifier of a model's
 shape into the class a backend must take. `DecideModelShape::AddTerm(objective, square, weight_sign, decisions)` fills
 it, and three readers do: the gate from the prepared groups (`ReadPreparedModelShape`, which `DeriveDecideModelClass`
-classifies), direct solve into `DirectIR::model_shape` from its IR's split terms (`../07_solver/todo.md` § SOL-4), and
+classifies), direct solve into `DirectIR::model_shape` from its IR's split terms (`../07_solver/done.md` §1), and
 the built model (`SolverModel::ModelClass`) from its matrix. An integral column and a coupled Q matter only beside a
 quadratic objective: a MILP with quadratic rows is QCQP, not MIQP.
 
@@ -237,11 +234,10 @@ fact about types and structure and is settled here. The pass reads no data.
 
 **Why it is here and not at execution.** Doing this algebra needs a binder: every
 rebuilt subtree goes through `RebindOperator` → `FunctionBinder::BindScalarFunction`
-so the operator is resolved for the children it is actually given. Performing it
-downstream of the binder meant reconstructing bound nodes by hand from another
-node's `FunctionData`, which does not fail on a type mismatch — it reinterprets the
-children's physical representation and returns a plausible wrong number. That
-workaround is gone.
+so the operator is resolved for the children it is actually given. Downstream of the
+binder it would mean reconstructing bound nodes by hand from another node's
+`FunctionData`, which does not fail on a type mismatch — it reinterprets the
+children's physical representation and returns a plausible wrong number.
 
 **A clause's scope** (stage 04 §3.10). Every walk over a constraint tree reads the wrappers
 the binder nests around a comparison through one borrowed view, `DecideEnclosingScope`, and
@@ -257,10 +253,9 @@ easy MIN/MAX (`MINMAX_EASY_REWRITE_TAG` on the comparison, its reducer kept:
 one row per member (`ExtractEasyExtremumTerms`). The filter is attached once, after
 extraction, to every term the body produced — linear terms and product groups alike
 (`AttachReducerFilter`, shared with the aggregate shape) — rather than threaded through
-the extraction branches: a branch that forgot it (the decision-free cast arm once did)
-left one term unfiltered, and stage 08 then read every kept row as a member, so the rows
-the reducer's own `when` dropped reached the model as `constant >= K` and a feasible query
-was called infeasible. A comparison classified `INVALID`, or still in the VALUE shape, is
+the extraction branches, where a branch that forgets it leaves one term unfiltered: stage
+08 then reads every kept row as a member, the rows the reducer's own `when` drops reach
+the model as `constant >= K`, and a feasible query is called infeasible. A comparison classified `INVALID`, or still in the VALUE shape, is
 an `InternalException`: stage 04 refuses the first and the value rewrite replaces the
 second. So is a term that holds a decision under anything but a bare reference
 (`ExtractTerms`): no rewrite lowered it, and reading it as its decision would drop the
@@ -310,9 +305,7 @@ once per coefficient of the form.
 What the group admits: two or more squares in one objective, each a group summed into
 the one Q; a data weight on a square (`w*POWER(x, 2)`, `w*x*x`), whose sign is known only when the query runs; and a
 query-wide factor on a square. The last two are non-convex to the gate, so Gurobi only. A product outside every reducer
-in the objective is refused unless the two decisions are distinct query-wide decisions or one is `BOOL`
-(*"... multiplies decisions outside a reducer, which is not supported yet"*), since it has no once-only reading in the
-model.
+in the objective follows §1a above.
 
 ### Like-term collection
 
@@ -338,13 +331,12 @@ Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS i
 not a repeated column. Product groups are left alone too — they feed
 an outer product rather than a linear row.
 
-**This closes a trap, not a defect.** The model builder already folded duplicate
-column entries when writing the matrix row, so the emitted model was always
-correct and no result-level test could fail. But every other consumer had to
-remember that a variable index can repeat, and one did not: the implied-bound
-derivation read a single term's coefficient instead of the sum. That is why the
-golden dump is unchanged by this pass — and why `test_like_term_collection.py`
-pins the *non*-merges, which are the observable direction.
+**This closes a trap, not a defect.** The model builder folds duplicate column
+entries when writing the matrix row, so collection leaves the golden dump unchanged
+and no result-level test can see it. It spares every other consumer from handling a
+repeated variable index, such as an implied-bound derivation that reads a single
+term's coefficient instead of the sum. `test_like_term_collection.py` pins the
+*non*-merges, which are the observable direction.
 
 **Why it is triggered from `plan_decide.cpp` rather than inside `OptimizeDecide`.**
 The prepared terms hold *copies* of coefficient subtrees. `RemoveUnusedColumns`,
@@ -415,8 +407,7 @@ rows the clause keeps; the objective's keep the objective's `when`.
 
 **An ABS inside an ABS.** `FindAndReplaceAbs` rewrites the argument before the node, so
 an inner ABS becomes its own auxiliary first and the outer's envelope rows refer to it
-(an ABS left in a row was read by term extraction as its argument, and the sign
-vanished). The pairs are appended innermost first, the order `DeriveAbsAuxiliaryBounds`
+(term extraction would read an ABS left in a row as its argument, losing the sign). The pairs are appended innermost first, the order `DeriveAbsAuxiliaryBounds`
 boxes them in: the outer range needs the inner box. An ABS beneath another is pinned
 exactly, because the outer ABS is not monotone in it: over `x` in `[-1, 1]`,
 `abs(abs(x) - 2) <= 0` with an inner auxiliary held by its lower envelope alone would hold
@@ -550,9 +541,8 @@ site first and groups the readers of one reducer (an equal reducer and alias, an
 `when`), across clauses and the objective; a group shares one helper whose row is the union
 of the readers' sides, `t = q` when they are pushed both ways. A helper per copy, each
 one-sided, lets the two copies read different values and answers `x = 2` there, where the
-MAX is 4. The definition belongs to no clause, as the value rewrite's does: it carries no
-clause provenance, a DROP of a reading clause leaves it (a row on a helper nothing else
-reads always holds), and each reading clause accounts for the helper in its own plan.
+MAX is 4. The definition belongs to no clause, as the value rewrite's does (§ The value
+rewrite).
 
 **Which bodies.** Every MIN or MAX whose body is not linear (`DecideDegreeOf`). In
 a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
@@ -591,8 +581,7 @@ at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
 `BODY_EQUAL`). The defining row itself is left out (`BODY_DEFINITION_TAG` on the row): it
 restates the body the reducer already prints. The row carries the source clause of the
 first clause that reads the helper (`CopySourceClauseTag`), so a refusal can quote it, and
-no removal group: every clause that reads the helper shares the row, so DIAGNOSE drops
-none of them with it. A MIN or MAX over defined members that is not
+no removal group (§ The value rewrite). A MIN or MAX over defined members that is not
 held by its envelope alone `becomes an extremum column stated to the solver natively`
 (`EXTREMUM_NATIVE`, `EXTREMUM_PER_GROUP_NATIVE`), read off `BODY_DEFINITION_TAG` on the
 reducer, instead of claiming indicator rows it never has.
@@ -652,7 +641,7 @@ One helper per **reducer over one set of rows**: a second site holding the same 
 each hold a copy of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`),
 and two helpers pinned on different sides would let the pair drift apart; two clauses
 holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) would say the same
-thing twice. The definition belongs to no clause (owner ruling, 2026-10-28): it is the
+thing twice. The definition belongs to no clause: it is the
 definition of an auxiliary, not a constraint any clause wrote, so it carries no
 `source_clause_id` or `removal_group_id`. A DROP of a clause that reads the helper leaves
 it, which is harmless, since an equality on a helper nothing else reads always holds, and
@@ -947,8 +936,7 @@ contributor is refused, so `SUM(x) <> 2` over four BOOL decisions would be refus
 outright.
 
 Seeding it here is safe because folding only ever narrows (`min`), and because a
-user restatement like `x <= 1` on a BOOL was already treated as a no-op against the
-intrinsic box. It also lets the `<>` range collapse see a BOOL's upper side:
+user restatement like `x <= 1` on a BOOL is a no-op against the intrinsic box. It also lets the `<>` range collapse see a BOOL's upper side:
 `SUM(x) <> 9` over four BOOL decisions is unreachable and drops
 to nothing instead of emitting a disjunction against a bound no assignment can meet.
 
@@ -968,7 +956,7 @@ redundantly, and `is_boolean_var` is consulted to skip that restatement. A genui
 BOOLEAN pin (`x <= 0`, `x >= 1`) does tighten the box and is recorded.
 
 **Why it runs last.** `RewriteInDomain` emits a floor-lowering `x >= min_value` for
-an all-constant `IN` domain whose minimum is negative — itself an foldable shape.
+an all-constant `IN` domain whose minimum is negative — itself a foldable shape.
 Fold before that pass and the floor stays at 0, the negative domain value becomes
 unreachable, and the solver returns a *different answer* rather than an error.
 Running last also guarantees every auxiliary variable created by `RewriteAbs`,
@@ -1012,10 +1000,12 @@ unknown sign forces `is_easy` false, and the indicator layer pins `z` to the tru
 MIN/MAX in both directions — correct whichever sign it turns out to have.
 
 `WalkComposedLhs` records the factor on `ComposedMinMaxTerm::scale` (with
-`scale_divides` for the `AGG / factor` spelling). The physical layer applies it
-where the term lands: multiplied into per-row coefficients for `SUM`/`AVG`
-(`ApplyScaleToExtracted`), or into the auxiliary's contribution for `MIN`/`MAX`,
-or distributed over the per-row form when the constraint linearizes the easy way.
+`scale_divides` for the `AGG / factor` spelling). Stage 08 evaluates it and stage 06
+multiplies it where the term lands: into the per-row coefficients for `SUM`/`AVG`, or into
+the auxiliary's contribution for `MIN`/`MAX`. A factor on a reducer outside the composed
+path is multiplied into every term the reducer produced by the linear form
+(`ApplyScaleToExtracted`, §1a), which distributes it over the per-row form when the
+constraint linearizes the easy way.
 
 Folding without the sign check would be a silent wrong answer.
 
@@ -1050,8 +1040,8 @@ stage 07.
   expansion, ABS linearization, `norm` lowering), which is why extraction asserts. A product with an `ABS` factor
   (`ABS(x) * y`) is read after `RewriteAbs` has replaced the `ABS` with its auxiliary, so it is a product of
   decisions like any other.
-- Decide which side of a comparison a term sits on — stage 04. Every pass here was
-  audited against that: ABS and bilinear replace decision-bearing atoms with
+- Decide which side of a comparison a term sits on — stage 04. Every pass here keeps
+  to that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`
   changes only metadata; composed MIN/MAX leaves a permitted placeholder;
   `FoldSingletonRows` only annotates.

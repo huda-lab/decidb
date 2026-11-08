@@ -42,9 +42,8 @@ solver path answers those queries, so none of them is wrong, only slower.
   `ReadReducer`) exists, but no query reaches it: the binder rejects a nested reducer anywhere else.
 - **Change.** Read the two-level objective into the IR through the nested-reducer reading.
 - **Done when.** `test_decidb_direct_ir.cpp`, "declines a two-level objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
-- **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
-  reached only by an IR test, so it was removed; this task waits for a rule that takes the shape (A3 or A4,
-  `../todo.md`).
+- **Needs (owner, 2026-10-29).** A rule that takes the shape (A3 or A4, `../todo.md`): read into the IR with no rule
+  taking it, the objective's reading would be reached only by an IR test.
 
 ## H-08 — VALUE-shape clauses (helper decisions)
 

@@ -117,7 +117,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 In `src/execution/operator/decide/physical_decide.cpp`:
 
-- `RunScopeChecks` first. Then each clause reads only its kept rows: `KeptRows` / `KeepRowsWhere` evaluate a condition
+- `RunScopeChecks` first. Then each clause reads only its kept rows: `KeptRows` evaluates a condition
   (the `and`/`or` order of guide §6.3), and `ExecuteOnReadRows` runs every other expression only on the rows a mask
   marks, NULL elsewhere.
 - `BuildGroupIds` partitions rows by a key, NULL a class; `LookupOrBuildPerGroupIds` caches one partition per key so

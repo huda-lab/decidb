@@ -10,7 +10,7 @@ How DeciDB is benchmarked, and what the measurements show about the TPC-H DECIDE
 
 ## Evidence
 
-- Stage findings come from the [../pipeline profiler](benchmarking/pipeline_profiler.md),
+- Stage findings come from the [pipeline profiler](benchmarking/pipeline_profiler.md),
   `benchmark/decide/profile_pipeline.py`: Q1 to Q11 and P1 to P4 on Gurobi and HiGHS, on the database its `DATABASE`
   constant names (`large` by default).
 - Its results are `benchmark/decide/results/pipeline_profile_{tier}.csv`, one row per (query, backend, repeat), with

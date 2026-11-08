@@ -12,8 +12,8 @@ and empty groups (pp. 30, 50, 56), and one nested shape, the two-level objective
 
 ## Current behavior the deck changes
 
-DeciDB refuses in one place where the deck answers. The guard was added for a reason that still holds until the
-deck's behavior is built; the move replaces it.
+DeciDB refuses in one place where the deck answers. The guard's reason holds until the deck's behavior is built,
+which replaces it.
 
 ### A qualified decision name (p. 7)
 

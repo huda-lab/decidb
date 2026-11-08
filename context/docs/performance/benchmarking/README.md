@@ -37,7 +37,6 @@ HiGHS is built into the CLI.
 
 ## Recording results
 
-Findings belong in the stage folders of [`../README.md`](../README.md) or in the rule folders of
-[`../../direct_solve/rules/`](../../direct_solve/README.md). Put measured, evidence-backed findings in `done.md` and
-open questions in `todo.md`. Cite the exact command, the commit, the machine and the result file. Measuring a
+Pipeline-profiler findings go in [`../findings.md`](../findings.md), a direct-solve rule's in its folder under
+[`../../direct_solve/rules/`](../../direct_solve/README.md) (`done.md`). Open questions go in the owning `todo.md`. Cite the exact command, the commit, the machine and the result file. Measuring a
 bottleneck does not complete its optimization.

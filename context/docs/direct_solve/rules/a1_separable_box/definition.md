@@ -75,8 +75,8 @@ the one before it.
 > 5\. every row is checked before one is released (infeasible, unbounded, invalid data), and the answer is cast to the
 > decision's output type.
 
-The translation uses projections, `LEAST`, `GREATEST`, `CASE` and one counting window that holds the rows back. See
-[done.md](done.md) for the exact behavior.
+The translation uses projections, `LEAST`, `GREATEST` and `CASE`, and holds no row. What the implementation admits
+beyond the catalogue text is in [done.md](done.md).
 
 ## Correctness
 
@@ -99,26 +99,3 @@ For one bounded linear or quadratic function, the optimum can only occur at an e
 > • Empty intervals produce DECIDE's infeasible result, while empty input remains empty.
 >
 > • `when`, `per`, `by`, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
-
-## As built
-
-What the implementation settles beyond the catalogue text:
-
-> • **Default box.** `BOOL` is [0, 1], `INT` and `REAL` are [0, ∞). An unconditional constant lower bound the solver
-> folds replaces the default 0, in any spelling of a bound on one decision (`x >= -3`, `2*x >= -6`, D41); a constant
-> lower bound under a `when` replaces it on the rows the `when` keeps; every other lower bound intersects with it.
->
-> • **Bounds.** A clause may carry a coefficient and an offset on the decision, a `when`, and a value that is a
-> constant, a numeric or Boolean source column, or any deterministic source expression, including one that can raise.
->
-> • **Objective.** `MINIMIZE`, `MAXIMIZE` or none; signed `SUM` parts with constant factors, optional `when`, at most one
-> squared term whose inner weight and offset may be row-valued.
->
-> • **Declined bound.** A bound the solver rejects before it reads any row (an upper bound below the default floor of 0,
-> or a `BOOL` lower bound above 1) is declined, so the solver reports it, on an empty source too.
->
-> • **Errors.** An empty box on any row is infeasible; an improving direction with no finite limit on any row is unbounded;
-> an `INT` answer beyond 2^53 cannot be returned; NULL, NaN or infinite values raise on every row that reads them, and
-> nothing is computed on a row a `when` drops; a term whose `when` keeps no row is dropped, as on the solver (D68).
->
-> • **Ties** go to the smaller value, and a decision with no objective term takes the lowest value its box allows.

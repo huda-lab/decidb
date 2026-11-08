@@ -86,8 +86,7 @@ never an outer query, whose column would be one constant per run of this one:
 
 1. A declared decision, by its name: *"DECIDE: x is a decision; when, per and by may
    only use data"*. A decision named like a column was already refused by the
-   conflict check (a `USING` column escapes it, a logged bug), so a name never means
-   both.
+   conflict check, so a name never means both.
 2. A column, resolved as SQL resolves it (`BindContext::GetBinding(alias, column)`):
    `R.c`, `S.R.c`, `C.S.R.c`, or an unqualified `c` — the `USING` primary relation's
    for a `USING` column (a `FULL OUTER JOIN USING` column has none: *"... write
@@ -116,9 +115,9 @@ of a decision's result column, and it must choose one wide enough for any value
 the solve can legitimately reach — which is not something a bound can tell it. A
 decision's real limit may arrive as a column read at execution (`x <= cap`), or as
 an aggregate row that bounds no single variable at all (`SUM(x) <= 5000000000`),
-so there is nothing here to inspect and range-check. Picking a 32-bit column
-instead pushed the failure to readback, where the excess was silently truncated
-and the type's limit returned as the answer. `BIGINT` also matches what DuckDB
+so there is nothing here to inspect and range-check. A 32-bit column would push
+the failure to readback, where the excess is silently truncated and the type's
+limit returned as the answer. `BIGINT` also matches what DuckDB
 returns for generated integers (`range()`). `BOOL` stays `INTEGER`: its domain is
 `0`/`1`, so it cannot overflow, and widening it would move a result column type
 for no gain. Readback still range-checks both (stage 08, `Type-specific
@@ -130,7 +129,7 @@ ever synthesized.** `is_boolean_var` carries the `[0,1]` box from here through
 `LogicalDecide` to `PhysicalDecide::Finalize`, which reports the variable's type
 as `LogicalType::BOOLEAN` on `SolverInput`, and the model builder applies the box
 and the `is_binary` flag from the type alone
-(`ilp_model_builder.cpp:192-236`). Auxiliary indicators that must stay
+(`SolverModel::Build`, `ilp_model_builder.cpp`). Auxiliary indicators that must stay
 `INTEGER`-typed so they can appear in arithmetic like `M * z` (IN-domain and L0
 indicators) use exactly the same signal.
 
@@ -156,8 +155,8 @@ Four layers refuse a DECIDE query, each for what only it can see:
 
 - a name that collides, a decision used where only data may stand, `D.x` (§1, §4a);
 - a volatile function, below;
-- a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): a source cast and a binder cast are
-  both `BoundCastExpression`, so authorship is observable only on the parsed tree;
+- a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): authorship is observable only on
+  the parsed tree (`../04_canonicalizer/done.md` §3.6);
 - an aggregate over table columns that multiplies or divides a decision (`ValidateDecideNoDataAggregateFactor`);
 - a NULL beside a decision, a reducer with no argument, a reducer inside a reducer, a non-scalar subquery or one that
   reads a decision (§4a, §4);
@@ -241,15 +240,15 @@ named relation's key at once. Concretely: naming a relation removes the fan-out 
 would otherwise contribute; a relation left unnamed still contributes its fan-out,
 uncollapsed.
 
-This has one consequence worth stating plainly: naming every relation a query
-joins is a no-op. With exactly two relations in the query, `SUM(D, T: expr)`
+One consequence: naming every relation a query joins is a no-op. With exactly two relations
+in the query, `SUM(D, T: expr)`
 and unqualified `SUM(expr)` are the same reducer, because the composite key
 already *is* the join-result row — there is no third, unnamed relation left to
 contribute fan-out for the qualifier to collapse. The two forms only diverge
 once a relation is left out of the list while still appearing in the join.
 
 The key is a set of columns, sorted by binding, so `SUM(D, T: ...)`, `SUM(T, D: ...)`
-and `sum(per D, T: ...)` share one scope and one `EntityMapping`.
+and `sum(per D, T: ...)` share one scope and one `KeyedMapping`.
 
 ---
 
@@ -566,14 +565,12 @@ operands).
 
 ## 6. Auxiliary variables
 
-`num_user_vars` is captured before any rewrite runs, so everything appended after
-it is auxiliary. Auxiliary variables are pruned from the bind context so they never
-appear in `SELECT *`; they exist only in the solver's variable space.
-`num_auxiliary_vars` travels to `LogicalDecide` and `PhysicalDecide`.
-
-The binder creates no auxiliaries of its own. `norm` and `IN` bind as markers
+The binder creates no auxiliary variables. `norm` and `IN` bind as markers
 and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
-(stage 05). No formulation runs on the parsed tree.
+(stage 05). No formulation runs on the parsed tree. Stage 05 appends each auxiliary
+after the declared decisions and counts it in `LogicalDecide::num_auxiliary_vars`;
+the select list is bound before any exists, so an auxiliary never appears in
+`SELECT *` (`../03_logical_plan/done.md` §1).
 
 ---
 

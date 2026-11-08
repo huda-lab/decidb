@@ -63,8 +63,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   whole-numbered side and is dropped: per row for each row whose `K` is fractional, per group for `AVG(x) <> K` when
   `K·n_g` is fractional. When `K` varies inside a group, `ExpandAggregateNotEqual` (`linearization_not_equal.cpp`)
   gives each distinct value its own binary and Big-M pair against the same left side. For `AVG(x) <> K` the left side
-  stays an integer `SUM` and the right is scaled (`ne_avg_rhs_scale`). A `<>` that reads only some rows stores its
-  indicator column sparse (`CoefficientColumn::SparseMasked`). The integer tolerance is `1e-9`.
+  stays an integer `SUM` and the right is scaled (`ne_avg_rhs_scale`). The integer tolerance is `1e-9`.
 - **Composed `MIN`/`MAX`.** An additive side may mix `MIN`/`MAX` terms with `SUM`/`AVG`
   (`sum(x * v) + max(x * v) <= 20`). Each `MIN`/`MAX` becomes an auxiliary `z_k` pinned per row by its envelope; when
   the outer comparison pushes `z_k` the wrong way (or for `=`), an indicator layer pins it to the true extreme. Signs
@@ -80,8 +79,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   each data factor of its summand, so the term masks and AVG's row count do the skipping. Where DuckDB's statistics
   prove the factor never NULL, `StatisticsPropagator` folds the test to TRUE (its LOGICAL_DECIDE case, as it folds a
   filter's `IS NOT NULL`); the folded constant keeps its tag, and stage 08 reads no filter for it. A reducer over data
-  whose
-  every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
+  whose every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
   on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `SkipNullInstances` cuts the instance
   that row reaches: one row of a row constraint, the whole group of a grouped one. A composed MIN/MAX clause with a
   NULL factor is skipped (`clause.skipped`). In the objective, `DropNullObjectiveTerms` (stage 05) reads a NULL
@@ -141,7 +139,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   no Big-M; the choice is made once at execution from the backend's capability table, and both paths reach the same
   optimum. Classification and scaffolding: `RewriteMinMaxConstraints` (`decide_rewrite_minmax.cpp`).
 - **The colon form.** `SUM(D: e)` binds onto the exact key scope `sum(per D: e)` uses, so the two share one
-  `EntityMapping`, one de-duplication mask and one `DETERMINES` check. A composite qualifier's key is every named
+  `KeyedMapping`, one de-duplication mask and one `DETERMINES` check. A composite qualifier's key is every named
   relation's stored columns, sorted by binding, so order does not matter. The grammar reads the qualifier as an
   argument list and checks its shape in the C action, because `sum(D, T: e)` and `sum(a, b)` share a prefix LALR(1)
   cannot split at the comma. Parse node `PG_AEXPR_QUALIFIED_REDUCER` → `QUALIFIED_REDUCER_TAG`

@@ -74,20 +74,13 @@ Finalize spans separate the keyed-decision mapping (`execution.keyed_mapping`), 
 
 | Query | Top extraction costs |
 |---|---|
-| Q4 | `evaluate_composed` 495 (21 after PERF-14); `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
+| Q4 | `evaluate_composed` 495 (21 today, § Measured design choices); `formulate` 312 (composed MIN/MAX 240, MIN/MAX objective 73); constraints 156 (RHS 82) |
 | Q8 | group ids 304 (inside the keyed mapping 255 and the constraints); constraints 152 (`when`/`per` 106) |
 | Q1 | constraints 217: linear coefficients 63, `when`/`per` 63, setup 59, RHS 31, group ids 23; objective 32 |
 | P4 | constraints 121: `when`/`per` 114, of it group ids 95 (250k order-key classes); objective 11.5 |
 | P1 | constraints 43 (RHS 39); objective 11.5 |
 
-Q4's composed MIN/MAX evaluation is the largest extraction cost on the benchmark and has no known cause
-([todo.md § PERF-14](todo.md#perf-14--q4s-composed-minmax-evaluation)).
-
-**Q8's key width.** Q8's keyed mapping depends on the key's width: `per o` (9 columns) against `per o.o_orderkey` on
-the same query (load 2.2): keyed mapping 252 → 109 ms, `solver.cleanup` 45 → 0.7 ms, peak 858 → 498 MiB, query
-666 → 474 ms. The difference is one `Value` per class per key column (250k × 9) kept as each class's representative
-(`BuildGroupIds`'s `out_rep_keys`), built in the mapping and destroyed with the model
-([todo.md § PERF-13](todo.md#perf-13--q8s-key-values)).
+The Q4 and Q8 rows are older than the changes in § Measured design choices, which give their current numbers.
 
 **Scope checks against constraint evaluation.** A join of `lineitem` and `orders` (1M rows), `DECIDE per o:
 assign(BOOL)`, one varying clause plus `per o.o_orderpriority: sum(assign) by (o.o_orderpriority) >= 20`, MAXIMIZE
@@ -98,13 +91,9 @@ ms. Load 1.9-2.1.
 |---|---|---|---|---|---|---|
 | `per o: assign <= o.o_shippriority` | none needed | 571 | 838 | 15.5 | 97 | — |
 | `per l.l_orderkey: assign <= 1` | the operator's keyed check | 589 | 807 | 109 | 46 | — |
-| `per l.l_orderkey: assign <= o.o_shippriority` | keyed + a planned check | 1069 | 1667 | 87 | 97 | 569 + 877 + 125 |
 
 The operator's keyed check costs about twice constraint evaluation (109 against 46 ms). A planned determination check
-costs about 480 ms of wall time and 860 MiB of peak memory on 1M rows while passing, five times constraint
-evaluation: three window operators each materialize every row with every column, for the per-class count/min/max
-(569 ms CPU), a dense rank of all rows by the key to pick the least failing class (877 ms) and a global min for the
-message (125 ms) ([todo.md § PERF-3](todo.md#perf-3--a-passing-determination-check-materializes-every-row)).
+is a side aggregate; its cost is in § Measured design choices.
 
 ## Model construction
 
@@ -184,11 +173,11 @@ Both backends are forced explicitly; no silent fallback is accepted. Gurobi `opt
 
 Optional native logs expose versions, reductions and progress where available. Counters include iteration/node counts and objectives; Gurobi additionally reports bound/gap where available. Native solver internals are not all separately timed by these API-level spans.
 
-Q5/Q7 require quadratic constraints and are rejected by the current forced-HiGHS contract before execution; they are capability exclusions. P2/P3 cover supported convex QP on both. The corrected 1,000-row pilot validated all 28 supported pairs, with two expected HiGHS refusals; it is preliminary, not the final baseline.
+Q5/Q7 require quadratic constraints and are rejected by the current forced-HiGHS contract before execution; they are capability exclusions. P2/P3 cover supported convex QP on both. A 1,000-row pilot ran all 28 supported pairs, with two expected HiGHS refusals; it is a pilot, not a baseline.
 
 ## Output and cleanup
 
-Backend result extraction is separate from optimization. DECIDE's output accumulator measures complete solution-to-row mapping and integer conversion. CTAS forces full output without terminal formatting millions of rows; it is a different consumer from the original CLI benchmark.
+Backend result extraction is separate from optimization. DECIDE's output accumulator measures complete solution-to-row mapping and integer conversion. CTAS forces full output without terminal formatting millions of rows; it is a different consumer from the TPC-H suite's CLI output.
 
 The facade times postprocessing and cleanup separately. Gurobi model/environment destruction is instrumented. Finalize self time includes remaining local destruction; process wall/resource measurements additionally include validation and shutdown.
 
@@ -198,14 +187,11 @@ CTAS write.
 - Backend readback (`*.status_and_readback`): 0.3-3 ms. `execution.output_readback` (solution to rows, every row
   produced): 0.4 ms (Q11, 136k rows) to 17.8 ms (Q8, 1M rows).
 - Writing the temporary result: DuckDB's `CREATE_TABLE_AS` operator, 5.7 ms CPU for 1M rows (the scope-check join).
-- `solver.cleanup` (the SolverModel and the session destroyed): 0.7-17 ms, except Q8 at 45-48 ms on both backends,
-  which is the 250k × 9 representative key `Value`s (`per o.o_orderkey`: 0.7 ms; PERF-13). `gurobi.free_model` at
-  most 3.2 ms (Q1).
+- `solver.cleanup` (the SolverModel and the session destroyed): 0.7-17 ms. `gurobi.free_model` at most 3.2 ms (Q1).
 - Wall time outside every span: under 10 ms on every query (P1 7.9, Q8 2.7, Q11 2.2). On queries with a long finalize
   the per-thread `sink_append` total exceeds the wall time it overlaps, so nothing is left unassigned.
 
-Output and cleanup are small; Q8's cleanup is the one cost that stands out, and it belongs to the keyed mapping's
-representative values.
+Output and cleanup are small.
 
 ## Memory and scaling
 
@@ -215,120 +201,111 @@ The profiler carries no memory guard, cap or early stop. A machine-wide counter 
 
 The medium-tier sweep (`results/pipeline_profile_medium.csv`) peaks at 6,525 MiB, on Q10/HiGHS at 2.5M variables; the median across all 90 runs is 668 MiB. The machine has 18 GiB, so this scale fits with room to spare.
 
-## Regressions since 2026-09-09
+## Measured design choices
 
-Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three interleaved runs beside other work (load
-8-18, single spans swing up to 3x).
+Each item is a design the code has, measured against the alternative it replaced on the same query and machine:
+alternative → current. Unless stated: measured from 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three
+interleaved runs beside other work (load 8-18, single spans swing up to 3x).
 
-- **Q8's keyed mapping (PERF-9).** Group ids compared each row with its group's representative `Value` by `Value`,
-  built a label string for every group, and copied an uncollated key into a label column. Group ids now come from
-  DuckDB's aggregate hash table, labels are formatted only for the groups a message names, and a key keeps one copy
-  of an uncollated column. `execution.keyed_mapping` 1,169 → 257 ms; `extraction.group_ids` 868 → 309 ms and
-  extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms. Q8's peak RSS 1,172 → about 860 MiB.
-- **A `when` read once per part (PERF-10, part).** `KeepRowsWhere` scanned the data once per AND or OR part; it now
-  scans once. Q1 `when_per_and_qualifiers` 218 → 165-174 ms.
-- **Extraction passes since September (PERF-10).** Measured alone, medians of 3 at `large` on Gurobi, two interleaved
-  rounds against the build before. A NULL-skip filter that keeps every row the clause reads (a NULL test on data with no
-  NULL) now counts as no filter, so an ungrouped clause no longer carries a 1M-row group list or a CSR for it (DuckDB's
-  ValidityMask idea: allocate nothing while every row is valid); a `per K:` class check reads the cached grouping and
-  stops at the first kept row with a class instead of renumbering every row; a clause's term conditions are read in one
-  scan; the kept rows' groups are built only under DIAGNOSE, their one reader. `extraction.constraint` Q1 312 → 217 ms,
-  Q4 210 → 156, P4 134 → 123; `assembly.implied_bounds` Q1 61 → 49, Q4 and P4 unchanged.
-- **Rows, bounds and NULL tests built once (PERF-10, closed).** Each clause's emitted rows are one CSR shared by
-  implied bounds, the `<>` expansion and the builder; a bound's admitted ends read `a` and `r` evaluated once per row
-  (two projections) and stage 08 folds constants once; a NULL test the statistics prove always TRUE folds at plan time
-  and no filter is read for it, and the objective sites treat an identity filter as none. Medians of 3 at `large` on
-  Gurobi, two interleaved rounds (load 5-14), Q1 / Q4 / P4: `extraction.constraint` 216 → 202, 156 → 120,
-  122 → 120 ms; `assembly.implied_bounds` 52 → 38, 51 → 42, 26 → 24; `extraction.rhs` Q4 83 → 55;
-  `extraction.constraint_setup` Q1 60 → 43, Q4 8 → 0; `execution.evaluate_objective` 32 → 20, 26 → 17, 11 → 7;
-  `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters still select kept rows with a per-row `vector<bool>`: a
-  `SelectionVector` path would let DuckDB's conjunction `Select` reorder AND/OR operands, and DECIDE reads them left
-  to right.
-- **Composed MIN/MAX coefficients read a chunk at a time (PERF-14, closed).** `EvaluateComposedClauses` read each
-  inner term's coefficient row by row: it boxed a `Value`, cast it to `DOUBLE` through a fresh `Vector` and unboxed
-  it, one scan per inner term (a stack sample put the phase's whole time in the cast). It now reads a term's inner
-  coefficients in one scan through `EvaluateTermColumns`, the vectorized reader every other clause uses. Q4
-  `execution.evaluate_composed` 489 → 21 ms on Gurobi, 21 ms on HiGHS; no other span moved.
-- **A group keeps its row, not its key values (PERF-13, closed).** `BuildGroupIds` kept one `Value` per group per
-  key column (250k groups × 9 columns on Q8's `per o`). A group now keeps its first row (for a collated column, the
-  row of its least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message
-  reads a group's values at its row when it names it (late materialization). Q8, medians of 3, two interleaved
-  rounds (load 10-13): `execution.keyed_mapping` 264 → 167 ms, `extraction.group_ids` 314 → 219, `solver.cleanup`
-  52 → 0, peak RSS 834 → 526 MiB. The keyed mapping left is the hash-table build (about 100 ms) and the sort of
-  250k groups (about 80 ms).
-- **MIN/MAX link rows summed without a hash map (PERF-17, closed).** Each MIN/MAX link row summed its columns in its
-  own `std::unordered_map` (`MinMaxLinkRow::AddColumn`, and the composed outer row's `outer_accum`): a bucket array
-  and a node per member, millions of allocations on Q4's 1M members, and rows grown from capacity 1. The rows now sum
-  in the model builder's `SparseCoeffAccumulator` (dense scatter, first-touch order) and are sized once. Q4, medians
-  of 3 (load 11-16): `execution.formulate` 346 → 172 ms; same model (1,000,002 columns, 1,000,010 rows, 6,000,004
-  nonzeros).
-- **A MIN/MAX member built into the row it becomes (PERF-18, closed).** Each member was built as an `ExtremumMember`
-  (two vectors and a copied `AuxRange`) and then copied into the solver row. `EmitExtremumLink` now asks an
-  `ExtremumMemberSource` for each member as it emits the row, into one reused scratch row, and reads a member's range
-  only where the native arm pins a column (late materialization). Q4, medians of 3 (load 15): `execution.formulate`
-  167 → 122 ms; same model. The dense accumulator `BuildMinMaxGroups` assigns per call costs 1.4 ms cold, 0.12 ms
-  warm: left as is.
-- **A reserve that grew a shared buffer one row at a time (BUG-40, fixed).** `SparseCoeffAccumulator::Flush` reserved
-  exactly `size + touched` on each call. Since `ClauseEmittedRows` (PERF-10) appends every row of a clause into one
-  CSR buffer, each flush reallocated and copied the whole buffer: quadratic in the clause's rows. d1 (1M-row join,
-  `per l.l_orderkey` over 250k kept rows) spent 5 s in `assembly.implied_bounds`. The reserve is gone and the vectors
-  grow geometrically: d1 passing 6.2 → 0.98 s (three runs each, load 6-10). Q1, Q4 and P4 were too small to show it.
-- **Planned determination checks as side aggregates (PERF-3, closed).** A planned row check was three window operators
-  over the DECIDE source, each holding every row with every column (per-class counts and extremes, a dense rank of
-  every row to pick the least failing class, a global min for the message). Each check is now a grouped aggregate over
-  the columns it reads on its own read of the source, and the verdict a one-row CTE that gates every read (DuckDB's
-  uncorrelated scalar subquery). d1 (1M-row join, `per l.l_orderkey: assign <= o.o_shippriority + 1`), three runs
-  each against the build with BUG-40 fixed: passing 0.98 → 0.56 s and 1,543 → 817 MiB; failing 0.42 → 0.07 s and
-  1,476 → 436 MiB, same message. A key that
-  holds a decision's own key plans no check of it (FD reflexivity).
-- **Constant folding of direct-solve plans (PERF-16, closed with no change).** DuckDB folds constants before the
-  DECIDE optimizer runs, so the trees a direct rule builds are not folded. A fold over the finished direct plan
-  (`ExpressionRewriter` with `ConstantFoldingRule`, after `Apply`) does fold them (`CAST(100 AS DOUBLE)` → `100.0`)
-  and saves nothing: on 1M lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s
-  and 0.315 → 0.326 s, S1 0.044 → 0.044 s. DuckDB evaluates a constant subtree once per chunk, so per-row cost does not
-  depend on it. Messages are rendered before `Apply`, so a fold there would change none.
-- **Bound reducers as side tables (PERF-15, closed).** A reducer a bound reads from data (`<= sum(cap) by (g)`) was a
-  window over the DECIDE source, holding every source column to attach one value per group, a stack of them for
-  several bounds. Each is now a grouped aggregate on its own read of the source, materialized once and joined back to
-  every read by its key (DuckDB's decorrelated scalar subquery), so a recomputable source stays recomputed. large.db,
-  1M-row lineitem JOIN supplier (23 columns), against the same bound written as a number, medians of 3: solver path,
-  same `by` key +256 ms / +738 MiB → +39 ms / +470 MiB, coarser key +523 ms / +994 MiB → +51 ms / +372 MiB; direct
-  path, coarser key +181 ms / +581 MiB → +63 ms / +46 MiB. A row bound read from a reducer on A1 was PERF-19.
-- **A1 verifies, then streams (PERF-19, closed).** Every A1 plan whose values vary by row held its whole input in a
-  partitionless `COUNT(*) OVER ()` window, so a bad last row raised under `LIMIT 1`. Late materialization kept the
-  window narrow only over projections, windows, filters and scans, so a bound's side table made it hold every column,
-  and the window scaled negatively with threads (592 ms at 11 threads, 429 at 1). A1 now reads the source once into a
-  one-row verdict (`bool_and` of each row's check) and gates a second, streamed read on it, as the row checks do.
-  large.db lineitem (16 columns, 1M rows), `MAXIMIZE sum(x * l_extendedprice)`, medians of 3, old → new: a bound read
-  from a reducer 590 → 248 ms, a number 173 → 47 ms, a plain column 204 → 55 ms; lineitem JOIN supplier with a reducer
-  984 → 393 ms. Peak memory falls where rows were held wide and rises where a third read makes the reader copy the
-  source (lineitem with a reducer 361 → 512 MiB; PERF-21). profile_direct_a1.py at 5M rows: 0.32 → 0.09 s.
-- **Column pruning below a materialized CTE.** DuckDB's `RemoveUnusedColumns` kept every column below a materialized
-  CTE, the consuming plan's included, so every gate verdict (PERF-3) and side table (PERF-15) wrapped around a direct
-  plan stopped pruning beneath it: `SELECT count(*)` over A1 scanned all 16 lineitem columns. The consuming plan is now
-  pruned as any other, and the definition keeps only the union of the columns its references read (PERF-21).
-- **Late materialization under side tables, gates and copies (PERF-20 and PERF-21, closed).** Late materialization
-  accepted only a plan of projections, windows, filters and scans, so a bound's side table or a row-check gate made S1
-  and R1 hold every column; a copy of the source kept every column whatever its reads used, and the copy decision
-  counted them all. The row id is now followed through any operator to its scan, the copy is pruned to its references'
-  columns, and its width leaves out what late materialization reads back. large.db at 1M rows (lisup is lineitem JOIN
-  supplier), a parent that reads every column (wide) or none, medians of 3, wall ms / peak MiB, old → new: S1 with a
-  reducer on lisup, wide, 247 / 809 → 217 / 434; S1 with a row check on lisup, wide, 211 / 1041 → 180 / 683; R1 with a
-  constant bound on lineitem, wide, 137 / 473 → 121 / 250; the same on lisup, none, 163 / 667 → 113 / 217; A1 with a
-  reducer on lisup, none, 64 / 548 → 26 / 112. A1 with a reducer on lisup whose parent reads every column (CTAS) stays
-  near 250 / 506: a join is copied whole and is never late-materialized. The lisup cases gain from the pruned copy,
-  the lineitem case from late materialization.
-- **A pipelined plan over a copy (PERF-22, closed).** Late materialization was switched off for every pipelined plan,
-  but a source read three times or more is copied, and the copy held the strings the parent reads. It now applies
-  whenever the plan holds rows, in a rank or a copy. large.db lineitem, 1M rows, A1 with a bound read from a reducer,
-  medians of 5, old → new: a parent that returns every column (CTAS) 251 ms / 503 MiB → 96 ms / 509 MiB; a parent that
-  reads one string, 36 ms / 170 MiB → 42 ms / 159 MiB (the second scan and its join).
-- **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
-  builds them once. Q1 model build about 15 ms lower.
-- **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data
-  was read and copied it into each model row; a row now carries a group number and the text is formatted only for a
-  finding that prints it. On a clause of 200,000 groups over 1M rows, `extraction.constraint` 150 → 103 ms (medians of
-  three interleaved runs, load ~17); Q1 and Q8, whose grouped clauses have 4-6 groups, unchanged. DIAGNOSE on 20,000
-  groups: same time and peak RSS.
-- **Peak memory on Q3 and Q10 (PERF-11).** The peak is inside Gurobi's solve, after DeciDB hands over the model; the
-  stages before it hold less than the solve adds. Not a DeciDB cost.
+- **Q8's keyed mapping.** Group ids come from DuckDB's aggregate hash table, labels are formatted only for the groups a
+  message names, and a key keeps one copy of an uncollated column. Against comparing each row with its group's
+  representative `Value`, a label for every group and a copied label column: `execution.keyed_mapping` 1,169 → 257
+  ms; `extraction.group_ids` 868 → 309 ms and extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms; Q8's
+  peak RSS 1,172 → about 860 MiB.
+- **A `when` is read in one scan** (`KeptRows`), not one scan per AND or OR part: Q1 `when_per_and_qualifiers`
+  218 → 165-174 ms.
+- **Extraction passes.** Measured alone at `large`, two interleaved rounds against the build before. A NULL-skip
+  filter that keeps every row the clause reads (a NULL test on data with no NULL) counts as no filter, so an ungrouped
+  clause carries no 1M-row group list or CSR for it (DuckDB's ValidityMask idea: allocate nothing while every row is
+  valid); a `per K:` class check reads the cached grouping and stops at the first kept row with a class instead of
+  renumbering every row; a clause's term conditions are read in one scan; the kept rows' groups are built only under
+  DIAGNOSE, their one reader. `extraction.constraint` Q1 312 → 217 ms, Q4 210 → 156, P4 134 → 123;
+  `assembly.implied_bounds` Q1 61 → 49, Q4 and P4 unchanged.
+- **Rows, bounds and NULL tests built once.** Each clause's emitted rows are one CSR shared by implied bounds, the
+  `<>` expansion and the builder; a bound's admitted ends read `a` and `r` evaluated once per row (two projections)
+  and stage 08 folds constants once; a NULL test the statistics prove always TRUE folds at plan time and no filter is
+  read for it, and the objective sites treat an identity filter as none. Two interleaved rounds (load 5-14), Q1 / Q4 /
+  P4: `extraction.constraint` 216 → 202, 156 → 120, 122 → 120 ms; `assembly.implied_bounds` 52 → 38, 51 → 42,
+  26 → 24; `extraction.rhs` Q4 83 → 55; `extraction.constraint_setup` Q1 60 → 43, Q4 8 → 0;
+  `execution.evaluate_objective` 32 → 20, 26 → 17, 11 → 7; `model.build` 53 → 46, 157 → 128, 42 → 43. Term filters
+  select kept rows with a per-row `vector<bool>`: a `SelectionVector` path would let DuckDB's conjunction `Select`
+  reorder AND/OR operands, and DECIDE reads them left to right.
+- **Composed MIN/MAX coefficients are read a chunk at a time.** `EvaluateComposedClauses` reads a term's inner
+  coefficients in one scan through `EvaluateTermColumns`, the vectorized reader every other clause uses. Reading them
+  row by row (box a `Value`, cast it to `DOUBLE` through a fresh `Vector`, unbox it, one scan per inner term; a stack
+  sample put the phase's whole time in the cast) costs Q4 `execution.evaluate_composed` 489 ms against 21 ms on
+  Gurobi, 21 ms on HiGHS; no other span differs.
+- **A group keeps its row, not its key values.** A group keeps its first row (for a collated column, the row of its
+  least spelling); groups number through DuckDB's sort key instead of a `Value` comparator, and a message reads a
+  group's values at its row when it names it (late materialization). Against one `Value` per group per key column
+  (250k groups × 9 columns on Q8's `per o`), Q8, two interleaved rounds (load 10-13): `execution.keyed_mapping`
+  264 → 167 ms, `extraction.group_ids` 314 → 219, `solver.cleanup` 52 → 0, peak RSS 834 → 526 MiB. The keyed mapping
+  left is the hash-table build (about 100 ms) and the sort of 250k groups (about 80 ms).
+- **MIN/MAX link rows sum in the model builder's `SparseCoeffAccumulator`** (dense scatter, first-touch order) and are
+  sized once. Against a `std::unordered_map` per link row (a bucket array and a node per member, millions of
+  allocations on Q4's 1M members, rows grown from capacity 1), Q4 (load 11-16): `execution.formulate` 346 → 172 ms;
+  same model (1,000,002 columns, 1,000,010 rows, 6,000,004 nonzeros).
+- **A MIN/MAX member is built into the row it becomes.** `EmitExtremumLink` asks an `ExtremumMemberSource` for each
+  member as it emits the row, into one reused scratch row, and reads a member's range only where the native arm pins
+  a column (late materialization). Against building each member as an `ExtremumMember` (two vectors and a copied
+  `AuxRange`) and copying it into the row, Q4 (load 15): `execution.formulate` 167 → 122 ms; same model. The dense
+  accumulator `BuildMinMaxGroups` assigns per call costs 1.4 ms cold, 0.12 ms warm: left as is.
+- **`SparseCoeffAccumulator::Flush` reserves nothing; the vectors grow geometrically.** `ClauseEmittedRows` appends
+  every row of a clause into one CSR buffer, so a reserve of exactly `size + touched` per flush reallocates and copies
+  the whole buffer each time: quadratic in the clause's rows. d1 (1M-row join, `per l.l_orderkey` over 250k kept rows)
+  passing, three runs each (load 6-10): 6.2 s with that reserve (5 s in `assembly.implied_bounds`), 0.98 s without.
+  Q1, Q4 and P4 are too small to show it.
+- **Planned determination checks are side aggregates.** Each check is a grouped aggregate over the columns it reads
+  on its own read of the source, and the verdict a one-row CTE that gates every read (DuckDB's uncorrelated scalar
+  subquery). Against three window operators over the DECIDE source, each holding every row with every column
+  (per-class counts and extremes, a dense rank of every row to pick the least failing class, a global min for the
+  message), d1 (`per l.l_orderkey: assign <= o.o_shippriority + 1`), three runs each: passing 0.98 → 0.56 s and
+  1,543 → 817 MiB; failing 0.42 → 0.07 s and 1,476 → 436 MiB, same message. A key that holds a decision's own key
+  plans no check of it (FD reflexivity).
+- **Direct-solve plans are not constant-folded (PERF-16).** DuckDB folds constants before the DECIDE optimizer runs,
+  so the trees a direct rule builds are not folded. A fold over the finished direct plan (`ExpressionRewriter` with
+  `ConstantFoldingRule`, after `Apply`) does fold them (`CAST(100 AS DOUBLE)` → `100.0`) and saves nothing: on 1M
+  lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s and 0.315 → 0.326 s, S1
+  0.044 → 0.044 s. DuckDB evaluates a constant subtree once per chunk, so per-row cost does not depend on it. Messages
+  are rendered before `Apply`, so a fold there would change none.
+- **Bound reducers are side tables.** A reducer a bound reads from data (`<= sum(cap) by (g)`) is a grouped aggregate
+  on its own read of the source, materialized once and joined back to every read by its key (DuckDB's decorrelated
+  scalar subquery), so a recomputable source stays recomputed. Against a window over the DECIDE source holding every
+  source column (a stack of them for several bounds), large.db, 1M-row lineitem JOIN supplier (23 columns), cost over
+  the same bound written as a number, medians of 3: solver path, same `by` key +256 ms / +738 MiB → +39 ms / +470 MiB,
+  coarser key +523 ms / +994 MiB → +51 ms / +372 MiB; direct path, coarser key +181 ms / +581 MiB → +63 ms / +46 MiB.
+- **A1 verifies, then streams.** A1 reads the source once into a one-row verdict (`bool_and` of each row's check) and
+  gates a second, streamed read on it, as the row checks do. Against a partitionless `COUNT(*) OVER ()` window that
+  held the whole input (narrow only over projections, windows, filters and scans, so a bound's side table made it hold
+  every column, and it scaled negatively with threads: 592 ms at 11 threads, 429 at 1), large.db lineitem (16
+  columns, 1M rows), `MAXIMIZE sum(x * l_extendedprice)`: a bound read from a reducer 590 → 248 ms, a number
+  173 → 47 ms, a plain column 204 → 55 ms; lineitem JOIN supplier with a reducer 984 → 393 ms. Peak memory falls where
+  rows were held wide and rises where a third read makes the reader copy the source (lineitem with a reducer
+  361 → 512 MiB). profile_direct_a1.py at 5M rows: 0.32 → 0.09 s.
+- **Column pruning below a materialized CTE.** The plan consuming a materialized CTE is pruned as any other, and the
+  definition keeps only the union of the columns its references read. Without it (DuckDB's `RemoveUnusedColumns`
+  keeps every column below a materialized CTE), every gate verdict and side table wrapped around a direct plan stops
+  pruning beneath it: `SELECT count(*)` over A1 scans all 16 lineitem columns.
+- **Late materialization under side tables, gates and copies.** The row id is followed through any operator to its
+  scan, a copy of the source is pruned to its references' columns, and its width leaves out what late materialization
+  reads back. Against accepting only projections, windows, filters and scans (a side table or a row-check gate made S1
+  and R1 hold every column, and a copy kept every column), large.db at 1M rows (lisup is lineitem JOIN supplier), a
+  parent that reads every column (wide) or none, medians of 3, wall ms / peak MiB: S1 with a reducer on lisup, wide,
+  247 / 809 → 217 / 434; S1 with a row check on lisup, wide, 211 / 1041 → 180 / 683; R1 with a constant bound on
+  lineitem, wide, 137 / 473 → 121 / 250; the same on lisup, none, 163 / 667 → 113 / 217; A1 with a reducer on lisup,
+  none, 64 / 548 → 26 / 112. A1 with a reducer on lisup whose parent reads every column (CTAS) stays near 250 / 506: a
+  join is copied whole and is never late-materialized. The lisup cases gain from the pruned copy, the lineitem case
+  from late materialization.
+- **Late materialization applies to a pipelined plan over a copy**, whenever the plan holds rows, in a rank or a
+  copy: a source read three times or more is copied, and the copy would hold the strings the parent reads. large.db
+  lineitem, 1M rows, A1 with a bound read from a reducer, medians of 5, off → on: a parent that returns every column
+  (CTAS) 251 ms / 503 MiB → 96 ms / 509 MiB; a parent that reads one string, 36 ms / 170 MiB → 42 ms / 159 MiB (the
+  second scan and its join).
+- **A grouped clause's row lists are built once** (`ClauseRows`), for implied bounds and the builder: Q1 model build
+  about 15 ms lower than building them twice.
+- **Group keys are formatted when printed.** A row carries a group number, and the key text is formatted only for a
+  finding that prints it. Against formatting every group's key when its data is read and copying it into each model
+  row, on a clause of 200,000 groups over 1M rows, `extraction.constraint` 150 → 103 ms (load ~17); Q1 and Q8, whose
+  grouped clauses have 4-6 groups, unchanged. DIAGNOSE on 20,000 groups: same time and peak RSS.
+- **Peak memory on Q3 and Q10** is inside Gurobi's solve, after DeciDB hands over the model; the stages before it hold
+  less than the solve adds. Not a DeciDB cost.

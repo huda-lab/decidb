@@ -150,7 +150,7 @@ The generated vector satisfies SUM(POWER(x, 2)) \<= B by construction.
 >
 > • The domain is exactly [0, ∞) or (−∞, ∞). Any other bound declines, even one that would not bind.
 >
-> • B is one constant of magnitude below 1e20, or a value of the source row, where the tightest value in a component applies and a NULL has no limit. B \< 0 with an instance is infeasible. A limit left as an aggregate of the component's rows declines.
+> • B is one constant of magnitude below 1e20, or a value of the source row, where the tightest value in a component applies and a NULL has no limit, or an aggregate of the component's rows. B \< 0 with an instance is infeasible.
 >
 > • Zero directions and B = 0 use the explicit zero-vector branch.
 >

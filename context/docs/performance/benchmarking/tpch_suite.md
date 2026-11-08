@@ -84,7 +84,7 @@ Where each line is printed:
   only the built model knows the expanded row count.
 
 The timers use DuckDB's `Profiler` class and are gated on `std::getenv("DECIDB_BENCH")`. For a finer, nested
-breakdown use the [../../pipeline profiler](pipeline_profiler.md).
+breakdown use the [pipeline profiler](pipeline_profiler.md).
 
 ## Query set
 
@@ -104,7 +104,7 @@ coefficients used in each result entry.
    127.5K/255K and the query over `partsupp` (Q11) at 68K/136K. These run their full table.
 2. **Solver cost that grows faster than the rows.** Q3 (L0 covering MILP) and Q5 (QCQP barrier) stay row-limited
    through `${..._ROW_LIMIT}`. Q9 is near-linear because its MIN/MAX auxiliary has a derived box, but its
-   limit still holds the earlier value until the tier is re-chosen.
+   limit holds a value chosen before that box; the tier is not yet re-chosen.
 3. **Nothing.** Q1, Q4, Q8 and Q10 run the full 500K/1M `lineitem`.
 
 Measured ceilings (largest size completing under 60 s):
@@ -126,8 +126,8 @@ on one change, use `--sizes medium --queries <subset>`.
 
 **Raising a limit requires re-measuring.** A superlinear curve is evidence to explain, not a property to design around.
 Q7 runs the full `orders` table because its non-convex structure is independent per row: 127.5K rows solve in 3.3 s.
-Q9's steep curve (5K 1.7 s, 30K over 60 s) came from a free MIN/MAX auxiliary that starved the root simplex of a box;
-boxed, it measures 15K 0.24 s, 30K 0.45 s, 60K 0.95 s, 120K 2.8 s (2026-08-18, solver time). The `-- NOTE:` headers
+Q9's MIN/MAX auxiliary is boxed: 15K 0.24 s, 30K 0.45 s, 60K 0.95 s, 120K 2.8 s (2026-08-18, solver time). A free
+auxiliary starves the root simplex of a box (5K 1.7 s, 30K over 60 s). The `-- NOTE:` headers
 in each query file record its measured curve.
 
 | Query | File | Features Exercised |
@@ -146,35 +146,9 @@ in each query file record its measured curve.
 
 ### Coefficients
 
-`${..._ROW_LIMIT}` placeholders set the row prefix for row-limited queries; the remaining placeholders are constraint bounds sized to keep each query feasible and non-trivial at each scale.
-
-| Placeholder | Medium | Large |
-|---|---:|---:|
-| `Q1_QTY_CAP` | 3829286 | 7660945 |
-| `Q1_R_QTY_CAP` | 1260000 | 2520000 |
-| `Q1_GRP_CAP` | 62500 | 125000 |
-| `Q1_LOCAL_CAP` | 5420000000 | 10900000000 |
-| `Q2_NE_SUM` | 127500 | 255000 |
-| `Q2_PRICE_CAP` | 9070000000 | 18200000000 |
-| `Q2_MOD_CAP` | 1147500 | 2295000 |
-| `Q3_ROW_LIMIT` | 60000 | 120000 |
-| `Q3_ABS_CAP` | 450000 | 900000 |
-| `Q4_QTY_CAP` | 2500000 | 5000000 |
-| `Q5_ROW_LIMIT` | 50000 | 100000 |
-| `Q5_SSE_CAP` | 38700000 | 77400000 |
-| `Q6_ROW_LIMIT` | 127500 | 255000 |
-| `Q6_PICK_CAP` | 63750 | 127500 |
-| `Q6_BILIN_CAP` | 3187500 | 6375000 |
-| `Q6_GRP_CAP` | 1245117 | 2490234 |
-| `Q7_ROW_LIMIT` | 127500 | 255000 |
-| `Q7_BILIN_CAP` | 5100000 | 10200000 |
-| `Q7_PICK_CAP` | 63750 | 127500 |
-| `Q9_ROW_LIMIT` | 7500 | 15000 |
-| `Q10_ROW_LIMIT` | 500000 | 1000000 |
-| `Q10_SUM_CAP` | 7500000 | 15000000 |
-| `Q10_ABS_FLOOR` | 1250000 | 2500000 |
-| `Q11_BUDGET` | 51000000000 | 102000000000 |
-| `P3_BUDGET` (pipeline profiler only) | 5000000 | 10000000 |
+`${..._ROW_LIMIT}` placeholders set the row prefix for row-limited queries; the remaining placeholders are constraint
+bounds sized to keep each query feasible and non-trivial at each scale. The values, per size, are the `COEFFICIENTS`
+table in `run_benchmarks.py` (`P3_BUDGET` serves the pipeline profiler only).
 
 Q8 carries no placeholders (its feasibility bounds are fixed literals); Q4's composed-constraint cap and Q9's cardinality/price bounds are likewise inline literals held constant across sizes.
 

@@ -25,29 +25,26 @@ never enters the arm and raises the state-only `ThrowDecideSolveError`. A residu
 
 **Engine boundary (mirrors `DiagnoseUnbounded`).** `InfeasibleDiagnosisInput`
 (`decide_diagnostic_engines.hpp`) is the unbounded input with one structural swap: it
-carries the built **`SolverModel`** (the elastic transform will reshape its rows) in place
-of a solved ray, alongside the `VarIndexer`, per-variable labels / is-aux flags,
-`DecideDiagParams`, and an **injected solve callback**
+carries the formulated repair **`SolverModel`** (the elastic transform will reshape its rows)
+in place of a solved ray, alongside its `VarIndexer`, per-variable labels / is-aux flags, the
+global-column labels, `DecideDiagParams`, and an **injected solve callback**
 `std::function<SolverResult(const SolverModel &)>`. The callback lets the engine run the
 elastic re-solve without depending on the operator or the solver facade — `Finalize` binds
-it to the prepared-model solver on the primary solve's backend (`SelectSolverBackend` is
-deterministic, so the re-solve uses the same backend), with the diagnostic helper budget
-`min(60s, primary solve limit)` and the same interrupt poll as the primary solve. If any
-elastic pass hits that helper budget, the operator reports that diagnosis ran out of time
-instead of hiding the attempt behind the generic static error. This keeps the engine
-solver-agnostic and unit-testable, the same boundary as the unbounded engine's
-`get_candidates` injection. No clause→row index is carried in the input — the engine reads
-each row's `provenance` directly off the model.
+it to `SolvePreparedModel` on the backend the primary solve ran on (`PlannedSolverBackend`;
+see "Diagnosed on the solver that failed" in [`../README.md`](../README.md)), under the
+diagnostic helper budget (`../foundations/done.md`). This keeps the engine solver-agnostic
+and unit-testable, the same boundary as the unbounded engine's `get_candidates` injection.
+No clause→row index is carried in the input — the engine reads each row's `provenance`
+directly off the model.
 
-**Model retention.** `SolveModel` builds the `SolverModel` as a local and discards it —
-only the `SolverResult` returns — and `SolverModel::Build` *moves* the global constraints
-out of the `SolverInput`, so the base model is gone by the time the arm runs and cannot be
-faithfully rebuilt from the gutted input. To give the engine a model to transform,
-`SolveModel` takes an optional out-param **`SolverModel *retained_model`**
-(`ilp_solver.hpp`): `Finalize` passes it only when diagnosis is armed, and the built model
-is moved into it after the solve completes (the post-solve disambiguation / ray helpers
-stay file-private inside `ilp_solver.cpp`, so all solve orchestration keeps its single
-home). The retained model is freed when `Finalize` returns.
+**Model retention.** `SolverModel::Build` *moves* the global constraints out of the
+`SolverInput`, so the solved input cannot be reformulated. Under `DIAGNOSE` only, `Finalize`
+keeps an `ElasticFormulation`: the model input and column space as PHASE 3a left them,
+before any constant is derived. The `INFEASIBLE` arm formulates the repair model from it
+(`FormulateElasticModel`, see "The elastic model is a formulation, not a matrix patch"
+below). `SolveModel` also takes an optional out-param **`SolverModel *retained_model`**
+(`ilp_solver.hpp`), passed only when diagnosis is armed; the unbounded arm reads it to tell
+whether an empty ray comes from a non-linear model.
 
 **Labels.** Per-decide-variable labels and is-aux flags (for column provenance) are built by
 one `build_var_labels` lambda in `Finalize`, shared by the UNBOUNDED and INFEASIBLE arms.
@@ -106,7 +103,7 @@ once per kept row (`row`) in the `expanded` one (`FanOutByClass`, below). A clau
 into one model row per relation row, all rendering the same text, so findings are
 de-duplicated on `(label, group, row)` — the user wrote one clause and reads one
 finding, or one per class. Clause text comes from the same `MakeClauseLabel` the elastic
-edits use (factored out of `MakeLoosenEdit`), so a pre-solve finding and a post-solve
+edits use, so a pre-solve finding and a post-solve
 edit name a clause identically, its `when c per K:` qualifier included.
 
 ## Elastic engine: the stage-1 core and the elastic-infeasible signal
@@ -156,7 +153,7 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   BOOLEAN from `op.is_boolean_var` alone). Since the domain is never a constraint node,
   singleton-row folding only ever sees one if the user wrote it; it skips recording a BOOLEAN bound
   **only when it merely restates the domain** (an upper `>= 1` or a lower `<= 0` after
-  integer-strict normalization, `ShouldRecord`). A genuine BOOLEAN **pin** (`x <= 0`,
+  integer-strict normalization, `decide_singleton_row_folding.cpp`). A genuine BOOLEAN **pin** (`x <= 0`,
   `x >= 1`, `x = 1`) IS recorded and reaches the repair model like any other user bound —
   its column opens only back to the intrinsic `[0,1]`, so the pin becomes loosenable while
   the 0/1 domain itself stays rigid. (Erasing pins wholesale would make the elastic model
@@ -226,9 +223,9 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
   A row that stands for its group's classes (`class_set`, an easy MIN/MAX's member rows
   included) folds within its group in both modes; a per-row row of a clause with no `per`
   key (`per_kept_row`) keeps its own slack in expanded mode whatever its shape.
-- **`block_key()`** — query mode keys a block by `clause_id` alone (so all groups and
+- **`block_key()`** — query mode keys a block by `repair_group_id` alone (so all groups and
   classes of a clause collapse into one slack = the single literal edit); expanded mode
-  keys by `(clause_id, group_key)` (so each `by` group or `per` class is its own slack). A
+  keys by `(repair_group_id, group_key)` (so each `by` group or `per` class is its own slack). A
   folded data block still belongs to the data-offset lexicographic tier in both modes —
   only the *grouping* changes by mode, never the tier.
 
@@ -254,7 +251,7 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
   slack in the expanded scope whatever its shape (`per_kept_row`) and reports at its data
   row (`data_row`, `expanded_row`), a data RHS included; when canonicalization moved a
   term across its comparison, the finding offsets the bound as written. A bound the
-  optimizer folded into a column box reports the same way through its own clause's rows
+  optimizer folded into a column box reports the same way through its own clause's rows.
   An unreachable bound names its `per` key's values in both scopes
   and its kept rows in the expanded scope only. A quadratic row folds as a linear one does,
   its slack on the linear RHS only, and in the expanded scope reports the classes it stands
@@ -309,7 +306,7 @@ one slack per row.** `DiagnoseInfeasible` calls it, solves via the injected call
 reads each block back. Exposing it is also the structural test seam.
 
 **Shape marker (`ConstraintProvenance::shape`, `decide.hpp::ElasticShape`).** `UNSET` is the
-invalid default; `BuildElasticModel` asserts that every relaxable row with a user `clause_id`
+invalid default; `BuildElasticModel` asserts that every relaxable row with a user `source_clause_id`
 has been stamped explicitly. `SHARED_SCALAR` = the complete canonical RHS is one editable
 query-wide value shared across every row the clause emits; `PER_ROW_DATA` = genuine per-row or
 per-group **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`: linear and quadratic
@@ -321,7 +318,7 @@ it is what canonicalization left of a written bound that reads data: `x <= cap *
 written, keeps it `PER_ROW_DATA`, in the data tier and per row in `expanded`, as `x <= cap` is. The
 test is the written right side, the bound an edit offsets: `x - cap * o <= 0` has a literal bound
 there, and so does `cap * o >= x`, whose edit reads `cap * o >= x - d`. Other bounds are stamped
-`PER_ROW_DATA`; an folded bound's clause rows carry its literal, so `SHARED_SCALAR`.
+`PER_ROW_DATA`; a folded bound's clause rows carry its literal, so `SHARED_SCALAR`.
 
 **Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups
 relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_SCALAR` block gets **one
@@ -331,9 +328,7 @@ edit is the max (not the per-row sum) and the "which clause to relax" race is no
 This covers **easy MIN/MAX** (`max(e) ≤ K` → per-member `eᵢ ≤ K`), **per-row literal**
 constraints, and **multi-instance bounds** (`x ≤ K` over N instances, through its clause's
 rows). For a clause over **`per` classes or `by` groups** the block key depends on the
-mode: **query** keys by `clause_id` alone, so all classes of `per g: sum(x) by (g) ≥ K`
-fold into one slack = the single literal edit; **expanded** keys by
-`(clause_id, group_key)`, so each class is its own slack (the per-class profile).
+mode, as `block_key()` above states.
 
 **Every clause has its own grouping id.** `block_key()` groups by `repair_group_id`, so
 two clauses sharing an id share a slack — and a slack spanning two unrelated clauses can be
@@ -361,10 +356,9 @@ virtual offset.
 `e_i - M*y_i >= K - M` plus a rigid `SUM(y) >= 1`. The N rows are the clause: lowering `K`
 moves all of them together, so they are stamped `USER_PARAMETER` and share one slack, and
 the disjunction row stays rigid (slackening it would satisfy the clause with no row at
-all, a repair with no SQL edit behind it). Before this they were rigid too, so the clause
-had no loosenable row and the diagnosis fell back to whatever column bound sat nearby —
-the same SQL repaired differently depending on which solver the host had, and only the
-Gurobi answer named the line the user wrote.
+all, a repair with no SQL edit behind it). Were the N rows rigid too, the clause would have
+no loosenable row and the diagnosis would fall back to whatever column bound sat nearby, so
+the same SQL would repair differently on each backend.
 
 **An `=` on a MIN/MAX is a range.** Its two halves keep the clause's source id as the ends of a range: a finding
 quotes the clause as written and suggests `max(e) BETWEEN lo AND hi` with the end that moved, which always repairs.
@@ -379,16 +373,15 @@ user typed. Three things shift it and they are resolved in one place
 (`DisplayRhs(prov, rhs, sense)`): a strict `<` / `>` carries the binder's δ and re-quotes
 `typed_k`; a lowering adds a mechanism term (the `± M` above); and a constant LHS term
 folds into the RHS at every builder site, since `SUM(x + c) >= K` is emitted as
-`SUM(x) >= K - Sum(c)`. The last was wrong for as long as it existed and independently of
-MIN/MAX: the label renders the LHS the user wrote, constant included, so `SUM(x + c) >= 100`
-was reported as `SUM(x + c) >= 90` — a clause appearing nowhere in the query, whose
-suggested edit could not be pasted back over anything. Both shifts accumulate on
+`SUM(x) >= K - Sum(c)`. The label renders the LHS the user wrote, constant included, so
+without the re-quote `SUM(x + c) >= 100` would read `SUM(x + c) >= 90` — a clause appearing
+nowhere in the query, whose suggested edit could not be pasted back over anything. Both shifts accumulate on
 `ConstraintProvenance::rhs_mechanism_offset`, the lowering's part stamped by the
 linearizer and the folded constant added by the builder site that folded it.
 
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
-`MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (a literal knob) and
-`MakeVirtualOffsetEdit(provenance, lhs, rhs_text, sense, delta)` (a query-mode data offset,
+`MakeLoosenEdit` (a literal knob) and
+`MakeVirtualOffsetEdit` (a query-mode data offset,
 `x <= col + delta`) in `decide_diagnostic_render.cpp` — the one place per-shape rendering
 lives: they render the sense, re-quote a strict `<`/`>` against the typed literal, and format
 the suggestion. The LHS is rendered shape-aware by `FormatLhs` — plain `FormatTerms`,
@@ -402,12 +395,8 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS with no single liter
 "loosen to K". Under the slack-scope policy it reports a **virtual offset** in query mode
 (`x <= col + delta`) or a **per-row profile** in expanded mode (see "Slack-scope policy"), and
 the data offset lives in a separate lexicographic tier, so an editable literal is always
-preferred when it can restore feasibility. Two parts:
+preferred when it can restore feasibility.
 
-- **Reporting.** `ReadElasticEdits` reads a data-RHS block per the slack-scope mode: query mode
-  emits **one `virtual_offset` LOOSEN** for the folded clause (`x <= col + delta`), expanded mode
-  emits **one `expanded_row` LOOSEN per conflicting row**. Either way it names the clause, not
-  one line per row, and the conflict is actionable.
 - **Editable-knob preference.** In a degenerate infeasibility an editable knob and a data row can
   be equally-optimal fixes, and the solver would split arbitrarily (a messy, non-deterministic
   mix). To prefer an *actionable* edit, stage 1 solves data offsets before editable loosening:
@@ -446,7 +435,7 @@ preferred when it can restore feasibility. Two parts:
   exercised and the only "fix" is gutting the *other* clause — the same degenerate symptom, from a
   different cause. The diagnosis bound-reset loop (`physical_decide.cpp`) reverts folded
   tightenings for every column, booleans included — resetting a boolean's box to
-  `[0,1]` (upper → 1 if `< 1`, lower → 0 if `> 0`) instead of skipping them — so the slackable row
+  `[0,1]` (upper → 1 if `< 1`, lower → 0 if `> 0`) — so the slackable row
   is the sole enforcer. Never opens past 1 (that would unbound the variable). With this, E loosens
   the budget and reaches a nonzero objective; without it, the normalized weights point at the right
   clause but the model still can't buy anything.
@@ -463,7 +452,7 @@ preferred when it can restore feasibility. Two parts:
 ### AVG, strict and quadratic clauses in the user's units
 
 - **AVG.** The AVG→SUM rewrite pre-scales row coefficients by `1/N_g`
-  (`ScaleAvgRowCoefficients`), so the slack is **already in AVG units** — reported raw, no
+  (`ScaleAvgRows`, `physical_decide.cpp`), so the slack is **already in AVG units** — reported raw, no
   `/N_g`. A pure-AVG row is tagged `provenance.avg_scaled` (set in `physical_decide.cpp` when
   every linear term is AVG-scaled, propagated at the aggregate provenance sites in
   `ilp_model_builder.cpp`); `FormatLhs` then collapses the `1/N`-scaled terms back to `AVG(x)`
@@ -562,8 +551,8 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
 - **The scope (`qualifier`)** — the `when c per K:` text in front of the clause, built once
   per clause on the bound tree by `InitializeConstraintSourceInfo`
   (`decide_source_provenance.cpp`, `VisitSourceComparisons`) and kept in the source
-  registry (`ConstraintSourceInfo::qualifier`). `SourceAwareProvenance` copies it onto the
-  provenance the renderer reads, and `QuoteWrittenClause` / `QuoteEditedClause` write it in front of both
+  registry (`ConstraintSourceInfo::qualifier`). The renderer finds the registry entry through
+  `FindConstraintSource`, and `QuoteWrittenClause` / `QuoteEditedClause` write it in front of both
   the clause and the suggestion. A `when` and a `per` key print in that order
   (`when active per grp: sum(x) by (grp) >= 5`); a key prints as written, comma-separated
   (`per r, y:`), `per ()` as `per ():`, and the default `per row:` not at all (D32). The
@@ -589,16 +578,16 @@ remove-only; removal is the exact atomic DROP below.
 **A Big-M row is never an editable knob.** A row carrying a Big-M states some construct's
 *mechanism*, and slack on it is measured in that mechanism's units, not the user's. A composed
 MIN/MAX lowers to an envelope, closing rows and an outer row; only the outer row is the user's
-clause. Making the closing rows relaxable broke both halves of a diagnosis at once:
+clause. Making the closing rows relaxable would break both halves of a diagnosis:
 
-- *The name.* `ExtremumLinkSpec` carries no `source_clause_id`, so a blamed closing row had no
-  clause to name. `SourceAwareLhs` fell back to `FormatLhs` and rebuilt the text from the row's
-  own coefficients, reporting `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string appearing
-  nowhere in the query, stamped `edit_source=source_literal`.
+- *The name.* `ExtremumLinkSpec` carries no `source_clause_id`, so a blamed closing row has no
+  clause to name. `SourceAwareLhs` would fall back to `FormatLhs` and rebuild the text from the
+  row's own coefficients, reporting `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string
+  appearing nowhere in the query.
 - *The number.* Slack on a closing row lets the auxiliary `z` leave its extremum; the user's
   bound moves by that slack times the coefficient `z` carries in the outer row. For
-  `3*MIN(x + c) + SUM(x) <= 22` the engine reported 8 where the real repair is 24, and the
-  suggested `<= 30` re-solved to infeasible.
+  `3*MIN(x + c) + SUM(x) <= 22` the engine would report 8 where the real repair is 24, and the
+  suggested `<= 30` re-solves to infeasible.
 
 Relaxing the outer row is mathematically equivalent — lowering `z` by `s/a` and raising the
 bound by `s` admit the same solutions — and is already in the user's own units, so repair goes
@@ -621,10 +610,8 @@ clause is not: the clause is registered where it is *tagged*, before either arm 
 both parts of the payload are always present. There is one spelling per tag, and the reader
 asserts it.
 
-**Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
-rows with the correct sign; a grouped `SHARED_SCALAR` clause folds to one block in query and
-one per group in expanded; a data RHS folds to one block in query and stays independent per-row
-in expanded; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a data-offset tier
+**Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`), beside the slack-scope folds
+above: one shared slack spans all N rows with the correct sign; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a data-offset tier
 defers to an editable knob; a query-mode data RHS folds to one virtual offset; strict re-quotes
 against `typed_k`; an AVG row renders `AVG(x)` with the raw slack; a quadratic constraint slacks
 its linear part only with Q untouched. C++ behavioral: a shared block with rigid floors reports
@@ -647,7 +634,7 @@ Exact atomic DROP handles clauses that cannot be meaningfully loosened: `<>`, `I
 constraint-side comparison containing an L0 `norm`. The optimizer assigns one
 written-order `removal_group_id` to the source comparison before any rewrite. Objective-side
 L0 is deliberately excluded. Every descendant row or native construct copies that identity,
-including IN cardinality/link rows, an folded bound's clause rows, ABS/McCormick descendants,
+including IN cardinality/link rows, a folded bound's clause rows, ABS/McCormick descendants,
 composed MIN/MAX extraction, and backend lowering.
 
 `source_clause_id`, `repair_group_id`, and `removal_group_id` are separate namespaces:
@@ -684,9 +671,7 @@ Because that registry is the single source of clause text, it also owns the oper
 spelling. `DecideComparisonOperator` (`decide_source_provenance.cpp`) renders
 `COMPARE_NOTEQUAL` as `<>` rather than DuckDB's default `!=`, so every DECIDE clause
 renderer — written and canonical text, DROP and LOOSEN subjects, EXPLAIN — quotes the
-operator the syntax reference documents and the user typed. Without it a `<>` clause came
-back as `x != 1`, matching neither the query nor the `SUM(x) <> 0` spelling
-`ne_clause_labels` had always used.
+operator the syntax reference documents and the user typed, never `x != 1`.
 
 **Exact search and ranking.** Groups are enumerated lazily by increasing cardinality. Every
 candidate at the first feasible cardinality is solved; a timeout, `INF_OR_UNBD`, suboptimal
@@ -819,7 +804,7 @@ HiGHS's QP path on the user's query (`issues/bugs.md` § Limitations).
 constant moves no optimum and would change a relative MIP gap; `SolverSession` adds it to every
 objective value and bound a solve reads back (`../../pipeline/07_solver/done.md`), so the
 `achievable_objective` is the objective as written. It is summed without a range check: terms past a
-DOUBLE make it ±inf, and the query still answers (a constant never changes the answer, BUG-24).
+DOUBLE make it ±inf, and the query still answers (a constant never changes the answer).
 `SolverModel::ClearObjective()`
 clears it with the rest of the objective for every derived model. `SolverResult` carries
 `objective_value`, populated on
@@ -834,7 +819,7 @@ the `R*`/`D*`/`E*` freezes.
 (`achievable_objective`, `unbounded_after_fix`). An achievable finite value becomes one
 model-level finding with `edit_source='achievable_objective'` and the value in typed
 `amount`; an unbounded repaired objective becomes an `unbounded_after_fix` finding. The
-repair budgets themselves are **not** surfaced .
+repair budgets themselves are **not** surfaced.
 
 **Stage-2 unbounded.** If the relaxed region is unbounded in the objective
 direction (`UNBOUNDED` / `INF_OR_UNBD`), there is no finite optimum: the engine keeps the
@@ -842,7 +827,7 @@ stage-1 edit (still valid) and emits an `edit_source='unbounded_after_fix'` find
 **not** hand off to the unbounded engine — the edit is the actionable part, and composing two
 diagnoses would muddy the message.
 
-This is the **final contract**, not a placeholder. The alternative — hunting for a
+This is the contract. The alternative — hunting for a
 different repair that leaves the objective finite — would break the promise that stage 1
 returns the *smallest* edit, and no such repair need exist. So the answer is two edits,
 and the finding says so plainly:
@@ -955,14 +940,11 @@ comes from the column itself:
   coefficient is what makes a price-weighted row state its demand in the column's units
   rather than its own.
 
-Per column is the whole point, and it was learned the hard way. An earlier version derived one
-widening for the model and applied it everywhere, with a doubling loop to grow it when it
-bound the search. Every number in the elastic model was then coupled to the largest number
-anywhere in the query: a price-weighted row dragged an unrelated `x <= 5` out to 1e15, the
-Big-M followed, and HiGHS stopped being able to load the model for reasons that had nothing to
-do with `x`. Three separate defects came out of that one coupling before it was replaced.
-Scaling each column from its own bounds and row demands prevents unrelated columns from
-inflating its constants. A row can still demand a value far beyond the current box — that
+Per column is the whole point. One model-wide widening would couple every number in the
+elastic model to the largest number anywhere in the query: a price-weighted row would drag an
+unrelated `x <= 5` out to 1e15, the Big-M would follow, and HiGHS could no longer load the
+model for reasons that have nothing to do with `x`. Scaling each column from its own bounds
+and row demands prevents unrelated columns from inflating its constants. A row can still demand a value far beyond the current box — that
 larger widening is semantic and local to the column. The calculation needs no search,
 doubling, or model-wide radius.
 
@@ -977,8 +959,8 @@ as `4.499999`, which reported verbatim is a repair one part in a million *short*
 Both are cleaned up in the readback.
 
 The floor that separates a real edit from rounding is **absolute** — a few multiples of the
-backend tolerance — and deliberately not relative to anything. Two relative floors were tried
-and both are wrong, in opposite directions:
+backend tolerance — and deliberately not relative to anything. Both relative floors are wrong,
+in opposite directions:
 
 - taken from the *model's* scale, it erases every small edit in a model that contains one
   large-coefficient row, and answers "no loosening restores feasibility" about a query one
@@ -1013,16 +995,15 @@ surface as bugs. The formulation pass above likewise keeps its narrow catch.
 The solved model is untouched by all of this — the golden dumps are byte-identical — because
 the second formulation runs on a copy.
 
-**The sweep** (`test_diagnosis_repair_sweep.py`). One invariant, swept across four
-magnitudes and twenty clause shapes rather than argued case by case: an infeasible query
-under `DIAGNOSE` comes back with either a repair that makes it solve, or an explicit
-"could not analyse" — never a crash, never silence, never a repair that leaves the query
-infeasible. It exists because hand-picked cases kept missing whole classes; every defect it
-caught was in the arithmetic *around* the repair rather than in the repair itself, and every
-one of them produced advice that looked reasonable and did not work.
+**The sweep** (`test_diagnosis_repair_sweep.py`). One invariant, swept across magnitudes
+and clause shapes rather than argued case by case: an infeasible query under `DIAGNOSE`
+comes back with either a repair that makes it solve, or an explicit "could not analyse" —
+never a crash, never silence, never a repair that leaves the query infeasible. Hand-picked
+cases miss whole classes, and the defects it targets sit in the arithmetic *around* the
+repair, where they produce advice that looks reasonable and does not work.
 
-**Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). The five cases
-of the retained-constants table — two controls with no encoding at all, then a lowered `<>`,
+**Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). The five
+`_WIDENING_CASES` — two controls with no encoding at all, then a lowered `<>`,
 an L0 `norm` and a McCormick product — are asserted three ways. `assert_backends_agree` across
 Gurobi native, Gurobi lowered and HiGHS catches a constant that only one formulation bakes.
 The promised payoff is oracled against a real re-solve of the edited query. And each case
@@ -1061,17 +1042,14 @@ domain rigid:
 
 - **Box widening (only the intrinsic domain stays rigid).** The repair model's
   `OpenElasticColumnBox` (`physical_decide.cpp`) widens every decide column direction that
-  is narrower than the rigid box (`SolverInput::rigid_lower_bounds` / `rigid_upper_bounds`:
-  the intrinsic domain, captured before propagation with every folded user direction
-  re-opened) — folded user bounds and implied tightenings alike — by the bounded
-  per-column amount described above. This is safe: propagation only ever tightens (raises
-  lower / lowers upper), every implied tightening has a backing row (`USER_PARAMETER`
+  is narrower than the rigid box (`SolverInput::rigid_lower_bounds` / `rigid_upper_bounds`)
+  by the bounded per-column amount described above; the mechanism is in
+  [`../../pipeline/08_execution/done.md`](../../pipeline/08_execution/done.md) §2 "The elastic
+  box". This is safe: every implied tightening has a backing row (`USER_PARAMETER`
   slackable, or `STRUCTURAL` still-rigid) that keeps enforcing it, and every folded bound
-  is enforced by its own clause's rows. This is what lets `x <= 2+3` (a
-  foldable cap copied into the column box) be loosened by its row instead of pinned by the
-  box. A BOOLEAN-domain column (`SolverInput::variable_types[var] == BOOLEAN`) is clamped
-  to `[0,1]` and never widens past it, so a pin on one opens only back to its domain and a
-  BOOLEAN implied-tightened below 1 (the budget example) opens back to 1.
+  is enforced by its own clause's rows. This is what lets `x <= 2+3` (a foldable cap copied
+  into the column box) be loosened by its row instead of pinned by the box. A BOOLEAN
+  implied-tightened below 1 (the budget example) opens back to 1.
 - **Inverted-box survival.** Two opposite folded bounds (`x <= 4 AND x >= 10`) invert the box
   (`col_lower > col_upper`). `SolverModel::Build` keeps the inverted box, and `SolveModel`
   short-circuits to INFEASIBLE (`SolverModel::ProvesInfeasible`) with the model retained, **without
@@ -1080,18 +1058,14 @@ domain rigid:
   un-inverts the box for the elastic re-solve, which loosens one of the two bounds.
 - **A conflict with the type's own range is a static error, not an elastic edit.** A user
   bound that contradicts the default floor of a REAL or INTEGER (`x <= -1` with no lower bound
-  written), or the `[0,1]` box of a BOOLEAN (`x >= 2`, `x <= -1`), can't be fixed by loosening
-  a clause (only by changing the type, writing a lower bound or dropping the bound), so it
-  never reaches the engine. A check in the sink constructor (`DecideGlobalSinkState`, over
-  the box `DecideOptimizer::FoldSingletonRows` resolved) throws a static
-  `InvalidInputException`, under `DIAGNOSE` too:
-  `"DECIDE optimization is infeasible: x <= -1 cannot hold because x is non-negative (>= 0). …"`
-  and `"DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable."`, each
-  quoting the bound as written. The guard is `U < 0 AND L >= 0` (upper below the
-  non-negativity floor) or, for a BOOLEAN, a box outside `[0,1]`, so an explicitly-lowered
-  floor (`x <= -1 AND x >= -5`, box `[-5,-1]`) stays feasible and a purely user-vs-user
-  inverted box (`x >= 5 AND x <= 1`, both ≥ 0) proceeds to the elastic engine. The same bound
-  under a `when` is a row, not a box, and is diagnosed like any clause.
+  written), or the `[0,1]` box of a BOOLEAN (`x >= 2`), can't be fixed by loosening a clause
+  (only by changing the type, writing a lower bound or dropping the bound), so it throws a
+  static `InvalidInputException` in the sink constructor (`DecideGlobalSinkState`), under
+  `DIAGNOSE` too, and never reaches the engine. The guard and its messages are in
+  [`../../pipeline/08_execution/done.md`](../../pipeline/08_execution/done.md) §2 "Domain
+  contradictions are a static error". A purely user-vs-user inverted box (`x >= 5 AND x <= 1`)
+  proceeds to the elastic engine, and the same bound under a `when` is a row, not a box, and is
+  diagnosed like any clause.
 
 ### Scalar-subquery bound provenance
 
@@ -1115,26 +1089,14 @@ names is a row, so there is nothing to summarize and nothing to truncate. A quer
 dozens of failing classes returns dozens of rows, which is the right shape for a
 relation — the user filters, aggregates, or `LIMIT`s it themselves.
 
-**Why no runnable rewritten query.** The engine has no access to the original SQL text (it
-works on `SolverModel` rows, and clause labels are *reconstructed* + canonicalized — the user's
-`5 >= x` comes back as `x <= 5`), so a faithful full query is unbuildable and a reconstructed
-partial would duplicate what the table already carries. The table is the source of truth; the
-flat finding is the repair fragment the engine can state faithfully.
+**Why no runnable rewritten query.** The engine works on `SolverModel` rows and quotes
+clauses, some in canonical form (the user's `5 >= x` comes back as `x <= 5`), so a faithful
+full query is unbuildable and a reconstructed partial would duplicate what the table already
+carries. The table is the source of truth; the flat finding is the repair fragment the engine
+can state faithfully.
 
-**Fixed flat vocabulary.** Every result row is one finding in the fixed schema
-`state | clause | suggested_change | amount | total | scope | edit_source | group | row`.
-`total` and `scope` are reserved for counted unbounded escapes and remain NULL for
-infeasibility findings. The
-`edit_source` column is the stable kind discriminator:
-
-- clause-level loosens: `source_literal` or `virtual_offset`;
-- expanded profiles: `expanded_row` or `expanded_group`, with identity in `row` or `group`;
-- remove-only clauses and special findings: `remove_only`, `unreachable_bound`,
-  `rigid_conflict`, `undiagnosed`;
-- model-level facts: `achievable_objective` or `unbounded_after_fix`.
-
-A data conflict is an actionable `virtual_offset` finding in query mode or an `expanded_row`
-profile in expanded mode, never a dead end.
+`total` and `scope` are reserved for counted unbounded escapes and stay NULL for
+infeasibility findings.
 
 **Tests.** C++ (`test_decidb_diagnostic_engines.cpp`) asserts the typed schema, renderer,
 statement-scoped handoff, loosen/drop builders, virtual offsets, and expanded identities.
@@ -1152,9 +1114,8 @@ conflict beside it still gets an ordinary loosen edit; and a merely far-out-of-r
 bound still goes through the elastic solve. The infinite-bound cases run on both backends;
 `test_infinite_bounds.py` (`test_highs_answers_an_unreachable_bound_as_infeasible`,
 `test_highs_still_solves_a_vacuous_infinity`) pins that the unprefixed verdict keys on direction
-rather than on the infinity. The semantics side is in
-`test/decide/tests/test_infinite_bounds.py`, whose unreachable cases assert the named
-verdict rather than just the word "infeasible".
+rather than on the infinity; its unreachable cases assert the named verdict rather than just
+the word "infeasible".
 
 `test/common/test_decidb_diagnostic_engines.cpp` — SECTIONs drive `DiagnoseInfeasible`
 against the bundled HiGHS backend on one-variable models: a relaxable cap conflicting with
@@ -1182,5 +1143,5 @@ customer ⋈ nation ⋈ region, where nations carry 50-72 customers each) must n
 run `_apply_reported_fix`, so the label is proven pasteable, not just pretty. The third
 (`test_infeasible_row_scoped_label_unaffected_by_fold_rendering`, over `VALUES`) pins that
 a decision per row, `per grp: sum(buy) by (grp) >= 5`, keeps the fan-out path. The
-genuinely data-weighted keyed clause (`SUM(keepS * cost)`) is verified manually only — no
-automated case yet.
+genuinely data-weighted keyed clause (`SUM(keepS * cost)`) has no automated case
+(`todo.md`).

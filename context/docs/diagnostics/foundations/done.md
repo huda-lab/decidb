@@ -10,9 +10,9 @@ so callers branch on the outcome. This gates the whole area.
 - **`SolverResult` + `SolverStatus`** (`src/include/duckdb/decidb/solver/solver_result.hpp`).
   `SolverStatus = {OPTIMAL, INFEASIBLE, UNBOUNDED, INF_OR_UNBD, TIME_LIMIT,
   SUBOPTIMAL, ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, objective_value, ray,
-  diagnostic_timed_out, raw_status, has_solution, best_bound, gap }`.
-  `ray` is populated only on the unbounded ray-extraction path; `raw_status` carries
-  the backend-native code for the `OTHER` message. `diagnostic_timed_out` is set only
+  diagnostic_timed_out, status_text, has_solution, best_bound, gap, user_interrupted, model_constraint_rows }`.
+  `ray` is populated only on the unbounded ray-extraction path; `status_text` carries
+  the backend's own words for the `OTHER` message. `diagnostic_timed_out` is set only
   when an internal diagnostic helper solve (the `INF_OR_UNBD` probe or ray fallback)
   hits its helper budget before producing a usable result, so the operator can say
   diagnosis ran out of time instead of silently falling to the static error.
@@ -24,44 +24,36 @@ so callers branch on the outcome. This gates the whole area.
     (`decide_router.cpp`) sends it to the **SOLVED** success terminal so the operator
     delivers the rows with a plain "not proven best" stderr caveat rather than erroring.
     Gurobi-only — HiGHS rejects quadratic constraints upstream, so it never reaches here.
-    (Historically such statuses were rewritten to `OPTIMAL`; the current soundness rule
-    never relabels a non-optimal termination as optimal — it carries a distinct status.)
-  - **Timeout incumbent fields (S1).** `solution` + `objective_value` carry the proven
+    A non-optimal termination is never relabelled `OPTIMAL`.
+  - **Timeout incumbent fields.** `solution` + `objective_value` carry the proven
     optimum at `OPTIMAL` **and** the best-so-far incumbent at `TIME_LIMIT` / `SUBOPTIMAL`
     (when one was found) — so a caller must branch on `status` / `has_solution`, not on
     solution emptiness, to know whether a value is proven best. `has_solution` is true iff the
-    backend found a feasible incumbent (Gurobi `SolCount > 0` / HiGHS
-    `primal_solution_status == kSolutionStatusFeasible`); it **gates** the incumbent reads
-    (`solution` / `objective_value` / `gap`) because with no incumbent those attributes
-    return solver sentinels (`-1e100` / `inf` / `nan`). `best_bound` (Gurobi `ObjBound` /
-    HiGHS `mip_dual_bound`) and `gap` **default to NaN ("unavailable")** and are only
-    populated when a proven bound actually exists — i.e. on **MIP** timeouts. On an LP/QP
-    timeout Gurobi's `ObjBound` reads back the ±1e100 infinity sentinel (finite, so it
-    would pass an `isfinite` guard downstream) and HiGHS's `mip_dual_bound` holds its 0
-    default; both backends therefore reject sentinel/non-finite values (Gurobi: magnitude
-    `>= EFFECTIVE_INFINITY`; HiGHS additionally gates on the model having an integer
-    variable) and leave NaN. Report writers must skip bound/gap output when
-    `!std::isfinite`. `gap` (Gurobi `MIPGap` / HiGHS `mip_gap`) is a **fraction** on
-    *both* backends — HiGHS's `mip_gap` doc string reads "(%)" but the stored value is
-    `|primal − dual| / |primal|`, not a percentage. Populated in the `GRB_TIME_LIMIT` /
-    `kTimeLimit` branches (`gurobi_solver.cpp`, `deterministic_naive.cpp`).
+    backend found a feasible incumbent and **gates** the incumbent reads (`solution` /
+    `objective_value` / `gap`). `best_bound` and `gap` **default to NaN ("unavailable")** and
+    are populated only when a proven bound exists — on **MIP** timeouts; report writers skip
+    them when `!std::isfinite`. `gap` is a **fraction** on *both* backends — HiGHS's `mip_gap`
+    doc string reads "(%)" but the stored value is `|primal − dual| / |primal|`. They are set
+    in the `GRB_TIME_LIMIT` / `kTimeLimit` branches (`gurobi_solver.cpp`,
+    `deterministic_naive.cpp`); the per-backend reads and sentinels are under "Time-limit
+    behavior" below. `user_interrupted` marks a Ctrl-C stop, which reuses `TIME_LIMIT`.
 - **Backends map-and-return** instead of throwing on solver status
   (`gurobi_solver.cpp`, `deterministic_naive.cpp`). HiGHS `kUnboundedOrInfeasible`
   (status 9) maps to `INF_OR_UNBD`. Genuine internal/API errors (NaN/Inf,
   extraction, API failures) still throw.
 - **The `SolveModel` facade** returns `SolverResult` and does not throw on solver
   status (`ilp_solver.cpp`). The default user-facing error text is a single helper,
-  `ThrowDecideSolveError(const SolverResult &)`.
+  `ThrowDecideSolveError(const SolverResult &, SolverBackend)`.
 - **Diagnostic helper solves are capped and interrupt-aware.** `ResolveDecideDiagnosticTimeLimit`
-  (`solver_config.hpp`) returns `min(60s, primary_solve_limit)`. The prepared-model
-  overload `SolvePreparedModel(model, backend, options)` applies that budget and the
+  (`solver_config.hpp`) returns `min(60s, primary_solve_limit)`.
+  `SolvePreparedModel(model, backend, options)` applies that budget and the
   same interrupt poll as the primary solve. It is used by the zero-objective
   `INF_OR_UNBD` probe, the portable box-LP ray fallback, and the infeasible engine's
   elastic re-solves (tier passes, stage 2, and tie-break), so diagnosis cannot add
   several full 300s chunks after an already-slow failed solve. A helper `TIME_LIMIT`
   is reported as "diagnosis ran out of time" rather than being hidden behind the
   generic static error.
-- **`INF_OR_UNBD` first goes through the existing feasibility probe.** A ray (improving
+- **`INF_OR_UNBD` first goes through a feasibility probe.** A ray (improving
   recession direction) is *necessary but not sufficient* for unboundedness — the
   region must also be feasible (an infeasible problem can still admit an improving
   ray, e.g. `x − y ≤ −10 AND y − x ≤ −10`). So `DisambiguateInfOrUnbd`
@@ -74,24 +66,18 @@ so callers branch on the outcome. This gates the whole area.
   - **Residual `INF_OR_UNBD` is a router fallback, not a broader status policy.** When the
     probe *itself* returns neither OPTIMAL nor INFEASIBLE (a zero-objective model
     can't be unbounded, so this means the solver could not decide feasibility at all
-    — error/limit), the status stays `INF_OR_UNBD`. Under `DIAGNOSE`, the router uses
-    the ray signal: a present ray routes to the unbounded terminal and no ray routes
-    to the infeasible terminal. Without the prefix it reports the ambiguous state and
-    stops.
+    — error/limit), the status stays `INF_OR_UNBD`, and the router routes it by the ray
+    signal (`../router/done.md`).
 - **Pre-solve model-builder infeasibility is normalized.** Contradictory bounds (`x >= 5
   AND x <= 1`, an inverted column box) and a violated coefficient-free row (`SUM(0 * x) <=
   -1`, `x - x <= -1`) stay in the built model, and `SolverModel::ProvesInfeasible` answers
   it as `SolverResult{status = INFEASIBLE}` before any backend reads it. The model is
   retained, so it reaches the same `PhysicalDecide::Finalize` gate as backend-reported
   infeasibility, and diagnosis runs normally and names the clause.
-- **The status policy lives in the operator.** `PhysicalDecide::Finalize`
-  (`physical_decide.cpp`) branches on status: optimal → store the solution
-  (`SUBOPTIMAL` also stores it, with a "not proven best" caveat); other
-  non-optimal → the statement's `diagnose` flag decides whether to run an engine and
-  report findings or call `ThrowDecideSolveError`. This is the single trigger.
-
-An unprefixed query gets the concise state-only error plus the instruction to rerun
-with `DIAGNOSE`; it pays for no model retention, ray extraction, or elastic solve.
+- **The status policy lives in the operator.** `PhysicalDecide::Finalize` routes the
+  status once through the router (`../router/done.md`). An unprefixed query gets the
+  concise state-only error plus the instruction to rerun with `DIAGNOSE`; it pays for no
+  model retention, ray extraction, or elastic solve.
 
 ## Solver behavior (backend reference)
 
@@ -101,7 +87,7 @@ rely on these.
 
 - **Versions.** Gurobi is runtime-loaded (dlopen), supporting 9.5–13.0 — the version
   is parsed from the lib filename, so there is no fixed Gurobi version. HiGHS is
-  vendored 1.11.0 (`third_party/highs/HConfig.h`).
+  vendored 1.15.1 (`third_party/highs/HConfig.h`).
 - **Terminal status by case** (constructed minimal models):
 
   | Case | Gurobi | HiGHS |
@@ -127,18 +113,15 @@ rely on these.
   uniformly better; DeciDB uses the portable box-LP (`../unbounded/done.md`) as the
   solver-agnostic default and treats native rays as optional accelerators.
 
-These facts are the evidence behind the router's inf/unb branch — the ambiguous
-status is real (HiGHS MILP), the feasibility probe stays first, and a residual
-ray routes through the unbounded engine. If that engine cannot name a variable, its
-`undiagnosed` finding retains `state='infeasible or unbounded'` because feasibility
-was not established (`../router/done.md`).
+These facts are the evidence behind the router's inf/unb branch (`../router/done.md`):
+the ambiguous status is real (HiGHS MILP), so the feasibility probe stays first.
 
 - **Time-limit behavior (incumbent / bound / gap at timeout).** Measured on constructed
   hard MILPs (equality market-split for the no-incumbent case; a
   trivially-feasible multi-dim knapsack for the with-incumbent case) with
-  `DECIDB_TIME_LIMIT` set to 1–2 s. **Both backends expose everything the slow
-  router needs at the time limit** — a feasible incumbent (when one was found), its
-  objective, the best bound, and the gap — so Bucket A is *not* reduced on HiGHS.
+  `DECIDB_TIME_LIMIT` set to 1–2 s. **Both backends expose everything a time-limit
+  report needs** — a feasible incumbent (when one was found), its objective, the best
+  bound, and the gap.
 
   | Field | Gurobi (at `GRB_TIME_LIMIT`) | HiGHS (at `kTimeLimit`) |
   | --- | --- | --- |
@@ -149,34 +132,33 @@ was not established (`../router/done.md`).
   | gap | `MIPGap` (only when incumbent, MIP) | `getInfo().mip_gap` (only when incumbent, MIP) |
 
   - **The best bound is the reliable routing key on both backends *for MIPs*** —
-    meaningful in both buckets (e.g. the same market-split model reports bound `27` on
-    Gurobi *and* HiGHS). This is what S3's "route by best bound" reads. On **LP/QP**
-    timeouts neither backend proves a bound: Gurobi's `ObjBound` read succeeds but
-    returns the ±1e100 infinity sentinel, and HiGHS's `mip_dual_bound` silently holds
-    its 0 default (a 200k-variable LP at `DECIDB_TIME_LIMIT=0.001`). The
-    backends keep the NaN "unavailable" default in `SolverResult` for those cases.
+    with or without an incumbent (e.g. the same market-split model reports bound `27` on
+    Gurobi *and* HiGHS). On **LP/QP** timeouts neither backend proves a bound: Gurobi's
+    `ObjBound` read succeeds but returns the ±1e100 infinity sentinel (finite, so it would
+    pass an `isfinite` guard), and HiGHS's `mip_dual_bound` silently holds its 0 default
+    (a 200k-variable LP at `DECIDB_TIME_LIMIT=0.001`). Both backends therefore reject a
+    value at or above `DECIDE_EFFECTIVE_INFINITY` in magnitude, HiGHS also requires an
+    integer variable in the model, and the NaN "unavailable" default stays.
   - **Sentinels must be gated on the incumbent-presence flag, not the read's error
     code.** With no incumbent, Gurobi's `ObjVal`/`MIPGap` reads *succeed* (error 0)
     but return `-1e100` / `1e100`; HiGHS returns `objective_function_value = inf` and
     `mip_gap = nan`, and `col_value` is present but garbage. Read incumbent/objective/gap
     *only* when `SolCount > 0` (Gurobi) / `primal_solution_status == 2` (HiGHS).
-  - **HiGHS timeout mapping (fixed, S0).** `highs.run()` returns `HighsStatus::kWarning`
-    (not `kOk`) at the time limit. `HighsSession::RunAndReadback` throws only on
-    `HighsStatus::kError`, so `kWarning` falls through to the model-status switch and
-    `kTimeLimit` maps to `TIME_LIMIT`. Both backends produce `TIME_LIMIT` with a readable
+  - **HiGHS timeout mapping.** `highs.run()` returns `HighsStatus::kWarning`
+    (not `kOk`) at the time limit. `HighsSession::RunAndReadback` reports only
+    `HighsStatus::kError` as `OTHER`, so `kWarning` falls through to the model-status switch
+    and `kTimeLimit` maps to `TIME_LIMIT`. Both backends produce `TIME_LIMIT` with a readable
     incumbent / bound / gap.
-  - **Manual interrupt API — Gurobi wired, HiGHS not.** Ctrl-C is a peer trigger into the
-    slow branch on *any* armed solve (first solve included), decoupled from the time limit —
-    see `../../pipeline/08_execution/slow_solves.md` ("Ctrl-C as a peer trigger"). Gurobi uses **`GRBterminate`** from a
-    watcher thread (thread-safe), mapping `GRB_INTERRUPTED → TIME_LIMIT` with a
-    `user_interrupted` flag for the wording. HiGHS's interrupt would need the
-    `setCallback` / `startCallback` path (no thread-safe terminate), which is **not** wired,
-    so HiGHS stays boundary-only: a mid-solve Ctrl-C is seen only at the chunk boundary and
-    reported as a time-limit stop — the solver-agnostic fallback.
+  - **Manual interrupt on both backends.** Ctrl-C stops a solve with or without the
+    prefix, decoupled from the time limit (`../../pipeline/08_execution/slow_solves.md`).
+    Gurobi uses **`GRBterminate`** from a watcher thread (thread-safe), mapping
+    `GRB_INTERRUPTED → TIME_LIMIT`. HiGHS has no thread-safe terminate; its interrupt
+    callbacks (`kCallbackMipInterrupt`, `kCallbackSimplexInterrupt`, `kCallbackIpmInterrupt`)
+    answer from the same poll beside HiGHS's own time-limit checks, and `kInterrupt` maps to
+    `TIME_LIMIT`. Both set `user_interrupted` for the wording.
   - **Warm-start API exists on both.** Gurobi `Start` attribute; HiGHS `setSolution`.
-    The anytime objective→constraint ladder that would have used it was dropped. At a
-    timeout DeciDB resumes the original warm solve; it does not launch the elastic engine
-    as a feasibility classifier or infer unboundedness from incumbent progress. See
+    At a timeout DeciDB resumes the original warm solve; it does not launch the elastic
+    engine as a feasibility classifier or infer unboundedness from incumbent progress. See
     `../../pipeline/08_execution/slow_solves.md` ("Settled timeout policy").
 
 ## Constraint provenance (row → clause)
@@ -184,16 +166,17 @@ was not established (`../router/done.md`).
 Every emitted matrix row records where it came from, so diagnosis reports at the
 user-clause level instead of raw rows.
 
-- **`ConstraintProvenance {clause_id, group_key, kind, shape, avg_scaled, strict, typed_k}`**
-  on `ModelConstraint` and `SolverModel::QuadraticConstraint`
-  (`src/include/duckdb/decidb/formulation/ilp_model.hpp`). `clause_id` indexes
-  `SolverInput::constraints` (`INVALID_INDEX` for synthetic rows); `group_key` is the
+- **`ConstraintProvenance`** on `ModelConstraint` and `SolverModel::QuadraticConstraint`
+  (`src/include/duckdb/decidb/formulation/ilp_model.hpp`). Three separate identities:
+  `source_clause_id` indexes the source display registry `SolverModel::constraint_sources`,
+  `repair_group_id` is the elastic grouping identity, and `removal_group_id` the atomic DROP
+  identity (`INVALID_INDEX` for synthetic rows); `group_key` is the
   group the row was emitted for — a reducer's `by` group in the aggregate shape, a
   `per K:` class in the per-row shape, the one group of a clause with a `when` — and
   INVALID when the clause is ungrouped; `kind` is the row role. Beside it, `data_row`
   names the data row a per-row row came from and `class_set` the classes a group's row
-  stands for (D28), which the expanded slack scope reports one by one. The trailing fields
-  (added in I2) drive the elastic engine's slack placement: `shape` (`ElasticShape::UNSET`
+  stands for (D28), which the expanded slack scope reports one by one. The remaining fields
+  drive the elastic engine's slack placement: `shape` (`ElasticShape::UNSET`
   / `SHARED_SCALAR` / `PER_ROW_DATA`) decides whether a clause's rows share **one** slack;
   `UNSET` is the invalid default, and `BuildElasticModel` asserts that any relaxable
   user-clause row has been explicitly stamped before diagnosis reads it. `avg_scaled` /
@@ -223,7 +206,7 @@ user-clause level instead of raw rows.
   field. The builder stamps no clause text: a clause's `when c per K:` qualifier lives
   in the source registry alone (`ConstraintSourceInfo::qualifier`, built by
   `InitializeConstraintSourceInfo` in `decide_source_provenance.cpp`), and the
-  diagnosis renderer reads it there through `SourceAwareProvenance`.
+  diagnosis renderer reads it there through `FindConstraintSource`.
 - **Rigid rewrite rows are stamped at the source.** The optimizer tags structural
   rewrites that re-enter constraint parsing with `STRUCTURAL_CONSTRAINT_TAG`, and
   `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;
@@ -231,7 +214,7 @@ user-clause level instead of raw rows.
   MIN/MAX outer user pins as `USER_PARAMETER`.
 Tested in `test/common/test_decidb_constraint_provenance.cpp`. There is no separate
 clause → row index: the elastic engine walks `provenance` directly, and a consumer that
-needs the lookup groups by `provenance.clause_id`.
+needs the lookup groups by `provenance.source_clause_id`.
 
 ## Variable provenance (column → name / instance)
 
@@ -239,9 +222,9 @@ The column-side complement: map every solver column back to the user-facing thin
 it represents, so the unbounded diagnosis names escaping variables.
 
 - **Aux→source-expression capture.** `LogicalDecide::aux_var_expressions` maps an
-  auxiliary variable's index to the user's original expression string, stamped at
-  the four aux-creation sites in `decide_optimizer.cpp` (`<>` indicator, MIN/MAX
-  indicator, ABS aux, bilinear aux) and threaded to `PhysicalDecide`.
+  auxiliary variable's index to the user's original expression string, stamped by
+  `decide_rewrite::AddAuxiliaryDecision` (`decide_optimizer.cpp`), which every
+  aux-creating rewrite calls, and threaded to `PhysicalDecide`.
 - **`ColumnProvenance` + `BuildColumnProvenance`** (`ilp_model.hpp` /
   `ilp_model_builder.cpp`). `ColumnKind{USER, AUX, GLOBAL_AUX}`. The builder is
   pure (caller pre-extracts per-decide-var labels + an is-aux flag) and inverts
@@ -275,10 +258,8 @@ it and no automatic path.
   `diagnosis_armed` and pre-arms the shared diagnosis prep it gates:
   `SolveModelOptions::extract_unbounded_ray`, `keep_singleton_rows` (data-valued singleton rows stay rows), and
   retained-model capture. An unprefixed query pays for none of it.
-- **The gate helper.** `DiagnosisApplies(bool armed, SolverStatus)`
-  (`decide_diagnostic.cpp`) — true only under the prefix, and only for INFEASIBLE /
-  UNBOUNDED / INF_OR_UNBD. `DiagnoseModeArmsDiagnosis` and `GetDiagnoseDecideMode` are
-  gone with the setting they read.
+- **The gate.** The router's classifier takes the armed flag and routes a failure to an
+  engine only under the prefix (`../router/done.md`).
 - **A query with no DECIDE clause is rejected**, at bind time, by `BindDiagnose`:
   DIAGNOSE reports on an optimization run, and there is none.
 - **A query with more than one DECIDE clause is rejected too**, at bind time, in the
@@ -288,16 +269,9 @@ it and no automatic path.
   that put two operators in the plan — a DECIDE subquery nested inside a DECIDE
   clause, and two DECIDE subqueries joined side by side; both are already flattened
   into the operator tree by the time `BindDiagnose` walks it. **Only the prefix is
-  refused**: the same queries solve exactly as before. Before this, the walk armed
-  whichever operator it reached first, so a diagnosis appeared only when that
-  operator was the failing one — and when it was not, the query raised the
-  unprefixed error telling the user to add the prefix they had already added.
+  refused**: the same queries solve unprefixed.
 
 Tested in `test/decide/tests/test_diagnose_trigger.py` (both backends).
-
-**A slow solve is not covered here.** A time-limit stop, and Ctrl-C, are ordinary
-execution behaviour and happen with or without the prefix — see
-`../../pipeline/08_execution/slow_solves.md`.
 
 ## Diagnosis engine seam
 
@@ -308,8 +282,7 @@ inline branches in `PhysicalDecide::Finalize`.
   (`src/include/duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp`,
   `src/decidb/diagnostics/decide_diagnostic_engines.cpp`). The input carries the
   `SolverResult`, `VarIndexer`, user labels, aux flags, diagnostic params, and an
-  injected `get_candidates(decide_var_idx, total_instances)` callback for categorical
-  groupings.
+  injected `get_candidates(decide_var_idx)` callback for categorical groupings.
 - **Boundary:** the engine is free of DuckDB execution/operator types. It reads the
   ray, maps columns through variable provenance, groups escaping instances by
   DECIDE variable, asks the callback for row or keyed-class categorical candidates, and
@@ -320,16 +293,12 @@ inline branches in `PhysicalDecide::Finalize`.
   `undiagnosed` finding instead. Only an unprefixed failure falls through to
   `ThrowDecideSolveError`; success clears the handoff before the operator above emits
   its `feasible` finding.
-- **Infeasible engine (I1/I2):** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
+- **Infeasible engine:** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
   carries the repair model `PhysicalDecide::FormulateElasticModel` builds against the
   widened column box (the elastic transform `BuildElasticModel` then reshapes it) plus an
-  injected `solve_model` callback. No user bound is missing from that model: every bound
-  the optimizer folded into a column box reaches it through its own clause's rows
-  (`DecidePreparedModel::singleton_row_constraints`, evaluated under `DIAGNOSE` only), one
-  row per kept row or class, BOOLEAN pins like `x <= 0` / `x >= 1` / `x = 1` included.
-  Only bounds that merely restate a variable's intrinsic domain (a BOOLEAN's `<= 1` or
-  `>= 0`) are left unrecorded, by `FoldSingletonRows`. Engine
-  internals are in `../infeasible/done.md`.
+  injected `solve_model` callback. Every bound the optimizer folded into a column box
+  reaches that model through its own clause's rows. Engine internals are in
+  `../infeasible/done.md`.
 
 Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
 
@@ -339,16 +308,15 @@ The box-LP ray-fallback path spans three translation units — the model builder
 (`probe_models.cpp`, which opens bounds), the solver facade (`ilp_solver.cpp`,
 which confirms an improving ray), and the unbounded engine
 (`decide_diagnostic_engines.cpp`, which filters escaping columns). Its "free suspect
-filter" invariant only holds if these all use the *same* two thresholds, so they are
-defined once in `src/include/duckdb/decidb/diagnostics/diagnostic_constants.hpp`:
+filter" invariant only holds if these all use the *same* two thresholds, so each is
+defined once and no file keeps its own copy:
 
-- `EFFECTIVE_INFINITY` (`1e20`) — a finite bound at/above this magnitude is treated
-  as unbounded in that direction (which upper bounds the fallback LP opens).
-- `DIAGNOSTIC_RAY_EPSILON` (`1e-8`) — a ray / objective-improvement component at/below
-  this is treated as zero (both the improving-ray check and the escape filter).
-
-One shared header (`EFFECTIVE_INFINITY`, `UNBOUNDED_RAY_IMPROVEMENT_EPSILON`,
-`RAY_ESCAPE_EPSILON`) means no file keeps its own copy to drift.
+- `DECIDE_EFFECTIVE_INFINITY` (`1e20`, `src/include/duckdb/common/decide_numeric_policy.hpp`)
+  — a finite bound at/above this magnitude is treated as unbounded in that direction
+  (which bounds the fallback LP opens).
+- `DIAGNOSTIC_RAY_EPSILON` (`1e-8`, `src/include/duckdb/decidb/diagnostics/diagnostic_constants.hpp`)
+  — a ray / objective-improvement component at/below this is treated as zero (both the
+  improving-ray check and the escape filter).
 
 ## Diagnosis invariants (shared test helper)
 
@@ -399,7 +367,7 @@ this section is the mechanics.
   with real columns and real types (`amount` DOUBLE, `row` BIGINT, `has_amount` /
   `has_row` for NULL).
 - **A statement-scoped handoff, not a stash to read later.** `DecideDiagnosticState` is
-  still a `ClientContextState` under key `decide_diagnostics`, but its job changed:
+  a `ClientContextState` under key `decide_diagnostics`.
   `PhysicalDecide` writes it during its `Finalize`, and `PhysicalDecideDiagnose` — the
   operator directly above it in the same plan — consumes it in its own `Finalize` via
   `TakeDecideDiagnostic`, which clears it on the way out. Nothing may read it twice, and
@@ -412,35 +380,22 @@ this section is the mechanics.
   resolves its types from `GetDecideDiagnoseSchema` — the single definition of the
   columns — and the physical one is a sink that swallows the query's rows (DIAGNOSE
   reports on the run, it does not return the run's output) and a source that emits the
-  findings via `RenderDecideDiagnostic`. Both are tiny: the engines already produce typed
-  findings, so this is a reshape of where they are written, not new machinery.
-- **`decide_diagnostics()` is deleted** — the table function, its EAV bind schema
-  (`diagnosis_id, state, subject_kind, subject, attribute, value`, all VARCHAR), and its
-  registration in `system_functions.cpp`. The relation it returned needed a `PIVOT` recipe
-  to be read one-row-per-clause; the flat shape is that row directly, and it composes as
-  a subquery instead of being a second statement.
+  findings via `RenderDecideDiagnostic`. Both are small: the engines already produce typed
+  findings. The flat relation is one row per finding directly, and it composes as a
+  subquery instead of being a second statement.
 - **Why an operator and not a result-schema switch:** DECIDE is a clause on SELECT, and
   the projection binds the decision columns before the solve runs
   (`logical_decide.cpp`, `transform_select_node.cpp`), so a runtime result-schema switch
   is bind-time-blocked. The prefix declares the schema at bind time instead, which is
   exactly what makes it a different statement rather than a different outcome of the same
   one.
-- **The unbounded engine populates runaway findings** (`BuildUnboundedDiagnostic` — see
-  `../unbounded/done.md`). One finding per escaping variable, or one per categorical slice
-  when the escape is characterized: `clause` names the variable, `edit_source` carries
-  the direction, `group` names the slice, `amount` counts it, and
-  `suggested_change` prescribes the forced remedy without inventing the cap. The
-  unbounded characterization adds
-  three sticky extension options:
-  `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
-  `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
-  The infeasible engine populates clause/model rows (`BuildInfeasibleDiagnostic` —
-  see `../infeasible/done.md`) for loosen/drop edits and achievable-objective
-  metadata. It adds `diagnose_decide_infeasible_slack_scope` (VARCHAR, `query`
-  default / `expanded`)
-  — the slack-scope policy selecting a folded SQL-level edit vs. the profile per kept
-  row or per `per` class, threaded via `DecideDiagParams::slack_scope` (see
-  `../infeasible/done.md`).
+- **The engines populate the findings.** `BuildUnboundedDiagnostic` writes one runaway
+  finding per escaping variable or slice (`../unbounded/done.md`); `BuildInfeasibleDiagnostic`
+  writes loosen/drop edits and achievable-objective rows (`../infeasible/done.md`). Their
+  sticky tuning options (`diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
+  `diagnose_decide_min_categories`, `diagnose_decide_infeasible_slack_scope`) are registered
+  in `RegisterDecideDiagnosticOptions` and read into `DecideDiagParams`; each engine's doc
+  says what its options do.
 
 Tested in `test/decide/tests/test_query_diagnostics_relation.py` (both backends) and
 `test/common/test_decidb_diagnostic_engines.cpp` (a clause-shaped stub row).
