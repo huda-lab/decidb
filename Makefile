@@ -562,9 +562,11 @@ upgrade-highs:
 # untouched). decide-coverage-build creates it when missing and otherwise only rebuilds what changed.
 # decide-coverage runs the DECIDE pytest suite with one profile per test (test/decide/run_coverage.sh) and
 # `unittest "[decidb]"` with one combined profile, then prints coverage_report.py's report over both.
-# Results land in COVERAGE_RUN_DIR (replaced on every run).
+# Results land in COVERAGE_RUN_DIR (replaced on every run). COVERAGE_SOURCES names the instrumented files, as
+# -fprofile-list patterns under src/; widening it (for example to src/planner/decide/*) rebuilds those files.
 COVERAGE_BUILD_DIR ?= build/coverage
 COVERAGE_RUN_DIR ?= build/coverage/run
+COVERAGE_SOURCES ?= optimizer/decide/direct/* optimizer/decide/decide_rewrite_rhs_bounds.cpp
 COVERAGE_COMPILE_FLAGS = -fprofile-instr-generate -fcoverage-mapping -fprofile-list=$(PROJ_DIR)$(COVERAGE_BUILD_DIR)/profile_list.txt
 # The instrumentation is Clang's on every platform. A build directory keeps the compiler it was configured with.
 COVERAGE_CC ?= clang
@@ -576,8 +578,8 @@ COVERAGE_PROBE = echo 'int main() { return 0; }' | $(COVERAGE_CXX) $(COVERAGE_CO
 
 decide-coverage-build:
 	mkdir -p $(COVERAGE_BUILD_DIR)
-	printf '[clang]\nsrc:*/src/optimizer/decide/direct/*\nsrc:*/src/optimizer/decide/decide_rewrite_rhs_bounds.cpp\n' \
-		> $(COVERAGE_BUILD_DIR)/profile_list.txt.new
+	printf '[clang]\n' > $(COVERAGE_BUILD_DIR)/profile_list.txt.new
+	set -f; for f in $(COVERAGE_SOURCES); do printf 'src:*/src/%s\n' "$$f"; done >> $(COVERAGE_BUILD_DIR)/profile_list.txt.new
 	cmp -s $(COVERAGE_BUILD_DIR)/profile_list.txt.new $(COVERAGE_BUILD_DIR)/profile_list.txt \
 		&& rm $(COVERAGE_BUILD_DIR)/profile_list.txt.new \
 		|| mv $(COVERAGE_BUILD_DIR)/profile_list.txt.new $(COVERAGE_BUILD_DIR)/profile_list.txt

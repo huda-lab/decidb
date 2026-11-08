@@ -33,9 +33,10 @@ Vocabulary
             (A parametrized grid is one category.)
   unique    an arm that exactly one test (or exactly one category) reaches.
 
-The instrumented files are exactly the ones listed in ``SCOPE`` below. The instrumented binary
-also carries a handful of header template functions that the toolchain instruments as a side
-effect; those are ignored here because they are not in ``SCOPE``.
+The files read are exactly the instrumented ones: ``_scope`` reads the patterns that ``make
+decide-coverage-build`` wrote to ``build/coverage/profile_list.txt`` from ``COVERAGE_SOURCES``. The
+instrumented binary also carries a handful of header template functions that the toolchain
+instruments as a side effect; those are ignored here because they are not in that list.
 """
 
 from __future__ import annotations
@@ -56,8 +57,7 @@ REPO = HERE.parent.parent
 COVERAGE_BUILD = REPO / "build" / "coverage"
 BINARY = COVERAGE_BUILD / "decidb"
 CPP_NODEID = "unittest [decidb]"
-SCOPE_DIR = REPO / "src" / "optimizer" / "decide" / "direct"
-SCOPE = sorted(SCOPE_DIR.glob("*.cpp")) + [REPO / "src" / "optimizer" / "decide" / "decide_rewrite_rhs_bounds.cpp"]
+PROFILE_LIST = COVERAGE_BUILD / "profile_list.txt"
 
 _KIND_BRANCH = 4  # llvm-cov branch region
 
@@ -125,8 +125,15 @@ def cmd_slice(args) -> int:
 # ---------------------------------------------------------------------------
 
 
+@functools.cache
+def _scope() -> list[Path]:
+    """The instrumented ``.cpp`` files: each ``src:*/<pattern>`` line of the build's profile list, globbed."""
+    patterns = re.findall(r"^src:\*/(.+)$", PROFILE_LIST.read_text(), re.MULTILINE)
+    return sorted({path for pattern in patterns for path in REPO.glob(pattern) if path.suffix == ".cpp"})
+
+
 def _short(path: str) -> str:
-    return path.split("/src/optimizer/decide/", 1)[-1]
+    return path.split("/src/", 1)[-1]
 
 
 def _export(profdata: Path, binary: Path = BINARY) -> tuple[set[tuple], set[tuple]]:
@@ -139,7 +146,7 @@ def _export(profdata: Path, binary: Path = BINARY) -> tuple[set[tuple], set[tupl
             f"-instr-profile={profdata}",
             "-format=text",
             "-skip-expansions",
-            *map(str, SCOPE),
+            *map(str, _scope()),
         ],
         capture_output=True,
         text=True,
@@ -169,7 +176,7 @@ def _category(nodeid: str) -> str:
 
 def _label(arm: tuple, source_cache: dict) -> str:
     name, l1, c1, _l2, _c2, side = arm
-    path = REPO / "src" / "optimizer" / "decide" / name
+    path = REPO / "src" / name
     lines = source_cache.setdefault(path, path.read_text().splitlines())
     text = lines[l1 - 1].strip()
     return f"{name}:{l1}:{c1} {side}  {text[:90]}"
@@ -328,7 +335,7 @@ def cmd_report(args) -> int:
 def _region_text(arm: tuple, source_cache: dict) -> str:
     """The source text of an arm's condition (its whole region), with whitespace collapsed."""
     name, l1, c1, l2, c2, _side = arm
-    path = REPO / "src" / "optimizer" / "decide" / name
+    path = REPO / "src" / name
     lines = source_cache.setdefault(path, path.read_text().splitlines())
     if l1 == l2:
         text = lines[l1 - 1][c1 - 1 : c2 - 1]
@@ -343,16 +350,17 @@ def _arm_functions(profdata: Path, binary: Path) -> dict[tuple, str]:
     ``binary`` will do."""
     out = subprocess.run(
         [llvm_tool("llvm-cov"), "export", str(binary), f"-instr-profile={profdata}", "-format=text", "-skip-expansions"]
-        + list(map(str, SCOPE)),
+        + list(map(str, _scope())),
         capture_output=True,
         text=True,
         check=True,
     ).stdout
     found: dict[tuple, str] = {}
+    scope = set(_scope())
     for function in json.loads(out)["data"][0]["functions"]:
         for l1, c1, l2, c2, _t, _f, file_id, _x, kind in function["branches"]:
             name = _short(function["filenames"][file_id])
-            if kind == _KIND_BRANCH and (REPO / "src" / "optimizer" / "decide" / name) in SCOPE:
+            if kind == _KIND_BRANCH and (REPO / "src" / name) in scope:
                 found.setdefault((name, l1, c1, l2, c2), function["name"])
     names = sorted(set(found.values()))
     demangled = {}

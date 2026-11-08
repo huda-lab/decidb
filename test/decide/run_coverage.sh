@@ -11,8 +11,9 @@
 # `make decide-coverage` (repository root) is the usual entry point: it builds build/coverage when missing,
 # calls this script for the pytest suite, runs `unittest "[decidb]"` as one combined profile and prints the
 # report. The instrumented build (build/release is untouched) is made by `make decide-coverage-build` with Clang
-# (COVERAGE_CC and COVERAGE_CXX), whose own LLVM tools read the profiles: -fprofile-instr-generate -fcoverage-mapping -fprofile-list limited to src/optimizer/decide/direct/* and
-# src/optimizer/decide/decide_rewrite_rhs_bounds.cpp, with the cmake variables `make release` passes.
+# (COVERAGE_CC and COVERAGE_CXX), whose own LLVM tools read the profiles: -fprofile-instr-generate -fcoverage-mapping -fprofile-list limited to the files
+# COVERAGE_SOURCES names (by default src/optimizer/decide/direct/* and decide_rewrite_rhs_bounds.cpp), with the cmake
+# variables `make release` passes.
 # Do not run build/coverage/decidb by hand without LLVM_PROFILE_FILE set: it drops a default.profraw in the
 # current directory.
 

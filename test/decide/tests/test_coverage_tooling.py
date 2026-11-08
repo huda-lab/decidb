@@ -4,7 +4,6 @@ import argparse
 import importlib.util
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -75,14 +74,23 @@ def test_cpp_profile_reads_the_shared_library_of_either_platform(tmp_path, monke
     assert REPORT._read_meta(tmp_path)[REPORT.CPP_NODEID]["binary"] == tmp_path / "src" / library
 
 
-def _coverage_build_recipe():
-    return (REPO / "Makefile").read_text().split("\ndecide-coverage-build:\n", 1)[1].split("\ndecide-coverage:", 1)[0]
-
-
-def test_makefile_instruments_exactly_the_files_the_report_reads():
-    patterns = re.findall(r"src:\*/([^\\']+)", _coverage_build_recipe())
-    instrumented = {path for pattern in patterns for path in REPO.glob(pattern) if path.suffix == ".cpp"}
-    assert instrumented == set(REPORT.SCOPE)
+def test_the_report_reads_the_files_the_profile_list_instruments(tmp_path, monkeypatch):
+    # `_scope` globs each `src:*/` pattern of the build's profile list and keeps the .cpp files.
+    profile_list = tmp_path / "profile_list.txt"
+    profile_list.write_text(
+        "[clang]\nsrc:*/src/optimizer/decide/direct/s1_*\nsrc:*/src/planner/decide/decide_cast_policy.cpp\n"
+    )
+    monkeypatch.setattr(REPORT, "PROFILE_LIST", profile_list)
+    REPORT._scope.cache_clear()
+    try:
+        assert REPORT._scope() == sorted(
+            [
+                *(REPO / "src/optimizer/decide/direct").glob("s1_*.cpp"),
+                REPO / "src/planner/decide/decide_cast_policy.cpp",
+            ]
+        )
+    finally:
+        REPORT._scope.cache_clear()
 
 
 def test_a_compiler_that_rejects_the_coverage_flags_stops_before_configuring():
