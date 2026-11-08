@@ -1002,6 +1002,9 @@ class TestBinderRefusalBranches:
             ("x * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
             # A subquery over a per-row decision is not "a query-wide decision": IsRowInvariantExpression reads its body.
             ("2 * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
+            # The same as a call's lone argument, which a call prints with its alias: the refusal quotes `sum((SELECT x))`
+            # as written, never the tag the binder put on the subquery.
+            ("(SELECT x)", r"found 'sum\(\(SELECT x\)\)'"),
         ],
     )
     def test_reducer_argument(self, decidb_cli, argument, message):

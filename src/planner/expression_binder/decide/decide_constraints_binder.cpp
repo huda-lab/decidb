@@ -144,7 +144,7 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
 //! The refusal for a constraint shape DECIDE cannot read, quoting the part as written.
 static BindResult UnsupportedConstraint(ParsedExpression &expr) {
 	return BindResult(
-	    BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT does not support '%s'", expr.ToString())));
+	    BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT does not support '%s'", DecideWrittenSql(expr))));
 }
 
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -184,7 +184,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
         };
         if ((!IsDecideSide(left_type) && !IsValidBound(*comp.left)) ||
             (!IsDecideSide(right_type) && !IsValidBound(*comp.right))) {
-            return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
+            return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", DecideWrittenSql(expr))));
         }
     }
     is_top_expression = false;
@@ -199,7 +199,7 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
         if (!IsVariableExpression(*op.children.front(), variables)) {
             return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
                 "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
-                op.children.front()->ToString())));
+                DecideWrittenSql(*op.children.front()))));
         }
         for (idx_t i = 1; i < op.children.size(); i++) {
             if (ExpressionContainsDecideVariable(*op.children[i], variables)) {
@@ -419,7 +419,7 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 		// A bare column at the top level of SUCH THAT is never a valid constraint.
 		return BindResult(BinderException::Unsupported(
 		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
-		                             expr.ToString())));
+		                             DecideWrittenSql(expr))));
 	}
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
@@ -466,7 +466,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF: {
         if (!IsVariableExpression(expr, variables)) {
-            error_msg = StringUtil::Format("SUCH THAT clause: Column '%s' must be one of the DECIDE variables", expr.ToString());
+            error_msg = StringUtil::Format("SUCH THAT clause: Column '%s' must be one of the DECIDE variables", DecideWrittenSql(expr));
             return DecideExpression::INVALID;
         }
         return DecideExpression::VARIABLE;
@@ -499,7 +499,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
         return GetExpressionType(*cast.child, error_msg);
     }
     default: {
-        error_msg = StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());
+        error_msg = StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", DecideWrittenSql(expr));
     	return DecideExpression::INVALID;
     }
 	}

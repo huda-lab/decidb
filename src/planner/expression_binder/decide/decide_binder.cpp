@@ -43,6 +43,19 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 	return !colref.IsQualified() && variables.count(colref.GetColumnName()) > 0;
 }
 
+static void StripTagsInPlace(ParsedExpression &expr) {
+	expr.SetAlias(StripDecideTags(expr.GetAlias()));
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) { StripTagsInPlace(child); });
+}
+
+string DecideWrittenSql(const ParsedExpression &expr) {
+	// A call prints its arguments' aliases (`sum(__source_fragment_0__ := (SELECT x))`), and the binders tag a cast and
+	// a subquery with the fragment that holds their text (TagDecideSourceFragments).
+	auto copy = expr.Copy();
+	StripTagsInPlace(*copy);
+	return copy->ToString();
+}
+
 //! ParsedExpressionIterator::EnumerateChildren, plus the body (SELECT list, WHERE,
 //! FROM, ...) of a subquery, which EnumerateChildren does not enter. A DECIDE nested in
 //! the subquery keeps its clauses to itself: its own binder checks them.
@@ -80,7 +93,7 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 			    "DECIDE does not allow casts over decision expressions: '%s'. "
 			    "Decision values are modeled directly as DOUBLE. Remove the cast; "
 			    "casts over data-only expressions are allowed.",
-			    cast.ToString());
+			    DecideWrittenSql(cast));
 		}
 	}
 
@@ -115,7 +128,7 @@ static void ValidateNoScopeSpelling(const ParsedExpression &expr) {
 		}
 		if (IsDecideMarker(expr, QUALIFIED_REDUCER_TAG)) {
 			throw BinderException(expr, "DECIDE: the colon form %s is not supported inside a subquery yet",
-			                      expr.ToString());
+			                      DecideWrittenSql(expr));
 		}
 	}
 	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) { ValidateNoScopeSpelling(child); });
@@ -161,12 +174,12 @@ static void ValidateScopeData(const ParsedExpression &expr, const case_insensiti
 	    expr, [](const ParsedExpression &node) { return node.GetExpressionClass() == ExpressionClass::WINDOW; });
 	if (window) {
 		throw BinderException(*window, "DECIDE: a window function such as '%s' is not supported in when, per or by",
-		                      window->ToString());
+		                      DecideWrittenSql(*window));
 	}
 	auto reducer = FindNode(expr, [](const ParsedExpression &node) { return TakesReducerBy(node); });
 	if (reducer) {
 		throw BinderException(*reducer, "DECIDE: a reducer such as '%s' is not supported in when, per or by",
-		                      reducer->ToString());
+		                      DecideWrittenSql(*reducer));
 	}
 	ValidateNoScopeSpelling(expr);
 }
@@ -738,7 +751,7 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 				// Spelled by hand rather than through comp.ToString(), which renders
 				// COMPARE_NOTEQUAL as `!=`. The clause is quoted back to the user, so it
 				// has to read the way they wrote it.
-				string clause = "(" + comp.left->ToString() + " <> " + comp.right->ToString() + ")";
+				string clause = "(" + DecideWrittenSql(*comp.left) + " <> " + DecideWrittenSql(*comp.right) + ")";
 				throw BinderException(
 				    comp,
 				    "Inequality '<>' is not supported over the REAL decision '%s': '%s'. "
@@ -755,7 +768,7 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 			    "A REAL decision takes any value up to the bound, so there is no next value "
 			    "to stop at. Use '%s' instead, and move the bound by one step if the compared "
 			    "quantity is a count or other whole number.",
-			    is_less ? "<" : ">", real_var, comp.ToString(), is_less ? "<=" : ">=");
+			    is_less ? "<" : ">", real_var, DecideWrittenSql(comp), is_less ? "<=" : ">=");
 		}
 		return;
 	}
@@ -1136,7 +1149,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 	case ExpressionClass::CONJUNCTION:
 		// A truth value over a decision is no term of a sum; over data it is a 0/1 coefficient.
 		if (ExpressionContainsDecideVariable(expr, variables)) {
-			error_msg = StringUtil::Format("SUM expression does not support '%s'", expr.ToString());
+			error_msg = StringUtil::Format("SUM expression does not support '%s'", DecideWrittenSql(expr));
 			return false;
 		}
 		return true;
@@ -1266,10 +1279,10 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 	if (fname == "norm") {
 		if (func.children.empty()) {
 			error_msg = StringUtil::Format("NORM needs an expression and an order, as in norm(e, 1), found '%s'",
-			                               func.ToString());
+			                               DecideWrittenSql(func));
 			result = DecideExpression::INVALID;
 		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
-			error_msg += ", found '" + func.ToString() + "'";
+			error_msg += ", found '" + DecideWrittenSql(func) + "'";
 			result = DecideExpression::INVALID;
 		} else {
 			result = DecideExpression::SUM;
@@ -1280,7 +1293,7 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		// A reducer takes one argument: MAX(x, n) and MIN(x, n) are DuckDB's top-n aggregates, which return a list.
 		if (func.children.size() != 1) {
 			error_msg =
-			    StringUtil::Format("%s needs one argument, found '%s'", StringUtil::Upper(fname), func.ToString());
+			    StringUtil::Format("%s needs one argument, found '%s'", StringUtil::Upper(fname), DecideWrittenSql(func));
 			result = DecideExpression::INVALID;
 			return true;
 		}
@@ -1288,14 +1301,14 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		// chooses the rows.
 		auto &body = const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
 		if (ExpressionContainsDecideVariable(body, variables) && IsRowInvariantExpression(body)) {
-			auto body_text = body.ToString();
+			auto body_text = DecideWrittenSql(body);
 			error_msg = StringUtil::Format(
 			    "%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
 			    "use %s on its own",
 			    body_text, StringUtil::Upper(fname), body_text, body_text);
 			result = DecideExpression::INVALID;
 		} else if (!ValidateSumArgument(body, variables, error_msg)) {
-			error_msg += ", found '" + func.ToString() + "'";
+			error_msg += ", found '" + DecideWrittenSql(func) + "'";
 			result = DecideExpression::INVALID;
 		} else {
 			result = DecideExpression::SUM;
@@ -1333,7 +1346,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 
 	// No Filter/Distinc allowed for Aggregate
 	if (aggr.filter || aggr.distinct) {
-        return BindResult(BinderException::Unsupported(aggr, StringUtil::Format("DECIDE clause does not support '%s'", aggr.ToString())));
+        return BindResult(BinderException::Unsupported(aggr, StringUtil::Format("DECIDE clause does not support '%s'", DecideWrittenSql(aggr))));
 	}
 
 	// Bind arguments
@@ -1528,7 +1541,7 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 				continue;
 			}
 		}
-		auto name = element->ToString();
+		auto name = DecideWrittenSql(*element);
 		auto key_error = BindDataChild(element, depth);
 		if (key_error.HasError()) {
 			return BindResult(std::move(key_error));
@@ -1640,7 +1653,7 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 	// folds it to that constant: the decisions it read are gone, so it is refused here,
 	// where the SQL is still at hand.
 	bool reads_decision = ExpressionContainsDecideVariable(function, variables);
-	auto text = reads_decision ? function.ToString() : string();
+	auto text = reads_decision ? DecideWrittenSql(function) : string();
 	auto result = ExpressionBinder::BindExpression(expr_ptr, depth);
 	if (reads_decision && !result.HasError() &&
 	    result.expression->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&

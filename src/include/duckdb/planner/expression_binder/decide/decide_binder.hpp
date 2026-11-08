@@ -71,6 +71,9 @@ struct DecideQualifierContext {
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
+//! `expr` as SQL, as a message quotes it: without the source-fragment and other tags the binders put on its nodes.
+string DecideWrittenSql(const ParsedExpression &expr);
+
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);

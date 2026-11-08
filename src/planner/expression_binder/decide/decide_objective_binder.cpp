@@ -216,10 +216,10 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	auto clause = decide_sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE";
 	if (!ExpressionContainsDecideVariable(expr, variables)) {
 		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format("%s %s has no decision to optimize", clause, expr.ToString())));
+		    expr, StringUtil::Format("%s %s has no decision to optimize", clause, DecideWrittenSql(expr))));
 	}
 	return BindResult(
-	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, expr.ToString())));
+	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, DecideWrittenSql(expr))));
 }
 
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string &error_msg) {
