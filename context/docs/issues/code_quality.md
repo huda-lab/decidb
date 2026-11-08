@@ -7,7 +7,7 @@ ordinary optimization result. Solve-correctness bugs belong in [bugs.md](bugs.md
 Each entry: short title, location (`file:line`), what's wrong, why it matters,
 and when/during which task it was discovered.
 
-## Messages reprint expression trees instead of quoting the source text
+## MSG-1 — Messages reprint expression trees instead of quoting the source text
 
 Location: `src/planner/decide/decide_source_provenance.cpp` (`RenderDecideSource`), `TagDecideSourceFragments`,
 `decide_source_info.hpp` (`DecideSourceText`). A message that names a value renders a bound tree, so it shows
@@ -23,6 +23,10 @@ balancing or grammar work; messages and goldens that quote a reprint would chang
 PERF-16 (architect review). The same cause shows in two more messages: `if(c, a, b)` and `iif` reach the binder as
 the parser's CASE, so `SUM(if(s = 'F', x, 2 * x))` is refused as a CASE the user never wrote, and `per g: SUM(x) by
 (CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message.
+Three more, from BLOAT-27: `SUM(x) * (w * b) <= 7` names the term
+`"*"(CAST(CAST(w AS DECIMAL(12,1)) AS DECIMAL(38,1)), sum(x))`; a CASE factor prints the bound CASE; `MAXIMIZE (w +
+1) * SUM(x)` prints `CAST(w AS DECIMAL(12,1)) + CAST(1 AS DECIMAL(12,1))`. Done when every message that names a
+value quotes a span of the query as written, the renderer's tag list is gone, and these examples are tests.
 
 ## FMT-1 — DeciDB sources indented with spaces fail the formatter
 
