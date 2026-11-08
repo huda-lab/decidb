@@ -1222,3 +1222,86 @@ def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
         f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
+
+
+# --- The integer-step gate on declared types (DecideSideIsWholeNumbered) ---------------------------------------
+
+_GATE_ROWS = [(1, 2, 10.0), (2, 3, 20.0), (3, 1, 5.0), (4, 4, 8.0)]  # (id, c, w)
+_GATE_TABLE = "(VALUES (1, 2, 10.0), (2, 3, 20.0), (3, 1, 5.0), (4, 4, 8.0)) t(id, c, w)"
+
+
+def _gate_optimum(oracle_solver, name, vtype, ub, coeffs, limit):
+    """max sum(w * x) s.t. sum(coeffs * x) <= limit, 0 <= x <= ub."""
+    oracle_solver.create_model(name)
+    names = [f"x_{i}" for i in range(len(_GATE_ROWS))]
+    for n in names:
+        oracle_solver.add_variable(n, vtype, lb=0.0, ub=float(ub))
+    oracle_solver.add_constraint({n: float(c) for n, c in zip(names, coeffs)}, "<=", float(limit), name="strict")
+    oracle_solver.set_objective({n: w for n, (_, _, w) in zip(names, _GATE_ROWS)}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    return result.objective_value
+
+
+def _gate_objective(rows, cols):
+    ci = {c: i for i, c in enumerate(cols)}
+    by_id = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
+    return sum(w * by_id[i] for i, _, w in _GATE_ROWS)
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+@pytest.mark.parametrize("narrow", ["TINYINT", "SMALLINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"])
+def test_strict_over_a_widened_whole_type(decidb_cli, oracle_solver, narrow):
+    """A whole-numbered type widened to DOUBLE stays on the lattice, so `< 30` is `<= 29`. The cast to DOUBLE is not a
+    whole type, so the test reads the type under it: one case per integer type DecideTypeIsWholeNumbered names."""
+    rows, cols = decidb_cli.execute(
+        f"""
+        SELECT id, x FROM {_GATE_TABLE} DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 5 AND SUM(x * CAST(CAST(c AS {narrow}) AS DOUBLE)) < 30
+        MAXIMIZE SUM(x * w)
+    """
+    )
+    expected = _gate_optimum(oracle_solver, f"strict_{narrow}", VarType.INTEGER, 5, [c for _, c, _ in _GATE_ROWS], 29)
+    assert _gate_objective(rows, cols) == pytest.approx(expected)
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+@pytest.mark.parametrize("power", ["pow(x, 2)", "power(x, 2)", "x ** 2", "x ^ 2"])
+def test_strict_over_a_power_in_every_spelling(decidb_cli, oracle_solver, power):
+    """A BOOL decision squared is itself, so `SUM(x ^ 2) < 3` is `SUM(x) <= 2`; the gate reads the function's name."""
+    rows, cols = decidb_cli.execute(
+        f"""
+        SELECT id, x FROM {_GATE_TABLE} DECIDE x(BOOL)
+        SUCH THAT SUM({power}) < 3
+        MAXIMIZE SUM(x * w)
+    """
+    )
+    expected = _gate_optimum(oracle_solver, "strict_power", VarType.BINARY, 1, [1] * len(_GATE_ROWS), 2)
+    assert _gate_objective(rows, cols) == pytest.approx(expected)
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.error_binder
+@pytest.mark.parametrize(
+    "clause, message",
+    [
+        # A power whose exponent is a column, negative, or fractional is no degree: it is not a whole number.
+        ("SUM(power(x, c)) < 30", r"Comparison '<' is not supported here: 'power\(x, c\)' has type DOUBLE"),
+        ("SUM(power(x, -1)) < 30", r"Comparison '<' is not supported here: 'power\(x, -1\)' has type DOUBLE"),
+        ("SUM(power(x, 0.5)) < 30", r"Comparison '<' is not supported here"),
+        # `<>` over an AVG of a fractional column, and over a SUM of one (both messages say `<>`).
+        ("AVG(x * w) <> 3", r"Comparison '<>' is not supported here: column 'w' has type DECIMAL"),
+        ("SUM(x * w) <> 3", r"Comparison '<>' is not supported here: column 'w' has type DECIMAL"),
+        # The compared side on the right: the left is the bound.
+        ("5 < SUM(x * w)", r"Comparison '<' is not supported here: column 'w' has type DECIMAL"),
+        # A MAX of two arguments is a list, and no list is whole.
+        ("max(x, 2) < max(x, 2)", r"'max\(x, 2\)' has type BIGINT\[\]"),
+    ],
+)
+def test_strict_gate_refusals(decidb_cli, clause, message):
+    result = decidb_cli.execute_raw(
+        f"SELECT id, x FROM {_GATE_TABLE} DECIDE x(INT) SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)"
+    )
+    assert re.search(message, result.stderr), result.stderr

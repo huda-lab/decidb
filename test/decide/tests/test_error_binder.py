@@ -922,3 +922,144 @@ class TestRefusalsSpeakSql:
         """`SUM(1)` has no decision at all; only a body made of query-wide decisions is called one."""
         stderr = self._refusal(decidb_cli, "SUM(1) <= 5")
         assert "SUM expression must reference at least one DECIDE variable" in stderr, stderr
+
+
+_BRANCH_ROWS = (
+    "SELECT id, x FROM (VALUES (1, 10.0, 1, 2), (2, 20.0, 1, 3), (3, 5.0, 2, 1), (4, 8.0, 2, 4)) t(id, w, k, c) "
+)
+
+
+def _branch_refusal(decidb_cli, tail, message, rows=_BRANCH_ROWS):
+    result = decidb_cli.execute_raw(f"{rows}DECIDE x(INT) {tail}")
+    assert re.search(message, result.stderr), result.stderr
+    assert_no_internal_leak(result, "a refused clause")
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+class TestBinderRefusalBranches:
+    """One refusal per binder branch that no other refusal reaches; the comment on each case names its branch."""
+
+    @pytest.mark.parametrize(
+        "clause, message",
+        [
+            # A constraint that is a plain function call: DecideConstraintsBinder::BindExpressionInternal's FUNCTION case
+            # at the top, and ValidateDecideNoIntegerStepComparisonOnReal's FUNCTION case that is no scope marker.
+            ("abs(x)", r"SUCH THAT does not support 'abs\(x\)'"),
+            # The same for a CASE at the top.
+            ("CASE WHEN c > 1 THEN true ELSE false END", r"SUCH THAT does not support 'CASE"),
+            # A subquery that is not scalar, and one that reads a decision (DecideBinder::BindExpressionInternal).
+            ("x IN (SELECT 1)", r"Only scalar subqueries are supported in DECIDE"),
+            ("x <= (SELECT x)", r"Subqueries in DECIDE clauses cannot reference DECIDE variables"),
+            # A `when` whose condition, or a reducer's, does not bind (BindScopedConstraint, BindScopedReducer).
+            ("when nosuch > 0: x <= 3", r'Referenced column "nosuch" not found'),
+            ("SUM(when nosuch > 0: x) <= 3", r'Referenced column "nosuch" not found'),
+            # A COALESCE over a reducer, in the body of a sum's left side (ContainsDecideAggregate's OPERATOR case).
+            ("COALESCE(SUM(x), 0) + 1 <= 100", r"operator 'COALESCE' cannot take a DECIDE variable"),
+        ],
+    )
+    def test_constraint_shape(self, decidb_cli, clause, message):
+        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)", message)
+
+    @pytest.mark.parametrize(
+        "bound",
+        [
+            "sum(w) OVER ()",  # a class IsAllowedDecisionFreeBoundExpression does not list
+            "1 + sum(w) OVER ()",  # IsAllowedOperatorChildren
+            "abs(sum(w) OVER ())",  # a function's child
+            "CAST((sum(w) OVER () = 1) AS INT)",  # a comparison's child, after an allowed first one
+            "(EXISTS (SELECT 1))",  # a subquery that is not scalar
+            "max(w) FILTER (WHERE EXISTS (SELECT 1))",  # a reducer's filter
+            "max(w, 2)",  # a reducer with two arguments
+            "max(w, 2) by (k)",  # the same under a `by`
+            "abs(w) FILTER (WHERE EXISTS (SELECT 1))",  # a scalar function's filter that is not allowed
+        ],
+    )
+    def test_bound_side(self, decidb_cli, bound):
+        message = r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables"
+        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND SUM(x) <= {bound} MAXIMIZE SUM(x)", message)
+
+    def test_bound_side_on_the_left(self, decidb_cli):
+        """The decision-free side is the left one: IsValidBound is asked of it."""
+        message = r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables"
+        _branch_refusal(decidb_cli, "SUCH THAT x <= 3 AND sum(w) OVER () >= SUM(x) MAXIMIZE SUM(x)", message)
+
+    def test_bound_side_filter_on_a_scalar_function(self, decidb_cli):
+        """An allowed filter on a scalar function is left to DuckDB, which refuses it."""
+        _branch_refusal(
+            decidb_cli,
+            "SUCH THAT x <= 3 AND SUM(x) <= abs(w) FILTER (WHERE true) MAXIMIZE SUM(x)",
+            r"only applicable to aggregate functions",
+        )
+
+    @pytest.mark.parametrize(
+        "argument, message",
+        [
+            ("abs(x, 1)", r"ABS requires exactly one argument"),
+            # A non-scalar subquery, first among a product's factors (the second is then not asked).
+            ("EXISTS (SELECT 1) * x", r"Subquery in DECIDE SUM expression must be scalar"),
+            ("x * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
+        ],
+    )
+    def test_reducer_argument(self, decidb_cli, argument, message):
+        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND SUM({argument}) <= 30 MAXIMIZE SUM(x)", message)
+
+    @pytest.mark.parametrize(
+        "constraint, message",
+        [
+            # A colon form over a function that is no reducer, then a reducer that cannot be qualified, and over a
+            # reducer that fails to bind.
+            ("abs(t: x) <= 5", r"A relation qualifier is only allowed on SUM, AVG, MIN or MAX"),
+            ("SUM(x) + count(t: w) <= 30", r"'COUNT' cannot be qualified by a relation"),
+            ("count(t: x) <= 5", r"COUNT over a DECIDE variable is degenerate"),
+            # A qualifier that is itself qualified, and the relation of the decisions.
+            ("sum(t.u: x) <= 5", r"The qualifier of a reducer must be a relation name or alias"),
+            ("sum(decide_variables: x) <= 5", r"Relation 'decide_variables' is not in the FROM clause"),
+        ],
+    )
+    def test_colon_form(self, decidb_cli, constraint, message):
+        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND {constraint} MAXIMIZE SUM(x)", message)
+
+    @pytest.mark.parametrize(
+        "key, message",
+        [
+            # Three names that name no relation (RelationAlias's catalog.schema.alias case), and five that are a
+            # column's path past any relation.
+            ("per a.b.c: SUM(x) <= 3", r"a\.b\.c is neither a column nor a relation of the FROM clause"),
+            ("per t.s.a.b.c: SUM(x) <= 3", r"t\.s\.a\.b\.c is neither a column nor a relation of the FROM clause"),
+            # A `by` key of four names that name no column: it is data, and the catalog is not found.
+            ("SUM(x) by (a.b.t.nosuch) <= 3", r'Referenced table "a" not found'),
+        ],
+    )
+    def test_key_names(self, decidb_cli, key, message):
+        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND {key} MAXIMIZE SUM(x)", message)
+
+    @pytest.mark.parametrize(
+        "objective, message",
+        [
+            # Two-level forms the binder refuses; each reaches a different test of the form.
+            ("sum(per (): max(w * x) by ())", r"an aggregate inside an aggregate is not supported yet"),
+            ("sum(per k: count(x) by (k))", r"COUNT over a DECIDE variable is degenerate"),
+            ("sum(per k: max(w) by (k))", r"Nested MAX\(\) inside DECIDE expression must reference a DECIDE variable"),
+            ("sum(per k: max() by (k))", r"Nested MAX\(\) inside DECIDE expression must reference a DECIDE variable"),
+            ("sum(per k: max(per k: w * x) by (k))", r"per inside the inner reducer of sum\(per k: max\(\.\.\.\)"),
+            ("sum(per k: max(w * x) by (k + 1))", r"the by key must be the per key"),
+            # A reducer in a reducer under a product with a decision.
+            ("SUM(2 * SUM(x))", r"an aggregate inside an aggregate is not supported yet"),
+            # An aggregate with arguments no function takes.
+            ("SUM(w * x, 2)", r"No function matches the given name and argument types"),
+            # A scope whose body, or condition, does not bind.
+            ("when c > 0: sum(nosuch * x)", r'Referenced column "nosuch" not found'),
+            ("when nosuch > 0: sum(w * x)", r'Referenced column "nosuch" not found'),
+            # An operator or CASE at the top, an operator below it, a product of data, a quotient by a reducer.
+            ("COALESCE(SUM(x), 0)", r"does not support 'COALESCE\(sum\(x\), 0\)'"),
+            ("SUM(x) + COALESCE(x, 1)", r"operator 'COALESCE' cannot take a DECIDE variable"),
+            ("CASE WHEN c > 1 THEN 1 ELSE 2 END", r"has no decision to optimize"),
+            ("w * 2", r"clause does not support function '\*'"),
+            ("SUM(x * w) / SUM(x)", r"does not support wrapping an aggregate in '/'"),
+            # `"/"` called by name takes any number of arguments, one here.
+            ('"/"(SUM(x))', r"does not support wrapping an aggregate in '/'"),
+        ],
+    )
+    def test_objective_shape(self, decidb_cli, objective, message):
+        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 MINIMIZE {objective}", message)

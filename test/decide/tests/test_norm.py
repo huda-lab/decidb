@@ -10,6 +10,8 @@ Each correctness test asserts norm() reaches the SAME optimal objective value as
 its hand-written equivalent (robust to alternate optima), plus the error paths.
 """
 
+import re
+
 import pytest
 
 from decidb_cli import DeciDBCliError
@@ -115,6 +117,40 @@ def test_norm_l0_negative_bound_rejected(decidb_cli):
 def test_norm_unsupported_order(decidb_cli):
     with pytest.raises(DeciDBCliError, match=r"[Uu]nsupported norm order|Supported"):
         decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 3)"))
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("spelling", ["infinity", "max"])
+def test_norm_linf_spellings_agree(decidb_cli, spelling):
+    """'infinity' and 'max' name the same order as 'inf' (BindFunction's order check lets all three through)."""
+    r1, c1 = decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 'inf')"))
+    r2, c2 = decidb_cli.execute(_BASE.format(obj=f"norm(new_qty - l_quantity, '{spelling}')"))
+    assert max(abs(d) for d in _devs(r2, c2)) == pytest.approx(max(abs(d) for d in _devs(r1, c1)), abs=1e-4)
+
+
+_SHAPE_ROWS = "SELECT id, x FROM (VALUES (1, 10.0, 1, 2), (2, 20.0, 1, 3)) t(id, w, k, c) DECIDE x(INT)"
+
+
+@pytest.mark.error
+@pytest.mark.error_binder
+@pytest.mark.parametrize(
+    "clause, message",
+    [
+        # A strict comparison also asks IsIntegerValuedReducer, which declines on each of the first two shapes.
+        ("norm(x) < 5", r"norm\(expr, p\) takes an expression, an order"),
+        ("norm(x, c) < 5", r"The order p in norm\(expr, p\) must be a constant"),
+        ("norm(x, 0, 5, 7) <= 5", r"norm\(expr, p\) takes an expression, an order"),
+        ("norm(x, 'a') <= 5", r"Unsupported norm order 'a'"),
+        ("norm(x, 'inf', 3) <= 5", r"norm\(expr, 'inf'\) does not take M"),
+        ("norm(x, 1, 3) <= 5", r"Only norm\(expr, 0, M\) accepts M"),
+        ("norm(x, 2, 3) <= 5", r"Only norm\(expr, 0, M\) accepts M"),
+        ("norm(x, 0, c) <= 5", r"the bound M must be a constant"),
+        ("norm(x, NULL) <= 5", r"The order p in norm\(expr, p\) must be 0, 1, 2, or 'inf'"),
+    ],
+)
+def test_norm_shape_rejected(decidb_cli, clause, message):
+    result = decidb_cli.execute_raw(f"{_SHAPE_ROWS} SUCH THAT x <= 3 AND {clause} MAXIMIZE SUM(x)")
+    assert re.search(message, result.stderr), result.stderr
 
 
 # --- compositions ---------------------------------------------------------

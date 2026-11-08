@@ -416,3 +416,31 @@ def test_a_composed_objective_reads_the_kept_rows(decidb_cli, scope_solver):
         == pytest.approx(model.solve_scoped(scope_solver, clauses, objective))
         == 6
     )
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "inner, tail",
+    [
+        pytest.param("t.w * x", " by ()", id="outer-by-all-rows"),  # IsTwoLevelObjective peels the outer `by ()`
+        pytest.param("per row: t.w * x", "", id="inner-per-row"),  # BindTwoLevelObjective drops the written default
+    ],
+)
+def test_two_level_form_spellings(decidb_cli, scope_solver, inner, tail):
+    """`sum(per g: max(e) by (g)) by ()` and `max(per row: e)` are the two-level form with its defaults written out."""
+    sql = f"""
+        SELECT id, x {table('t', GROUPS, GROUP_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND sum(x) >= 6
+        MINIMIZE sum(per t.g: max({inner}) by (t.g)){tail}
+        ORDER BY id"""
+    model = ScopedModel(table_rows(GROUPS, GROUP_ROWS), [Decision("x")])
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
+        Scoped((Reduce("sum", lambda r: {"x": 1}),), ">=", (lambda r: {CONSTANT: 6},), per=()),
+    ]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Nested("sum", ("g",), "max", lambda r: {"x": r["w"]}),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )

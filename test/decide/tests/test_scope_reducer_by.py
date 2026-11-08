@@ -1034,3 +1034,38 @@ def test_real_bound_side_values(decidb_cli, scope_solver):
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
     )
+
+
+_KEY_COLUMNS = ("id", "cap", "w")
+_KEY_ROWS = ((1, 5, 1), (2, 4, -1), (3, 6, 1), (4, 2, 2), (5, 3, 1), (6, 9, -2))
+
+
+@pytest.mark.correctness
+def test_by_keys_are_one_list_however_they_are_written(decidb_cli, scope_solver):
+    """A key's elements are one set in one order: two expressions (ordered by their text), two subqueries (each a key of
+    its own, recognised by its text), and a column followed by the relation that stores it (the written column wins,
+    FindOrCreateDecideKey)."""
+    sql = f"""
+        SELECT id, x {table('t', _KEY_COLUMNS, _KEY_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND sum(x) by (t.cap + 2, t.cap + 1) <= 5 AND sum(x) by ((SELECT 1), t.w) <= 3
+                  AND sum(x) by (t.w, (SELECT 2)) <= 4 AND sum(x) by (t.cap, t) <= 2
+        MAXIMIZE sum(t.w * x)
+        ORDER BY id"""
+
+    def total(by, bound):
+        return Scoped((Reduce("sum", lambda r: {"x": 1}, by=by),), "<=", (lambda r: {CONSTANT: bound},))
+
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
+        total(lambda r: (r["cap"] + 2, r["cap"] + 1), 5),
+        total(lambda r: (1, r["w"]), 3),
+        total(lambda r: (r["w"], 2), 4),
+        total(lambda r: (r["cap"], r["id"], r["cap"], r["w"]), 2),
+    ]
+    model = ScopedModel(table_rows(_KEY_COLUMNS, _KEY_ROWS), [Decision("x")])
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["w"]}),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )

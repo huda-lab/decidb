@@ -219,3 +219,20 @@ def test_a_finding_spells_a_group_by_its_least_spelling_when_a_later_row_holds_i
         DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
     found = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
     assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["B"], found
+
+
+@pytest.mark.correctness
+def test_an_inner_per_within_a_collated_by_group(decidb_cli, scope_solver):
+    """`sum(x) by (g) <= sum(per g: cap) by (g)`: the bound reducer's `per` key and `by` key are one collated key, whose
+    elements the reducer's scope check copies (WithinGroups). Each collated group is bounded by its own cap."""
+    sql = f"""
+        SELECT id, x {_keyed_source()}
+        DECIDE x(BOOL) SUCH THAT sum(x) by (t.g) <= sum(per t.g: t.cap) by (t.g) MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    clauses = [
+        Scoped(
+            (Reduce("sum", lambda r: {"x": 1}, by=("gk",)),),
+            "<=",
+            (Reduce("sum", lambda r: {CONSTANT: r["cap"]}, per=("gk",), by=("gk",)),),
+        )
+    ]
+    _keyed_judged(decidb_cli, scope_solver, sql, clauses, MAXIMIZE_PX)
