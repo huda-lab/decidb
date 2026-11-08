@@ -1687,6 +1687,10 @@ AFFINE_FACTOR_CASES = [
     ),
     pytest.param("b * (x - b) >= 2", lambda b, x, y, c: b * (x - b) >= 2, "MINIMIZE", id="the-boolean-in-both-factors"),
     pytest.param("b * (x / 2) >= 1", lambda b, x, y, c: b * (x / 2) >= 1, "MINIMIZE", id="divided-by-data"),
+    pytest.param("(x - 1) * b >= 2", lambda b, x, y, c: (x - 1) * b >= 2, "MINIMIZE", id="the-boolean-on-the-right"),
+    pytest.param(
+        "b * (-x + t.c) >= -1", lambda b, x, y, c: b * (-x + c) >= -1, "MINIMIZE", id="a-negated-decision-in-a-sum"
+    ),
     pytest.param("b * (x + x - 1) >= 3", lambda b, x, y, c: b * (x + x - 1) >= 3, "MINIMIZE", id="like-terms-merged"),
     pytest.param(
         "(b + 1) * (x + b) >= 5", lambda b, x, y, c: (b + 1) * (x + b) >= 5, "MINIMIZE", id="like-products-merged"
