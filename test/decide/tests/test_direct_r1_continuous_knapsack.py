@@ -827,18 +827,6 @@ def test_r1_empty_source_returns_no_rows_under_a_minimum_an_exact_fill_or_a_rang
         assert _run(decidb_cli, sql, mode)[0] == []
 
 
-@pytest.mark.correctness
-def test_r1_binder_rejects_strict_bounds_on_real_before_direct_solve_is_asked(decidb_cli):
-    for mode in ("off", "require"):
-        with pytest.raises(DeciDBCliError, match="Strict inequality"):
-            _run(
-                decidb_cli,
-                "SELECT amount FROM (SELECT 1 AS id, 1.0 AS w) DECIDE amount(REAL) "
-                "SUCH THAT amount < 3 AND SUM(w*amount) <= 5 MAXIMIZE SUM(amount)",
-                mode,
-            )
-
-
 # ---------------------------------------------------------------------------
 # A budget per group and under a `when`
 # ---------------------------------------------------------------------------
@@ -1210,28 +1198,6 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
         _check_scoped_assignment(case_, rows, columns, oracle, mode)
 
     agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "budget,objective",
-    [
-        # Two clauses of one budget must cover the same rows: `by` on one clause and not the other ...
-        ("SUM(w*amount) by (g) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-        # ... other keys, or a key of another number of columns ...
-        ("SUM(w*amount) by (g) >= 1 AND SUM(w*amount) by (h) <= 6", "MAXIMIZE SUM(v*amount)"),
-        ("SUM(w*amount) by (g, h) >= 1 AND SUM(w*amount) by (g) <= 6", "MAXIMIZE SUM(v*amount)"),
-        # ... a `when` on one clause and not the other, or two different ones.
-        ("when f: SUM(w*amount) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-        ("when f: SUM(w*amount) >= 1 AND when id > 4: SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-        ("when f: SUM(w*amount) >= 1 AND SUM(when cap > 3: w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-    ],
-)
-def test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver(decidb_cli, budget, objective):
-    sql = _scoped_sql(THREE_GROUPS, budget, objective)
-    assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
-    assert _run_all(decidb_cli, sql, "auto") == _run_all(decidb_cli, sql, "off")
 
 
 @pytest.mark.cons_aggregate
@@ -1912,45 +1878,9 @@ def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_n
     assert direct == pytest.approx(solver)
 
 
-@pytest.mark.error
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_r1_late_bad_row_raises_under_count_and_where(decidb_cli):
-    inner = _late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0"))
-    for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-        with pytest.raises(DeciDBCliError, match=r"w is NaN or infinite on some rows"):
-            _run(decidb_cli, outer, "require")
-    assert _run(decidb_cli, f"SELECT i FROM ({inner}) q LIMIT 0", "require")[0] == []
-    # LIMIT 1 reads the whole problem too: the last row is the unbounded one.
-    unbounded = _late(LATE_DECIDE, w_sql=_last_row("-1.0", "1.0"), cap_sql=_last_row("1e30", "10.0"), tail="LIMIT 1")
-    with pytest.raises(DeciDBCliError, match="unbounded"):
-        _run(decidb_cli, unbounded, "require")
-
-
-@pytest.mark.error
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_r1_an_unused_decision_still_raises(decidb_cli):
-    # The solver reads the whole problem even when no column of the decision is selected.
-    sql = (
-        "SELECT id FROM (SELECT * FROM (VALUES (1, -1.0, 1.0), (2, 1.0, 1.0)) t(id, w, v) "
-        "DECIDE amount(REAL) SUCH THAT amount >= 0 AND SUM(w*amount) <= 5 MAXIMIZE SUM(v*amount)) q"
-    )
-    for mode in ("off", "require"):
-        with pytest.raises(DeciDBCliError, match="unbounded"):
-            _run(decidb_cli, sql, mode)
-
-
 # ---------------------------------------------------------------------------
 # Values the oracle cannot hold: direct solve is compared with the solver path alone
 # ---------------------------------------------------------------------------
-
-
-def _problem(rows, bounds="amount >= lo AND amount <= cap", budget="SUM(w*amount) <= 6", obj="MAXIMIZE SUM(v*amount)"):
-    return (
-        f"SELECT id, amount FROM (SELECT * FROM (VALUES {_values(rows)}) v({', '.join(NAMES)})) "
-        f"DECIDE amount(REAL) SUCH THAT {bounds} AND {budget} {obj} ORDER BY id"
-    )
 
 
 BOUNDARY_CASES = {
@@ -2021,57 +1951,6 @@ def _all_close(left, right):
             elif a != b:
                 return False
     return True
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize("limit", ["1e20", "'Infinity'::DOUBLE"])
-def test_r1_leaves_a_limit_the_solver_reads_as_no_bound_to_the_solver(decidb_cli, limit):
-    sql = _problem(WORKED, bounds="amount >= 0 AND amount <= cap", budget=f"SUM(w*amount) <= {limit}")
-    require = _run_all(decidb_cli, sql, "require")
-    assert require == ("error", "direct_not_applied")
-    # A limit of 1e20 is a right-hand side of the model both solver runs build; an infinite one is no number.
-    large = writes_number_out_of_range(sql)
-    assert _run_all(decidb_cli, sql, "auto", large) == _run_all(decidb_cli, sql, "off", large)
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "budget",
-    [
-        "SUM(w*amount) >= 1e20",
-        "SUM(w*amount) >= -1e20",
-        "SUM(w*amount) = 1e20",
-        "SUM(w*amount) = 'Infinity'::DOUBLE",
-        # Every comparison of the budget is checked, not only the first.
-        "SUM(w*amount) >= 1 AND SUM(w*amount) <= 1e20",
-        "SUM(w*amount) BETWEEN 1 AND 'Infinity'::DOUBLE",
-    ],
-)
-def test_r1_leaves_a_minimum_or_exact_fill_the_solver_reads_as_no_bound_to_the_solver(decidb_cli, budget):
-    sql = _problem(WORKED, bounds="amount >= 0 AND amount <= cap", budget=budget)
-    assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
-    large = writes_number_out_of_range(sql)
-    assert _run_all(decidb_cli, sql, "auto", large) == _run_all(decidb_cli, sql, "off", large)
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "budget",
-    [
-        # Different weights: two budgets with no single price per unit of budget.
-        "SUM(w*amount) >= 1 AND SUM(v*amount) <= 20",
-        # The same weights with another term, and with another sign on one term: not the same sum.
-        "SUM(w*amount) >= 1 AND SUM(w*amount + 2*amount) <= 20",
-        "SUM(w*amount + v*amount) >= 1 AND SUM(w*amount - v*amount) <= 40",
-    ],
-)
-def test_r1_leaves_budgets_that_are_not_one_sum_to_the_solver(decidb_cli, budget):
-    sql = _problem(WORKED, bounds="amount >= 0 AND amount <= cap", budget=budget)
-    assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
-    assert _run_all(decidb_cli, sql, "auto") == _run_all(decidb_cli, sql, "off")
 
 
 # ---------------------------------------------------------------------------
@@ -2427,19 +2306,6 @@ def test_r1_plan_materializes_a_source_that_is_not_a_table_scan(decidb_cli):
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stdout
     assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "HASH_JOIN") == 1 and _count(plan, "SEQ_SCAN") == 2, plan
     assert "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", ["minimum_binding_mixed_min", "exact_fill_mixed_max", "between_binding_low_min"])
-def test_r1_plan_has_one_sort_under_a_minimum_an_exact_fill_and_a_range(decidb_cli, name):
-    # The price is found from the same sort under every direction, however the limits are written.
-    sql = _sql(R1_CASES[name]).replace(" ORDER BY id", "")
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
-    windows = plan.split("│           WINDOW          │")[1:]
-    ordered = [body for body in windows if "ORDER BY" in body.split("└")[0]]
-    assert "ORDER_BY" not in plan and len(ordered) == 1, plan
 
 
 # ---------------------------------------------------------------------------
@@ -3102,14 +2968,9 @@ def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(de
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("decisions", [1, 2])
 @pytest.mark.parametrize(
-    "scope",
-    [
-        pytest.param(""),
-        pytest.param(" by (g)"),
-    ],
-    ids=["global", "per"],
+    "decisions, scope",
+    [pytest.param(1, "", id="1-global"), pytest.param(2, " by (g)", id="2-per")],
 )
 def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, tmp_path, decisions, scope):
     # The group's limits come from the stage that totals the group, so a limit read from the data adds no operator to

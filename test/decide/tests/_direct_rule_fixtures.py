@@ -199,33 +199,12 @@ R1 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_r1_life ADD COLUMN extra INTEGER;",
-    # Each is the plain form with one condition changed, so the rule has to decline it: an INT decision (a unit cannot
-    # be partly filled), two budgets with different weights (no single price per unit of budget), an objective with a
-    # square (a term that is not a per-row linear value; the closest the IR offers to a coupled term for one
-    # decision), and a constraint that reads two decisions of a row (it links them).
-    near_misses=(
-        ("x(INT)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5 AND SUM(p*x) <= 7", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(p*x) - SUM(POWER(x, 2))"),
-        # Two decisions in one budget apply; a per-row constraint that reads both links them.
-        ("x(REAL), y(REAL)", "x <= cap AND y <= cap AND x + y <= 4 AND SUM(w*x + w*y) <= 5", "MAXIMIZE SUM(p*x + p*y)"),
-        # An objective `when` that is not a source predicate: on the objective and on its sum.
-        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE when txid_current() >= 0: SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(when txid_current() >= 0: p*x)"),
-    ),
-    # Forms that look like near misses and apply: a minimum, an exact fill, and one sum compared twice (a range), two
-    # decisions in one budget (the pieces of a benefit), and a budget read from the data (a column of the source, and
-    # an aggregate of it, which the right-hand-side rewrite makes a column).
-    near_miss_applies=(
-        ("x(REAL)", "x <= cap AND SUM(w*x) <= lim", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) <= 0.5 * SUM(cap*w)", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) >= 3", "MINIMIZE SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) = 5", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x <= cap AND SUM(w*x) >= 3 AND SUM(w*x) <= 7", "MINIMIZE SUM(p*x)"),
-        ("x(REAL), y(REAL)", "x <= cap AND y <= cap AND SUM(w*x + w*y) <= 5", "MAXIMIZE SUM(p*x + p*y)"),
-    ),
-    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 5.0::DOUBLE, 6.0::DOUBLE), "
-    "(2, 10.0::DOUBLE, 3.0::DOUBLE, 3.0::DOUBLE, 6.0::DOUBLE)) t(id,p,w,cap,lim)",
+    # The plain form with one condition changed, so the rule has to decline it: an INT decision (a unit cannot be
+    # partly filled). The other declines and the forms that apply are `test_decidb_direct_decline.cpp`'s.
+    near_misses=(("x(INT)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(p*x)"),),
+    near_miss_applies=(),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 5.0::DOUBLE), "
+    "(2, 10.0::DOUBLE, 3.0::DOUBLE, 3.0::DOUBLE)) t(id,p,w,cap)",
     near_miss_column="id",
     late_errors=(
         # Errors R1 raises, on the last of 5,000 rows: an empty box, an unbounded problem and a NaN weight.

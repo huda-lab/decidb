@@ -5,7 +5,6 @@
 #include <map>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
-#include "duckdb/common/exception.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -14,7 +13,6 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
-#include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
@@ -1268,9 +1266,6 @@ private:
 	ExprPtr KeyColumn(idx_t i, const vector<ColumnBinding> &key) const {
 		return calc.Col(key_types[i], key[i]);
 	}
-	bool HasDataLimits() const {
-		return !condition.data_limits.empty();
-	}
 	//! The budget's limits L and U in a group: the constants, or with a limit read from the data the group columns
 	//! stage 2 computes.
 	ExprPtr LowerOf(const vector<ColumnBinding> &limits) const {
@@ -1449,7 +1444,7 @@ private:
 		stage.columns.over = out.Add(verdict.over);
 		stage.columns.under = out.Add(verdict.under);
 		stage.columns.ok = out.Add(calc.Wrap(DirectAllHold(calc, std::move(checks))));
-		if (HasDataLimits()) {
+		if (!condition.data_limits.empty()) {
 			stage.columns.limits.push_back(out.Add(lower));
 			stage.columns.limits.push_back(out.Add(upper));
 		}
