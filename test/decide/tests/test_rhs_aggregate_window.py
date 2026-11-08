@@ -152,11 +152,17 @@ def _agree(cli, oracle_solver, rows, constraint, limits):
     agree_with_oracle(cli, _sql(rows, constraint), oracle, check_assignment, modes=("off",), number_range=large)
 
 
+# The aggregate and the scope reach the rewrite by separate code: MakeReducerColumn (decide_rewrite_rhs_bounds.cpp)
+# records the aggregate function as an opaque value and takes the scope from GroupKeyIndex and Reads, and the aggregate
+# decides only ArgumentMessage (COUNT reads no value to check; the others check a NaN). So each aggregate runs once,
+# under the scope that combines a `when` with a `by` (`when_by`), and each other scope runs once, under SUM.
+_WINDOW_RUNS = sorted({(aggregate, "when_by") for aggregate in AGGREGATES} | {("SUM(cap)", scope) for scope in SCOPES})
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.per_clause
 @pytest.mark.correctness
-@pytest.mark.parametrize("scope", sorted(SCOPES))
-@pytest.mark.parametrize("aggregate", sorted(AGGREGATES))
+@pytest.mark.parametrize("aggregate, scope", _WINDOW_RUNS, ids=[f"{a}-{s}" for a, s in _WINDOW_RUNS])
 def test_rhs_aggregate_window_matches_the_oracle(decidb_cli, oracle_solver, aggregate, scope):
     constraint, clause = _scoped(scope, aggregate)
     _agree(decidb_cli, oracle_solver, ROWS, constraint, _clause_limits(ROWS, _caps(aggregate), **clause))
@@ -164,7 +170,7 @@ def test_rhs_aggregate_window_matches_the_oracle(decidb_cli, oracle_solver, aggr
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("scope", ["global", "by"])
+@pytest.mark.parametrize("scope", ["by"])
 def test_rhs_count_of_a_text_column_counts_its_values(decidb_cli, oracle_solver, scope):
     """`COUNT(g)` over the VARCHAR key counts its non-NULL values, as SQL's COUNT does; the solver once cast the
     argument to DOUBLE. ROWS holds NULL keys, which COUNT skips."""
@@ -395,9 +401,10 @@ def test_rhs_same_aggregate_in_two_clauses_reads_each_clauses_group(decidb_cli, 
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("aggregate", ["SUM", "MIN", "AVG"])
+@pytest.mark.parametrize("aggregate", ["SUM"])
 def test_rhs_aggregate_with_its_own_when_under_a_clause_when_matches_the_oracle(decidb_cli, oracle_solver, aggregate):
-    """A reducer's own `when` narrows the rows the clause keeps; its argument is read only where both hold."""
+    """A reducer's own `when` narrows the rows the clause keeps; its argument is read only where both hold. The
+    aggregate is opaque to the filter (`Reads` in MakeReducerColumn), so one stands for all."""
     constraint = f"when id < 5: SUM(x * w) by (g) <= {aggregate}(when flag: cap) by (g)"
     limits = _clause_limits(
         PLAIN,

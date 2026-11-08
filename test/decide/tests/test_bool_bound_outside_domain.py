@@ -8,7 +8,7 @@ x, `SUM(x) >= 4` over three rows is satisfiable by x above 1). The independent o
 arithmetic on a binary variable.
 
 Covers:
-  - test_bool_bound_outside_domain_matches_oracle: every bound, alone and with each aggregate
+  - test_bool_bound_outside_domain_matches_oracle: every bound alone, and beside the aggregate that exploits it (_RUNS)
   - test_bool_bound_outside_domain_with_when_matches_oracle: the `when` form of the same bounds, as a control
   - test_bool_bound_outside_domain_diagnose_raises_the_same_error: DIAGNOSE raises the same error
   - test_bool_bound_outside_domain_over_empty_source_raises: an empty source raises the same error
@@ -50,6 +50,29 @@ _INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNO
 _CANNOT_HOLD = {"x >= 2", "x <= -1", "x < 0", "x > 1.5", "x = -1"}
 
 
+# The (bound, aggregate) runs. The error of a bound that cannot hold comes from the sink's constructor
+# (DecideGlobalSinkState), which reads only the bounds on one decision, so the aggregate cannot change it: each such
+# bound runs alone, and `x >= 2` once beside an aggregate a direct-solve rule takes, which reaches S1's decline of a
+# bound that contradicts the domain (ProveFixedVariables). A bound that always holds is exploited at one end only: a
+# floor below 0 by `SUM(x) <= -2` (satisfiable by a signed x), a ceiling above 1 by `SUM(x) >= 4` (satisfiable by an x
+# above 1); the aggregate of the other direction cannot tell a widened box from the Boolean one. `SUM(x) >= 1` is
+# satisfiable either way.
+_FLOOR_BELOW_ZERO = {"x >= -3", "x > -3"}
+_RUNS = [
+    (bound, aggregate)
+    for bound in _BOUNDS
+    for aggregate in _AGGREGATES
+    if (
+        aggregate[0] is None
+        or (bound[0] == "x >= 2" and aggregate[0] == "SUM(x) >= 1")
+        or (
+            bound[0] not in _CANNOT_HOLD
+            and aggregate[0] != ("SUM(x) >= 4" if bound[0] in _FLOOR_BELOW_ZERO else "SUM(x) <= -2")
+        )
+    )
+]
+
+
 def _cannot_hold(bound):
     return re.escape(f"DECIDE optimization is infeasible: {bound} cannot hold for a BOOL variable.")
 
@@ -74,8 +97,7 @@ def _solve_oracle(oracle_solver, model_name, bound, aggregate, *, rows=_ROWS):
 @pytest.mark.cons_mixed
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize("aggregate", _AGGREGATES, ids=[a[0] or "alone" for a in _AGGREGATES])
-@pytest.mark.parametrize("bound", _BOUNDS, ids=[b[0] for b in _BOUNDS])
+@pytest.mark.parametrize("bound, aggregate", _RUNS, ids=[f"{b[0]}-{a[0] or 'alone'}" for b, a in _RUNS])
 def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bound, aggregate):
     constraints = bound[0] if aggregate[0] is None else f"{bound[0]} AND {aggregate[0]}"
     sql = f"""
@@ -137,10 +159,11 @@ def test_bool_bound_outside_domain_diagnose_raises_the_same_error(decidb_cli):
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.error
-@pytest.mark.parametrize("bound", sorted(_CANNOT_HOLD))
+@pytest.mark.parametrize("bound", ["x <= -1", "x >= 2"])
 def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
     # The solver rejects the bound before it reads a row, so an empty source raises too, with the same text in
-    # both modes.
+    # both modes. One bound per side of the domain: how a spelling (`x < 0`, `x > 1.5`, `x = -1`) folds to a side is
+    # settled before any row, and the alone cases of the test above run each.
     sql = f"""
         SELECT id, x FROM (
             SELECT * FROM {_SOURCE} WHERE false

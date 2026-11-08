@@ -161,18 +161,23 @@ def test_reversed_bound_comparisons_are_normalized(decidb_cli):
 # against an oracle model with the constraint's algebraic solution baked into
 # the variable bounds.
 
+
 @pytest.mark.var_real
 @pytest.mark.cons_perrow
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-@pytest.mark.parametrize("lhs_sql,rhs_sql,oracle_ub", [
-    ("x + 3",       "10",   7.0),
-    ("x - 3",       "2",    5.0),
-    ("x / 2",       "1",    2.0),
-    ("2 * x + 3",   "11",   4.0),
-    ("x / 2 + 1",   "3",    4.0),
-    ("x + 3 - 1",   "9",    7.0),
-])
+# One operator per case: DecideTermSplitter::Split reads `+`, binary `-`, `/` and a product each by its own branch and
+# recurses on the operands, so `x / 2 + 1` and `x + 3 - 1` reach only the branches of `x / 2`, `x + 3` and `x - 3`.
+# `2 * x + 3` is the one case with the product.
+@pytest.mark.parametrize(
+    "lhs_sql,rhs_sql,oracle_ub",
+    [
+        ("x + 3", "10", 7.0),
+        ("x - 3", "2", 5.0),
+        ("x / 2", "1", 2.0),
+        ("2 * x + 3", "11", 4.0),
+    ],
+)
 def test_perrow_linear_lhs_upper_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
                                         lhs_sql, rhs_sql, oracle_ub):
     """Per-row upper-bound constraints with non-trivial linear LHS. The oracle

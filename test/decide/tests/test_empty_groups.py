@@ -36,7 +36,6 @@ def _empty(row):
     return row["val"] > 100
 
 
-AT_MOST_ONE = Scoped((lambda row: {"x": 1},), "<=", (_const(1),))
 MAXIMIZE_VAL = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", _x_val),))
 MINIMIZE_VAL = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", _x_val),))
 

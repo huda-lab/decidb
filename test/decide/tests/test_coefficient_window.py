@@ -155,12 +155,11 @@ def test_a_generated_big_m_above_the_ceiling_loads(decidb_cli_highs):
 
 @pytest.mark.edge_case
 @pytest.mark.correctness
+# The three weighted-sum queries (tiny cap, tiny floor, large cap) are the SQL of the three tests above, which hold
+# HiGHS to the Gurobi oracle on them; row scaling is in the HiGHS loader alone. Only the Big-M query has no oracle.
 @pytest.mark.parametrize(
     "sql, large",
     [
-        pytest.param(_weighted_sum_sql("0.000000001", 5, "<=", 1, "MAXIMIZE"), False, id="tiny-cap"),
-        pytest.param(_weighted_sum_sql("1e-9", "1e10", ">=", 1, "MINIMIZE"), True, id="tiny-floor"),
-        pytest.param(_weighted_sum_sql("1e16", 5, "<=", "1e20", "MAXIMIZE"), True, id="large-cap"),
         pytest.param(_BIG_M_SQL.format(box="4000000000000000"), True, id="big-m"),
     ],
 )

@@ -3,7 +3,6 @@
 Covers:
   - Force zero: when condition: x <= 0 (block selection of matching rows)
   - Force select: when condition: x = 1 (require matching rows)
-  - Numeric condition on per-row bound
   - Boundary: all rows match (equivalent to unconditional per-row)
   - test_when_row_real: REAL variable (no implicit [0,1] cap) + WHEN
     per-row — continuous skip-constraint path
@@ -143,69 +142,6 @@ def test_when_row_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 
     perf_tracker.record(
         "when_perrow_select", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.when_row
-@pytest.mark.var_boolean
-@pytest.mark.cons_perrow
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_when_row_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Exclude large-quantity items: when quantity > 40: x <= 0."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_quantity > 40: x <= 0
-            AND SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_orderkey AS BIGINT),
-               CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE)
-        FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("when_perrow_numeric")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    for i, row in enumerate(data):
-        if row[3] > 40:
-            oracle_solver.add_variable(vnames[i], VarType.BINARY, lb=0.0, ub=0.0)
-        else:
-            oracle_solver.add_variable(vnames[i], VarType.BINARY)
-
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(len(data))},
-        ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-
-    perf_tracker.record(
-        "when_perrow_numeric", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

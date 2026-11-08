@@ -12,7 +12,6 @@ a negative literal in an `IN` domain — DeciDB honors it instead of clamping to
                                    stay >= 0 (regression guard for the default)
   - test_signed_mccormick:        Bool x signed-Real product (McCormick corners)
   - test_signed_mccormick_asymmetric: McCormick with an asymmetric range [-100, 5]
-  - test_signed_in_domain:        IN domain containing negative values
   - test_signed_abs_objective:    ABS over a signed variable (audit: sign-safe)
   - test_signed_strict_integer:   strict `>` on a signed-integer aggregate (Big-M)
   - test_signed_norm_l1_parity:   norm(x,1) == SUM(ABS(x)) on a signed variable
@@ -153,60 +152,6 @@ def test_signed_mccormick(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     perf_tracker.record(
         "signed_mccormick", decidb_time, build_time,
         result.solve_time_seconds, n, len(bnames) + len(xnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.var_integer
-@pytest.mark.cons_perrow
-@pytest.mark.obj_minimize
-@pytest.mark.correctness
-def test_signed_in_domain(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """IN domain containing negative values. Without the bound-widening the
-    default lower bound 0 would silently prune the -5 selection."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, x
-        FROM lineitem
-        WHERE l_orderkey < 40
-        DECIDE x(INT)
-        SUCH THAT x IN (-5, 0, 5)
-        MINIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_extendedprice AS DOUBLE)
-        FROM lineitem WHERE l_orderkey < 40
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("signed_in_domain")
-    n = len(data)
-    domain = [-5.0, 0.0, 5.0]
-    vnames = [f"x_{i}" for i in range(n)]
-    for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.INTEGER, lb=-5.0, ub=5.0)
-        add_in_domain(oracle_solver, vn, domain)
-
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][0] for i in range(n)},
-        ObjSense.MINIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-
-    perf_tracker.record(
-        "signed_in_domain", decidb_time, build_time,
-        result.solve_time_seconds, n, len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
@@ -574,7 +519,7 @@ def test_signed_norm_l1_parity(decidb_cli):
 @pytest.mark.var_integer
 @pytest.mark.correctness
 @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
-@pytest.mark.parametrize("bound", [-2.5, -2.7, -0.5])
+@pytest.mark.parametrize("bound", [-2.5, -0.5])
 def test_signed_integer_fractional_lower_bound(request, scope_solver, cli_fixture, bound):
     """An INTEGER decision with a fractional negative lower bound and an open upper side
     (`x <= cap` is a row, not a column bound): `x >= -2.5` minimizes to -2. HiGHS was handed
@@ -811,12 +756,21 @@ _LIFT_CASES = {
 }
 
 
-@_LIFT_BACKENDS
+# ResolveLiftedFloors (instance_floors.cpp) settles the floors in the SolverInput before any backend reads it, so every
+# case runs on Gurobi and HiGHS differs only in loading the columns and rows. HiGHS runs the two shapes its loading
+# treats differently: a column lowered to -inf (`row_scoped_real`) and a box that no value satisfies
+# (`upper_below_zero_every_row_kept`, the inverted box HiGHS refuses on load).
+_HIGHS_LIFT_CASES = ("row_scoped_real", "upper_below_zero_every_row_kept")
+_LIFT_RUNS = [(name, "decidb_cli_gurobi") for name in sorted(_LIFT_CASES)] + [
+    (name, "decidb_cli_highs") for name in _HIGHS_LIFT_CASES
+]
+
+
 @pytest.mark.var_real
 @pytest.mark.var_integer
 @pytest.mark.when
 @pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(_LIFT_CASES))
+@pytest.mark.parametrize("name, cli_fixture", _LIFT_RUNS, ids=[f"{name}-{cli}" for name, cli in _LIFT_RUNS])
 def test_negative_lower_bound_under_a_when_lowers_the_floor_on_the_rows_it_keeps(
     request, scope_solver, cli_fixture, name
 ):

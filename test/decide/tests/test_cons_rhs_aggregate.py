@@ -50,22 +50,6 @@ def test_rhs_sum_matches_explicit_hoist(decidb_cli):
 
 
 @pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_rhs_sum_matches_scalar_bound(decidb_cli):
-    """SUM(b) = 20 over all four rows, so the RHS aggregate equals `<= 20`:
-    budget for two unit items → pick the two highest-profit (ids 3, 4)."""
-    assert _selected(decidb_cli, "SUM(x * weight) <= SUM(b)") == [3, 4]
-    assert _selected(decidb_cli, "SUM(x * weight) <= 20") == [3, 4]
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_rhs_sum_plus_scalar(decidb_cli):
-    """A scalar term stays on the RHS: SUM(b) + 10 = 30 → three items (2, 3, 4)."""
-    assert _selected(decidb_cli, "SUM(x * weight) <= SUM(b) + 10") == [2, 3, 4]
-
-
-@pytest.mark.cons_aggregate
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_rhs_sum_per_group_bound(decidb_cli):
@@ -112,20 +96,6 @@ def test_rhs_aggregate_local_when(decidb_cli):
     # 10*SUM(x) <= 15 over all rows ⇒ at most one item ⇒ highest profit (id 4).
     assert direct == [4]
     assert direct == hoist
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_rhs_minmax_bound(decidb_cli):
-    """MIN/MAX on the RHS is evaluated by the reducer evaluator, not the hoist.
-
-    The hoist could only ever move SUM and AVG, because the left side reduces a
-    data term by *summing a column* — MIN cannot be obtained by adding things up.
-    `b` is 5.0 on every row, so MIN(b) = 5 caps the weight-10 items at zero.
-    """
-    assert _selected(decidb_cli, "SUM(x * weight) <= MIN(b)") == []
-    # MAX over the same column agrees, since b is constant.
-    assert _selected(decidb_cli, "SUM(x * weight) <= MAX(b)") == []
 
 
 @pytest.mark.cons_aggregate

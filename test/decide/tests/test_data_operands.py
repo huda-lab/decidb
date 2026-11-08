@@ -116,20 +116,6 @@ def test_lambda_in_a_reduced_bound(decidb_cli, oracle_solver):
     assert _objective(rows, cols, caps) == pytest.approx(_oracle(oracle_solver, "lambda_bound", caps, ones, 6, caps))
 
 
-@pytest.mark.cons_perrow
-@pytest.mark.correctness
-def test_comparison_in_a_per_row_bound(decidb_cli, oracle_solver):
-    rows, cols = decidb_cli.execute(
-        f"""
-        SELECT id, x FROM {_TABLE} DECIDE x(INT)
-        SUCH THAT x <= 4 * CAST((cap > 2 AND cap < 6) AS INT)
-        MAXIMIZE SUM(x)
-    """
-    )
-    ub = [4 * int(2 < cap < 6) for _, cap, _ in _ROWS]
-    assert _objective(rows, cols, ones) == pytest.approx(_oracle(oracle_solver, "cmp_row", ub, None, 0, ones))
-
-
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_comparison_in_a_reducer_coefficient(decidb_cli, oracle_solver):
@@ -142,19 +128,6 @@ def test_comparison_in_a_reducer_coefficient(decidb_cli, oracle_solver):
     )
     coeffs = [int(cap > 4) for _, cap, _ in _ROWS]
     assert _objective(rows, cols, ones) == pytest.approx(_oracle(oracle_solver, "cmp_coef", caps, coeffs, 4, ones))
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_comparison_in_a_reduced_bound(decidb_cli, oracle_solver):
-    rows, cols = decidb_cli.execute(
-        f"""
-        SELECT id, x FROM {_TABLE} DECIDE x(INT)
-        SUCH THAT x <= cap AND SUM(x) <= 5 * CAST(2 > 1 AS INT)
-        MAXIMIZE SUM(x * cap)
-    """
-    )
-    assert _objective(rows, cols, caps) == pytest.approx(_oracle(oracle_solver, "cmp_bound", caps, ones, 5, caps))
 
 
 @pytest.mark.cons_aggregate

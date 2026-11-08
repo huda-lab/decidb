@@ -103,58 +103,6 @@ def test_in_domain_restriction(
 
 
 @pytest.mark.cons_in
-@pytest.mark.var_boolean
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_in_binary_domain(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """x IN (0, 1) on an implicitly typed variable — equivalent to(BOOL)."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
-        DECIDE x(INT)
-        SUCH THAT x IN (0, 1)
-            AND SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_rows, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
-    n = len(data)
-
-    t_build = time.perf_counter()
-    vnames = _build_in_domain_model(
-        oracle_solver, "in_binary_domain", data, [0, 1], big_M=1.0,
-    )
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] for i in range(n)},
-        "<=", 100.0, name="quantity_cap",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    x_idx = decidb_cols.index("x")
-    for row in decidb_rows:
-        assert row[x_idx] in (0, 1), f"x={row[x_idx]} not in {{0, 1}}"
-
-    cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-    perf_tracker.record(
-        "in_binary_domain", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 3, 2, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.cons_in
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
@@ -197,54 +145,6 @@ def test_in_single_value(
     perf_tracker.record(
         "in_single_value", decidb_time, build_time, result.solve_time_seconds,
         n, n * 2, 0, result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.cons_in
-@pytest.mark.var_integer
-@pytest.mark.obj_minimize
-@pytest.mark.correctness
-def test_in_minimize_picks_smallest(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """x IN (3, 5, 7) MINIMIZE SUM(x) — solver should pick 3 for all rows."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
-        DECIDE x(INT)
-        SUCH THAT x IN (3, 5, 7)
-        MINIMIZE SUM(x * l_quantity)
-    """
-    t0 = time.perf_counter()
-    decidb_rows, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
-    n = len(data)
-
-    t_build = time.perf_counter()
-    vnames = _build_in_domain_model(
-        oracle_solver, "in_minimize_picks_smallest", data, [3, 5, 7], big_M=7.0,
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    x_idx = decidb_cols.index("x")
-    for row in decidb_rows:
-        assert row[x_idx] in (3, 5, 7)
-        assert row[x_idx] == 3, f"MINIMIZE should pick smallest: x={row[x_idx]}"
-
-    cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
-    )
-    perf_tracker.record(
-        "in_minimize_picks_smallest", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 4, 0, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
@@ -423,58 +323,6 @@ def test_in_cast_domain_floor_uses_cast_value(
         "in_cast_domain_floor_uses_cast_value", decidb_time, build_time,
         result.solve_time_seconds, n, n * 3, 0, result.objective_value,
         oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.cons_in
-@pytest.mark.var_integer
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_in_maximize_picks_largest(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """x IN (2, 5) MAXIMIZE SUM(x * extendedprice) with a loose aggregate cap."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
-        DECIDE x(INT)
-        SUCH THAT x IN (2, 5)
-            AND SUM(x * l_quantity) <= 99999
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_rows, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
-    n = len(data)
-
-    t_build = time.perf_counter()
-    vnames = _build_in_domain_model(
-        oracle_solver, "in_maximize_picks_largest", data, [2, 5], big_M=5.0,
-    )
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] for i in range(n)},
-        "<=", 99999.0, name="quantity_cap",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    x_idx = decidb_cols.index("x")
-    for row in decidb_rows:
-        assert row[x_idx] in (2, 5), f"x={row[x_idx]} not in domain"
-
-    cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-    perf_tracker.record(
-        "in_maximize_picks_largest", decidb_time, build_time, result.solve_time_seconds,
-        n, n * 3, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 

@@ -43,7 +43,6 @@ import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
 from ._brute_force import judge_rows
-from ._oracle_helpers import emit_hard_inner_max
 from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 

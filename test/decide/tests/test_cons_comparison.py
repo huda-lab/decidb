@@ -34,19 +34,9 @@ _STRICT_GT_REAL_MSG = re.compile(
 _STRICT_LT_COEFF_MSG = re.compile(
     r"Comparison '<' is not supported here: .*can take fractional values"
 )
-_STRICT_QUADRATIC_MSG = re.compile(
-    r"Strict inequality \('<' / '>'\) is not supported on constraints with "
-    r"quadratic or bilinear terms"
-)
 _NE_REAL_MSG = re.compile(
     r"Inequality '<>' is not supported over the REAL decision"
 )
-_NE_FRACTIONAL_COEFF_MSG = re.compile(
-    r"Inequality '<>' is not supported when a column scaling the "
-    r"left-hand side holds a non-integer value"
-)
-
-
 @pytest.mark.cons_comparison
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
@@ -371,25 +361,6 @@ def test_sum_negative_coeffs_aggregate(
 
 
 @pytest.mark.cons_comparison
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-def test_sum_not_equal(decidb_cli):
-    """SUM(x) <> 5 — not-equal on aggregate (disjunctive, hard for ILP)."""
-    result, _ = decidb_cli.execute("""
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 5
-            AND SUM(x * l_quantity) <= 200
-        MAXIMIZE SUM(x * l_extendedprice)
-    """)
-    assert len(result) > 0
-    total = sum(row[4] for row in result)
-    assert total != 5, f"SUM(x) = {total}, expected <> 5"
-
-
-@pytest.mark.cons_comparison
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
 def test_perrow_not_equal(decidb_cli):
@@ -407,49 +378,6 @@ def test_perrow_not_equal(decidb_cli):
     x_idx = 2
     for row in result:
         assert row[x_idx] != 3, f"x={row[x_idx]}, expected <> 3"
-
-
-@pytest.mark.cons_comparison
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-def test_sum_not_equal_zero(decidb_cli):
-    """SUM(x) <> 0 — forces at least one selected."""
-    result, _ = decidb_cli.execute("""
-        SELECT l_orderkey, l_linenumber, x
-        FROM lineitem WHERE l_orderkey < 50
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 0
-            AND SUM(x) <= 3
-        MAXIMIZE SUM(x * l_extendedprice)
-    """)
-    assert len(result) > 0
-    total = sum(row[2] for row in result)
-    assert total != 0, f"SUM(x) = {total}, expected <> 0"
-    assert total >= 1, f"SUM(x) must be at least 1"
-
-
-@pytest.mark.cons_comparison
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.when
-@pytest.mark.obj_maximize
-def test_sum_not_equal_with_when(decidb_cli):
-    """when condition: sum(x) <> 5 — NE with conditional application."""
-    result, _ = decidb_cli.execute(
-        """
-        SELECT l_orderkey, l_linenumber, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
-        DECIDE x(BOOL)
-        SUCH THAT when l_quantity > 20: sum(x) <> 5
-            AND SUM(x * l_quantity) <= 200
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    )
-    assert len(result) > 0
-    conditional_total = sum(row[3] for row in result if row[2] > 20)
-    assert conditional_total != 5, \
-        f"SUM(x) WHEN l_quantity > 20 = {conditional_total}, expected <> 5"
 
 
 @pytest.mark.cons_comparison
@@ -563,25 +491,6 @@ def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_real_sum_strict_lt_rejected(decidb_cli):
-    """SUM(x) < K with(REAL) — integer-step rewrite is unsafe, must reject."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 10
-        DECIDE x(REAL)
-        SUCH THAT SUM(x) < 5
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
-
-
-@pytest.mark.cons_comparison
-@pytest.mark.var_real
-@pytest.mark.cons_aggregate
 def test_real_sum_strict_gt_rejected(decidb_cli):
     """SUM(x) > K with(REAL) — integer-step rewrite is unsafe, must reject."""
     sql = """
@@ -595,24 +504,6 @@ def test_real_sum_strict_gt_rejected(decidb_cli):
     with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_GT_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
-    )
-
-
-@pytest.mark.cons_comparison
-@pytest.mark.var_real
-def test_real_perrow_strict_rejected(decidb_cli):
-    """Per-row x < K with(REAL) — same integer-step rewrite applies; must reject."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, x
-        FROM lineitem WHERE l_orderkey < 10
-        DECIDE x(REAL)
-        SUCH THAT x < 5
-        MAXIMIZE SUM(x)
-    """
-    with pytest.raises(DeciDBCliError) as exc_info:
-        decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
 

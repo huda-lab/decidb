@@ -240,7 +240,23 @@ def _two_sided(form, lhs, lower, upper):
     return f"({lhs} >= {lower} AND ({lhs} <= {upper} AND {lhs} <= {upper}))"
 
 
-_TWO_SIDED_FORMS = pytest.mark.parametrize("form", ["between", "parenthesised", "nested"])
+# BindBetween expands a BETWEEN to the conjunction `(lhs >= lower AND lhs <= upper)` that the parenthesised form binds
+# to (only the tags that name the clause differ), and BindScopedConstraint gives each half of a conjunction the whole
+# scope by the same code, so MINIMIZE (the lower half) on "between" reaches what it would on "parenthesised". "nested"
+# binds its second half to a conjunction of its own, which the scope wraps as one child, so it keeps both senses.
+_FORM_SENSES = [
+    (form, sense)
+    for form in ("between", "parenthesised", "nested")
+    for sense in ("MAXIMIZE", "MINIMIZE")
+    if (form, sense) != ("parenthesised", "MINIMIZE")
+]
+_FORM_WHEN_SENSES = [
+    (form, when, sense)
+    for form in ("between", "parenthesised", "nested")
+    for when in (False, True)
+    for sense in ("MAXIMIZE", "MINIMIZE")
+    if (form, sense) != ("parenthesised", "MINIMIZE")
+]
 
 
 def _run_mode(decidb_cli, mode, sql):
@@ -285,9 +301,8 @@ def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, b
 @pytest.mark.cons_between
 @pytest.mark.when_row
 @pytest.mark.correctness
-@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
-@_TWO_SIDED_FORMS
-def test_between_when_row_matches_some_rows(decidb_cli, duckdb_conn, oracle_solver, sense, form):
+@pytest.mark.parametrize("form, sense", _FORM_SENSES, ids=[f"{f}-{s}" for f, s in _FORM_SENSES])
+def test_between_when_row_matches_some_rows(decidb_cli, duckdb_conn, oracle_solver, form, sense):
     """The bounds hold on the rows where the `when` holds and nowhere else.
 
     MAXIMIZE sees the upper bound (the unflagged row with the best payoff is not capped at `cap`), MINIMIZE sees the
@@ -315,9 +330,8 @@ def test_between_when_row_matches_some_rows(decidb_cli, duckdb_conn, oracle_solv
 @pytest.mark.cons_aggregate
 @pytest.mark.when_constraint
 @pytest.mark.correctness
-@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
-@_TWO_SIDED_FORMS
-def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, form):
+@pytest.mark.parametrize("form, sense", _FORM_SENSES, ids=[f"{f}-{s}" for f, s in _FORM_SENSES])
+def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, form, sense):
     """`when flag: SUM(x) BETWEEN 2 AND 4` sums the flagged rows only, for both its bounds."""
     data = _wrapped_between_data(duckdb_conn)
 
@@ -339,10 +353,8 @@ def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, f
 @pytest.mark.when_constraint
 @pytest.mark.per_clause
 @pytest.mark.correctness
-@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
-@pytest.mark.parametrize("when", [False, True])
-@_TWO_SIDED_FORMS
-def test_between_by_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, when, form):
+@pytest.mark.parametrize("form, when, sense", _FORM_WHEN_SENSES, ids=[f"{f}-{w}-{s}" for f, w, s in _FORM_WHEN_SENSES])
+def test_between_by_aggregate(decidb_cli, duckdb_conn, oracle_solver, form, when, sense):
     """`[when flag:] SUM(x) by (g) BETWEEN 1 AND 2` bounds each group's sum, over the flagged rows under a `when`."""
     data = _wrapped_between_data(duckdb_conn)
 

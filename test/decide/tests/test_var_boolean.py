@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from solver.types import VarType, ObjSense, SolverStatus
+from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 
 
@@ -71,4 +71,3 @@ def test_q01_knapsack_binary(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
-

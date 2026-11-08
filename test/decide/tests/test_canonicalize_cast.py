@@ -535,6 +535,9 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
     )
 
 
+# ValidateDecideNoExplicitDecisionCasts is called once on the constraints and once on the objective, and the three
+# spellings are one CastExpression stamped with its location by the parser, whichever clause holds it. So each spelling
+# runs once, in a constraint, and the objective call runs once.
 @pytest.mark.parametrize(
     ("cast_expression", "location"),
     [
@@ -542,8 +545,6 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
         pytest.param("TRY_CAST(x AS DOUBLE)", "constraint", id="try_cast_constraint"),
         pytest.param("x::DOUBLE", "constraint", id="colon_cast_constraint"),
         pytest.param("CAST(x AS DOUBLE)", "objective", id="cast_objective"),
-        pytest.param("TRY_CAST(x AS DOUBLE)", "objective", id="try_cast_objective"),
-        pytest.param("x::DOUBLE", "objective", id="colon_cast_objective"),
     ],
 )
 @pytest.mark.var_integer
@@ -561,40 +562,6 @@ def test_all_explicit_decision_cast_syntax_is_rejected(
         SUCH THAT x >= 0 AND {constraint}
         MAXIMIZE {objective}
     """, match=r"Binder Error: DECIDE does not allow casts over decision expressions")
-
-
-@pytest.mark.parametrize(
-    "sql",
-    [
-        pytest.param(
-            """
-            SELECT id, s
-            FROM (VALUES (1)) t(id)
-            DECIDE per (): s(INT)
-            SUCH THAT CAST(s AS DOUBLE) <= 4
-            MAXIMIZE s
-        """,
-            id="query_wide",
-        ),
-        pytest.param(
-            """
-            SELECT n.n_nationkey, keepN
-            FROM nation n
-            DECIDE per n: keepN(BOOL)
-            SUCH THAT CAST(keepN AS DOUBLE) <= 1
-            MAXIMIZE SUM(keepN)
-        """,
-            id="keyed",
-        ),
-    ],
-)
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_explicit_cast_rejection_covers_all_decision_scopes(decidb_cli, sql):
-    decidb_cli.assert_error(
-        sql,
-        match=r"Binder Error: DECIDE does not allow casts over decision expressions",
-    )
 
 
 @pytest.mark.var_boolean

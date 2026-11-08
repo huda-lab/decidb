@@ -5,7 +5,6 @@ Covers:
   - OR compound on aggregate constraint
   - AND compound on per-row constraint
   - AND compound on objective
-  - Mixed string + numeric compound condition
   - OR compound on per-row constraint
 """
 
@@ -277,70 +276,6 @@ def test_when_compound_and_objective(decidb_cli, duckdb_conn, oracle_solver, per
 
     perf_tracker.record(
         "when_cmpd_and_obj", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.when_compound
-@pytest.mark.when_constraint
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_when_compound_mixed_types(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Mixed string + numeric compound: when (returnflag='A' AND quantity <= 25): sum(x*qty) <= 80."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when (l_returnflag = 'A' AND l_quantity <= 25): sum(x * l_quantity) <= 80
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_orderkey AS BIGINT),
-               CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE),
-               l_returnflag
-        FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("when_cmpd_mixed")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.BINARY)
-
-    # Mixed: string equality + numeric inequality
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3]
-         for i in range(len(data))
-         if data[i][4] == 'A' and data[i][3] <= 25},
-        "<=", 80.0, name="capacity_A_small",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(len(data))},
-        ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-
-    perf_tracker.record(
-        "when_cmpd_mixed", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

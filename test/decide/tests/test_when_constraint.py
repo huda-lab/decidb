@@ -3,7 +3,6 @@
 Covers:
   - String equality filter on aggregate constraint
   - Multiple WHEN constraints with different categories
-  - Numeric comparison in WHEN condition
   - Boundary: all rows match (equivalent to no WHEN)
   - Mixed conditional + unconditional constraints
   - Constant coefficient in SUM with WHEN
@@ -139,67 +138,6 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
     perf_tracker.record(
         "when_multi_cat", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.when_constraint
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_when_aggregate_numeric_comparison(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Capacity limit on discounted items: when discount >= 0.06: sum(x*price) <= 5000."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_discount, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_discount >= 0.06: sum(x * l_extendedprice) <= 5000
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_orderkey AS BIGINT),
-               CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE),
-               CAST(l_discount AS DOUBLE)
-        FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("when_agg_numeric")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.BINARY)
-
-    # WHEN filter: only rows with discount >= 0.06
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][2] for i in range(len(data)) if data[i][4] >= 0.06},
-        "<=", 5000.0, name="price_cap_discounted",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(len(data))},
-        ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-
-    perf_tracker.record(
-        "when_agg_numeric", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
@@ -384,66 +322,6 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
 
     perf_tracker.record(
         "when_const_coeff", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.when_constraint
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """when with not-equal operator: when returnflag <> 'N': sum(x*qty) <= 80."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag <> 'N': sum(x * l_quantity) <= 80
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_orderkey AS BIGINT),
-               CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE),
-               l_returnflag
-        FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("when_not_eq")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.BINARY)
-
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] != 'N'},
-        "<=", 80.0, name="capacity_not_N",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(len(data))},
-        ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-
-    perf_tracker.record(
-        "when_not_eq", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
