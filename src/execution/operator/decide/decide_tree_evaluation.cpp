@@ -817,14 +817,13 @@ void DecideTreeEvaluation::Frame(idx_t node_index) {
 			auto &at = timeline.positions[position];
 			const auto first = at.entries[0];
 			if (at.conflict) {
-				string location = frame.order_name + " = " + DecideSqlLiteral(at.order);
-				auto &key = container.groups[timeline.slot].key;
-				for (idx_t i = 0; i < MinValue(key.size(), frame.timeline_names.size()); i++) {
-					location = frame.timeline_names[i] + " = " + DecideSqlLiteral(key[i]) + ", " + location;
-				}
+				auto names = frame.timeline_names;
+				names.push_back(frame.order_name);
+				auto values = descent.Label(node.key, container.groups[timeline.slot].key);
+				values.push_back(at.order);
 				return ErrorValue(type, ErrorData(InvalidInputException(
 				                            "DECIDE: %s finds %llu rows at %s; a position must hold one row.",
-				                            frame.text, at.entries.size(), location)));
+				                            frame.text, at.entries.size(), DescribeKeyValues(names, values))));
 			}
 			if (!payloads[first]) {
 				payloads[first] = ExpressionValue(*node.body, node_index, container.entries[first]);
@@ -995,10 +994,13 @@ void DecideTreeEvaluation::Frame(idx_t node_index) {
 					if (frame.timeline_names.size() > 1) {
 						timeline_names = "(" + timeline_names + ")";
 					}
+					auto spanning = descent.Label(frame.partition_key, first.partition);
 					auto spans =
-					    names.empty() ? string("Its rows span") : DescribeKeyValues(names, first.partition) + " spans";
-					auto timelines =
-					    describe(container.groups[first.slot].key) + ", " + describe(container.groups[entry.slot].key);
+					    names.empty() ? string("Its rows span") : DescribeKeyValues(names, spanning) + " spans";
+					auto timeline = [&](const DecideDescentEntry &at) {
+						return describe(descent.Label(node.key, container.groups[at.slot].key));
+					};
+					auto timelines = timeline(first) + ", " + timeline(entry);
 					current.error = ErrorValue(
 					    type, ErrorData(InvalidInputException("DECIDE: %s. %s %s = %s.", frame.partition_subject, spans,
 					                                          timeline_names, timelines)));

@@ -51,11 +51,30 @@ static bool DescentKeyLess(const vector<Value> &left, const vector<Value> &right
 	return left.size() < right.size();
 }
 
+//! The bytes a least spelling is taken by, ORDER BY's for `values` ascending with NULL last, as flat takes it
+//! (LeastSpellingRows): equal bytes are one spelling, so the least does not depend on the order rows are read in.
+static vector<string> SpellingKeys(const vector<Value> &values, const LogicalType &type) {
+	Vector spelled(type, MaxValue<idx_t>(values.size(), 1));
+	for (idx_t i = 0; i < values.size(); i++) {
+		spelled.SetValue(i, values[i]);
+	}
+	Vector encoded(LogicalType::BLOB, MaxValue<idx_t>(values.size(), 1));
+	CreateSortKeyHelpers::CreateSortKey(spelled, values.size(),
+	                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST), encoded);
+	vector<string> result;
+	result.reserve(values.size());
+	auto keys = FlatVector::GetData<string_t>(encoded);
+	for (idx_t i = 0; i < values.size(); i++) {
+		result.push_back(keys[i].GetString());
+	}
+	return result;
+}
+
 DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
     : tree(tree_p), context(context_p), containers(tree.nodes.size()), indexes(tree.nodes.size()),
       decision_groups(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
       decision_recorded(tree.keyed_scopes.size()), decision_indexes(tree.keyed_scopes.size()),
-      failed_rows(tree.nodes.size()) {
+      spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
 }
 
 void DecideDescent::SetDecisionResolver(std::function<idx_t(idx_t, idx_t)> resolver) {
@@ -184,8 +203,22 @@ vector<vector<Value>> DecideDescent::Key(idx_t key, DataChunk &chunk, const vect
                                         vector<bool> &present) {
 	vector<vector<Value>> result(rows.size());
 	present.assign(rows.size(), true);
-	for (auto &element : DecideKeyElements(tree.keys, key)) {
+	auto &elements = DecideKeyElements(tree.keys, key);
+	// A collated column groups under its collation and is named by its spelling, read as GROUP BY reads both (D69).
+	// The spelling is the same read of the column, at its rank: a row it fails on failed the grouping first.
+	vector<vector<Value>> spelled(elements.size());
+	vector<vector<string>> sort_keys(elements.size());
+	bool collated = false;
+	for (idx_t c = 0; c < elements.size(); c++) {
+		auto &element = elements[c];
+		const auto rank = current_rank.expression;
 		auto values = Evaluate(element.Grouping(), chunk, rows);
+		if (element.collated) {
+			current_rank.expression = rank;
+			spelled[c] = Evaluate(*element.expression, chunk, rows);
+			sort_keys[c] = SpellingKeys(spelled[c], element.expression->return_type);
+			collated = true;
+		}
 		for (idx_t i = 0; i < rows.size(); i++) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP && values[i].IsNull()) {
 				present[i] = false;
@@ -193,7 +226,47 @@ vector<vector<Value>> DecideDescent::Key(idx_t key, DataChunk &chunk, const vect
 			result[i].push_back(std::move(values[i]));
 		}
 	}
+	if (collated) {
+		Spell(key, result, spelled, sort_keys);
+	}
 	return result;
+}
+
+//! Folds the spellings `spelled` of `groups`, groups of `key`, into each group's least, as `min` folds a group's
+//! values: so a group is spelled one way in every message, whichever node reads it and in whatever order (D69).
+void DecideDescent::Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
+                          const vector<vector<string>> &sort_keys) {
+	auto &table = spellings[key];
+	for (idx_t i = 0; i < groups.size(); i++) {
+		auto &bucket = table[DescentHash(0, groups[i])];
+		auto known = std::find_if(bucket.begin(), bucket.end(),
+		                          [&](const KeySpelling &spelling) { return DescentEqual(spelling.group, groups[i]); });
+		if (known == bucket.end()) {
+			bucket.push_back({groups[i], groups[i], vector<string>(groups[i].size())});
+			known = bucket.end() - 1;
+		}
+		for (idx_t c = 0; c < sort_keys.size(); c++) {
+			if (!sort_keys[c].empty() && (known->least[c].empty() || sort_keys[c][i] < known->least[c])) {
+				known->least[c] = sort_keys[c][i];
+				known->label[c] = spelled[c][i];
+			}
+		}
+	}
+}
+
+vector<Value> DecideDescent::Label(idx_t key, const vector<Value> &group) const {
+	if (key >= spellings.size() || spellings[key].empty()) {
+		return group;
+	}
+	auto bucket = spellings[key].find(DescentHash(0, group));
+	if (bucket != spellings[key].end()) {
+		for (auto &spelling : bucket->second) {
+			if (DescentEqual(spelling.group, group)) {
+				return spelling.label;
+			}
+		}
+	}
+	throw InternalException("DECIDE tree: a group of a collated key was never read");
 }
 
 vector<vector<Value>> DecideDescent::Signature(const DecideNode &node, DataChunk &chunk,
@@ -608,6 +681,12 @@ void DecideDescent::Finish() {
 		if (node.kind != DecideNodeKind::FRAME) {
 			continue;
 		}
+		// A position is named by its least spelling, as a group is (D69; flat's DecidePositionRows).
+		vector<Value> spelled;
+		for (auto &entry : container.entries) {
+			spelled.push_back(entry.order);
+		}
+		const auto sort_keys = SpellingKeys(spelled, node.over->return_type);
 		for (auto slot : order) {
 			auto entries = container.groups[slot].entries;
 			std::stable_sort(entries.begin(), entries.end(), [&](idx_t left, idx_t right) {
@@ -620,6 +699,7 @@ void DecideDescent::Finish() {
 			});
 			DecideDescentTimeline timeline;
 			timeline.slot = slot;
+			idx_t least = DConstants::INVALID_INDEX;
 			for (auto index : entries) {
 				auto &entry = container.entries[index];
 				if (timeline.positions.empty() ||
@@ -629,10 +709,15 @@ void DecideDescent::Finish() {
 					position.order = entry.order;
 					position.entries.push_back(index);
 					timeline.positions.push_back(std::move(position));
+					least = index;
 				} else {
 					auto &position = timeline.positions.back();
 					position.conflict |= !DescentEqual(container.entries[position.entries[0]].signature, entry.signature);
 					position.entries.push_back(index);
+					if (sort_keys[index] < sort_keys[least]) {
+						position.order = entry.order;
+						least = index;
+					}
 				}
 			}
 			container.timelines.push_back(std::move(timeline));

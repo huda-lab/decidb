@@ -40,6 +40,7 @@ struct DecideDescentEntry {
 struct DecideDescentGroup {
 	//! The G or O slot an E's class lies in; INVALID for a G's or O's group, whose key is its whole path key.
 	idx_t parent_slot;
+	//! The values its rows group on, a collated column under its collation; a message quotes its Label.
 	vector<Value> key;
 	idx_t first_row;
 	//! Value-order rank, assigned by Finish; storage addresses remain stable.
@@ -48,6 +49,8 @@ struct DecideDescentGroup {
 };
 
 struct DecideDescentPosition {
+	//! Its least spelling of the order key over its rows, which a collation lets them differ in: the name a message
+	//! gives it (D69). Set by Finish.
 	Value order;
 	vector<idx_t> entries;
 	//! A duplicate position has different payload signatures. This is raised
@@ -91,6 +94,10 @@ public:
 	const vector<vector<idx_t>> &DecisionRows() const {
 		return decision_rows;
 	}
+	//! The label a message quotes for group `group` of key `key` (D69; flat's GroupKeyReader): a collated column at its
+	//! least spelling over every row the query read the key on, as GROUP BY shows a collated group, and any other
+	//! column as it groups. Complete once every row is appended.
+	vector<Value> Label(idx_t key, const vector<Value> &group) const;
 	string Dump() const;
 	const DecideErrorLedger &Errors() const {
 		return errors;
@@ -108,6 +115,14 @@ private:
 		//! value is inserted once, independently of which reader visits first.
 		unordered_map<hash_t, vector<pair<idx_t, idx_t>>> seen;
 	};
+	//! A group of a collated key and its least spelling so far: a hash aggregate over every read of the key (Key),
+	//! whose label Label returns.
+	struct KeySpelling {
+		vector<Value> group;
+		vector<Value> label;
+		//! Per column, the sort key of its spelling in `label`; empty for a column that is not collated.
+		vector<string> least;
+	};
 	const DecideTree &tree;
 	ClientContext &context;
 	vector<DecideNodeContainer> containers;
@@ -116,6 +131,8 @@ private:
 	vector<vector<idx_t>> decision_rows;
 	vector<vector<bool>> decision_recorded;
 	vector<unordered_map<hash_t, vector<idx_t>>> decision_indexes;
+	//! Per key, its groups' spellings; empty for a key with no collated column.
+	vector<unordered_map<hash_t, vector<KeySpelling>>> spellings;
 	std::function<idx_t(idx_t, idx_t)> decision_resolver;
 	bool finished = false;
 	DecideErrorLedger errors;
@@ -132,6 +149,8 @@ private:
 	vector<uint8_t> Truth(const Expression &expression, DataChunk &chunk, const vector<RoutingRow> &rows);
 	vector<vector<Value>> Key(idx_t key, DataChunk &chunk, const vector<RoutingRow> &rows,
 	                          vector<bool> &present);
+	void Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
+	           const vector<vector<string>> &sort_keys);
 	vector<vector<Value>> Signature(const DecideNode &node, DataChunk &chunk,
 	                                const vector<RoutingRow> &rows, idx_t row_base);
 	idx_t FindGroup(idx_t node, idx_t parent, vector<Value> key, idx_t row);

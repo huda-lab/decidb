@@ -16,6 +16,8 @@ from solver.types import ObjSense, VarType
 COLUMNS = ("id", "g", "cap", "p")
 ROWS = ((1, "a", 1, 5.0), (2, "A", 2, 4.0), (3, "b", 2, 3.0), (4, "B", 3, 2.0), (5, "b", 2, 1.0))
 X = Decision("x", var_type=VarType.BINARY)
+#: The default suite runs flat, so a test of the tree evaluator selects it.
+TREE = {"DECIDB_EVALUATOR": "tree"}
 MAXIMIZE_PX = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["p"]}),))
 
 
@@ -196,17 +198,28 @@ NARROW = "when t.id >= 4 per t.g: sum(x) by (t.g) >= 3"
 WIDE = "per t.g: sum(x) by (t.g) <= 1"
 
 
+def _assert_every_finding_names_b(cli, clauses):
+    sql = f"""
+        SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(SPELLING_ROWS, 'v', ('id', 'g'))}) t
+        DECIDE x(BOOL) SUCH THAT {clauses[0]} AND {clauses[1]} MAXIMIZE SUM(x)"""
+    rows = _diagnose_relation.rows(_diagnose_relation.run(cli, sql, scope="expanded"))
+    groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
+    assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows
+
+
 @pytest.mark.diagnose
 @pytest.mark.parametrize("clauses", [(NARROW, WIDE), (WIDE, NARROW)], ids=["narrow-first", "wide-first"])
 def test_every_finding_spells_a_group_by_its_least_spelling_over_the_rows_read(decidb_cli, clauses):
     """The `when` clause alone reads only 'b'; the other clause reads 'B' too. Each finding on the group names it 'B',
     the least spelling over every row the query read the key on, whichever clause reads it first (ResolveGroupNames)."""
-    sql = f"""
-        SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(SPELLING_ROWS, 'v', ('id', 'g'))}) t
-        DECIDE x(BOOL) SUCH THAT {clauses[0]} AND {clauses[1]} MAXIMIZE SUM(x)"""
-    rows = _diagnose_relation.rows(_diagnose_relation.run(decidb_cli, sql, scope="expanded"))
-    groups = sorted((row["clause"], row["group"]) for row in rows if row["edit_source"] == "expanded_group")
-    assert groups == sorted([(NARROW, "B"), (WIDE, "B")]), rows
+    _assert_every_finding_names_b(decidb_cli, clauses)
+
+
+@pytest.mark.diagnose
+def test_the_tree_folds_every_read_of_a_key_into_its_least_spelling(decidb_cli):
+    """The tree's descent folds each read of a collated key into its group's least spelling (DecideDescent::Spell):
+    it reads the `when` clause's rows first, which spell the group 'b' alone, and the other clause's 'B' replaces it."""
+    _assert_every_finding_names_b(decidb_cli.with_env(TREE), (NARROW, WIDE))
 
 
 @pytest.mark.diagnose
@@ -370,6 +383,14 @@ class TestACollatedOrderKey:
         result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
         assert "finds 2 rows at t.k = 'A'" in result.stderr, result.stderr
 
+    def test_the_tree_names_a_position_by_its_least_spelling(self, decidb_cli):
+        """The tree's descent names a position at Finish by the least spelling over its rows, 'A' after the first row's
+        'a' (DecideDescent::Finish)."""
+        result = decidb_cli.with_env(TREE).execute_raw(
+            _ordered("at(previous else 0: t.v) {over}", TWO_VALUES_ROW_ORDERS[0])
+        )
+        assert "finds 2 rows at t.k = 'A'" in result.stderr, result.stderr
+
     @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])
     def test_a_variant_is_named_by_its_positions_least_spelling(self, decidb_cli, rows):
         """Each position is its own variant of the class, and DIAGNOSE names it `g, A` in either row order."""
@@ -403,3 +424,33 @@ class TestACollatedOrderKey:
         result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", rows))
         assert "a position must hold one row" in result.stderr, result.stderr
         assert_no_internal_leak(result, "two rows at one collated position")
+
+
+# A frame's timeline key is a key: a message names its timeline as the key is spelled (D69). Each group below has one
+# spelling, which flat prints too.
+def test_the_tree_names_a_position_within_its_timeline_as_the_key_is_spelled(decidb_cli):
+    """A position is named within its timeline by the timeline key's columns in written order, a collated one by its
+    spelling, 'B', not its collation's 'b' (DecideDescent::Label)."""
+    rows = ((1, "B", 1, 1, 10.0), (2, "B", 1, 1, 20.0), (3, "B", 1, 2, 30.0))
+    source = f"(SELECT id, g COLLATE NOCASE AS g, h, k, v FROM {values(rows, 'r', ('id', 'g', 'h', 'k', 'v'))}) t"
+    sql = f"""SELECT id, x FROM {source} DECIDE x(REAL)
+        SUCH THAT x <= 50 AND x <= at(previous else 0: t.v) over (t.k within t.g, t.h) MAXIMIZE sum(x)"""
+    result = decidb_cli.with_env(TREE).execute_raw(sql)
+    assert "finds 2 rows at t.g = 'B', t.h = 1, t.k = 1;" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize(
+    "category, product",
+    [("category COLLATE NOCASE", "p"), ("category", "p COLLATE NOCASE")],
+    ids=["collated-class", "collated-timeline"],
+)
+def test_the_tree_names_a_class_spanning_timelines_as_its_keys_are_spelled(decidb_cli, category, product):
+    """D75: the class `Food` spans the timelines of products 'A' and 'B'. Each key is named as it is spelled, a collated
+    one by its spelling and a plain one by its value (DecideDescent::Label), whichever of the two is collated."""
+    rows = ((1, "Food", "A", 1, 4), (2, "Food", "B", 1, 6), (3, "Food", "A", 2, 9))
+    columns = ("id", "category", "p", "period", "v")
+    source = f"(SELECT id, {category} AS category, {product} AS product, period, v FROM {values(rows, 'r', columns)}) t"
+    sql = f"""SELECT id, x FROM {source} DECIDE x(INT)
+        SUCH THAT x <= 10 AND per t.category: x >= at(first: t.v) over (t.period within t.product) MINIMIZE sum(x)"""
+    result = decidb_cli.with_env(TREE).execute_raw(sql)
+    assert "t.category = 'Food' spans t.product = 'A', 'B'." in result.stderr, result.stderr

@@ -1,5 +1,6 @@
 #include "duckdb/planner/decide/decide_tree.hpp"
 
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
@@ -258,12 +259,7 @@ public:
 			node.facts->removal_group_id = composed.removal_group_id;
 			node.source_clause_id = composed.source_clause_id;
 			node.removal_group_id = composed.removal_group_id;
-			if (composed.source_clause_id < op.constraint_sources.size()) {
-				auto &source = op.constraint_sources[composed.source_clause_id];
-				node.text = source.written_lhs + " " + source.written_cmp + " " + source.written_rhs;
-			} else {
-				node.text = "composed comparison";
-			}
+			node.text = RootText(composed.source_clause_id);
 			Scope(index, composed.scope);
 			node.facts->scope.when = composed.scope.when ? composed.scope.when->Copy() : nullptr;
 			node.facts->scope.per = composed.scope.per;
@@ -360,6 +356,16 @@ private:
 	string Text(const Expression &expression) const {
 		return RenderDecideSource(expression, DecidePlanNames(op.source_fragments, op.keyed_scopes, op.keys,
 		                                                      op.decide_index, op.aux_var_expressions));
+	}
+
+	//! How a message names a root, as flat names a row (DecideWrittenClause): by the clause it comes from as the user
+	//! wrote it (QuoteWrittenClause), and a row no clause claims, which a rewrite added for the objective, by the
+	//! objective.
+	string RootText(idx_t source) const {
+		if (source < op.constraint_sources.size()) {
+			return QuoteWrittenClause(op.constraint_sources[source]);
+		}
+		return DecideWrittenObjective(op.decide_sense, op.written_objective);
 	}
 
 	unique_ptr<Expression> Resolve(const Expression &expression) const {
@@ -515,13 +521,13 @@ private:
 		auto &node = *tree->nodes[index];
 		node.root = true;
 		node.facts = ReadDecideClauseFacts(context, op, comparison, scope);
-		node.text = Text(comparison);
 		node.comparison_type = comparison.type;
 		node.folded = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_BOUND_TAG);
 		node.repair_rows = HasDecideTag(comparison.GetAlias(), SINGLETON_ROW_CLAUSE_ROWS_TAG);
 		node.minmax_easy = HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG);
 		node.tightest_bound = HasDecideTag(comparison.GetAlias(), FRAME_TIGHTEST_BOUND_TAG);
 		TryParseSourceClauseTag(comparison.GetAlias(), node.source_clause_id);
+		node.text = RootText(node.source_clause_id);
 		TryParseRemovalGroupTag(comparison.GetAlias(), node.removal_group_id);
 		TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, node.defined_var);
 		Gates(index, scope.Condition());

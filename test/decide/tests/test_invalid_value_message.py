@@ -252,6 +252,32 @@ def test_a_sum_past_a_double_names_its_clause(request, cli_fixture, mode, name, 
     assert _too_large(written) in _stderr(cli, _big_query(decide, big), mode)
 
 
+# The tree evaluator names a root as flat names its row (DecideWrittenClause): by its clause as written, a composed
+# clause's qualifier with it, and a row a rewrite added for the objective, which no clause claims, by the objective.
+TREE_WRITTEN = [case for case in TOO_LARGE if case[0] == "constraint_on_a_keyed_decision_by_group"] + [
+    (
+        "composed_extremum_under_a_when",
+        "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 AND when a > 0: SUM(b * y) + MAX(x) <= 10 "
+        "MAXIMIZE SUM(a * x)",
+        "when a > 0: SUM(b * y) + MAX(x) <= 10",
+        "1e308",
+    ),
+    (
+        "row_of_an_abs_in_the_objective",
+        "per (): y(REAL) SUCH THAT y <= 5 AND y >= -5 MAXIMIZE SUM(ABS(b * y + b * y))",
+        "MAXIMIZE sum(abs(b * y + b * y))",
+        "1e308",
+    ),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("name,decide,written,big", TREE_WRITTEN, ids=[case[0] for case in TREE_WRITTEN])
+def test_the_tree_names_a_root_as_flat_names_its_row(decidb_cli, name, decide, written, big):
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert _too_large(written) in _stderr(cli, _big_query(decide, big), "off")
+
+
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off", "auto"])
 def test_a_square_past_a_double_in_a_constraint_names_its_clause(decidb_cli_gurobi, mode):

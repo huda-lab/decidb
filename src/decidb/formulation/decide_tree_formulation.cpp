@@ -173,7 +173,7 @@ private:
 		auto &groups = descent.Containers()[node].groups;
 		vector<vector<Value>> values(groups.size());
 		for (auto &group : groups) {
-			values[group.rank] = group.key;
+			values[group.rank] = descent.Label(tree.nodes[node]->key, group.key);
 		}
 		SolverInput::KeyValues keys;
 		for (auto &element : DecideKeyElements(tree.keys, tree.nodes[node]->key)) {
