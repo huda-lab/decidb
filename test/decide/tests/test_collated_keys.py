@@ -286,6 +286,12 @@ class TestACollatedReducerOverData:
     def test_a_frame_reads_it_too(self, decidb_cli, bound, expected):
         assert _bounded(decidb_cli, "off", f"x <= {bound}") == expected
 
+    def test_the_tree_folds_a_range_with_its_bound_reducer(self, decidb_cli):
+        """The tree evaluator folds a range with the aggregate its marker is bound to, `arg_max` over the value and
+        its key: group `a` reads 'C', where a byte-order `max` reads 'aaa' and gives [3, 3, 2]."""
+        cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+        assert _bounded(cli, "off", f"x <= length(max(from first to last: t.n) {TIMELINE})") == [1, 1, 2]
+
     def test_a_range_over_collated_text_takes_no_number_else(self, decidb_cli):
         """A missing position's `else` would need a key under the collation, and a number has none."""
         clause = f"x <= length(max(from previous to next else 0: t.n) {TIMELINE})"

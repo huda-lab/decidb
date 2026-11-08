@@ -562,9 +562,9 @@ DecideTreeValuePtr DecideTreeEvaluation::Reduce(idx_t node_index, const BoundAgg
 	if (!function) {
 		return UnsupportedValue(type, "a data reducer has no bound aggregate function");
 	}
-	if (aggregate != StringUtil::Lower(function->function.name)) {
-		return UnsupportedValue(type, "a data aggregate carrier has a different bound state function");
-	}
+	// The bound state is the fold; `aggregate` only names it. A collated MIN or MAX is bound as arg_min or arg_max over
+	// its value and comparison key (BindMinMax). A rewrite renames a carrier only for a reducer over decisions, which
+	// is symbolic above and never reaches this fold.
 	try {
 		if (aggregate != "count" && !arguments.empty()) {
 			for (auto member : kept) {
