@@ -265,3 +265,232 @@ def test_reducers_over_squared_bodies_share_a_helper_only_when_they_are_the_same
         lambda a: value([a[f"y{i}"] for i in range(3)]),
         objective.startswith("MAXIMIZE"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Second pass: the probes that reach the arms the first pass left open
+# ---------------------------------------------------------------------------
+
+_DOMAIN_ROWS = "(VALUES (1, 1), (2, 5), (3, 0)) t(id, d)"
+_DOMAIN_DATA = (1, 5, 0)
+_GROUPED = "(VALUES (1, 0, 2), (2, 1, 3), (3, 0, 1)) t(id, g, c)"
+_GROUP_OF = (0, 1, 0)
+_FACTOR_OF = (2, 3, 1)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "domain, allowed",
+    [
+        # RewriteInDomain, a Boolean `IN` of two values that are not 0 and 1 in one order (`b == 1.0`, `a == 1.0`).
+        pytest.param("b IN (0, 2)", lambda d: {0, 2}, id="zero-and-two"),
+        pytest.param("b IN (1, 2)", lambda d: {1, 2}, id="one-and-two"),
+        # A value read from data is not a constant at plan time (`TryEvaluateFoldableDouble` fails on either end).
+        pytest.param("b IN (0, d)", lambda d: {0, d}, id="data-second"),
+        pytest.param("b IN (d, 1)", lambda d: {d, 1}, id="data-first"),
+    ],
+)
+def test_a_boolean_in_that_is_not_its_own_two_values_restricts_the_boolean(
+    decidb_cli_gurobi, decidb_cli_highs, domain, allowed
+):
+    sql = f"""
+        SELECT id, b FROM {_DOMAIN_ROWS}
+        DECIDE b(BOOL)
+        SUCH THAT {domain}
+        MAXIMIZE SUM(b)
+        ORDER BY id"""
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        _judge(
+            cli,
+            sql,
+            _per_row("b", 1),
+            lambda a: all(a[f"b{i}"] in allowed(_DOMAIN_DATA[i]) for i in range(3)),
+            lambda a: sum(a[f"b{i}"] for i in range(3)),
+        )
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause, holds",
+    [
+        # A reducer with a foldable `when` of its own folds into the column box (`filtered.folds`).
+        pytest.param("MAX(when 1 = 1: x) <= 3", lambda xs: max(xs) <= 3, id="easy-max-with-a-constant-filter"),
+        pytest.param("MIN(when 1 = 1: x) >= 3", lambda xs: min(xs) >= 3, id="easy-min-with-a-constant-filter"),
+    ],
+)
+def test_an_easy_extremum_with_a_constant_filter_bounds_every_member(
+    decidb_cli_gurobi, decidb_cli_highs, clause, holds
+):
+    sql = f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND {clause}
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        _judge(
+            cli,
+            sql,
+            _per_row("x", 5),
+            lambda a: holds([a[f"x{i}"] for i in range(3)]),
+            lambda a: sum(a[f"x{i}"] for i in range(3)),
+        )
+
+
+@pytest.mark.parametrize("backend", ["gurobi", "highs"])
+def test_a_bound_below_every_value_is_infeasible_not_a_box(request, backend):
+    """FoldKnownBound: `x <= -inf` admits no value, so it is no box and the clause stays a row the model refuses."""
+    cli = request.getfixturevalue(f"decidb_cli_{backend}")
+    sql = f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND x <= -'inf'::DOUBLE
+        MAXIMIZE SUM(x)"""
+    cli.assert_error(sql, match="DECIDE optimization is infeasible")
+
+
+@pytest.mark.correctness
+def test_an_objective_adds_a_positive_term_after_the_first_term_beside_its_max(decidb_cli_gurobi, decidb_cli_highs):
+    """RewriteComposedMinMaxObjectiveTop: two terms beside the MAX, the second positive."""
+    sql = f"""
+        SELECT id, y FROM {_ROWS}
+        DECIDE y(INT)
+        SUCH THAT y <= 3 AND SUM(y) <= 6
+        MAXIMIZE MAX(y) + SUM(y) + SUM(c * y)
+        ORDER BY id"""
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        _judge(
+            cli,
+            sql,
+            _per_row("y", 3),
+            lambda a: sum(a[f"y{i}"] for i in range(3)) <= 6,
+            lambda a: max(a[f"y{i}"] for i in range(3))
+            + sum(a[f"y{i}"] for i in range(3))
+            + sum(_DATA[i] * a[f"y{i}"] for i in range(3)),
+        )
+
+
+@pytest.mark.correctness
+def test_a_continuous_plan_with_a_min_helper_is_taken_by_both_backends(decidb_cli_gurobi, decidb_cli_highs):
+    """MayHaveIntegralColumn: a `min` value link in a plan whose decisions are all continuous."""
+    sql = f"""
+        SELECT id, y FROM {_ROWS}
+        DECIDE y(REAL)
+        SUCH THAT y <= 3 AND y <= 0.5 * MIN(y) + 1
+        MAXIMIZE SUM(y)
+        ORDER BY id"""
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        _judge(
+            cli,
+            sql,
+            _per_row("y", 3),
+            lambda a: all(a[f"y{i}"] <= 0.5 * min(a[f"y{j}"] for j in range(3)) + 1 for i in range(3)),
+            lambda a: sum(a[f"y{i}"] for i in range(3)),
+        )
+
+
+def test_highs_names_the_product_of_two_decisions_after_a_convex_square(decidb_cli_highs):
+    """FirstNonconvexGroup: the objective's first group (a minimized square) is convex, so the refusal names the
+    second."""
+    sql = f"""
+        SELECT id, y, z FROM {_ROWS}
+        DECIDE y(REAL), z(REAL)
+        SUCH THAT y <= 3 AND z <= 2
+        MINIMIZE SUM(POWER(y, 2)) + SUM(y * z)"""
+    decidb_cli_highs.assert_error(sql, match=r"the objective multiplies two decision variables.*Gurobi")
+
+
+#: Reducers over squared bodies, beside the three of `_SQUARE_BODY_CASES` (the `when` against none, in both orders;
+#: two `by` keys on one body).
+_MORE_BODY_CASES = [
+    pytest.param(
+        "when id < 3: MAX(POWER(y - 1, 2)) >= 3 AND MAX(POWER(y - 1, 2)) >= 3",
+        lambda ys: max((y - 1) ** 2 for y in ys[:2]) >= 3 and max((y - 1) ** 2 for y in ys) >= 3,
+        id="a-when-then-none",
+    ),
+    pytest.param(
+        "MAX(POWER(y - 1, 2)) >= 3 AND when id < 3: MAX(POWER(y - 1, 2)) >= 3",
+        lambda ys: max((y - 1) ** 2 for y in ys) >= 3 and max((y - 1) ** 2 for y in ys[:2]) >= 3,
+        id="none-then-a-when",
+    ),
+    pytest.param(
+        "MAX(POWER(y - 1, 2)) by (id % 2) >= 3 AND MAX(POWER(y - 1, 2)) by (id) >= 3",
+        lambda ys: all(
+            max((ys[j] - 1) ** 2 for j in range(3) if (j + 1) % 2 == (i + 1) % 2) >= 3 and (ys[i] - 1) ** 2 >= 3
+            for i in range(3)
+        ),
+        id="one-body-under-two-keys",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, holds", _MORE_BODY_CASES)
+def test_reducers_over_squared_bodies_under_other_scopes(decidb_cli_gurobi, clause, holds):
+    sql = f"""
+        SELECT id, y FROM {_ROWS}
+        DECIDE y(INT)
+        SUCH THAT y <= 3 AND {clause}
+        MAXIMIZE SUM(y)
+        ORDER BY id"""
+    _judge(
+        decidb_cli_gurobi,
+        sql,
+        _per_row("y", 3),
+        lambda a: holds([a[f"y{i}"] for i in range(3)]),
+        lambda a: sum(a[f"y{i}"] for i in range(3)),
+    )
+
+
+@pytest.mark.correctness
+def test_a_two_level_max_over_a_squared_body_is_stated_natively(decidb_cli_gurobi):
+    """RewriteMinMaxObjectiveTree: the outer MAX is hard and its inner members are a defined body, which has no box."""
+    sql = f"""
+        SELECT id, y FROM {_GROUPED}
+        DECIDE y(INT)
+        SUCH THAT y <= 4
+        MAXIMIZE MAX(per g: MAX(POWER(y - 1, 2)) by (g))
+        ORDER BY id"""
+    _judge(
+        decidb_cli_gurobi,
+        sql,
+        _per_row("y", 4),
+        lambda a: True,
+        lambda a: max((a[f"y{i}"] - 1) ** 2 for i in range(3)),
+    )
+
+
+@pytest.mark.correctness
+def test_an_abs_over_two_reducers_reads_each_helper_once_per_copy(decidb_cli_gurobi, decidb_cli_highs):
+    """ReplaceReducer: the envelope pair of an ABS holds a copy of each reducer, and the second copy of each finds its
+    helper and says so once (the `told` scan, past an account of another reducer)."""
+    sql = f"""
+        SELECT id, y FROM {_GROUPED}
+        DECIDE y(INT)
+        SUCH THAT y <= 3 AND ABS(MAX(y) by (g) + MAX(c * y) by (g) - 7) >= 3
+        MAXIMIZE SUM(y)
+        ORDER BY id"""
+
+    def holds(a):
+        for i in range(3):
+            same = [j for j in range(3) if _GROUP_OF[j] == _GROUP_OF[i]]
+            total = max(a[f"y{j}"] for j in same) + max(_FACTOR_OF[j] * a[f"y{j}"] for j in same)
+            if abs(total - 7) < 3:
+                return False
+        return True
+
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        _judge(cli, sql, _per_row("y", 3), holds, lambda a: sum(a[f"y{i}"] for i in range(3)))
+
+
+@pytest.mark.parametrize("backend", ["gurobi", "highs"])
+@pytest.mark.parametrize("divided", ["y / c", "ABS(y) / c"])
+def test_dividing_by_a_data_zero_is_refused_naming_the_coefficient(request, backend, divided):
+    """A zero in the divisor column makes the coefficient infinite, which DuckDB divides to (`1.0 / 0 = inf`)."""
+    cli = request.getfixturevalue(f"decidb_cli_{backend}")
+    sql = f"""
+        SELECT id, y FROM (VALUES (1, 2), (2, 0), (3, 1)) t(id, c)
+        DECIDE y(INT)
+        SUCH THAT y <= 6 AND SUM({divided}) <= 30
+        MAXIMIZE SUM(y)"""
+    cli.assert_error(sql, match=re.escape("DECIDE: 1 / c is NaN or infinite on some rows"))
