@@ -1597,7 +1597,7 @@ def _total(a):
     return a["x0"] + a["x1"] + a["x2"]
 
 
-def _signed_objective(objective, when=""):
+def _signed_objective(objective):
     return f"""SELECT id, x FROM {_SIGNED_ROWS}
         DECIDE x(INT) SUCH THAT x <= cap {objective} ORDER BY id"""
 
@@ -1650,12 +1650,15 @@ def test_abs_objective_sign_under_sense(request, cli_fixture, objective, value, 
     judge_rows(answer(cli, _signed_objective(objective)), _SIGNED_DOMAINS, lambda a: True, value, maximize)
 
 
+# A data weight is a column, so its sign is unknown at plan time whatever it holds (PlanTimeSignOf, WalkPolarity in
+# decide_optimizer.cpp) and every case gets the one exact envelope; the cases differ in the data only: one negative
+# weight (the query once called unbounded) and a zero weight beside a negative one.
 @_NESTED_SOLVERS
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "weights",
-    [(1, 1, 1), (-1, 1, 1), (-1, -1, -1), (0, 1, -1)],
-    ids=["positive", "one-negative", "negative", "mixed-with-zero"],
+    [(-1, 1, 1), (0, 1, -1)],
+    ids=["one-negative", "mixed-with-zero"],
 )
 @pytest.mark.parametrize("sense, maximize", [("MINIMIZE", False), ("MAXIMIZE", True)])
 def test_abs_objective_data_weight_of_any_sign(request, cli_fixture, weights, sense, maximize):
@@ -1766,22 +1769,30 @@ def test_abs_under_a_hard_min_constraint(request, cli_fixture, extra_env):
     judge_rows(answer(cli, sql), _SIGNED_DOMAINS, lambda a: min(abs(a[n] - 1) for n in a) <= 1, _total, True)
 
 
+# Each case is a place the zero factor sits: outside the reducer, inside it, over a nested ABS, over a reducer, and four
+# spellings of a data column that multiplies to zero. WalkPolarity returns at a zero factor before it reads the sense
+# (decide_optimizer.cpp), so the senses alternate down the list rather than crossing it.
+_ZERO_FACTOR_CASES = [
+    (sense, maximize, dead)
+    for (sense, maximize), dead in zip(
+        [("MAXIMIZE -sum(x)", True), ("MINIMIZE sum(x)", False)] * 4,
+        [
+            "0 * sum(abs(x - 1))",
+            "sum(0 * abs(x - 1))",
+            "sum(0 * -abs(abs(x) - 2))",
+            "0 * abs(sum(x) - 4)",
+            "sum(0 * w * -abs(x - 2))",
+            "sum(w * 0 * abs(x - 2))",
+            "sum(-(0 * w) * abs(x - 2))",
+            "sum((0 * w) / 3 * abs(x - 2))",
+        ],
+    )
+]
+
+
 @_HARD_SOLVERS
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "dead",
-    [
-        "0 * sum(abs(x - 1))",
-        "sum(0 * abs(x - 1))",
-        "sum(0 * -abs(abs(x) - 2))",
-        "0 * abs(sum(x) - 4)",
-        "sum(0 * w * -abs(x - 2))",
-        "sum(w * 0 * abs(x - 2))",
-        "sum(-(0 * w) * abs(x - 2))",
-        "sum((0 * w) / 3 * abs(x - 2))",
-    ],
-)
-@pytest.mark.parametrize("sense, maximize", [("MAXIMIZE -sum(x)", True), ("MINIMIZE sum(x)", False)])
+@pytest.mark.parametrize("sense, maximize, dead", _ZERO_FACTOR_CASES)
 def test_abs_under_a_zero_factor_needs_no_bound(request, cli_fixture, extra_env, dead, sense, maximize):
     """An ABS under a factor of exactly zero -- outside or inside the reducer, nested in
     another ABS, over a reducer, or under a product with a data column that is zero

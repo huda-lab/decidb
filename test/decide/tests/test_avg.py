@@ -12,11 +12,9 @@ AVG objective is compared against an ordinary linear objective.
 """
 
 import time
-from collections import defaultdict
 
 import pytest
 
-from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 from ._oracle_helpers import add_bool_and, add_ne_indicator, group_indices

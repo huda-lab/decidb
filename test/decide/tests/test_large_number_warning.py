@@ -21,8 +21,7 @@ backends through the forced-backend fixtures, which also keep a query on the sol
 
 Covers (one test per branch of the check):
   - test_a_number_in_a_linear_position_warns_from_its_threshold: a constraint and an objective coefficient (999999,
-    1000000, 2000000); a right-hand side (both signs), lower bound and upper bound (4503599627, 4503599627.370496,
-    5000000000)
+    1000000); a right-hand side (both signs), lower bound and upper bound (4503599627, 4503599627.370496)
   - test_a_small_objective_coefficient_warns_from_its_threshold: 1e-6 of either sign warns; just over it and 0 do not
   - test_a_small_quadratic_objective_coefficient_warns: the Q matrix of the objective
   - test_a_small_constraint_coefficient_is_silent: the scan for a small number reads the objective only
@@ -46,7 +45,6 @@ import itertools
 
 import pytest
 
-from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -111,12 +109,15 @@ _TOTAL_POSITIONS = {
     ),
 }
 
-# The numbers written into a position: just under the threshold, at it, and well over. A coefficient warns from
+# The numbers written into a position: just under the threshold and at it. A coefficient warns from
 # DECIDE_LARGE_COEFFICIENT (1 / the integrality tolerance); a right-hand side or a bound from DECIDE_LARGE_TOTAL (the
 # feasibility tolerance / the machine epsilon, 4503599627.370496). The numbers here are written out, not read from the
-# C++ constants, so a change to either constant fails a test.
-_COEFFICIENTS = ["999999", "1000000", "2000000"]
-_TOTALS = ["4503599627", "4503599627.370496", "5000000000"]
+# C++ constants, so a change to either constant fails a test. A number over the threshold would reach the same line as
+# the one at it (`fabs(value) >= threshold`, IsLargeCoefficient and IsLargeTotal in ilp_solver.cpp). Each position is
+# a different place the check reads: a constraint coefficient, an objective coefficient, a right-hand side of either
+# sign, a lower bound and an upper bound.
+_COEFFICIENTS = ["999999", "1000000"]
+_TOTALS = ["4503599627", "4503599627.370496"]
 _CASES = [
     (position, n, float(n) >= LARGE_COEFFICIENT) for position in _COEFFICIENT_POSITIONS for n in _COEFFICIENTS
 ] + [(position, n, float(n) >= LARGE_TOTAL) for position in _TOTAL_POSITIONS for n in _TOTALS]
@@ -139,6 +140,8 @@ def test_a_number_in_a_linear_position_warns_from_its_threshold(
     assert arguments["objective"] * sum(xs) == pytest.approx(result.objective_value, rel=1e-6, abs=1e-6)
 
 
+# IsSmallObjectiveCoefficient: the threshold itself (`<=`) of either sign, the first number over it, and the zero it
+# excludes.
 _SMALL_OBJECTIVE_CASES = [("0.000001", True), ("-0.000001", True), ("0.0000011", False), ("0", False)]
 
 

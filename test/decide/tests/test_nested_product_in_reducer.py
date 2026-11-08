@@ -229,14 +229,17 @@ def test_nested_product_scaled_reducer(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-@pytest.mark.parametrize("decl", ["DECIMAL(2,1)", "DECIMAL(9,2)", "DECIMAL(18,2)", "DOUBLE"])
+# One case per physical storage of the operand: int32 (DECIMAL(9,2)), int64 (DECIMAL(18,2)) and double. The table's own
+# DECIMAL(2,1) (int16) is the query of `test_nested_product_oracle`: a cast to the type a column has is no cast.
+@pytest.mark.parametrize("decl", ["DECIMAL(9,2)", "DECIMAL(18,2)", "DOUBLE"])
 def test_nested_product_narrow_decimal_widths(decidb_cli, decl):
     """The same query across DECIMAL widths and DOUBLE.
 
     The bug was a physical-width mismatch, so it only appeared where the operand and
     the signature landed on different physical storage types. DECIMAL(2,1) reproduced
-    it; DECIMAL(18,2) and DOUBLE did not. Parametrizing pins the whole range, so a
-    future rebuild that is correct for one width cannot quietly break another.
+    it (the table's own columns, tested above); DECIMAL(18,2) and DOUBLE did not.
+    Parametrizing pins the whole range, so a future rebuild that is correct for one
+    width cannot quietly break another.
     """
     rows, cols = decidb_cli.execute(f"""
         SELECT id, q, x FROM (

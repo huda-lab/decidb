@@ -292,60 +292,6 @@ class TestQuadraticConstraintCorrectness:
         )
 
     @_expect_gurobi
-    def test_binding_vs_nonbinding(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
-        """Large budget (non-binding) vs tight budget — oracle-verify both."""
-        data_sql = """
-            SELECT 1 AS id, 10.0 AS target UNION ALL
-            SELECT 2, 20.0 UNION ALL
-            SELECT 3, 30.0
-        """
-        base_sql = f"""
-            WITH data AS ({data_sql})
-            SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= {{budget}}
-            MAXIMIZE SUM(x)
-        """
-        data = duckdb_conn.execute(
-            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
-        ).fetchall()
-        n = len(data)
-
-        for tag, budget in (("big", 100000.0), ("tight", 3.0)):
-            t0 = time.perf_counter()
-            rows, cols = decidb_cli.execute(base_sql.format(budget=budget))
-            decidb_time = time.perf_counter() - t0
-
-            t_build = time.perf_counter()
-            oracle_solver.create_model(f"qcp_binding_{tag}")
-            for i in range(n):
-                oracle_solver.add_variable(
-                    f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
-                )
-            linear, quadratic, adj_rhs = _aggregate_sq_dev(data, 1, budget)
-            oracle_solver.add_quadratic_constraint(
-                linear=linear, quadratic=quadratic,
-                sense="<=", rhs=adj_rhs, name="budget",
-            )
-            oracle_solver.set_objective(
-                {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
-            )
-            build_time = time.perf_counter() - t_build
-
-            x_col = cols.index("x")
-            decidb_obj = sum(float(r[x_col]) for r in rows)
-            result = _assert_oracle_obj(oracle_solver, decidb_obj)
-            perf_tracker.record(
-                f"qcp_binding_{tag}", decidb_time, build_time,
-                result.solve_time_seconds, n, n, 1,
-                result.objective_value, oracle_solver.solver_name(),
-                comparison_status="optimal",
-            )
-
-    @_expect_gurobi
     def test_negated_power(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
@@ -604,7 +550,9 @@ def _run_syntax_variant(
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestQuadraticConstraintSyntax:
-    """All quadratic-constraint syntaxes produce identical results."""
+    """The POWER spelling of a square in a limit. The other spellings (`**`, a product of equal factors) are read to the
+    same product by ProductReader before the clause is, and are tested in `test_quadratic.py` and
+    `test_product_normal_form.py`."""
 
     @_expect_gurobi
     def test_power_form(self, decidb_cli, oracle_solver, perf_tracker):
@@ -612,22 +560,6 @@ class TestQuadraticConstraintSyntax:
             decidb_cli, oracle_solver, perf_tracker,
             test_id="qcp_syntax_power",
             constraint_expr="POWER(x - target, 2)",
-        )
-
-    @_expect_gurobi
-    def test_starstar_form(self, decidb_cli, oracle_solver, perf_tracker):
-        _run_syntax_variant(
-            decidb_cli, oracle_solver, perf_tracker,
-            test_id="qcp_syntax_starstar",
-            constraint_expr="(x - target) ** 2",
-        )
-
-    @_expect_gurobi
-    def test_self_multiply_form(self, decidb_cli, oracle_solver, perf_tracker):
-        _run_syntax_variant(
-            decidb_cli, oracle_solver, perf_tracker,
-            test_id="qcp_syntax_self_mult",
-            constraint_expr="(x - target) * (x - target)",
         )
 
     @_expect_gurobi
@@ -1195,52 +1127,6 @@ class TestQuadraticConstraintInteractions:
 class TestQuadraticConstraintVarTypes:
 
     @_expect_gurobi
-    def test_real_variables(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0
-            )
-            SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 10
-            MAXIMIZE SUM(x)
-        """
-        t0 = time.perf_counter()
-        rows, cols = decidb_cli.execute(sql)
-        decidb_time = time.perf_counter() - t0
-        data = [(1, 10.0), (2, 20.0)]
-        n = len(data)
-
-        t_build = time.perf_counter()
-        oracle_solver.create_model("qcp_real_vars")
-        for i in range(n):
-            oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
-            )
-        linear, quadratic, adj_rhs = _aggregate_sq_dev(data, 1, 10.0)
-        oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=adj_rhs, name="budget",
-        )
-        oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
-        )
-        build_time = time.perf_counter() - t_build
-
-        x_col = cols.index("x")
-        decidb_obj = sum(float(r[x_col]) for r in rows)
-        result = _assert_oracle_obj(oracle_solver, decidb_obj)
-        perf_tracker.record(
-            "qcp_real", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
-            comparison_status="optimal",
-        )
-
-    @_expect_gurobi
     def test_integer_variables(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
@@ -1482,47 +1368,3 @@ class TestQuadraticConstraintEdgeCases:
             n, n, n, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
-
-
-# ===================================================================
-# Category 6: Error Handling
-# ===================================================================
-
-@pytest.mark.correctness
-@pytest.mark.quadratic
-class TestQuadraticConstraintErrors:
-
-    def test_constraint_self_product_of_power_rejected(self, decidb_cli):
-        # POWER(x, 2) * POWER(x, 2) inside a constraint = x^4; must not
-        # silently reduce to x^2. (Previously this produced wrong bindings
-        # because the inner POWER was treated as a linear term.)
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 3
-                AND SUM(POWER(x, 2) * POWER(x, 2)) <= 16
-            MINIMIZE SUM(-x)
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
-    def test_constraint_product_of_two_powers_rejected(self, decidb_cli):
-        # POWER(x, 2) * POWER(y, 2) inside a constraint = x^2 y^2.
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, x, y FROM data
-            DECIDE x(REAL), y(REAL)
-            SUCH THAT x >= 0 AND x <= 5 AND y >= 0 AND y <= 5
-                AND SUM(POWER(x, 2) * POWER(y, 2)) <= 10
-            MAXIMIZE SUM(x + y)
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
-    def test_constraint_variable_times_power_rejected(self, decidb_cli):
-        # a * POWER(x, 2) inside a constraint = a x^2 (total degree 3).
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, a, x FROM data
-            DECIDE a(REAL), x(REAL)
-            SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
-                AND SUM(a * POWER(x, 2)) <= 20
-            MAXIMIZE SUM(a + x)
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")

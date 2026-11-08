@@ -111,9 +111,10 @@ def test_imputation_inside_objective_reducer_matches_oracle(decidb_cli, oracle_s
     assert actual == expected == {1: 0, 2: 0, 3: 1}
 
 
+# The objective reads the same refusal through the same check as a constraint (DecideShapeCheck::CheckSide), so the
+# clause is the one case.
 @pytest.mark.parametrize("clauses", [
     "SUCH THAT SUM(COALESCE(keep, 0)) <= 1 MAXIMIZE SUM(keep)",
-    "SUCH THAT SUM(keep) <= 1 MAXIMIZE SUM(COALESCE(keep, 0))",
 ])
 @pytest.mark.error
 def test_coalesce_over_decide_variable_inside_reducer_is_rejected(decidb_cli, clauses):

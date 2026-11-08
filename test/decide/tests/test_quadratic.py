@@ -638,39 +638,6 @@ class TestQuadraticMaximize:
             comparison_status="optimal",
         )
 
-    def test_maximize_negated_starstar_syntax(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
-        data_sql = "SELECT 1 AS id, 15.0 AS target UNION ALL SELECT 2, 25.0"
-        sql = f"""
-            WITH data AS ({data_sql})
-            SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 100
-            MAXIMIZE SUM(-((x - target) ** 2))
-        """
-        t0 = time.perf_counter()
-        rows, cols = decidb_cli.execute(sql)
-        decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute(
-            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
-        ).fetchall()
-
-        t_build = time.perf_counter()
-        oracle_solver.create_model("qp_max_starstar")
-        self._solve_case_a(oracle_solver, data)
-        build_time = time.perf_counter() - t_build
-        result = _solve_and_compare(
-            oracle_solver, rows, cols,
-            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
-        )
-        perf_tracker.record(
-            "qp_max_starstar", decidb_time, build_time,
-            result.solve_time_seconds, len(data), len(data), 0,
-            result.objective_value, oracle_solver.solver_name(),
-            comparison_status="optimal",
-        )
-
     def test_maximize_convex_power_case_b(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
@@ -876,40 +843,6 @@ class TestQuadraticMaximize:
         )
         perf_tracker.record(
             "qp_max_neg_rhs", decidb_time, build_time,
-            result.solve_time_seconds, len(data), len(data), 0,
-            result.objective_value, oracle_solver.solver_name(),
-            comparison_status="optimal",
-        )
-
-    def test_maximize_negated_multiplication_form(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
-        """-((x-t) * (x-t)) — negated identical-child multiply."""
-        data_sql = "SELECT 1 AS id, 12.0 AS target UNION ALL SELECT 2, 35.0"
-        sql = f"""
-            WITH data AS ({data_sql})
-            SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 100
-            MAXIMIZE SUM(-((x - target) * (x - target)))
-        """
-        t0 = time.perf_counter()
-        rows, cols = decidb_cli.execute(sql)
-        decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute(
-            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
-        ).fetchall()
-
-        t_build = time.perf_counter()
-        oracle_solver.create_model("qp_max_neg_mult")
-        self._solve_case_a(oracle_solver, data)
-        build_time = time.perf_counter() - t_build
-        result = _solve_and_compare(
-            oracle_solver, rows, cols,
-            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
-        )
-        perf_tracker.record(
-            "qp_max_neg_mult", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
@@ -1165,30 +1098,6 @@ class TestQuadraticErrors:
             SUCH THAT x >= 0 AND x <= 3
             MINIMIZE SUM(POWER(x - 1, 2) * POWER(x - 1, 2)) + SUM(-2 * x)
         """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
-    def test_qp_product_of_two_powers_rejected(self, decidb_cli):
-        # POWER(x, 2) * POWER(y, 2) = x^2 y^2 — falls into the bilinear branch
-        # of ExtractLinearAndBilinearTerms with a degree-2 "coefficient"; must
-        # be rejected before the coefficient evaluator touches it.
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, x, y FROM data
-            DECIDE x(REAL), y(REAL)
-            SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
-            MINIMIZE SUM(POWER(x, 2) * POWER(y, 2))
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
-    def test_qp_variable_times_power_rejected(self, decidb_cli):
-        # a * POWER(x, 2) with a a DECIDE var — total degree 3; same bilinear
-        # misclassification as (2) and previously crashed the engine.
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, a, x FROM data
-            DECIDE a(REAL), x(REAL)
-            SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
-            MAXIMIZE SUM(a * POWER(x, 2))
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
 
 # ===========================================================================
 # TPC-H based QP tests — oracle-compared

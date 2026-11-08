@@ -33,7 +33,6 @@ def _variables(oracle_solver, names, var_type=VarType.CONTINUOUS):
 # Each spelling as (SQL square term, the term's Q entries for row i as {(a, b): coeff}, the term evaluated in Python).
 _SQUARES = {
     "coefficient first": ("2*x*x", lambda i, w: {("x", "x"): 2.0}, lambda w, x, y: 2 * x * x),
-    "coefficient between": ("x*2*x", lambda i, w: {("x", "x"): 2.0}, lambda w, x, y: 2 * x * x),
     "cast exponent": ("POWER(x, CAST(2 AS INTEGER))", lambda i, w: {("x", "x"): 1.0}, lambda w, x, y: x * x),
     "power of a linear form": (
         "POWER(x - w, 2)",
@@ -48,10 +47,7 @@ _SQUARES = {
     # A data weight on a square is the product group's weight (BUG-46): Gurobi solves it, as it does x*y.
     "data weight times a power": ("w*POWER(x, 2)", lambda i, w: {("x", "x"): w}, lambda w, x, y: w * x * x),
     "data weight times a product": ("w*x*x", lambda i, w: {("x", "x"): w}, lambda w, x, y: w * x * x),
-    "power times a data weight": ("POWER(x, 2)*w", lambda i, w: {("x", "x"): w}, lambda w, x, y: w * x * x),
 }
-
-_DATA_WEIGHTS = ["data weight times a power", "data weight times a product", "power times a data weight"]
 
 
 def _uses_y(term):
@@ -63,6 +59,10 @@ def _uses_y(term):
 class TestEverySpellingIsOnePolynomial:
     """Each spelling of a square answers as the oracle's model of the polynomial it denotes."""
 
+    # The spellings are read by ProductReader (decide_product_form.cpp), which takes the factors of a `*` in any order:
+    # data goes to the coefficient, an equal decision factor merges into the power, and a POWER of one linear form stays
+    # whole. So the coefficient may lead or sit between the factors, and the data weight lead or follow, with no case of
+    # its own: the cases are one read of each kind.
     @pytest.mark.parametrize("spelling", list(_SQUARES))
     def test_square_under_minimize(self, decidb_cli_gurobi, oracle_solver, spelling):
         term, q_of, value = _SQUARES[spelling]
@@ -94,7 +94,10 @@ class TestEverySpellingIsOnePolynomial:
         actual = sum(value(w, x, y) - c * x for (_, w, c), x, y in zip(_ROWS, xs, ys))
         assert actual == pytest.approx(result.objective_value, rel=1e-4, abs=1e-4)
 
-    @pytest.mark.parametrize("spelling", ["coefficient first", "coefficient between", "cast exponent"] + _DATA_WEIGHTS)
+    # The limit is the other place a square is read: a constant coefficient, and a data weight (a row-varying Q). The
+    # spelling is already read in the objective above, and both clauses read it through the same splitter
+    # (decide_linear_form.cpp: `splitter.Split` then ReadProductGroup, for a constraint and for the objective).
+    @pytest.mark.parametrize("spelling", ["coefficient first", "data weight times a power"])
     def test_square_under_a_limit(self, decidb_cli_gurobi, oracle_solver, spelling):
         term, q_of, value = _SQUARES[spelling]
         rows, cols = decidb_cli_gurobi.execute(
@@ -118,6 +121,8 @@ class TestEverySpellingIsOnePolynomial:
         assert sum(c * x for (_, _, c), x in zip(_ROWS, xs)) == pytest.approx(result.objective_value, rel=1e-4)
         assert sum(value(w, x, 0.0) for (_, w, _), x in zip(_ROWS, xs)) <= 10 + 1e-6
 
+    # The two ways a Q weight reaches HiGHS: a constant coefficient on a product, and a POWER of a data-weighted
+    # decision.
     @pytest.mark.parametrize(
         "term,weight", [("3*x*x", lambda w: 3.0), ("POWER(w*x, 2)", lambda w: w * w)], ids=["data coefficient", "power"]
     )
@@ -184,6 +189,7 @@ class TestEverySpellingIsOnePolynomial:
         xs = _values(rows, cols, "x")
         assert sum(c * x for (_, _, c), x in zip(_ROWS, xs)) == pytest.approx(result.objective_value, rel=1e-6)
 
+    # POWER(x, 0) is a per-row constant in a clause and in the objective: two places the 1 is read.
     @pytest.mark.parametrize(
         "constraint,objective",
         [("POWER(x, 0) + x <= 3", "SUM(c * x)"), ("SUM(x) <= 5", "SUM(c * x + POWER(x, 0))")],
@@ -211,6 +217,7 @@ class TestEverySpellingIsOnePolynomial:
         xs = _values(rows, cols, "x")
         assert sum(c * x for (_, _, c), x in zip(_ROWS, xs)) == pytest.approx(result.objective_value, rel=1e-6)
 
+    # The count is held below the limit, at it, and above it (the row is infeasible).
     @pytest.mark.parametrize("rows", [3, 5, 6], ids=["fewer rows", "as many rows", "more rows"])
     def test_power_zero_in_a_reducer_counts_rows(self, decidb_cli, oracle_solver, rows):
         """SUM(POWER(x, 0)) is the row count: the clause holds with 5 rows or fewer and is infeasible with more.
@@ -252,6 +259,7 @@ class TestOneSpellingOfAWholeExponent:
     """A whole exponent is written as its number however it was spelled, so `POWER(x, CAST(2 AS INTEGER))` and
     `POWER(x, 2)` are one term and merge as like terms do. A square in a limit needs Gurobi."""
 
+    # The two spellings merge as like terms in a row, across two reducers, and inside one reducer.
     @pytest.mark.parametrize(
         "constraint, canonical",
         [
@@ -270,6 +278,7 @@ class TestOneSpellingOfAWholeExponent:
 class TestBooleanProducts:
     """A product of BOOL decisions takes the general path: a square of b is b * b, linearized like b * d."""
 
+    # A Boolean squared as a product of itself, and a sum of Booleans squared (the cross term b*d).
     @pytest.mark.parametrize(
         "term,q",
         [
@@ -308,6 +317,8 @@ class TestBooleanProducts:
 class TestShapeCheckRefusals:
     """One refusal per kind the shape check judges, each quoting the clause and pointing at the term."""
 
+    # One case per refusal of the shape check: a degree by a product and by a power, an exponent, a function, a
+    # division, an operator and a CASE.
     @pytest.mark.parametrize(
         "constraint,message",
         [
@@ -341,6 +352,8 @@ class TestShapeCheckRefusals:
         assert f"In the SUCH THAT clause `{constraint}`" in result.stderr or "has a term of degree" in result.stderr
         assert "LINE " in result.stderr and "^" in result.stderr, result.stderr
 
+    # COALESCE is a parser node of its own and IFNULL a rewritten call: each reaches the refusal by its own source
+    # location.
     @pytest.mark.parametrize("term", ["COALESCE(x, 0)", "IFNULL(x, 0)"], ids=["coalesce", "ifnull"])
     def test_null_replacement_refusal_underlines_its_term(self, decidb_cli, term):
         """COALESCE is a parser node of its own and IFNULL a rewritten call; each carries its source location."""

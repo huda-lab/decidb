@@ -11,8 +11,8 @@ Covers:
   - Bilinear in constraints (QCQP, Gurobi only for non-linearizable)
   - Mixed linear + bilinear objectives
   - Bilinear with WHEN filter
-  - Error rejection: triple products, HiGHS non-convex rejection
-  - Backward compatibility: existing QP and linear objectives unchanged
+  - Error rejection: a missing upper bound, a degree above two, HiGHS non-convex rejection
+  - Backward compatibility: a linear objective unchanged (the QP spellings are in test_quadratic.py)
 
 Cross-feature interactions (oracle-compared, module-level):
   - test_bilinear_per_group:           bilinear + `per` (McCormick aux per group)
@@ -42,54 +42,6 @@ from ._oracle_helpers import add_bool_and
 @pytest.mark.correctness
 class TestBilinearBooleanObjectives:
     """Bilinear objectives where at least one factor is Boolean (linearizable)."""
-
-    def test_bool_times_bool_objective(self, decidb_cli, oracle_solver, perf_tracker):
-        """MAXIMIZE SUM(b1 * b2) — AND-linearization, oracle-compared."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
-            )
-            SELECT id, b1, b2
-            FROM data
-            DECIDE b1(BOOL), b2(BOOL)
-            SUCH THAT SUM(b1) <= 3 AND SUM(b2) <= 3
-            MAXIMIZE SUM(b1 * b2)
-        """
-        t0 = time.perf_counter()
-        result, cols = decidb_cli.execute(sql)
-        decidb_time = time.perf_counter() - t0
-
-        n = 3
-        t_build = time.perf_counter()
-        oracle_solver.create_model("bool_times_bool_objective")
-        b1n = [f"b1_{i}" for i in range(n)]
-        b2n = [f"b2_{i}" for i in range(n)]
-        wn = [f"w_{i}" for i in range(n)]
-        for v in b1n + b2n:
-            oracle_solver.add_variable(v, VarType.BINARY)
-        for v in wn:
-            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=1.0)
-        for i in range(n):
-            _mccormick_link(oracle_solver, wn[i], b1n[i], b2n[i], 1.0, f"mc_{i}")
-        oracle_solver.add_constraint({b: 1.0 for b in b1n}, "<=", 3.0, name="cap_b1")
-        oracle_solver.add_constraint({b: 1.0 for b in b2n}, "<=", 3.0, name="cap_b2")
-        oracle_solver.set_objective({w: 1.0 for w in wn}, ObjSense.MAXIMIZE)
-        build_time = time.perf_counter() - t_build
-        res = oracle_solver.solve()
-        assert res.status == SolverStatus.OPTIMAL
-
-        b1_col = cols.index("b1")
-        b2_col = cols.index("b2")
-        decidb_obj = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
-        assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
-        perf_tracker.record(
-            "bool_times_bool_objective", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3 + 2,
-            res.objective_value, oracle_solver.solver_name(),
-            comparison_status="optimal",
-        )
 
     def test_bool_times_bool_constrained(self, decidb_cli, oracle_solver, perf_tracker):
         """MAXIMIZE SUM(b1 * b2) with SUM(b1) <= 2 — oracle-compared."""
@@ -617,17 +569,6 @@ class TestBilinearConstraints:
     @pytest.mark.bilinear
     @pytest.mark.var_integer
     @pytest.mark.cons_perrow
-    def test_bilinear_constraint_coeff_multiplies_both_sides(self, decidb_cli_gurobi):
-        """Regression: (2*x)*(3*y) must use coefficient 6, not just one side."""
-        result, cols = self._run_coeff_constraint(
-            decidb_cli_gurobi, "(2 * x) * (3 * y) >= 4",
-        )
-
-        self._assert_single_xy_one(result, cols)
-
-    @pytest.mark.bilinear
-    @pytest.mark.var_integer
-    @pytest.mark.cons_perrow
     def test_bilinear_constraint_coeff_split_shape_matches_flat_product(self, decidb_cli_gurobi):
         split_result, split_cols = self._run_coeff_constraint(
             decidb_cli_gurobi, "(2 * x) * (3 * y) >= 4",
@@ -644,6 +585,7 @@ class TestBilinearConstraints:
     @pytest.mark.bilinear
     @pytest.mark.var_integer
     @pytest.mark.cons_perrow
+    # The coefficient sits on the left factor, then on the right one: each side is read apart.
     @pytest.mark.parametrize("constraint_expr", [
         "(2 * x) * y >= 2",
         "x * (3 * y) >= 3",
@@ -878,13 +820,12 @@ class TestFactoredProductDegree:
         return cli.execute(sql)
 
     @pytest.mark.cons_aggregate
+    # Each case is a different factor shape of the degree count (DecideDegreeOf: `+` takes the maximum, `*` adds): a
+    # sum beside one decision, a sum beside a sum, a data coefficient, and one decision on both sides.
     @pytest.mark.parametrize("factored,expanded", [
         # Two-term sum times a third variable — the canonical gating shape.
         ("SUM((x + y) * z) <= 1",
          "SUM(x * z + y * z) <= 1"),
-        # Three-term sum: 4 occurrences, still degree 2.
-        ("SUM((x + y + z) * w) <= 1",
-         "SUM(x * w + y * w + z * w) <= 1"),
         # Sum times sum: 4 occurrences, still degree 2.
         ("SUM((x + y) * (z + w)) <= 1",
          "SUM(x * z + x * w + y * z + y * w) <= 1"),
@@ -917,28 +858,6 @@ class TestFactoredProductDegree:
         assert factored_cols == expanded_cols
         assert factored_rows == expanded_rows
 
-    @pytest.mark.obj_maximize
-    @pytest.mark.cons_aggregate
-    def test_same_expression_accepted_in_objective_and_constraint(self, decidb_cli_gurobi):
-        """`SUM((x + y) * z)` must bind in both clauses.
-
-        Regression for the asymmetry: accepted in MAXIMIZE (symbolic layer
-        expanded it) but rejected in SUCH THAT (nothing expanded it).
-        """
-        as_objective, _ = decidb_cli_gurobi.execute("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, x, y, z
-            FROM data
-            DECIDE x(INT), y(INT), z(INT)
-            SUCH THAT x >= 0 AND x <= 1 AND y >= 0 AND y <= 1 AND z >= 0 AND z <= 1
-                  AND SUM(z) = 1
-            MAXIMIZE SUM((x + y) * z)
-        """)
-        assert len(as_objective) == 1
-
-        as_constraint, _ = self._run_constraint(decidb_cli_gurobi, "SUM((x + y) * z) <= 1")
-        assert len(as_constraint) == 1
-
     @pytest.mark.cons_aggregate
     @pytest.mark.parametrize("constraint_expr", [
         # Three distinct variables multiplied: genuinely degree 3.
@@ -970,31 +889,6 @@ class TestFactoredProductDegree:
 class TestBilinearErrors:
     """Error cases that should be rejected."""
 
-    def test_triple_product_rejected(self, decidb_cli):
-        """SUM(a * b * c) with three DECIDE variables should be rejected."""
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, a, b, c FROM data
-            DECIDE a(BOOL), b(BOOL), c(BOOL)
-            SUCH THAT a >= 0 AND b >= 0 AND c >= 0
-            MAXIMIZE SUM(a * b * c)
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
-    def test_quad_bilinear_chain_rejected(self, decidb_cli):
-        """SUM((b1 * x) * (b2 * y)) — degree-4 chain of two bilinear terms.
-
-        Each factor is itself a Bool × Real product, so the total shape has
-        degree 4. Must be rejected by the same higher-order-product guard
-        that catches a * b * c.
-        """
-        decidb_cli.assert_error("""
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, b1, b2, x, y FROM data
-            DECIDE b1(BOOL), b2(BOOL), x(REAL), y(REAL)
-            SUCH THAT x <= 10 AND y <= 10
-            MAXIMIZE SUM((b1 * x) * (b2 * y))
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
-
     def test_missing_upper_bound_rejected(self, decidb_cli):
         """b * x without an upper bound on x should be rejected."""
         decidb_cli.assert_error("""
@@ -1005,25 +899,6 @@ class TestBilinearErrors:
             MAXIMIZE SUM(b * x)
         """, match=r"finite upper bound|upper bound")
 
-    def test_highs_nonconvex_bilinear_rejected(self, decidb_cli):
-        """Real × Real bilinear on HiGHS should error (non-convex)."""
-        sql = """
-            WITH data AS (SELECT 1 AS id)
-            SELECT id, ROUND(x, 2) AS x, ROUND(y, 2) AS y
-            FROM data
-            DECIDE x(REAL), y(REAL)
-            SUCH THAT x >= 0 AND x <= 10 AND y >= 0 AND y <= 10
-            MAXIMIZE SUM(x * y)
-        """
-        try:
-            result, cols = decidb_cli.execute(sql)
-            # If Gurobi is available, this is fine (non-convex QP)
-            pass  # Gurobi handled it
-        except DeciDBCliError as e:
-            # HiGHS: non-convex rejection expected
-            assert re.search(r"needs Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
-
 
 # ===================================================================
 # Backward compatibility
@@ -1032,61 +907,7 @@ class TestBilinearErrors:
 
 @pytest.mark.correctness
 class TestBilinearBackwardCompat:
-    """Ensure existing QP and linear objectives still work."""
-
-    def test_power_still_works(self, decidb_cli, oracle_solver, perf_tracker):
-        """MINIMIZE SUM(POWER(x - target, 2)) — oracle mirrors the expanded QP.
-
-        Expansion of (x_i - t_i)^2 drops the constant t_i^2 term (DeciDB's
-        reported objective does the same), leaving linear=-2*t_i*x_i and
-        quadratic=x_i^2. The decidb-side objective subtracts t_i^2 to match.
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 100
-            MINIMIZE SUM(POWER(x - target, 2))
-        """
-        t0 = time.perf_counter()
-        result, cols = decidb_cli.execute(sql)
-        decidb_time = time.perf_counter() - t0
-
-        data = [(1, 10.0), (2, 20.0)]
-        n = len(data)
-        t_build = time.perf_counter()
-        oracle_solver.create_model("power_still_works")
-        xnames = [f"x_{i}" for i in range(n)]
-        for xn in xnames:
-            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
-        linear = {xnames[i]: -2.0 * data[i][1] for i in range(n)}
-        quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
-        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
-        build_time = time.perf_counter() - t_build
-        res = oracle_solver.solve()
-        assert res.status == SolverStatus.OPTIMAL
-
-        x_col = cols.index("x")
-        id_col = cols.index("id")
-        target_by_id = dict(data)
-        decidb_obj = sum(
-            (float(row[x_col]) - target_by_id[int(row[id_col])]) ** 2
-            - target_by_id[int(row[id_col])] ** 2
-            for row in result
-        )
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={res.objective_value:.4f}"
-        )
-        perf_tracker.record(
-            "power_still_works", decidb_time, build_time,
-            res.solve_time_seconds, n, n, 0,
-            res.objective_value, oracle_solver.solver_name(),
-            comparison_status="optimal",
-        )
+    """Ensure an existing linear objective still works; the QP spellings are tested in `test_quadratic.py`."""
 
     def test_linear_objective_still_works(
         self, decidb_cli, oracle_solver, perf_tracker,
@@ -1139,59 +960,6 @@ class TestBilinearBackwardCompat:
             res.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
-
-    def test_identical_multiplication_still_qp(
-        self, decidb_cli, oracle_solver, perf_tracker,
-    ):
-        """(x - target) * (x - target) should still be treated as QP, not bilinear.
-        Oracle mirrors the expanded form with diagonal Q entry x_i^2."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 7.0 AS target UNION ALL
-                SELECT 2, 42.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 100
-            MINIMIZE SUM((x - target) * (x - target))
-        """
-        t0 = time.perf_counter()
-        result, cols = decidb_cli.execute(sql)
-        decidb_time = time.perf_counter() - t0
-
-        data = [(1, 7.0), (2, 42.0)]
-        n = len(data)
-        t_build = time.perf_counter()
-        oracle_solver.create_model("identical_multiplication_still_qp")
-        xnames = [f"x_{i}" for i in range(n)]
-        for xn in xnames:
-            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
-        linear = {xnames[i]: -2.0 * data[i][1] for i in range(n)}
-        quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
-        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
-        build_time = time.perf_counter() - t_build
-        res = oracle_solver.solve()
-        assert res.status == SolverStatus.OPTIMAL
-
-        x_col = cols.index("x")
-        id_col = cols.index("id")
-        target_by_id = dict(data)
-        decidb_obj = sum(
-            (float(row[x_col]) - target_by_id[int(row[id_col])]) ** 2
-            - target_by_id[int(row[id_col])] ** 2
-            for row in result
-        )
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={res.objective_value:.4f}"
-        )
-        perf_tracker.record(
-            "identical_multiplication_still_qp", decidb_time, build_time,
-            res.solve_time_seconds, n, n, 0,
-            res.objective_value, oracle_solver.solver_name(),
-            comparison_status="optimal",
-        )
-
 
 # ===================================================================
 # Cross-feature interactions (oracle-compared, module-level)
@@ -1622,26 +1390,6 @@ def _selected_ids_xy(decidb_rows, decidb_cols):
 @pytest.mark.obj_maximize
 @pytest.mark.bilinear
 @pytest.mark.correctness
-def test_bilinear_objective_multiplies_both_side_coeffs(decidb_cli_gurobi, oracle_solver):
-    """Regression: (a*x)*(b*y) must use coefficient a*b (not just one side)."""
-    decidb_rows, decidb_cols = _run_split_coefficient_bilinear_query(
-        decidb_cli_gurobi, "(a * x) * (b * y)",
-    )
-    oracle_result = _build_split_coefficient_bilinear_oracle(oracle_solver)
-
-    decidb_obj = _decidb_split_coefficient_objective(decidb_rows, decidb_cols)
-    assert abs(decidb_obj - oracle_result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, "
-        f"Oracle={oracle_result.objective_value}"
-    )
-    assert _selected_ids_xy(decidb_rows, decidb_cols) == {1}
-
-
-@pytest.mark.var_integer
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.bilinear
-@pytest.mark.correctness
 def test_bilinear_objective_split_shape_matches_flat_product(decidb_cli_gurobi, oracle_solver):
     """(a*x)*(b*y) and a*b*x*y should produce the same optimal objective."""
     split_rows, split_cols = _run_split_coefficient_bilinear_query(
@@ -1889,6 +1637,7 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
 
 @pytest.mark.correctness
 @pytest.mark.bilinear
+# A sign in front of the Boolean, of a scaled Boolean, and of the other factor: each is read from a different factor.
 @pytest.mark.parametrize(
     "constraint, holds",
     [

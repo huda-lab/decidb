@@ -24,7 +24,6 @@ wrong answer in a user query.
 
 import functools
 import re
-import time
 
 import pytest
 
