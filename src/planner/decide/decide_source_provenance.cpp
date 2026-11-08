@@ -706,7 +706,7 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 		                                                info.written_cmp != info.canonical_cmp;
 		                       info.rendered_lhs.clear();
 		                       info.rendered_rhs.clear();
-		                       if (!IsQueryWideBoundTag(cmp.GetAlias()) &&
+		                       if (!IsQueryWideBoundTag(cmp.right->GetAlias()) &&
 		                           !ContainsSubquerySource(*cmp.right)) {
 			                       info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		                       } else {

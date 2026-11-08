@@ -2,6 +2,8 @@
 
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "test_helpers.hpp"
 
 #include <utility>
 
@@ -170,4 +172,41 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		REQUIRE(model.constraints.size() == 1);
 		CHECK(model.constraints[0].rhs == 4.0);
 	}
+}
+
+namespace {
+
+LogicalDecide *FindProvenanceDecide(LogicalOperator &op) {
+	if (op.type == LogicalOperatorType::LOGICAL_DECIDE) {
+		return &op.Cast<LogicalDecide>();
+	}
+	for (auto &child : op.children) {
+		if (auto *found = FindProvenanceDecide(*child)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("A bound that is one value for the query is quoted by its value, not as an expression to edit",
+          "[decidb][query_diagnostics][provenance]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
+	// One clause per bound: a literal, a column, a subquery, arithmetic over literals, and a zero weight on a column.
+	auto plan = con.ExtractPlan("SELECT x FROM (FROM (VALUES (1, 2.0::DOUBLE)) s(id, w)"
+	                            " DECIDE x(INT) SUCH THAT x <= 5 AND x <= w AND x <= (SELECT 5) AND x <= 2 + 3"
+	                            " AND x <= 0 * w + 3 MAXIMIZE SUM(x)) q");
+	auto *decide = FindProvenanceDecide(*plan);
+	REQUIRE(decide != nullptr);
+	auto &sources = decide->constraint_sources;
+	REQUIRE(sources.size() == 5);
+	// A data bound is an expression the user can offset; every other bound is one number.
+	CHECK(sources[0].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
+	CHECK(sources[1].rhs_kind == ConstraintSourceRhsKind::DATA_EXPRESSION);
+	CHECK(sources[2].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
+	CHECK(sources[3].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
+	CHECK(sources[4].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);
 }
