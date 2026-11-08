@@ -47,58 +47,95 @@ from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is 
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
+def _agrees_with_oracle(cli, solver, sql, rows, clauses, objective=None):
+    """Judge `sql` against the scope oracle over `rows`, in the order the query sorts by: DeciDB's answer must satisfy
+    every clause, and its objective must equal the oracle's optimum. The objective defaults to MAXIMIZE SUM(x).
+    Returns the answer rows."""
+    model = ScopedModel(rows, [Decision("x")])
+    objective = objective or ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
+    result = answer(cli, sql)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(solver, clauses, objective), abs=1e-4
+    )
+    return result
+
+
+def _x_at_most(bound):
+    """``x <= bound``, once per row."""
+    return Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: bound},))
+
+
+def _reduced(agg, sense, bound, factor=1.0, body=lambda r: {"x": 1}):
+    """``factor * agg(body) sense bound``, once per row (D30)."""
+    return Scoped((Reduce(agg, body, factor=lambda r: factor),), sense, (lambda r: {CONSTANT: bound},))
+
+
+def _objective(sense, agg, factor=1.0, body=lambda r: {"x": 1}):
+    return ScopedObjective(sense, (Reduce(agg, body, factor=lambda r: factor),))
+
+
+IDS = [{"id": 1}, {"id": 2}]
+
+
 # ---------------------------------------------------------------------------
 # The sign swap. These two shapes returned a wrong answer before B.3.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_negative_scale_on_max_objective(decidb_cli):
+def test_negative_scale_on_max_objective(decidb_cli, scope_solver):
     """``MINIMIZE -1 * MAX(x)`` with ``SUM(x) <= 4``, ``x in [0,5]``.
 
     Minimizing ``-MAX(x)`` is maximizing ``MAX(x)``, so one row should take the
-    whole budget: x = (4, 0), objective -4. Folding without the swap turns it into
+    whole budget: objective -4. Folding without the swap turns it into
     ``MINIMIZE MAX(-x)`` = ``MAXIMIZE MIN(x)``, which spreads the budget evenly and
-    returns x = (2, 2). The two are distinguishable by the x vector alone, which is
-    why this test reads the vector rather than only the objective.
+    reaches -2. The oracle's optimum tells the two apart.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 5 AND SUM(x) <= 4
         MINIMIZE -1 * MAX(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = sorted(int(r[ci["x"]]) for r in rows)
-    assert xs == [0, 4], f"expected one row to take the whole budget, got {xs}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(5), _reduced("sum", "<=", 4)],
+        _objective(ObjSense.MINIMIZE, "max", factor=-1.0),
+    )
 
 
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_negative_scale_on_min_objective(decidb_cli):
+def test_negative_scale_on_min_objective(decidb_cli, scope_solver):
     """``MAXIMIZE -1 * MIN(x)`` with ``SUM(x) >= 4``, ``x in [0,5]``.
 
     The mirror image: maximizing ``-MIN(x)`` is minimizing ``MIN(x)``, so one row is
-    pushed to 0 and the other carries the requirement, giving ``MIN(x) = 0``.
-    Folding without the swap gives ``MAXIMIZE MIN(-x)`` = ``MINIMIZE MAX(x)``, which
-    spreads the requirement evenly and yields ``MIN(x) = 2``.
+    pushed to 0 and the other carries the requirement. Folding without the swap gives
+    ``MAXIMIZE MIN(-x)`` = ``MINIMIZE MAX(x)``, which spreads the requirement evenly.
 
-    Assert on ``MIN(x)`` rather than the vector: the surviving row may sit anywhere
-    in [4, 5] without changing the objective, so the vector is not unique but the
-    quantity being optimized is.
+    The comparison is on the objective: the surviving row may sit anywhere in [4, 5]
+    without changing it, so the vector is not unique but the quantity being optimized is.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 5 AND SUM(x) >= 4
         MAXIMIZE -1 * MIN(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = [int(r[ci["x"]]) for r in rows]
-    assert min(xs) == 0, f"expected MIN(x) driven to 0, got {xs}"
-    assert sum(xs) >= 4, f"constraint violated: {xs}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(5), _reduced("sum", ">=", 4)],
+        _objective(ObjSense.MAXIMIZE, "min", factor=-1.0),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -214,23 +251,28 @@ def test_scaled_max_in_composed_constraint(decidb_cli, oracle_solver, perf_track
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_negative_scale_on_max_constraint(decidb_cli):
+def test_negative_scale_on_max_constraint(decidb_cli, scope_solver):
     """``-2 * MAX(x) >= -8`` — the negative factor flips which direction is easy.
 
     ``-2*MAX(x) >= -8`` is ``MAX(x) <= 4``, the easy direction, so every row is
-    capped at 4 and the budget-free objective drives all rows there. Read without
+    capped and the budget-free objective drives all rows to the cap. Read without
     the swap it would be ``MAX(-2x) >= -8``, i.e. *some* row satisfies -2x >= -8,
-    which leaves the other rows unbounded — a strictly larger feasible set.
+    which leaves the other rows unbounded — a strictly larger feasible set, and a
+    larger objective than the oracle's.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND -2 * MAX(x) >= -8
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = sorted(int(r[ci["x"]]) for r in rows)
-    assert xs == [4, 4], f"every row should be capped at 4, got {xs}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("max", ">=", -8, factor=-2.0)],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -243,70 +285,87 @@ def test_negative_scale_on_max_constraint(decidb_cli):
 # wrote it. Matching one order there rejects the other — which is exactly the
 # same-shape-different-outcome asymmetry this work exists to remove.
 
+
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_objective_factor_on_the_right(decidb_cli):
+def test_objective_factor_on_the_right(decidb_cli, scope_solver):
     """``MAXIMIZE SUM(x*p) * 2`` — factor on the right of the reducer.
 
     Must agree with ``MAXIMIZE 2 * SUM(x*p)``: a positive factor cannot change the
-    argmax, so both should spend the budget of 3 on the highest-priced row.
+    argmax, so the budget of 3 goes to the highest-priced row. The oracle's optimum
+    carries the factor, so a dropped or doubled factor shows in the objective.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, p, x FROM (VALUES (1, 10.0), (2, 20.0)) t(id, p)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) <= 3
         MAXIMIZE SUM(x * p) * 2
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    picks = {float(r[ci["p"]]): int(r[ci["x"]]) for r in rows}
-    assert picks == {10.0: 0, 20.0: 3}, f"expected the budget on p=20, got {picks}"
+        ORDER BY id
+    """,
+        [{"id": 1, "p": 10.0}, {"id": 2, "p": 20.0}],
+        [_x_at_most(9), _reduced("sum", "<=", 3)],
+        _objective(ObjSense.MAXIMIZE, "sum", factor=2.0, body=lambda r: {"x": r["p"]}),
+    )
 
 
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_objective_negative_factor_on_the_right(decidb_cli):
+def test_objective_negative_factor_on_the_right(decidb_cli, scope_solver):
     """``MINIMIZE MAX(x) * -1`` — the swap has to fire for this spelling too.
 
     Same query as ``MINIMIZE -1 * MAX(x)``: minimizing ``-MAX(x)`` maximizes
-    ``MAX(x)``, so with ``SUM(x) >= 3`` and ``x <= 9`` every row goes to 9.
+    ``MAX(x)``, so with ``SUM(x) >= 3`` and ``x <= 9`` the oracle drives MAX(x) to 9.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) >= 3
         MINIMIZE MAX(x) * -1
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = [int(r[ci["x"]]) for r in rows]
-    assert max(xs) == 9, f"expected MAX(x) driven to 9, got {xs}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("sum", ">=", 3)],
+        _objective(ObjSense.MINIMIZE, "max", factor=-1.0),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Division, and a factor that is not a literal.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_reducer_divided_by_constant(decidb_cli):
+def test_reducer_divided_by_constant(decidb_cli, scope_solver):
     """``SUM(x) / 2 <= 3`` — division is a scale too, and stays a division rather
     than being reciprocated (``SUM(x)/3`` has no exact decimal reciprocal)."""
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) / 2 <= 3
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    total = sum(int(r[ci["x"]]) for r in rows)
-    assert total == 6, f"expected SUM(x) = 6, got {total}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("sum", "<=", 3, factor=0.5)],
+    )
 
 
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_scalar_subquery_scale(decidb_cli):
+def test_scalar_subquery_scale(decidb_cli, scope_solver):
     """``(SELECT max(w) FROM t) * SUM(x) <= 12`` — an uncorrelated scalar subquery
     is one value for the whole query, so it is a legal factor even though its
     value is unknown at plan time.
@@ -316,15 +375,20 @@ def test_scalar_subquery_scale(decidb_cli):
     this: after flattening the factor is a plain column reference, indistinguishable
     from ``w`` itself and from a correlated subquery (see the rejection test below).
     """
-    rows, cols = decidb_cli.execute("""
+    subquery_values = [2.0, 3.0]
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 5 AND (SELECT max(w) FROM (VALUES (2.0), (3.0)) u(w)) * SUM(x) <= 12
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    total = sum(int(r[ci["x"]]) for r in rows)
-    assert total == 4, f"expected 3*SUM(x) <= 12 -> SUM(x) = 4, got {total}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(5), _reduced("sum", "<=", 12, factor=max(subquery_values))],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -334,11 +398,7 @@ def test_scalar_subquery_scale(decidb_cli):
 
 def _judged_per_row_factor(cli, solver, sql, rows, clauses):
     """Judge `sql` (MAXIMIZE SUM(x) over `rows`, ordered by id) against the scope oracle."""
-    model = ScopedModel(rows, [Decision("x")])
-    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
-    assert model.judge_scoped(answer(cli, sql), clauses, objective) == pytest.approx(
-        model.solve_scoped(solver, clauses, objective), abs=1e-4
-    )
+    _agrees_with_oracle(cli, solver, sql, rows, clauses)
 
 
 @pytest.mark.cons_aggregate
@@ -370,24 +430,28 @@ def test_correlated_subquery_factor_is_read_per_row(decidb_cli, scope_solver):
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_correlated_subquery_factor_moved_inside(decidb_cli):
+def test_correlated_subquery_factor_moved_inside(decidb_cli, scope_solver):
     """Moving the factor inside the reducer works and reads it per row.
 
     ``SUM(x * (SELECT ...))`` gives the per-row-coefficient reading the buggy
-    acceptance was silently producing: over k = (10, 100) with ``x <= 5``, the cap
-    of 100 admits ``x = (5, 0)``.
+    acceptance was silently producing: over k = (10, 100) with ``x <= 5``, the oracle
+    states ``10*x1 + 100*x2 <= 100`` and compares the objective.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) m(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 5
             AND SUM(x * (SELECT k FROM (VALUES (1, 10.0), (2, 100.0)) s(sid, k)
                          WHERE s.sid = m.id)) <= 100
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    picks = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
-    assert picks == {1: 5, 2: 0}, f"expected x=(5,0), got {picks}"
+        ORDER BY id
+    """,
+        [{"id": 1, "k": 10.0}, {"id": 2, "k": 100.0}],
+        [_x_at_most(5), _reduced("sum", "<=", 100, body=lambda r: {"x": r["k"]})],
+    )
 
 
 @pytest.mark.cons_aggregate
@@ -843,96 +907,124 @@ def test_bool_decision_factor_names_the_member_without_a_bound(decidb_cli):
 # accepted x = 9 on every row. Each test below therefore asserts the constraint
 # actually holds, not merely that the query ran.
 
+
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_unknown_sign_factor_on_max_constraint(decidb_cli):
+def test_unknown_sign_factor_on_max_constraint(decidb_cli, scope_solver):
     """``(SELECT max(k)) * MAX(x) <= 12`` with k = 3, so ``MAX(x) <= 4``.
 
     Maximizing SUM(x) drives every row to the cap. A formulation that only asserted
-    "some row attains the max" would leave the other rows free at x = 9.
+    "some row attains the max" would leave the other rows free at x = 9, which the
+    oracle's clause check (every row) and optimum both reject.
     """
-    rows, cols = decidb_cli.execute("""
+    rows = _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MAX(x) <= 12
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = [int(r[ci["x"]]) for r in rows]
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("max", "<=", 12, factor=3.0)],
+    )
+    xs = [int(r["x"]) for r in rows]
     assert max(xs) <= 4, f"constraint violated: 3 * MAX({xs}) > 12"
-    assert xs == [4, 4], f"expected both rows at the cap, got {xs}"
 
 
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_unknown_sign_factor_on_min_constraint(decidb_cli):
+def test_unknown_sign_factor_on_min_constraint(decidb_cli, scope_solver):
     """``(SELECT max(k)) * MIN(x) >= 3`` with k = 3, so ``MIN(x) >= 1``."""
-    rows, cols = decidb_cli.execute("""
+    rows = _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MIN(x) >= 3
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = [int(r[ci["x"]]) for r in rows]
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("min", ">=", 3, factor=3.0)],
+    )
+    xs = [int(r["x"]) for r in rows]
     assert min(xs) >= 1, f"constraint violated: 3 * MIN({xs}) < 3"
-    assert xs == [9, 9], f"expected both rows at their upper bound, got {xs}"
 
 
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_unknown_sign_factor_in_composed_constraint(decidb_cli):
+def test_unknown_sign_factor_in_composed_constraint(decidb_cli, scope_solver):
     """``SUM(x) + (SELECT max(k)) * MAX(x) <= 12`` with k = 3.
 
-    Feasible set: SUM(x) + 3*MAX(x) <= 12. The optimum of SUM(x) is 4, at (2,2):
-    4 + 6 = 10. Any larger total pushes MAX up faster than the budget allows —
-    (3,1) gives 4 + 9 = 13.
+    Feasible set: SUM(x) + 3*MAX(x) <= 12. The oracle's optimum of SUM(x) is the
+    bar: a total above it pushes MAX up faster than the budget allows.
     """
-    rows, cols = decidb_cli.execute("""
+    rows = _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MAX(x) <= 12
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = [int(r[ci["x"]]) for r in rows]
+        ORDER BY id
+    """,
+        IDS,
+        [
+            _x_at_most(9),
+            Scoped(
+                (Reduce("sum", lambda r: {"x": 1}), Reduce("max", lambda r: {"x": 1}, factor=lambda r: 3.0)),
+                "<=",
+                (lambda r: {CONSTANT: 12},),
+            ),
+        ],
+    )
+    xs = [int(r["x"]) for r in rows]
     assert sum(xs) + 3 * max(xs) <= 12 + 1e-6, f"constraint violated: {xs}"
-    assert sum(xs) == 4, f"expected SUM(x) = 4, got {xs}"
 
 
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_unknown_sign_factor_on_minmax_objective(decidb_cli):
+def test_unknown_sign_factor_on_minmax_objective(decidb_cli, scope_solver):
     """``MINIMIZE (SELECT max(k)) * MAX(x)`` with k = 3 — minimize 3*MAX(x).
 
-    With no lower pressure on x the optimum is all zeros. The flat MIN/MAX objective
-    path cannot express this: it replaces the whole objective with its auxiliary at
-    coefficient 1.0, leaving nowhere to put the factor, so a scaled objective is
-    routed through the composed path instead.
+    With no lower pressure on x the oracle's optimum is all zeros. The flat MIN/MAX
+    objective path cannot express this: it replaces the whole objective with its
+    auxiliary at coefficient 1.0, leaving nowhere to put the factor, so a scaled
+    objective is routed through the composed path instead.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) <= 4
         MINIMIZE (SELECT max(k) FROM (VALUES (3.0)) u(k)) * MAX(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    xs = [int(r[ci["x"]]) for r in rows]
-    assert max(xs) == 0, f"expected MAX(x) driven to 0, got {xs}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("sum", "<=", 4)],
+        _objective(ObjSense.MINIMIZE, "max", factor=3.0),
+    )
 
 
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_scaled_composed_minmax_over_a_join(decidb_cli):
+def test_scaled_composed_minmax_over_a_join(decidb_cli, scope_solver):
     """The same composed scaled MIN/MAX, but over a JOIN.
 
     A scale on a composed term is an Expression the optimizer moves out of the
@@ -944,21 +1036,36 @@ def test_scaled_composed_minmax_over_a_join(decidb_cli):
     in this file uses VALUES; this one must not.
 
     `SUM(x) + 2 * MAX(x * v) <= 12` with v from the joined table: v = (2, 3).
-    Optimum is SUM(x) = 4 at (2, 2): 4 + 2*max(4,6) = 4 + 12 = 16 > 12, so (2,2) is
-    infeasible; (1,2) gives 3 + 2*6 = 15; (2,1) gives 3 + 2*4 = 11 <= 12, SUM = 3.
+    The oracle's optimum of SUM(x) is the bar; a column read at the wrong position
+    changes the coefficients and so the objective.
     """
-    rows, cols = decidb_cli.execute("""
+    rows = _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT t.id, s.v, x FROM (VALUES (1), (2)) t(id)
         JOIN (VALUES (1, 2.0), (2, 3.0)) s(sid, v) ON s.sid = t.id
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + 2 * MAX(x * s.v) <= 12
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    pairs = [(float(r[ci["v"]]), int(r[ci["x"]])) for r in rows]
+        ORDER BY t.id
+    """,
+        [{"id": 1, "v": 2.0}, {"id": 2, "v": 3.0}],
+        [
+            _x_at_most(9),
+            Scoped(
+                (
+                    Reduce("sum", lambda r: {"x": 1}),
+                    Reduce("max", lambda r: {"x": r["v"]}, factor=lambda r: 2.0),
+                ),
+                "<=",
+                (lambda r: {CONSTANT: 12},),
+            ),
+        ],
+    )
+    pairs = [(float(r["v"]), int(r["x"])) for r in rows]
     lhs = sum(x for _, x in pairs) + 2 * max(v * x for v, x in pairs)
     assert lhs <= 12 + 1e-6, f"constraint violated: {pairs} gives {lhs}"
-    assert sum(x for _, x in pairs) == 3, f"expected SUM(x) = 3, got {pairs}"
 
 
 @pytest.mark.obj_maximize
@@ -989,64 +1096,90 @@ def test_decision_factor_in_objective_rejected(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_composed_minmax_term_divided_by_constant(decidb_cli):
+def test_composed_minmax_term_divided_by_constant(decidb_cli, scope_solver):
     """``SUM(x) + MAX(x*w) / 2 <= 12`` — division on a COMPOSED MIN/MAX term.
 
     Division reaches the composed path through the same `scale` slot as
     multiplication, with `scale_divides` set; the physical layer inverts it once.
-    w = (2,3), x <= 9. The optimum is SUM(x) = 7 at (4,3): 7 + max(8,9)/2 = 11.5.
+    w = (2,3), x <= 9; the objective is compared with the oracle's optimum.
     """
-    rows, cols = decidb_cli.execute("""
+    rows = _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, w, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + MAX(x * w) / 2 <= 12
         MAXIMIZE SUM(x)
-    """)
-    ci = {c: i for i, c in enumerate(cols)}
-    pairs = [(float(r[ci["w"]]), int(r[ci["x"]])) for r in rows]
+        ORDER BY id
+    """,
+        [{"id": 1, "w": 2.0}, {"id": 2, "w": 3.0}],
+        [
+            _x_at_most(9),
+            Scoped(
+                (
+                    Reduce("sum", lambda r: {"x": 1}),
+                    Reduce("max", lambda r: {"x": r["w"]}, factor=lambda r: 0.5),
+                ),
+                "<=",
+                (lambda r: {CONSTANT: 12},),
+            ),
+        ],
+    )
+    pairs = [(float(r["w"]), int(r["x"])) for r in rows]
     lhs = sum(x for _, x in pairs) + max(w * x for w, x in pairs) / 2.0
     assert lhs <= 12 + 1e-6, f"constraint violated: {pairs} gives {lhs}"
-    assert sum(x for _, x in pairs) == 7, f"expected SUM(x) = 7, got {pairs}"
 
 
 # ---------------------------------------------------------------------------
 # Nested query-wide scales compose into one accepted scale.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_nested_multiplier_scale(decidb_cli):
+def test_nested_multiplier_scale(decidb_cli, scope_solver):
     """``2 * (3 * SUM(x)) <= 12`` is the composed scale ``6 * SUM(x)``.
 
     The accepted-shape contract chooses support rather than a late physical
     extractor error.  Integer factors keep typed evaluation unambiguous, so
     this is the smallest positive case for the Step 4 implementation.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND 2 * (3 * SUM(x)) <= 12
         MAXIMIZE SUM(x)
-    """)
-    total = sum(int(r[cols.index("x")]) for r in rows)
-    assert total == 2, f"expected 6 * SUM(x) <= 12, got SUM(x)={total}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("sum", "<=", 12, factor=2.0 * 3.0)],
+    )
 
 
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_nested_divisor_scale(decidb_cli):
+def test_nested_divisor_scale(decidb_cli, scope_solver):
     """``(SUM(x) / 2) / 3 <= 1`` composes without reassociating division.
 
-    Evaluating the written typed operations yields ``SUM(x) <= 6``.  The test
+    The oracle states the written operations as the factor ``(1 / 2) / 3``.  The test
     pins support and the arithmetic direction independently of multiplication.
     """
-    rows, cols = decidb_cli.execute("""
+    _agrees_with_oracle(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND (SUM(x) / 2) / 3 <= 1
         MAXIMIZE SUM(x)
-    """)
-    total = sum(int(r[cols.index("x")]) for r in rows)
-    assert total == 6, f"expected (SUM(x) / 2) / 3 <= 1, got SUM(x)={total}"
+        ORDER BY id
+    """,
+        IDS,
+        [_x_at_most(9), _reduced("sum", "<=", 1, factor=(1.0 / 2.0) / 3.0)],
+    )

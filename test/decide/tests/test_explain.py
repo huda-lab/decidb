@@ -448,7 +448,7 @@ def test_explain_json_structure(decidb_cli):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain_json(decidb_cli, sql)
-    assert '"DECIDE"' in out or '"name": "DECIDE"' in out or "DECIDE" in out
+    assert '"name": "DECIDE"' in out, out
     assert _shows(out, '"Variables"', '"x"'), out
     assert _shows(out, '"Objective"', "MAXIMIZE", "sum(", "l_extendedprice"), out
     assert _shows(out, '"Constraints"', "SUM(", "l_quantity", "<=", "100"), out

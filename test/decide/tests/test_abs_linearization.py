@@ -887,7 +887,7 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
+def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn, oracle_solver):
     """MAXIMIZE SUM(ABS(x - l_quantity)) with no explicit bound but SUM(x) = 100.
 
     x has no declared upper bound, but SUM(x) = 100 with x >= 0 implies x <= 100.
@@ -895,9 +895,8 @@ def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
     Big-M is finite and the query solves — it no longer needs an explicit bound
     (the previous behavior was to reject this query with a "finite bound" error).
 
-    Ground truth (analytical): maximizing the convex SUM|x_i - q_i| over the simplex
-    {SUM(x) = 100, x >= 0} is attained at a vertex (all 100 on one row, rest 0), so
-    the optimum is 100 + SUM(q) - 2*min(q) (every q_i < 100 for l_orderkey <= 3).
+    The oracle states no bound on x and pins each |x_i - q_i| with an indicator
+    constraint, so it needs no Big-M of its own.
     """
     sql = """
         SELECT l_quantity, x
@@ -915,12 +914,37 @@ def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
             "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
         ).fetchall()
     ]
-    expected = 100.0 + sum(qtys) - 2.0 * min(qtys)
+    n = len(qtys)
+
+    oracle_solver.create_model("abs_maximize_bound_inferred")
+    xnames = [f"x_{i}" for i in range(n)]
+    dnames = [f"d_{i}" for i in range(n)]
+    ynames = [f"y_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0)
+    for dn in dnames:
+        oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
+    for yn in ynames:
+        oracle_solver.add_variable(yn, VarType.BINARY)
+    oracle_solver.add_constraint({xn: 1.0 for xn in xnames}, "=", 100.0, name="sum_eq")
+    for i, qty in enumerate(qtys):
+        # d_i >= |x_i - q_i| from both sides; the indicator pins d_i to the side y_i names.
+        oracle_solver.add_constraint({dnames[i]: 1.0, xnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}")
+        oracle_solver.add_constraint({dnames[i]: 1.0, xnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}")
+        oracle_solver.add_indicator_constraint(
+            ynames[i], 1, {dnames[i]: 1.0, xnames[i]: -1.0}, "<=", -qty, name=f"abs_ub1_{i}"
+        )
+        oracle_solver.add_indicator_constraint(
+            ynames[i], 0, {dnames[i]: 1.0, xnames[i]: 1.0}, "<=", qty, name=f"abs_ub2_{i}"
+        )
+    oracle_solver.set_objective({dn: 1.0 for dn in dnames}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
 
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "x", "l_quantity")
-    assert abs(decidb_obj - expected) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, expected={expected:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
 
 @pytest.mark.var_real

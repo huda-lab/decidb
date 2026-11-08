@@ -8,8 +8,10 @@ import time
 
 import pytest
 
-from solver.types import VarType, ObjSense
+from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
+from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
 @pytest.mark.var_integer
@@ -136,9 +138,11 @@ def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_reversed_bound_comparisons_are_normalized(decidb_cli):
+def test_reversed_bound_comparisons_are_normalized(decidb_cli, oracle_solver):
     """Equivalent reversed comparisons (`K >= x`, `K <= x`, `K >= SUM(x)`)
-    bind as the canonical DECIDE-LHS forms."""
+    bind as the canonical DECIDE-LHS forms. The bounds must hold per row, and the
+    objective must equal the oracle's, which states each comparison in its canonical
+    direction (`x <= 5`, `x >= 2`, `SUM(x) <= 6`)."""
     rows, cols = decidb_cli.execute("""
         SELECT id, x
         FROM (VALUES (1), (2)) t(id)
@@ -151,15 +155,27 @@ def test_reversed_bound_comparisons_are_normalized(decidb_cli):
     x_idx = cols.index("x")
     xs = [int(row[x_idx]) for row in rows]
     assert all(2 <= x <= 5 for x in xs)
-    assert sum(xs) == 6
+
+    oracle_solver.create_model("reversed_bounds")
+    vnames = [f"x_{i}" for i in range(len(xs))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=2.0, ub=5.0)
+    oracle_solver.add_constraint({vn: 1.0 for vn in vnames}, "<=", 6.0, name="total_limit")
+    oracle_solver.set_objective({vn: 1.0 for vn in vnames}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    assert (
+        abs(sum(xs) - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={sum(xs)}, Oracle={result.objective_value}"
 
 
 # --- Per-row LHS with linear transforms (regression tests) ---
 # Before Fix A, these silently returned wrong answers because ExtractTerms
 # didn't handle `/` and the ilp_model_builder dropped LHS terms without a
 # decide variable instead of moving them to RHS. Each case compares decidb
-# against an oracle model with the constraint's algebraic solution baked into
-# the variable bounds.
+# against an oracle model that states the constraint as written, one row per
+# DeciDB row (`coefficient * x_i <= rhs - constant`), plus only the bounds the
+# query itself writes and the type's default bound.
 
 
 @pytest.mark.var_real
@@ -170,18 +186,20 @@ def test_reversed_bound_comparisons_are_normalized(decidb_cli):
 # recurses on the operands, so `x / 2 + 1` and `x + 3 - 1` reach only the branches of `x / 2`, `x + 3` and `x - 3`.
 # `2 * x + 3` is the one case with the product.
 @pytest.mark.parametrize(
-    "lhs_sql,rhs_sql,oracle_ub",
+    "lhs_sql,rhs_sql,coefficient,constant",
     [
-        ("x + 3", "10", 7.0),
-        ("x - 3", "2", 5.0),
-        ("x / 2", "1", 2.0),
-        ("2 * x + 3", "11", 4.0),
+        ("x + 3", "10", 1.0, 3.0),
+        ("x - 3", "2", 1.0, -3.0),
+        ("x / 2", "1", 0.5, 0.0),
+        ("2 * x + 3", "11", 2.0, 3.0),
     ],
+    ids=["x + 3-10-7.0", "x - 3-2-5.0", "x / 2-1-2.0", "2 * x + 3-11-4.0"],
 )
-def test_perrow_linear_lhs_upper_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
-                                        lhs_sql, rhs_sql, oracle_ub):
+def test_perrow_linear_lhs_upper_bound(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker, lhs_sql, rhs_sql, coefficient, constant
+):
     """Per-row upper-bound constraints with non-trivial linear LHS. The oracle
-    model encodes the algebraic solution (x <= oracle_ub); decidb should match."""
+    states `coefficient * x_i + constant <= rhs` on every row; decidb should match."""
     sql = f"""
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp
@@ -204,7 +222,8 @@ def test_perrow_linear_lhs_upper_bound(decidb_cli, duckdb_conn, oracle_solver, p
     oracle_solver.create_model(f"perrow_linear_{lhs_sql.replace(' ', '')}")
     vnames = [f"x_{i}" for i in range(len(data))]
     for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=oracle_ub)
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0)
+        oracle_solver.add_constraint({vn: coefficient}, "<=", float(rhs_sql) - constant)
     oracle_solver.set_objective(
         {vnames[i]: data[i][1] for i in range(len(data))},
         ObjSense.MAXIMIZE,
@@ -230,7 +249,7 @@ def test_perrow_linear_lhs_upper_bound(decidb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_perrow_unary_minus_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Unary minus on LHS: `-x <= -K` means `x >= K`. Oracle matches via lb=K."""
+    """Unary minus on LHS: `-x <= -K` means `x >= K`. The oracle states `-x_i <= -2` on every row."""
     sql = """
         SELECT ps_partkey, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 10
@@ -253,7 +272,8 @@ def test_perrow_unary_minus_lower_bound(decidb_cli, duckdb_conn, oracle_solver, 
     oracle_solver.create_model("perrow_unary_minus")
     vnames = [f"x_{i}" for i in range(len(data))]
     for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=2.0, ub=10.0)
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.add_constraint({vn: -1.0}, "<=", -2.0)
     oracle_solver.set_objective(
         {vnames[i]: 1.0 for i in range(len(data))},
         ObjSense.MAXIMIZE,
@@ -301,9 +321,10 @@ def test_perrow_data_column_in_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_data_column")
     vnames = [f"x_{i}" for i in range(len(data))]
-    # Per-row bound: x_i <= 1 + ps_availqty[i]
+    # x_i - ps_availqty[i] <= 1, with the row's own number on the left
     for i, vn in enumerate(vnames):
-        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=1.0 + data[i][1])
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0)
+        oracle_solver.add_constraint({vn: 1.0}, "<=", 1.0 + data[i][1])
     oracle_solver.set_objective(
         {vnames[i]: 1.0 for i in range(len(data))},
         ObjSense.MAXIMIZE,
@@ -355,9 +376,10 @@ def test_perrow_negative_constant_divisor(decidb_cli, duckdb_conn, oracle_solver
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_neg_divisor")
     vnames = [f"x_{i}" for i in range(len(data))]
-    # -0.5 * x <= 1  →  x >= -2, with explicit x <= 10 giving lb=-2, ub=10.
+    # x / -2 <= 1 is -0.5 * x_i <= 1 on every row; the query writes x <= 10.
     for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=-2.0, ub=10.0)
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.add_constraint({vn: -0.5}, "<=", 1.0)
     oracle_solver.set_objective(
         {vnames[i]: 1.0 for i in range(len(data))}, ObjSense.MAXIMIZE,
     )
@@ -378,46 +400,31 @@ def test_perrow_negative_constant_divisor(decidb_cli, duckdb_conn, oracle_solver
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_perrow_strict_lt_with_offset(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """`x + 3 < 10` with integer x should give `x <= 6` (strict-< on integers
-    becomes `<= K-1`). Checks that RHS adjustment and strict-inequality
-    handling compose."""
+def test_perrow_strict_lt_with_offset(decidb_cli, duckdb_conn, scope_solver):
+    """`x + 3 < 10` with integer x: strict-< on integers becomes `<= K-1`. Checks that
+    RHS adjustment and strict-inequality handling compose. The scope oracle states the
+    clause as written (`<` with the offset on the left) and applies the language's
+    strict rule itself."""
     sql = """
-        SELECT ps_partkey, ps_availqty, x
-        FROM partsupp WHERE ps_partkey < 10
+        SELECT ps_partkey, ps_suppkey, ps_availqty, x
+        FROM partsupp
+        WHERE ps_partkey < 10
         DECIDE x(INT)
         SUCH THAT x + 3 < 10
         MAXIMIZE SUM(x * ps_availqty)
+        ORDER BY ps_partkey, ps_suppkey
     """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
-        FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("perrow_strict_lt")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    for vn in vnames:
-        # x + 3 < 10  →  x <= 6 (integer strict-lt on integer LHS rewrites to <=K-1)
-        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=6.0)
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
-    )
-    perf_tracker.record(
-        "perrow_strict_lt", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    rows = [
+        dict(zip(("ps_partkey", "ps_suppkey", "ps_availqty"), row))
+        for row in duckdb_conn.execute(
+            "SELECT ps_partkey, ps_suppkey, ps_availqty FROM partsupp WHERE ps_partkey < 10 ORDER BY ps_partkey, ps_suppkey"
+        ).fetchall()
+    ]
+    model = ScopedModel(rows, [Decision("x")])
+    clauses = [Scoped((lambda r: {"x": 1, CONSTANT: 3},), "<", (lambda r: {CONSTANT: 10},))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["ps_availqty"]}),))
+    assert model.judge_scoped(answer(decidb_cli, sql), clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
     )
 
 
@@ -449,7 +456,8 @@ def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_sol
     oracle_solver.create_model("perrow_int_fractional_coef")
     vnames = [f"x_{i}" for i in range(len(data))]
     for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=3.0)
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0)
+        oracle_solver.add_constraint({vn: 1.0 / 3.0}, "<=", 1.0)
     oracle_solver.set_objective(
         {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
     )
@@ -495,9 +503,10 @@ def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, per
     oracle_solver.create_model("perrow_when_linear")
     vnames = [f"x_{i}" for i in range(len(data))]
     for i, vn in enumerate(vnames):
-        # even partkey: x <= 7; odd: x <= 20.
-        ub = 7.0 if (int(data[i][0]) % 2 == 0) else 20.0
-        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=ub)
+        # The query writes x <= 20 for every row, and x + 3 <= 10 on the rows `when` keeps.
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=20.0)
+        if int(data[i][0]) % 2 == 0:
+            oracle_solver.add_constraint({vn: 1.0}, "<=", 10.0 - 3.0)
     oracle_solver.set_objective(
         {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
     )
