@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
@@ -10,6 +11,7 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -97,6 +99,31 @@ void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const 
 void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
                             LogicalDecide &decide) {
 	if (checks.empty() && decide.bound_aggregates.empty()) {
+		return;
+	}
+	if (DecideTreeRequested()) {
+		for (auto &check : checks) {
+			decide.retained_row_checks.push_back(check.invalid->Copy());
+		}
+		for (auto &aggregate : decide.bound_aggregates) {
+			LogicalDecide::RetainedBoundAggregate retained;
+			retained.placeholder = make_uniq<BoundColumnRefExpression>(aggregate.function->return_type, aggregate.column);
+			retained.aggregate.column = aggregate.column;
+			retained.aggregate.function = aggregate.function->Copy();
+			retained.aggregate.reads = aggregate.reads ? aggregate.reads->Copy() : nullptr;
+			retained.aggregate.key = aggregate.key;
+			retained.aggregate.counts_classes = aggregate.counts_classes;
+			retained.aggregate.class_key = aggregate.class_key;
+			for (auto &argument : aggregate.arguments) {
+				retained.aggregate.arguments.push_back(argument->Copy());
+			}
+			decide.retained_bound_aggregates.push_back(std::move(retained));
+		}
+	}
+	if (SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE) {
+		// The tree owns the retained reducers and checks. Its source is the
+		// original relation, with no aggregate join or check gate in front of it.
+		decide.bound_aggregates.clear();
 		return;
 	}
 	// The operator reads the source once, and each bound and check once more.

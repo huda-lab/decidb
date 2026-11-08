@@ -366,6 +366,11 @@ inline string MakeFrameTag(idx_t frame_idx) {
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
+//! Metadata for the executable tree when a flat MIN/MAX carrier deliberately
+//! drops its qualifier. Flat term extraction and rendering do not read these.
+static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
+static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
+
 //! Tag prefix marking a SUM(...) that really means a hard MIN/MAX (on
 //! BoundAggregateExpression.alias).
 //! Format: "__minmax_clause_<clause_idx>_<min|max>__", on both arms.

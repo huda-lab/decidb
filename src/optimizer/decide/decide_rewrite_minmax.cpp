@@ -14,6 +14,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -38,6 +39,20 @@
 namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
+
+//! Retain tree semantics without changing the flat carrier's term extraction.
+static void KeepTreeReducerScope(Expression &carrier, const BoundAggregateExpression &original) {
+	if (!DecideTreeRequested()) {
+		return;
+	}
+	idx_t index;
+	if (TryParseQualifiedReducerTag(original.GetAlias(), index)) {
+		AddDecideTag(carrier.alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(index) + "__");
+	}
+	if (TryParseGroupKeyTag(original.GetAlias(), index)) {
+		AddDecideTag(carrier.alias, string(TREE_REDUCER_KEY_TAG_PREFIX) + to_string(index) + "__");
+	}
+}
 
 // ---------------------------------------------------------------------------
 // A factor sitting on a reducer
@@ -615,6 +630,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		if (TryParseGroupKeyTag(agg.alias, group_key)) {
 			AddDecideTag(hard_lhs->alias, MakeGroupKeyTag(group_key));
 		}
+		KeepTreeReducerScope(*hard_lhs, agg);
 		return hard_lhs;
 	};
 	// The hard side. Stage 06 takes the extremum the tag names over the members'
@@ -810,6 +826,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		if (outer_agg.filter) {
 			new_sum->Cast<BoundAggregateExpression>().filter = outer_agg.filter->Copy();
 		}
+		KeepTreeReducerScope(*new_sum, outer_agg);
 		*obj_owner = std::move(new_sum);
 	}
 }

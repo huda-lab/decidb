@@ -7,6 +7,7 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
@@ -76,6 +77,8 @@ struct TermFilterState {
 //! entire input before producing output.
 class PhysicalDecide : public PhysicalOperator {
 public:
+    //! Semantic E/G/O graph, captured before flat frame lowering during migration.
+    unique_ptr<DecideTree> tree;
     static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::DECIDE;
 
 public:

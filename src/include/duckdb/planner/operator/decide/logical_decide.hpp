@@ -693,6 +693,18 @@ public:
 	//! has built their side tables (DirectSourceReader::AddSideTable).
 	vector<DecideBoundAggregate> bound_aggregates;
 
+	//! During the tree evaluator's transition, side tables still serve the flat
+	//! oracle. Keep the data reducer's semantics and its resolved result reference
+	//! so the executable graph can compute it independently. Enumerated with the
+	//! operator's live expressions; never serialized (the optimizer creates it).
+	struct RetainedBoundAggregate {
+		DecideBoundAggregate aggregate;
+		unique_ptr<Expression> placeholder;
+	};
+	vector<RetainedBoundAggregate> retained_bound_aggregates;
+	//! The checks side plans execute during the transition, retained for tree execution.
+	vector<unique_ptr<Expression>> retained_row_checks;
+
 	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
 	//! values execution computes, so the reducer stays in the tree, tagged with its entry (FRAME_AGGREGATE_TAG_PREFIX)
 	//! over the rows it reads (its filter), and stage 05 makes it a frame column execution computes after the frames

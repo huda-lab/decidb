@@ -28,6 +28,9 @@ enum class DecideEvaluator : uint8_t {
 //! of a running process does not change. It is no setting, so it stays off the wire and out of every plan.
 DecideEvaluator SelectedDecideEvaluator();
 
+//! Build the semantic graph for a tree execution or a requested structural dump.
+bool DecideTreeRequested();
+
 //! What a run of an evaluator leaves for the model, in the form two runs compare, taken before BuildSolverInput
 //! consumes it. SolverInput itself cannot be compared: it holds a std::function and mutable caches, and a clause's
 //! coefficients are filled on rows it never emits. Each field is in one group, which an injected difference names.

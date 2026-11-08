@@ -8,6 +8,7 @@
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
+#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -58,6 +59,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
     // expressions after the DECIDE optimizer runs -- copies taken earlier would keep
     // bindings that no longer name the right input columns.
+    auto tree = DecideTreeRequested() ? BuildDecideTree(context, op) : nullptr;
     BuildDecidePreparedModel(context, op);
     // With the shape of every constraint and the objective settled, check the model
     // class this query needs against the backend chosen for it. A model class is a
@@ -117,6 +119,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         op.types, op.estimated_cardinality, std::move(child_plan),
         op.decide_index, std::move(op.decide_variables),
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
+    decide_op->tree = std::move(tree);
     // The DIAGNOSE prefix, carried the last leg of parser → binder → plan → stage 08.
     decide_op->diagnose = op.diagnose;
     decide_op->solver_backend_name = op.solver_backend_name;

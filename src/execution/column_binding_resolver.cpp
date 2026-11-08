@@ -145,6 +145,23 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 				ignored_bindings.push_back(expr->Cast<BoundColumnRefExpression>().binding);
 			}
 		}
+		// A tree-only data reducer has no side-table result column. Preserve
+		// its logical identity until BuildDecideTree replaces every such read
+		// with a typed child-result reference. A result the child DOES produce
+		// (the shadow evaluator's side table) is resolved normally.
+		for (auto &retained : decide_op.retained_bound_aggregates) {
+			if (retained.placeholder->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+				continue;
+			}
+			auto binding = retained.placeholder->Cast<BoundColumnRefExpression>().binding;
+			bool produced = false;
+			for (auto &input_binding : bindings) {
+				produced = produced || input_binding == binding;
+			}
+			if (!produced) {
+				ignored_bindings.push_back(binding);
+			}
+		}
 
 		// Every expression LogicalDecide owns (variables, constraints, objective,
 		// composed MIN/MAX terms, keyed decisions' keys) must be resolved here for the same

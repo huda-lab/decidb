@@ -10,6 +10,7 @@
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
+#include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -918,18 +919,7 @@ private:
 			constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
 		}
 
-		string minmax_payload;
-		if (ExtractDecideTagPayload(agg.alias, MINMAX_CLAUSE_TAG_PREFIX, minmax_payload)) {
-			// "<clause_idx>_<agg>", always both parts: the clause is registered where it is
-			// tagged, before either formulation is chosen, so the index is there whichever
-			// arm follows. Neither "min" nor "max" contains an underscore, so the first one
-			// separates the two.
-			auto sep = minmax_payload.find('_');
-			D_ASSERT(sep != string::npos);
-			constraint.minmax_clause_idx = std::stoull(minmax_payload.substr(0, sep));
-			constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
-			constraint.kind = ConstraintKind::USER_MECHANISM;
-		}
+
 	}
 
 	//! The per-row terms of a scoped easy MIN/MAX, `[s *] max(when c: e)`: the terms of `e`,
@@ -1012,68 +1002,8 @@ private:
 				break;
 			}
 
-			auto constraint = make_uniq<DecideConstraint>();
-			constraint->comparison_type = comp.type;
-			constraint->rhs_expr = comp.right->Copy();
-			constraint->tightest_frame_bound = HasDecideTag(comp.alias, FRAME_TIGHTEST_BOUND_TAG);
-			TryParseSourceClauseTag(comp.GetAlias(), constraint->source_clause_id);
-			TryParseRemovalGroupTag(comp.GetAlias(), constraint->removal_group_id);
-
-			// Parse not-equal indicator tag if present
-			string payload;
-			if (ExtractDecideTagPayload(comp.alias, NE_CLAUSE_TAG_PREFIX, payload)) {
-				constraint->ne_clause_idx = std::stoull(payload);
-				constraint->kind = ConstraintKind::USER_MECHANISM;
-			}
-
-			// Parse ABS MAXIMIZE upper-bound tag: marks a lower-bound ABS constraint
-			// (aux >= inner or aux >= -inner) that needs Big-M upper bounds at finalization.
-			if (HasDecideTag(comp.alias, STRUCTURAL_CONSTRAINT_TAG)) {
-				constraint->kind = ConstraintKind::STRUCTURAL;
-			}
-			TryParseDecideIndexTag(comp.alias, DEFINES_TAG_PREFIX, constraint->defined_var);
-			if (ExtractDecideTagPayload(comp.alias, ABS_UB_POS_TAG_PREFIX, payload)) {
-				constraint->abs_aux_idx = std::stoull(payload);
-				constraint->abs_is_pos_bound = true;
-				constraint->kind = ConstraintKind::STRUCTURAL;
-			} else if (ExtractDecideTagPayload(comp.alias, ABS_UB_NEG_TAG_PREFIX, payload)) {
-				constraint->abs_aux_idx = std::stoull(payload);
-				constraint->abs_is_pos_bound = false;
-				constraint->kind = ConstraintKind::STRUCTURAL;
-			}
-
-			// Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
-			if (HasDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG)) {
-				constraint->was_minmax_easy = true;
-			}
-
-			constraint->scope = DecideClauseScope(scope);
-			TryParseGroupKeyTag(comp.alias, constraint->group_key);
-
-			// Extract terms from LHS
-			// Only binder-generated wrappers over decision algebra are transparent.
-			// A data cast is a SQL computation and UnwrapDecideCasts stops at it.
+			auto constraint = ReadDecideClauseFacts(context, op, comp, scope);
 			Expression *lhs = UnwrapDecideCasts(*comp.left, decide_index);
-
-			auto constraint_class = canonicalizer.ClassifyCanonicalComparison(comp);
-			if (constraint_class == CanonicalConstraintClass::INVALID) {
-				throw InternalException(
-				    "DECIDE constraint reached term extraction with invalid aggregate/per-row "
-				    "homogeneity: '%s'. Canonical validation must reject this during planning.",
-				    comp.ToString());
-			}
-			if (constraint_class == CanonicalConstraintClass::VALUE) {
-				throw InternalException("DECIDE constraint in the VALUE shape reached term extraction: the value "
-				                        "rewrite did not replace its reducers in '%s'.",
-				                        comp.ToString());
-			}
-			// `per K:` makes a per-row clause one row per class. Over the aggregate shape, and
-			// over the easy MIN/MAX whose rows are its members, the key only names the
-			// classes a group's row stands for.
-			if (constraint->scope.per != DecideClauseScope::PerRole::NONE && !constraint->was_minmax_easy &&
-			    constraint_class != CanonicalConstraintClass::AGGREGATE) {
-				constraint->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
-			}
 
 			if (constraint->was_minmax_easy) {
 				// The easy direction of a MIN/MAX (`max(when c: e) by (g) <= cap`)
@@ -1083,7 +1013,7 @@ private:
 				// `when` and `by` reach this point; a factor on it distributes over the rows.
 				constraint->lhs_is_aggregate = false;
 				ExtractEasyExtremumTerms(*lhs, *constraint);
-			} else if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
+			} else if (constraint->lhs_is_aggregate) {
 				// Aggregate constraint. Handles both legacy single aggregates and
 				// additive aggregate expressions whose reducers carry their own `when`. The
 				// classification comes from the canonical boundary rather than aggregate
@@ -1125,22 +1055,6 @@ private:
 					// (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0,
 					//  or POWER(x - target, 2) <= K quadratic constraint)
 					ExtractConstraintTerms(*lhs, *constraint, 1);
-				}
-			}
-			// A bound on one decision, a per-row one or an easy MIN/MAX on each member it reads, folds into the
-			// decision's column on each row it emits (stage 06).
-			DecideSingletonRow bound;
-			if (!folded && !constraint->lhs_is_aggregate && DecideReadSingletonRow(context, op, comp, bound)) {
-				constraint->admitted_lower = std::move(bound.lower);
-				constraint->admitted_upper = std::move(bound.upper);
-				constraint->admitted_a = std::move(bound.a);
-				constraint->admitted_r = std::move(bound.r);
-				constraint->admitted_member = std::move(bound.member);
-				// A bound the folding pass did not enter (a `when`, a reducer filter) that lowers the default floor
-				// signs its decision on the rows the clause keeps (stage 06, ResolveLiftedFloors).
-				if (bound.LiftsDefaultFloor()) {
-					constraint->lifted_floor = bound.var_idx;
-					constraint->lifted_floor_k = bound.written_k;
 				}
 			}
 
