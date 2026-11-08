@@ -128,8 +128,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	decide.SetObjective(optimizer.context, std::move(objective));
 	auto constraints = std::move(decide.decide_constraints);
 	rewrite(constraints, string(), DecideEnclosingScope());
-	if (constraints)
-		decide.AddConstraint(optimizer.context, std::move(constraints));
+	decide.AddConstraint(optimizer.context, std::move(constraints));
 	for (auto &link : links)
 		decide.AddConstraint(optimizer.context, std::move(link));
 }
@@ -148,7 +147,6 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	};
 	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const string &source_alias) {
-		if (!expr) return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
 		scope = EnterDecideScope(*expr, scope);
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -157,14 +155,13 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 				if (IsConstraintChild(conj, i)) rewrite(conj.children[i], scope, clause_alias);
 			}
 			// A `when c:` goes with the clause it held: the placeholder stands in for both.
-			if (IsWhenFilterWrapper(conj) && conj.children.size() == 2 &&
-			    conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-			    conj.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>())
+			if (IsWhenFilterWrapper(conj) && conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT)
 				expr = MakeTrueExpression(conj.children[0]->GetAlias());
 			return;
 		}
 		auto when = scope.Condition();
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR || expr->type != ExpressionType::COMPARE_IN) return;
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR)
+			return;
 		auto &in = expr->Cast<BoundOperatorExpression>();
 		if (in.children.size() < 2) throw InternalException("DECIDE IN marker has no domain values");
 		auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
@@ -173,7 +170,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		scope_of_in = ScopeOf(decide, canonicalizer, *in.children[0]);
 		for (idx_t i = 1; i < in.children.size(); i++)
 			scope_of_in = JoinScopes(scope_of_in, ScopeOf(decide, canonicalizer, *in.children[i]));
-		if (target->binding.column_index < decide.is_boolean_var.size() && decide.is_boolean_var[target->binding.column_index] && k == 2) {
+		if (decide.is_boolean_var[target->binding.column_index] && k == 2) {
 			double a, b;
 			if (TryEvaluateFoldableDouble(optimizer.context, *in.children[1], a, FOLD_CATCH_ALL) &&
 			    TryEvaluateFoldableDouble(optimizer.context, *in.children[2], b, FOLD_CATCH_ALL) &&

@@ -37,9 +37,6 @@
 namespace duckdb {
 
 void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
-	if (!decide.decide_constraints) {
-		return;
-	}
 	// Walk the bound constraint tree and find all COMPARE_NOTEQUAL expressions.
 	// For each one, create an auxiliary BOOLEAN indicator variable.
 	// The constraint expression itself is NOT modified — the physical operator
@@ -90,11 +87,9 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	// Rewrites mutate in place, so each clause is detached, rewritten, and
 	// reinstalled through the boundary rather than edited where it sits.
-	if (decide.decide_constraints) {
-		auto constraints = std::move(decide.decide_constraints);
-		RewriteAvgInExpression(constraints, decide, string());
-		decide.AddConstraint(optimizer.context, std::move(constraints));
-	}
+	auto constraints = std::move(decide.decide_constraints);
+	RewriteAvgInExpression(constraints, decide, string());
+	decide.AddConstraint(optimizer.context, std::move(constraints));
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		RewriteAvgInExpression(objective, decide, OBJECTIVE_ROW_TAG);
@@ -104,31 +99,13 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 
 void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                              const string &source_alias) {
-	if (!expr) {
-		return;
-	}
-	const idx_t decide_index = decide.decide_index;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
-	Expression *inner = expr.get();
-	bool has_cast = false;
-	if (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		has_cast = true;
-		inner = inner->Cast<BoundCastExpression>().child.get();
-	}
-
-	if (inner->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &agg = inner->Cast<BoundAggregateExpression>();
-		// A decision-free AVG is left alone. The rewrite exists only to linearize a
-		// decision-bearing AVG into `1/N * x_i` coefficients; a data-only AVG has
-		// nothing to linearize, it is just a number the right-hand side evaluates.
-		// Rewriting it is actively harmful there: BindAggregateFunction("sum", ...)
-		// redeclares the node with SUM's type (HUGEINT where AVG is DOUBLE), and the
-		// right-hand side must hand its value back to the surrounding expression,
-		// which was bound against that declared type -- so the fractional part is
-		// cast away. Leaving it as a real AVG keeps the round trip DOUBLE->DOUBLE.
-		if (StringUtil::CIEquals(agg.function.name, "avg") && agg.children.size() == 1 &&
-		    BoundExpressionReferencesDecide(*inner, decide_index)) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		auto &agg = expr->Cast<BoundAggregateExpression>();
+		// Only an AVG over decisions reaches this pass: a data-only one is the bound's, already a placeholder column
+		// (RewriteRhsAggregates), and the binder admits no cast over a decision.
+		if (StringUtil::CIEquals(agg.function.name, "avg")) {
 			AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
 			                  RenderForPlan(agg, decide));
 			auto new_sum = BindSumOver(optimizer, agg.children[0]->Copy(), agg.filter.get());
@@ -142,13 +119,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 			new_sum->alias = agg.alias;
 			AddDecideTag(new_sum->alias, AVG_REWRITE_TAG);
 
-			if (has_cast) {
-				// Preserve the cast wrapper — update its child
-				auto &cast_expr = expr->Cast<BoundCastExpression>();
-				cast_expr.child = std::move(new_sum);
-			} else {
-				expr = std::move(new_sum);
-			}
+			expr = std::move(new_sum);
 			return;
 		}
 	}
