@@ -68,6 +68,13 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 		auto named = DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, names.texts[i - 1]);
 		message = calc.If(not_finite, calc.Constant(Value(named)), message);
 	}
+	// A constant that is not finite fails on every row, so it is named before any column's value.
+	for (idx_t i = names.constants.size(); i > 0; i--) {
+		auto constant = calc.Cast(calc.Of(*names.constants[i - 1]), LogicalType::DOUBLE);
+		auto not_finite = calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", constant), calc.Bool(false));
+		auto named = DecideInvalidValueMessage(DecideValueRole::CONSTANT, names.constant_texts[i - 1]);
+		message = calc.If(not_finite, calc.Constant(Value(named)), message);
+	}
 	auto none = calc.Constant(Value(LogicalType::VARCHAR));
 	return calc.If(calc.IsNull(number), none, calc.If(calc.Fn("isfinite", number), none, message));
 }

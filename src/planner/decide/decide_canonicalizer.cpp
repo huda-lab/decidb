@@ -927,8 +927,10 @@ bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
 			}
 		}
 		// A group whose factors cancel is left as written: dropping it could empty the
-		// side, and `x - x` is the user's to resolve.
-		if (like.empty() || total == 0.0) {
+		// side, and `x - x` is the user's to resolve. So is one whose sum leaves the DOUBLE range: the terms are each
+		// finite and the model builder, which adds them, names the clause; a merged infinity would be a constant the
+		// user never wrote.
+		if (like.empty() || total == 0.0 || !std::isfinite(total)) {
 			continue;
 		}
 		ScaleAtomBy(atoms[i], term, total);

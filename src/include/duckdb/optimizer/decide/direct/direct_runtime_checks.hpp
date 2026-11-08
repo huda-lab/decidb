@@ -45,17 +45,21 @@ unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const Expression
 
 //! What a message names for a number a plan checks, as the solver path names it (ValueSource): the values it is
 //! computed from that a column holds, each over the source with the text the user wrote it as, in reading order, and
-//! the clause (or the objective) it belongs to. A literal is no column's value, so it is not among them.
+//! the clause (or the objective) it belongs to. A literal is no column's value, so it is not among `inputs`; it is
+//! among `constants`, which a message names when one is NaN or infinite itself (DecideValueRole::CONSTANT).
 struct DirectNumberNames {
 	vector<unique_ptr<Expression>> inputs;
 	vector<string> texts;
+	vector<unique_ptr<Expression>> constants;
+	vector<string> constant_texts;
 	string clause;
 };
 
 //! The message of a number the solver refuses (NaN or infinite), NULL for a valid number; a NULL number skips what it
 //! reaches, so it is valid. It names the first of `names.inputs` that is not finite (DecideValueRole::COEFFICIENT),
 //! and the clause when each is: the arithmetic left the DOUBLE range (TOO_LARGE). Only a row whose number is not finite
-//! reads the inputs, as a CASE evaluates a branch only on the rows that reach it. `into` re-points an input at the
+//! reads the inputs, as a CASE evaluates a branch only on the rows that reach it. A constant that is not finite is
+//! named before any input (DecideValueRole::CONSTANT), as the solver path names it. `into` re-points an input at the
 //! operator the message is evaluated in.
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
                             const std::function<ExprPtr(const Expression &)> &into);

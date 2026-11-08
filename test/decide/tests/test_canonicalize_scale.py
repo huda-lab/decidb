@@ -1333,8 +1333,31 @@ def test_like_terms_over_constant_divisors(decidb_cli, clause, holds):
 
 @pytest.mark.cons_comparison
 @pytest.mark.error_binder
-@pytest.mark.parametrize("clause", ["x / 0 <= 4", "x / 0.0 + x / 0.0 <= 3"])
-def test_a_zero_divisor_is_refused(decidb_cli, clause):
+@pytest.mark.parametrize(
+    "clause, message",
+    [
+        # SQL makes 1 / 0 infinite, so the coefficient is a constant that is not finite: no row holds it and no `when`
+        # skips it.
+        pytest.param("x / 0 <= 4", "DECIDE: 1 / 0 is NaN or infinite. Use a finite value.", id="zero-divisor"),
+        pytest.param(
+            "x / 0.0 + x / 0.0 <= 3",
+            "DECIDE: 2 * (1 / 0.0) is NaN or infinite. Use a finite value.",
+            id="zero-divisor-merged",
+        ),
+        pytest.param(
+            "x * 'Infinity'::DOUBLE <= 3",
+            "DECIDE: CAST('Infinity' AS DOUBLE) is NaN or infinite. Use a finite value.",
+            id="infinite-literal",
+        ),
+        # Finite terms whose sum leaves the DOUBLE range: DeciDB's own arithmetic, so the clause is named.
+        pytest.param(
+            "x * 1e308 + x * 1e308 <= 4",
+            "DECIDE: x * 1e308 + x * 1e308 <= 4 computes a number too large for a DOUBLE. Scale its data down.",
+            id="finite-sum-past-the-range",
+        ),
+    ],
+)
+def test_a_constant_coefficient_that_is_not_finite_is_refused(decidb_cli, clause, message):
     decidb_cli.assert_error(
         f"""
         SELECT id, x FROM {_NESTED_ROWS}
@@ -1342,7 +1365,7 @@ def test_a_zero_divisor_is_refused(decidb_cli, clause):
         SUCH THAT x <= 5 AND {clause}
         MAXIMIZE SUM(x)
     """,
-        match=re.escape(f"DECIDE: {clause} computes a number too large for a DOUBLE. Scale its data down."),
+        match=re.escape(message),
     )
 
 

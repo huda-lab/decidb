@@ -174,6 +174,8 @@ struct ValueSource {
 	const DecideSourceNames &names;
 	string clause = string();
 	const ValueInputs *inputs = nullptr;
+	//! Where to evaluate a constant, for a source that has no inputs.
+	ClientContext *context = nullptr;
 };
 
 //! Whether `input` is a finite number or NULL on row `row` of the chunk: the one row a failing coefficient reads it on.
@@ -203,11 +205,25 @@ static bool IsFiniteOnRow(const ValueInputs &inputs, const Expression &input, id
 	if (source.role != DecideValueRole::COEFFICIENT) {
 		throw refuse(source.role, source.value);
 	}
+	// A constant that SQL computes as NaN or infinite (`1 / 0`, `'Infinity'`) is the user's value, not DeciDB's
+	// arithmetic past a DOUBLE. It fails on every row, so no `when` skips it and it is named before any column's value.
+	// A literal the parser reads past the DOUBLE range (`2e308`) is a number too large, and names its clause.
+	auto &context = source.inputs ? source.inputs->context : *source.context;
+	auto is_non_finite_constant = [&](const Expression &value) {
+		double number;
+		return value.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT && value.IsFoldable() &&
+		       TryEvaluateFoldableDouble(context, value, number, FOLD_CATCH_ALL) && !std::isfinite(number);
+	};
 	if (!source.inputs || source.inputs->values.empty()) {
 		if (source.value.IsFoldable()) {
-			throw too_large;
+			throw is_non_finite_constant(source.value) ? refuse(DecideValueRole::CONSTANT, source.value) : too_large;
 		}
 		throw refuse(DecideValueRole::COEFFICIENT, source.value);
+	}
+	for (auto &input : source.inputs->values) {
+		if (is_non_finite_constant(*input)) {
+			throw refuse(DecideValueRole::CONSTANT, *input);
+		}
 	}
 	for (auto &input : source.inputs->values) {
 		if (!input->IsFoldable() && !IsFiniteOnRow(*source.inputs, *input, row)) {
@@ -2891,7 +2907,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		}
 		double v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 		if (!std::isfinite(v)) {
-			ThrowInvalidValue({DecideValueRole::COEFFICIENT, scale, Names(), clause});
+			ThrowInvalidValue({DecideValueRole::COEFFICIENT, scale, Names(), clause, nullptr, &context});
 		}
 		if (divides) {
             if (v == 0.0) {

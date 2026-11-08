@@ -172,6 +172,10 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 		if (!DecideUnguarded(*value.expr).IsFoldable()) {
 			names.inputs.push_back(value.expr->Copy());
 			names.texts.push_back(ir.render(*value.expr));
+		} else if (DecideUnguarded(*value.expr).GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+			// A literal past the DOUBLE range is a number too large, not a constant SQL computed as infinite.
+			names.constants.push_back(DecideUnguarded(*value.expr).Copy());
+			names.constant_texts.push_back(ir.render(*value.expr));
 		}
 	}
 	names.clause = clause;

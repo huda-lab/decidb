@@ -308,7 +308,8 @@ def test_s1_a_finite_literal_score_adds_no_too_large_check(decidb_cli):
 @pytest.mark.correctness
 @pytest.mark.parametrize("budget", [False, True])
 def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(decidb_cli, budget):
-    # `'NaN'::DOUBLE` beside a column the data may leave NULL is a literal: it is named as the clause, not as a value.
+    # `'NaN'::DOUBLE` beside a column the data may leave NULL is a literal: it is named as a constant, not as a column's
+    # value on some rows.
     body = "'NaN'::DOUBLE * x + p * y"
     sql = f"""
         SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
@@ -316,7 +317,8 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
         MAXIMIZE SUM({'x + y' if budget else body})
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "computes a number too large for a DOUBLE" in direct, direct
+    assert "is NaN or infinite. Use a finite value." in direct, direct
+    assert "on some rows" not in direct, direct
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
@@ -324,14 +326,15 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
 @pytest.mark.correctness
 @pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p","s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
 def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient):
-    # A literal that is not finite keeps its check, which names the objective as the solver path does. Under the data's
-    # NULL skip the literal is still no column's value, so it is never named as one.
+    # A literal that is not finite keeps its check, which names it as a constant as the solver path does. Under the
+    # data's NULL skip the literal is still no column's value, so it is never named as one.
     sql = f"""
         SELECT id, s FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
         DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER({coefficient}, 2))
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "computes a number too large for a DOUBLE" in direct, direct
+    assert "is NaN or infinite. Use a finite value." in direct, direct
+    assert "on some rows" not in direct, direct
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 

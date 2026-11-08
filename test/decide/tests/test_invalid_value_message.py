@@ -183,6 +183,31 @@ def test_a_sum_the_plan_computes_that_overflows_is_named_as_written(decidb_cli, 
     assert direct == solver
 
 
+def _constant(value):
+    return f"DECIDE: {value} is NaN or infinite. Use a finite value."
+
+
+# A coefficient that is a constant, NaN or infinite itself: SQL computes `1 / 0` as infinity, so no row holds it and no
+# `when` skips it. Both paths name it, in one text without the `when`.
+BOTH_PATHS_CONSTANT = [
+    ("a1_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x / 0)", "1 / 0"),
+    ("a1_infinite_literal", f"x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x * {INFINITY})", f"CAST('Infinity' AS DOUBLE)"),
+    ("r1_objective", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(x / 0)", "1 / 0"),
+    ("r1_budget_weight", "x(REAL) SUCH THAT x <= 4 AND SUM(x / 0) <= 9 MAXIMIZE SUM(c * x)", "1 / 0"),
+    ("s1_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(x / 0)", "1 / 0"),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("name,decide,value", BOTH_PATHS_CONSTANT, ids=[case[0] for case in BOTH_PATHS_CONSTANT])
+def test_a_constant_coefficient_that_is_not_finite_is_named_on_both_paths(decidb_cli, name, decide, value):
+    direct = _stderr(decidb_cli, _query(decide, "1.0"), "require")
+    solver = _stderr(decidb_cli, _query(decide, "1.0"), "off")
+    assert _constant(value) in solver, solver
+    assert "when isfinite" not in solver, solver
+    assert direct == solver
+
+
 def _big_query(decide, big):
     # Every row holds the big value in `b`: a sum over rows, or a square of one, is past a DOUBLE.
     rows = f"(1, 1.0, {big}, 'g'), (2, 2.0, {big}, 'g'), (3, 3.0, {big}, 'h')"
