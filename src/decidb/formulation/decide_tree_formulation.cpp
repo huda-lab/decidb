@@ -96,7 +96,6 @@ public:
 	}
 
 	void Run() {
-		evaluation.RequireSupported();
 		LiftedFloors();
 		// Data bounds must settle before an extremum derives its own range. This
 		// is a dependency of formulation, independent of the written clause order.
@@ -210,18 +209,16 @@ private:
 				if (child.kind != DecideNodeKind::REDUCER || child.key != node.facts->group_key) {
 					continue;
 				}
+				const auto member = evaluation.FirstEntry(read.node, entry.row);
+				if (member == DConstants::INVALID_INDEX) {
+					continue;
+				}
 				members = &descent.Containers()[read.node];
-				for (auto &member : members->entries) {
-					if (member.row == entry.row) {
-						group = &members->groups[member.slot];
-						row.group_key = group->rank;
-						row.group_name = Name(read.node, member.slot, entry.row);
-						break;
-					}
-				}
-				if (group) {
-					break;
-				}
+				const auto slot = members->entries[member].slot;
+				group = &members->groups[slot];
+				row.group_key = group->rank;
+				row.group_name = Name(read.node, slot, entry.row);
+				break;
 			}
 		}
 		if (!group && node.per != DecideTreePer::ROW) {

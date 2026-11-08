@@ -1,11 +1,13 @@
 #include "duckdb/execution/operator/decide/decide_tree_evaluation.hpp"
 
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -126,6 +128,11 @@ idx_t DecideTreeEvaluation::ChildEntry(idx_t child, const DecideDescentEntry &en
 		return found->second[0];
 	}
 	throw InternalException("DECIDE tree: a shared child has several unmatched parent contexts");
+}
+
+idx_t DecideTreeEvaluation::FirstEntry(idx_t node, idx_t row) const {
+	auto found = rows[node].find(row);
+	return found == rows[node].end() ? DConstants::INVALID_INDEX : found->second[0];
 }
 
 DecideTreeValuePtr DecideTreeEvaluation::ChildValue(idx_t child, const DecideDescentEntry &entry) const {
@@ -1035,6 +1042,10 @@ void DecideTreeEvaluation::Evaluate() {
 		injected_data = parts[2];
 	}
 	for (auto node : tree.eval_order) {
+		// A Ctrl-C stops the evaluation at its next node, as it stops the descent at its next visit.
+		if (context.interrupted) {
+			throw InterruptException();
+		}
 		switch (tree.nodes[node]->kind) {
 		case DecideNodeKind::SCOPE:
 			Scope(node);
@@ -1068,10 +1079,21 @@ void DecideTreeEvaluation::Evaluate() {
 	evaluated = true;
 }
 
-static void RequireValue(const DecideTreeValuePtr &value, DecideErrorLedger &errors, DecideErrorRank fallback) {
+//! Values form a DAG, in which every entry of a group reads the group's reducer. A value is walked again only under a
+//! fallback ranking before every one it was walked under. An error ranks by its own rank or by the fallback, so a
+//! walk under a later fallback would add each error after, and at a rank no earlier than, one already added: the
+//! error ThrowIfAny raises stays the same.
+static void RequireValue(const DecideTreeValuePtr &value, DecideErrorLedger &errors, DecideErrorRank fallback,
+                         unordered_map<const DecideTreeValue *, DecideErrorRank> &walked, idx_t &walks) {
 	if (!value) {
 		throw InternalException("DECIDE tree: a root reads a value that was not computed");
 	}
+	auto known = walked.find(value.get());
+	if (known != walked.end() && !(fallback < known->second)) {
+		return;
+	}
+	walked[value.get()] = fallback;
+	walks++;
 	if (value->kind == DecideTreeValueKind::ERROR) {
 		auto rank = value->error_ranked ? value->error_rank : fallback;
 		if (value->error_rank.phase != DecideErrorPhase::INVALID) {
@@ -1083,7 +1105,7 @@ static void RequireValue(const DecideTreeValuePtr &value, DecideErrorLedger &err
 		errors.Add(fallback, ErrorData(NotImplementedException("DECIDE tree evaluation: %s", value->operation)));
 	}
 	for (auto &operand : value->operands) {
-		RequireValue(operand, errors, fallback);
+		RequireValue(operand, errors, fallback, walked, walks);
 	}
 }
 
@@ -1092,6 +1114,8 @@ void DecideTreeEvaluation::RequireSupported() const {
 		throw InternalException("DECIDE tree: root values requested before bottom-up evaluation");
 	}
 	auto errors = descent.Errors();
+	unordered_map<const DecideTreeValue *, DecideErrorRank> walked;
+	idx_t walks = 0;
 	for (auto root : tree.roots) {
 		auto &node = *tree.nodes[root];
 		auto &result = results[root];
@@ -1101,13 +1125,14 @@ void DecideTreeEvaluation::RequireSupported() const {
 				continue;
 			}
 			DecideErrorRank rank {node.value_phase, node.value_order, 0, descent.Containers()[root].entries[entry].row};
-			RequireValue(value, errors, rank);
+			RequireValue(value, errors, rank, walked, walks);
 			if (!result.rhs.empty()) {
 				rank.expression = 1;
-				RequireValue(result.rhs[entry], errors, rank);
+				RequireValue(result.rhs[entry], errors, rank, walked, walks);
 			}
 		}
 	}
+	DecideProfileScope::Counter("execution.required_values", static_cast<double>(walks));
 	errors.ThrowIfAny();
 }
 

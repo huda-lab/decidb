@@ -314,3 +314,56 @@ def test_a_lifted_floor_lands_on_each_member(decidb_cli, case):
         DECIDE x(INT) SUCH THAT x <= 10 AND {LIFTED_FLOOR_CASES[case]} MINIMIZE SUM(x) ORDER BY id"""
     cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
     assert answer(cli, sql) == [{"id": 1, "x": -5}, {"id": 2, "x": 0}, {"id": 3, "x": 0}, {"id": 4, "x": -5}]
+
+
+def test_the_tree_walks_a_shared_value_once(decidb_cli):
+    """Every row of a group reads the group's sum: x_i + S_g <= 10. RequireSupported (decide_tree_evaluation.cpp) runs
+    once, in Finalize, and walks a value again only under an earlier rank, so the counter is linear in the rows.
+    Without that memo each of the 600 rows walked its group's 200 members (about 124,000 walks); the formulator's
+    second call reported a second counter. The answer: with m the largest x of a group, S_g <= 10 - m and
+    S_g <= 200 m, so S_g = 10 - 10/201 and the total is 3 * (10 - 10/201) = 29.850746."""
+    rows = 600
+    sql = f"""SET threads=1; SET decide_direct_solve='off';
+        SELECT round(sum(x), 6) AS total FROM (SELECT i, x FROM (SELECT i, i % 3 AS g FROM range({rows}) r(i)) t
+        DECIDE x(REAL) SUCH THAT x <= 1 AND x + sum(x) by (t.g) <= 10 MAXIMIZE sum(x))"""
+    cli = decidb_cli.without_verify_serializer().with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_PROFILE": "1"})
+    profiled = cli.execute_raw(sql)
+    events = [
+        json.loads(line[len("DECIDB_PROFILE: ") :])
+        for line in profiled.stderr.splitlines()
+        if line.startswith("DECIDB_PROFILE: ")
+    ]
+    walks = [event["value"] for event in events if event.get("name") == "execution.required_values"]
+    assert len(walks) == 1 and walks[0] < 20 * rows, walks
+    assert "29.850746" in profiled.stdout, profiled.stdout
+
+
+def test_a_shared_error_ranks_at_its_earliest_reader(decidb_cli):
+    """Position t.p = 1 holds two rows, so the frame raises where row 3 reads it, an error that takes the rank of its
+    reader. The ABS auxiliary's definition reads it (KEYED_MAPPING), and so does its clause (CONSTRAINTS) through the
+    auxiliary, first. RequireSupported walks it again under the definition's earlier rank, so it raises before the
+    sqrt of clause 1, as flat raises its frame peers before its constraints. Kept at its first reader's rank, clause
+    2's, it raised the sqrt of row 1 instead, the error this query raises when its positions are distinct."""
+    sql = """SET threads=1; SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES (1, 1, -1.0, 5.0), (2, 1, 4.0, 6.0), (3, 2, 9.0, 7.0)) t(id, p, r, v) DECIDE x(REAL)
+        SUCH THAT x <= 10 AND sqrt(t.r) * x <= 5 AND abs(x - at(previous else 0: t.v) over (t.p)) <= 30
+        MAXIMIZE sum(x)"""
+    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    assert cli.execute_raw(sql).stderr.strip() == (
+        "Invalid Input Error: DECIDE: at(previous else 0: t.v) over (t.p) finds 2 rows at t.p = 1; "
+        "a position must hold one row."
+    )
+
+
+def test_an_interrupt_stops_the_bottom_up_evaluation(decidb_cli):
+    """Twelve frames over data, each read at 5,000 anchors over windows of about 4,000 positions, hold the tree's
+    bottom-up evaluation for about 11 s, about 1 s a frame. Evaluate polls the query's interrupt before each node, as
+    the descent does before each visit, so a Ctrl-C 1.5 s in stops the query with DuckDB's interrupt. Without that
+    poll the evaluation ran to its end, and the solver's poll stopped the query with "DECIDE stopped at your
+    request"."""
+    frames = " AND ".join(f"x <= sum(from {k} previous to {k} next: t.v) over (t.i)" for k in range(2000, 2012))
+    sql = f"""SET threads=1; SET decide_direct_solve='off'; SET decide_frame_limit=1000000000;
+        SELECT count(*) FROM (SELECT i, x FROM (SELECT i, (i * 7919) % 100 AS v FROM range(5000) r(i)) t
+        DECIDE x(REAL) SUCH THAT {frames} MAXIMIZE sum(x))"""
+    result, _ = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}).execute_interrupted(sql, after=1.5, timeout=60)
+    assert "Interrupted!" in result.stderr, result.stderr[:800]

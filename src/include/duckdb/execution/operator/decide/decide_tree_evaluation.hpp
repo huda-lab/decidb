@@ -76,6 +76,8 @@ public:
 	}
 	//! Refuse an unsupported construct or a deferred error only when a surviving root instance reads it.
 	void RequireSupported() const;
+	//! The first of `node`'s entries that holds `row`, or INVALID.
+	idx_t FirstEntry(idx_t node, idx_t row) const;
 	string Dump() const;
 
 private:
