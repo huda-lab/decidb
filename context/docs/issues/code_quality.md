@@ -25,7 +25,9 @@ the parser's CASE, so `SUM(if(s = 'F', x, 2 * x))` is refused as a CASE the user
 (CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message.
 Three more, from BLOAT-27: `SUM(x) * (w * b) <= 7` names the term
 `"*"(CAST(CAST(w AS DECIMAL(12,1)) AS DECIMAL(38,1)), sum(x))`; a CASE factor prints the bound CASE; `MAXIMIZE (w +
-1) * SUM(x)` prints `CAST(w AS DECIMAL(12,1)) + CAST(1 AS DECIMAL(12,1))`. Done when every message that names a
+1) * SUM(x)` prints `CAST(w AS DECIMAL(12,1)) + CAST(1 AS DECIMAL(12,1))`. The text in the alias has a second cost: two clauses
+holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) carry different aliases, so `Helpers::Find`
+builds two helpers where its comment promises one. Done when every message that names a
 value quotes a span of the query as written, the renderer's tag list is gone, and these examples are tests.
 
 ## FMT-1 — DeciDB sources indented with spaces fail the formatter

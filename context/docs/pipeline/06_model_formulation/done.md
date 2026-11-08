@@ -1093,3 +1093,15 @@ columns still name a decide variable in that message.
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |
+
+## Arms no test reaches, kept (BLOAT-30)
+
+Each is a guard a stage boundary or a typed read needs:
+
+- **Stage handoffs.** The comparison type stage 05 hands over (`SolverModel::Build`, `LinearizeComposedMinMaxConstraint`:
+  `<>` is consumed earlier); a `<>` over a product in `LinearizeNotEqual` (the binder refuses it); the column-box
+  finiteness check in `SolverModel::Build`, the one place an infinite box from any rewrite is refused (a MIN/MAX
+  auxiliary's reach is coefficient times box, so `b * y` with `b = 1e308` passes a DOUBLE).
+- **Typed reads.** A coefficient label read back as an optional weight label and as a number (`strtod` accepts `""`,
+  `inf`, `nan`); an empty `row_group_ids` meaning every row is kept (`ResolveLiftedFloors`); an empty group's first row
+  in `DecidePropagateImpliedBounds`.
