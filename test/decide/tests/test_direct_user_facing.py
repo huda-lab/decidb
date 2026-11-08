@@ -1152,7 +1152,9 @@ _LATE_MATERIALIZATION_AROUND_CTES = {
         "direct_bound",
         2,
     ),
-    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 3),
+    # S1 computes the group bound `cap` on a read of its own, so the rule reads the source twice and the three reads
+    # (with the row check's) scan a copy: the copy's scan and the payload's.
+    "row_check": ("DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score * x)", "direct_verdict", 2),
     "copied_source": (
         "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(cap * x) <= 5000 MAXIMIZE SUM(score * x)",
         "direct_source",
@@ -1273,6 +1275,22 @@ def test_a1_pipelined_plan_does_not_read_twice(decidb_cli):
     rows, _ = _run(decidb_cli, setup + query)
     solver, _ = _run(decidb_cli, setup + query, mode="off")
     _same_answers(rows, solver)
+
+
+@pytest.mark.correctness
+def test_n1_pipelined_plan_reads_the_table_twice_whatever_the_parent_reads(decidb_cli, decidb_cli_gurobi):
+    # N1 reads the table once for the sum of squares of each ball and once for the rows, and holds no row (the rows are
+    # probed against the sums), so a payload column the parent reads travels with the second read: a late
+    # materialization would only add a third scan and a join. This is the `pipelined` branch of N1's substitute.
+    setup = _late_materialization_setup("a1")
+    decide = "FROM rr_src DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) <= 1000 MAXIMIZE SUM(score * x)"
+    query = f"SELECT COUNT(*) FILTER (WHERE payload = 'payload-' || id::VARCHAR), SUM(score * x) FROM ({decide}) q"
+    plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
+    assert "N1_EUCLIDEAN_BALL" in plan and _table_scans(plan) == 2, plan
+    direct, _ = _run(decidb_cli, setup + query)
+    solver, _ = _run(decidb_cli_gurobi, setup + query, mode="off")
+    assert direct[0][0] == solver[0][0] == _LATE_MATERIALIZATION_ROWS
+    assert math.isclose(direct[0][1], solver[0][1], rel_tol=5e-6)
 
 
 def _scans_and_solver_answers(cli, setup, query, scans):

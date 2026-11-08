@@ -38,9 +38,9 @@ struct Condition final : DirectApplicabilityCondition {
 		unique_ptr<Expression> value;
 		//! The count body is `-x`, so `comparison` is already flipped and the value to compare against is `-B`.
 		bool negated = false;
-		//! The bound-side rewrite left the bound to the plan (DecideGroupBound): the plan computes its aggregates in
-		//! the rank window, over the group, and makes the checks the rewrite would have made. Null when `value` is
-		//! read.
+		//! The bound-side rewrite left the bound to the plan (DecideGroupBound): the plan computes its aggregates in a
+		//! hash aggregate over the group, joined to every row, and makes the checks the rewrite would have made. Null
+		//! when `value` is read.
 		unique_ptr<DecideGroupBound> group;
 	};
 	//! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient
@@ -94,6 +94,16 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<SourceBound> source_bounds;
 	vector<SourceFixedValue> source_fixed_values;
 	bool scoped = false;
+
+	//! Whether some bound is left to the plan to compute from the aggregates of its group.
+	bool HasGroupBound() const {
+		for (auto &bound : source_bounds) {
+			if (bound.group) {
+				return true;
+			}
+		}
+		return false;
+	}
 };
 
 //! Every term is the decision times a coefficient.
@@ -272,6 +282,8 @@ public:
 		    !ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}
+		// The aggregates of the group bounds are computed on a read of their own (BuildGroupBounds).
+		condition->source_reads = condition->HasGroupBound() ? 2 : 1;
 		return std::move(condition);
 	}
 	string Summary() const override {
@@ -548,6 +560,10 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!
 //!   ProjectScopeState -> ProjectScore
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
+//!
+//! The aggregates of the group bounds are not the rank's: they are computed once per group by a hash aggregate over a
+//! first read of the source (BuildGroupBounds), and RankAndFilterFeasibility joins them to every row of the window
+//! (group-then-join, DirectJoinClassAnswers), where the checks that read them stand.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -583,14 +599,8 @@ public:
 		for (auto &bound : condition.source_bounds) {
 			// A bound of the group's aggregates is computed above the rank window, not per row.
 			bound_bindings.push_back(bound.group ? ColumnBinding() : ColumnBinding(score_index, next_slot++));
-			group_inputs.emplace_back();
 			for (idx_t r = 0; bound.group && r < bound.group->inputs.size(); r++) {
-				auto layout = DirectGroupLayout(bound.group->inputs[r], condition.scoped);
-				DirectGroupInputColumns columns;
-				columns.reads = layout.reads ? ColumnBinding(score_index, next_slot++) : ColumnBinding();
-				columns.argument = layout.argument ? ColumnBinding(score_index, next_slot++) : ColumnBinding();
-				group_inputs.back().push_back(columns);
-				limit_message_count += layout.invalid ? 1 : 0;
+				limit_message_count += DirectGroupLayout(bound.group->inputs[r], condition.scoped).invalid ? 1 : 0;
 			}
 		}
 		// The messages of the checks the plan owes, in the solver's order: the NaN check of what each group bound
@@ -600,11 +610,12 @@ public:
 		}
 	}
 
-	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
+	//! `classes` is the plan of the group bounds' aggregates (BuildGroupBounds), or null when no bound reads them.
+	DirectSubstitute Build(unique_ptr<LogicalOperator> source, unique_ptr<LogicalOperator> classes) const {
 		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = ProjectScore(std::move(source), scope);
-		auto ranked = RankAndFilterFeasibility(std::move(source));
+		auto ranked = RankAndFilterFeasibility(std::move(source), std::move(classes));
 		auto result = ProjectAssignment(std::move(ranked));
 
 		DirectSubstitute substitute;
@@ -616,6 +627,63 @@ public:
 		}
 		substitute.child = std::move(result);
 		return substitute;
+	}
+
+	//! The class plan over the first read `rows`: a hash aggregate on the scope (whether the row is eligible, then the
+	//! group key; one row for all the rows when the bounds have no scope) holding the aggregates of the group bounds.
+	//! `group_values` are then expressions over its columns, which Build joins to every row.
+	unique_ptr<LogicalOperator> BuildGroupBounds(unique_ptr<LogicalOperator> rows) const {
+		ScopeBindings scope;
+		auto plan = ProjectScopeState(std::move(rows), scope);
+		auto into_state = [&](const Expression &expression) {
+			return CopyIntoState(expression, scope);
+		};
+		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, scope.eligible_binding) : nullptr;
+		DirectProjectionStage inputs(binder.GenerateTableIndex());
+		vector<vector<DirectGroupInputColumns>> columns(condition.source_bounds.size());
+		vector<ColumnBinding> key;
+		vector<LogicalType> key_types;
+		if (condition.scoped) {
+			key.push_back(inputs.Add(calc.Out(eligible)));
+			key_types.push_back(LogicalType::BOOLEAN);
+			for (idx_t i = 0; i < scope.key_bindings.size(); i++) {
+				key.push_back(inputs.Add(calc.Out(calc.Col(KeyType(i), scope.key_bindings[i]))));
+				key_types.push_back(KeyType(i));
+			}
+		}
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			auto &bound = condition.source_bounds[i];
+			if (!bound.group) {
+				continue;
+			}
+			for (auto &input : DirectGroupInputs(calc, *bound.group, eligible, into_state)) {
+				DirectGroupInputColumns column;
+				if (input.reads) {
+					column.reads = inputs.Add(calc.Out(input.reads));
+				}
+				if (input.argument) {
+					column.argument = inputs.Add(calc.Out(input.argument));
+				}
+				columns[i].push_back(column);
+			}
+		}
+		plan = inputs.Finish(std::move(plan));
+
+		DirectAggregateStage stage(binder);
+		vector<ColumnBinding> groups;
+		for (idx_t i = 0; i < key.size(); i++) {
+			groups.push_back(stage.Group(calc.Out(calc.Col(key_types[i], key[i]))));
+		}
+		DirectAggregateSink sink(stage);
+		auto in_group = condition.scoped ? calc.Col(LogicalType::BOOLEAN, groups[0]) : nullptr;
+		group_values.assign(condition.source_bounds.size(), DirectGroupValues());
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			auto &bound = condition.source_bounds[i];
+			if (bound.group) {
+				group_values[i] = DirectAddGroupBound(calc, *bound.group, columns[i], sink, in_group);
+			}
+		}
+		return stage.Finish(std::move(plan));
 	}
 
 private:
@@ -662,9 +730,8 @@ private:
 	ColumnBinding fixed_zero_binding;
 	//! Each source-valued count bound's value, in the score projection; unset for a bound of the group's aggregates.
 	vector<ColumnBinding> bound_bindings;
-	//! What the aggregates of each group bound read, in the score projection (DirectGroupInputs).
-	vector<vector<DirectGroupInputColumns>> group_inputs;
-	//! What each group bound gives once the rank window has computed its aggregates.
+	//! What each group bound gives once the class plan has computed its aggregates (BuildGroupBounds), over its
+	//! columns.
 	mutable vector<DirectGroupValues> group_values;
 	//! The message each check raises on the row (VARCHAR, NULL when it passes), in the score projection: the first
 	//! `limit_message_count` are the NaN checks of what the group bounds read, the rest the values the row fixes.
@@ -807,16 +874,8 @@ private:
 			auto &bound = condition.source_bounds[i];
 			group_columns.emplace_back();
 			if (bound.group) {
+				// Only the messages are per row; the aggregates read the first read (BuildGroupBounds).
 				group_columns.back() = DirectGroupInputs(calc, *bound.group, eligible, into_state);
-				for (idx_t r = 0; r < group_columns.back().size(); r++) {
-					auto &columns = group_columns.back()[r];
-					if (columns.reads) {
-						append_at(group_inputs[i][r].reads, calc.Out(columns.reads));
-					}
-					if (columns.argument) {
-						append_at(group_inputs[i][r].argument, calc.Out(columns.argument));
-					}
-				}
 				continue;
 			}
 			auto value = CopyIntoState(*bound.value, scope);
@@ -863,19 +922,6 @@ private:
 			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1, false, 1.0, false));
 		}
 		return calc.Cast(limit, LogicalType::DOUBLE);
-	}
-
-	//! Takes the aggregates of the group bounds into `window`, which is partitioned like the rank.
-	void AddGroupBounds(LogicalWindow &window) const {
-		DirectWindowSink sink(window, [&](BoundWindowExpression &aggregate) { AddScope(aggregate); });
-		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, eligible_binding) : nullptr;
-		group_values.assign(condition.source_bounds.size(), DirectGroupValues());
-		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
-			auto &bound = condition.source_bounds[i];
-			if (bound.group) {
-				group_values[i] = DirectAddGroupBound(calc, *bound.group, group_inputs[i], sink, eligible);
-			}
-		}
 	}
 
 	//! Adds to `window`, which is partitioned like the rank, the least message of each check in the row's group.
@@ -979,7 +1025,7 @@ private:
 	//! Stage 4: rank rows within their scope, raise the errors of the checks in the solver's order (what the group
 	//! bounds read and give, the values the row fixes, the score), and the infeasibility error when the bounds, fixed
 	//! values, and row counts cannot all hold.
-	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score) const {
+	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, unique_ptr<LogicalOperator> classes) const {
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
 		auto rank =
@@ -1016,11 +1062,25 @@ private:
 			AddScope(*count);
 			window->expressions.push_back(std::move(count));
 		}
-		AddGroupBounds(*window);
 		AddRowMessages(*window);
 		window->children.push_back(std::move(score));
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
+		if (classes) {
+			// Each row takes its group's bounds, whose class is the scope: whether the row is eligible, then its key.
+			vector<ColumnBinding> row_key;
+			vector<LogicalType> key_types;
+			if (condition.scoped) {
+				row_key.push_back(eligible_binding);
+				key_types.push_back(LogicalType::BOOLEAN);
+				for (idx_t i = 0; i < key_bindings.size(); i++) {
+					row_key.push_back(key_bindings[i]);
+					key_types.push_back(KeyType(i));
+				}
+			}
+			result.plan =
+			    DirectJoinClassAnswers(binder, std::move(result.plan), row_key, key_types, std::move(classes)).plan;
+		}
 		auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot));
 		feasible->children.push_back(std::move(result.plan));
 		result.plan = std::move(feasible);
@@ -1166,8 +1226,15 @@ DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
 	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
 	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
 	PlanBuilder plan_builder(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
-	return DirectBuildOverOneRead(
-	    reader, [&](unique_ptr<LogicalOperator> rows) { return plan_builder.Build(std::move(rows)); });
+	unique_ptr<LogicalOperator> classes;
+	if (condition.HasGroupBound()) {
+		classes = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+			return plan_builder.BuildGroupBounds(std::move(rows));
+		});
+	}
+	return DirectBuildOverOneRead(reader, [&](unique_ptr<LogicalOperator> rows) {
+		return plan_builder.Build(std::move(rows), std::move(classes));
+	});
 }
 
 } // namespace direct_s1_uniform_matroid
