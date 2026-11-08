@@ -110,13 +110,44 @@ solved model after the evaluation, and read the named input columns in a pass of
 
 The literal one-pass plan (`.claude/local/literal_one_pass_plan.md`, §7) builds the deck's evaluator beside this one:
 Branch by Abstraction with a whole Parallel Run. `DECIDB_EVALUATOR` picks one, read once and kept off the wire:
-`flat` (the default, the evaluator above), `verify`, and `tree` and `tree-noside`, which are not built yet.
+`flat` (the default, the evaluator above), `verify`, `tree` and `tree-noside`.
 `PhysicalDecide::Evaluate` is the region from the one pass to the helper decisions' members. Under `verify` it runs as
 ever and alone prints; then the evaluation fields of the sink state stand aside, a second run fills its own in silence,
 and `CompareDecideEvaluations` (`decide_evaluator.hpp`) compares what each would hand the model, before
 `BuildSolverInput` consumes it. A difference is an INTERNAL error, so a suite run under `verify` fails any test whose
 query differs, with no assertion written. `test_evaluator_verify.py` shows each compared group catches an injected
-difference. The switch, the record and the comparison go when the flat evaluator does (P6).
+difference. The second run is the flat evaluator again until the tree's model emitter exists, so `verify` builds no
+tree yet. The switch, the record and the comparison go when the flat evaluator does (P6).
+
+**`tree` today.** The deck's evaluator runs end to end, beside flat and not yet its equal (the suite run under
+`DECIDB_EVALUATOR=tree` still has failures):
+
+- *The tree* (`decide_tree.hpp`, `BuildDecideTree`): built at plan time from the clause list, the link and record
+  tables and the frames, with the deck's three node classes, E (`SCOPE`), G (`REDUCER`) and O (`FRAME`). An E's σ is
+  the binder's signature of its clause; a generated NULL test is a member test that carries its columns and adds no
+  σ field. A root in the grouped shape (the aggregate shape, an easy or a composed extremum) with no `per` is a class
+  of its `by` key, as flat's grouped rows are (`language/guide.md` §6.4). A root's text is its clause as written.
+- *Top-down* (`decide_descent.hpp`): the descent reads the buffered input in `Finalize`'s one scan
+  (`DecideRowStore::Build`), so the sink stays parallel. A G's or O's groups lie in no enclosing slot, because the
+  rewrites already make a reducer's key its whole path key (`language/guide.md` §5.5): only a `by` opens a level, and
+  an E's classes lie within the G or O they feed. A collated key folds each read's spelling into its group's least at
+  insert, one dictionary per key across every node, and a position takes its rows' least spelling when the descent
+  finishes (D69).
+- *Bottom-up* (`decide_tree_evaluation.hpp`): each node in `eval_order`, after what it reads. An auxiliary has no
+  value where something it is defined from has none, a defining root or a product's factor (D88). A shared value is
+  walked once for errors, and the least-ranked error is raised (`DecideErrorLedger`). A Ctrl-C stops the evaluation
+  at its next node.
+- *Formulation*: an interim second back end (`decide_tree_formulation.cpp`) writes `SolverInput` from the values. The
+  plan replaces it with a model emitter onto stage 06, shape by shape, and then deletes it.
+
+`tree-noside` plans no side plans and folds the data reducers in the descent; it fails exactly what `tree` fails.
+
+Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS` and `DECIDB_DUMP_VALUES` print the tree, the
+containers and the bottom-up values to stderr (the first two also under `flat`, which then builds the tree and runs the
+descent in its pass, for the dump alone); `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
+`DECIDB_TREE_INJECT=node:data:value` replaces a node's data value, so a test can show the solver reads the bottom-up
+values. Profile counters (`DECIDB_PROFILE`): `execution.input_scans` (scans of the input, 1), `execution.descent_rows`
+and `execution.required_values` (values walked for errors, linear in the entries).
 
 ## 2. The folded variable box
 
