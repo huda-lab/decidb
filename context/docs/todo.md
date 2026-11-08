@@ -27,9 +27,7 @@ the A batches; B2 after A2.
 
 ## X15. Other areas' arms no test reaches (one lane per task)
 
-- [ ] BLOAT-26 Binder: arms no test reaches — testing/todo.md § BLOAT-26
 - [ ] BLOAT-27 Canonicalizer and provenance: arms no test reaches — testing/todo.md § BLOAT-27
-- [ ] BLOAT-28 Logical operator: arms no test reaches — testing/todo.md § BLOAT-28
 - [ ] BLOAT-29 Optimizer passes: arms no test reaches — testing/todo.md § BLOAT-29
 - [ ] BLOAT-30 Formulation: arms no test reaches — testing/todo.md § BLOAT-30
 

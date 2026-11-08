@@ -201,7 +201,11 @@ caret at a term, and so do the integrality gate's two refusals (§4).
 
 ## 3. Reducers
 
-`IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers.
+`IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers, and
+`DecideBinder::ClassifyReducerCall` is the one place both clause binders ask whether a call is one. A reducer takes
+exactly one argument: `max(x, 2)` is DuckDB's top-n aggregate, which returns a list, and is refused in the objective
+as in a constraint (*"MAX needs one argument, found 'max(x, 2)'"*). A subquery in a reducer's body counts as
+query-wide only when its own body names no per-row decision (`ReadsRowDecision`).
 `DecideBinder::BindAggregate` binds them; the optimizer, not the binder, decides
 their formulation. `norm(e, p)` binds as an inert `SUM` marker tagged with its order
 (`NORM_MARKER_TAG_PREFIX`), which stage 05 lowers. `COUNT` binds as data only:
@@ -458,7 +462,13 @@ NULL)'"*. A reducer body it does not read gets *"SUM expression does not support
 (`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal `count_star`. A
 reducer whose body holds no decision (`sum(1)`, `sum(cap)`) gets *"SUM expression must
 reference at least one DECIDE variable"*; only a body that holds a query-wide decision
-is told to drop the reducer.
+is told to drop the reducer. Every binder message that quotes a clause takes its text from `DecideWrittenSql`, which
+strips the source-fragment tags (`TagDecideSourceFragments`) from a copy before printing it: a call prints its
+arguments' aliases, so a reprint of the tagged tree would show `sum(__source_fragment_0__ := (SELECT x))`.
+
+Arms kept as guards (BLOAT-26): the null check after `GetBoundAggregate` in `BindScopedReducer` and `BindReducerBy`
+(a nullable pointer read on the next line), and the error check after the scope lambda binds a scoped constraint's
+condition a second time (`BindScopedConstraint`). No query reaches them; each guards a typed read.
 
 ---
 

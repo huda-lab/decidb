@@ -20,18 +20,10 @@ make decide-coverage`) at `73b52ab1d1` finds 1,093 of 10,624 arms that no test r
 
 - **Problem.** 146 of 1,490 arms in `execution/operator/decide/` are unreached, all in `physical_decide.cpp`.
 
-## BLOAT-26 — Binder: arms no test reaches
-
-- **Problem.** 202 of 1,324 arms in `planner/expression_binder/decide/` are unreached; `decide_binder.cpp` has 120.
-
 ## BLOAT-27 — Canonicalizer and provenance: arms no test reaches
 
 - **Problem.** 298 of 1,928 arms in `planner/decide/` are unreached; `decide_canonicalizer.cpp` has 149 and
   `decide_source_provenance.cpp` 85.
-
-## BLOAT-28 — Logical operator: arms no test reaches
-
-- **Problem.** 15 of 176 arms in `planner/operator/decide/` are unreached.
 
 ## BLOAT-29 — Optimizer passes: arms no test reaches
 

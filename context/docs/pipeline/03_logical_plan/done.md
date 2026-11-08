@@ -227,6 +227,10 @@ otherwise silently opts them out, and the operator then reads a logical index as
 chunk position. A single-table source hides the bug entirely, because the two
 indexings coincide there; it surfaces only once a join reorders columns.
 
+Arms kept as guards (BLOAT-28): `DecideSourceColumnKey`'s `slot >= column_ids.size()` (a scan with no column ids
+answers the binding `(table_index, 0)`, which names no column) and `EnumerateExpressions`' null `decide_constraints`
+check (the rewrites detach the clause and reinstall it). No query reaches them.
+
 ---
 
 ## 4b. The `DIAGNOSE` flag, and the operator that reads it
