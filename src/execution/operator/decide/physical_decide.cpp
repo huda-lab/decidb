@@ -1337,57 +1337,7 @@ string PhysicalDecide::GetName() const {
 }
 
 InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
-	InsertionOrderPreservingMap<string> result;
-
-	string vars_info;
-	idx_t user_var_count = decide_variables.size() - num_auxiliary_vars;
-	for (idx_t i = 0; i < user_var_count; i++) {
-		if (i > 0) {
-			vars_info += "\n";
-		}
-		vars_info += decide_variables[i]->GetName();
-	}
-	result["Variables"] = vars_info;
-
-	// What the optimizer made of the clauses: a column that stands for an expression
-	// prints it, and each rewrite's account follows its clause, the objective's its own.
-	auto names = DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
-	vector<string> objective_accounts;
-	for (auto &account : rewrite_accounts) {
-		if (account.source_clause_id == DConstants::INVALID_INDEX) {
-			objective_accounts.push_back(RenderDecideRewriteAccount(account));
-		}
-	}
-	// Constraints first: they also hand back the rows the rewrites added for the objective.
-	vector<string> unattributed;
-	vector<string> objective_rows;
-	string constraints_text;
-	if (decide_constraints || !constraint_sources.empty()) {
-		auto layers = CollectDecideClauseLayers(decide_constraints.get(), names, constraint_sources, unattributed,
-		                                        objective_rows, rewrite_accounts);
-		constraints_text = RenderDecideClauseLayers(layers, unattributed);
-	}
-	if (decide_objective) {
-		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
-		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, names, objective_strs, nullptr, nullptr);
-		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
-		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
-		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its
-		// account, as in a constraint.
-		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty() ||
-		    per_inner_agg == ObjectiveAggregateType::MIN_AGG || per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
-			objective_strs.clear();
-		}
-		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective, objective_canonical_differs,
-		                                                  objective_strs, objective_accounts, objective_rows);
-	} else {
-		result["Objective"] = "FEASIBILITY";
-	}
-	if (decide_constraints || !constraint_sources.empty()) {
-		result["Constraints"] = constraints_text;
-	}
-
+	auto result = RenderDecideParams(*this);
 	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }

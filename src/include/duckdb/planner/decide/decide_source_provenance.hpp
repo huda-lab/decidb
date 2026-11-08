@@ -191,4 +191,69 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
                                    bool canonical_differs, const vector<string> &rewritten,
                                    const vector<string> &accounts = {}, const vector<string> &derived_rows = {});
 
+//! The EXPLAIN parameters of a DECIDE operator, without the cardinality line: the variables, the objective and the
+//! constraints through the clause walker, so `when`/`per` wrappers print as written rather than as a generic
+//! conjunction. LogicalDecide::ParamsToString and PhysicalDecide::ParamsToString both call it and add their own
+//! cardinality. Extract Method as a function template: the two operators carry these fields under the same names, so it
+//! needs no parameter list and moves no field. It lives here, beside the renderers it calls, because this header is
+//! already included by both operators and the body adds no include.
+template <class OP>
+InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
+	InsertionOrderPreservingMap<string> result;
+
+	// Variables (exclude auxiliary variables)
+	string vars_info;
+	idx_t user_var_count = op.decide_variables.size() - op.num_auxiliary_vars;
+	for (idx_t i = 0; i < user_var_count; i++) {
+		if (i > 0) {
+			vars_info += "\n";
+		}
+		vars_info += op.decide_variables[i]->GetName();
+	}
+	result["Variables"] = vars_info;
+
+	// What the optimizer made of the clauses: a column that stands for an expression prints it, and each rewrite's
+	// account follows its clause, the objective's its own.
+	auto names =
+	    DecidePlanNames(op.source_fragments, op.keyed_scopes, op.keys, op.decide_index, op.aux_var_expressions);
+	vector<string> objective_accounts;
+	for (auto &account : op.rewrite_accounts) {
+		if (account.source_clause_id == DConstants::INVALID_INDEX) {
+			objective_accounts.push_back(RenderDecideRewriteAccount(account));
+		}
+	}
+	// Constraints first: they also hand back the rows the rewrites added for the objective.
+	vector<string> unattributed;
+	vector<string> objective_rows;
+	string constraints_text;
+	if (op.decide_constraints || !op.constraint_sources.empty()) {
+		auto layers = CollectDecideClauseLayers(op.decide_constraints.get(), names, op.constraint_sources, unattributed,
+		                                        objective_rows, op.rewrite_accounts);
+		constraints_text = RenderDecideClauseLayers(layers, unattributed);
+	}
+	if (op.decide_objective) {
+		string sense_prefix = (op.decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
+		vector<string> objective_strs;
+		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs, nullptr, nullptr);
+		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
+		// extremum, or what the composed objective keeps (its 0.0 placeholder or the terms
+		// beside its reducers) -- that its accounts describe and a row would misread. An AVG's sum stays, under its
+		// account, as in a constraint.
+		if (op.flat_objective_agg != ObjectiveAggregateType::NONE || !op.composed_minmax_objective_terms.empty() ||
+		    op.per_inner_agg == ObjectiveAggregateType::MIN_AGG ||
+		    op.per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
+			objective_strs.clear();
+		}
+		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, op.written_objective, op.canonical_objective,
+		                                                  op.objective_canonical_differs, objective_strs,
+		                                                  objective_accounts, objective_rows);
+	} else {
+		result["Objective"] = "FEASIBILITY";
+	}
+	if (op.decide_constraints || !op.constraint_sources.empty()) {
+		result["Constraints"] = constraints_text;
+	}
+	return result;
+}
+
 } // namespace duckdb
