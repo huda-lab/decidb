@@ -686,7 +686,8 @@ class AnrModel:
     def _frame_fields(self, node, t, kept) -> tuple:
         """By its keys, as the annotated tree holds a frame (D82, deck p. 99): its timeline, the
         anchor's position there when it reads relative to the anchor, and the fallback where
-        the anchor reaches it -- not the value it reads."""
+        the anchor reaches it -- not the value it reads. A fallback with no value there is no
+        fallback (D86), so it is no field."""
         timeline = self._timeline(node.over, kept)
         within, _ = timeline.position[t]
         fields = [("within", within)]
@@ -694,7 +695,9 @@ class AnrModel:
         if relative:
             fields.append(("order", timeline.order[t]))
         if node.fallback is not None and self._missing(node, t, kept):
-            fields.append(("fallback", _freeze(self._form(node.fallback, t, kept))))
+            fallback = self._form(node.fallback, t, kept)
+            if fallback is not ABSENT:
+                fields.append(("fallback", _freeze(fallback)))
         return tuple(fields)
 
     def _is_data(self, expr) -> bool:
