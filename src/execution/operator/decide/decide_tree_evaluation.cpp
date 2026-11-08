@@ -222,6 +222,62 @@ DecideTreeValuePtr DecideTreeEvaluation::DecisionValue(idx_t variable, const Log
 	return value;
 }
 
+DecideTreeValuePtr DecideTreeEvaluation::DecisionRead(idx_t variable, const LogicalType &type, idx_t node_index,
+                                                      const DecideDescentEntry &entry) const {
+	auto value = DecisionValue(variable, type, entry);
+	// A root reads the auxiliary it defines unconditionally: a dependency cycle through that address would otherwise
+	// make every definition absent before it could be computed.
+	if (value->kind != DecideTreeValueKind::DECISION || tree.nodes[node_index]->defined_var == variable) {
+		return value;
+	}
+	if (variable < tree.definition_nodes.size() && !tree.definition_nodes[variable].empty()) {
+		// A root defining the auxiliary stands for it where an instance of the entry's class survives.
+		const auto scope =
+		    variable < tree.variable_scopes.size() ? tree.variable_scopes[variable] : DecideVarScopeInfo::Row();
+		const vector<idx_t> *mapping = nullptr;
+		if ((scope.IsKeyed() || scope.scope == DecideVarScope::INLINED) &&
+		    scope.keyed_scope_idx < descent.DecisionRows().size()) {
+			mapping = &descent.DecisionRows()[scope.keyed_scope_idx];
+		}
+		bool present = false;
+		for (auto definition : tree.definition_nodes[variable]) {
+			auto &definition_entries = descent.Containers()[definition].entries;
+			auto &definition_values = results[definition].entries;
+			for (idx_t index = 0; index < definition_values.size(); index++) {
+				const auto row = definition_entries[index].row;
+				bool same = scope.IsGlobal() || row == entry.row;
+				if (mapping) {
+					same = row < mapping->size() && entry.row < mapping->size() &&
+					       (*mapping)[row] != DConstants::INVALID_INDEX && (*mapping)[row] == (*mapping)[entry.row];
+				}
+				if (!same) {
+					continue;
+				}
+				auto &definition_value = definition_values[index];
+				if (definition_value->kind == DecideTreeValueKind::ERROR ||
+				    definition_value->kind == DecideTreeValueKind::UNSUPPORTED) {
+					return definition_value;
+				}
+				present |= definition_value->Present();
+			}
+		}
+		if (!present) {
+			return AbsentValue(type);
+		}
+	}
+	for (auto &product : tree.bilinear_links) {
+		if (product.aux_idx != variable) {
+			continue;
+		}
+		for (auto factor : {product.bool_var_idx, product.other_var_idx}) {
+			if (!DecisionRead(factor, type, node_index, entry)->Present()) {
+				return AbsentValue(type);
+			}
+		}
+	}
+	return value;
+}
+
 DecideTreeValuePtr DecideTreeEvaluation::ExpressionValue(const Expression &expression, idx_t node_index,
                                                          const DecideDescentEntry &entry) {
 	auto data = [&](Value value) {
@@ -236,46 +292,7 @@ DecideTreeValuePtr DecideTreeEvaluation::ExpressionValue(const Expression &expre
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto &reference = expression.Cast<BoundColumnRefExpression>();
 			if (reference.binding.table_index == tree.decide_index) {
-				const auto variable = reference.binding.column_index;
-				auto value = DecisionValue(variable, expression.return_type, entry);
-				if (value->kind != DecideTreeValueKind::DECISION || tree.nodes[node_index]->defined_var == variable ||
-				    variable >= tree.definition_nodes.size() || tree.definition_nodes[variable].empty()) {
-					return value;
-				}
-				// A lowered auxiliary is present where its defining E has a surviving instance. Its own defining row
-				// reads the address unconditionally above; a dependency cycle through that address would otherwise
-				// make every definition absent before it could be computed (D88).
-				const auto scope =
-				    variable < tree.variable_scopes.size() ? tree.variable_scopes[variable] : DecideVarScopeInfo::Row();
-				const vector<idx_t> *mapping = nullptr;
-				if ((scope.IsKeyed() || scope.scope == DecideVarScope::INLINED) &&
-				    scope.keyed_scope_idx < descent.DecisionRows().size()) {
-					mapping = &descent.DecisionRows()[scope.keyed_scope_idx];
-				}
-				bool present = false;
-				for (auto definition : tree.definition_nodes[variable]) {
-					auto &definition_entries = descent.Containers()[definition].entries;
-					auto &definition_values = results[definition].entries;
-					for (idx_t index = 0; index < definition_values.size(); index++) {
-						const auto row = definition_entries[index].row;
-						bool same = scope.IsGlobal() || row == entry.row;
-						if (mapping) {
-							same = row < mapping->size() && entry.row < mapping->size() &&
-							       (*mapping)[row] != DConstants::INVALID_INDEX &&
-							       (*mapping)[row] == (*mapping)[entry.row];
-						}
-						if (!same) {
-							continue;
-						}
-						auto &definition_value = definition_values[index];
-						if (definition_value->kind == DecideTreeValueKind::ERROR ||
-						    definition_value->kind == DecideTreeValueKind::UNSUPPORTED) {
-							return definition_value;
-						}
-						present |= definition_value->Present();
-					}
-				}
-				return present ? value : AbsentValue(expression.return_type);
+				return DecisionRead(reference.binding.column_index, expression.return_type, node_index, entry);
 			}
 			return UnsupportedValue(expression.return_type, "a source reference was not resolved before descent");
 		}

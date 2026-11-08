@@ -958,25 +958,33 @@ private:
 				Decisions(*argument, variables);
 			}
 			for (auto variable : variables) {
-				if (variable == node.defined_var || variable >= definitions.size()) {
-					continue;
+				if (variable != node.defined_var) {
+					Sources(variable, i);
 				}
-				for (auto definition : definitions[variable]) {
-					if (definition != i) {
-						AddIndex(node.dependencies, definition);
-					}
-				}
-				for (auto &product : op.bilinear_links) {
-					if (product.aux_idx == variable) {
-						for (auto factor : {product.bool_var_idx, product.other_var_idx}) {
-							if (factor < definitions.size()) {
-								for (auto definition : definitions[factor]) {
-									AddIndex(node.dependencies, definition);
-								}
-							}
-						}
-					}
-				}
+			}
+		}
+	}
+
+	//! A reader of a decision waits for what the decision is defined from (D88): the roots defining it, the G or O
+	//! holding its value, and for a product (BilinearLink) what each factor is defined from.
+	void Sources(idx_t variable, idx_t reader) {
+		if (variable >= tree->definition_nodes.size()) {
+			return;
+		}
+		auto &dependencies = tree->nodes[reader]->dependencies;
+		for (auto definition : tree->definition_nodes[variable]) {
+			if (definition != reader) {
+				AddIndex(dependencies, definition);
+			}
+		}
+		const auto value = tree->value_nodes[variable];
+		if (value != DConstants::INVALID_INDEX) {
+			AddIndex(dependencies, value);
+		}
+		for (auto &product : op.bilinear_links) {
+			if (product.aux_idx == variable) {
+				Sources(product.bool_var_idx, reader);
+				Sources(product.other_var_idx, reader);
 			}
 		}
 	}

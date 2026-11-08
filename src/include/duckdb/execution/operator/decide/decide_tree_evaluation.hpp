@@ -93,6 +93,10 @@ private:
 	void SignatureReads(const Expression &expression, idx_t node, const DecideDescentEntry &entry,
 	                    vector<Value> &signature) const;
 	DecideTreeValuePtr DecisionValue(idx_t variable, const LogicalType &type, const DecideDescentEntry &entry) const;
+	//! D88: an auxiliary has no value at an entry where something it is defined from has none, whether a root defining
+	//! it or a factor of its product (BilinearLink), and a factor is read by this same rule.
+	DecideTreeValuePtr DecisionRead(idx_t variable, const LogicalType &type, idx_t node,
+	                                const DecideDescentEntry &entry) const;
 	DecideTreeValuePtr Reduce(idx_t node, const BoundAggregateExpression *function,
 	                          const vector<vector<DecideTreeValuePtr>> &arguments,
 	                          const vector<DecideTreeValuePtr> &members);
