@@ -52,6 +52,7 @@ public:
 	void Build();
 	//! A column computed bottom-up (a frame's), numbered after the input's and the computed ones before it.
 	void AppendColumn(const Vector &values);
+	void AppendColumn(const Vector &values, const std::map<idx_t, ErrorData> &errors);
 	//! The columns an expression may read: the input's, then the computed ones; and their types.
 	idx_t ColumnCount() const {
 		return types.size();
@@ -106,6 +107,8 @@ private:
 	std::unordered_multimap<hash_t, idx_t> slot_hash;
 	//! Per input column, its values once the pass kept it (null otherwise); then the computed columns.
 	vector<unique_ptr<Vector>> columns;
+	//! Latent errors of computed columns, exposed only if an expression actually reads that column on that row.
+	vector<std::map<idx_t, ErrorData>> column_errors;
 	vector<bool> keep;
 };
 

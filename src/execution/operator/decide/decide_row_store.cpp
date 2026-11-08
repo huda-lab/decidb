@@ -11,6 +11,7 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
@@ -84,7 +85,7 @@ static void EvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor
 
 DecideRowStore::DecideRowStore(ClientContext &context, ColumnDataCollection &data)
     : context(context), data(data), num_rows(data.Count()), input_columns(data.ColumnCount()), types(data.Types()),
-      columns(data.ColumnCount()), keep(data.ColumnCount(), false) {
+      columns(data.ColumnCount()), column_errors(data.ColumnCount()), keep(data.ColumnCount(), false) {
 }
 
 DecideRowStore::Slot *DecideRowStore::Find(const Expression &lowered) {
@@ -204,11 +205,58 @@ void DecideRowStore::Build() {
 }
 
 void DecideRowStore::AppendColumn(const Vector &values) {
+	AppendColumn(values, {});
+}
+
+void DecideRowStore::AppendColumn(const Vector &values, const std::map<idx_t, ErrorData> &errors) {
 	auto column = make_uniq<Vector>(values.GetType(), MaxValue<idx_t>(num_rows, 1));
 	VectorOperations::Copy(values, *column, num_rows, 0, 0);
 	types.push_back(values.GetType());
 	columns.push_back(std::move(column));
+	column_errors.push_back(errors);
 }
+
+namespace {
+//! A latent failure is an executable leaf, rather than a NULL with an unconditional error mask. DuckDB's executor
+//! then decides whether CASE/COALESCE actually reads it, exactly as it decides whether to evaluate a scalar call.
+struct DecideDeferredErrorData : FunctionData {
+	explicit DecideDeferredErrorData(ErrorData error_p) : error(std::move(error_p)) {
+	}
+	ErrorData error;
+	unique_ptr<FunctionData> Copy() const override {
+		return make_uniq<DecideDeferredErrorData>(error);
+	}
+	bool Equals(const FunctionData &other) const override {
+		auto &rhs = other.Cast<DecideDeferredErrorData>();
+		return error.Type() == rhs.error.Type() && error.Message() == rhs.error.Message();
+	}
+};
+
+static void RaiseDeferredDecideError(DataChunk &, ExpressionState &state, Vector &) {
+	state.expr.Cast<BoundFunctionExpression>().bind_info->Cast<DecideDeferredErrorData>().error.Throw();
+}
+
+static void BindDeferredErrors(unique_ptr<Expression> &expr, idx_t row,
+                               const vector<std::map<idx_t, ErrorData>> &errors) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		auto column = expr->Cast<BoundReferenceExpression>().index;
+		if (column < errors.size()) {
+			auto found = errors[column].find(row);
+			if (found != errors[column].end()) {
+				auto type = expr->return_type;
+				ScalarFunction function("decide_deferred_error", {}, type, RaiseDeferredDecideError);
+				function.stability = FunctionStability::VOLATILE;
+				expr = make_uniq<BoundFunctionExpression>(type, std::move(function), vector<unique_ptr<Expression>>(),
+				                                         make_uniq<DecideDeferredErrorData>(found->second));
+			}
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		BindDeferredErrors(child, row, errors);
+	});
+}
+} // namespace
 
 void DecideRowStore::Fill(Slot &slot) {
 	RequireKept(*slot.lowered);
@@ -229,6 +277,38 @@ void DecideRowStore::Fill(Slot &slot) {
 		}
 		chunk.SetCardinality(count);
 		EvaluateWindow(context, executor, 0, remake, slot, chunk, offset);
+		std::map<idx_t, bool> affected;
+		ForEachColumnRead(*slot.lowered, [&](idx_t column) {
+			for (auto it = column_errors[column].lower_bound(offset);
+			     it != column_errors[column].end() && it->first < offset + count; ++it) {
+				affected.emplace(it->first, true);
+			}
+		});
+		for (auto &entry : affected) {
+			const auto row = entry.first;
+			auto expression = slot.lowered->Copy();
+			BindDeferredErrors(expression, row, column_errors);
+			SelectionVector selection(1);
+			selection.set_index(0, row - offset);
+			DataChunk input;
+			input.InitializeEmpty(types);
+			input.Slice(chunk, selection, 1);
+			try {
+				ExpressionExecutor reader(context, *expression);
+				Vector value(expression->return_type);
+				reader.ExecuteExpression(input, value);
+				slot.values.SetValue(row, value.GetValue(0));
+				slot.errors.erase(row);
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				if (StopsTheQuery(error)) {
+					throw;
+				}
+				slot.errors.erase(row);
+				slot.errors.emplace(row, std::move(error));
+				slot.values.SetValue(row, Value(slot.lowered->return_type));
+			}
+		}
 	}
 }
 

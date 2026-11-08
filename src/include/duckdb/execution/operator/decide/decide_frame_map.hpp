@@ -215,7 +215,9 @@ void SkipDecideRangeNullReads(ClientContext &context, const vector<const Express
 //! on every row (DecideFrameColumn), each computed on the rows its kind names only: a
 //! payload on the first row of each selected peer, which CheckDecideFramePeers holds for the
 //! peer's other rows, or on the rows a range's windows read; an `else` on the anchors that
-//! reach it. An anchor where the frame reads nothing is NULL in every column (D84).
+//! reach it. An anchor where the frame reads nothing is NULL in every column (D84). A payload, fallback or reduction
+//! failure travels with the computed column at the anchors that read it, and raises only when a consumer reads one
+//! of those anchors: an anchor without a surviving instance must not raise another instance's error.
 void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
                               const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
                               idx_t num_rows, ChunkExprCache &chunk_expr_cache);

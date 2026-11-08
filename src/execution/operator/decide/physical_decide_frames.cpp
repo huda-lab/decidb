@@ -24,8 +24,51 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <map>
 
 namespace duckdb {
+
+//! A computed value can fail on a row that no surviving instance reads. Keep that failure with the value until a
+//! consumer reaches it, as the input pass does for its expressions (DecideRowStore::Slot).
+struct DeferredFrameValues {
+	DeferredFrameValues(const LogicalType &type, idx_t count) : values(type, count) {
+	}
+	Vector values;
+	std::map<idx_t, ErrorData> errors;
+};
+
+static DeferredFrameValues EvaluateFrameRows(ClientContext &context, const Expression &expr, idx_t num_rows,
+                                             const vector<bool> &rows, ChunkExprCache &chunk_expr_cache) {
+	auto &lowered = CachedTransformToChunkExpression(chunk_expr_cache, expr, context);
+	auto &slot = chunk_expr_cache.store->Values(lowered);
+	DeferredFrameValues result(lowered.return_type, num_rows + 1);
+	if (slot.constant) {
+		Vector constant(slot.values.GetValue(0));
+		VectorOperations::Copy(constant, result.values, num_rows, 0, 0);
+	} else {
+		VectorOperations::Copy(slot.values, result.values, num_rows, 0, 0);
+	}
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (!rows[row]) {
+			FlatVector::SetNull(result.values, row, true);
+			continue;
+		}
+		if (slot.constant && slot.constant_error.HasError()) {
+			result.errors.emplace(row, slot.constant_error);
+		}
+	}
+	for (auto &error : slot.errors) {
+		if (rows[error.first]) {
+			result.errors.emplace(error.first, error.second);
+		}
+	}
+	return result;
+}
+
+static bool StopsFrameEvaluation(const ErrorData &error) {
+	auto type = error.Type();
+	return type == ExceptionType::INTERRUPT || type == ExceptionType::OUT_OF_MEMORY || type == ExceptionType::FATAL;
+}
 
 //! `expr` on the rows `rows` marks, one slot per row and one more after them: NULL on the
 //! rows not read, the extra slot for the caller to fill.
@@ -556,13 +599,57 @@ static void SetEveryRowNull(Vector &out, idx_t num_rows) {
 	}
 }
 
+//! Fold states together on the usual path. If a data error affects one state, recover each state's result and
+//! error separately: an anchor that never reads the failing state must still be able to read the others.
+template <class FEED>
+static Vector FoldFrameStates(ClientContext &context, const BoundAggregateExpression &aggregate,
+                              vector<Vector> &sources, Vector &read, idx_t count, const string &written,
+                              const FEED &feed, std::map<idx_t, ErrorData> &errors) {
+	Vector values(aggregate.return_type, count);
+	try {
+		AggregateFold fold(context, aggregate, sources, read, count, written);
+		for (idx_t state = 0; state < count; state++) {
+			if (!errors.count(state)) {
+				feed(state, fold, state);
+			}
+		}
+		fold.Finish(values);
+		return values;
+	} catch (std::exception &ex) {
+		if (StopsFrameEvaluation(ErrorData(ex))) {
+			throw;
+		}
+	}
+	for (idx_t state = 0; state < count; state++) {
+		if (errors.count(state)) {
+			FlatVector::SetNull(values, state, true);
+			continue;
+		}
+		try {
+			AggregateFold fold(context, aggregate, sources, read, 1, written);
+			feed(state, fold, 0);
+			Vector one(aggregate.return_type);
+			fold.Finish(one);
+			values.SetValue(state, one.GetValue(0));
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (StopsFrameEvaluation(error)) {
+				throw;
+			}
+			errors.emplace(state, std::move(error));
+			FlatVector::SetNull(values, state, true);
+		}
+	}
+	return values;
+}
+
 //! A range over data's REDUCED column (DecideFrameColumn) into `out`: the frame's own reducer run (AggregateFold) over
 //! each window's values -- the payload at each row it reads, once per visit, and the `else` at its anchor once per
 //! missing position; a NULL among them is skipped (D84; `count` counts the others, and of none is 0). Each value is
 //! computed on the rows that read it only. An anchor whose window reads nothing reads NULL.
 static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameColumn &column,
-                              const DecideFrameMap &map, idx_t num_rows,
-                              ChunkExprCache &chunk_expr_cache, Vector &out) {
+                              const DecideFrameMap &map, idx_t num_rows, ChunkExprCache &chunk_expr_cache, Vector &out,
+                              std::map<idx_t, ErrorData> &errors) {
 	auto &marker = column.value->Cast<BoundAggregateExpression>();
 	if (marker.children.empty()) {
 		throw InternalException("DECIDE: %s's column reads no reducer over its payload", frame.text);
@@ -578,30 +665,51 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 	// One source per argument to reduce from: the payload's values at [0, n), the else's at [n, 2n). Only a collated
 	// MIN or MAX has a second argument, and it takes no `else` (BindDecideFrame).
 	vector<Vector> sources;
+	std::map<idx_t, ErrorData> source_errors;
+	auto read_rows = map.ReadRows();
 	for (auto &argument : marker.children) {
 		sources.emplace_back(argument->return_type, 2 * num_rows);
-		auto payload = EvaluateOnRows(context, *argument, num_rows, map.ReadRows(), chunk_expr_cache);
-		VectorOperations::Copy(payload, sources.back(), num_rows, 0, 0);
+		auto payload = EvaluateFrameRows(context, *argument, num_rows, read_rows, chunk_expr_cache);
+		VectorOperations::Copy(payload.values, sources.back(), num_rows, 0, 0);
+		for (auto &error : payload.errors) {
+			source_errors.emplace(error.first, error.second);
+		}
 	}
 	if (map.fallback) {
-		auto fallback =
-		    EvaluateOnRows(context, *column.fallback, num_rows, map.FallbackAnchors(), chunk_expr_cache);
-		VectorOperations::Copy(fallback, sources[0], num_rows, 0, num_rows);
+		auto fallback = EvaluateFrameRows(context, *column.fallback, num_rows, map.FallbackAnchors(), chunk_expr_cache);
+		VectorOperations::Copy(fallback.values, sources[0], num_rows, 0, num_rows);
+		for (auto &error : fallback.errors) {
+			source_errors.emplace(num_rows + error.first, error.second);
+		}
 	}
 
-	AggregateFold fold(context, marker, sources, sources[0], windows, frame.text);
+	std::map<idx_t, ErrorData> window_errors;
 	for (idx_t w = 0; w < windows; w++) {
 		if (map.WindowAbsent(w)) {
 			continue;
 		}
-		map.ForEachRead(w, [&](idx_t row, idx_t times) { fold.Feed(row, w, times); });
-		const auto fallbacks = map.WindowFallbacks(w);
-		if (fallbacks > 0) {
-			fold.Feed(num_rows + map.window_anchor[w], w, fallbacks);
+		auto inherit = [&](idx_t source) {
+			auto error = source_errors.find(source);
+			if (error != source_errors.end()) {
+				window_errors.emplace(w, error->second);
+			}
+		};
+		map.ForEachRead(w, [&](idx_t row, idx_t) { inherit(row); });
+		if (map.WindowFallbacks(w) > 0) {
+			inherit(num_rows + map.window_anchor[w]);
 		}
 	}
-	Vector values(column.type, windows);
-	fold.Finish(values);
+	auto feed = [&](idx_t w, AggregateFold &fold, idx_t state) {
+		if (map.WindowAbsent(w)) {
+			return;
+		}
+		map.ForEachRead(w, [&](idx_t row, idx_t times) { fold.Feed(row, state, times); });
+		const auto fallbacks = map.WindowFallbacks(w);
+		if (fallbacks > 0) {
+			fold.Feed(num_rows + map.window_anchor[w], state, fallbacks);
+		}
+	};
+	auto values = FoldFrameStates(context, marker, sources, sources[0], windows, frame.text, feed, window_errors);
 	// Each anchor reads its window's value; every other row, and an anchor whose window reads nothing, reads NULL.
 	SelectionVector gather(num_rows);
 	vector<bool> unread(num_rows, false);
@@ -609,6 +717,12 @@ static void ReduceRangeValues(ClientContext &context, const DecideFrameSpec &fra
 		const auto window = map.anchors[row] ? map.window[row] : DConstants::INVALID_INDEX;
 		unread[row] = window == DConstants::INVALID_INDEX || map.Absent(row);
 		gather.set_index(row, unread[row] ? 0 : window);
+		if (!unread[row]) {
+			auto error = window_errors.find(window);
+			if (error != window_errors.end()) {
+				errors.emplace(row, error->second);
+			}
+		}
 	}
 	VectorOperations::Copy(values, out, gather, num_rows, 0, 0);
 	for (idx_t row = 0; row < num_rows; row++) {
@@ -659,11 +773,12 @@ void SkipDecideRangeNullReads(ClientContext &context, const vector<const Express
 		vector<bool> nulls(num_rows, false);
 		bool any = false;
 		for (auto *expr : exprs) {
-			auto values = EvaluateOnRows(context, *expr, num_rows, rows, chunk_expr_cache);
+			auto values = EvaluateFrameRows(context, *expr, num_rows, rows, chunk_expr_cache);
 			UnifiedVectorFormat format;
-			values.ToUnifiedFormat(num_rows, format);
+			values.values.ToUnifiedFormat(num_rows, format);
 			for (idx_t row = 0; row < num_rows; row++) {
-				if (rows[row] && !format.validity.RowIsValid(format.sel->get_index(row))) {
+				// A failed value is not a NULL member: its error must reach the window's actual consumer.
+				if (rows[row] && !values.errors.count(row) && !format.validity.RowIsValid(format.sel->get_index(row))) {
 					nulls[row] = any = true;
 				}
 			}
@@ -715,6 +830,7 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		                        prepared.frame_column_base, chunk_expr_cache.store->ColumnCount());
 	}
 	vector<unique_ptr<Vector>> values_of;
+	vector<std::map<idx_t, ErrorData>> errors_of;
 	// DEFINED reads the frame's other columns, so it is computed after them. A reducer over data reading frames is
 	// computed once they are appended, its column after every frame's (AppendDecideFrameAggregates).
 	vector<idx_t> defined;
@@ -725,10 +841,11 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		}
 		auto &map = maps[column.frame];
 		auto out = make_uniq<Vector>(column.type, num_rows);
+		std::map<idx_t, ErrorData> errors;
 		if (column.kind == DecideFrameColumn::Kind::DEFINED) {
 			defined.push_back(j);
 		} else if (column.kind == DecideFrameColumn::Kind::REDUCED) {
-			ReduceRangeValues(context, frames[column.frame], column, map, num_rows, chunk_expr_cache, *out);
+			ReduceRangeValues(context, frames[column.frame], column, map, num_rows, chunk_expr_cache, *out, errors);
 		} else {
 			// A payload is read at the first row of each selected peer, the row every anchor of
 			// the peer reads (D73 holds the others to it); an `else` at the anchors whose
@@ -751,23 +868,33 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 			// One source to gather from: the payload's values at [0, n), the default at n, the
 			// else's at [n + 1, 2n + 1).
 			Vector source(column.type, 2 * num_rows + 1);
+			std::map<idx_t, ErrorData> source_errors;
 			if (payload) {
-				auto values = EvaluateOnRows(context, *payload, num_rows, selected_rows, chunk_expr_cache);
-				VectorOperations::Copy(values, source, num_rows, 0, 0);
+				auto values = EvaluateFrameRows(context, *payload, num_rows, selected_rows, chunk_expr_cache);
+				VectorOperations::Copy(values.values, source, num_rows, 0, 0);
+				source_errors = std::move(values.errors);
 			}
 			const bool no_value = column.kind == DecideFrameColumn::Kind::VALUE ||
 			                      (column.kind == DecideFrameColumn::Kind::READ && !frames[column.frame].fallback);
 			source.SetValue(num_rows, no_value ? Value(column.type) : Value::INTEGER(0).DefaultCastAs(column.type));
 			if (fallback) {
-				auto values = EvaluateOnRows(context, *fallback, num_rows, missing_rows, chunk_expr_cache);
-				VectorOperations::Copy(values, source, num_rows, 0, num_rows + 1);
+				auto values = EvaluateFrameRows(context, *fallback, num_rows, missing_rows, chunk_expr_cache);
+				VectorOperations::Copy(values.values, source, num_rows, 0, num_rows + 1);
+				for (auto &error : values.errors) {
+					source_errors.emplace(num_rows + 1 + error.first, error.second);
+				}
 			}
 			SelectionVector gather(num_rows);
 			for (idx_t row = 0; row < num_rows; row++) {
 				auto selected_row = payload ? map.SelectedRow(row) : DConstants::INVALID_INDEX;
-				gather.set_index(row, selected_row != DConstants::INVALID_INDEX ? selected_row
-				                      : missing_rows[row]                       ? num_rows + 1 + row
-				                                                                : num_rows);
+				auto source_row = selected_row != DConstants::INVALID_INDEX ? selected_row
+				                  : missing_rows[row]                       ? num_rows + 1 + row
+				                                                            : num_rows;
+				gather.set_index(row, source_row);
+				auto error = source_errors.find(source_row);
+				if (!map.Absent(row) && error != source_errors.end()) {
+					errors.emplace(row, error->second);
+				}
 			}
 			VectorOperations::Copy(source, *out, gather, num_rows, 0, 0);
 			// An anchor where the frame reads nothing -- one in no timeline among them, whatever its `else` -- has no
@@ -779,6 +906,7 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 			}
 		}
 		values_of.push_back(std::move(out));
+		errors_of.push_back(std::move(errors));
 	}
 	for (auto j : defined) {
 		// TRUE where the frame has a value, NULL elsewhere: a range's window reads something, a point's every READ and
@@ -800,6 +928,11 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 				continue;
 			}
 			for (idx_t row = 0; row < num_rows; row++) {
+				auto error = errors_of[k].find(row);
+				if (error != errors_of[k].end()) {
+					errors_of[j].emplace(row, error->second);
+					continue;
+				}
 				if (values_of[k]->GetValue(row).IsNull()) {
 					validity.SetInvalid(row);
 				}
@@ -807,7 +940,9 @@ void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSp
 		}
 	}
 
-	AppendDecideColumns(chunk_expr_cache, values_of);
+	for (idx_t j = 0; j < values_of.size(); j++) {
+		chunk_expr_cache.store->AppendColumn(*values_of[j], errors_of[j]);
+	}
 }
 
 void AppendDecideColumns(ChunkExprCache &chunk_expr_cache, const vector<unique_ptr<Vector>> &values_of) {
