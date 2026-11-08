@@ -1293,6 +1293,22 @@ def test_n1_pipelined_plan_reads_the_table_twice_whatever_the_parent_reads(decid
     assert math.isclose(direct[0][1], solver[0][1], rel_tol=5e-6)
 
 
+@pytest.mark.correctness
+def test_a2_pipelined_plan_reads_the_table_twice_whatever_the_parent_reads(decidb_cli):
+    # A2 reads the table once for each class's answer and once for the rows, and holds no row (the rows are probed
+    # against the answers), so a payload column the parent reads travels with the second read: a late materialization
+    # would only add a third scan and a join. This is the `pipelined` branch of A2's substitute.
+    setup = _late_materialization_setup("a1")
+    decide = "FROM rr_src DECIDE per (): c(REAL) SUCH THAT c BETWEEN 0 AND 10 MINIMIZE SUM(POWER(c - score, 2))"
+    query = f"SELECT COUNT(*) FILTER (WHERE payload = 'payload-' || id::VARCHAR), SUM(c) FROM ({decide}) q"
+    plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
+    assert "A2_SINGLE_FACILITY_LOCATION" in plan and _table_scans(plan) == 2, plan
+    direct, _ = _run(decidb_cli, setup + query)
+    solver, _ = _run(decidb_cli, setup + query, mode="off")
+    assert direct[0][0] == solver[0][0] == _LATE_MATERIALIZATION_ROWS
+    assert math.isclose(direct[0][1], solver[0][1], rel_tol=1e-6)
+
+
 def _scans_and_solver_answers(cli, setup, query, scans):
     """The direct plan reads the table `scans` times and answers like the solver."""
     plan = _raw(cli, setup + f"EXPLAIN {query}").stdout

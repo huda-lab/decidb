@@ -17,7 +17,6 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
-#include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
 
@@ -43,13 +42,11 @@ struct PlanTools {
 };
 
 //! The hash aggregate over the rows of a class: an aggregate added to it holds the class's value on the class's one
-//! row (group-then-join, DirectJoinClassAnswers). The loss that needs a window of its own over the rows of the class
-//! partitions it by `Partitions()`.
+//! row (group-then-join, DirectJoinClassAnswers).
 class ClassAggregate {
 public:
-	ClassAggregate(DirectAggregateStage &aggregate_p, vector<ExprPtr> partitions_p, Optimizer &optimizer_p,
-	               const ExpressionBuilder &calc_p)
-	    : aggregate(aggregate_p), partitions(std::move(partitions_p)), optimizer(optimizer_p), calc(calc_p) {
+	ClassAggregate(DirectAggregateStage &aggregate_p, Optimizer &optimizer_p, const ExpressionBuilder &calc_p)
+	    : aggregate(aggregate_p), optimizer(optimizer_p), calc(calc_p) {
 	}
 
 	//! The aggregate `function` of a column over the class, on the rows where `reads` holds (null: every row).
@@ -58,21 +55,14 @@ public:
 		return aggregate.Add(DirectHashAggregate(optimizer, calc, function, calc.Col(type, column), reads));
 	}
 
-	//! Makes `window` run over the rows of the row's class.
-	void Partition(BoundWindowExpression &window) const {
-		for (auto &partition : partitions) {
-			window.partitions.push_back(calc.Out(partition));
-		}
-	}
-
-	//! The columns the class is partitioned by, none for a query-wide decision.
-	const vector<ExprPtr> &Partitions() const {
-		return partitions;
+	//! The discrete median of a DOUBLE `value` over the class: the `ceil(n/2)`-th least of its `n` non-NULL values,
+	//! NULL when there is none (`quantile_disc` at one half).
+	ColumnBinding AddLowerMedian(const ExprPtr &value) const {
+		return aggregate.Add(DirectHashAggregate(optimizer, calc, "quantile_disc", value, nullptr, calc.Num(0.5)));
 	}
 
 private:
 	DirectAggregateStage &aggregate;
-	vector<ExprPtr> partitions;
 	Optimizer &optimizer;
 	const ExpressionBuilder &calc;
 };
@@ -122,10 +112,8 @@ public:
 	//! P2: the row's values the class aggregates read, from the raw values. Appends the row's checks.
 	virtual void PerRow(const PlanTools &tools, DirectProjectionStage &p2, LossColumns &columns,
 	                    vector<unique_ptr<Expression>> &checks) const = 0;
-	//! W: the class's values, DOUBLE columns, from the aggregates the loss adds to the class aggregate. A loss that
-	//! needs a window of its own first puts it over `plan`, under the class aggregate.
-	virtual void Aggregate(const PlanTools &tools, const ClassAggregate &classes, unique_ptr<LogicalOperator> &plan,
-	                       LossColumns &columns) const = 0;
+	//! W: the class's values, DOUBLE columns, from the aggregates the loss adds to the class aggregate.
+	virtual void Aggregate(const PlanTools &tools, const ClassAggregate &classes, LossColumns &columns) const = 0;
 	//! P3: forwards the class's values through the interval's projection, which is all P4 reads.
 	virtual void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const = 0;
 	//! P4: the target over the class's values, which the skeleton clamps into `[lower, upper]`. `has_class` is false on
@@ -193,8 +181,7 @@ public:
 		square.row_b = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.b)));
 	}
 
-	void Aggregate(const PlanTools &, const ClassAggregate &classes, unique_ptr<LogicalOperator> &,
-	               LossColumns &columns) const override {
+	void Aggregate(const PlanTools &, const ClassAggregate &classes, LossColumns &columns) const override {
 		auto &square = columns.Cast<SquareColumns>();
 		square.a = classes.Add("sum", square.row_a, LogicalType::DOUBLE);
 		square.b = classes.Add("sum", square.row_b, LogicalType::DOUBLE);
@@ -263,7 +250,7 @@ struct CenteredColumns : LossColumns {
 	ColumnBinding weight;
 };
 
-//! The class's weight and its lower and upper median (W, then P3).
+//! The class's total weight and its lower and upper median (W, then P3).
 struct MedianColumns final : CenteredColumns {
 	ColumnBinding total;
 	ColumnBinding lower;
@@ -321,12 +308,16 @@ private:
 	double weight;
 };
 
-//! `SUM(K * ABS(s*c + t))`: the minimum is at a median of the centers `v = -t/s`, each weighted by `m = K*|s|`. Every
-//! point between the lower and the upper weighted median is optimal; the answer is the one nearest 0.
+//! `SUM(K * ABS(s*c + t))`: the minimum is at a median of the centers `v = -t/s`. Every point between the lower and the
+//! upper median is optimal; the answer is the one nearest 0.
 //!
-//! A running sum `R` of the weights in order of the centers sits beside the class's total `M`, on one sort. The lower
-//! median is the least center where `2R >= M`: the weight up to it is at least half. The upper median is the greatest
-//! center where the weight from it on, `M - R + m`, is at least half.
+//! ProveAbsolute admits a constant `K` and a nonzero constant `s`, so every row that has a center has the same weight
+//! `m = K*|s|`, and the weighted median is the plain one: the lower median is the `ceil(n/2)`-th least center
+//! (`quantile_disc` at one half) and the upper median the `floor(n/2)+1`-th, which is the lower median of the negated
+//! centers, negated. Both are hash aggregates over the class, with no sort and no window, so they run in parallel (the
+//! standard order-statistic aggregate; a weighted median would need a running sum of the weights in order of the
+//! centers). A rule that admits a weight read from the data needs that sum instead. The class's total weight stays,
+//! since a sum past a DOUBLE is the solver's error.
 class AbsoluteLoss final : public CenteredLoss {
 public:
 	using CenteredLoss::CenteredLoss;
@@ -335,37 +326,13 @@ public:
 		return make_uniq<MedianColumns>();
 	}
 
-	void Aggregate(const PlanTools &tools, const ClassAggregate &classes, unique_ptr<LogicalOperator> &plan,
-	               LossColumns &columns) const override {
+	void Aggregate(const PlanTools &tools, const ClassAggregate &classes, LossColumns &columns) const override {
 		auto &median = columns.Cast<MedianColumns>();
 		auto &calc = tools.calc;
 		auto center = calc.Col(LogicalType::DOUBLE, median.center);
-		auto weight = calc.Col(LogicalType::DOUBLE, median.weight);
-		// A window of its own under the class aggregate: both aggregates share the class and its order of centers. A
-		// row with no center sorts last, and its weight is 0.
-		auto sorted = make_uniq<LogicalWindow>(tools.binder.GenerateTableIndex());
-		auto total = DirectWindowExtremum(tools.optimizer, "sum", calc.Out(weight));
-		classes.Partition(*total);
-		total->orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST, calc.Out(center));
-		sorted->expressions.push_back(std::move(total));
-		sorted->expressions.push_back(
-		    DirectRunningSum(tools.optimizer, calc, weight, center, OrderType::ASCENDING, classes.Partitions()));
-		median.total = ColumnBinding(sorted->window_index, 0);
-		auto up_to = calc.Col(LogicalType::DOUBLE, ColumnBinding(sorted->window_index, 1));
-		sorted->children.push_back(std::move(plan));
-		plan = std::move(sorted);
-
-		auto total_weight = calc.Col(LogicalType::DOUBLE, median.total);
-		auto two = calc.Num(2.0);
-		auto from_here = calc.Add(calc.Sub(total_weight, up_to), weight);
-		median.lower =
-		    classes.Add("min", median.center, LogicalType::DOUBLE,
-		                calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, up_to), total_weight));
-		median.upper =
-		    classes.Add("max", median.center, LogicalType::DOUBLE,
-		                calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Mul(two, from_here), total_weight));
-		// The window repeats the class's total on each of its rows; the class's row takes it once.
-		median.total = classes.Add("max", median.total, LogicalType::DOUBLE);
+		median.lower = classes.AddLowerMedian(center);
+		median.upper = classes.AddLowerMedian(calc.Neg(center));
+		median.total = classes.Add("sum", median.weight, LogicalType::DOUBLE);
 	}
 
 	void CarryClasses(const PlanTools &tools, DirectProjectionStage &p3, LossColumns &columns) const override {
@@ -380,10 +347,10 @@ public:
 		auto &calc = tools.calc;
 		auto &median = columns.Cast<MedianColumns>();
 		Answer answer;
-		// The point of the optimal medians nearest 0. With no weight on any row of the class, both medians are NULL,
-		// which the extrema skip: the target is 0.
+		// The upper median is the negated lower median of the negated centers. The point of the optimal medians nearest
+		// 0. With no center in the class, both medians are NULL, which the extrema skip: the target is 0.
 		answer.target = calc.Min({calc.Max({calc.Num(0.0), calc.Col(LogicalType::DOUBLE, median.lower)}),
-		                          calc.Col(LogicalType::DOUBLE, median.upper)});
+		                          calc.Neg(calc.Col(LogicalType::DOUBLE, median.upper))});
 		answer.checks.push_back(
 		    DirectRaiseTooLarge(tools.optimizer, calc.Col(LogicalType::DOUBLE, median.total), tools.written));
 		return answer;
@@ -400,8 +367,7 @@ public:
 		return make_uniq<ExtremeColumns>();
 	}
 
-	void Aggregate(const PlanTools &, const ClassAggregate &classes, unique_ptr<LogicalOperator> &,
-	               LossColumns &columns) const override {
+	void Aggregate(const PlanTools &, const ClassAggregate &classes, LossColumns &columns) const override {
 		auto &extreme = columns.Cast<ExtremeColumns>();
 		extreme.least = classes.Add("min", extreme.center, LogicalType::DOUBLE);
 		extreme.greatest = classes.Add("max", extreme.center, LogicalType::DOUBLE);
@@ -816,21 +782,18 @@ private:
 	// W: the aggregates of a class
 	//===------------------------------------------------------------------===//
 
-	//! Puts one hash aggregate on the key over `plan` (the loss may put a window of its own under it first): the
-	//! loss's aggregates, and for each clause the MAX of its lower ends and the MIN of its upper ends
-	//! (DirectTightestBound), and whether some row a floor-lifting clause keeps exists. A row with no class sits in a
-	//! key of its own, whose answer is NULL whatever the key holds.
+	//! Puts one hash aggregate on the key over `plan`: the loss's aggregates, and for each clause the MAX of its lower
+	//! ends and the MIN of its upper ends (DirectTightestBound), and whether some row a floor-lifting clause keeps
+	//! exists. A row with no class sits in a key of its own, whose answer is NULL whatever the key holds.
 	Aggregates AggregateClasses(const Rows &rows, unique_ptr<LogicalOperator> &plan, LossColumns &loss_columns) const {
 		DirectAggregateStage stage(binder);
 		Aggregates result;
 		result.key_types = rows.key_types;
-		vector<ExprPtr> partitions;
 		for (idx_t i = 0; i < rows.keys.size(); i++) {
-			partitions.push_back(calc.Col(rows.key_types[i], rows.keys[i]));
-			result.keys.push_back(stage.Group(calc.Out(partitions.back())));
+			result.keys.push_back(stage.Group(calc.Out(calc.Col(rows.key_types[i], rows.keys[i]))));
 		}
-		ClassAggregate classes(stage, std::move(partitions), optimizer, calc);
-		condition.loss->Aggregate(tools, classes, plan, loss_columns);
+		ClassAggregate classes(stage, optimizer, calc);
+		condition.loss->Aggregate(tools, classes, loss_columns);
 		DirectAggregateSink sink(stage);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];

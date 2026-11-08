@@ -243,9 +243,11 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
                                                        unique_ptr<Expression> value);
 
 //! The hash counterpart of DirectWindowExtremum: the aggregate `name` over `argument` (null for COUNT(*)), on the rows
-//! where `reads` holds (null: every row). A rule adds it to a DirectAggregateStage.
+//! where `reads` holds (null: every row). `parameter` is a constant second argument for an aggregate that takes one
+//! (the fraction of `quantile_disc`), null for none. A rule adds it to a DirectAggregateStage.
 unique_ptr<Expression> DirectHashAggregate(Optimizer &optimizer, const ExpressionBuilder &calc, const char *name,
-                                           const ExprPtr &argument, const ExprPtr &reads = nullptr);
+                                           const ExprPtr &argument, const ExprPtr &reads = nullptr,
+                                           const ExprPtr &parameter = nullptr);
 
 //! The inclusive running sum of `value` within each partition, in order of `order` (`direction`, NULLs last), ties in
 //! any order: DirectWindowExtremum's `sum` with a frame that ends at the current row, and the sort that gives the frame

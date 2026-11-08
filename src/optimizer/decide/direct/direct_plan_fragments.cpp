@@ -433,10 +433,13 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 }
 
 unique_ptr<Expression> DirectHashAggregate(Optimizer &optimizer, const ExpressionBuilder &calc, const char *name,
-                                           const ExprPtr &argument, const ExprPtr &reads) {
+                                           const ExprPtr &argument, const ExprPtr &reads, const ExprPtr &parameter) {
 	vector<unique_ptr<Expression>> children;
 	if (argument) {
 		children.push_back(calc.Out(argument));
+	}
+	if (parameter) {
+		children.push_back(calc.Out(parameter));
 	}
 	auto bound = optimizer.BindAggregateFunction(name, std::move(children));
 	if (reads) {

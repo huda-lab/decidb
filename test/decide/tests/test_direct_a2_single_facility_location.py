@@ -1528,9 +1528,6 @@ for _objective in ("abs", "max"):
     ABS_KEYED_CASES[f"{_objective}_answers_clamped_per_class"] = _abs_case(
         KEYED_SPLIT_BOX, _objective, ABS_KEYED_ROWS, ("k",)
     )
-# The key's shape reaches the window of the absolute loss, which partitions by it.
-ABS_KEYED_CASES["abs_multi_column_key"] = _abs_case("interior", "abs", ABS_KEYED_ROWS, ("k", "j"))
-ABS_KEYED_CASES["abs_relation_key"] = _abs_case("interior", "abs", RELATION_ROWS, (), True)
 ABS_KEYED_CASES["abs_bad_values_on_dropped_rows"] = _abs_case("interior", "abs_when", KEYED_DROPPED_BAD_ROWS, ("k",))
 
 # Bounds read from the data: the ungrouped aggregate query-wide and the grouped one per class, under a `when`.
