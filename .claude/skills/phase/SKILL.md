@@ -54,8 +54,10 @@ Lane rules:
 - Any design choice the brief does not settle: stop and report it under DECISIONS HIT with the options and your
   recommendation. The orchestrator asks the owner and resumes you.
 - Build with `CMAKE_BUILD_PARALLEL_LEVEL=3 make release` (other lanes build at the same time). Run only focused tests:
-  `./test/decide/run_tests.sh -n 2 -k <pattern>`. Never run `make decide-test` or a full suite: the orchestrator runs
-  full gates one lane at a time.
+  `./test/decide/run_tests.sh -n 2 -k <pattern>`, once per task before its commit, not after every edit. Settle
+  evidence by reading the code first (no caller, the case that already reaches the branch); run a focused test for
+  evidence only when reading cannot settle it. Never run `make decide-test` or a full suite: the orchestrator runs
+  one full gate for the whole phase after combining.
 - Do not edit docs (todo.md, done.md, bugs.md, ...). Do not edit context/docs/todo.md under any circumstances.
 - Commit on your worktree branch when a task is done: subject prefixed `decide:`, no trailer, never push.
 
@@ -89,28 +91,33 @@ the shared base directory so lanes reuse each other's objects. A cold build per 
 - Batch questions that arrive close together into one message to the owner.
 - Never answer a design question yourself.
 
-## 5. Review and gate each lane
+## 5. Review each lane
 
 When a lane reports done, review it as `/orchestrate` step 4 does, against its worktree: `git -C <wt> diff` from the
-phase's base commit, the brief, the layer that owns the behavior. Then run its full gate in its worktree, one lane at
-a time (never two full suites at once): `make decide-test`, plus the area suites `.claude/CLAUDE.md` names for what it
-touched. Fixes go back to the same lane by SendMessage. A lane is ready when its gate passes and its report is
-reviewed.
+phase's base commit, the brief, the layer that owns the behavior. Do not run a full suite per lane: read its focused
+test results, and rerun a focused test only where the diff gives a reason to doubt them. Fixes go back to the same
+lane by SendMessage. A lane is ready when its report and diff are reviewed.
 
 ## 6. Combine
 
-In the main tree, one lane at a time, in queue order:
+Full suites run once per phase, here, on all lanes together (the owner's rule: full runs only at critical points).
 
-1. Rebase the lane branch onto the main branch and fast-forward, so history stays linear and each task keeps its
-   commit. Resolve conflicts yourself when they are mechanical; when they are not, ask the lane agent (it has the
-   context) or the owner.
-2. Build, run `make decide-test` and the area suites. A failure here that passed in the lane is an interaction
-   between lanes: find which lanes, and bring it to the owner before fixing.
+1. Stack the lanes in queue order: rebase the first lane branch onto the main branch, each next one onto the one
+   before, so history stays linear and each task keeps its commit. Resolve conflicts yourself when they are
+   mechanical; when they are not, ask the lane agent (it has the context) or the owner.
+2. Check out the top of the stack detached in the main tree, build, and run the phase's one full gate: `make
+   decide-test` plus every area suite `.claude/CLAUDE.md` names for what any lane touched (when that is most of them,
+   `test/decide/run_direct_matrix.sh` runs all five in about 3 minutes). A failure names its test file, which names
+   its lane; confirm with that lane's focused tests, not another full run, and bring an interaction between lanes to
+   the owner before fixing. After a fix, rerun only the suites that failed.
 3. Golden diffs go to the owner before any regeneration.
-4. Write the docs for the lane (done.md, task deletions, queue line deletions), as `/orchestrate` step 5 does.
-5. File the lane's FILED items: each becomes a task in the owning nested `todo.md` with an id, and a queue line in the
-   batch it belongs to (or a new batch). Only you edit the queue.
-6. Ask the owner to approve the lane: its commits, the docs commit, the filed items. Land only after a yes.
+4. Per lane, in queue order: write its docs (done.md, task deletions, queue line deletions) as `/orchestrate` step 5
+   does, as one docs commit on top of the stack; doc-only commits need no new test run.
+5. File each lane's FILED items: each becomes a task in the owning nested `todo.md` with an id, and a queue line in
+   the batch it belongs to (or a new batch). Only you edit the queue.
+6. Ask the owner to approve each lane: its commits, its docs commit, its filed items. Land (fast-forward the main
+   branch) only after a yes; a lane the owner turns down comes off the stack, and the gate reruns only if code is
+   left that it did not cover.
 
 After every lane has landed: remove the worktrees (`git worktree remove`) and their merged branches, report the phase
 in plain language (what shipped, what was filed, what is next), and offer the next phase.
