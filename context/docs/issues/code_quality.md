@@ -30,6 +30,32 @@ holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) carry diffe
 builds two helpers where its comment promises one. Done when every message that names a
 value quotes a span of the query as written, the renderer's tag list is gone, and these examples are tests.
 
+**Design (architect review, 2026-11-09).** libpg_query here keeps span ends already: `YYLTYPE` is `{start, end}`
+(`scan.l` sets each token's end, `YYLLOC_DEFAULT` in `grammar/grammar.hpp` carries it to every nonterminal). So:
+one decorator reduction per expression nonterminal (`a_expr: a_expr_body { $$ = noteDecideExpr($1, @1, ...) }`, and
+`b_expr`) records `{node, start, end}` with a new role `EXPR` inside a DECIDE clause; one interceptor at
+`Transformer::TransformExpression(PGNode&)` keys the span by the parsed node's `query_location`, innermost first.
+`DecideSourceText` moves onto `LogicalDecide` and `PhysicalDecide` (replacing `source_fragments`). The location rule
+(Clang's TreeTransform): a replacement takes the location of exactly the node it equals in value, through one helper
+at each replacement site; a synthesized node with no location reprints its operator and quotes its children, never an
+ancestor's span. `RenderSource` cuts a located node's span before reprinting; the binder quotes parsed nodes the same
+way. A macro expansion gives the root the call's location and clears the body's and the substituted arguments'
+locations relative to the other text (Clang's expansion location). `COLON_FORM_TAG`, the `WRITTEN_VALUE_TAG` alias
+text, the fragment machinery (`TagDecideSourceFragments`, `WRITTEN_TERM_TAG_PREFIX`, the text payloads of the group-key
+and qualified-reducer tags, `MakeWrittenOrderSuffix`) and the `TERM`/`COLUMN` roles go; `NULL_GUARD_TAG` and
+`SKIP_NULL_TAG` stay, as rewrites read them. `Helpers::Find` keys on the reducer (`Equals`), its group key, qualifier
+scope, `when` condition and class key, since `Equals` ignores aliases. Staged as: grammar and transformer spans (no
+behavior change); the text on the operators; the renderer and binder quoting with the location rule and the macro
+rule; deleting the tags and machinery; `Helpers::Find`; docs. The invariant the location rule needs (an edit that
+changes a located node's value must clear its location) goes into `../pipeline/architecture.md` § 3.
+
+**Ruling (owner, 2026-11-09, delegated).** EXPLAIN's canonical and rewritten layers quote every located data-only
+subtree and reprint decision structure. `CMP_LHS`/`CMP_RHS` fold into `EXPR`; BETWEEN's spans stay. The plan keeps
+hiding skip tests through `SKIP_NULL_TAG`. `L0_AUTO_BOUND_TAG` is out of scope: it labels an engine placeholder with
+no source text. A macro's text is quoted as written in its definition. A parameter is quoted as written (`$1`), as
+Postgres does. A cut keeps its whitespace and comments verbatim, as Clang does. Helpers are shared across clauses
+keyed on scope.
+
 ## FMT-1 — DeciDB sources indented with spaces fail the formatter
 
 Location: nine files under `src/decidb/` (among them `src/decidb/formulation/ilp_model_builder.cpp`,
