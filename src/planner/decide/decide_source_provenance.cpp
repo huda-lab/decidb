@@ -567,7 +567,7 @@ static bool ReadsRowData(const Expression &expr, idx_t decide_index) {
 
 //! Link the two halves of `input BETWEEN lo AND hi` into the clause the user wrote: each points at the other, and both
 //! carry the whole clause as their written sides. The sides come from the text the parser kept (`input`, `lo AND hi`);
-//! without it, from the halves' own rendered sides.
+//! without it (a macro argument was substituted into the tail), from the halves' own rendered sides.
 static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo &upper, idx_t lower_id, idx_t upper_id,
                               const string *input, const string *bounds) {
 	string whole_input = input ? *input : lower.written_lhs;
@@ -585,7 +585,7 @@ static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo 
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
                                                             idx_t decide_index, const vector<DecideKey> *keys,
-                                                            const DecideSourceText *text) {
+                                                            const DecideSourceText &text) {
 	vector<ConstraintSourceInfo> result;
 	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
 	idx_t lower_half = DConstants::INVALID_INDEX;
@@ -638,11 +638,15 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       // is the text the user wrote, cut from the query (a clause with no cut keeps the
 		                       // render).
 		                       string left, right;
-		                       bool cut = text && text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_LHS, left) &&
-		                                  text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_RHS, right);
+		                       bool cut = text.Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_LHS, left) &&
+		                                  text.Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_RHS, right);
 		                       if (between_lower) {
 			                       lower_half = source_id;
-		                       } else if (between_upper && lower_half != DConstants::INVALID_INDEX) {
+		                       } else if (between_upper) {
+			                       if (lower_half == DConstants::INVALID_INDEX) {
+				                       throw InternalException("DECIDE: the upper half of a BETWEEN came without "
+				                                               "its lower half; the binder emits them in order");
+			                       }
 			                       // The location is the BETWEEN's, so what was cut is the whole clause's sides.
 			                       LinkBetweenHalves(result[lower_half], info, lower_half, source_id,
 			                                         cut ? &left : nullptr, cut ? &right : nullptr);

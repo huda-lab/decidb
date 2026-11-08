@@ -289,7 +289,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, names);
 			    result.decide_constraint_sources =
 			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
-			                                       result.decide_index, &keys, &statement.decide_text);
+			                                       result.decide_index, &keys, statement.decide_text);
 		    }
         }
         if (statement.decide_objective) {

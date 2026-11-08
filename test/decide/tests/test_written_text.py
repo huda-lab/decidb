@@ -107,6 +107,19 @@ def test_a_macro_argument_in_a_decide_tail_does_not_borrow_the_bodys_text(decidb
 
 
 @pytest.mark.explain
+def test_a_between_in_a_macro_tail_with_an_argument_is_written_from_its_halves(decidb_cli):
+    """A tail an argument was substituted into keeps no source text, so a BETWEEN reads its sides off its two halves:
+    the clause is `x BETWEEN 1 AND 3`, and each half follows it."""
+    create = (
+        "CREATE TEMP MACRO m(c) AS TABLE SELECT id, x FROM (VALUES (1, 5), (2, 6)) t(id, cap) "
+        "DECIDE x(INT) SUCH THAT x <= 9 AND x BETWEEN 1 AND c MAXIMIZE sum(x)"
+    )
+    cli = decidb_cli.without_verify_serializer()
+    plan = re.sub(r"[│\s]", "", cli.execute_raw(f"{_OFF}{create}; EXPLAIN SELECT * FROM m(3)").stdout)
+    assert "xBETWEEN1AND3≡x>=1≡x<=3" in plan, plan
+
+
+@pytest.mark.explain
 def test_a_macro_without_arguments_in_its_tail_keeps_its_text(decidb_cli):
     create = (
         "CREATE TEMP MACRO n() AS TABLE SELECT id, x FROM (VALUES (1, 5)) t(id, cap) "
