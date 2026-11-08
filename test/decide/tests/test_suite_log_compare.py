@@ -240,7 +240,9 @@ INCUMBENT_AGAIN = {
 }
 
 _SUMMARY = re.compile(
-    r"^auto: \d+ queries: (\d+) same, (\d+) unproven, (\d+) differ, (\d+) only in old, (\d+) only in new$", re.MULTILINE
+    r"^auto: \d+ queries: (\d+) same, (\d+) unproven, (\d+) differ, (\d+) only in old, (\d+) only in new"
+    r"(?:, (\d+) as a second baseline run printed)?$",
+    re.MULTILINE,
 )
 
 
@@ -273,14 +275,16 @@ def compare(tmp_path, capsys):
     """Compare a log of ``old`` records with one of ``new``: the exit code, the verdicts the summary counts, and the
     printed text."""
 
-    def run(old, new, *options, failed=(), old_modes=("auto",)):
+    def run(old, new, *options, failed=(), old_modes=("auto",), again=None):
         old_log = _log(tmp_path / "old", old, set(), old_modes)
         new_log = _log(tmp_path / "new", new, set(failed), ("auto",))
+        if again is not None:
+            options = (*options, "--again", str(_log(tmp_path / "again", again, set(), ("auto",))))
         code = main([str(old_log), str(new_log), *options])
         out = capsys.readouterr().out
         counts = _SUMMARY.search(out).groups()
-        names = ("same", "unproven", "differ", "only in old", "only in new")
-        return code, [name for name, count in zip(names, counts) if count != "0"], out
+        names = ("same", "unproven", "differ", "only in old", "only in new", "seen")
+        return code, [name for name, count in zip(names, counts) if count not in ("0", None)], out
 
     return run
 
@@ -347,6 +351,20 @@ def test_a_changed_value_differs_though_its_test_passes(compare):
     them: x = 8 on row 5 is worse than the optimum, and the log cannot tell it from an alternate optimum."""
     worse = {**DUMP, "stdout": DUMP["stdout"].replace("│     5 │     9 │", "│     5 │     8 │")}
     assert compare([DUMP], [worse])[:2] == (1, ["differ"])
+
+
+def test_an_output_the_baselines_second_run_printed_is_seen(compare):
+    """A tie: the second baseline run of one commit printed the other optimum, so a new run printing it is no
+    difference."""
+    other = {**DUMP, "stdout": DUMP["stdout"].replace("│     5 │     9 │", "│     5 │     8 │")}
+    assert compare([DUMP], [other], again=[other])[:2] == (0, ["seen"])
+
+
+def test_an_output_neither_baseline_run_printed_differs(compare):
+    """The same query, but a value neither baseline run printed: a tie stays allowed, a third answer does not."""
+    other = {**DUMP, "stdout": DUMP["stdout"].replace("│     5 │     9 │", "│     5 │     8 │")}
+    third = {**DUMP, "stdout": DUMP["stdout"].replace("│     5 │     9 │", "│     5 │     7 │")}
+    assert compare([DUMP], [third], again=[other])[:2] == (1, ["differ"])
 
 
 def test_a_stop_report_that_follows_the_clock_is_unproven(compare):

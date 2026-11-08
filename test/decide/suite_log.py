@@ -21,7 +21,12 @@ Any other change is a difference, a changed value included. No output states the
 alternate optimum from a wrong answer, and a test that passes proves neither: ``test_not_equal_still_accepted`` passes
 on an assignment worse than the optimum. A person reads each one.
 
-    test/decide/suite_log.py OLD NEW [--limit N]
+Some queries vary between two runs of one binary: a query with several optimal answers can get another one when its
+rows arrive in another order across threads. ``--again`` names a second log of OLD's commit, and a query NEW prints as
+one of the two baseline runs printed it counts as seen, not as a difference. An output neither printed is still one,
+so a tie stays allowed while a wrong answer on the same query does not.
+
+    test/decide/suite_log.py OLD NEW [--again OLD_AGAIN] [--limit N]
 
 Exit code 0 with no difference, 1 with some (a query or a mode only one log holds is one), 2 when OLD or NEW holds no
 mode.
@@ -209,18 +214,22 @@ def _heading(mode: str, what: str, tests: set[str], sql: str) -> str:
     return f"\n[{mode}] {what}: {min(tests)}\n  {' '.join(sql.split())[:300]}"
 
 
-def _compare_mode(old_dir: Path, new_dir: Path, limit: int) -> int:
-    """Print how one mode of two logs compares; return how many of its queries differ or are in one log alone."""
+def _compare_mode(old_dir: Path, new_dir: Path, limit: int, again_dir: Path | None = None) -> int:
+    """Print how one mode of two logs compares; return how many of its queries differ or are in one log alone. With
+    ``again_dir``, a second run of OLD's mode, a query printed as either run printed it is seen."""
     mode = old_dir.name
     old, new = _read_mode(old_dir), _read_mode(new_dir)
+    again = _read_mode(again_dir) if again_dir is not None and again_dir.is_dir() else {}
     passed = _passed_tests(old_dir) & _passed_tests(new_dir)
-    counts = {"same": 0, "unproven": 0, "differ": 0}
+    counts = {"same": 0, "unproven": 0, "differ": 0, "seen": 0}
     reports, unproven = [], []
     for key in sorted(old.keys() & new.keys()):
         found = _verdict(old[key], new[key], passed)
+        if found == "differ" and key in again and new[key].printed <= old[key].printed | again[key].printed:
+            found = "seen"
         counts[found] += 1
-        if found == "unproven":
-            unproven.append(f"[{mode}] unproven: {min(old[key].tests | new[key].tests)}")
+        if found in ("unproven", "seen"):
+            unproven.append(f"[{mode}] {found}: {min(old[key].tests | new[key].tests)}")
         elif found == "differ":
             removed = min(old[key].printed - new[key].printed, default=None)
             added = min(new[key].printed - old[key].printed, default=None)
@@ -237,9 +246,10 @@ def _compare_mode(old_dir: Path, new_dir: Path, limit: int) -> int:
     for line in unproven:
         print(line)
     only_old, only_new = len(old.keys() - new.keys()), len(new.keys() - old.keys())
+    seen = f", {counts['seen']} as a second baseline run printed" if again_dir is not None else ""
     print(
         f"{mode}: {len(old.keys() | new.keys())} queries: {counts['same']} same, {counts['unproven']} unproven, "
-        f"{counts['differ']} differ, {only_old} only in old, {only_new} only in new"
+        f"{counts['differ']} differ, {only_old} only in old, {only_new} only in new{seen}"
     )
     return len(reports)
 
@@ -248,14 +258,14 @@ def _modes(log: Path) -> set[str]:
     return {path.name for path in log.glob("*") if path.is_dir()}
 
 
-def _compare_logs(old: Path, new: Path, limit: int = 20) -> int:
+def _compare_logs(old: Path, new: Path, limit: int = 20, again: Path | None = None) -> int:
     """Print how two logs compare, mode by mode; return how many differences they hold, a mode only one holds being
     one: a run that captured fewer modes has not shown the others still print what they did."""
     old_modes, new_modes = _modes(old), _modes(new)
     differences = 0
     for mode in sorted(old_modes | new_modes):
         if mode in old_modes and mode in new_modes:
-            differences += _compare_mode(old / mode, new / mode, limit)
+            differences += _compare_mode(old / mode, new / mode, limit, again / mode if again is not None else None)
         else:
             print(f"\n[{mode}] only in {'old' if mode in old_modes else 'new'}: the whole mode")
             differences += 1
@@ -267,12 +277,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("old", type=Path)
     parser.add_argument("new", type=Path)
     parser.add_argument("--limit", type=int, default=20, help="the most differing queries to print in full, per mode")
+    parser.add_argument("--again", type=Path, help="a second log of OLD's commit: what either run printed is seen")
     args = parser.parse_args(argv)
-    for log in (args.old, args.new):
+    for log in (args.old, args.new, *([args.again] if args.again else [])):
         if not _modes(log):
             print(f"{log} holds no mode, so it is no suite log", file=sys.stderr)
             return 2
-    differences = _compare_logs(args.old, args.new, args.limit)
+    differences = _compare_logs(args.old, args.new, args.limit, args.again)
     print(f"{differences} differences" if differences else "no differences")
     return 1 if differences else 0
 
