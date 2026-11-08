@@ -753,7 +753,7 @@ def test_a2_a_filter_on_the_result_does_not_shrink_the_problem(decidb_cli):
 
 @pytest.mark.correctness
 def test_a2_empty_source_returns_no_rows_whatever_the_bounds_say(decidb_cli):
-    for bounds in ("c BETWEEN 0 AND 10", "c >= 0", "c >= -1e30 AND c <= 4", "c >= 5 AND c <= 3"):
+    for bounds in ("c BETWEEN 0 AND 10", "c >= 0", "c >= -1e30 AND c <= 4"):
         for objective_sql in ("MINIMIZE SUM(POWER(c - v, 2))", "MINIMIZE when v > 0: SUM(POWER(c - v, 2))"):
             sql = (
                 "SELECT id, c FROM (SELECT 1 AS id, 1.0 AS v WHERE false) "

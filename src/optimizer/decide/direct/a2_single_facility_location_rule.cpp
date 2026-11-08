@@ -730,9 +730,6 @@ private:
 	struct Aggregates {
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;
-		//! The number of rows of a query-wide decision's one class: an aggregate without a key gives its one row over
-		//! no rows too, and with no row there is no class.
-		ColumnBinding rows;
 		ColumnBinding valid;
 		vector<DirectGroupValues> lowers;
 		vector<DirectGroupValues> uppers;
@@ -743,7 +740,6 @@ private:
 	struct Interval {
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;
-		ColumnBinding has_class;
 		ColumnBinding valid;
 		vector<ColumnBinding> clause_lowers;
 		vector<ColumnBinding> clause_uppers;
@@ -853,9 +849,9 @@ private:
 				result.lowering_whens.push_back(classes.Add("bool_or", ends.when, LogicalType::BOOLEAN));
 			}
 		}
-		if (!IsKeyed()) {
-			result.rows = stage.Add(optimizer.BindAggregateFunction("count_star", vector<unique_ptr<Expression>>()));
-		}
+		// A query-wide decision has no key to group by, and an aggregate without a key gives its one row over no rows
+		// too. That row has `valid` NULL (bool_and of no rows), and DirectAllHold puts `valid` first, so no check
+		// runs on it: an empty source raises nothing and returns no rows.
 		result.valid = classes.Add("bool_and", rows.valid, LogicalType::BOOLEAN);
 		plan = stage.Finish(std::move(plan));
 		return result;
@@ -881,11 +877,6 @@ private:
 		Interval result;
 		result.keys = p3.Forward(aggregates.keys, aggregates.key_types);
 		result.key_types = aggregates.key_types;
-		// The class's own flag is the first column of a key. A query-wide decision has a class when it has a row.
-		result.has_class = IsKeyed() ? result.keys[0]
-		                             : p3.Add(calc.Out(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN,
-		                                                        calc.Col(LogicalType::BIGINT, aggregates.rows),
-		                                                        calc.Constant(Value::BIGINT(0)))));
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
@@ -905,8 +896,8 @@ private:
 		ExprPtr lower, upper;
 		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, interval.floor), condition.upper, interval.clause_lowers,
 		             interval.clause_uppers, lower, upper);
-		// A key with no class has no decision and shows NULL.
-		auto has_class = calc.Col(LogicalType::BOOLEAN, interval.has_class);
+		// A key with no class has no decision and shows NULL. Its flag is the first column of the key.
+		auto has_class = IsKeyed() ? calc.Col(LogicalType::BOOLEAN, interval.keys[0]) : calc.Bool(true);
 		auto finish = condition.loss->Finish(tools, loss_columns, lower, upper, has_class);
 		// The loss's target clamped into the interval. A NULL target leaves every point optimal, and the point of the
 		// interval nearest 0 is the answer: the clamp of 0. Adding 0.0 turns -0.0 into 0.0.
