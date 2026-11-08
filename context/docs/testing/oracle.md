@@ -43,7 +43,10 @@ Forbidden: analytical / hand-computed closed-form assertions like
 `expected = {1: 10.0, 2: 20.0, 3: 30.0}`. Those only check the instance the
 author thought through; an encoding bug that happens to coincide with the
 expected answer passes silently. The oracle must be an independent
-gurobipy formulation.
+gurobipy formulation. It states each constraint as the query writes it
+(`x + 3 <= 10` is the row `x <= 10 - 3`, a data column is that row's number),
+never the constraint's worked-out solution as a variable bound, and a strict
+comparison through the scope oracle, which reads it as the language does.
 
 ---
 

@@ -19,7 +19,6 @@ the A batches; B2 after A2.
 
 ## T1. Tests against the oracle
 
-- [ ] TEST-1 Expectations computed by hand — testing/todo.md § TEST-1
 - [ ] TEST-2 Direct-solve arms no test reaches — direct_solve/framework/todo.md § TEST-2
 
 ## X13. Execution arms no test reaches
