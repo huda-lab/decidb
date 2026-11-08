@@ -748,3 +748,52 @@ def test_per_sum_outer_max_inner_additive_coefficient(
         rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
     )
     assert cmp.status in ("identical", "optimal")
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_a_composed_clause_reads_each_tuple_of_a_qualified_reducer_once(decidb_cli, oracle_solver):
+    """`sum(d: x) + max(d: x) <= 25` over a join that repeats depot `a` on two rows: the depots' x, one per depot, is
+    read once each by both reducers (the join's duplicate row of `a` is dropped from the max as from the sum)."""
+    sql = """
+        SELECT id, x
+        FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
+        JOIN (VALUES ('a', 10), ('b', 20)) d(g, cap) USING (g)
+        DECIDE per d: x(REAL)
+        SUCH THAT x <= d.cap AND sum(d: x) + max(d: x) <= 25
+        MAXIMIZE sum(d: x)
+        ORDER BY id"""
+    oracle_solver.create_model("composed_qualified_reducer")
+    for name, cap in (("x_a", 10.0), ("x_b", 20.0), ("m", None)):
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=cap)
+    oracle_solver.add_constraint({"m": 1.0, "x_a": -1.0}, ">=", 0.0, name="m_ge_a")
+    oracle_solver.add_constraint({"m": 1.0, "x_b": -1.0}, ">=", 0.0, name="m_ge_b")
+    oracle_solver.add_constraint({"x_a": 1.0, "x_b": 1.0, "m": 1.0}, "<=", 25.0, name="composed")
+    oracle_solver.set_objective({"x_a": 1.0, "x_b": 1.0}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    by_id = {row[0]: row[1] for row in rows}
+    assert by_id[1] == pytest.approx(by_id[2])
+    assert by_id[1] + by_id[3] == pytest.approx(result.objective_value)
+
+
+@pytest.mark.min_max
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "decide, clause",
+    [
+        (
+            "SUCH THAT x <= 5 AND sum(x) + max(x) / (SELECT count(*) - 3 FROM range(3)) <= 7 MAXIMIZE sum(x)",
+            "constraint",
+        ),
+        ("SUCH THAT x <= 5 MAXIMIZE sum(x) + max(x) / (SELECT count(*) - 3 FROM range(3))", "objective"),
+    ],
+    ids=["constraint", "objective"],
+)
+def test_a_factor_that_divides_by_a_query_wide_zero_is_refused(decidb_cli, decide, clause):
+    """`max(x) / (SELECT count(*) - 3 ...)` divides the extremum by a value known only when the query runs: 0 here. The
+    composed clause names where the zero stands."""
+    decidb_cli.assert_error(
+        f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(REAL) {decide}",
+        match=f"DECIDE {clause}: division by zero — the factor on an aggregate evaluated to 0\\.",
+    )

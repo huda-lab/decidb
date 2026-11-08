@@ -482,6 +482,44 @@ def test_a_when_in_front_limits_the_classes_to_the_kept_rows(decidb_cli):
     ]
 
 
+def _diagnose_over(cli, clause: str, rows):
+    """`DIAGNOSE` of `clause` over `rows` of the depot relation, in the expanded scope, as the relation's rows."""
+    sql = f"""
+        SELECT id, x {table('t', T_COLUMNS, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND {clause}
+        MAXIMIZE SUM(x)"""
+    return _diagnose_relation.rows(_diagnose_relation.run(cli, sql, scope="expanded"))
+
+
+@pytest.mark.diagnose
+def test_a_row_with_a_null_class_key_stands_for_no_class(decidb_cli):
+    """Row 2's depot is NULL: it is in no class of `per t.depot`, though its region still bounds the group. The group's
+    classes are the depots of the rows that have one, and the shortfall is the same as with a depot on row 2."""
+    rows = (T_ROWS[0], (2, None, "E", 20), T_ROWS[2], T_ROWS[3])
+    findings = _findings(
+        [
+            row
+            for row in _diagnose_over(decidb_cli, "per t.depot: sum(x) by (t.region) >= 100", rows)
+            if row["edit_source"] == "expanded_group"
+        ]
+    )
+    change = "per t.depot: sum(x) by (t.region) >= {}"
+    assert findings == [
+        ("D1", "NULL", 40, "expanded_group", change.format(60)),
+        ("D2", "NULL", 40, "expanded_group", change.format(60)),
+        ("D3", "NULL", 85, "expanded_group", change.format(15)),
+    ]
+
+
+@pytest.mark.diagnose
+def test_a_per_key_that_is_null_on_every_kept_row_has_no_instance_to_diagnose(decidb_cli):
+    """With every depot NULL there is no class, so the clause holds for none and the query is feasible."""
+    rows = tuple((row[0], None) + row[2:] for row in T_ROWS)
+    found = _diagnose_over(decidb_cli, "per t.depot: sum(x) by (t.region) >= 100", rows)
+    assert [row["state"] for row in found] == ["feasible"], found
+
+
 @pytest.mark.diagnose
 def test_a_group_keeps_its_name_when_a_later_clause_reads_its_key_on_more_rows(decidb_cli):
     """The first clause reads t.region on row 4 alone, where W is its first group; the second reads it on every row,

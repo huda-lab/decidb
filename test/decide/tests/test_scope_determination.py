@@ -22,7 +22,7 @@ from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import DEPOT_COLUMNS, DEPOTS, SHIPMENT_COLUMNS, SHIPMENTS, values
 from ._scope_cases import aligned, answer, from_clause, joined, scope_solver  # noqa: F401
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
-from solver.types import ObjSense
+from solver.types import ObjSense, VarType
 
 #: A second East depot whose capacity differs within its region.
 EAST_SPLIT = (DEPOTS[0], ("D2", "East", "CA", 40, 12, 0.2, 0.6, 60), DEPOTS[2])
@@ -151,6 +151,82 @@ def test_an_inner_per(decidb_cli):
         "DECIDE: per D.region does not determine D.capacity (in sum(per D.region: D.capacity * ship)). "
         "D.region = 'East' has more than one value: 25, 40.",
     )
+
+
+@pytest.mark.error
+def test_a_decision_outside_the_objectives_reducers_is_one_instance(decidb_cli):
+    """A keyed decision beside the objective's reducers is legal only when the kept rows hold one of it. The check is on
+    the empty key, so the message names no class (`DeterminesText::one_class`)."""
+    decide = "ship(INT), per D.depotID: r(INT)"
+    rows, _ = decidb_cli.execute(_query("r <= 10", decide=decide, objective="MAXIMIZE when D.depotID = 'D1': r"))
+    assert len(rows) == len(SHIPMENTS)
+    _stops(
+        decidb_cli,
+        _query("r <= 10", decide=decide, objective="MAXIMIZE r"),
+        "DECIDE: per () does not determine the decision r (declared per D.depotID). The kept rows cover more than "
+        "one r.",
+    )
+
+
+@pytest.mark.error
+def test_a_key_of_two_columns_names_both(decidb_cli):
+    """Two East depots in one country: `per D.region, D.country` holds both of them. The class that fails is named by
+    each column of its key (DescribeKeyValues)."""
+    depots = (DEPOTS[0], ("D2", "East", "US", 40, 12, 0.2, 0.6, 60), DEPOTS[2])
+    decide = "ship(INT), per D.depotID: r(INT)"
+    _stops(
+        decidb_cli,
+        _query("per D.region, D.country: r <= 10", depots, decide=decide),
+        "DECIDE: per D.region, D.country does not determine the decision r (declared per D.depotID). "
+        "D.region = 'East', D.country = 'US' covers more than one r.",
+    )
+
+
+@pytest.mark.error
+def test_a_reducers_own_when_limits_the_rows_a_key_is_checked_on(decidb_cli):
+    """`sum(per D.country: r)` reads r once per country, but US holds D1 and D3. Only the shipment on hold (D2) is read
+    under `when S.status = 'hold'`, so US has no row and the key holds; the active shipments still hold D1 and D3."""
+    decide = "ship(INT), per D.depotID: r(INT)"
+    rows, _ = decidb_cli.execute(
+        _query(
+            "r <= 10 AND sum(when S.status = 'hold' per D.country: r) <= 100",
+            decide=decide,
+            objective="MAXIMIZE sum(r)",
+        )
+    )
+    assert len(rows) == len(SHIPMENTS)
+    _stops(
+        decidb_cli,
+        _query(
+            "r <= 10 AND sum(when S.status = 'active' per D.country: r) <= 100",
+            decide=decide,
+            objective="MAXIMIZE sum(r)",
+        ),
+        "DECIDE: per D.country does not determine the decision r (in sum(when S.status = 'active' per D.country: r)). "
+        "D.country = 'US' covers more than one r.",
+    )
+
+
+@pytest.mark.correctness
+def test_a_row_in_no_class_of_a_keyed_decision_is_not_compared(decidb_cli, oracle_solver):
+    """The second row's depot is NULL, so it has no decision (`r` is NULL there) and the check of `sum(per t.cap: r)`
+    skips it. The other two rows stand alone: r takes each row's cap."""
+    sql = """
+        SELECT id, r FROM (VALUES (1, 'D1', 5), (2, NULL, 6), (3, 'D2', 7)) t(id, depot, cap)
+        DECIDE per t.depot: r(INT)
+        SUCH THAT r <= t.cap AND sum(per t.cap: r) <= 100
+        MAXIMIZE sum(r)
+        ORDER BY id"""
+    oracle_solver.create_model("absent_class_is_not_compared")
+    for name in ("r_1", "r_3"):
+        oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0)
+    oracle_solver.add_constraint({"r_1": 1.0}, "<=", 5.0, name="cap_1")
+    oracle_solver.add_constraint({"r_3": 1.0}, "<=", 7.0, name="cap_3")
+    oracle_solver.add_constraint({"r_1": 1.0, "r_3": 1.0}, "<=", 100.0, name="classes")
+    oracle_solver.set_objective({"r_1": 1.0, "r_3": 1.0}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    assert rows == [(1, round(result.variable_values["r_1"])), (2, None), (3, round(result.variable_values["r_3"]))]
 
 
 @pytest.mark.error

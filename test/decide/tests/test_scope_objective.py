@@ -229,6 +229,28 @@ def test_two_level_form(decidb_cli, scope_solver, outer, inner, sense):
 
 
 @pytest.mark.correctness
+def test_two_level_form_over_nullable_data(decidb_cli, scope_solver):
+    """A NULL weight makes its row's term NULL, so the row is read by no term: it is in no group (`c` holds only such a
+    row, so it has no group), and a group keeps its other rows. Every term of the objective carries that filter."""
+    columns = ("id", "g", "cap", "w")
+    rows = ((1, "a", 5, 1), (2, "a", 4, None), (3, "b", 6, 2), (4, "c", 3, None))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap
+        MAXIMIZE sum(per t.g: sum(t.w * x) by (t.g))
+        ORDER BY id"""
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    clauses = [Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},))]
+    body = lambda r: {"x": r["w"]} if r["w"] is not None else {}  # noqa: E731
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Nested("sum", ("g",), "sum", body),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+
+
+@pytest.mark.correctness
 def test_two_level_form_under_when(decidb_cli, scope_solver):
     """The `when` drops row 2, group a's heaviest weight: the best group is then b, at 8;
     without the `when` it is a, at 21 through row 2."""

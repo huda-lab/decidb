@@ -201,3 +201,46 @@ def test_bool_bound_outside_domain_unfolded_spelling_is_read_per_row(decidb_cli,
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["require"]
+
+
+_NON_NEGATIVE = " cannot hold because {name} is non-negative (>= 0). Add an explicit lower bound if it may be negative."
+_NEVER_NEGATIVE = " cannot hold because {name} is never negative."
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_perrow
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "decide, quoted, tail",
+    [
+        # The quoted clause is the one that sets the box end, not the first bound written on the variable.
+        pytest.param(
+            "x(BOOL) SUCH THAT x >= 2 AND x <= -1",
+            "x <= -1",
+            " cannot hold for a BOOL variable.",
+            id="other-side-first",
+        ),
+        pytest.param(
+            "x(BOOL) SUCH THAT x >= 2 AND x >= 3", "x >= 3", " cannot hold for a BOOL variable.", id="tighter"
+        ),
+        pytest.param(
+            "x(INT) SUCH THAT x <= 3 AND x <= -1", "x <= -1", _NON_NEGATIVE.format(name="x"), id="tighter-ceiling"
+        ),
+        pytest.param(
+            "x(BOOL), y(BOOL) SUCH THAT x <= 0 AND y >= 2",
+            "y >= 2",
+            " cannot hold for a BOOL variable.",
+            id="other-variable",
+        ),
+        # An auxiliary decision (the ABS of y) is named by what it stands for; the other ABS has its own label.
+        pytest.param(
+            "x(REAL), y(REAL) SUCH THAT abs(x) >= 3 AND abs(y) <= -1",
+            "abs(y) <= -1",
+            _NEVER_NEGATIVE.format(name="abs(y)"),
+            id="two-auxiliaries",
+        ),
+    ],
+)
+def test_the_clause_quoted_is_the_one_that_sets_the_end_that_cannot_hold(decidb_cli, decide, quoted, tail):
+    sql = f"SELECT id FROM (VALUES (1), (2)) t(id) DECIDE {decide} MAXIMIZE SUM(x)"
+    decidb_cli.assert_error(sql, match=re.escape(f"DECIDE optimization is infeasible: {quoted}{tail}"))

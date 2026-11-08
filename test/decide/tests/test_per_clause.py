@@ -503,3 +503,30 @@ def test_real_between_per_oracle(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.per_clause
+@pytest.mark.when_row
+@pytest.mark.correctness
+def test_a_when_leaves_rows_out_of_the_one_row_per_class(decidb_cli, oracle_solver):
+    """`when f = 1 per depot: r <= cap` is one bound per depot, read on the depot's kept row: D1's kept row (cap 5) and
+    D2's (cap 7). The rows `when` drops (ids 2 and 4, with other caps) are in no class of the clause, and `cap` is
+    determined by the depot among the kept rows alone."""
+    sql = """
+        SELECT id, r
+        FROM (VALUES (1, 'D1', 5, 1), (2, 'D1', 6, 0), (3, 'D2', 7, 1), (4, 'D2', 8, 0)) t(id, depot, cap, f)
+        DECIDE per t.depot: r(INT)
+        SUCH THAT when t.f = 1 per t.depot: r <= t.cap
+        MAXIMIZE sum(r)
+        ORDER BY id"""
+    oracle_solver.create_model("when_leaves_rows_out_of_the_class")
+    for name in ("r_D1", "r_D2"):
+        oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0)
+    oracle_solver.add_constraint({"r_D1": 1.0}, "<=", 5.0, name="D1")
+    oracle_solver.add_constraint({"r_D2": 1.0}, "<=", 7.0, name="D2")
+    # Each depot's r is read on both of its rows by the objective.
+    oracle_solver.set_objective({"r_D1": 2.0, "r_D2": 2.0}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    depot_of = {1: "r_D1", 2: "r_D1", 3: "r_D2", 4: "r_D2"}
+    assert rows == [(i, round(result.variable_values[depot_of[i]])) for i in (1, 2, 3, 4)]

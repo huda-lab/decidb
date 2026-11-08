@@ -655,3 +655,83 @@ def test_avg_no_decide_var(decidb_cli):
     ci = {c: i for i, c in enumerate(cols)}
     assert abs(rows[0][ci["avg_val"]] - 6.5) < 1e-6, \
         f"Expected AVG=6.5, got {rows[0][ci['avg_val']]}"
+
+
+@pytest.mark.avg_rewrite
+@pytest.mark.correctness
+def test_an_avg_that_reads_no_row_is_dropped_from_the_objective(decidb_cli, oracle_solver):
+    """`AVG(when value > 100: value * x)` reads no row, so it is NULL and its term is dropped (deck p. 56): the
+    objective is `SUM(x)` alone, which every x at its cap maximizes. No division by the empty count is made."""
+    sql = f"""
+        SELECT name, x FROM ({_DATA_SQL_4})
+        DECIDE x(REAL)
+        SUCH THAT x <= 5
+        MAXIMIZE AVG(when value > 100: value * x) + SUM(x)
+        ORDER BY name
+    """
+    oracle_solver.create_model("avg_reads_no_row")
+    names = [f"x_{i}" for i in range(4)]
+    for name in names:
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=5.0)
+    oracle_solver.set_objective({name: 1.0 for name in names}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    assert [row[1] for row in rows] == pytest.approx([result.variable_values[name] for name in names])
+
+
+@pytest.mark.avg_rewrite
+@pytest.mark.correctness
+def test_avg_of_squares_in_a_constraint_divides_by_the_row_count(decidb_cli_gurobi, oracle_solver):
+    """`AVG(POWER(x - value, 2)) <= 4` is `SUM((x - value)^2) <= 16`: the squares are one product group, scaled by the
+    count. Maximizing SUM(x) moves every x two above its value."""
+    sql = f"""
+        SELECT name, x FROM ({_DATA_SQL_4})
+        DECIDE x(REAL)
+        SUCH THAT x <= 20 AND AVG(POWER(x - value, 2)) <= 4
+        MAXIMIZE SUM(x)
+        ORDER BY name
+    """
+    values = [10.0, 5.0, 8.0, 3.0]
+    oracle_solver.create_model("avg_square_constraint")
+    names = [f"x_{i}" for i in range(4)]
+    for name in names:
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=20.0)
+    oracle_solver.add_quadratic_constraint(
+        linear={name: -2.0 * value for name, value in zip(names, values)},
+        quadratic={(name, name): 1.0 for name in names},
+        sense="<=",
+        rhs=4.0 * 4 - sum(value * value for value in values),
+        name="avg_squares",
+    )
+    oracle_solver.set_objective({name: 1.0 for name in names}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli_gurobi.execute(sql)
+    assert [row[1] for row in rows] == pytest.approx([result.variable_values[name] for name in names], abs=1e-4)
+
+
+@pytest.mark.avg_rewrite
+@pytest.mark.correctness
+def test_avg_of_squares_in_the_objective_divides_by_the_row_count(decidb_cli, oracle_solver):
+    """`MINIMIZE AVG(POWER(x - value, 2))` is the sum of squares over the row count; with `x <= 6` each x is its value
+    where it fits and 6 where it does not."""
+    sql = f"""
+        SELECT name, x FROM ({_DATA_SQL_4})
+        DECIDE x(REAL)
+        SUCH THAT x <= 6
+        MINIMIZE AVG(POWER(x - value, 2))
+        ORDER BY name
+    """
+    values = [10.0, 5.0, 8.0, 3.0]
+    oracle_solver.create_model("avg_square_objective")
+    names = [f"x_{i}" for i in range(4)]
+    for name in names:
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=6.0)
+    oracle_solver.set_quadratic_objective(
+        linear={name: -2.0 * value / 4 for name, value in zip(names, values)},
+        quadratic={(name, name): 1.0 / 4 for name in names},
+        sense=ObjSense.MINIMIZE,
+        constant=sum(value * value for value in values) / 4,
+    )
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    assert [row[1] for row in rows] == pytest.approx([result.variable_values[name] for name in names], abs=1e-4)

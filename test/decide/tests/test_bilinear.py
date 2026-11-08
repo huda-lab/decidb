@@ -1971,3 +1971,29 @@ def test_a_product_in_a_helpers_scope_links_only_the_groups_it_has(decidb_cli_gu
             lambda a: a["b"] * a["x1"] <= 3 and a["b"] * a["x2"] <= 3,
             lambda a: a["x0"] + a["x1"] + a["x2"] + 8 * a["b"],
         )
+
+
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_objective_of_a_qualified_reducer_counts_each_tuple_once(decidb_cli_gurobi, oracle_solver):
+    """`sum(d: x * y)` over a join that repeats depot `a` on two rows reads the product of each depot once: x and y at
+    their cap 4 for both depots, 16 + 16. A repeated `a` would count its product twice."""
+    sql = """
+        SELECT id, x, y
+        FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
+        JOIN (VALUES ('a', 10), ('b', 20)) d(g, cap) USING (g)
+        DECIDE per d: x(INT), per d: y(INT)
+        SUCH THAT x <= 4 AND y <= 4
+        MAXIMIZE sum(d: x * y)
+        ORDER BY id"""
+    oracle_solver.create_model("bilinear_qualified_reducer")
+    for name in ("x_a", "y_a", "x_b", "y_b"):
+        oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0, ub=4.0)
+    oracle_solver.set_quadratic_objective(
+        linear={}, quadratic={("x_a", "y_a"): 1.0, ("x_b", "y_b"): 1.0}, sense=ObjSense.MAXIMIZE
+    )
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli_gurobi.execute(sql)
+    by_id = {row[0]: row[1:] for row in rows}
+    assert by_id[1] == by_id[2]
+    assert by_id[1][0] * by_id[1][1] + by_id[3][0] * by_id[3][1] == pytest.approx(result.objective_value)

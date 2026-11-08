@@ -191,6 +191,19 @@ def test_an_objective_reads_one_collated_by_group(decidb_cli, scope_solver):
     _keyed_judged(decidb_cli, scope_solver, sql, clauses, objective, rows)
 
 
+@pytest.mark.correctness
+def test_a_key_of_a_collated_and_a_plain_column_groups_each_as_its_column_does(decidb_cli, scope_solver):
+    """`sum(x) by (g, k) <= 1`: 'a' and 'A' are one value of the collated g, and k (not collated) tells groups apart
+    that g alone would join: (a, 1) holds rows 1 and 3, (a, 2) rows 2 and 4. Only the collated column is spelled by its
+    least spelling, so the key reads a label for g and the grouped value for k (BuildGroupIds)."""
+    rows = ((1, 1, "a", 1, 5.0), (2, 2, "A", 1, 4.0), (3, 1, "A", 1, 3.0), (4, 2, "a", 1, 2.0))
+    sql = f"""
+        SELECT id, x {_keyed_source(rows)}
+        DECIDE x(BOOL) SUCH THAT sum(x) by (t.g, t.k) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk", "k")),), "<=", (lambda r: {CONSTANT: 1},))]
+    _keyed_judged(decidb_cli, scope_solver, sql, clauses, MAXIMIZE_PX, rows)
+
+
 # 'b' is read on rows 4-5 by the `when` clause and on rows 1-5 by the other: one group, spelled 'B' over every row read.
 SPELLING_ROWS = ((1, "a"), (2, "A"), (3, "B"), (4, "b"), (5, "b"))
 NARROW = "when t.id >= 4 per t.g: sum(x) by (t.g) >= 3"

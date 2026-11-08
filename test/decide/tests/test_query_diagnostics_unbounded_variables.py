@@ -266,6 +266,25 @@ class TestUnboundedWithNonLinearParts:
         assert [(f["state"], f["edit_source"]) for f in flat] == [("unbounded", "undiagnosed")]
         assert flat[0]["suggested_change"] == "a non-linear term prevents naming the variable."
 
+    def test_a_runaway_inside_a_quadratic_constraint_stays_undiagnosed(self, decidb_cli_gurobi, oracle_solver):
+        """Branch: a column of a quadratic constraint is held still, so a runaway `x` there finds no ray and the model
+        keeps the non-linear reason (it holds a quadratic constraint, not a quadratic objective). The oracle finds
+        `x1^2 + x2^2 >= 1` with `MAXIMIZE x1 + x2` unbounded."""
+        oracle_solver.create_model("open_square_constraint")
+        oracle_solver.add_variable("x1", _REAL, lb=0.0)
+        oracle_solver.add_variable("x2", _REAL, lb=0.0)
+        oracle_solver.add_quadratic_constraint({}, {("x1", "x1"): 1.0, ("x2", "x2"): 1.0}, ">=", 1.0, name="outside")
+        oracle_solver.set_objective({"x1": 1.0, "x2": 1.0}, ObjSense.MAXIMIZE)
+        assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
+
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) >= 1 MAXIMIZE SUM(x)"
+        )
+        flat = _flat(_diagnose(decidb_cli_gurobi, sql))
+        assert [(f["state"], f["edit_source"]) for f in flat] == [("unbounded", "undiagnosed")]
+        assert flat[0]["suggested_change"] == "a non-linear term prevents naming the variable."
+
     def test_a_runaway_outside_a_native_max_is_named(self, decidb_cli_gurobi, oracle_solver):
         """Branch: a general constraint's result and argument columns are held still.
 

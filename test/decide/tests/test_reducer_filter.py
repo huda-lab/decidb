@@ -1928,3 +1928,38 @@ def test_easy_extremum_own_when_skips_a_null_member(decidb_cli, scope_solver):
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, objective)
     )
+
+
+@pytest.mark.when
+@pytest.mark.correctness
+def test_a_reducers_when_known_before_the_rows_are_read(decidb_cli, oracle_solver):
+    """A `when` that is `false` or NULL for every row reads none, so its clause has no instance; one that is `true`
+    reads every row and binds. Only `sum(when true: x) <= 20` binds here: three x at 10 each can sum to 20 at most."""
+    sql = """
+        SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT)
+        SUCH THAT x <= 10 AND sum(when false: x) <= 12 AND sum(when NULL: x) <= 3 AND sum(when true: x) <= 20
+        MAXIMIZE sum(x)
+        ORDER BY id"""
+    oracle_solver.create_model("when_known_before_rows")
+    names = [f"x_{i}" for i in range(3)]
+    for name in names:
+        oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0, ub=10.0)
+    oracle_solver.add_constraint({name: 1.0 for name in names}, "<=", 20.0, name="when_true")
+    oracle_solver.set_objective({name: 1.0 for name in names}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    rows, _ = decidb_cli.execute(sql)
+    assert sum(row[1] for row in rows) == pytest.approx(result.objective_value)
+    assert all(0 <= row[1] <= 10 for row in rows)
+
+
+@pytest.mark.when
+@pytest.mark.error
+def test_a_when_that_cannot_be_folded_raises_when_it_is_read(decidb_cli):
+    """`ln(0 - 1)` has no value: the `when` is constant in form, but evaluating it fails, so it is read like any other
+    `when` and raises DuckDB's own error."""
+    decidb_cli.assert_error(
+        """SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT) SUCH THAT x <= 10 AND sum(when ln(0 - 1) > 0: x) <= 12 MAXIMIZE sum(x)""",
+        match=r"cannot take logarithm of a negative number",
+    )

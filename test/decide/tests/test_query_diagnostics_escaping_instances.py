@@ -165,6 +165,43 @@ class TestEscapingInstances:
         assert _escape(rows, "hire") == [(10, 10, "keyed", "region = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_two_row_scoped_variables_share_the_candidate_columns(self, request, cli_fixture):
+        """Both variables escape on the same rows, and the categorical columns that characterize row-scoped escapes
+        are the same for any row-scoped variable, so they are built once and the second variable reads them again."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, buy, sell FROM ("
+            "SELECT i AS id, CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS channel, "
+            "i * 1.0 AS margin FROM range(1, 101) t(i)) "
+            "DECIDE buy(REAL), sell(REAL) "
+            "SUCH THAT when channel = 'domestic': buy <= 100 AND when channel = 'domestic': sell <= 100 "
+            "MAXIMIZE SUM(buy * margin) + SUM(sell * margin)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert _escape(rows, "buy") == [(20, 20, "row", "channel = 'export'")]
+        assert _escape(rows, "sell") == [(20, 20, "row", "channel = 'export'")]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_keyed_escape_is_characterized_by_a_column_constant_in_each_class(self, request, cli_fixture):
+        """Ten classes of ten rows. `tier` is a function of the class, so one value per class: it characterizes the
+        three classes that escape, for either variable keyed by `grp` (the second reads the first's candidates).
+        `half` changes inside every class, so no class has one value of it and it names nothing."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, hire, bonus FROM ("
+            "SELECT i AS id, i % 10 AS grp, CASE WHEN i % 10 < 3 THEN 'A' ELSE 'B' END AS tier, i // 50 AS half, "
+            "i * 1.0 AS w FROM range(1, 101) t(i)) "
+            "DECIDE per grp: hire(REAL), per grp: bonus(REAL) "
+            "SUCH THAT when tier = 'B': hire <= 50 AND when tier = 'B': bonus <= 50 "
+            "MAXIMIZE SUM(hire * w) + SUM(bonus * w)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        for variable in ("hire", "bonus"):
+            found = _escape(rows, variable)
+            assert (3, 3, "keyed", "tier = 'A'") in found, found
+            assert not [slice_ for _, _, _, slice_ in found if slice_.startswith("half")], found
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_aliased_column_is_named(self, request, cli_fixture, oracle_solver):
         """T2: a low-cardinality column referenced only in the outer SELECT (never in the
         DECIDE clause) is still named when the user gave it an explicit `AS` alias — that
