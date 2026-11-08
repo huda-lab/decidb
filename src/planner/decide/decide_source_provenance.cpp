@@ -4,6 +4,7 @@
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/decide/decide_parsed_markers.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -316,22 +317,6 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	return result;
 }
 
-//! `(e)` as `e` when the parentheses enclose the whole string: a labelled auxiliary such
-//! as `(open * ship)` or `(ship <> 0)` reads inside `sum(...)` without a second pair.
-static string WithoutEnclosingParentheses(string text) {
-	if (text.size() < 2 || text.front() != '(' || text.back() != ')') {
-		return text;
-	}
-	int depth = 0;
-	for (idx_t i = 0; i + 1 < text.size(); i++) {
-		depth += text[i] == '(' ? 1 : text[i] == ')' ? -1 : 0;
-		if (depth == 0) {
-			return text; // the opening parenthesis closes before the end
-		}
-	}
-	return text.substr(1, text.size() - 2);
-}
-
 static string RenderAggregate(const BoundAggregateExpression &agg, const RenderContext &ctx) {
 	string body;
 	for (idx_t i = 0; i < agg.children.size(); i++) {
@@ -472,9 +457,6 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 			break;
 		}
 		auto &in = expr.Cast<BoundOperatorExpression>();
-		if (in.children.size() < 2) {
-			break;
-		}
 		string result = RenderSource(*in.children[0], ctx) + " IN (";
 		for (idx_t i = 1; i < in.children.size(); i++) {
 			if (i > 1) {

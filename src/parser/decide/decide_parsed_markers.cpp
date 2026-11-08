@@ -63,4 +63,18 @@ const ParsedExpression &ReducerArgumentBody(const ParsedExpression &argument) {
 	return *body;
 }
 
+string WithoutEnclosingParentheses(const string &text) {
+	if (text.size() < 2 || text.front() != '(' || text.back() != ')') {
+		return text;
+	}
+	int depth = 0;
+	for (idx_t i = 0; i + 1 < text.size(); i++) {
+		depth += text[i] == '(' ? 1 : text[i] == ')' ? -1 : 0;
+		if (depth == 0) {
+			return text; // the opening parenthesis closes before the end
+		}
+	}
+	return text.substr(1, text.size() - 2);
+}
+
 } // namespace duckdb

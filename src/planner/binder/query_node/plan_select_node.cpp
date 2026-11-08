@@ -221,7 +221,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		                                          std::move(statement.decide_constraints), statement.decide_sense,
 		                                          std::move(statement.decide_objective));
 
-		decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
         decide_op->objective_constant_offset = statement.objective_constant_offset;
         decide_op->is_boolean_var = std::move(statement.is_boolean_var);
         decide_op->keyed_scopes = std::move(statement.keyed_scopes);

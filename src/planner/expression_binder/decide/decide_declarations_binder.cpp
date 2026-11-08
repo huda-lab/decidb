@@ -134,7 +134,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         case_insensitive_map_t<idx_t> decide_variable_names;
         vector<string> var_names;
         vector<LogicalType> var_types;
-        vector<bool> is_boolean_var;  // Track which variables are BOOLEAN for generating bounds
+        // A BOOL's 0/1 domain is carried by is_boolean_var alone: PhysicalDecide::Finalize applies it to the solver
+        // column's bounds, so no SUCH THAT row is synthesized for it.
+        vector<bool> is_boolean_var;
         vector<string> decide_source_fragments;
 
         // Key scopes: one per distinct key, shared by the declarations and reducers on it.
@@ -197,21 +199,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             is_boolean_var.push_back(type_marker == "bool_variable");
         }
 
-        // A variable's `0/1` domain (declared BOOL, or a boolean-valued auxiliary
-        // like an IN-domain/L0 indicator that must stay INTEGER-typed to
-        // participate in arithmetic — see is_boolean_var's uses below) is never
-        // synthesized as a SUCH THAT constraint. `is_boolean_var` alone carries the
-        // domain from here through LogicalDecide to PhysicalDecide, which applies it
-        // directly to the solver column's bounds (PhysicalDecide::Finalize) — the
-        // same mechanism already used for optimizer-created BOOLEAN-typed
-        // auxiliaries (MIN/MAX indicators, NE indicators). This avoids the round
-        // trip through the constraint tree: no redundant rows for downstream
-        // rewrites to carry or accidentally reshape, and no expression-shape
-        // pattern-matching needed to recover the domain at model-build time.
-
-        // Capture user var count BEFORE any rewrites that add auxiliary variables
-        idx_t num_user_vars = var_names.size();
-
         // A decision is referenced by its bare name, wherever the query names it.
         auto refuse_qualified = [&](const ParsedExpression &expr) {
             RefuseQualifiedDecisionReferences(expr, bind_context, decide_variable_names, false);
@@ -256,21 +243,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                                                   decide_variable_names);
         }
 
-        // NORM and IN bind as explicit markers. Their mathematical formulation
-        // (indicators, linking rows, and aggregate rewrites) belongs to
-        // DecideOptimizer, after types/scopes/casts are known.
-
-        // NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
-        // (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
-
-        // MIN/MAX, NE, and IN/L0 indicator bounds are all handled the same way now:
-        // `is_boolean_var[i]` marks the domain and PhysicalDecide::Finalize applies
-        // `[0,1]` directly to the solver column, regardless of whether the indicator's
-        // DuckDB-facing type is BOOLEAN (MIN/MAX, NE) or INTEGER (IN/L0, which need
-        // INTEGER to participate in the parsed arithmetic that links them). No
-        // constraint-tree bounds to generate here.
-        idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
-
         if (statement.decide_constraints) {
             // An aggregate over data that scales a decision is refused before symbolic
             // normalization could distribute the decision into it.
@@ -299,7 +271,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // Query-wide decisions (`per (): x`), so the constraint and objective binders can
         // tell a query-wide decision from a per-row one.
         case_insensitive_set_t scalar_variable_names;
-        for (idx_t v = 0; v < variable_scopes.size() && v < var_names.size(); v++) {
+        for (idx_t v = 0; v < variable_scopes.size(); v++) {
             if (variable_scopes[v].IsGlobal()) {
                 scalar_variable_names.insert(var_names[v]);
             }
@@ -359,29 +331,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             );
             result.decide_variables.push_back(std::move(bound_col_ref));
         }
-        result.num_auxiliary_vars = num_auxiliary_vars;
         result.is_boolean_var = is_boolean_var;
 
 	    result.decide_keys = std::move(keys);
 
 	    result.keyed_scopes = std::move(keyed_scopes);
         result.variable_scopes = variable_scopes;
-
-        // ne_clause_sources is now populated by DecideOptimizer (post-binding)
-        // minmax_clause_labels, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
-        // are now populated by DecideOptimizer::RewriteMinMax (post-binding)
-
-        // Hide auxiliary vars from SELECT * by truncating the bind context binding.
-        // The decide_variables vector still has ALL vars (user + aux) for the execution layer,
-        // but the bind context only exposes user vars for star expansion.
-        if (num_auxiliary_vars > 0) {
-            auto &binding = *bind_context.GetBindingsList().back();
-            for (idx_t i = num_user_vars; i < var_names.size(); i++) {
-                binding.name_map.erase(var_names[i]);
-            }
-            binding.names.resize(num_user_vars);
-            binding.types.resize(num_user_vars);
-        }
 }
 
 } // namespace duckdb

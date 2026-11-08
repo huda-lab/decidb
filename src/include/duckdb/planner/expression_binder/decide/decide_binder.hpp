@@ -20,6 +20,9 @@ class BindContext;
 class FunctionExpression;
 struct DecideSourceNames;
 
+//! The names a key element may not take: every declared decision, as the user may spell it.
+case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables);
+
 //! Find or create the key scope of `per K: ...`, given the parser's `SCOPE_PER_TAG` marker
 //! (children: the body, then the elements of K). Each element resolves against the FROM
 //! clause alone, never an outer query: a declared decision is an error; otherwise it is a

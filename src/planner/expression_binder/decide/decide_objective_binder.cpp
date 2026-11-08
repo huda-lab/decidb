@@ -121,10 +121,7 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 			                                 form)));
 		}
 	}
-	case_insensitive_set_t decision_names;
-	for (auto &variable : variables) {
-		decision_names.insert(variable.first);
-	}
+	const auto decision_names = DecisionNames(variables);
 	if (!qualifier_context || !qualifier_context->keys) {
 		throw InternalException("DECIDE: a two-level objective needs the clause's keys");
 	}
@@ -187,8 +184,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	}
     string error_msg;
 	switch (expr.GetExpressionClass()) {
-    case ExpressionClass::COLUMN_REF:
-    case ExpressionClass::CONSTANT: {
+    case ExpressionClass::COLUMN_REF: {
 		// A decision is a complete objective on its own: a query-wide one has a single
 		// solver column, and any other must have one instance over the kept rows, which
 		// a scope check decides.

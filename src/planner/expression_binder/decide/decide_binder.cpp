@@ -61,20 +61,12 @@ static void EnumerateChildrenAndSubqueries(const ParsedExpression &expr,
 	ParsedExpressionIterator::EnumerateChildren(expr, callback);
 }
 
-static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr,
-                                                    const case_insensitive_map_t<idx_t> &variables) {
-	idx_t count = 0;
-	if (IsVariableExpression(expr, variables)) {
-		count++;
-	}
-	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
-		count += CountDecideVariableOccurrencesInternal(child, variables);
-	});
-	return count;
-}
-
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
+	bool found = IsVariableExpression(expr, variables);
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
+		found = found || ExpressionContainsDecideVariable(child, variables);
+	});
+	return found;
 }
 
 void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
@@ -471,9 +463,6 @@ static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression
 			throw InternalException("DECIDE per key element '%s' is not a name", element.ToString());
 		}
 		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decision_names, columns);
-	}
-	if (columns.empty() && per.children.size() > 1) {
-		throw InternalException("DECIDE per key '%s' resolved to no column", DecideKeyToString(per));
 	}
 	return columns;
 }
@@ -872,8 +861,6 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
                                       bool addends_count = false);
 
-//! Is a MIN or MAX of `body`, standing on the side's additive spine, whole-numbered? Its constant addends move onto
-//! the bound in stage 04 (SplitExtremumBody), so only the terms that stay count.
 //! The value of a constant exponent, through the casts the binder put on it.
 static bool TryGetConstantExponent(const Expression &expr, double &out_value) {
 	const Expression *cur = &expr;
@@ -892,6 +879,8 @@ static bool TryGetConstantExponent(const Expression &expr, double &out_value) {
 	return true;
 }
 
+//! Is a MIN or MAX of `body`, standing on the side's additive spine, whole-numbered? Its constant addends move onto
+//! the bound in stage 04 (SplitExtremumBody), so only the terms that stay count.
 static bool DecideExtremumBodyIsWholeNumbered(const Expression &body, idx_t decide_index) {
 	for (auto &term : SplitExtremumBody(body, decide_index).kept) {
 		if (!DecideSideIsWholeNumbered(*term.second, false, decide_index, /*addends_count=*/true)) {
@@ -1134,8 +1123,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			error_msg = "ABS requires exactly one argument";
 			return false;
 		}
-		if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" ||
-		    func_name_lower == "avg") {
+		if (IsDecideAggregateName(func.function_name)) {
 			// Nested aggregates (the two-level objective `sum(per k: max(e) by (k))`) are allowed.
 			// The optimizer will detect and rewrite them.
 			if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
@@ -1286,7 +1274,7 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		}
 		return true;
 	}
-	if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
+	if (IsDecideAggregateName(fname)) {
 		// The value reduced is the argument's body; a `when` or `per` in front of it only
 		// chooses the rows.
 		auto body = func.children.empty()
@@ -1466,8 +1454,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	return BindResult(std::move(aggregate_expr));
 }
 
-//! The names a key element may not take: every declared decision, as the user may spell it.
-static case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables) {
+case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables) {
 	case_insensitive_set_t names;
 	for (auto &variable : variables) {
 		names.insert(variable.first);

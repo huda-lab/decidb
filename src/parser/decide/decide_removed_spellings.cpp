@@ -39,27 +39,11 @@ void RestoreCountStar(unique_ptr<ParsedExpression> &expr) {
 	                                            [&](unique_ptr<ParsedExpression> &child) { RestoreCountStar(child); });
 }
 
-//! `text` without the one pair of parentheses the parser prints around a comparison or an
-//! arithmetic term.
-string WithoutOuterParentheses(const string &text) {
-	if (text.size() < 2 || text.front() != '(' || text.back() != ')') {
-		return text;
-	}
-	int depth = 0;
-	for (idx_t i = 0; i + 1 < text.size(); i++) {
-		depth += text[i] == '(' ? 1 : text[i] == ')' ? -1 : 0;
-		if (depth == 0) {
-			return text;
-		}
-	}
-	return text.substr(1, text.size() - 2);
-}
-
 //! An expression as the user wrote it, for quoting back in a message.
 string Written(const ParsedExpression &expr) {
 	auto copy = expr.Copy();
 	RestoreCountStar(copy);
-	return WithoutOuterParentheses(copy->ToString());
+	return WithoutEnclosingParentheses(copy->ToString());
 }
 
 //! A condition about to be joined to another with `and`: an OR keeps its parentheses.
@@ -73,7 +57,7 @@ string ConditionText(const ParsedExpression &condition) {
 
 string JoinConditions(const vector<string> &conditions) {
 	if (conditions.size() == 1) {
-		return WithoutOuterParentheses(conditions[0]);
+		return WithoutEnclosingParentheses(conditions[0]);
 	}
 	return StringUtil::Join(conditions, " and ");
 }
@@ -344,20 +328,11 @@ bool EndsWithLastOperand(const ParsedExpression &expr) {
 	}
 }
 
-//! The condition a removed WHEN marker at the end of `path` was written with. The old
-//! grammar read it short -- a reducer's WHEN up to one column or parenthesized term, the
-//! objective's up to one comparison -- and parsed the rest of it as operators around the
-//! marker: `SUM(x) WHEN cap BETWEEN 2 AND 5` is `BETWEEN(SUM(x) WHEN cap, 2, 5)`. The
-//! condition runs on through every operator whose first operand ends with it, up to the
-//! outermost such operator that yields a condition; `top` receives that operator's place on
-//! the path, or the marker's own when the condition was written whole. Nodes above
-//! `path[first]` belong to the clause (its own comparison), never to the condition.
-//! A constraint, as opposed to a term the bound of the clause was read into.
-bool IsConstraint(const ParsedExpression &expr) {
+//! A clause's own relation, which a condition never extends over.
+bool IsClauseRelation(const ParsedExpression &expr) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COMPARISON:
 	case ExpressionClass::BETWEEN:
-	case ExpressionClass::CONJUNCTION:
 		return true;
 	case ExpressionClass::OPERATOR:
 		return expr.GetExpressionType() == ExpressionType::COMPARE_IN ||
@@ -365,6 +340,11 @@ bool IsConstraint(const ParsedExpression &expr) {
 	default:
 		return false;
 	}
+}
+
+//! A constraint, as opposed to a term the bound of the clause was read into.
+bool IsConstraint(const ParsedExpression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::CONJUNCTION || IsClauseRelation(expr);
 }
 
 //! A WHEN after a term rather than a constraint whose condition read on into what followed:
@@ -434,6 +414,14 @@ bool OtherOperandsHoldAReducer(const ParsedExpression &expr) {
 	return found;
 }
 
+//! The condition a removed WHEN marker at the end of `path` was written with. The old
+//! grammar read it short -- a reducer's WHEN up to one column or parenthesized term, the
+//! objective's up to one comparison -- and parsed the rest of it as operators around the
+//! marker: `SUM(x) WHEN cap BETWEEN 2 AND 5` is `BETWEEN(SUM(x) WHEN cap, 2, 5)`. The
+//! condition runs on through every operator whose first operand ends with it, up to the
+//! outermost such operator that yields a condition; `top` receives that operator's place on
+//! the path, or the marker's own when the condition was written whole. Nodes above
+//! `path[first]` belong to the clause (its own comparison), never to the condition.
 WrittenWhen WrittenCondition(const vector<PathStep> &path, idx_t first, idx_t &top, bool objective) {
 	const idx_t marker = path.size() - 1;
 	auto &when = path[marker].node->Cast<FunctionExpression>();
@@ -491,20 +479,6 @@ bool ConditionIsWhole(const vector<PathStep> &path, idx_t top) {
 		}
 	}
 	return true;
-}
-
-//! A clause's own relation, which a condition never extends over.
-bool IsClauseRelation(const ParsedExpression &expr) {
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::COMPARISON:
-	case ExpressionClass::BETWEEN:
-		return true;
-	case ExpressionClass::OPERATOR:
-		return expr.GetExpressionType() == ExpressionType::COMPARE_IN ||
-		       expr.GetExpressionType() == ExpressionType::COMPARE_NOT_IN;
-	default:
-		return false;
-	}
 }
 
 //===--------------------------------------------------------------------===//

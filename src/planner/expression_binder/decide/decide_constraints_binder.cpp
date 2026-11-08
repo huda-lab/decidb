@@ -101,11 +101,7 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                 }
                 return true;
             }
-            auto fn = StringUtil::Lower(func.function_name);
-            if (fn == "sum" || fn == "avg" || fn == "min" || fn == "max") {
-                if (func.children.empty()) {
-                    return false;
-                }
+            if (IsDecideAggregateName(func.function_name)) {
                 if (func.children.size() != 1) {
                     return false;
                 }
@@ -227,7 +223,7 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
     auto &op = expr.Cast<OperatorExpression>();
     switch (op.type) {
     case ExpressionType::COMPARE_IN:{
-        if (op.children.size() < 2 || !IsVariableExpression(*op.children.front(), variables)) {
+        if (!IsVariableExpression(*op.children.front(), variables)) {
             return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
                 "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
                 op.children.front()->ToString())));
@@ -377,11 +373,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 				qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
 			}
 		}
-		case_insensitive_set_t decision_names;
-		for (auto &variable : variables) {
-			decision_names.insert(variable.first);
-		}
-		key = BindKey(context, binder.bind_context, *per, decision_names, key_text, *qualifier_context->keys);
+		key = BindKey(context, binder.bind_context, *per, DecisionNames(variables), key_text, *qualifier_context->keys);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
@@ -470,12 +462,6 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 		return BindResult(BinderException::Unsupported(
 		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
 		                             expr.ToString())));
-	}
-	case ExpressionClass::CONSTANT: {
-		if (!is_top_expression) {
-            return ExpressionBinder::BindExpression(expr_ptr, depth);
-        }
-        break;
 	}
 	case ExpressionClass::CAST: {
         if (!is_top_expression) {

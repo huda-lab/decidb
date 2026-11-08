@@ -71,8 +71,6 @@ public:
     //! the actual objective value can add it back. Zero when nothing was peeled.
     //! Transferred to LogicalDecide at plan time.
     double objective_constant_offset = 0.0;
-    //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
-    idx_t num_auxiliary_vars = 0;
     //! Per-variable boolean flag (true if declared IS BOOLEAN)
     vector<bool> is_boolean_var;
     //! Key scopes and each decision's scope (populated during binding, transferred to LogicalDecide)
