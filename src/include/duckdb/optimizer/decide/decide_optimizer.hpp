@@ -233,10 +233,11 @@ private:
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect AbsPairInfo entries,
 	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
-	//! TagAbsForBigM left on the node; this pass decides nothing about it.
+	//! TagAbsForBigM left on the node; this pass decides nothing about it. `reducer_when` is the `when` of the
+	//! reducers around `expr` (null for none): a term reads only the rows it keeps, besides those of the clause's.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                       const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
-	                       const string &source_alias, DecideEnclosingScope scope);
+	                       const string &source_alias, DecideEnclosingScope scope, const Expression *reducer_when);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

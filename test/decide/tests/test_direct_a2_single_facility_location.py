@@ -1561,15 +1561,10 @@ for _name in ABS_OBJECTIVES:
 for _name in ("abs_when_none", "max_when_none"):
     for _box in ABS_BOXES:
         ABS_CASES[f"{_name}_in_{_box}"] = _abs_case(_box, _name)
-# A NaN and an infinity on rows a `when` drops are never read.
-for _name in ("abs_when", "max_when"):
+# A NaN and an infinity on rows a `when` drops are never read, whether the `when` is the objective's or the
+# reducer's own.
+for _name in ("abs_when", "max_when", "abs_filter", "max_filter"):
     ABS_CASES[f"{_name}_bad_values_on_dropped_rows"] = _abs_case("interior", _name, DROPPED_BAD_ROWS)
-# The solver path reads them when the `when` is the reducer's own (it raises "the bound -v is NaN" on the dropped row),
-# so these are answered by direct solve alone and checked against the rulings below.
-ABS_DIRECT_ONLY_CASES = {
-    f"{_name}_bad_values_on_dropped_rows": _abs_case("interior", _name, DROPPED_BAD_ROWS)
-    for _name in ("abs_filter", "max_filter")
-}
 
 # A decision per class of a key.
 ABS_KEYED_ROWS = KEYED_ROWS + (_krow(7, "c", 2, 8.0, True), _krow(8, "c", 1, -4.0, False))
@@ -1807,7 +1802,7 @@ def test_a2_a_bad_value_on_the_last_row_raises_under_an_absolute_loss(decidb_cli
                 _run(decidb_cli, outer, "require")
 
 
-ABS_ALL_CASES = {**ABS_CASES, **ABS_KEYED_CASES, **ABS_DATA_CASES, **ABS_DIRECT_ONLY_CASES}
+ABS_ALL_CASES = {**ABS_CASES, **ABS_KEYED_CASES, **ABS_DATA_CASES}
 #: Every case whose classes all have a non-empty interval (an empty one raises, which the cases above compare).
 ABS_PINNED = sorted(
     name

@@ -269,12 +269,13 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
 	                                  decide.keyed_scopes, decide.is_boolean_var);
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(),
-		                  DecideEnclosingScope());
+		FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(), DecideEnclosingScope(),
+		                  nullptr);
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
+		FindAndReplaceAbs(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope(),
+		                  nullptr);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 
@@ -375,6 +376,18 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	}
 }
 
+//! The rows an ABS is read on: those the clause's `when` keeps that also pass the `when` of each reducer around the
+//! ABS (`SUM(when f: ABS(x - v))`), as the reducer reads its own term. Null for every row.
+static unique_ptr<Expression> AbsReadRows(ClientContext &context, const Expression *clause_when,
+                                          const Expression *reducer_when) {
+	if (!clause_when || !reducer_when) {
+		const Expression *only = clause_when ? clause_when : reducer_when;
+		return only ? only->Copy() : nullptr;
+	}
+	ExpressionBuilder calc(context);
+	return calc.Out(calc.And(calc.Of(*clause_when), calc.Of(*reducer_when)));
+}
+
 //! Refuses a NaN or infinite value in the argument of an ABS where it is read, on the rows the ABS is read on, before
 //! the lowering turns it into a bound on the auxiliary. The values are the argument's terms that hold no decision
 //! (`v` in `ABS(x - v)`), named as the user wrote them with the message every other refused value raises
@@ -422,12 +435,23 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                         const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
-                                        const string &source_alias, DecideEnclosingScope scope) {
+                                        const string &source_alias, DecideEnclosingScope scope,
+                                        const Expression *reducer_when) {
 	if (!expr) {
 		return;
 	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 	scope = EnterDecideScope(*expr, scope);
+
+	// A term of a reducer with its own `when` reads only the rows that `when` keeps.
+	unique_ptr<Expression> reducer_rows;
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		auto &reducer = expr->Cast<BoundAggregateExpression>();
+		if (reducer.filter) {
+			reducer_rows = AbsReadRows(optimizer.context, reducer_when, reducer.filter.get());
+			reducer_when = reducer_rows.get();
+		}
+	}
 
 	if (IsAbsOverDecideVar(*expr, decide.decide_index)) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -450,7 +474,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 		// ABS no later pass would lower (term extraction read `abs(h)` as `h`). Its
 		// pair is appended before this one, which is the order the auxiliary-bound
 		// derivation boxes them in: the outer range needs the inner box.
-		FindAndReplaceAbs(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope);
+		FindAndReplaceAbs(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope, reducer_when);
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
@@ -463,18 +487,19 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 		// collects as unknown sign) and for a dead one (which it leaves untagged).
 		const bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
 
-		// A value of the argument that is not finite is refused here, before the lowering turns it into a bound.
-		AddAbsValueCheck(optimizer.context, decide, *func.children[0], scope.Condition());
+		// The rows the ABS is read on: the envelope rows below, and the check of its values, are made for those only.
+		auto read_rows = AbsReadRows(optimizer.context, scope.Condition(), reducer_when);
+		AddAbsValueCheck(optimizer.context, decide, *func.children[0], read_rows.get());
 
-		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
-		                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label), aux_scope});
+		abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm, std::move(read_rows),
+		                     std::move(label), aux_scope});
 
 		ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
 		return;
 	}
 
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, canonicalizer, abs_pairs, clause_alias, scope);
+		FindAndReplaceAbs(child, decide, canonicalizer, abs_pairs, clause_alias, scope, reducer_when);
 	});
 }
 
