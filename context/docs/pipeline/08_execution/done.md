@@ -106,6 +106,18 @@ solved model after the evaluation, and read the named input columns in a pass of
 
 ---
 
+### The evaluator switch (temporary)
+
+The literal one-pass plan (`.claude/local/literal_one_pass_plan.md`, §7) builds the deck's evaluator beside this one:
+Branch by Abstraction with a whole Parallel Run. `DECIDB_EVALUATOR` picks one, read once and kept off the wire:
+`flat` (the default, the evaluator above), `verify`, and `tree` and `tree-noside`, which are not built yet.
+`PhysicalDecide::Evaluate` is the region from the one pass to the helper decisions' members. Under `verify` it runs as
+ever and alone prints; then the evaluation fields of the sink state stand aside, a second run fills its own in silence,
+and `CompareDecideEvaluations` (`decide_evaluator.hpp`) compares what each would hand the model, before
+`BuildSolverInput` consumes it. A difference is an INTERNAL error, so a suite run under `verify` fails any test whose
+query differs, with no assertion written. `test_evaluator_verify.py` shows each compared group catches an injected
+difference. The switch, the record and the comparison go when the flat evaluator does (P6).
+
 ## 2. The folded variable box
 
 Whether a simple bound (`x <= 10`) becomes a column box or a model row is decided
