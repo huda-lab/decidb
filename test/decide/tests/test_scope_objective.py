@@ -14,12 +14,20 @@ import itertools
 import pytest
 
 from ._output_helpers import assert_no_internal_leak
-from ._scope_cases import SHIPMENTS, aligned, answer, from_clause, joined, scope_solver, table, table_rows  # noqa: F401
+from ._scope_cases import (
+    SHIP,
+    SHIPMENTS,
+    SHIP_BOUND,
+    aligned,
+    answer,
+    from_clause,
+    joined,
+    scope_solver,  # noqa: F401
+    table,
+    table_rows,
+)
 from ._scope_oracle import CONSTANT, Decision, Nested, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
-
-SHIP = [Decision("ship")]
-SHIP_BOUND = Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},))
 
 
 def _query(objective: str, clause: str = "ship <= S.demand", decide: str = "ship(INT)") -> str:

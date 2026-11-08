@@ -11,7 +11,7 @@ runs on both solvers; where one cannot load the model, its refusal is asserted i
 import pytest
 
 from ._brute_force import judge_rows
-from ._scope_cases import answer, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
+from ._scope_cases import answer, const, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
@@ -27,10 +27,6 @@ X = lambda r: {"x": 1}  # noqa: E731
 CAP_BOUND = Scoped((X,), "<=", (lambda r: {CONSTANT: r["cap"]},))
 MAXIMIZE_X = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", X),))
 MINIMIZE_X = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", X),))
-
-
-def _const(value):
-    return lambda r: {CONSTANT: value}
 
 
 def _query(decisions, clauses, objective, select="id, x"):
@@ -61,7 +57,7 @@ STRICT = [
     pytest.param(
         "x <= 20 AND MAX(x) > 12",
         "MINIMIZE SUM(x)",
-        [Scoped((X,), "<=", (_const(20),)), Scoped((Reduce("max", X),), ">", (_const(12),))],
+        [Scoped((X,), "<=", (const(20),)), Scoped((Reduce("max", X),), ">", (const(12),))],
         MINIMIZE_X,
         0.0,
         id="hard-max",
@@ -69,7 +65,7 @@ STRICT = [
     pytest.param(
         "x <= cap AND MIN(x) < 3",
         "MAXIMIZE SUM(x)",
-        [CAP_BOUND, Scoped((Reduce("min", X),), "<", (_const(3),))],
+        [CAP_BOUND, Scoped((Reduce("min", X),), "<", (const(3),))],
         MAXIMIZE_X,
         0.0,
         id="hard-min",
@@ -77,7 +73,7 @@ STRICT = [
     pytest.param(
         "x <= cap AND SUM(x) + MAX(x) > 12",
         "MINIMIZE SUM(x)",
-        [CAP_BOUND, Scoped((Reduce("sum", X), Reduce("max", X)), ">", (_const(12),))],
+        [CAP_BOUND, Scoped((Reduce("sum", X), Reduce("max", X)), ">", (const(12),))],
         MINIMIZE_X,
         0.0,
         id="composed",
@@ -85,7 +81,7 @@ STRICT = [
     pytest.param(
         "x <= cap AND x > 2.5",
         "MINIMIZE SUM(x)",
-        [CAP_BOUND, Scoped((X,), ">", (_const(2.5),))],
+        [CAP_BOUND, Scoped((X,), ">", (const(2.5),))],
         MINIMIZE_X,
         0.0,
         id="fractional-absorbed",
@@ -93,7 +89,7 @@ STRICT = [
     pytest.param(
         "x <= cap AND x > -2.2",
         "MINIMIZE SUM(x)",
-        [CAP_BOUND, Scoped((X,), ">", (_const(-2.2),))],
+        [CAP_BOUND, Scoped((X,), ">", (const(-2.2),))],
         MINIMIZE_X,
         float("-inf"),
         id="fractional-negative",
@@ -117,7 +113,7 @@ def test_negative_factor_on_a_hard_max(request, scope_solver, cli_fixture):
     """`-2 * MAX(x) <= -5` is `MAX(x) >= 2.5`: the negative factor reverses the clause, so
     an answer of all zeros violates it."""
     cli = request.getfixturevalue(cli_fixture)
-    clauses = [CAP_BOUND, Scoped((Reduce("max", X, factor=lambda r: -2.0),), "<=", (_const(-5),))]
+    clauses = [CAP_BOUND, Scoped((Reduce("max", X, factor=lambda r: -2.0),), "<=", (const(-5),))]
     _judged(
         cli, scope_solver, _query("x(INT)", "x <= cap AND -2 * MAX(x) <= -5", "MINIMIZE SUM(x)"), clauses, MINIMIZE_X
     )
@@ -280,12 +276,12 @@ def test_a_column_addend_keeps_a_min_or_max_fractional(request, cli_fixture):
     [
         pytest.param(
             "cap * sum(x) <= 40",
-            Scoped((Reduce("sum", X, factor=lambda r: r["cap"]),), "<=", (_const(40),)),
+            Scoped((Reduce("sum", X, factor=lambda r: r["cap"]),), "<=", (const(40),)),
             id="row-varying-factor",
         ),  # not refused as "'cap' varies per row"
         pytest.param(
             "sum(w) + x <= 10",
-            Scoped((Reduce("sum", lambda r: {CONSTANT: r["w"]}), X), "<=", (_const(10),)),
+            Scoped((Reduce("sum", lambda r: {CONSTANT: r["w"]}), X), "<=", (const(10),)),
             id="data-reducer-beside-a-row-decision",
         ),  # not refused as "row-scoped decision 'x'"
         pytest.param(
@@ -316,7 +312,7 @@ def test_max_of_a_decision_bounded_by_max_of_data(request, scope_solver, cli_fix
     sql = f"""SELECT id, x {table('t', columns, rows)}
         DECIDE x(INT) SUCH THAT x <= 10 AND MAX(x) <= MAX(v) MAXIMIZE SUM(x) ORDER BY id"""
     clauses = [
-        Scoped((X,), "<=", (_const(10),)),
+        Scoped((X,), "<=", (const(10),)),
         Scoped((Reduce("max", X),), "<=", (Reduce("max", lambda r: {CONSTANT: r["v"]}),)),
     ]
     model = ScopedModel(table_rows(columns, rows), [Decision("x")])
@@ -428,7 +424,7 @@ def test_easy_min_floor_lets_the_decision_go_negative(request, scope_solver, cli
         cli,
         scope_solver,
         _query("x(INT)", f"x <= cap AND {bound}", "MINIMIZE SUM(x)"),
-        [CAP_BOUND, Scoped((Reduce("min", X),), ">=", (_const(-5),))],
+        [CAP_BOUND, Scoped((Reduce("min", X),), ">=", (const(-5),))],
         MINIMIZE_X,
         [Decision("x", lb=float("-inf"))],
     )
@@ -463,39 +459,39 @@ _SIGNED_X = (Decision("x", lb=float("-inf")),)
 # The spellings `test_affine_bound_builds_the_model_of_a_column_bound` does not list. It pins the others to the model
 # `x >= -2` builds, which a backend answers as `x-folded-bound` below does, so they need no answer-level case.
 NEGATIVE_FLOOR_SPELLINGS = [
-    pytest.param("x >= -2 + 0", Scoped((X,), ">=", (_const(-2),)), id="x-folded-bound"),
-    pytest.param("x * 2 >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-factor-right"),
-    pytest.param("x / 2 >= -1", Scoped((_X_TIMES(0.5),), ">=", (_const(-1),)), id="x-divided"),
-    pytest.param("2 * x > -5", Scoped((_X_TIMES(2),), ">", (_const(-5),)), id="x-strict-factor"),
+    pytest.param("x >= -2 + 0", Scoped((X,), ">=", (const(-2),)), id="x-folded-bound"),
+    pytest.param("x * 2 >= -4", Scoped((_X_TIMES(2),), ">=", (const(-4),)), id="x-factor-right"),
+    pytest.param("x / 2 >= -1", Scoped((_X_TIMES(0.5),), ">=", (const(-1),)), id="x-divided"),
+    pytest.param("2 * x > -5", Scoped((_X_TIMES(2),), ">", (const(-5),)), id="x-strict-factor"),
     pytest.param(
-        "min(x) / 2 >= -1", Scoped((Reduce("min", X, factor=lambda r: 0.5),), ">=", (_const(-1),)), id="min-divided"
+        "min(x) / 2 >= -1", Scoped((Reduce("min", X, factor=lambda r: 0.5),), ">=", (const(-1),)), id="min-divided"
     ),
     pytest.param(
         "per g: min(x) by (g) - 1 >= -3",
-        Scoped((Reduce("min", X, by=("g",)), _const(-1)), ">=", (_const(-3),), per=("g",)),
+        Scoped((Reduce("min", X, by=("g",)), const(-1)), ">=", (const(-3),), per=("g",)),
         id="min-per-shift",
     ),
-    pytest.param("-(x - 1) <= 3", Scoped((_X_TIMES(-1), _const(1)), "<=", (_const(3),)), id="x-shift-under-minus"),
+    pytest.param("-(x - 1) <= 3", Scoped((_X_TIMES(-1), const(1)), "<=", (const(3),)), id="x-shift-under-minus"),
     pytest.param(
         "(min(x) - 1) * 2 >= -6",
-        Scoped((Reduce("min", X, factor=lambda r: 2.0), _const(-2)), ">=", (_const(-6),)),
+        Scoped((Reduce("min", X, factor=lambda r: 2.0), const(-2)), ">=", (const(-6),)),
         id="min-shift-under-factor-right",
     ),
     pytest.param(
         "(min(x) + 1) / 2 >= -0.5",
-        Scoped((Reduce("min", X, factor=lambda r: 0.5), _const(0.5)), ">=", (_const(-0.5),)),
+        Scoped((Reduce("min", X, factor=lambda r: 0.5), const(0.5)), ">=", (const(-0.5),)),
         id="min-shift-under-division",
     ),
     pytest.param(
         "3 - min(x) <= 5",
-        Scoped((_const(3), Reduce("min", X, factor=lambda r: -1.0)), "<=", (_const(5),)),
+        Scoped((const(3), Reduce("min", X, factor=lambda r: -1.0)), "<=", (const(5),)),
         id="min-subtracted-from-constant",
     ),
-    pytest.param("2 * x + x >= -6", Scoped((_X_TIMES(3),), ">=", (_const(-6),)), id="x-repeated-under-factor"),
-    pytest.param("x - 3 * x <= 4", Scoped((_X_TIMES(-2),), "<=", (_const(4),)), id="x-repeated-cancelling-to-negative"),
+    pytest.param("2 * x + x >= -6", Scoped((_X_TIMES(3),), ">=", (const(-6),)), id="x-repeated-under-factor"),
+    pytest.param("x - 3 * x <= 4", Scoped((_X_TIMES(-2),), "<=", (const(4),)), id="x-repeated-cancelling-to-negative"),
     pytest.param(
         "2 * min(x) + min(x) >= -6",
-        Scoped((Reduce("min", X, factor=lambda r: 3.0),), ">=", (_const(-6),)),
+        Scoped((Reduce("min", X, factor=lambda r: 3.0),), ">=", (const(-6),)),
         id="min-repeated-under-factor",
     ),
 ]
@@ -746,7 +742,7 @@ def test_norm_zero_by_group(request, cli_fixture):
 def test_count_star_by_group(request, scope_solver, cli_fixture):
     """`count(*) by (g)` counts the group's kept rows, as `sum(1) by (g)` does."""
     cli = request.getfixturevalue(cli_fixture)
-    clause = Scoped((Reduce("sum", X, by=("g",)),), "<=", (Reduce("sum", _const(1), by=("g",)),), per=("g",))
+    clause = Scoped((Reduce("sum", X, by=("g",)),), "<=", (Reduce("sum", const(1), by=("g",)),), per=("g",))
     _judged(
         cli,
         scope_solver,

@@ -23,9 +23,14 @@ from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import (
     DEPOTS,
+    MAXIMIZE_SHIP,
+    MINIMIZE_SHIP,
+    SHIP,
     SHIPMENTS,
+    SHIP_BOUND,
     aligned,
     answer,
+    const,
     dump_bounds,
     dump_counts,
     error_of,
@@ -38,17 +43,9 @@ from ._scope_cases import (
 from ._scope_oracle import CONSTANT, GLOBAL, PER_ROW, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
 
-SHIP = [Decision("ship")]
-SHIP_BOUND = Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},))
-MAXIMIZE_SHIP = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
-MINIMIZE_SHIP = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
 #: The decision as a tuple term of a clause.
 X = lambda r: {"ship": 1}  # noqa: E731
 PRIORITY = lambda r: r["priority"]  # noqa: E731
-
-
-def _const(value):
-    return lambda r: {CONSTANT: value}
 
 
 def _ship_query(
@@ -182,7 +179,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
     clauses = [
         SHIP_BOUND,
         Scoped((_ship_reduce(by=("depotID",)), lambda r: {"open": -r["capacity"]}), "<=", (), per=("depotID",)),
-        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (_const(2),), per=GLOBAL),
+        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (const(2),), per=GLOBAL),
     ]
     result = aligned(answer(decidb_cli, sql), model)
     # D1 (capacity 25) and D2 (40) open: 65. D2 and D3 would give 60.
@@ -250,7 +247,7 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
     clauses = [
         SHIP_BOUND,
         Scoped((_ship_reduce(by=by), lambda r: {"open": -factor(r)}), "<=", (), per=per),
-        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (_const(2),), per=GLOBAL),
+        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (const(2),), per=GLOBAL),
     ]
     result = aligned(answer(cli, sql), model)
     assert model.judge_scoped(result, clauses, MAXIMIZE_SHIP) == pytest.approx(
@@ -287,7 +284,7 @@ def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, cla
         "num_rows": len(SHIPMENTS) + helpers,
     }
     model = ScopedModel(joined(), SHIP)
-    clauses = [SHIP_BOUND, Scoped(tuple(_ship_reduce(by=by) for by in reducers), "<=", (_const(bound),))]
+    clauses = [SHIP_BOUND, Scoped(tuple(_ship_reduce(by=by) for by in reducers), "<=", (const(bound),))]
     _judged(decidb_cli, scope_solver, sql, model, clauses)
 
 
@@ -296,14 +293,14 @@ def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, cla
 # ---------------------------------------------------------------------------
 
 S_GLOBAL = [Decision("ship"), Decision("s", GLOBAL)]
-S_LE_3 = Scoped((lambda r: {"s": 1},), "<=", (_const(3),))
+S_LE_3 = Scoped((lambda r: {"s": 1},), "<=", (const(3),))
 
 MINMAX_CASES = [
     pytest.param(
         "ship(INT)",
         "ship <= 0.5 * max(ship) by (D.region) + 8",
         SHIP,
-        [Scoped((X,), "<=", (_ship_reduce("max", by=("region",), factor=0.5), _const(8)))],
+        [Scoped((X,), "<=", (_ship_reduce("max", by=("region",), factor=0.5), const(8)))],
         "MAXIMIZE",
         [10, 16, 16, 15, 16],
         id="max-pushed-up-closing",
@@ -312,7 +309,7 @@ MINMAX_CASES = [
         "ship(INT)",
         "ship <= min(ship) by (D.region) + 5",
         SHIP,
-        [Scoped((X,), "<=", (_ship_reduce("min", by=("region",)), _const(5)))],
+        [Scoped((X,), "<=", (_ship_reduce("min", by=("region",)), const(5)))],
         "MAXIMIZE",
         [10, 15, 15, 15, 25],
         id="min-pushed-up-envelope",
@@ -322,8 +319,8 @@ MINMAX_CASES = [
         "ship >= 1 AND ship >= 2 * min(ship) by (D.region) - 1",
         SHIP,
         [
-            Scoped((X,), ">=", (_const(1),)),
-            Scoped((X,), ">=", (_ship_reduce("min", by=("region",), factor=2), _const(-1))),
+            Scoped((X,), ">=", (const(1),)),
+            Scoped((X,), ">=", (_ship_reduce("min", by=("region",), factor=2), const(-1))),
         ],
         "MINIMIZE",
         [1, 1, 1, 1, 1],
@@ -337,7 +334,7 @@ MINMAX_CASES = [
             Scoped(
                 (_ship_reduce("max", by=("region",)), _ship_reduce("min", by=("region",), factor=-1)),
                 "<=",
-                (_const(5),),
+                (const(5),),
             )
         ],
         "MAXIMIZE",
@@ -350,7 +347,7 @@ MINMAX_CASES = [
         SHIP,
         [
             Scoped(
-                (_ship_reduce(by=("region",)), _ship_reduce("max", by=("region",))), "<=", (_const(30),), when=PRIORITY
+                (_ship_reduce(by=("region",)), _ship_reduce("max", by=("region",))), "<=", (const(30),), when=PRIORITY
             )
         ],
         "MAXIMIZE",
@@ -361,7 +358,7 @@ MINMAX_CASES = [
         "ship(INT)",
         "when S.priority: sum(ship) + max(ship) by (D.region) <= 30",
         SHIP,
-        [Scoped((_ship_reduce(), _ship_reduce("max", by=("region",))), "<=", (_const(30),), when=PRIORITY)],
+        [Scoped((_ship_reduce(), _ship_reduce("max", by=("region",))), "<=", (const(30),), when=PRIORITY)],
         "MAXIMIZE",
         None,
         id="composed-with-two-keys",
@@ -388,7 +385,7 @@ MINMAX_CASES = [
         "ship(INT)",
         "(SELECT 2) * max(ship) by (D.region) <= 40",
         SHIP,
-        [Scoped((_ship_reduce("max", by=("region",), factor=2),), "<=", (_const(40),))],
+        [Scoped((_ship_reduce("max", by=("region",), factor=2),), "<=", (const(40),))],
         "MAXIMIZE",
         [10, 20, 20, 15, 20],
         id="unknown-sign-factor-with-by",
@@ -427,7 +424,7 @@ MINMAX_CASES = [
         "ship(INT), per (): s(INT)",
         "s <= 3 AND when S.priority: max(ship) by (D.region) + s <= 12",
         S_GLOBAL,
-        [S_LE_3, Scoped((_ship_reduce("max", by=("region",)), lambda r: {"s": 1}), "<=", (_const(12),), when=PRIORITY)],
+        [S_LE_3, Scoped((_ship_reduce("max", by=("region",)), lambda r: {"s": 1}), "<=", (const(12),), when=PRIORITY)],
         "MAXIMIZE",
         [10, 20, 12, 15, 12],
         id="decision-beside-max-with-by",
@@ -436,7 +433,7 @@ MINMAX_CASES = [
         "ship(INT), per (): s(INT)",
         "s <= 3 AND when S.priority: max(ship) + s <= 12",
         S_GLOBAL,
-        [S_LE_3, Scoped((_ship_reduce("max"), lambda r: {"s": 1}), "<=", (_const(12),), when=PRIORITY)],
+        [S_LE_3, Scoped((_ship_reduce("max"), lambda r: {"s": 1}), "<=", (const(12),), when=PRIORITY)],
         "MAXIMIZE",
         [10, 20, 12, 15, 12],
         id="decision-beside-max",
@@ -483,7 +480,7 @@ def test_an_unbounded_member_under_a_closing_link(decidb_cli_highs, decidb_cli_g
 # ---------------------------------------------------------------------------
 
 #: Every shipment is at most 10; a depot's group reaches the sum, or the largest multiple, of its members' 10s.
-SHIP_AT_MOST_10 = Scoped((X,), "<=", (_const(10),))
+SHIP_AT_MOST_10 = Scoped((X,), "<=", (const(10),))
 #: The weights a MAX helper takes the largest of: D1's rows weigh 2 and 3, D2's 1 and 2, D3's 1.
 TRANSIT_OF_SHIP = lambda r: {"ship": r["transitDays"]}  # noqa: E731
 
@@ -507,7 +504,7 @@ def test_a_max_helper_instance_is_boxed_and_closed_by_its_own_group(
     clauses = [
         SHIP_BOUND,
         SHIP_AT_MOST_10,
-        Scoped((X,), "<=", (Reduce("max", TRANSIT_OF_SHIP, by=("depotID",), factor=lambda r: 0.5), _const(1))),
+        Scoped((X,), "<=", (Reduce("max", TRANSIT_OF_SHIP, by=("depotID",), factor=lambda r: 0.5), const(1))),
     ]
     for cli in (decidb_cli_highs, decidb_cli_gurobi):
         dump, helper = _helper_dump(cli, sql, tmp_path)
@@ -527,7 +524,7 @@ def test_a_not_equal_over_a_sum_helper_is_sized_by_each_groups_reach(
     its own instance's 10 and not from the cover's 20 (-11 and -9 against -21 and -19)."""
     sql = _ship_query("ship <= 10 AND ship <> sum(ship) by (D.depotID) - 3")
     model = ScopedModel(joined(), SHIP)
-    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((X,), "<>", (_ship_reduce(by=("depotID",)), _const(-3)))]
+    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((X,), "<>", (_ship_reduce(by=("depotID",)), const(-3)))]
     dump, helper = _helper_dump(decidb_cli_highs, sql, tmp_path)
     assert helper == [(0.0, 20.0), (0.0, 20.0), (0.0, 10.0)]
     rows = re.findall(r"^row \d+: sense=([<>]) rhs=(\S+) nnz=3 ", dump, re.M)
@@ -538,7 +535,7 @@ def test_a_not_equal_over_a_sum_helper_is_sized_by_each_groups_reach(
     # The same on the helper's floor: `sum(0 - ship)` reaches -20, -20 and -10, which sizes the other half of each row.
     sql = _ship_query("ship <= 10 AND ship <> sum(0 - ship) by (D.depotID) + 3")
     negated = Reduce("sum", lambda r: {"ship": -1}, by=("depotID",))
-    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((X,), "<>", (negated, _const(3)))]
+    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((X,), "<>", (negated, const(3)))]
     dump, helper = _helper_dump(decidb_cli_highs, sql, tmp_path)
     assert helper == [(-20.0, 0.0), (-20.0, 0.0), (-10.0, 0.0)]
     big_ms = re.findall(r"^row \d+: sense=[<>] rhs=\S+ nnz=3 \| \d+:\S+ \d+:\S+ \d+:(\S+)$", dump, re.M)
@@ -558,7 +555,7 @@ def test_a_not_equal_range_collapse_never_reads_a_helpers_reach(
     sql = _ship_query("ship <= 10 AND S.transitDays * sum(ship) by (D.depotID) <> 1000")
     model = ScopedModel(joined(), SHIP)
     transit_sum = _ship_reduce(by=("depotID",), factor=lambda r: r["transitDays"])
-    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((transit_sum,), "<>", (_const(1000),))]
+    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((transit_sum,), "<>", (const(1000),))]
     dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
     assert dump_counts(dump) == {
         "num_vars": 2 * len(SHIPMENTS) + len(DEPOTS),
@@ -585,7 +582,7 @@ def test_strict_and_not_equal_over_whole_numbered_helpers(decidb_cli, scope_solv
     # D1: `s1 <> s1 + s2 - 10` is `s2 <> 10` and `s2 <> s1 + s2 - 10` is `s1 <> 10`, so the
     # 10-unit shipment gives up one unit; the other depots lose nothing.
     sql = _ship_query("ship <> sum(ship) by (D.depotID) - 10")
-    clauses = [SHIP_BOUND, Scoped((X,), "<>", (_ship_reduce(by=("depotID",)), _const(-10)))]
+    clauses = [SHIP_BOUND, Scoped((X,), "<>", (_ship_reduce(by=("depotID",)), const(-10)))]
     assert _judged(decidb_cli, scope_solver, sql, model, clauses) == [9, 20, 30, 15, 25]
 
 
@@ -625,7 +622,7 @@ def test_a_helper_over_a_reducer_with_its_own_per(decidb_cli, scope_solver):
     clauses = [
         SHIP_BOUND,
         Scoped((X,), "<=", (Reduce("sum", lambda r: {"open": r["capacity"]}, per=("depotID",), factor=lambda r: 0.5),)),
-        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (_const(1),), per=GLOBAL),
+        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (const(1),), per=GLOBAL),
     ]
     result = aligned(answer(decidb_cli, sql), model)
     assert (
@@ -695,7 +692,7 @@ def test_a_row_varying_factor_on_a_decision_beside_a_reducer(decidb_cli, scope_s
     clauses = [
         SHIP_BOUND,
         S_LE_3,
-        Scoped((_ship_reduce(), lambda r: {"s": r["capacity"]}), "<=", (_const(100),), when=PRIORITY),
+        Scoped((_ship_reduce(), lambda r: {"s": r["capacity"]}), "<=", (const(100),), when=PRIORITY),
     ]
     assert _judged(decidb_cli, scope_solver, sql, model, clauses) == [10, 20, 30, 15, 25]
 
@@ -924,7 +921,7 @@ def test_a_min_helper_counts_a_keyed_decision_once(decidb_cli, scope_solver):
     rows = ((1, "a", 10), (2, "a", 20), (3, "b", 30))
     sql = _t_query("per row: x <= 2 * min(per t.g: x) by () - 5", decide="per t.g: x(INT)", rows=rows)
     model = ScopedModel(table_rows(T_COLUMNS, rows), [Decision("x", ("g",))])
-    clauses = [X_CAP, Scoped((XV,), "<=", (Reduce("min", XV, per=("g",), factor=lambda r: 2), _const(-5)))]
+    clauses = [X_CAP, Scoped((XV,), "<=", (Reduce("min", XV, per=("g",), factor=lambda r: 2), const(-5)))]
     result = aligned(answer(decidb_cli, sql), model, "id")
     assert (
         model.judge_scoped(result, clauses, MAXIMIZE_X)
@@ -1009,7 +1006,7 @@ EPIGRAPH_CASES = [
     ),
     pytest.param(
         "per row: ship + sum(ship) <= 40",
-        [Scoped((X, _ship_reduce()), "<=", (_const(40),))],
+        [Scoped((X, _ship_reduce()), "<=", (const(40),))],
         ">",
         id="pushed-down",
     ),
@@ -1039,13 +1036,13 @@ EPIGRAPH_CASES = [
     ),
     pytest.param(
         "per row: ship <> sum(ship) - 10",
-        [Scoped((X,), "<>", (_ship_reduce(), _const(-10)))],
+        [Scoped((X,), "<>", (_ship_reduce(), const(-10)))],
         "=",
         id="not-equal",
     ),
     pytest.param(
         "per row: ship <= 0.5 * sum(ship) AND per row: ship + sum(ship) <= 80",
-        [Scoped((X,), "<=", (_ship_reduce(factor=0.5),)), Scoped((X, _ship_reduce()), "<=", (_const(80),))],
+        [Scoped((X,), "<=", (_ship_reduce(factor=0.5),)), Scoped((X, _ship_reduce()), "<=", (const(80),))],
         "=",
         id="two-clauses-pushing-both-ways",
     ),
@@ -1239,13 +1236,13 @@ def test_explain_echoes_the_clause_as_written(decidb_cli):
         ),
         pytest.param(
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50",
-            [Scoped((_ship_reduce(by=("depotID",)), _ship_reduce(by=("region",))), "<=", (_const(50),))],
+            [Scoped((_ship_reduce(by=("depotID",)), _ship_reduce(by=("region",))), "<=", (const(50),))],
             None,
             id="two-keys",
         ),
         pytest.param(
             "ship <= 0.5 * max(ship) by (D.region) + 8",
-            [Scoped((X,), "<=", (_ship_reduce("max", by=("region",), factor=0.5), _const(8)))],
+            [Scoped((X,), "<=", (_ship_reduce("max", by=("region",), factor=0.5), const(8)))],
             [10, 16, 16, 15, 16],
             id="max-closing",
         ),

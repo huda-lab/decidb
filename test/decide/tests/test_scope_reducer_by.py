@@ -21,7 +21,11 @@ from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import (
     DEPOTS,
+    MAXIMIZE_SHIP,
+    MINIMIZE_SHIP,
+    SHIP,
     SHIPMENTS,
+    SHIP_BOUND,
     aligned,
     answer,
     dump_counts,
@@ -33,11 +37,6 @@ from ._scope_cases import (
 )
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
-
-SHIP = [Decision("ship")]
-SHIP_BOUND = Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},))
-MAXIMIZE_SHIP = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
-MINIMIZE_SHIP = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
 
 
 def _ship_query(clause: str, sense: str = "MAXIMIZE", shipments=SHIPMENTS, depots=DEPOTS) -> str:

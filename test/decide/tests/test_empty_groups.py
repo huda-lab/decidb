@@ -9,7 +9,7 @@ independently; a case direct solve takes also runs under `require`.
 import pytest
 
 from ._direct_oracle_common import _allow_direct_path, run  # noqa: F401
-from ._scope_cases import aligned, scope_solver, table, table_rows  # noqa: F401
+from ._scope_cases import aligned, const, scope_solver, table, table_rows  # noqa: F401
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
 
@@ -28,10 +28,6 @@ def _x_val(row):
     return {"x": row["val"]}
 
 
-def _const(value):
-    return lambda row: {CONSTANT: value}
-
-
 def _empty(row):
     return row["val"] > 100
 
@@ -46,7 +42,7 @@ CASES = {
         [X],
         "when val > 100: sum(x) >= 1",
         "MINIMIZE SUM(val * x)",
-        [Scoped((Reduce("sum", _x),), ">=", (_const(1),), when=_empty, per=GLOBAL)],
+        [Scoped((Reduce("sum", _x),), ">=", (const(1),), when=_empty, per=GLOBAL)],
         MINIMIZE_VAL,
         True,
     ),
@@ -55,8 +51,8 @@ CASES = {
         "sum(x) <= 1 AND when id = 99: x >= 1",
         "MAXIMIZE SUM(val * x)",
         [
-            Scoped((Reduce("sum", _x),), "<=", (_const(1),), per=GLOBAL),
-            Scoped((_x,), ">=", (_const(1),), when=lambda row: row["id"] == 99),
+            Scoped((Reduce("sum", _x),), "<=", (const(1),), per=GLOBAL),
+            Scoped((_x,), ">=", (const(1),), when=lambda row: row["id"] == 99),
         ],
         MAXIMIZE_VAL,
         True,
@@ -74,7 +70,7 @@ CASES = {
         [X],
         "sum(when val > 100: x) >= 1",
         "MINIMIZE SUM(val * x)",
-        [Scoped((Reduce("sum", _x, when=_empty),), ">=", (_const(1),), per=GLOBAL)],
+        [Scoped((Reduce("sum", _x, when=_empty),), ">=", (const(1),), per=GLOBAL)],
         MINIMIZE_VAL,
         True,
     ),
@@ -86,7 +82,7 @@ CASES = {
             Scoped(
                 (Reduce("sum", _x, when=lambda row: row["c"] == 1, by=("g",)), Reduce("sum", _x, by=("g",))),
                 ">=",
-                (_const(2),),
+                (const(2),),
             )
         ],
         MINIMIZE_VAL,
@@ -97,7 +93,7 @@ CASES = {
         [X],
         "max(when val > 100: x * val) >= 5",
         "MINIMIZE SUM(val * x)",
-        [Scoped((Reduce("max", _x_val, when=_empty),), ">=", (_const(5),), per=GLOBAL)],
+        [Scoped((Reduce("max", _x_val, when=_empty),), ">=", (const(5),), per=GLOBAL)],
         MINIMIZE_VAL,
         False,
     ),
@@ -105,7 +101,7 @@ CASES = {
         [X],
         "when val > 100: min(x * val) >= 5",
         "MINIMIZE SUM(val * x)",
-        [Scoped((Reduce("min", _x_val),), ">=", (_const(5),), when=_empty, per=GLOBAL)],
+        [Scoped((Reduce("min", _x_val),), ">=", (const(5),), when=_empty, per=GLOBAL)],
         MINIMIZE_VAL,
         False,
     ),
@@ -113,7 +109,7 @@ CASES = {
         [X],
         "sum(x * val) + max(when val > 100: x * val) <= 5",
         "MAXIMIZE SUM(val * x)",
-        [Scoped((Reduce("sum", _x_val), Reduce("max", _x_val, when=_empty)), "<=", (_const(5),), per=GLOBAL)],
+        [Scoped((Reduce("sum", _x_val), Reduce("max", _x_val, when=_empty)), "<=", (const(5),), per=GLOBAL)],
         MAXIMIZE_VAL,
         False,
     ),
@@ -122,7 +118,7 @@ CASES = {
         [X],
         "sum(x) >= 1",
         "MAXIMIZE when val > 100: max(x * val)",
-        [Scoped((Reduce("sum", _x),), ">=", (_const(1),), per=GLOBAL)],
+        [Scoped((Reduce("sum", _x),), ">=", (const(1),), per=GLOBAL)],
         ScopedObjective(ObjSense.MAXIMIZE, (Reduce("max", _x_val),), when=_empty),
         False,
     ),
@@ -130,7 +126,7 @@ CASES = {
         [X],
         "sum(x) <= 2",
         "MAXIMIZE sum(x * val) + min(when val > 100: x * val)",
-        [Scoped((Reduce("sum", _x),), "<=", (_const(2),), per=GLOBAL)],
+        [Scoped((Reduce("sum", _x),), "<=", (const(2),), per=GLOBAL)],
         ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", _x_val), Reduce("min", _x_val, when=_empty))),
         False,
     ),
@@ -150,8 +146,8 @@ CASES = {
         "x <= 1 AND when val > 100: sum(w * x) <= 2",
         "MAXIMIZE SUM(val * x)",
         [
-            Scoped((_x,), "<=", (_const(1),)),
-            Scoped((Reduce("sum", lambda row: {"x": row["w"]}),), "<=", (_const(2),), when=_empty, per=GLOBAL),
+            Scoped((_x,), "<=", (const(1),)),
+            Scoped((Reduce("sum", lambda row: {"x": row["w"]}),), "<=", (const(2),), when=_empty, per=GLOBAL),
         ],
         MAXIMIZE_VAL,
         True,
@@ -161,8 +157,8 @@ CASES = {
         "x <= 1 AND sum(when val > 100: w * x) <= 2",
         "MAXIMIZE SUM(val * x)",
         [
-            Scoped((_x,), "<=", (_const(1),)),
-            Scoped((Reduce("sum", lambda row: {"x": row["w"]}, when=_empty),), "<=", (_const(2),), per=GLOBAL),
+            Scoped((_x,), "<=", (const(1),)),
+            Scoped((Reduce("sum", lambda row: {"x": row["w"]}, when=_empty),), "<=", (const(2),), per=GLOBAL),
         ],
         MAXIMIZE_VAL,
         True,
@@ -171,7 +167,7 @@ CASES = {
         [X_REAL],
         "x <= 1",
         "MAXIMIZE when val > 100: SUM(val * x)",
-        [Scoped((_x,), "<=", (_const(1),))],
+        [Scoped((_x,), "<=", (const(1),))],
         ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", _x_val),), when=_empty),
         True,
     ),

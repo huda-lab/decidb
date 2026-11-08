@@ -16,14 +16,22 @@ import pytest
 
 from ._brute_force import judge, optimum
 from ._output_helpers import assert_no_internal_leak
-from ._scope_cases import DEPOTS, SHIPMENTS, aligned, answer, from_clause, joined, scope_solver  # noqa: F401
+from ._scope_cases import (
+    DEPOTS,
+    MAXIMIZE_SHIP,
+    SHIPMENTS,
+    aligned,
+    answer,
+    from_clause,
+    joined,
+    scope_solver,  # noqa: F401
+)
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
 SHIP_OPEN = [Decision("ship"), Decision("open", ("depotID",), lb=0, ub=1)]
 #: A depot ships only when open: `ship <= S.demand * open`.
 SHIP_IF_OPEN = Scoped((lambda r: {"ship": 1, "open": -r["demand"]},), "<=")
-MAXIMIZE_SHIP = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
 
 
 def _open_query(clause: str, shipments=SHIPMENTS, objective: str = "MAXIMIZE SUM(ship)") -> str:

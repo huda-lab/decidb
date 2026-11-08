@@ -8,6 +8,10 @@ pair: the query runs on data where the key determines the value, and stops with 
 named error on data where it does not. The message quotes the key, the expression and
 one class holding two values, in the user's SQL only (§10.1). Without `per` the same clause
 is legal: one constraint per row, which is the tightest bound per group (S3).
+
+Around the rule: NULL is one value in a class, a `when` that keeps no row or a group a reducer
+reads no row of has no instance, the error also stops a DIAGNOSE, and a key determines its own
+elements by construction (KeyHolds), so no check of them is planned.
 """
 
 import re

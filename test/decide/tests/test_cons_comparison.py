@@ -1108,12 +1108,12 @@ def test_real_sum_not_equal_rejected(decidb_cli):
 
 
 # ---------------------------------------------------------------------------
-# Regression: strict-inequality guard on the quadratic / bilinear constraint
-# paths. The `IsEvalConstraintLhsIntegerValued` check was added to both the
-# linear path (`ApplyComparisonSense`) and the quadratic path
-# (`BuildQuadraticConstraint`). Pure-integer quadratic shapes rewrite via
-# integer step and succeed (see `test_bilinear_int_int_strict_oracle`); the
-# non-integer-LHS variants below must reject via the quadratic-path guard.
+# Regression: a strict inequality on the quadratic / bilinear constraint
+# paths. The stage-02 type gate refuses a strict comparison whose left side is
+# not integer-valued, so the builder takes only integer left sides. Pure-integer
+# quadratic shapes rewrite via integer step and succeed (see
+# `test_bilinear_int_int_strict_oracle`); the non-integer-LHS variants below are
+# refused.
 # ---------------------------------------------------------------------------
 
 

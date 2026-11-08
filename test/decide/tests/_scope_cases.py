@@ -13,6 +13,9 @@ import re
 
 import pytest
 
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedObjective
+from solver.types import ObjSense
+
 SHIPMENT_COLUMNS = ("shipmentID", "depotID", "demand", "priority", "dispatchDay", "transitDays", "status")
 DEPOT_COLUMNS = (
     "depotID",
@@ -36,6 +39,17 @@ DEPOTS = (
     ("D2", "East", "CA", 40, 12, 0.2, 0.6, 60),
     ("D3", "West", "US", 20, 30, 0.3, 0.7, 60),
 )
+
+SHIP = [Decision("ship")]
+#: `ship <= S.demand`: bounds every shipment, folded into its column's box (no row).
+SHIP_BOUND = Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},))
+MAXIMIZE_SHIP = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
+MINIMIZE_SHIP = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
+
+
+def const(value):
+    """A clause's constant term, the same for every row."""
+    return lambda r: {CONSTANT: value}
 
 
 def literal(value) -> str:

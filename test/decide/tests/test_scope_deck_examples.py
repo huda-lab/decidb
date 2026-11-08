@@ -19,6 +19,7 @@ import pytest
 
 from ._scope_cases import (
     SHIPMENTS,
+    SHIP_BOUND,
     aligned,
     answer,
     dump_counts,
@@ -30,9 +31,6 @@ from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, Scop
 from solver.types import ObjSense, VarType
 
 DECISIONS = [Decision("ship"), Decision("reserve", ("depotID",), VarType.CONTINUOUS)]
-
-#: `ship <= S.demand`: bounds every shipment, folded into its column's box (no row).
-SHIP_BOUND = Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},))
 
 
 def _query(clause: str, objective: str, shipments=SHIPMENTS) -> str:

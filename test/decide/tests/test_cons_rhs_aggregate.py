@@ -4,7 +4,7 @@
 bound-side rewrite (RewriteRhsAggregates): each data reducer becomes a column holding its value
 per group (a side table joined back to the rows), honouring the reducer's own `when`, the constraint's
 `when`/`per`, and relation-qualifier de-duplication. These tests pin (a) parity with
-the explicit hoisted form the binder used to produce, (b) parity with the
+the same bound written on the left (`SUM(x*val) - SUM(val) <= 0`), (b) parity with the
 scalar-bound equivalent, and (c) `when` / `per` / AVG composition, including
 per-group RHS values.
 
@@ -64,7 +64,7 @@ def test_rhs_sum_per_group_bound(decidb_cli):
 def test_rhs_avg_matches_scalar(decidb_cli):
     """AVG on both sides shares the group denominator. AVG(x*profit) <= AVG(cap)
     with cap = 2 everywhere reduces to SUM(x*profit) <= 2*N; here it caps the
-    average profit-per-row, matching the explicit hoisted form."""
+    average profit-per-row, matching the same bound written on the left."""
     sql = """
         WITH k(id, profit, cap) AS (
             VALUES (1, 4.0, 2.0), (2, 4.0, 2.0), (3, 4.0, 2.0), (4, 4.0, 2.0)
@@ -137,17 +137,12 @@ def test_rhs_count_is_group_aware(decidb_cli, scope_solver):
 def test_rhs_avg_mixed_with_other_terms(decidb_cli):
     """`<= 2 * AVG(b)` solves, and keeps AVG's fractional value.
 
-    This used to be refused. The refusal was never about the arithmetic — the RHS
-    evaluator already divided correctly — but about a type: DecideOptimizer rewrote
-    every AVG to SUM, which redeclares the node with SUM's integral type while its
-    value stays fractional, and this is the one place a reducer's value is handed
-    back to a surrounding expression bound against that type. The rewrite now skips
-    decision-free aggregates, so the node stays a real AVG and the round trip is
-    DOUBLE->DOUBLE.
-
-    A bare `<= AVG(b)` never exercised this: the bind-time hoist moved it left and
-    scaled it there. That hoist is gone (the canonicalization refactor), so both forms now go
-    through this path.
+    The bound-side evaluator (RewriteRhsAggregates) hands the value of a reducer over
+    data back to the surrounding expression, here `2 * AVG(b)`, which is bound against
+    the reducer's type. DecideOptimizer rewrites decision-bearing AVGs to SUM, which
+    redeclares the node with SUM's integral type while its value stays fractional, so
+    the rewrite skips decision-free aggregates: the node stays a real AVG and the
+    round trip is DOUBLE->DOUBLE. A bare `<= AVG(b)` goes through the same path.
     """
     # AVG(b) = 5.0, so the bound is 10 and exactly one weight-10 item fits: the
     # highest-profit one.

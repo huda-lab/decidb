@@ -20,7 +20,7 @@ from comparison.compare import compare_solutions
 from ._oracle_helpers import (
     add_bool_and, add_ne_indicator, group_indices,
 )
-from ._scope_cases import answer, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
+from ._scope_cases import answer, const, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
@@ -1792,10 +1792,6 @@ _X_CAP = Scoped((_X,), "<=", (lambda r: {CONSTANT: 5},))
 _SUM_X = Reduce("sum", _X)
 
 
-def _const(value):
-    return lambda r: {CONSTANT: value}
-
-
 def _body(offset):
     """``x + offset(row)``, the reducer's body on one row."""
     return lambda r: {"x": 1, CONSTANT: offset(r)}
@@ -1826,51 +1822,51 @@ def _judged_members(cli, solver, sql, rows, clauses, sense):
     [
         pytest.param(
             "min(when p: x + 2) >= 3",
-            [Scoped((Reduce("min", _body(lambda r: 2), when=_P),), ">=", (_const(3),))],
+            [Scoped((Reduce("min", _body(lambda r: 2), when=_P),), ">=", (const(3),))],
             ObjSense.MINIMIZE,
             id="constant",
         ),
         pytest.param(
             "min(when p: x + 0) >= 1",
-            [Scoped((Reduce("min", _body(lambda r: 0), when=_P),), ">=", (_const(1),))],
+            [Scoped((Reduce("min", _body(lambda r: 0), when=_P),), ">=", (const(1),))],
             ObjSense.MINIMIZE,
             id="zero",
         ),
         pytest.param(
             "min(when p: x - 1) = 0",
-            [Scoped((Reduce("min", _body(lambda r: -1), when=_P),), "=", (_const(0),))],
+            [Scoped((Reduce("min", _body(lambda r: -1), when=_P),), "=", (const(0),))],
             ObjSense.MINIMIZE,
             id="equality",
         ),
         pytest.param(
             "max(when p: x + w) <= 2",
-            [Scoped((Reduce("max", _body(lambda r: r["w"]), when=_P),), "<=", (_const(2),))],
+            [Scoped((Reduce("max", _body(lambda r: r["w"]), when=_P),), "<=", (const(2),))],
             ObjSense.MAXIMIZE,
             id="column",
         ),
         pytest.param(
             "max(when p: x - w) by (g) <= -1",
-            [Scoped((Reduce("max", _body(lambda r: -r["w"]), when=_P, by=("g",)),), "<=", (_const(-1),))],
+            [Scoped((Reduce("max", _body(lambda r: -r["w"]), when=_P, by=("g",)),), "<=", (const(-1),))],
             ObjSense.MAXIMIZE,
             id="by",
         ),
         pytest.param(
             "per g: min(when p: x + 1) by (g) >= 2",
-            [Scoped((Reduce("min", _body(lambda r: 1), when=_P, by=("g",)),), ">=", (_const(2),), per=("g",))],
+            [Scoped((Reduce("min", _body(lambda r: 1), when=_P, by=("g",)),), ">=", (const(2),), per=("g",))],
             ObjSense.MINIMIZE,
             id="per-key",
         ),
         pytest.param(
             "per (): min(when p: x + 3) >= 5",
-            [Scoped((Reduce("min", _body(lambda r: 3), when=_P),), ">=", (_const(5),), per=())],
+            [Scoped((Reduce("min", _body(lambda r: 3), when=_P),), ">=", (const(5),), per=())],
             ObjSense.MINIMIZE,
             id="per-query",
         ),
         pytest.param(
             "min(when p: x + 2) BETWEEN 3 AND 10",
             [
-                Scoped((Reduce("min", _body(lambda r: 2), when=_P),), ">=", (_const(3),)),
-                Scoped((Reduce("min", _body(lambda r: 2), when=_P),), "<=", (_const(10),)),
+                Scoped((Reduce("min", _body(lambda r: 2), when=_P),), ">=", (const(3),)),
+                Scoped((Reduce("min", _body(lambda r: 2), when=_P),), "<=", (const(10),)),
             ],
             ObjSense.MINIMIZE,
             id="between",
@@ -1903,7 +1899,7 @@ def test_easy_extremum_own_when_never_reads_a_dropped_row(request, scope_solver,
     columns, rows = ("id", "p", "a"), ((1, True, 2), (2, False, None))
     sql = f"""SELECT id, x {table('t', columns, rows)}
         DECIDE x(INT) SUCH THAT x <= 5 AND min(when p: x + a) >= 3 MINIMIZE SUM(x) ORDER BY id"""
-    clauses = [_X_CAP, Scoped((Reduce("min", _body(lambda r: r["a"]), when=_P),), ">=", (_const(3),))]
+    clauses = [_X_CAP, Scoped((Reduce("min", _body(lambda r: r["a"]), when=_P),), ">=", (const(3),))]
     assert _judged_members(cli, scope_solver, sql, table_rows(columns, rows), clauses, ObjSense.MINIMIZE) == [1, 0]
 
 
