@@ -52,8 +52,16 @@ serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     first integer whose next step no longer improves (the smaller one on a tie), with its precision flag (Number-range
     warning, below).
   - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
-    aggregate becomes a window over the whole partition, with the rule's group as the partition (S1, N1 and A2). R1's own
-    sink adds each aggregate to its hash aggregate with `DirectAggregateOf`, which the bound side tables use too.
+    aggregate becomes a window over the whole partition, with the rule's group as the partition (S1 and N1).
+    `DirectAggregateSink` is its hash form: each aggregate goes into the rule's hash aggregate through
+    `DirectAggregateOf`, which the bound side tables use too (R1 and A2).
+  - **Group-then-join** (`DirectJoinClassAnswers`): a rule that gives one answer per class computes it once, on a
+    class plan of one row per class (a hash aggregate of a first read on the key, the answer and its checks above it),
+    and joins it back to a second read of the rows on the key, a SINGLE join, or a cross product for a query-wide
+    decision. Its precondition is that a row's class is its whole key: a rule that drops rows from its classes makes
+    whether the row has a class the first key column on both sides, so a row no class takes never meets a class's
+    answer. The checks sit below the join, so no joined row leaves before its class's row has passed them, as the
+    solver reads every row before it answers. A2 takes it; R1's `JoinOnKey` is the same join (H-49).
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),
   `DirectValidBoundPredicate` and `DirectNumberMessage`. The two state errors come from `DirectStateErrors {infeasible,
@@ -218,8 +226,8 @@ serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule proves it can compute
     the bound (`DirectGroupBoundIsReadable`), lays out the columns of each input (`DirectGroupLayout`,
     `DirectGroupInputs`) and adds the aggregates to the group aggregate it already runs, with no branch per bound
-    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: S1, N1 and A2 a window through `DirectWindowSink`, R1 its hash
-    aggregate), so a direct plan has no side table for them. Only the
+    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: S1 and N1 a window through `DirectWindowSink`, R1 and A2
+    their hash aggregate through `DirectAggregateSink`), so a direct plan has no side table for them. Only the
     solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
     in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
     reducer on another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` are

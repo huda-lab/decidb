@@ -11,7 +11,7 @@ the A batches; B2 after A2.
 
 ## A2. A2's slow all-rows query
 
-- [ ] H-48 A2's answer once per class, joined back — direct_solve/framework/todo.md § H-48
+- [ ] H-48 A2's group-then-join plan is measured (quiet machine, after the lanes) — direct_solve/framework/todo.md § H-48
 
 ## A3. A2 test trim (needs: A2)
 
@@ -36,3 +36,7 @@ the A batches; B2 after A2.
 ## B2. The faster plan for the other rules (needs: A2)
 
 - [ ] H-49 N1, S1 and R1 take group-then-join where faster — direct_solve/framework/todo.md § H-49
+
+## F1. Formatting (after every other batch)
+
+- [ ] FMT-1 DeciDB sources indented with spaces — issues/code_quality.md § FMT-1

@@ -35,34 +35,16 @@ solver path answers those queries, so none of them is wrong, only slower.
   fails no test, the case that already reaches the branch). Record the lines and the `lizard` figures of the area
   before and after in the report.
 
-## H-48 — A2 computes a class's answer once per row, and a query-wide window runs on one thread
+## H-48 — A2's group-then-join plan is measured
 
-- **Ruling (owner, 2026-11-08).** A rule that repeats one answer per class computes it once per class and joins it
-  back (option 1), in place of a window that repeats the class's sums on every row.
-- **Problem.** A2's plan (and N1's, the same aggregate-then-repeat shape) puts the class's sums in a window, then
-  computes the answer, its clamps and its checks in a projection over every row: one long `CASE` chain evaluated
-  800,000 times at `sf=1` for one query-wide answer. A window with no `PARTITION BY` also hands its rows to a single
-  thread, so everything above it runs on one core: `direct` and `direct, 1 thread` time the same for `a2` (0.094 s)
-  and for `n1` (0.080 s and 0.079 s at 800,000 rows). Measured with the profiler on `a2` at `sf=1`: the window takes
-  15 ms and the answer's projection 35 ms of 71 ms. The solver path takes 50 ms, as it folds the shared decision into
-  one variable whose coefficients are the same sums; A2's `a2` query is 0.8 to 0.9 times Gurobi's speed
-  (A2 `done.md` § Performance). The keyed plan does the same per-row work in parallel and stays ahead. The same
-  projection carries constant branches DuckDB leaves unfolded (`CASE WHEN false THEN true ...`, read in the
-  profiler's plan), which computing the answer once per class would also take off the per-row path.
-- **Options.**
-  1. Group-then-join: aggregate per class (a hash aggregate on the key, or an ungrouped one for a query-wide
-     decision), compute the answer and its checks on the aggregate's rows, and join the answer back to the rows on the
-     key (a cross join of one row for a query-wide decision). The source is read once into a materialized CTE and
-     scanned twice, as DuckDB does for a CTE referenced twice, so a source with `random()` or a costly join is not
-     computed twice. The join's build side consumes every row before the probe releases one, so each row's value check
-     still runs on every row first. Plain-SQL sizing at `sf=1` with a light answer: 26 ms against 3 to 4 ms
-     query-wide, 15 ms against 7 ms keyed.
-  2. Keep the window and leave it. Cost: A2's query-wide squared loss stays slower than the solver.
-- **Change.** Option 1, as a shared plan fragment beside `DirectProjectScope` and `DirectWindowSink`, taken by A2
-  here; N1, S1 and R1 follow in H-49. It changes A2's plan skeleton's W and P4 stages, not any loss.
+- **Problem.** A2 computes each class's answer once and joins it back (`../rules/a2_single_facility_location/done.md`
+  § How it works). A2's § Performance still holds the window plan's figures, and only `sf=1` was timed on the new
+  plan, under load (median of 5): `a2` 0.032 s on all threads against 0.046 s on one; Gurobi took 0.075 s on the old
+  sweep.
+- **Change.** Run the sweep on a quiet machine and rewrite A2's § Performance from it, with the plan's explanation.
 - **Done when.** `a2` runs faster on all threads than on one and is ahead of Gurobi at every size
-  (`benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs`), and the matrix passes
-  with no answer changed.
+  (`benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs`, and the same with
+  `--modes direct highs`).
 
 ## H-49 — N1, S1 and R1 take the group-then-join plan where it is faster
 
@@ -71,6 +53,15 @@ solver path answers those queries, so none of them is wrong, only slower.
   and are not measured against the group-then-join shape.
 - **Change.** N1 takes H-48's shared fragment. S1's and R1's per-group plans are measured against it on their
   benchmark queries, and move only where it is faster.
+- **Per rule (architect review of H-48).** N1: the class plan is an aggregate over the first read's P1 to P4
+  (`sum` of the squared length, the validity and the checks on `h`), with the data-limit window under the aggregate as
+  A2's median window is; the second read runs scope to P3 for each row's target, then the join, then P5. S1: the
+  answer is a rank inside the group, so only the group bounds (`AddGroupBounds`) can move to the aggregate and join;
+  measure that. R1: already group-then-join; its `JoinOnKey` becomes `DirectJoinClassAnswers`, and its window plan is
+  the one to measure. `ClassAggregate::Add` (A2) and R1's `Aggregate` bind one named aggregate over one argument: one
+  shared helper, the hash counterpart of `DirectWindowExtremum`. A2's absolute loss over a query-wide decision keeps a
+  window with no `PARTITION BY` for its running sum: measure a query-wide `a2_abs` shape, and move it where a parallel
+  plan is faster.
 - **Needs.** H-48.
 - **Done when.** `n1` runs faster on all threads than on one; each of S1 and R1 either moves with a faster time or keeps
   its plan with the measurement recorded in its `done.md` § Performance; the matrix passes with no answer changed.

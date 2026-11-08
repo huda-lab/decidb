@@ -58,7 +58,10 @@ computed on a row a `when` drops. The precision warning fires where a divisor is
 
 ## How it works
 
-One read of the source, no join. `PlanBuilder` is the skeleton of a Template Method with one method per stage, and
+Group-then-join: the class plan computes each class's answer once, on one row per class, and the rows join it back
+on their key. `Rule::Apply` builds the class plan over a first read of the source (`DirectBuildOverRead`) and the
+join over a second (`DirectBuildOverOneRead`); a source that is not a plain scan is read once into a materialized CTE
+and scanned twice, so a `random()` or a costly join is not computed twice. `PlanBuilder` is the skeleton of a Template Method with one method per stage, and
 each loss is a Strategy (`Loss`: `SquareLoss`, and `AbsoluteLoss` and `MaxAbsoluteLoss` over `CenteredLoss`) that
 fills in its columns at each stage and its target. A loss keeps its columns by name in a struct of its own
 (`LossColumns`: `SquareColumns`, `MedianColumns`, `ExtremeColumns`), which the skeleton makes once
@@ -75,18 +78,26 @@ too-large message names, is held once, by the rule's condition.
    A1), with the check of every value that can fail.
 3. P2 (`ComputeRows`): the loss's row values (a square's `a` and `b`; a center and its weight), each clause's ends on
    the row (`DirectClauseBounds`), and the row's checks.
-4. W (`AggregateClasses`): one window partitioned by the key (none for a query-wide decision) holding the loss's
-   aggregates (the sums of `a` and `b`; the least and greatest center), each clause's tightest ends through
-   `DirectWindowSink`, and the `bool_or` of each floor-lifting `when`. The absolute loss first puts its own window
-   under it, on one sort of the centers per class: the class's total weight `M` and the running sum `R` of the weights
-   (`DirectRunningSum`); the class window then takes the lower median as `MIN` of the centers where `2R >= M` and the
-   upper one as `MAX` of the centers where `2(M - R + m) >= M`. This is aggregate-then-repeat: the row's own columns are
-   what the class's values repeat on, so the source is read once, and the windows hold every row before they release
-   one, so each row's check has run on all of them first, as the solver reads every row before it answers.
+4. C (`AggregateClasses`): one hash aggregate grouped by the key (ungrouped for a query-wide decision) holding the
+   loss's aggregates (the sums of `a` and `b`; the least and greatest center), each clause's tightest ends through
+   `DirectAggregateSink`, the `bool_or` of each floor-lifting `when`, and the `bool_and` of the rows' validity. The
+   absolute loss first puts a window of its own under it, on one sort of the centers per class: the class's total
+   weight `M` and the running sum `R` of the weights (`DirectRunningSum`); the aggregate then takes the lower median as
+   `MIN` of the centers where `2R >= M` and the upper one as `MAX` of the centers where `2(M - R + m) >= M`. The
+   aggregate holds every row before it gives one, so each row's check has run on all of them first, as the solver
+   reads every row before it answers.
 5. P3 (`ComputeInterval`): the class's interval as columns, with the floor; the loss forwards its class values
    through it (`CarryClasses`), since P4 reads only P3's columns.
-6. P4 (`ComputeAnswer`): the target clamped into the interval (`DirectRowBox`; `+ 0.0` turns `-0.0` into `0.0`), NULL
-   on a row with no class, and the column that keeps the checks live.
+6. P4 (`ComputeAnswer`), on the class's row: the target clamped into the interval (`DirectRowBox`; `+ 0.0` turns
+   `-0.0` into `0.0`), NULL on a key with no class, and the column that keeps the checks live. The class's validity
+   is the first check (`DirectAllHold`), so an empty source's one query-wide row, whose `bool_and` is NULL, runs no
+   check.
+7. Join (`JoinAnswers`, `DirectJoinClassAnswers`): the second read takes its scope again and joins each row to its
+   class's answer, a SINGLE join on the key whose first column is whether the row has a class, or a cross product
+   with the one row of a query-wide decision. P4 sits below the join, so no joined row exists before its class's
+   row has passed its checks; the SINGLE join keeps the classes on the build side and the rows stream through the
+   probe.
+8. P5: the source columns, the answer and the check column.
 
 ## What it does not admit (falls back to the solver)
 

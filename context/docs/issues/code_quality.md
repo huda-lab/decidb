@@ -23,3 +23,13 @@ balancing or grammar work; messages and goldens that quote a reprint would chang
 PERF-16 (architect review). The same cause shows in two more messages: `if(c, a, b)` and `iif` reach the binder as
 the parser's CASE, so `SUM(if(s = 'F', x, 2 * x))` is refused as a CASE the user never wrote, and `per g: SUM(x) by
 (CASE WHEN ...) <= 3` quotes the parser's expanded CASE in its determination message.
+
+## FMT-1 — DeciDB sources indented with spaces fail the formatter
+
+Location: nine files under `src/decidb/` (among them `src/decidb/formulation/ilp_model_builder.cpp`,
+`ilp_linearization.cpp`, `linearization_bigm.cpp`, `linearization_minmax.cpp`, `linearization_not_equal.cpp`), one in
+`src/execution/operator/decide/` and two in `src/planner/expression_binder/decide/`. They are indented with four
+spaces where `.clang-format` asks for tabs, and `make format-check` (which covers `src/`) reports them. A change that
+formats only its own lines, as the repository asks, leaves tab lines among space lines in them. The fix is one
+formatting-only commit, `make format-fix` limited to these files, made when no lane has edits open in them; it changes
+no behavior. Found 2026-11-08 in BLOAT-30's review.
