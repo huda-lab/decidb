@@ -119,7 +119,8 @@ serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadLinearForm` reads a linear form `w*x + t` in
     one decision (its `inner.linear` and `inner.constant`, with their names) and declines a form in two decisions.
     `DirectReadSquareTerm` reads a square of such a form under a weight, constant or read from the data, as signed
-    values (`DirectSquareTerm::weight`); `DirectReadAbsTerm` reads `ABS` of such a form the same way (`DirectAbsTerm`).
+    values, and `DirectReadAbsTerm` reads `ABS` of such a form; both fill one `DirectWeightedForm`
+    (`weight * f(inner)`, `f` set by the reader), which `DirectLayoutQuadraticPart` lays out.
     Neither judges the weight: a rule that needs a constant folds it. `DirectFoldConstantSum` folds signed values (a
     square's weight or slope) to the one constant every row shares, reading through a NULL guard, and fails on a value
     that is not a finite constant. `DirectObjectivePartKept` returns the rows a part reads, those that the objective's

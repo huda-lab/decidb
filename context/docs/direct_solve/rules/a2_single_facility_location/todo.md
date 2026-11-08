@@ -4,39 +4,6 @@ A2 picks one shared value for many rows: one `per ():` or `per K:` decision plac
 observations. The class is in [definition.md](definition.md). How to work and the checks are in
 `../../framework/todo.md` § How to work any task; a new rule follows `../../architecture/rules.md` § Adding a rule.
 
-## A2-10 — `ABS` is copied into a square's struct
-
-- **Problem.** `DirectAbsTerm` and `DirectSquareTerm` (`direct_bound_reader.hpp`) hold the same three fields: the
-  weight, its names and the linear form inside. A2's `ReadAbsolute` copies the one into the other so that
-  `DirectLayoutQuadraticPart` lays the `ABS` out, and `CenteredLoss` says it is "laid out as a square is". Two names
-  for one thing, and a copy to cross between them.
-- **Change.** One struct for `weight * f(w*x + t)` (for example `DirectWeightedForm`), returned by both readers and
-  taken by the layout. `ReadAbsolute` keeps no copy.
-- **Ruling (owner, 2026-11-08).** `DirectWeightedForm { weight, weight_names, inner }` in `direct_bound_reader.hpp`,
-  meaning `weight * f(inner)` with `f` set by the reader that fills it; no kind tag, no alias. Both readers stay and fill
-  it. `DirectQuadraticPart::squares` keeps its name, with a comment that A2 lays an `ABS` there; N1 and A1 change only
-  the type name.
-- **Done when.** No copy between term types remains; the matrix passes with no answer changed.
-
-## A2-11 — The losses pass their columns as unnamed lists
-
-- **Problem.** Each loss hands its columns between stages as a `vector<ColumnBinding>` read back by position
-  (`raw[at++]`, `term.kept ? 1 : 0`, `classes[0]` to `classes[2]`). `SquareLoss` packs its layout's named columns
-  into such a list in P1 and unpacks them into `DirectQuadraticColumns` again in P2. A wrong index still compiles.
-  `SquareLoss::Finish` also recomputes the clamp that the shared tail computes, for its too-large check.
-- **Change.** Each loss keeps its own columns by name from stage to stage (a struct per loss, which the skeleton
-  passes through without reading). The too-large check of the answer moves to the shared tail, on the clamped answer
-  it already computes, after the loss's own checks, so the unbounded error still comes first.
-- **Ruling (owner, 2026-11-08).** The columns travel in an opaque per-plan state object, as DuckDB's
-  `GlobalSinkState` does: a `LossColumns` base with `Cast<T>()`, one subclass per loss (`SquareColumns`,
-  `CenteredColumns` and its median and extreme forms), made by the loss and passed by the skeleton to every stage
-  without reading it; a P3 hook forwards the class columns. The loss's output splits into its checks and its warnings,
-  and the tail runs the loss's checks, then the answer's too-large check, then the warnings. The answer check keeps
-  today's gate (a class has rows and the loss is convex), so no answer becomes an error. The written objective is held
-  once, by the rule's condition.
-- **Done when.** No loss reads a column by position, the clamp is computed once, and the matrix passes with no answer
-  or error text changed.
-
 ## A2-12 — The test grids reach the same branches many times
 
 - **Problem.** A2 has 1,172 tests; N1 has 143 and A1 196. The absolute loss alone has 530. The grids are full cross
@@ -49,6 +16,6 @@ observations. The class is in [definition.md](definition.md). How to work and th
   or none, the nearest-0 tie, no kept row, a NULL value, a point interval; each spelling once for the IR reading) and
   keep one case per branch, named for it. Check the ruled point inside the oracle test, on the same run, and delete
   the separate ruled-point tests.
-- **Needs.** A2-10, A2-11 and H-48, which change the branches.
+- **Needs.** H-48, which changes the branches.
 - **Done when.** Every remaining case names the branch it reaches, removing that branch fails it, and the matrix
   passes.

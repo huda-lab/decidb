@@ -6,15 +6,10 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: A1, A2, A3 in order; B1, X13 and X15 beside
-the A batches; T1 after A1; B2 after A2.
+Each batch finishes completely. Lanes: A2, A3 in order; B1, T1, X13 and X15 beside
+the A batches; B2 after A2.
 
-## A1. A2 code cleanup
-
-- [ ] A2-10 `ABS` is copied into a square's struct — direct_solve/rules/a2_single_facility_location/todo.md § A2-10
-- [ ] A2-11 The losses pass their columns as unnamed lists — direct_solve/rules/a2_single_facility_location/todo.md § A2-11
-
-## A2. A2's slow all-rows query (needs: A1)
+## A2. A2's slow all-rows query
 
 - [ ] H-48 A2's answer once per class, joined back — direct_solve/framework/todo.md § H-48
 

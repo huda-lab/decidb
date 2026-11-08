@@ -60,8 +60,14 @@ computed on a row a `when` drops. The precision warning fires where a divisor is
 
 One read of the source, no join. `PlanBuilder` is the skeleton of a Template Method with one method per stage, and
 each loss is a Strategy (`Loss`: `SquareLoss`, and `AbsoluteLoss` and `MaxAbsoluteLoss` over `CenteredLoss`) that
-fills in its columns at each stage and its target. The shared tail (the clamp of 0 for no target, the clamp into the
-interval, NULL on a row with no class, the infeasible error) is in one place.
+fills in its columns at each stage and its target. A loss keeps its columns by name in a struct of its own
+(`LossColumns`: `SquareColumns`, `MedianColumns`, `ExtremeColumns`), which the skeleton makes once
+(`Loss::NewColumns`) and hands to every stage without reading it, as DuckDB hands a `GlobalSinkState` to a sink; the
+loss casts it back (`Cast<T>`). The shared tail (the clamp of 0 for no target, the clamp into the interval, NULL on a
+row with no class, the infeasible error, the too-large check of the answer) is in one place. It runs the loss's
+checks, then the answer's too-large check where the loss asks for one (`Answer::finite_where`: the squared loss, on a
+convex class), then the loss's warnings, since a warning prints as it runs. The objective as written, which the
+too-large message names, is held once, by the rule's condition.
 
 1. Scope (`DirectProjectScope`, keyed decisions only): the row's class, whether it has one, and its key.
 2. P1 (`LayoutRawValues`): the loss's raw values on the rows the objective keeps (`DirectLayoutQuadraticPart`: weight,
@@ -77,7 +83,8 @@ interval, NULL on a row with no class, the infeasible error) is in one place.
    upper one as `MAX` of the centers where `2(M - R + m) >= M`. This is aggregate-then-repeat: the row's own columns are
    what the class's values repeat on, so the source is read once, and the windows hold every row before they release
    one, so each row's check has run on all of them first, as the solver reads every row before it answers.
-5. P3 (`ComputeInterval`): the class's interval as columns, with the floor.
+5. P3 (`ComputeInterval`): the class's interval as columns, with the floor; the loss forwards its class values
+   through it (`CarryClasses`), since P4 reads only P3's columns.
 6. P4 (`ComputeAnswer`): the target clamped into the interval (`DirectRowBox`; `+ 0.0` turns `-0.0` into `0.0`), NULL
    on a row with no class, and the column that keeps the checks live.
 
