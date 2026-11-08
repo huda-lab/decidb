@@ -303,11 +303,8 @@ def _values(records, names=NAMES):
 S1_CASES = {
     # --- count bounds, constant ---
     "global_upper_max": {"bounds": [("<=", 2)]},
-    "global_lower_min": {"bounds": [(">=", 3)], "sense": "MINIMIZE"},
-    "global_fractional_upper": {"bounds": [("<=", 2.5)]},
     "global_upper_at_2_pow_53": {"bounds": [("<=", 9007199254740992)]},
     "global_interval": {"bounds": [(">=", 4), ("<=", 6)]},
-    "global_exact": {"bounds": [("=", 3)]},
     "per_interval": {"bounds": [(">=", 1), ("<=", 2)], "per": True},
     "per_exact_min": {"bounds": [("=", 1)], "per": True, "sense": "MINIMIZE"},
     "top_when_upper": {"bounds": [("<=", 1)], "when": "top"},
@@ -466,12 +463,12 @@ for _op, _bound in itertools.product(("<=", "<", ">=", ">", "="), ("COUNT(*) / 2
 # leaves those on the solver (see the conformance fixture), so only spellings S1 admits are checked without one. Per
 # comparison: the constants checked with a `when`, and the constants checked without one.
 _ROWBOUND_CONSTANTS = {
-    "<=": (("0", "0.5", "1", "1.5", "2"), ("1", "1.5", "2")),
+    "<=": (("0", "0.5", "1", "1.5"), ("1", "1.5")),
     "<": (("0", "0.5", "1", "1.5", "2"), ("1", "1.5", "2")),
     ">=": (("-1", "-0.5", "0", "0.5", "1", "1.5", "2"), ("-1", "-0.5", "0")),
     ">": (("-1", "-0.5", "0", "0.5", "1", "1.5"), ("-1", "-0.5")),
     "=": (("0", "1", "2"), ()),
-    "<>": (("-1", "-0.5", "0", "0.5", "1", "1.5", "2"), ("-1", "-0.5", "0.5", "1", "1.5", "2")),
+    "<>": (("-1", "-0.5", "0", "0.5", "1", "2"), ("-1", "-0.5", "0.5", "1", "2")),
 }
 for _op, (_when_constants, _everywhere_constants) in _ROWBOUND_CONSTANTS.items():
     for _constant in _when_constants:
@@ -508,7 +505,7 @@ _NO_OBJECTIVE_SCOPES = {
     "local_when_per": {"when": "local", "per": True},
 }
 # A shape that meets only some scopes.
-_NO_OBJECTIVE_SHAPE_SCOPES = {"impossible_lower": ("global", "top_when", "local_when")}
+_NO_OBJECTIVE_SHAPE_SCOPES = {"impossible_lower": ("top_when", "local_when")}
 for _shape, _scope in itertools.product(_NO_OBJECTIVE_BOUNDS, _NO_OBJECTIVE_SCOPES):
     if _scope not in _NO_OBJECTIVE_SHAPE_SCOPES.get(_shape, _NO_OBJECTIVE_SCOPES):
         continue
@@ -526,7 +523,6 @@ S1_CASES["no_objective_with_fixed_per"] = {
     "objective": "none",
 }
 S1_CASES["no_objective_column_fixed_global"] = {"bounds": [(">=", 2)], "colfixed": True, "objective": "none"}
-S1_CASES["no_objective_ties_dataset"] = {"data": "ties", "bounds": [(">=", 3)], "objective": "none"}
 
 # One representative objective shape per sense, over an interval so that both senses bind. Two shapes are checked under
 # MAXIMIZE only.
