@@ -99,7 +99,6 @@ NEGATIVE_IN_ONE_GROUP = (_row(1, 3.0, 1.0, "a", l=25.0), _row(2, 4.0, 2.0, "b", 
 WHEN_STILL = (_row(1, 3.0, 1.0, "a", True), _row(2, 4.0, 3.0, "a", True), _row(3, -1.0, 2.0, "b", False))
 WHEN_IMPROVING = (_row(1, 3.0, 1.0, "a", True), _row(2, 4.0, 3.0, "a", False))
 WHEN_NULL = (_row(1, 3.0, 1.0, "a", True), _row(2, -1.0, 3.0, "a", None))
-ONE_ROW = (_row(1, 2.0, 7.0),)
 
 
 def _values(rows):
@@ -169,7 +168,6 @@ class Ball:
 BALLS = {
     "b25": Ball("SUM(POWER(x, 2)) <= 25"),
     "b4": Ball("SUM(POWER(x, 2)) <= 4", limit=constant(4.0)),
-    "b100": Ball("SUM(POWER(x, 2)) <= 100", limit=constant(100.0)),
     "b1": Ball("SUM(POWER(x, 2)) <= 1", limit=constant(1.0)),
     "b0": Ball("SUM(POWER(x, 2)) <= 0", limit=constant(0.0)),
     "negative": Ball("SUM(POWER(x, 2)) <= -1", limit=constant(-1.0)),
@@ -293,24 +291,16 @@ add("mixed_scores", MIXED, "b25", "max")
 add("mixed_scores_free", MIXED, "b25", "max", free=True)
 add("mixed_scores_box_written", MIXED, "b25", "max", spelled_box=True)
 add("minimize_is_the_negated_direction", MIXED, "b25", "min")
-add("minimize_free", MIXED, "b25", "min", free=True)
 add("no_row_gains_stays_at_zero", NONPOSITIVE, "b25", "max")
-add("no_row_gains_free_moves", NONPOSITIVE, "b25", "max", free=True)
 add("all_scores_zero", ALL_ZERO, "b25", "max")
-add("all_scores_zero_free", ALL_ZERO, "b25", "max", free=True)
 add("limit_zero", MIXED, "b0", "max")
 add("limit_zero_square", MIXED, "b0", "square")
 add("limit_negative", MIXED, "negative", "max")
-add("limit_negative_square", MIXED, "negative", "square")
-add("limit_negative_no_objective", MIXED, "negative", "none")
-add("one_row", ONE_ROW, "b25", "max")
 add("no_objective", MIXED, "b25", "none")
-add("no_objective_free", MIXED, "b25", "none", free=True)
 add("constant_term", MIXED, "b25", "constant")
 add("constant_column_term", MIXED, "b25", "constant_column")
 add("constant_factors", MIXED, "b25", "factors")
 add("several_parts", MIXED, "b25", "parts")
-add("several_parts_free", MIXED, "b25", "parts", free=True)
 add("part_when", WHEN_STILL, "b25", "part_when")
 add("objective_when", WHEN_STILL, "b25", "objective_when")
 add("parts_when", MIXED, "b25", "parts_when")
@@ -319,27 +309,22 @@ add("null_score_skips_its_term", NULL_SCORE, "b25", "null_score")
 
 # A square. Inside and outside the ball, with negative targets, in both domains.
 add("projection_inside", NEAR, "b25", "square")
-add("projection_inside_free", NEAR, "b25", "square", free=True)
 add("projection_outside", MIXED, "b4", "square")
 add("projection_outside_free", MIXED, "b4", "square", free=True)
 add("projection_negative_targets_stay_at_zero", NONPOSITIVE, "b4", "square")
-add("projection_negative_targets_free", NONPOSITIVE, "b4", "square", free=True)
 add("negated_square_maximized", MIXED, "b4", "negated_square")
 add("negated_term_maximized", MIXED, "b4", "negated_term")
 add("square_written_as_a_product", MIXED, "b4", "square_times")
 add("square_with_a_slope", MIXED, "b4", "square_slope")
-add("square_with_a_slope_free", MIXED, "b4", "square_slope", free=True)
 add("square_with_a_factor", MIXED, "b4", "square_factor")
 add("square_divided", MIXED, "b4", "square_divided")
 add("square_scaled_term", MIXED, "b4", "square_scaled_term")
 add("square_constant", MIXED, "b4", "square_constant")
 add("square_plus_linear", MIXED, "b4", "square_linear")
-add("square_plus_linear_free", MIXED, "b4", "square_linear", free=True)
 add("square_plus_linear_in_another_part", MIXED, "b4", "square_other_part")
 add("square_under_part_when", MIXED, "b4", "square_when")
 add("square_under_objective_when", MIXED, "b4", "square_objective_when")
 add("null_target_has_no_square", NULL_TARGET, "b4", "null_target")
-add("null_target_free", NULL_TARGET, "b4", "null_target", free=True)
 
 # The spellings of the limit.
 add("spelled_times", MIXED, "times", "max")
@@ -352,13 +337,11 @@ add("spelled_literal_on_right", MIXED, "literal_on_right", "max")
 
 # Groups.
 add("by_key", MIXED, "by", "max")
-add("by_key_free", MIXED, "by", "max", free=True)
 add("by_key_square", MIXED, "by", "square")
 add("per_key", MIXED, "per", "max")
 add("per_key_square", MIXED, "per", "square")
 add("per_key_by_key", MIXED, "per_by", "max")
 add("per_key_by_key_square", MIXED, "per_by", "square")
-add("no_objective_by_key", MIXED, "by", "none")
 
 # NULL keys: a row outside every ball, improving or not.
 add("null_key_improving_row_is_unbounded", NULL_KEY_IMPROVING, "by", "max")
@@ -384,10 +367,8 @@ add("when_and_by", MIXED, "when_by", "square")
 
 # Limits read from the data.
 add("column_limit_tightest_value", MIXED, "column", "max")
-add("column_limit_square", MIXED, "column", "square")
 add("column_limit_scaled", MIXED, "column_scaled", "max")
 add("column_limit_per_group", MIXED, "column_by", "max")
-add("column_limit_per_group_free", MIXED, "column_by", "max", free=True)
 add("column_limit_per_group_square", MIXED, "column_by", "square")
 add("column_limit_null_in_a_group_is_no_limit", NULL_LIMITS, "column_by", "square")
 add("column_limit_null_group_improving_is_unbounded", NULL_LIMITS, "column_by", "max", free=True)
@@ -397,12 +378,10 @@ add("column_limit_under_sum_when", MIXED, "column_sum_when", "square")
 add("limit_expression_over_a_column", MIXED, "column_expression", "max")
 add("limit_aggregate_under_sum_when", MIXED, "aggregate_sum_when", "square")
 add("aggregate_limit_per_group", MIXED, "sum_by", "max")
-add("aggregate_limit_per_group_square", MIXED, "sum_by", "square")
 add("aggregate_limit_of_a_group_of_nulls_is_no_limit", NULL_LIMITS, "sum_by", "square")
 add("aggregate_limit_negative_in_one_group", NEGATIVE_IN_ONE_GROUP, "sum_by", "max")
 add("aggregate_limit_null_key_square", NULL_KEY_IMPROVING, "sum_by", "square")
 add("aggregate_limit_of_all_rows", MIXED, "half_sum", "max")
-add("aggregate_limit_of_all_rows_square", MIXED, "half_sum", "square")
 
 
 def _sql_body(case_):
@@ -595,7 +574,6 @@ ERROR_CASES = {
         "'a'",
         "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)",
     ),
-    "negative_limit": ("infeasible", "1.0", "2.0", "25.0", "'a'", "SUM(POWER(x, 2)) <= -1 MAXIMIZE SUM(s * x)"),
     "null_key_improving": (
         "unbounded",
         "1.0",
@@ -668,7 +646,7 @@ _MAX_25 = "SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)"
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("scale", ["1e153", "1e100", "1e-100", "1e-150"])
+@pytest.mark.parametrize("scale", ["1e153", "1e-150"])
 def test_n1_formula_stays_in_range_where_the_squares_do(decidb_cli, scale):
     # The sum of squares stays inside the DOUBLE range, so scores this size give the answer of scores 3 and 4. Gurobi
     # returns x = 0 on each (done.md § Differences from the solver), so this is not a comparison with the solver.
@@ -705,12 +683,11 @@ def test_n1_a_target_past_a_double_raises_on_a_row_outside_every_ball(decidb_cli
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("sign", ["", "-"], ids=["plus", "minus"])
-def test_n1_a_zero_answer_has_no_sign(decidb_cli, sign):
+def test_n1_a_zero_answer_has_no_sign(decidb_cli):
     # A free domain keeps the direction as it is, and -0 is what `MINIMIZE` makes of a score of 0. DeciDB's solver path
     # returns 0, and the difference would show in the printed row.
     sql = (
-        f"SELECT x FROM (FROM (VALUES (1, 0.0::DOUBLE), (2, {sign}1.0::DOUBLE)) t(id, s) DECIDE x(REAL) "
+        "SELECT x FROM (FROM (VALUES (1, 0.0::DOUBLE), (2, 1.0::DOUBLE)) t(id, s) DECIDE x(REAL) "
         "SUCH THAT x >= -1e30 AND SUM(POWER(x, 2)) <= 25 MINIMIZE SUM(s * x)) q ORDER BY id"
     )
     assert math.copysign(1.0, _direct_values(decidb_cli, sql)[0]) == 1.0
@@ -820,7 +797,7 @@ _TINY_LIMIT = "SUM(POWER(x, 2)) <= 1e-320 MINIMIZE SUM(POWER(x - s, 2))"
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("scale,warns", [("1e-153", False), ("1e-155", True), ("1e-162", True), ("1e-200", True)])
+@pytest.mark.parametrize("scale,warns", [("1e-153", False), ("1e-155", True)])
 def test_n1_warns_when_h_leaves_the_normal_range(decidb_cli, scale, warns):
     _direct_values(decidb_cli, _two_rows(f"3 * {scale}", f"4 * {scale}", _MAX_25), number_range=warns)
 

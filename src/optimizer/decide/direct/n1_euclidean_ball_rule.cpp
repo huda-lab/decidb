@@ -1,7 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 #include <cmath>
-#include <limits>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
@@ -13,7 +12,6 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
-#include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
