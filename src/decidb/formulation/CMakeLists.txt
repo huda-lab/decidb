@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   ilp_linearization.cpp
   ilp_model_builder.cpp
+  decide_tree_formulation.cpp
   instance_floors.cpp
   linearization_bigm.cpp
   linearization_bilinear_abs.cpp

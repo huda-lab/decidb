@@ -83,9 +83,11 @@ def test_an_answer_does_not_change(decidb_cli):
 
 
 @pytest.mark.parametrize("value", ["tree", "tree-noside"])
-def test_the_tree_is_not_built_yet(decidb_cli, value):
-    result = decidb_cli.with_env({"DECIDB_EVALUATOR": value}).execute_raw(f"SET decide_direct_solve='off'; {PLAIN}")
-    assert "the tree evaluator is not built yet" in result.stderr, result.stderr
+def test_the_tree_executes_the_simple_model(decidb_cli, value):
+    sql = f"SET decide_direct_solve='off'; {PLAIN} ORDER BY id"
+    flat, _ = decidb_cli.with_env({"DECIDB_EVALUATOR": "flat"}).execute(sql)
+    tree, _ = decidb_cli.with_env({"DECIDB_EVALUATOR": value}).execute(sql)
+    assert tree == flat
 
 
 def test_an_unknown_evaluator_is_named(decidb_cli):

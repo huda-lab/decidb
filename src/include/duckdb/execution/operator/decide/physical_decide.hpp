@@ -289,7 +289,8 @@ public:
         return true;
     }
     bool ParallelSink() const override {
-        // Tree row identities follow source order until local dictionaries can be merged and rebased.
+        // The first tree implementation assigns row identity as chunks arrive. Parallel local containers require
+        // an explicit dictionary/row rebase at Combine before they can preserve the same identities.
         return !tree;
     }
 
@@ -472,6 +473,8 @@ private:
     struct ElasticFormulation {
         SolverInput input;
         VarIndexer var_indexer;
+        //! Tree formulation closes over synthesized values, which outlive the diagnostic solve.
+        std::function<void(SolverInput &, VarIndexer &)> formulate;
     };
 
     //! PHASE 3, solve + readback: build_var_labels, the RouteSolveResult switch and its

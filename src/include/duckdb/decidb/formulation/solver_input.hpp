@@ -780,6 +780,22 @@ struct SolverInput {
     };
     vector<RawConstraint> global_constraints;
 
+	//! Polynomial rows synthesized by the E/G/O evaluator, already in final
+	//! column coordinates. The linear half carries the ordinary row provenance.
+	//! Coefficients use the model's plain-monomial, lower-triangle convention.
+	struct FlatQuadraticTerm {
+		int row;
+		int column;
+		double coefficient;
+	};
+	struct RawQuadraticConstraint {
+		RawConstraint linear;
+		vector<FlatQuadraticTerm> quadratic;
+	};
+	vector<RawQuadraticConstraint> raw_quadratic_constraints;
+	vector<FlatQuadraticTerm> raw_quadratic_objective;
+	bool raw_quadratic_objective_nonconvex = false;
+
     //! The classes a scoped clause's group stands for (language/guide.md §8.1, D28),
     //! referenced by `EvaluatedConstraint::group_class_set` and `RawConstraint::class_set`.
     //! Filled by execution under DIAGNOSE only; the model carries it on to the diagnosis.

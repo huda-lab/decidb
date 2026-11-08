@@ -1,9 +1,11 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/execution/operator/decide/decide_evaluator.hpp"
-#include "duckdb/execution/operator/decide/decide_descent.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_row_store.hpp"
+#include "duckdb/execution/operator/decide/decide_descent.hpp"
+#include "duckdb/execution/operator/decide/decide_tree_evaluation.hpp"
+#include "duckdb/decidb/formulation/decide_tree_formulation.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/executor.hpp"
@@ -1967,9 +1969,15 @@ public:
 		}
 
 		// Minimal: keep constructor lean; detailed solver output comes from HiGHS
+		if (op.tree && (SelectedDecideEvaluator() == DecideEvaluator::TREE ||
+		                SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE)) {
+			descent = make_uniq<DecideDescent>(*op.tree, context);
+		}
 	}
 
     mutex lock;
+	unique_ptr<DecideDescent> descent;
+	idx_t descent_rows = 0;
     // This collection will hold all the data from the child operator
     ColumnDataCollection data;
 
@@ -2132,7 +2140,12 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
+    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     DecideProfileSample profile(lstate.profile_sink);
+    if (gstate.descent) {
+        AppendDecideDescent(*gstate.descent, chunk, gstate.descent_rows);
+		gstate.descent_rows += chunk.size();
+    }
     lstate.data.Append(lstate.append_state, chunk);
     return SinkResultType::NEED_MORE_INPUT;
 }
@@ -3078,6 +3091,142 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // by every other call site that asks for the same expression set.
     PerGroupCache per_group_cache;
 
+	if (gstate.descent) {
+		gstate.descent->Finish();
+		DecideTreeEvaluation values(*tree, *gstate.descent, context);
+		values.Evaluate();
+		values.RequireSupported();
+		for (auto root : tree->roots) {
+			auto &node = *tree->nodes[root];
+			if (node.objective || node.hidden || node.folded || node.repair_rows) {
+				continue;
+			}
+			auto &container = gstate.descent->Containers()[root];
+			auto &result = values.Results()[root];
+			vector<idx_t> settled_per_instance(container.instance_entries.size(), 0);
+			for (auto entry : result.instance_entries) {
+				settled_per_instance[container.entries[entry].instance]++;
+			}
+			idx_t grouped = 0;
+			for (auto count : settled_per_instance) {
+				grouped += MaxValue<idx_t>(count, 1);
+			}
+			idx_t kept = result.instance_entries.size();
+			if (node.facts && node.facts->lhs_is_aggregate && node.facts->group_key == DConstants::INVALID_INDEX) {
+				grouped = grouped ? 1 : 0;
+				kept = kept ? 1 : 0;
+			}
+			gstate.CountInstances(node.source_clause_id, grouped, kept);
+		}
+		ReportSkippedInstances(gstate, false);
+		if (std::getenv("DECIDB_DUMP_TREE")) {
+			fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
+		}
+		if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
+			fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n",
+			        gstate.descent->Dump().c_str());
+		}
+		if (std::getenv("DECIDB_DUMP_VALUES")) {
+			fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", values.Dump().c_str());
+		}
+		SolverInput solver_input;
+		solver_input.num_rows = num_rows;
+		solver_input.num_decide_vars = decide_variables.size();
+		solver_input.first_frame_read = solver_input.num_decide_vars;
+		solver_input.variable_scopes = variable_scopes;
+		solver_input.variable_scopes.resize(solver_input.num_decide_vars, DecideVarScopeInfo::Row());
+		solver_input.sense = decide_sense;
+		solver_input.objective_constant = objective_constant_offset;
+		solver_input.constraint_sources = constraint_sources;
+		solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
+		auto &groups = gstate.descent->DecisionGroups();
+		auto &rows = gstate.descent->DecisionRows();
+		solver_input.keyed_mappings.resize(groups.size());
+		for (idx_t scope = 0; scope < groups.size(); scope++) {
+			auto &mapping = solver_input.keyed_mappings[scope];
+			mapping.num_classes = groups[scope].size();
+			mapping.row_to_class = rows[scope];
+			for (auto &group : mapping.row_to_class) {
+				if (group == DConstants::INVALID_INDEX) {
+					if (mapping.absent_class == DConstants::INVALID_INDEX) {
+						mapping.absent_class = mapping.num_classes++;
+					}
+					group = mapping.absent_class;
+				} else {
+					group = groups[scope][group].rank;
+				}
+			}
+		}
+		vector<string> variable_names;
+		for (idx_t var = 0; var < decide_variables.size(); var++) {
+			auto &variable = *decide_variables[var];
+			const bool boolean = var < is_boolean_var.size() && is_boolean_var[var];
+			solver_input.variable_types.push_back(boolean ? LogicalType::BOOLEAN : variable.return_type);
+			variable_names.push_back(variable.GetName());
+			solver_input.lower_bounds.push_back(gstate.singleton_row_boxes[var].EffectiveLower());
+			solver_input.upper_bounds.push_back(gstate.singleton_row_boxes[var].upper);
+			if (var < tree->value_nodes.size() && tree->value_nodes[var] != DConstants::INVALID_INDEX) {
+				solver_input.variable_scopes[var].scope = DecideVarScope::INLINED;
+			}
+		}
+		solver_input.rigid_lower_bounds = solver_input.lower_bounds;
+		solver_input.rigid_upper_bounds = solver_input.upper_bounds;
+		for (auto &bound : gstate.user_singleton_row_bounds) {
+			auto variable = bound.decide_var_idx;
+			const bool boolean = variable < is_boolean_var.size() && is_boolean_var[variable];
+			if (bound.sense == '<' || bound.sense == '=') {
+				solver_input.rigid_upper_bounds[variable] = boolean ? 1.0 : NumericLimits<double>::Maximum();
+			}
+			if (bound.sense == '>' || bound.sense == '=') {
+				solver_input.rigid_lower_bounds[variable] = boolean ? 0.0 : -NumericLimits<double>::Maximum();
+			}
+		}
+		auto indexer = VarIndexer::Build(solver_input);
+		unique_ptr<ElasticFormulation> elastic;
+		if (diagnose) {
+			elastic = make_uniq<ElasticFormulation>();
+			elastic->input = solver_input;
+			elastic->var_indexer = indexer;
+			elastic->formulate = [&](SolverInput &repair_input, VarIndexer &repair_indexer) {
+				// The snapshot's raw rows serve only to size the widened box. Rebuild every row and auxiliary.
+				repair_input.global_constraints.clear();
+				FormulateDecideTree(*tree, *gstate.descent, values, repair_input, repair_indexer,
+				                   NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs},
+				                   variable_names, true);
+				repair_indexer.total_vars = repair_indexer.global_block_start + repair_input.num_global_vars;
+			};
+		}
+		FormulateDecideTree(*tree, *gstate.descent, values, solver_input, indexer,
+		                   NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs}, variable_names);
+		if (elastic) {
+			elastic->input.global_constraints = solver_input.global_constraints;
+			for (auto &polynomial : solver_input.raw_quadratic_constraints) {
+				elastic->input.global_constraints.push_back(polynomial.linear);
+			}
+			// Data bounds refine individual instances during tree formulation. Their hull gives the repair box
+			// finite starting magnitudes; each bound is emitted as a loosenable row when repair is formulated.
+			for (idx_t var = 0; var < solver_input.num_decide_vars; var++) {
+				const auto count = indexer.NamedInstances(var);
+				if (!count) {
+					continue;
+				}
+				double lower = NumericLimits<double>::Maximum(), upper = -NumericLimits<double>::Maximum();
+				for (idx_t instance = 0; instance < count; instance++) {
+					lower = MinValue(lower, solver_input.InstanceBoxLower(var, instance, solver_input.lower_bounds));
+					upper = MaxValue(upper, solver_input.InstanceBoxUpper(var, instance, solver_input.upper_bounds));
+				}
+				elastic->input.lower_bounds[var] = lower;
+				elastic->input.upper_bounds[var] = upper;
+			}
+		}
+		indexer.total_vars = indexer.global_block_start + solver_input.num_global_vars;
+		ReportAnEmptyObjective(solver_input);
+		EvaluatedClauses evaluated;
+		DecideProfileScope::Counter("execution.input_scans", gstate.descent_rows ? 1.0 : 0.0);
+		DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
+		return FinalizeSolveResult(context, gstate, solver_input, indexer, evaluated, elastic.get(), bench, model_timer,
+		                           solver_timer);
+	}
 	DecideRowStore row_store(context, gstate.data);
 	vector<KeyedMapping> keyed_mappings;
 	EvaluatedClauses evaluated;
@@ -3718,7 +3867,8 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 		}
 		return false;
 	};
-	if (std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
+	if (!input.raw_quadratic_objective.empty() ||
+	    std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
 	    std::any_of(input.quadratic_inner_coefficients.begin(), input.quadratic_inner_coefficients.end(), reads) ||
 	    std::any_of(input.bilinear_objective_terms.begin(), input.bilinear_objective_terms.end(),
 	                [&](const SolverInput::BilinearObjectiveTerm &term) { return reads(term.row_coefficients); }) ||
@@ -6000,7 +6150,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 //! value elsewhere in the model from inflating its constants. A row may still require a
 //! much larger widening than the column's current magnitude; that coupling is local and
 //! semantic rather than model-wide.
-static void OpenElasticColumnBox(SolverInput &input) {
+static void OpenElasticColumnBox(SolverInput &input, const VarIndexer &indexer) {
     //! Headroom every loosenable direction gets, as a multiple of the column's own
     //! magnitude. It is the floor, not the whole answer: it covers a column whose repair
     //! target is not visible in any row — the bound behind an `ABS(x) >= 5`, where the
@@ -6039,6 +6189,24 @@ static void OpenElasticColumnBox(SolverInput &input) {
                 if (std::isfinite(demand)) {
                     row_demand[v] = std::max(row_demand[v], demand);
                 }
+            }
+        }
+    }
+
+    for (const auto &row : input.global_constraints) {
+        if (!std::isfinite(row.rhs) || row.rhs == 0.0) {
+            continue;
+        }
+        for (idx_t term = 0; term < row.indices.size(); term++) {
+            auto column = idx_t(row.indices[term]);
+            double coefficient = std::abs(row.coefficients[term]);
+            if (column >= indexer.global_block_start || coefficient <= NEGLIGIBLE_COEFFICIENT) {
+                continue;
+            }
+            auto variable = indexer.OwnerOf(column);
+            double demand = std::abs(row.rhs) / coefficient;
+            if (variable < row_demand.size() && std::isfinite(demand)) {
+                row_demand[variable] = std::max(row_demand[variable], demand);
             }
         }
     }
@@ -6101,8 +6269,12 @@ SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elas
     VarIndexer indexer = elastic.var_indexer;
     input.keep_singleton_rows = keep_singleton_rows;
 
-    OpenElasticColumnBox(input);
-    FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
+    OpenElasticColumnBox(input, indexer);
+    if (elastic.formulate) {
+        elastic.formulate(input, indexer);
+    } else {
+        FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
+    }
 
     // Same reconciliation the solved model gets before its build: the `<>` label channel
     // is a prefix of the global block, padded to its final length.
