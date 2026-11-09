@@ -1,0 +1,39 @@
+# name: test/sql/optimizer/expression/test_case_simplification_error.test
+# description: A CASE whose constant WHEN cannot be evaluated is left to raise at run time, on the rows that reach it
+# group: [expression]
+
+statement ok
+PRAGMA enable_verification
+
+statement ok
+CREATE TABLE empty_rows (i INTEGER)
+
+statement ok
+CREATE TABLE one_row AS SELECT 1 AS i
+
+# the failing WHEN is never evaluated over no rows: no error at plan time
+query I
+SELECT CASE WHEN CAST('abc' AS INTEGER) = 1 THEN 1 ELSE 2 END FROM empty_rows
+----
+
+# a row that reaches it raises
+statement error
+SELECT CASE WHEN CAST('abc' AS INTEGER) = 1 THEN 1 ELSE 2 END FROM one_row
+----
+Could not convert string 'abc' to INT32
+
+# a row that an earlier WHEN takes never reaches it
+query I
+SELECT CASE WHEN i = 1 THEN 5 WHEN CAST('abc' AS INTEGER) = 1 THEN 1 ELSE 2 END FROM one_row
+----
+5
+
+# a WHEN that evaluates folds as before
+query I
+SELECT CASE WHEN false THEN 7 WHEN i = 1 THEN 5 ELSE 2 END FROM one_row
+----
+5
+
+query I
+SELECT CASE WHEN i = 2 THEN 7 WHEN CAST('abc' AS INTEGER) = 1 THEN 1 WHEN true THEN 3 ELSE 2 END FROM empty_rows
+----

@@ -19,7 +19,12 @@ unique_ptr<Expression> CaseSimplificationRule::Apply(LogicalOperator &op, vector
 		if (case_check.when_expr->IsFoldable()) {
 			// the WHEN check is a foldable expression
 			// use an ExpressionExecutor to execute the expression
-			auto constant_value = ExpressionExecutor::EvaluateScalar(GetContext(), *case_check.when_expr);
+			Value constant_value;
+			if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), *case_check.when_expr, constant_value)) {
+				// the evaluation failed (an overflow, say): leave this check to raise at run time, on the rows that
+				// reach it, as ConstantFoldingRule leaves an expression that cannot be evaluated
+				continue;
+			}
 
 			// fold based on the constant condition
 			auto condition = constant_value.DefaultCastAs(LogicalType::BOOLEAN);
