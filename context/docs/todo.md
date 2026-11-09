@@ -22,6 +22,10 @@ measurement on a quiet machine, last.
 
 - [ ] MSG-1 Messages reprint expression trees instead of quoting the source text — issues/code_quality.md § MSG-1
 
+## B1. Outer columns (after M1: both edit the binder)
+
+- [ ] BIND-1 An outer column inside a DECIDE marker leaks the marker's name — pipeline/02_binder/todo.md § BIND-1
+
 ## F1. Formatting (after every other batch)
 
 - [ ] FMT-1 DeciDB sources indented with spaces — issues/code_quality.md § FMT-1
