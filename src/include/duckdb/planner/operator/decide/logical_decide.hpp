@@ -329,6 +329,11 @@ public:
     //! shows the user their own clause.
     vector<string> source_fragments;
 
+    //! The DECIDE tail as the user wrote it, with where the parser found each expression in it (the Clang
+    //! SourceManager pattern). A bound node's query location names its span; a message cuts the text instead of
+    //! reprinting the node (MSG-1).
+    DecideSourceText source_text;
+
     //! The user's own name for every column reachable from the DECIDE input, captured
     //! from the BindContext where name resolution happens. This is the ONLY place the
     //! user's spelling exists for a source that has no catalog entry: a `t(a, b, c)`

@@ -96,6 +96,9 @@ public:
     //! and the diagnosis labels quote the clause the user typed.
     vector<string> source_fragments;
 
+    //! The DECIDE tail as the user wrote it, copied from LogicalDecide.
+    DecideSourceText source_text;
+
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;
 

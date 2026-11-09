@@ -230,6 +230,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->canonical_objective = std::move(canonical_objective);
         decide_op->objective_canonical_differs = objective_canonical_differs;
         decide_op->source_fragments = std::move(statement.decide_source_fragments);
+        decide_op->source_text = std::move(statement.decide_text);
         // Capture the user's column names off the BindContext, which is still live here
         // and is the authority name resolution itself used. Every source kind is covered
         // uniformly: a base table's catalog names, a `t(a, b, c)` alias list over

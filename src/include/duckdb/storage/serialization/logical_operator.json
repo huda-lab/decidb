@@ -1055,6 +1055,11 @@
         "id": 221,
         "name": "objective_canonical_differs",
         "type": "bool"
+      },
+      {
+        "id": 222,
+        "name": "source_text",
+        "type": "DecideSourceText"
       }
     ]
   },
