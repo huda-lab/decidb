@@ -1,0 +1,173 @@
+# name: test/sql/join/left_outer/test_left_join_perfect_hash.test
+# description: LEFT and SINGLE joins on one integer key whose build side is small and unique read a perfect hash table, with one NULL slot for the probe rows that have no partner
+# group: [left_outer]
+
+statement ok
+PRAGMA enable_verification
+
+statement ok
+CREATE TABLE build (k INTEGER, v INTEGER, s VARCHAR)
+
+# gaps at 4, 6 and 7; key 3 has NULL payload, which is a match and not a miss
+statement ok
+INSERT INTO build VALUES (2, 20, 'two'), (3, NULL, NULL), (5, 50, 'five'), (8, 80, 'eight')
+
+statement ok
+CREATE TABLE probe (id INTEGER, k INTEGER)
+
+# a key in a gap, a NULL key, a key under and over the build range, one far away, and every key of the build
+statement ok
+INSERT INTO probe VALUES (1, 2), (2, 3), (3, 4), (4, NULL), (5, 1), (6, 9), (7, 8), (8, 5), (9, 100000), (10, 2)
+
+query IIIII
+SELECT id, probe.k, build.k, v, s FROM probe LEFT JOIN build ON probe.k = build.k ORDER BY id
+----
+1	2	2	20	two
+2	3	3	NULL	NULL
+3	4	NULL	NULL	NULL
+4	NULL	NULL	NULL	NULL
+5	1	NULL	NULL	NULL
+6	9	NULL	NULL	NULL
+7	8	8	80	eight
+8	5	5	50	five
+9	100000	NULL	NULL	NULL
+10	2	2	20	two
+
+# the same join with the build side on the left: a RIGHT join keeps the hash table path
+query IIIII
+SELECT id, probe.k, build.k, v, s FROM build RIGHT JOIN probe ON probe.k = build.k ORDER BY id
+----
+1	2	2	20	two
+2	3	3	NULL	NULL
+3	4	NULL	NULL	NULL
+4	NULL	NULL	NULL	NULL
+5	1	NULL	NULL	NULL
+6	9	NULL	NULL	NULL
+7	8	8	80	eight
+8	5	5	50	five
+9	100000	NULL	NULL	NULL
+10	2	2	20	two
+
+# a SINGLE join: a scalar subquery with a unique key per row
+query II
+SELECT id, (SELECT v FROM build WHERE build.k = probe.k) FROM probe ORDER BY id
+----
+1	20
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	80
+8	50
+9	NULL
+10	20
+
+query II
+SELECT id, (SELECT s FROM build WHERE build.k = probe.k) FROM probe ORDER BY id
+----
+1	two
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	eight
+8	five
+9	NULL
+10	two
+
+# duplicate build keys: the join keeps the hash table, a LEFT join repeats the probe row and a scalar subquery raises
+statement ok
+CREATE TABLE duplicated (k INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO duplicated VALUES (2, 21), (2, 22), (5, 50)
+
+query III
+SELECT id, probe.k, v FROM probe LEFT JOIN duplicated ON probe.k = duplicated.k WHERE id <= 4 OR id >= 8 ORDER BY id, v
+----
+1	2	21
+1	2	22
+2	3	NULL
+3	4	NULL
+4	NULL	NULL
+8	5	50
+9	100000	NULL
+10	2	21
+10	2	22
+
+statement error
+SELECT id, (SELECT v FROM duplicated WHERE duplicated.k = probe.k) FROM probe
+----
+More than one row returned by a subquery
+
+# an empty build side
+statement ok
+CREATE TABLE nothing (k INTEGER, v INTEGER)
+
+query II
+SELECT id, v FROM probe LEFT JOIN nothing ON probe.k = nothing.k ORDER BY id
+----
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+10	NULL
+
+# a build side of one row, all of whose rows are in the range
+statement ok
+CREATE TABLE single_row AS SELECT 7 AS k, 70 AS v
+
+query II
+SELECT id, v FROM probe LEFT JOIN single_row ON probe.k = single_row.k ORDER BY id
+----
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+10	NULL
+
+# The NULL slot sits past the build range. The validity mask of a vector is one vector long, so the build ranges that
+# put the slot at, before and after that length are the ones to try, and a probe of several vectors.
+foreach size 2046 2047 2048 2049 4097
+
+statement ok
+CREATE OR REPLACE TABLE wide_build AS SELECT i AS k, i * 2 AS v, 'v' || i AS s FROM range(${size}) t(i)
+
+# the probe has every key of the build, the keys on both sides of its range and a NULL, three times over
+statement ok
+CREATE OR REPLACE TABLE wide_probe AS SELECT i - 5 AS k FROM range(${size} + 10) t(i)
+UNION ALL SELECT i - 5 FROM range(${size} + 10) t(i) UNION ALL SELECT NULL FROM range(3)
+
+# 23 probe rows read a key outside the build (10 below and above its range, twice, and three NULLs), and the others find
+# their one partner
+query IIIII
+SELECT count(*) = 2 * (${size} + 10) + 3, count(wide_build.k) = 2 * ${size}, sum(v) = 2 * ${size} * (${size} - 1),
+       count(s) = 2 * ${size}, max(s) FILTER (WHERE wide_probe.k = ${size} - 1) = 'v' || (${size} - 1)
+FROM wide_probe LEFT JOIN wide_build ON wide_probe.k = wide_build.k
+----
+true	true	true	true	true
+
+query I
+SELECT count(*) = 23 FROM wide_probe LEFT JOIN wide_build ON wide_probe.k = wide_build.k WHERE wide_build.k IS NULL
+----
+true
+
+# a SINGLE join reads the same slots
+query I
+SELECT count(*) = 23 FROM wide_probe WHERE (SELECT s FROM wide_build WHERE wide_build.k = wide_probe.k) IS NULL
+----
+true
+
+endloop

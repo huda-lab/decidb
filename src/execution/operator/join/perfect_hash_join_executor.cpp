@@ -68,9 +68,10 @@ bool PerfectHashJoinExecutor::CanDoPerfectHashJoin(const PhysicalHashJoin &op, c
 		return true; // Already true based on static statistics
 	}
 
-	// We only do this optimization for inner joins with one integer equality condition
+	// We only do this optimization for inner joins and the joins that keep every probe row (LEFT and SINGLE) with one
+	// integer equality condition
 	const auto key_type = op.conditions[0].left->return_type;
-	if (op.join_type != JoinType::INNER || op.conditions.size() != 1 ||
+	if (!(op.join_type == JoinType::INNER || IsProbeOuter()) || op.conditions.size() != 1 ||
 	    op.conditions[0].comparison != ExpressionType::COMPARE_EQUAL || !TypeIsInteger(key_type.InternalType())) {
 		return false;
 	}
@@ -120,14 +121,20 @@ bool PerfectHashJoinExecutor::CanDoPerfectHashJoin(const PhysicalHashJoin &op, c
 	return true;
 }
 
+bool PerfectHashJoinExecutor::IsProbeOuter() const {
+	return join.join_type == JoinType::LEFT || join.join_type == JoinType::SINGLE;
+}
+
 //===--------------------------------------------------------------------===//
 // Build
 //===--------------------------------------------------------------------===//
 bool PerfectHashJoinExecutor::BuildPerfectHashTable(LogicalType &key_type) {
-	// First, allocate memory for each build column
+	// First, allocate memory for each build column. A join that keeps every probe row has one slot past the build range
+	// that holds NULL in every column: a probe row without a partner points at it.
 	auto build_size = perfect_join_statistics.build_range + 1;
+	auto slot_count = build_size + (IsProbeOuter() ? 1 : 0);
 	for (const auto &type : join.rhs_output_columns.col_types) {
-		perfect_hash_table.emplace_back(type, build_size);
+		perfect_hash_table.emplace_back(type, slot_count);
 	}
 
 	// and for duplicate_checking
@@ -175,15 +182,19 @@ bool PerfectHashJoinExecutor::FullScanHashTable(LogicalType &key_type) {
 
 	// Full scan the remaining build columns and fill the perfect hash table
 	const auto build_size = perfect_join_statistics.build_range + 1;
+	const auto slot_count = build_size + (IsProbeOuter() ? 1 : 0);
 	for (idx_t i = 0; i < join.rhs_output_columns.col_types.size(); i++) {
 		auto &vector = perfect_hash_table[i];
 		const auto output_col_idx = ht.output_columns[i];
 		D_ASSERT(vector.GetType() == ht.layout.GetTypes()[output_col_idx]);
-		if (build_size > STANDARD_VECTOR_SIZE) {
+		if (slot_count > STANDARD_VECTOR_SIZE) {
 			auto &col_mask = FlatVector::Validity(vector);
-			col_mask.Initialize(build_size);
+			col_mask.Initialize(slot_count);
 		}
 		data_collection.Gather(tuples_addresses, sel_tuples, key_count, output_col_idx, vector, sel_build, nullptr);
+		if (IsProbeOuter()) {
+			FlatVector::SetNull(vector, build_size, true);
+		}
 	}
 
 	return true;
@@ -291,8 +302,11 @@ OperatorResultType PerfectHashJoinExecutor::ProbePerfectHashTable(ExecutionConte
 	// todo: add check for fast pass when probe is part of build domain
 	FillSelectionVectorSwitchProbe(keys_vec, state.build_sel_vec, state.probe_sel_vec, keys_count, probe_sel_count);
 
-	// If build is dense and probe is in build's domain, just reference probe
-	if (perfect_join_statistics.is_build_dense && keys_count == probe_sel_count) {
+	if (IsProbeOuter()) {
+		// Every probe row stays, and one without a partner reads the NULL slot (FillSelectionVectorSwitchProbe)
+		result.Reference(lhs_output_columns);
+	} else if (perfect_join_statistics.is_build_dense && keys_count == probe_sel_count) {
+		// If build is dense and probe is in build's domain, just reference probe
 		result.Reference(lhs_output_columns);
 	} else {
 		// otherwise, filter it out the values that do not match
@@ -359,6 +373,27 @@ void PerfectHashJoinExecutor::TemplatedFillSelectionVectorProbe(Vector &source, 
 	source.ToUnifiedFormat(count, vector_data);
 	auto data = reinterpret_cast<T *>(vector_data.data);
 	auto validity_mask = &vector_data.validity;
+	if (IsProbeOuter()) {
+		// every probe row picks a slot: its key's, or the NULL slot past the build range when its key is NULL, out of
+		// the range or absent from the build
+		const auto null_slot = perfect_join_statistics.build_range + 1;
+		for (idx_t i = 0; i < count; ++i) {
+			auto data_idx = vector_data.sel->get_index(i);
+			idx_t slot = null_slot;
+			if (validity_mask->RowIsValid(data_idx)) {
+				auto input_value = data[data_idx];
+				if (min_value <= input_value && input_value <= max_value) {
+					auto idx = (idx_t)(input_value - min_value);
+					if (bitmap_build_idx[idx]) {
+						slot = idx;
+					}
+				}
+			}
+			build_sel_vec.set_index(i, slot);
+		}
+		probe_sel_count = count;
+		return;
+	}
 	// build selection vector for non-dense build
 	if (validity_mask->AllValid()) {
 		for (idx_t i = 0, sel_idx = 0; i < count; ++i) {

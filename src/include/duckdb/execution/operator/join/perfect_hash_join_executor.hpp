@@ -43,6 +43,8 @@ public:
 	bool BuildPerfectHashTable(LogicalType &type);
 
 private:
+	//! Whether the join keeps every probe row (LEFT and SINGLE), the unmatched ones padded with NULL
+	bool IsProbeOuter() const;
 	void FillSelectionVectorSwitchProbe(Vector &source, SelectionVector &build_sel_vec, SelectionVector &probe_sel_vec,
 	                                    idx_t count, idx_t &probe_sel_count);
 	template <typename T>
