@@ -307,7 +307,7 @@ def test_a_nested_refusal_reaches_the_user(decidb_cli, inner_clauses, message):
     [
         ("FROM t WHERE t.k = g.k DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x)", "k"),
         ("FROM t DECIDE x(INT) SUCH THAT x <= lim MAXIMIZE SUM(x)", "lim"),
-        ("FROM t DECIDE x(INT) SUCH THAT x <= 1 AND SUM(x) <= g.lim MAXIMIZE SUM(x)", "lim"),
+        ("FROM t DECIDE x(INT) SUCH THAT x <= 1 AND SUM(x) <= g.lim MAXIMIZE SUM(x)", "g.lim"),
     ],
     ids=["where", "clause column", "clause table"],
 )
@@ -317,6 +317,92 @@ def test_a_decide_cannot_read_an_outer_query(decidb_cli, inner, name):
         f"LATERAL ({inner.replace('FROM t', 'FROM (VALUES (1), (2)) t(k)')}) q",
         match=f"DECIDE: '{name}' refers to an outer query, which a DECIDE cannot read; to solve per group",
     )
+
+
+# The same refusal for a column inside a DECIDE construct: a `when`, a `per` or a `by`
+# key, a scope in front of a clause or inside a reducer, the body of a scope, the
+# declaration's `per`. DuckDB's retry used to hand such a clause to the outer query, which
+# knows none of them ("Scalar Function __scope_when__ does not exist", "x not found", an
+# internal error). The column is refused where it fails to resolve, before any retry.
+_OUTER_O = "(VALUES (1e0, 'p')) o(cap, s)"
+_INNER_T = "(VALUES (1, 2e0, 3e0, 'a')) t(id, w, v, k)"
+
+
+def _lateral_decide(declaration, clauses):
+    return (
+        f"SELECT * FROM {_OUTER_O}, LATERAL (SELECT id, x FROM "
+        f"(FROM {_INNER_T} DECIDE {declaration} SUCH THAT {clauses}) q) z"
+    )
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "declaration,clauses,name",
+    [
+        ("x(REAL)", "x BETWEEN 0 AND o.cap MAXIMIZE SUM(v * x)", "o.cap"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND when o.cap > 1: x <= 2 MAXIMIZE SUM(v * x)", "o.cap"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND per o.s: SUM(x) <= 2 MAXIMIZE SUM(v * x)", "o.s"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND when t.k = 'a': x <= o.cap MAXIMIZE SUM(v * x)", "o.cap"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND when o.cap > 1: SUM(w * x) <= 5 MAXIMIZE SUM(v * x)", "o.cap"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND SUM(when o.cap > 1: x) <= 2 MAXIMIZE SUM(v * x)", "o.cap"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND SUM(per o.s: x) <= 2 MAXIMIZE SUM(v * x)", "o.s"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 AND SUM(x) by (o.s) <= 2 MAXIMIZE SUM(v * x)", "o.s"),
+        ("x(REAL)", "x BETWEEN 0 AND 3 MAXIMIZE SUM(when o.cap > 1: v * x)", "o.cap"),
+        ("per o.s: x(REAL)", "x BETWEEN 0 AND 3 MAXIMIZE SUM(v * x)", "o.s"),
+    ],
+    ids=[
+        "plain bound",
+        "scope when",
+        "scope per",
+        "body of a scope",
+        "filter form",
+        "reducer when",
+        "reducer per",
+        "by key",
+        "objective when",
+        "declaration per",
+    ],
+)
+def test_a_decide_construct_cannot_read_an_outer_query(decidb_cli, declaration, clauses, name):
+    decidb_cli.assert_error(
+        _lateral_decide(declaration, clauses),
+        match=f"DECIDE: '{name}' refers to an outer query, which a DECIDE cannot read; to solve per group",
+    )
+
+
+# A reducer over an outer column in a scalar subquery of the outer select list: SQL used to
+# bind the whole aggregate in the outer query and the refusal quoted it; it names the column.
+@pytest.mark.error_binder
+@pytest.mark.error
+def test_a_reducer_over_an_outer_column_names_the_column(decidb_cli):
+    decidb_cli.assert_error(
+        f"SELECT o.cap, (SELECT MAX(x) FROM (FROM {_INNER_T} DECIDE x(REAL) "
+        f"SUCH THAT x BETWEEN 0 AND 3 AND SUM(o.cap * x) <= 2 MAXIMIZE SUM(v * x)) q) FROM {_OUTER_O}",
+        match="DECIDE: 'o.cap' refers to an outer query, which a DECIDE cannot read; to solve per group",
+    )
+
+
+# A missing name inside a construct is the clause's own error. It used to be retried in the
+# outer query, which reported the construct as an unknown function.
+@pytest.mark.error_binder
+@pytest.mark.error
+def test_a_missing_column_in_a_construct_is_reported_as_written(decidb_cli):
+    decidb_cli.assert_error(
+        _lateral_decide("x(REAL)", "x BETWEEN 0 AND 3 AND when typo > 1: x <= 2 MAXIMIZE SUM(v * x)"),
+        match='Referenced column "typo" not found',
+    )
+
+
+# A subquery in a clause that correlates to the DECIDE's own rows is not a read of an outer
+# query: its own binder resolves the column, and the refusal leaves it alone.
+@pytest.mark.sql_subquery
+def test_a_subquery_correlated_to_the_decide_rows_still_solves(decidb_cli):
+    rows, _ = decidb_cli.execute(
+        f"SELECT id, x FROM {_INNER_T} DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 3 AND "
+        "x <= (SELECT MAX(u.v) FROM (VALUES (1, 5e0)) u(id, v) WHERE u.id = t.id) MAXIMIZE SUM(v * x)"
+    )
+    assert len(rows) == 1
 
 
 # A DECIDE in another DECIDE's FROM (or WITH) is a two-stage pipeline: the inner problem

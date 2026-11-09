@@ -325,8 +325,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		// The key as written (`per D`), read before its elements bind. It cannot ride on
 		// the marker's alias: the expression binder gives the bound wrapper that alias.
 		auto key_text = DecideKeyToString(*per);
-		key = BindKey(context, binder.bind_context, *per, DecisionNames(variables), key_text, *qualifier_context->keys,
-		              &key_order);
+		key = BindKey(context, binder, *per, DecisionNames(variables), key_text, *qualifier_context->keys, &key_order);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and

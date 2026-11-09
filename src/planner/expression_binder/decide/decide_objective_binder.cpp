@@ -111,8 +111,8 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	const auto decision_names = DecisionNames(variables);
 	auto &keys = *qualifier_context->keys;
 	const auto key_text = DecideKeyToString(per);
-	auto key = BindKey(context, binder.bind_context, per, decision_names, key_text, keys);
-	auto by_key = BindKey(context, binder.bind_context, inner_by, decision_names, DecideKeyToString(inner_by), keys);
+	auto key = BindKey(context, binder, per, decision_names, key_text, keys);
+	auto by_key = BindKey(context, binder, inner_by, decision_names, DecideKeyToString(inner_by), keys);
 	if (key != by_key) {
 		return BindResult(BinderException::Unsupported(
 		    inner_by, StringUtil::Format("DECIDE: in %s the by key must be the per key; any other is not supported "

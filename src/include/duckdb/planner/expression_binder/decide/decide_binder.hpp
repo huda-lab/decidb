@@ -16,12 +16,26 @@
 
 namespace duckdb {
 
+class Binder;
 class BindContext;
+class ColumnRefExpression;
 class FunctionExpression;
 struct DecideSourceNames;
 
 //! The names a key element may not take: every declared decision, as the user may spell it.
 case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables);
+
+//! The refusal of a DECIDE that reads a column of an outer query (a LATERAL subquery's or a scalar
+//! subquery's outer query): it solves one problem, so it cannot be re-solved per outer row. One message
+//! for every way the column is reached.
+string OuterQueryColumnMessage(const string &column_name);
+
+//! Throws that refusal, naming `column` as written, when `column`, which did not resolve in `binder`'s own
+//! query, resolves in an outer one. The outer binders are asked only to qualify the name, as DuckDB's retry does, and bind nothing. A
+//! DECIDE clause is rebound in the outer binder by that retry, which knows no DECIDE construct, so the
+//! refusal is raised here, at the column, before any retry. A name that resolves nowhere is left to its
+//! caller's own "not found".
+void ThrowIfOuterColumn(Binder &binder, const ColumnRefExpression &column);
 
 //! Find or create the key scope of `per K: ...`, given the parser's `SCOPE_PER_TAG` marker
 //! (children: the body, then the elements of K). Each element resolves against the FROM
@@ -30,7 +44,7 @@ case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variab
 //! repetition aside -- share one key (BindKey) and one scope. `key_text` is the key as
 //! written, kept for display. A reducer's `per ()` is the empty key: one scope every row
 //! belongs to.
-idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
+idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes,
                            vector<idx_t> *written_order = nullptr);
@@ -39,7 +53,7 @@ idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, co
 //! created when no key so far has them: a column element compares NULL as SQL's `=`
 //! does, a relation element stands for its stored columns, which compare NULL as a
 //! value. `key_text` is the key as written, kept for display.
-idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
+idx_t BindKey(ClientContext &context, Binder &binder, const FunctionExpression &per,
               const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys,
               vector<idx_t> *written_order = nullptr);
 
@@ -193,13 +207,19 @@ protected:
     //! marker replaces `expr_ptr` in place, so by the time the result comes back the
     //! node the caller held is no longer the one the user wrote.
     static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
-    //! Throws a clause's error at its root unless a column or table was not found. DuckDB
-    //! retries a failed expression in each outer query, in case it refers to one, and reports
-    //! that retry's error; only a missing name can be such a reference, so any other error is
-    //! the clause's own verdict and must reach the user as it is.
-    static BindResult ThrowClauseError(BindResult result, bool root_expression);
+	//! Throws a clause's error at its root. DuckDB would retry the failed expression in each outer
+	//! query, in case it refers to one, and report that retry's error, which knows no DECIDE
+	//! construct: a missing name inside a `when` would reach the user as an unknown function. A
+	//! clause reads no outer query (ThrowIfOuterColumn refuses one where its column fails to
+	//! resolve), so the clause's own error is the verdict.
+	static BindResult ThrowClauseError(BindResult result, bool root_expression);
 
-    //! True when `expr`, a reference to a decision (IsVariableExpression), names a query-wide (`per ()`) one.
+	//! A column of a clause that its own query does not hold is refused when an outer query does
+	//! (ThrowIfOuterColumn); any other missing name keeps DuckDB's error.
+	unique_ptr<ParsedExpression> QualifyColumnName(ColumnRefExpression &col_ref, ErrorData &error) override;
+	using ExpressionBinder::QualifyColumnName;
+
+	//! True when `expr`, a reference to a decision (IsVariableExpression), names a query-wide (`per ()`) one.
     //! A scalar has one solver column, so it needs no reducer to collapse it —
     //! and conversely may not appear inside one on its own.
     bool IsScalarDecideVariable(const ParsedExpression &expr) const;

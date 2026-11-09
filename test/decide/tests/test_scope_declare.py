@@ -618,7 +618,7 @@ KEY_ERRORS = [
         SUCH THAT x <= (SELECT MAX(y) FROM {_values(SHIPMENTS, 'S2', SHIPMENT_COLUMNS)}
                         DECIDE per D.region: y(INT) SUCH THAT y <= 3 MAXIMIZE SUM(y))
         MAXIMIZE SUM(x)""",
-        f"DECIDE: D.region {NEITHER}",
+        "DECIDE: 'D.region' refers to an outer query, which a DECIDE cannot read; to solve per group",
         "outer-query-column",
     ),
     _binder_error(

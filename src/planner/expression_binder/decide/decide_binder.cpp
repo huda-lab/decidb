@@ -438,11 +438,37 @@ static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context,
 	return bind_context.GetBinding(using_set->primary_binding, error);
 }
 
+string OuterQueryColumnMessage(const string &column_name) {
+	return StringUtil::Format("DECIDE: '%s' refers to an outer query, which a DECIDE cannot read; to solve per group, "
+	                          "join that table into this query's FROM and write the clause with per",
+	                          column_name);
+}
+
+void ThrowIfOuterColumn(Binder &binder, const ColumnRefExpression &column) {
+	for (auto &outer : binder.GetActiveBinders()) {
+		auto probe = column.Copy();
+		ErrorData error;
+		// The base lookup: an outer DECIDE binder would come back here.
+		if (outer.get().ExpressionBinder::QualifyColumnName(probe->Cast<ColumnRefExpression>(), error)) {
+			throw BinderException(column, "%s", OuterQueryColumnMessage(column.ToString()));
+		}
+	}
+}
+
+unique_ptr<ParsedExpression> DecideBinder::QualifyColumnName(ColumnRefExpression &col_ref, ErrorData &error) {
+	auto qualified = ExpressionBinder::QualifyColumnName(col_ref, error);
+	if (!qualified) {
+		ThrowIfOuterColumn(binder, col_ref);
+	}
+	return qualified;
+}
+
 //! Resolves one element of a `per` key into `columns`, against the FROM clause alone and
 //! the way SQL resolves the same name: a column (`c`, `R.c`, `S.R.c`, `C.S.R.c`), else a
 //! relation (`R`, `S.R`, `C.S.R`), standing for every column it stores.
-static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpression &element,
+static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element,
                               const case_insensitive_set_t &decision_names, KeyColumns &columns) {
+	auto &bind_context = binder.bind_context;
 	auto &names = element.column_names;
 	if (names.size() == 1 && decision_names.count(names[0])) {
 		throw BinderException(element, "DECIDE: %s is a decision; when, per and by may only use data",
@@ -462,6 +488,7 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 	}
 	auto relation = names.size() <= 3 ? bind_context.GetBinding(RelationAlias(names), error) : nullptr;
 	if (!relation) {
+		ThrowIfOuterColumn(binder, element);
 		throw BinderException(element, "DECIDE: %s is neither a column nor a relation of the FROM clause",
 		                      element.ToString());
 	}
@@ -470,11 +497,11 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 
 //! The columns of the key `per` lists (its children[1..]; none for `per ()`), each element
 //! resolved by ResolveKeyElement.
-static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression &per,
+static KeyColumns ResolveKey(Binder &binder, const FunctionExpression &per,
                              const case_insensitive_set_t &decision_names) {
 	KeyColumns columns;
 	for (idx_t i = 1; i < per.children.size(); i++) {
-		ResolveKeyElement(bind_context, per.children[i]->Cast<ColumnRefExpression>(), decision_names, columns);
+		ResolveKeyElement(binder, per.children[i]->Cast<ColumnRefExpression>(), decision_names, columns);
 	}
 	return columns;
 }
@@ -503,18 +530,18 @@ static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) 
 	return keyed_scopes.size() - 1;
 }
 
-idx_t FindOrCreateKeyScope(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
+idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes,
                            vector<idx_t> *written_order) {
-	auto key = BindKey(context, bind_context, per, decision_names, key_text, keys, written_order);
+	auto key = BindKey(context, binder, per, decision_names, key_text, keys, written_order);
 	return FindOrCreateScope(key, keyed_scopes);
 }
 
-idx_t BindKey(ClientContext &context, BindContext &bind_context, const FunctionExpression &per,
+idx_t BindKey(ClientContext &context, Binder &binder, const FunctionExpression &per,
               const case_insensitive_set_t &decision_names, const string &key_text, vector<DecideKey> &keys,
               vector<idx_t> *written_order) {
-	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(bind_context, per, decision_names)), key_text, keys,
+	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(binder, per, decision_names)), key_text, keys,
 	                             written_order);
 }
 
@@ -1220,11 +1247,7 @@ BindResult DecideBinder::PreserveQueryLocation(optional_idx location, BindResult
 
 BindResult DecideBinder::ThrowClauseError(BindResult result, bool root_expression) {
 	if (root_expression && result.HasError()) {
-		auto subtype = result.error.ExtraInfo().find("error_subtype");
-		if (subtype == result.error.ExtraInfo().end() ||
-		    (subtype->second != "COLUMN_NOT_FOUND" && subtype->second != "TABLE_NOT_FOUND")) {
-			result.error.Throw();
-		}
+		result.error.Throw();
 	}
 	return result;
 }
@@ -1495,9 +1518,9 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 	if (per) {
 		auto &marker = per->Cast<FunctionExpression>();
 		vector<idx_t> written_order;
-		auto scope_idx = FindOrCreateKeyScope(context, binder.bind_context, marker, DecisionNames(variables),
-		                                      DecideKeyToString(marker), *qualifier_context->keys,
-		                                      *qualifier_context->keyed_scopes, &written_order);
+		auto scope_idx =
+		    FindOrCreateKeyScope(context, binder, marker, DecisionNames(variables), DecideKeyToString(marker),
+		                         *qualifier_context->keys, *qualifier_context->keyed_scopes, &written_order);
 		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx, written_order));
 	}
 	return result;
