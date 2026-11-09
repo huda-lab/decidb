@@ -88,6 +88,9 @@ private:
 	void CreateFilterFromJoinStats(unique_ptr<LogicalOperator> &child, unique_ptr<Expression> &expr,
 	                               const BaseStatistics &stats_before, const BaseStatistics &stats_after);
 
+	//! Evaluate an expression whose children are all constants and replace it with the result. Returns false, and
+	//! leaves the expression, when it is not foldable or the evaluation fails.
+	bool TryFoldConstants(unique_ptr<Expression> &expr);
 	unique_ptr<BaseStatistics> PropagateExpression(unique_ptr<Expression> &expr);
 	unique_ptr<BaseStatistics> PropagateExpression(Expression &expr, unique_ptr<Expression> &expr_ptr);
 	//! Run a comparison between the statistics and the table filter; returns the prune result

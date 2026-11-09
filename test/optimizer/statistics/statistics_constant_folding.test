@@ -1,0 +1,98 @@
+# name: test/optimizer/statistics/statistics_constant_folding.test
+# description: Statistics propagation folds an expression whose children it has made constant
+# group: [statistics]
+
+statement ok
+PRAGMA enable_verification;
+
+statement ok
+PRAGMA explain_output = OPTIMIZED_ONLY;
+
+statement ok
+CREATE TABLE integers AS SELECT * FROM (VALUES (1), (2), (3)) tbl(i);
+
+# "i" holds no NULL, so the CASE is its THEN branch; the expression that reads it was written before the statistics
+# proved that, and folds once the CASE has
+
+# a cast of the folded CASE is a constant
+query II
+EXPLAIN SELECT CAST(CASE WHEN i IS NOT NULL THEN 1 ELSE 0 END AS DOUBLE) FROM integers;
+----
+logical_opt	<!REGEX>:.*CAST.*
+
+query I
+SELECT CAST(CASE WHEN i IS NOT NULL THEN 1 ELSE 0 END AS DOUBLE) FROM integers ORDER BY i;
+----
+1.0
+1.0
+1.0
+
+# a function the statistics do not evaluate folds as well, and the fold climbs through the expressions above it
+query II
+EXPLAIN SELECT upper(CASE WHEN i IS NOT NULL THEN 'a' ELSE 'b' END) || 'c' FROM integers;
+----
+logical_opt	<!REGEX>:.*(upper|\|\|).*
+
+query I
+SELECT upper(CASE WHEN i IS NOT NULL THEN 'a' ELSE 'b' END) || 'c' FROM integers ORDER BY i;
+----
+Ac
+Ac
+Ac
+
+# an expression with a column in it is not folded
+query II
+EXPLAIN SELECT upper(CASE WHEN i IS NOT NULL THEN 'a' ELSE 'b' END) || i::VARCHAR FROM integers;
+----
+logical_opt	<REGEX>:.*(upper|A).*\|\|.*
+
+# the folded values are the ones the executor computes for special floating point values
+query I
+SELECT CAST(CASE WHEN i IS NOT NULL THEN 'inf' ELSE '0' END AS DOUBLE) FROM integers ORDER BY i;
+----
+inf
+inf
+inf
+
+query I
+SELECT CAST(CASE WHEN i IS NOT NULL THEN 'nan' ELSE '0' END AS DOUBLE) FROM integers ORDER BY i;
+----
+nan
+nan
+nan
+
+# an expression that fails to evaluate stays, and raises only on the rows that reach it
+query II
+EXPLAIN SELECT CAST(CASE WHEN i IS NOT NULL THEN 300 ELSE 0 END AS TINYINT) FROM integers;
+----
+logical_opt	<REGEX>:.*CAST.*
+
+statement error
+SELECT CAST(CASE WHEN i IS NOT NULL THEN 300 ELSE 0 END AS TINYINT) FROM integers;
+----
+<REGEX>:Conversion Error:.*300.*TINYINT.*
+
+query I
+SELECT CAST(CASE WHEN i IS NOT NULL THEN 300 ELSE 0 END AS TINYINT) FROM integers WHERE i % 7 = 6;
+----
+
+# a volatile function never folds: one value for each row, not one for the query
+query I
+SELECT count(DISTINCT r) FROM (SELECT random() AS r FROM integers);
+----
+3
+
+query I
+SELECT count(DISTINCT r) FROM (SELECT random() + CASE WHEN i IS NOT NULL THEN 0.0 ELSE 1.0 END AS r FROM integers);
+----
+3
+
+# error() is volatile: it raises where its row is reached and not while planning
+query I
+SELECT error('raised') FROM integers WHERE i % 7 = 6;
+----
+
+statement error
+SELECT error('raised') FROM integers;
+----
+<REGEX>:.*raised.*

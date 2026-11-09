@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/statistics_propagator.hpp"
 
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/optimizer/compressed_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -128,8 +129,34 @@ unique_ptr<BaseStatistics> StatisticsPropagator::PropagateExpression(Expression 
 	return nullptr;
 }
 
+bool StatisticsPropagator::TryFoldConstants(unique_ptr<Expression> &expr) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		return false;
+	}
+	// the children were propagated and folded first, so a subtree of constants is already one constant: testing the
+	// children is enough, and no recursive IsFoldable runs at each node of a deep tree
+	bool children_are_constants = true;
+	ExpressionIterator::EnumerateChildren(*expr, [&](Expression &child) {
+		children_are_constants =
+		    children_are_constants && child.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+	});
+	Value value;
+	// a failure (an overflow, a bad cast) leaves the expression, to raise at run time on the rows that reach it
+	if (!children_are_constants || !expr->IsFoldable() ||
+	    !ExpressionExecutor::TryEvaluateScalar(context, *expr, value)) {
+		return false;
+	}
+	auto folded = make_uniq<BoundConstantExpression>(std::move(value));
+	folded->SetAlias(expr->GetAlias());
+	expr = std::move(folded);
+	return true;
+}
+
 unique_ptr<BaseStatistics> StatisticsPropagator::PropagateExpression(unique_ptr<Expression> &expr) {
 	auto stats = PropagateExpression(*expr, expr);
+	if (TryFoldConstants(expr)) {
+		stats = StatisticsFromValue(expr->Cast<BoundConstantExpression>().value);
+	}
 	if (ClientConfig::GetConfig(context).query_verification_enabled && stats) {
 		expr->verification_stats = stats->ToUnique();
 	}
