@@ -41,14 +41,15 @@ the clause the user wrote.
   rather than parallel arrays so an auxiliary appended by the optimizer cannot desync a scope from its key.
 - **Constraints.** `DecideConstraintsBinder::BindScopedConstraint` binds the body, then wraps it: `when` as a
   conjunction tagged `WHEN_FILTER_TAG` (child 0 the constraint, child 1 the condition), `per` as one tagged
-  `PER_CLASS_TAG` (child 0 the constraint), tagged with its key's entry (`MakePerKeyTag`; no tag for `per ()`). The key's written text
-  is recorded as a source fragment.
+  `PER_CLASS_TAG` (child 0 the constraint), tagged with its key's entry (`MakePerKeyTag`; no tag for `per ()`). The
+  wrapper takes the location of the `per`, where the parser kept the key's text, so a message quotes the key as written.
 - **Reducers.** `DecideBinder::BindScopedReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
   an inner `per` with its key scope (`MakeQualifiedReducerTag`). `BindReducerBy` registers the `by` key in
   `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
   `FindOrCreateDecideKey`) and tags the reducer `MakeGroupKeyTag`. `BindQualifiedReducer` binds the colon form onto the
-  same key scope as `sum(per D: e)` and adds `COLON_FORM_TAG`, which only affects how it prints. Tags are composable
-  (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM rewrite.
+  same key scope as `sum(per D: e)`; a message quotes it as written and EXPLAIN's layers print `sum(per D: e)`. Tags are
+  composable (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM
+  rewrite.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
   nothing. `BindTwoLevelObjective` binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a
   `TWO_LEVEL_OBJECTIVE_TAG` wrapper (child 0 the objective) tagged with the key's entry.

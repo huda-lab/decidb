@@ -169,22 +169,19 @@ short fails loudly instead of handing a backend a model it cannot load.
 
 ## 1. Pass order
 
-Two steps run on each `LogicalDecide` before these passes (`OptimizeSubtree`). First,
-`RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) replaces each data-only reducer on
-a bound's right side (`sum(x) <= sum(cap)`) with a placeholder column and records it on the
-node (`LogicalDecide::bound_aggregates`; equal reducers share one). The path that answers the
-node builds each record as a side table of the source (`DirectAddBoundTables`, on both paths):
-the same DuckDB aggregate over another read of the source, grouped by the reducer's `by` key
-(under the key's collation, D69) over the rows the clause's `when` keeps, and joined back to
-every read by the key. It reads its argument as that SQL aggregate does: a NULL is
-skipped, and only a NaN is checked (`COUNT` counts one). The column carries the reducer as written
-and `WRITTEN_VALUE_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. With several threads the
-source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
-so the model's row and column order and the group a scope check names first can differ between runs of
-one query. Neither changes the answer's optimum. Tests that compare models run on one thread
-(`DeciDBCli.dump_model`, `golden/capture.sh`). Then the direct-solve rules may replace the node with
-ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes
-below.
+Two steps run on each `LogicalDecide` before these passes (`OptimizeSubtree`). First, `RewriteRhsAggregates`
+(`decide_rewrite_rhs_bounds.cpp`) replaces each data-only reducer on a bound's right side (`sum(x) <= sum(cap)`) with a
+placeholder column and records it on the node (`LogicalDecide::bound_aggregates`; equal reducers share one). The path
+that answers the node builds each record as a side table of the source (`DirectAddBoundTables`, on both paths): the same
+DuckDB aggregate over another read of the source, grouped by the reducer's `by` key (under the key's collation, D69)
+over the rows the clause's `when` keeps, and joined back to every read by the key. It reads its argument as that SQL
+aggregate does: a NULL is skipped, and only a NaN is checked (`COUNT` counts one). The column takes the query location
+of the reducer it stands for (`DecideReplaces`), so a message quotes `max(cap) by (g)` as written and never calls it a
+column. With several threads the source hands its rows on in an order that varies with the thread schedule. The DECIDE
+operator reads them in that order, so the model's row and column order and the group a scope check names first can
+differ between runs of one query. Neither changes the answer's optimum. Tests that compare models run on one thread
+(`DeciDBCli.dump_model`, `golden/capture.sh`). Then the direct-solve rules may replace the node with ordinary operators
+(`../../direct_solve/README.md`); a node they leave takes the passes below.
 
 `DecideOptimizer::RewriteForSolver` runs fifteen passes, and the order is load-bearing:
 
@@ -549,15 +546,13 @@ factor of 0), `t = q`. A convex `q` pushed down stays convex. `t` is `INTEGER` w
 body is whole-numbered by declared types (`DecideValueIsWholeNumbered`), so a strict
 `max(power(x, 2)) > 48` over an `INT` `x` steps to 49.
 
-**One reducer is defined once** (structural sharing, as the encoding names one subterm
-once). An earlier rewrite may have copied a reducer into several rows of one clause:
-`RewriteAbs` writes `abs(max(power(x, 2)) - 4) >= 1` as two envelope rows, one pushing the
-MAX up and one down. The copies must keep reading one value, so the pass collects every
-site first and groups the readers of one reducer (an equal reducer and alias, an equal
-`when`), across clauses and the objective; a group shares one helper whose row is the union
-of the readers' sides, `t = q` when they are pushed both ways. A helper per copy, each
-one-sided, lets the two copies read different values and answers `x = 2` there, where the
-MAX is 4. The definition belongs to no clause, as the value rewrite's does (§ The value
+**One reducer is defined once** (structural sharing, as the encoding names one subterm once). An earlier rewrite may
+have copied a reducer into several rows of one clause: `RewriteAbs` writes `abs(max(power(x, 2)) - 4) >= 1` as two
+envelope rows, one pushing the MAX up and one down. The copies must keep reading one value, so the pass collects every
+site first and groups the readers of one reducer (an equal reducer, its `by`, its own `per`, the clause's `when` and its
+`per` key), across clauses and the objective; a group shares one helper whose row is the union of the readers' sides,
+`t = q` when they are pushed both ways. A helper per copy, each one-sided, lets the two copies read different values and
+answers `x = 2` there, where the MAX is 4. The definition belongs to no clause, as the value rewrite's does (§ The value
 rewrite).
 
 **Which bodies.** Every MIN or MAX whose body is not linear (`DecideDegreeOf`). In
@@ -651,9 +646,10 @@ can take fractional values in this constraint ..."*). The aggregate shape accept
 reducer, because there its constant moves to the bound when the reducer is summed in place
 (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`).
 
-One helper per **reducer over one set of rows**: a second site holding the same reducer
-(`Equals`, alias included) under the same `when` reuses the first helper
-(`Helpers::Find`), whichever clause it is in. The rows `RewriteAbs` derived from one clause
+One helper per **reducer over one set of rows**: a second site holding the same reducer (`Equals`, which ignores
+aliases, where the `by` and `per` tags live) with the same `by` key, the same key scope of its own `per`, under the
+same `when` and the same `per` key of its clause reuses the first helper (`Helpers::Find`), whichever clause it is in
+and however it spells the reducer. The rows `RewriteAbs` derived from one clause
 each hold a copy of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`),
 and two helpers pinned on different sides would let the pair drift apart; two clauses
 holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) would say the same

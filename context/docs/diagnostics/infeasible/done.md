@@ -651,7 +651,7 @@ leaves unnamed — so a dropped aggregate `<>` would have an empty subject.
 source text of a labeled global: the clause text `SUM(x) <> K` for an aggregate-`<>` binary
 (looked up from `aux_var_expressions` at that site), and the aggregate text `MAX(x)` for a
 composed-MIN/MAX z (both allocation sites build it from the term's `agg_name` +
-`inner_expr->ToString()`) — so the composed outer pin renders `SUM(x) + MAX(x) <= -1`, never
+`RenderDecideSource` of the term's `inner_expr`) — so the composed outer pin renders `SUM(x) + MAX(x) <= -1`, never
 an internal `colN`. Other global aux (single-term MIN/MAX objective z, McCormick) stay
 unlabeled, which is an empty entry rather than a missing one.
 

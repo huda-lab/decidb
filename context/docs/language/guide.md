@@ -672,9 +672,10 @@ the rows the solver receives. An auxiliary prints as the expression it stands fo
 derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
 timing.
 
-**Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed, with the `when c per K:` qualifier in front and
-the defaults `per row:` and `by ()` left out. Text DeciDB writes itself (a rewritten row, a suggested edit) uses
-lower-case reducers and keywords and spells every column as the query does.
+**Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed (case, spacing and comments as written), with the
+`when c per K:` qualifier in front and the defaults `per row:` and `by ()` left out. Text DeciDB reprints itself (a
+rewritten row, the decision structure of a plan's canonical layer) uses lower-case reducers and keywords and spells
+every column as the query does.
 
 Tests: `test/decide/tests/test_explain.py`, `test_scope_explain_diagnose.py`. Internals: [explain.md](explain.md).
 

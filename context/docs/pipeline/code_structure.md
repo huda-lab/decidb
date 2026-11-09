@@ -12,7 +12,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | Path | Stage | Contents |
 |---|---|---|
 | `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `DecideScopeCheckKind`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
-| `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
+| `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
 | `parser/decide/decide_removed_spellings.hpp` | 01 | `RefuseRemovedDecideSpellings` |
@@ -265,10 +265,11 @@ a condition as another constraint.
   `storage/serialization/logical_operator.json`.
 
 ### `src/planner/decide/decide_source_provenance.cpp` — stage 03
-- **`TagDecideSourceFragments()`** — records each cast/subquery's written spelling
-  before binding obscures it.
+- **`DecideReplaces()`** — the location rule's one helper: a replacement takes the
+  query location of the node it equals in value (architecture.md § 3).
 - **`RenderDecideSource()`** — the one user-facing expression renderer, used by
-  both EXPLAIN paths and by the diagnosis labels.
+  both EXPLAIN paths and by the diagnosis labels. It cuts a located node's span from
+  `DecideSourceText` and reprints only a node with no location.
 - **`CollectDecideExpressionStrings()`** — the EXPLAIN walker, shared by the
   logical and physical operators.
 - **`InitializeConstraintSourceInfo()` / `FinalizeConstraintSourceInfo()`** — the

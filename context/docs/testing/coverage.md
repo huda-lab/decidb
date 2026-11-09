@@ -1034,7 +1034,7 @@ writes every product of decisions as a coefficient times powers of its decision 
 - **A product of `BOOL` decisions** (`b*b`, `(b+d)*(d+b)`) answers through the McCormick rewrite, against the oracle.
 - **Each refusal quotes the clause and points at the term**: degree 3 (`x*x*y`, `POWER(x, 3)`), a fractional
   exponent, `EXP`, a division by a decision, `%`, and a `CASE` over a decision, each with a caret; the objective is
-  quoted as typed, from the `OBJECTIVE` span.
+  quoted as typed, from the `OBJECTIVE` span (the objective) and each term's span (a clause).
 - **A data weight on a square is refused on forced HiGHS by the gate**, before a row is read.
 - **`CASE` over data answers** as a per-row coefficient (`SUCH THAT`, the objective, inside `AVG`, `MIN`/`MAX` and a
   `per` constraint, outside a reducer, and as a query-wide objective constant), against the oracle; a `CASE` over a

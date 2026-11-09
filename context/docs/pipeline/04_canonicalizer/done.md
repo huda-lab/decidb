@@ -245,12 +245,14 @@ constant multiples (`x*x + x*x` is `2 * POWER(x, 2)`, `2 * x + x * 3` is `5 * x`
 subquery is not summable, so those atoms stay apart. No list of shapes decides this: any two atoms with the same
 decision-bearing factors are like terms.
 
-**Quoting.** A respelled node is tagged `WRITTEN_TERM_TAG_PREFIX` with its text as written, cut from the query at its
-source location. The grammar records a `TERM` span for each product, `**` or `^` power and function call, and an
-`OBJECTIVE` span for the objective, as Clang underlines a source range and does not reprint its syntax tree. A message
-or a `DIAGNOSE` repair quotes the clause as written and never searches for canonical text. EXPLAIN's `≡` line prints the canonical spelling, so a clause written `x * w` prints a second line,
-`w * x`. The transformer gives each parsed expression its token's location; a call it rewrites into another
-expression (`IF`, `IFNULL`) keeps the call's, so a refusal over a `COALESCE` or `IFNULL` points at it too.
+**Quoting.** A respelled node is the written term in another spelling, equal to it for every input, so it takes the
+query location of the node it replaces (`DecideReplaces`, the location rule of `../architecture.md` §3). A message or
+a `DIAGNOSE` repair cuts the text at that location, as Clang underlines a source range and does not reprint its syntax
+tree, and never searches for canonical text. The parser records a span for every expression of the tail and for the
+objective (`../01_parser/done.md` §3). EXPLAIN's `≡` layer quotes the located subtrees that read no decision and
+reprints the decision structure, so a clause written `x * w` prints a second line, `w * x`, while a product of data
+reads as written in both. The transformer gives each parsed expression its token's location; a call it rewrites into
+another expression (`IF`, `IFNULL`) keeps the call's, so a refusal over a `COALESCE` or `IFNULL` points at it too.
 
 ### 3.4 Placement
 
@@ -567,7 +569,7 @@ It refuses, for each clause as written:
 | An operator over a decision outside it (`%`, `COALESCE`) | `DECIDE: operator '%' cannot take a DECIDE variable.` |
 | A `POWER` over a decision whose exponent is not a whole number known before the query runs | `POWER over a DECIDE variable needs an exponent that is a whole number known before the query runs, found '0.5'.` |
 | A division by a decision | `DECIDE: cannot divide by a DECIDE variable.` |
-| A `CASE` over a decision (a `CASE` over data is a per-row coefficient, as `COALESCE` over data is) | `CASE over a DECIDE variable is not supported.` and the alternatives: a scope in front, `per`, or a CTE |
+| A `CASE` over a decision (a `CASE` over data is a per-row coefficient, as `COALESCE` over data is) | `CASE over a DECIDE variable is not supported.` and the alternatives: a scope in front, `per`, or a CTE. The first word is the user's: `if(c, a, b)` binds as a CASE and is refused as `IF over ...` (`WrittenConditional` reads it off the node's span) |
 | A term of degree above 2 | `DECIDE: the SUCH THAT clause ... has a term of degree 3, which no solver DeciDB supports can optimize.` and the advice to write each term with at most two decision factors |
 
 Every refusal is an Invalid Input error that ends with the clause as written (`In the SUCH THAT clause ...`, `In the
@@ -660,8 +662,8 @@ column and `by (t.g COLLATE noaccent)` are two keys, so the check runs and stops
 under `noaccent`; `by (t.g COLLATE NOCASE)` over that column is the same key. Collation names are never compared:
 `nocase.noaccent` and `noaccent.nocase` lower to different expressions and are two keys, as GROUP BY's duplicate-group
 removal sees them. The message texts are rendered
-here, through `RenderDecideSource`, from source fragments and relation aliases
-(`DecideScopeChecks`), since only planning still knows them.
+here, through `RenderDecideSource`, from the query's text (`DecideSourceText`, carried by `DecideScopeChecks`) and
+relation aliases, since only planning still knows them.
 
 ---
 
@@ -737,8 +739,8 @@ or debug-only:
   whose NULL handling is the default, so the special-NULL guard is a precondition.
 - **Typed reads.** Tag parsing, `ReadProduct`'s coefficient of a one-factor product, and `SourceClauseOf` throw an
   `InternalException` naming the stage that broke its promise.
-- **Source text.** The span cuts of `DecideSourceText` fall back to a reprint when a macro's tail substitutes an
-  argument, which keeps no source text (the macro `BETWEEN` test reaches it).
+- **Source text.** A `BETWEEN` whose location a macro expansion replaced has no span, so `LinkBetweenHalves` reads its
+  sides off its two halves (the macro `BETWEEN` test reaches it).
 - **Provenance tripwires.** A row no clause claims, a clause no row mentions, and the upper half of a `BETWEEN` met
   before its lower are formulation failures: every rewrite stamps its rows (`decide_optimizer.cpp`), and EXPLAIN
   marks such a row "added by formulation" ([`../../language/explain.md`](../../language/explain.md)). A C++ test

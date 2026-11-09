@@ -62,7 +62,7 @@ stage that owns the behavior, not the one that calls it first. Two things to rea
 
 ---
 
-## 3. Three structural decisions
+## 3. Four structural decisions
 
 ### The operator sits above the scan and the filter
 
@@ -94,6 +94,17 @@ a degree above two, the canonicalizer writes each marker once. A reader that rel
 broken promise in a release build is an error that names the stage, not a wrong answer. `D_ASSERT`, compiled out of a
 release build as in DuckDB, checks only what the same function established a few lines above. A query never reaches
 these checks; each area's `done.md` names the ones it keeps.
+
+### A message quotes the query by location
+
+The parser keeps the DECIDE tail's text and one span per expression (`DecideSourceText`, Clang's SourceManager), and a
+bound node names its span by its query location. A message cuts that text before it reprints anything. The location
+rule follows Clang's TreeTransform: a replacement takes the location of exactly the node it equals in value
+(`DecideReplaces`, one helper at each replacement site), and a node whose value differs from every node it replaces
+takes none and prints its operator over quoted children. The invariant: an edit that changes a located node's value
+must clear its location, or a message would quote text for a value the node no longer has. A macro expansion stands
+where its call stood (Clang's expansion location). Per-stage detail is in
+[`01_parser/done.md`](01_parser/done.md) §3 and [`03_logical_plan/done.md`](03_logical_plan/done.md) §6.
 
 ### Execution is stop-and-go
 

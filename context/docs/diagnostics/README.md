@@ -100,8 +100,8 @@ too-open one.
 
   A term canonicalization only respells, such as the product `x * w` into `w * x`
   (`../pipeline/04_canonicalizer/done.md` §3.3b), is quoted as written too: the canonical clause a repair edits keeps
-  that text, cut from the query at the term's source location (the `TERM` span), and never searches for it by canonical
-  text. EXPLAIN's `≡` line shows the respelling.
+  that text, cut from the query at the term's source location (the respelled node takes the location of the term it
+  replaces), and never searches for it by canonical text. EXPLAIN's `≡` line shows the respelling.
 
   It stays narrow deliberately. Where only **one** side carries decisions the rewrite is
   a clean move and the leftover bound folds into something *better* than what was

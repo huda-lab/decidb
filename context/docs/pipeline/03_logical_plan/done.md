@@ -273,7 +273,7 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
 it names — `DecideKey`, `DecideKeyElement`, `KeyedScopeInfo`, `DecideVarScopeInfo`,
-`ConstraintSourceInfo`, `DecideSourceColumnName`, `DecideScopeCheck` — have their own entries
+`ConstraintSourceInfo`, `DecideSourceColumnName`, `DecideScopeCheck`, `DecideSourceText` — have their own entries
 in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored
@@ -343,10 +343,10 @@ assertions select one complete build when verifier paths append equivalent copie
 `GetName()` returns `"DECIDE"`. `ParamsToString()` builds the structured plan
 output, using `CollectDecideExpressionStrings` to print every clause in one style
 (D32): each clause as typed, the `when` and `per` wrappers as one qualifier in front (`when c per K:`), and the
-defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as written (`sum(D: x)`,
-D38). The two-level objective prints as `outer(per k: inner(e) by (k))`, a `when` in
-front of it, its key as written: `RenderDecidePerKey` reads the source fragment both
-binders record for a `per` key. A row the solver receives is left out where it reads as
+defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as
+`sum(per D: x)` in the canonical and rewritten layers (D38). The two-level objective prints as
+`outer(per k: inner(e) by (k))`, a `when` in front of it, its key as written: `RenderDecidePerKey` cuts the key from
+`DecideSourceText` at the `per` wrapper's location. A row the solver receives is left out where it reads as
 the clause above it. The renderers read the clause
 registries and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
 column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b * x)`,
@@ -364,31 +364,32 @@ a scope keeps the qualifier of the wrappers above it in its source info
 (`ScopedInQualifier`), so a suggested edit pastes back with its scope; an infinity norm
 echoes its order quoted (`norm(e, 'inf')`). The diagnosis labels of a hard MIN/MAX and
 of a `<>` (`minmax_clause_labels`, `ne_clause_labels`) are spelled as the plan prints
-the clause (`max(ship)`, `sum(ship) by (D.region) <> 20`). Parentheses follow DuckDB's
-precedence: an untagged cast passes its precedence to the child it hides, the right
-operand of a non-associative operator keeps its parentheses (`x * (cap % 7)`,
-`a ** (b ** c)`), a negated negative prints `-(-x)` and an `OR` under an `AND` keeps its
-parentheses. A function prints its lower-case name and a column is quoted where SQL
-needs it (`"order"`, `"per"`).
+the clause (`max(ship)`, `sum(ship) by (D.region) <> 20`). A quoted span is parenthesized by how
+tightly its own text binds (`DecideBinding`, recorded with the span), not by the bound node. In a reprinted node,
+parentheses follow DuckDB's precedence: a cast with no location passes its precedence to the child it hides, the right
+operand of a non-associative operator keeps its parentheses (`x * (cap % 7)`, `a ** (b ** c)`), a negated negative
+prints `-(-x)` and an `OR` under an `AND` keeps its parentheses. A reprinted function prints its lower-case name and a
+column is quoted where SQL needs it (`"order"`, `"per"`).
 
 Both the walker and the leaf renderer `RenderDecideSource` live in
-`src/planner/decide/decide_source_provenance.cpp`, beside the source-fragment
-tagging they depend on, because every surface that echoes a DECIDE clause back to
-a user needs them: the logical node, the physical node, and the labels an
-infeasibility diagnosis prints. `Expression::ToString()` cannot serve any of them —
-it prints the tree as bound, so it shows the casts the binder inserted while
-reconciling types and spells arithmetic in call form. `RenderDecideSource` decides
-what to show by **authorship**: `TagDecideSourceFragments` recorded the written
-spelling of every cast and scalar subquery before binding could obscure it, so a
-tagged node replays its own SQL out of `source_fragments` and an untagged cast is
-dropped as reconciliation noise.
+`src/planner/decide/decide_source_provenance.cpp`, beside the location rule they depend on, because every surface that
+echoes a DECIDE clause back to a user needs them: the logical node, the physical node, and the labels an
+infeasibility diagnosis prints. `Expression::ToString()` cannot serve any of them: it prints the tree as bound, so it
+shows the casts the binder inserted while reconciling types and spells arithmetic in call form. `RenderDecideSource`
+decides what to show by **location**, Clang's SourceManager idea: the parser kept a span of the query for every
+expression of the DECIDE tail (`DecideSourceText`), a bound node names its span by its query location, and the
+renderer cuts the span of a located node (the parentheses around it excluded, its whitespace and comments verbatim)
+before it reprints anything. A message quotes every located node. EXPLAIN's written layer does the same; its canonical
+and rewritten layers quote every located subtree that reads no decision and reprint the decision structure, which
+canonicalization and the rewrites reshape. A node with no location (one a rewrite built) prints its operator and quotes
+its children; an implicit cast takes its child's location, so it quotes as the child does. The rule that keeps a
+location true is Clang's TreeTransform one (`../architecture.md` §3, `DecideReplaces`).
 
-`source_fragments` therefore rides on `LogicalDecide` (serialized) and is copied to
-`PhysicalDecide`, alongside the `constraint_sources` registry
-that shares the same renderer. The registry entry holds a clause's canonical text with each respelled term quoted as
-written (`canonical_lhs`, `canonical_rhs`) and the canonical spelling a plan shows (`spelled_lhs`, `spelled_rhs`). The
-objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span, and
-`objective_canonical_differs` says canonicalization changed it.
+`source_text` (`DecideSourceText`) rides on `LogicalDecide` (serialized) and is copied to `PhysicalDecide`, alongside
+the `constraint_sources` registry that shares the same renderer. The registry entry holds a clause's canonical text with
+each respelled term quoted as written (`canonical_lhs`, `canonical_rhs`) and the canonical spelling a plan shows
+(`spelled_lhs`, `spelled_rhs`). The objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span,
+and `objective_canonical_differs` says canonicalization changed it.
 
 See [`../../language/explain.md`](../../language/explain.md)
 for the output itself.

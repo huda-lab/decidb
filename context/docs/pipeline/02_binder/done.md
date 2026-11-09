@@ -197,6 +197,15 @@ override — filling only an empty location, so an inner node keeps its own span
 rather than being widened to its parent's. The shape check needs this to point a
 caret at a term, and so do the integrality gate's two refusals (§4).
 
+The location is also the key of the node's text. The parser kept a span of the query for every expression of the
+DECIDE tail (`../01_parser/done.md` §3), `DecideSourceText`, indexed by the parsed node's query location, so a bound
+node that keeps the location can be quoted as the user wrote it. Every site that builds a node in place of another
+takes the location of exactly the node it equals in value (`DecideReplaces`) and an edit that changes a located
+node's value clears it (`../architecture.md` §3). Copies of a bound column reference keep theirs. A macro
+expansion keeps the call's location on its root, clears the body's (they index the macro's definition, not this query)
+and leaves the arguments' as written (`ExpressionBinder::UnfoldMacroExpression`). A parameter is quoted as written
+(`$1`).
+
 ---
 
 ## 3. Reducers
@@ -223,20 +232,18 @@ reducer counts once. `per row` adds nothing. A `by` after the reducer is
 
 ### Relation-qualified reducers
 
-`DecideBinder::BindQualifiedReducer` binds the colon form `SUM(D: expr)` as
-`sum(per D: expr)` (../../language/guide.md §5.1): each listed relation must be a relation
-of the FROM clause, its stored columns form the key (`AddRelationColumns`), and `FindOrCreateScope` — shared with `FindOrCreateKeyScope` —
-finds or creates the key's scope, so `SUM(D: e)` and `sum(per D: e)` share one
-scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's alias). `COLON_FORM_TAG` keeps the
-spelling for the echo (D38). Nothing is checked against the body at bind time: that `D`
-determines it — every column, per-row and keyed decision in it — is the DETERMINES
-check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the
-decision y (in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation
-name, a relation not in the FROM clause, a qualifier on anything but `SUM`, `AVG`,
-`MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions alone
-(`ClassifyReducerCall`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)`
-carries the tag like `SUM(D: e)`; stage 04's definition of orders 1, 2 and `'inf'` and stage
-05's L0 lowering keep the alias, so every order reads each row of `D` once.
+`DecideBinder::BindQualifiedReducer` binds the colon form `SUM(D: expr)` as `sum(per D: expr)` (../../language/guide.md
+§5.1): each listed relation must be a relation of the FROM clause, its stored columns form the key
+(`AddRelationColumns`), and `FindOrCreateScope` — shared with `FindOrCreateKeyScope` — finds or creates the key's scope,
+so `SUM(D: e)` and `sum(per D: e)` share one scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's
+alias). A message quotes the colon form as written; EXPLAIN reprints the reducer, so it shows `sum(per D: e)` (D38).
+Nothing is checked against the body at bind time: that `D` determines it — every column, per-row and keyed decision in
+it — is the DETERMINES check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the decision y
+(in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation name, a relation not in the FROM clause, a
+qualifier on anything but `SUM`, `AVG`, `MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions
+alone (`ClassifyReducerCall`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)` carries the tag
+like `SUM(D: e)`; stage 04's definition of orders 1, 2 and `'inf'` and stage 05's L0 lowering keep the alias, so every
+order reads each row of `D` once.
 
 A reducer may name more than one relation, `SUM(D, T: expr)`. The key is every named
 relation's stored columns, so a row is a duplicate only when it repeats on **every**
@@ -392,9 +399,8 @@ likely a spelling as `SUM(x) < 5`. Reading a side is not moving one.
 The advice differs by operator because the repair does. `<` has an exact restatement
 (`<= K-1`), so the message offers it. `<>` has none, so the message says to declare the
 decision `INT` if the quantity is a whole number, or to name the range actually meant.
-The `<>` clause is spelled by hand rather than through `ToString()`, which renders
-`COMPARE_NOTEQUAL` as `!=` — a clause quoted back to the user has to read the way they
-wrote it.
+The clause is quoted from the query's text (`DecideWrittenSql`), not printed through `ToString()`, which renders
+`COMPARE_NOTEQUAL` as `!=`: a clause quoted back to the user reads the way they wrote it.
 
 **The rule is stated on the type of the compared quantity, not on every type beneath
 it.** `norm(e, 0, M)` counts nonzeros, so its value lands on the integer lattice however
@@ -455,16 +461,15 @@ model builder's remaining checks are `InternalException` invariants.
 
 ### Refusals quote the clause
 
-A constraint shape the binder does not read is refused by quoting it as written,
-through one helper (`UnsupportedConstraint`): *"SUCH THAT does not support '(x IS
-NULL)'"*. A reducer body it does not read gets *"SUM expression does not support
-'(x BETWEEN 1 AND 2)'"*. A function on either side is named as the user wrote it
-(`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal `count_star`. A
-reducer whose body holds no decision (`sum(1)`, `sum(cap)`) gets *"SUM expression must
-reference at least one DECIDE variable"*; only a body that holds a query-wide decision
-is told to drop the reducer. Every binder message that quotes a clause takes its text from `DecideWrittenSql`, which
-strips the source-fragment tags (`TagDecideSourceFragments`) from a copy before printing it: a call prints its
-arguments' aliases, so a reprint of the tagged tree would show `sum(__source_fragment_0__ := (SELECT x))`.
+A constraint shape the binder does not read is refused by quoting it as written, through one helper
+(`UnsupportedConstraint`): *"SUCH THAT does not support '(x IS NULL)'"*. A reducer body it does not read gets *"SUM
+expression does not support '(x BETWEEN 1 AND 2)'"*. A function on either side is named as the user wrote it
+(`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal `count_star`. A reducer whose body holds no decision
+(`sum(1)`, `sum(cap)`) gets *"SUM expression must reference at least one DECIDE variable"*; only a body that holds a
+query-wide decision is told to drop the reducer. Every binder message that quotes a clause takes its text from
+`DecideWrittenSql`, which cuts the expression's span from `DecideSourceText` by its query location. A parsed node with
+no span (a statement built without the parser's text) is printed from a copy stripped of the binders' tags, since a call
+prints its arguments' aliases.
 
 Arms kept as guards (BLOAT-26): the null check after `GetBoundAggregate` in `BindScopedReducer` and `BindReducerBy`
 (a nullable pointer read on the next line), and the error check after the scope lambda binds a scoped constraint's
@@ -504,23 +509,22 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | Written | Bound |
 |---|---|
 | `when c: C` | a WHEN wrapper (`WHEN_FILTER_TAG`) `[C, c]` |
-| `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its key as written a source fragment on the alias |
+| `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its location the `per`'s, where the parser kept the key as written |
 | `when c per K: C` | `PER_CLASS{WHEN{C, c}}`, tagged with K |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
 | `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
-| `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form adds `COLON_FORM_TAG` (§3) |
+| `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form shares the scope of `per D` (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
-| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e))}` (`TWO_LEVEL_OBJECTIVE_TAG`), tagged with k's entry, its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}}` |
+| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e))}` (`TWO_LEVEL_OBJECTIVE_TAG`), tagged with k's entry, located at its `per`; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}}` |
 
 - `BindScopedConstraint` binds the body, the condition as data, the key through
   `BindKey` (a declaration key's resolution into the key table; a column element keeps
   its written name for messages). A `BETWEEN` binds to two comparisons, each under the whole scope;
   the second binds the condition again from its parsed text, since a bound subquery
   cannot be copied.
-- The key's text becomes a source fragment while binding, not on the parsed marker:
-  `ExpressionBinder::Bind` copies a parsed node's alias onto the node it binds to, which
-  would replace the wrapper's tag.
+- The key's text is not a tag: the `PER` wrapper takes the location of the `per` marker and a message cuts the
+  key from the query there. The key table keeps the key as it was first written for a wrapper with no location.
 - `BindReducerBy`: a relation element stands for its stored columns (a column of that
   name wins); any other element binds as data. Equal key sets share one entry of the key
   table, with every other key of those elements: equal as bound expressions, or, for a key
@@ -533,8 +537,8 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   outer `avg` (*"DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not
   supported yet; write sum, min or max over them"*). A decision outside the objective's
   reducers binds: a query-wide one is one column, and any other must have one instance
-  over the kept rows, a run-time check. The objective's casts and subqueries are
-  fragment-tagged like a constraint's.
+  over the kept rows, a run-time check. The objective's
+  expressions are located like a constraint's.
 - A strict comparison over a fractional operand names a reducer as written, scopes and
   `by` included (*"'avg(ship) by (D.region)' has type DOUBLE ..."*). A decision-free
   addend belongs to the bound where the side is linear in it. A `MIN` or `MAX` that is a term

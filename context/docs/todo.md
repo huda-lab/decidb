@@ -6,19 +6,14 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: M1 and H-50 side by side; B1 after M1 (both edit the binder); the A2 measurement on a
-quiet machine, last.
+Each batch finishes completely. Lanes: H-50 and B1 side by side; the A2 measurement on a quiet machine, last.
 
 ## A2. A2's slow all-rows query
 
 - [ ] H-50 A direct plan costs two to three times DuckDB's own plan for the same answer — direct_solve/framework/todo.md § H-50
 - [ ] H-48 A2's group-then-join plan is measured (quiet machine, after H-50 and the lanes) — direct_solve/framework/todo.md § H-48
 
-## M1. Messages quote the query as written
-
-- [ ] MSG-1 Messages reprint expression trees instead of quoting the source text — issues/code_quality.md § MSG-1
-
-## B1. Outer columns (after M1: both edit the binder)
+## B1. Outer columns
 
 - [ ] BIND-1 An outer column inside a DECIDE marker leaks the marker's name — pipeline/02_binder/todo.md § BIND-1
 

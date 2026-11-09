@@ -21,7 +21,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D28 | DIAGNOSE's `group` column holds the `per` key value: in the expanded slack scope a `by`-grouped clause reports its group's finding once per class of its `per` key, and once per kept row when it has no `per` key (ANR deck pp. 16–17, 110) |
 | D30 | Every clause follows the scope rules, bare clauses included |
 | D31 | There is one language; no clause carries a language tag |
-| D32 | One echo for every clause: the qualifier in front, no synthesized `per row:`, `by ()` not printed. Quoted text keeps the user's case; text DeciDB writes (a rewritten row, an edit) uses lower-case reducers and keywords |
+| D32 | One echo for every clause: the qualifier in front, no synthesized `per row:`, `by ()` not printed. Quoted text keeps the user's case and spacing; a node DeciDB reprints (a rewritten row, the decision structure of a plan's canonical layer) uses lower-case reducers and keywords |
 | D33 | The expanded DIAGNOSE scope reports per kept row for a clause with no `per` key (D28 read literally) |
 | D34 | `count(*)` takes a `by`; `count(*) by (g)` counts a group's rows |
 | D35 | `norm(e, p)` takes a `by` |

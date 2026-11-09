@@ -52,31 +52,42 @@ An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(
 ## Rendering
 
 **Written text is cut, never re-rendered** (a source map, as Clang's SourceManager and DuckDB's `CreateInfo::sql`).
-Inside a DECIDE clause the parser records spans (`{anchor, role, start, end}`) for a comparison's two sides, `when`,
-`per`, `by`, every column, every product, power and function call (`TERM`), and the objective (`OBJECTIVE`, anchored at
-the start of the tail). `SelectNode::decide_text` (`DecideSourceText`) keeps the tail as typed and its spans
-keyed by `(query_location, role)`; it is serialized, `Equals` ignores it, and `SelectNode::ToString` prints the tail
-verbatim, so a print-and-parse round trip keeps the spans. Binders cut text into `source_fragments` and tag the bound
-node; a bound data column carries its spelling (`TagWrittenColumn`). A table macro whose argument lands in a DECIDE
-tail clears `decide_text`, since the argument is not in the body's text; that clause renders by tree. DuckDB's plan
-nodes strip only the source-fragment tag (`StripSourceFragmentTags`); rewrites read the other tags.
+Inside a DECIDE clause the parser records one span per expression (`EXPR`, with how tightly its own text binds:
+`DecideBinding`), plus a span for a reducer's call without its `by` (`CALL`), a `per` key, a `by` key, the two halves
+of a `BETWEEN` and the objective (anchored at the start of the tail). A span is `{anchor, role, start, end, binding}`;
+the parentheses around an expression are not part of its span. `SelectNode::decide_text` (`DecideSourceText`) keeps
+the tail as typed and its spans keyed by `(query_location, role)`; it is serialized, `Equals` ignores it, and
+`SelectNode::ToString` prints the tail verbatim, so a print-and-parse round trip keeps the spans. The binder keeps the
+parsed node's query location on the bound node, and the operator carries the text (`LogicalDecide::source_text`,
+copied to `PhysicalDecide`). A table macro whose argument lands in a DECIDE tail clears `decide_text`, since the
+argument is not in the body's text; that clause renders by tree. A scalar macro's expansion stands where its call
+stood: the call is quoted as written and the macro definition's text is not kept. A parameter is quoted as written
+(`$1`).
 
-**One tree renderer.** `RenderDecideSource` (`decide_source_provenance.cpp`) prints text DeciDB writes itself (the
-canonical layer, moved bounds, edited clauses) and any node without a span. A term canonicalization respelled carries
-`WRITTEN_TERM_TAG_PREFIX` and the text cut at its `TERM` span: a message and a `DIAGNOSE` repair print that text, the
-canonical layer prints the respelled term, and neither searches for the other's text. `Expression::ToString()` is not
-used because the bound tree is not the query: it carries casts the binder inserted, prints functions in call form,
-and keeps pipeline tags in aliases that `GetName()` prints verbatim (`__source_clause_0__`).
+**The location rule** (Clang's TreeTransform; `../pipeline/architecture.md` §3). A replacement takes the location of
+exactly the node it equals in value, so a cast the binder added, a respelled product and a helper column for a data
+reducer quote as the text they stand for. A node a rewrite built, whose value differs from every node it replaced, has
+no location: it prints its operator and quotes its children, never an ancestor's span.
 
-**The style** (D32): quoted text as typed; written text with reducers, `norm` and keywords in lower case; the
-`when c per K:` qualifier in front; a
+**One tree renderer.** `RenderDecideSource` (`decide_source_provenance.cpp`) cuts the span of a located node (whitespace
+and comments verbatim) before it reprints anything, and parenthesizes the cut by its own binding, so `(a + b) * c`
+keeps its parentheses and `a + b * c` gains none. A message and a `DIAGNOSE` repair quote every located node. The
+canonical and rewritten layers quote every located subtree that reads no decision and reprint the decision structure,
+which canonicalization and the rewrites reshape: the colon form prints as `sum(per D: e)` there (D38). A reprinted node
+prints its operator and quotes its children; a cast with no location is display noise and prints as its child. The
+canonical layer prints the respelled product, and a message never searches for the other layer's text.
+`Expression::ToString()` is not used because the bound tree is not the query: it carries casts the binder inserted,
+prints functions in call form, and keeps pipeline tags in aliases that `GetName()` prints verbatim
+(`__source_clause_0__`).
+
+**The style** (D32): quoted text as typed, in the user's case; a reprinted node (a rewritten row, the decision structure
+of a layer) with reducers, `norm` and keywords in lower case; the `when c per K:` qualifier in front; a
 reducer's own scope inside it and its `by (G)` after it; keys as written (`per D.depotID`), never as binding indexes;
-the defaults `per row:` and `by ()` not printed; the colon form kept as `sum(D: e)` (D38); the two-level objective
-printed whole.
+the defaults `per row:` and `by ()` not printed; the two-level objective printed whole.
 
-**Casts by authorship.** `TagDecideSourceFragments` records the written spelling of every cast and scalar subquery
-before binding. A tagged node replays its own SQL; an untagged one, which the binder added, is dropped. So
-`SUM(x * CAST(q AS INTEGER))` keeps its cast and reconciliation casts never appear.
+**Casts by location.** A cast the user wrote has its own span, so it is quoted with the expression around it:
+`SUM(x * CAST(q AS INTEGER))` keeps its cast. A cast the binder added takes its child's location and quotes as the
+child, so reconciliation casts never appear.
 
 **Walking the conjunction.** The binder puts all of `SUCH THAT` into one `BoundConjunctionExpression`.
 `CollectDecideExpressionStrings` walks it, building the qualifier of the wrappers above each clause:
@@ -88,7 +99,7 @@ before binding. A tagged node replays its own SQL; an untagged one, which the bi
 | `TWO_LEVEL_OBJECTIVE_TAG` (two-level objective) | print it whole (`RenderTwoLevelObjective`) |
 | `AND` | recurse into each child |
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
-| leaf | the cut text (else `RenderDecideSource`), quoted with its qualifier by `QuoteWrittenClause` |
+| leaf | `RenderDecideSource`: the cut text of a located node, else the reprint; quoted with its qualifier by `QuoteWrittenClause` |
 
 Messages quote a clause only through `QuoteWrittenClause` or `QuoteEditedClause` (`decide_source_info.cpp`), which
 put the qualifier in front. The objective goes through the same walker. `GetName()` on a `when` wrapper would return its alias, the raw tag.

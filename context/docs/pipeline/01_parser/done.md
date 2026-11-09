@@ -249,6 +249,17 @@ node, or a list) the children after it — into a tagged `FunctionExpression` wi
 The first five reach the binder, which binds every one into the bound tree's own
 wrappers and tags (`../02_binder/done.md` §4a). The last two never leave this stage.
 
+**Source spans.** The grammar wraps every expression of a DECIDE clause in one decorator reduction
+(`a_expr: a_expr_body` and `b_expr: b_expr_body` call `noteDecideExpr`), the one place that sees an expression with its
+text. It records `{node, start, end}` with the role `EXPR`; `noteDecideParen` leaves the parentheses of `( e )` out of
+`e`'s span. The other roles are the constructs that are no expression: `CALL` (a reducer without its `by`), `PER`, `BY`,
+the two halves of a `BETWEEN` and the objective. The interceptor `Transformer::TransformExpression` (Clang's
+SourceManager idea: one store of text, a location per node) keys each `EXPR` span by the query location its parsed
+expression took, innermost first, together with a `DecideBinding`: how tightly the node's own text binds (`WHOLE` for a
+call, column, literal, `::` cast, parenthesized text, subquery and `CASE ... END`; `LOOSE`, `ADDITIVE`, `MULTIPLICATIVE`
+or `POWER` for an operator). `TransformSelectNode` assembles the tail and its spans into `SelectNode::decide_text`
+(`DecideSourceText`). A parameter takes its location too, so `$1` is quoted as written.
+
 ### Refusing the removed spellings
 
 `RefuseRemovedDecideSpellings` (`src/parser/decide/decide_removed_spellings.cpp`) walks
@@ -325,7 +336,6 @@ In execution order:
 | 4 | `ValidateDecideNoExplicitDecisionCasts` | Rejects a user-written cast over a decision, in `SUCH THAT` and the objective; only the parsed tree shows who wrote a cast (`../04_canonicalizer/done.md` §3.6). |
 | 5 | `ValidateDecideNoDataAggregateFactor` | Rejects a data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`), before symbolic normalization could distribute the decision into it. Every other refusal of algebra is the shape check's (`../04_canonicalizer/done.md` §3.11). |
 | 6 | `ValidateDecideNoIntegerStepComparisonOnReal` | Rejects `<`, `>` and `<>` over a `REAL` decision, in the constraints (`../02_binder/done.md` §4). |
-| 7 | `TagDecideSourceFragments` | Stamps each cast and scalar subquery of the constraints and the objective with an id, so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
 
 `norm()` and DECIDE-variable `IN (...)` are deliberately not rewritten here.
 The binder retains bound markers, and stage 05 chooses the indicator and linking
@@ -406,7 +416,8 @@ Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
 | DECIDE `WHEN`, `PER` and `BY` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
 | Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`, `absorbRemovedPerKey`) |
-| Source spans (a comparison's sides, scopes, columns, a product, power or function call, the objective) | `grammar/grammar.cpp` (`noteDecideSpan`, `noteDecideSides`, `noteDecideTerm`); the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
+| Source spans (one per expression of the tail, a `per`/`by` key, a reducer's call, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideCall`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
+| Span keyed by query location, with its `DecideBinding` | `src/parser/transform/expression/transform_expression.cpp` (the interceptor `Transformer::TransformExpression`), `transform_select_node.cpp` (assembles `DecideSourceText`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
 | DECIDE tag construction | `src/parser/transform/expression/transform_operator.cpp` |
