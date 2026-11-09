@@ -1,7 +1,7 @@
 # Shared engine — what exists today
 
-Verified on 2026-11-08 at `73b52ab1d1`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
-serializer, highs) 7,020 passed; C++ `build/release/test/unittest "[decidb]"` 4,635 assertions in 85 cases. Design:
+Verified on 2026-11-09 at `c1c603746f`: `test/decide/run_direct_matrix.sh`, each of its four suites (auto, off,
+serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,670 assertions in 89 cases. Design:
 `../architecture/`.
 
 ## What it does
@@ -378,17 +378,35 @@ rank window or a verified, streamed plan) and run on the same two central files.
   also lists every arm no test reaches), and writes `report.json` with each arm's condition text and function.
   `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not (exit 1 when there are any) and the
   reverse, matching an arm by file, function, condition text and its occurrence in the function, so lines that move are
-  not read as lost. Arms no test reaches, kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every
-  caller's earlier determinism check rules out but which the function's contract promises on its own; the `default` arm
-  of the `ExpressionType` switch in S1's `NormalizeCapacity`; and the extension-name check in late materialization's
-  `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from an IR against the solver with
+  not read as lost. Arms no test reaches, kept on purpose, each a check of what another component promises:
+  - **The binder's promise that a key, a scope condition and a group-bound input read only the source:**
+    `DirectReferencesOnlySource` in `CheckablePredicate`, the checkability tests of a row, a filter and a value, and
+    `ReadKey` failing in `ReadDetermination`, for a reducer's `by` key and for a `per` key (`direct_ir.cpp`); the same
+    test of a group-bound input (`direct_plan_fragments.cpp`); and `ref.depth == 0` in `DirectReferencesOnlySource`
+    (`direct_expression.cpp`), which every caller's determinism check rules out but the function's contract promises
+    on its own. A `per` key cannot be an expression, a `when` or `by` reading a decision is refused earlier, and an
+    outer reference does not plan (BIND-1).
+  - **The canonicalizer's promise that a reducer's data is guarded:** the second operand of A1's `IsConstantProblem`
+    (`!constant_values(inner.constant)`, `!term.value->IsFoldable()`); any non-foldable data in a reducer makes the
+    canonicalizer guard every coefficient, so the first operand returns first.
+  - **A fold of the user's constant that fails:** S1's `TryEvaluateFoldableDouble(..., FOLD_CATCH_ALL)` over the value
+    and slope of a singleton row, which declines so the solver path raises the user's error, and the `default` arm of
+    the `ExpressionType` switch in S1's `NormalizeCapacity`.
+  - **Late materialization's own operators:** the extension-name check in `VisitForAdapters`, which keeps an operator
+    of another extension from being cast to the adapter, and the adapter-shape guards beside it
+    (`direct_late_materialization.cpp`).
+  - **`InternalException` guards on a caller in another file:** `DirectWindowOfAggregate` on a reducer with bind data
+    (the binder casts a reducer's argument to DOUBLE, so SUM, AVG, MIN, MAX and COUNT bind none);
+    `DirectReplaceColumns` on a column outside the ones replaced; `DirectIsFiniteWhereKept` on no values; and
+    `DirectReadAbsTerm` on a term that is not an `ABS` (A2 promises one).
+  The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from an IR against the solver with
   NULL-key rows (`test/common/ test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a
   query reaches it and a test runs it; a check on what a rule hands the engine raises in release builds and a stub-rule
-  C++ test reaches it; a check on a plan, IR or setting the engine builds itself is a `D_ASSERT`, which debug builds
-  run; code no query reaches is deleted. Branch coverage shows which branches a test runs, not whether its assertion
-  would catch a wrong value there. One change no query can tell apart: `inclusive <= 0.0` against `< 0.0` for a lower
-  bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives capacity 0 either way). At `73b52ab1d1` the tests reach
-  2,397 of the 2,450 arms in these files; `todo.md` § TEST-2 lists the other 53. A subset run by hand needs `-m` (the
+  C++ test reaches it; a check on a plan, IR or setting the engine builds itself, in the same file, is a `D_ASSERT`,
+  which debug builds run; code no query reaches is deleted. Branch coverage shows which branches a test runs, not
+  whether its assertion would catch a wrong value there. One change no query can tell apart: `inclusive <= 0.0`
+  against `< 0.0` for a lower bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives capacity 0 either way).
+  `coverage_report.py report --unreached` lists exactly the arms above. A subset run by hand needs `-m` (the
   script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `when` 0.26 s, 3 decisions and 8 clauses 0.29 s.

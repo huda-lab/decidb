@@ -6,17 +6,13 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: T1 and M1 side by side; H-50 after T1 (both edit the plan fragments); the A2
-measurement on a quiet machine, last.
+Each batch finishes completely. Lanes: M1 and H-50 side by side; B1 after M1 (both edit the binder); the A2 measurement on a
+quiet machine, last.
 
 ## A2. A2's slow all-rows query
 
-- [ ] H-50 A direct plan costs two to three times DuckDB's own plan for the same answer (after T1) — direct_solve/framework/todo.md § H-50
+- [ ] H-50 A direct plan costs two to three times DuckDB's own plan for the same answer — direct_solve/framework/todo.md § H-50
 - [ ] H-48 A2's group-then-join plan is measured (quiet machine, after H-50 and the lanes) — direct_solve/framework/todo.md § H-48
-
-## T1. Tests against the oracle
-
-- [ ] TEST-2 Direct-solve arms no test reaches — direct_solve/framework/todo.md § TEST-2
 
 ## M1. Messages quote the query as written
 

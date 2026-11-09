@@ -120,26 +120,3 @@ solver path answers those queries, so none of them is wrong, only slower.
   that computes the same answer with the same DOUBLE arithmetic, at `sf=1`, measured in one process (`PRAGMA
   enable_profiling`), and on all threads no slower than on one at every size; answers, error texts and the first
   error to raise unchanged, goldens unchanged, and the matrix passes.
-
-## TEST-2 — Direct-solve arms no test reaches
-
-- **Problem.** At `73b52ab1d1`, `make decide-coverage` reaches 2,397 of the 2,450 arms in `direct/*.cpp` and
-  `decide_rewrite_rhs_bounds.cpp`; `coverage_report.py report --unreached` lists the other 53. Three are kept on
-  purpose (`done.md`, branch coverage). Two groups are tests that miss what they are for:
-  - `DirectSourceReader::CopyOfChain` (`direct_source_reader.cpp`, the re-read of a projection or filter chain, five
-    arms): `test_r1_sources_over_a_stored_table_agree_with_the_solver` names it as its purpose ("a source is re-read
-    when it is a chain of projections and filters over one table scan"), but under the copy rule (§ Row checks) its
-    2,000-row sources are copied, so no test takes the re-read.
-  - N1 with a limit input that has no argument, `SUM(POWER(x, 2)) <= COUNT(*)` with or without `by` (two arms in
-    `n1_euclidean_ball_rule.cpp`): the rule takes it under `require`, and no test runs it.
-  - The nested-reducer reading (`DirectPart::inner`, set in `ReadReducer`, `direct_ir.cpp`) and every check of it
-    (`DirectPart::IsPlainSum`, A2's `plain`, the IR's own decline): the binder rejects a nested reducer everywhere but
-    the two-level objective `outer(per k: inner(e) by (k))`, and `ReadObjective` declines that first
-    (`IsTwoLevelObjectiveWrapper`), so no query reaches it. It is deleted with the IR test that only names it; the
-    two-level objective stays a decline (`../architecture/ir.md` § Not proved), and the rule that first takes it reads
-    it into the IR.
-  The others are declines and guards in the IR readers, the bound reader, the plan fragments, late materialization and
-  the S1, A1 and A2 rules.
-- **Change.** For each arm: add a test that reaches it (oracle-compared where it answers), or delete it as code no
-  query reaches (owner ruling 2026-10-21), or keep it as a rule-handoff or typed-read guard and name it in `done.md`.
-- **Done when.** `--unreached` lists only the arms `done.md` names, and the matrix passes.
