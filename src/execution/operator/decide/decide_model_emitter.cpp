@@ -20,15 +20,15 @@
 namespace duckdb {
 
 static const char *const DECIDE_MODEL_SHAPE_NAMES[] = {
-    "ROWS",           "REPAIR_ROWS",   "KEYED_DECLARED",     "OBJECTIVE_LINEAR",   "GROUP_ROWS",
-    "NOT_EQUAL_ROWS", "DEFINED_READS", "CLASS_ROWS",         "CLASS_SETS",         "KEYED_SIGNATURE",
-    "EXTREMUM_ROWS",  "MEMBER_ROWS",   "OBJECTIVE_EXTREMUM", "COMPOSED",           "OBJECTIVE_COMPOSED",
-    "PRODUCT_TERMS",  "SQUARE_TERMS",  "OBJECTIVE_SQUARES",  "OBJECTIVE_PRODUCTS", "PRODUCT_LINKS",
-    "TIGHTEST_BOUND", "VALUE_LINKS",   "FRAME_READS",
+    "ROWS",           "REPAIR_ROWS",    "KEYED_DECLARED",     "OBJECTIVE_LINEAR",   "GROUP_ROWS",
+    "NOT_EQUAL_ROWS", "DEFINED_READS",  "CLASS_ROWS",         "CLASS_SETS",         "KEYED_SIGNATURE",
+    "EXTREMUM_ROWS",  "MEMBER_ROWS",    "OBJECTIVE_EXTREMUM", "COMPOSED",           "OBJECTIVE_COMPOSED",
+    "PRODUCT_TERMS",  "SQUARE_TERMS",   "OBJECTIVE_SQUARES",  "OBJECTIVE_PRODUCTS", "PRODUCT_LINKS",
+    "VALUE_LINKS",    "TIGHTEST_BOUND", "FRAME_READS",
 };
 
 //! The shapes the query has that have no arm yet: a clause's bound that reads a frame, then what the query hands stage
-//! 06 beside its clauses. A helper's classes reach stage 06 with its link.
+//! 06 beside its clauses. A range over decisions is a helper of a frame (LogicalDecide::ReducerValueLink::frame).
 static vector<DecideModelShape> QueryShapes(const DecideTree &tree, const PhysicalDecide &op) {
 	vector<DecideModelShape> shapes;
 	for (auto root : tree.roots) {
@@ -36,9 +36,6 @@ static vector<DecideModelShape> QueryShapes(const DecideTree &tree, const Physic
 		if (body.clause && body.clause->tightest_frame_bound) {
 			shapes.push_back(DecideModelShape::TIGHTEST_BOUND);
 		}
-	}
-	if (!op.reducer_value_links.empty()) {
-		shapes.push_back(DecideModelShape::VALUE_LINKS);
 	}
 	if (!op.frames.empty()) {
 		shapes.push_back(DecideModelShape::FRAME_READS);
@@ -163,15 +160,14 @@ string DecideObjectiveDifference(const DecideTree &tree, const DecideNode &node,
 	return DecideObjectiveTwiceMessage(node.signature, tree.keys, tree.variable_scopes, read);
 }
 
-vector<KeyedMapping> DecideModelEmitter::KeyedMappings() {
-	auto mappings = DecideDeclaredMappings(descent);
+void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
+	mappings = DecideDeclaredMappings(descent);
 	for (idx_t scope = 0; scope < op.keyed_scopes.size(); scope++) {
 		if (op.keyed_scopes[scope].signature != DConstants::INVALID_INDEX) {
 			mappings[scope] = SignatureMapping(scope);
 		}
 	}
-	ReadAbsence();
-	return mappings;
+	ReadAbsence(mappings);
 }
 
 KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
@@ -188,82 +184,91 @@ KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
 	if (variants.count > variants.num_classes) {
 		op.RecordVariants(signature, "values", variants.count, variants.num_classes);
 	}
-	// A row the reducer does not read has no class: it maps to one spare class (KeyedMapping::absent_class).
+	// A row the reducer does not read has no class.
 	mapping.row_to_class = variants.of_row;
-	for (auto &id : mapping.row_to_class) {
-		if (id == DConstants::INVALID_INDEX) {
-			mapping.absent_class = variants.count;
-			id = mapping.absent_class;
-		}
-	}
-	if (mapping.absent_class != DConstants::INVALID_INDEX) {
-		mapping.num_classes++;
-	}
+	DecideMapRowsInNoClass(mapping);
 	return mapping;
 }
 
-void DecideModelEmitter::ReadAbsence() {
+DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
+	auto &body = tree.nodes[link]->compiled;
+	const auto site = DecideTreeOperand(tree, link);
+	auto &entries = descent.Containers()[site].entries;
+	auto &slots = descent.Containers()[link].groups;
+	// Flat computes the members on the rows its reducer's `when` and NULL tests keep where every decision they read
+	// has an instance (PhysicalDecide::ValueLinkMembers), a row in no group of its `by` key among them, and a
+	// relation-qualified reducer lists each class once in its group, at its first row (language/guide.md §5.1).
+	LinkMembers members;
+	members.reads = columns.Tested(site);
+	for (idx_t e = 0; e < entries.size(); e++) {
+		for (auto &term : body.members) {
+			members.reads[e] = members.reads[e] && !columns.AbsentAt(term.variable_index, entries[e].row);
+		}
+	}
+	const auto qualified =
+	    op.reducer_value_links[tree.nodes[link]->link].qualifier_scope_idx != DConstants::INVALID_INDEX;
+	vector<bool> held(slots.size(), false);
+	for (auto &read :
+	     ReadRows(site, qualified ? columns.FirstOfEachInstance(site, members.reads) : members.reads, qualified)) {
+		const auto slot = entries[read.second].parent_slot;
+		if (slots[slot].in_a_class) {
+			members.rows.push_back(read);
+			held[slot] = true;
+		}
+	}
+	// A group's number is its rank among the groups that hold a member, as flat numbers them by value.
+	vector<idx_t> by_rank(slots.size());
+	for (idx_t slot = 0; slot < slots.size(); slot++) {
+		by_rank[slots[slot].rank] = slot;
+	}
+	members.group_of_slot.assign(slots.size(), DConstants::INVALID_INDEX);
+	for (auto slot : by_rank) {
+		if (held[slot]) {
+			members.group_of_slot[slot] = members.groups++;
+		}
+	}
+	return members;
+}
+
+KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
+	auto &members = link_members[tree.nodes[link]->link];
+	members = Members(link);
+	KeyedMapping mapping;
+	mapping.num_classes = members.groups;
+	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
+	// A group with no member has no helper, so a row of it reads none (PhysicalDecide::BuildScopeMapping).
+	auto &entries = descent.Containers()[link].entries;
+	for (auto &read : DecideEntryRows(tree, descent, link)) {
+		mapping.row_to_class[read.first] = members.group_of_slot[entries[read.second].slot];
+	}
+	DecideMapRowsInNoClass(mapping);
+	return mapping;
+}
+
+void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	gstate.absent_reads.assign(op.decide_variables.size(), vector<bool>());
-	columns.ReadAbsence(gstate.absent_reads);
-	// The rows defining each auxiliary (DecideConstraint::defined_var), in the tree's order, which puts what defines a
-	// decision before what reads it (D88): an auxiliary a definition reads has its absence by then, whatever order the
-	// rewrites numbered them in.
+	columns.ReadAbsence(mappings, gstate.absent_reads);
+	// The rows defining each auxiliary (DecideConstraint::defined_var) and each helper's G, in the tree's order, which
+	// puts what defines a decision before what reads it (D88): an auxiliary or a helper a definition or a helper's
+	// member reads has its absence by then, whatever order the rewrites numbered them in.
 	vector<idx_t> position(tree.nodes.size());
 	for (idx_t i = 0; i < tree.eval_order.size(); i++) {
 		position[tree.eval_order[i]] = i;
 	}
 	auto definitions = ClauseRoots();
 	definitions.resize(op.prepared.constraints.size());
+	link_members.assign(op.reducer_value_links.size(), LinkMembers());
+	for (auto &link : op.reducer_value_links) {
+		definitions.push_back(tree.value_nodes[link.value_var]);
+	}
 	std::sort(definitions.begin(), definitions.end(),
 	          [&](idx_t left, idx_t right) { return position[left] < position[right]; });
 	for (auto root : definitions) {
-		auto &body = tree.nodes[root]->compiled;
-		auto &clause = *body.clause;
-		if (clause.defined_var == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		auto &absent = gstate.absent_reads[clause.defined_var];
-		auto mark = [&](idx_t row) {
-			absent.resize(num_rows, false);
-			absent[row] = true;
-		};
-		// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
-		// its bound, then each term's coefficient, then each square's terms', which flat reads in that order, so what
-		// one raises ranks there (DecideNode::value_rank). It reads no product's coefficient (DefinitionNulls).
-		auto rank = tree.nodes[root]->value_rank;
-		idx_t position = 0;
-		auto null_rows = [&](idx_t node, idx_t program) {
-			rank.position = position++;
-			const auto nulls = columns.NullEntries(node, program, columns.Tested(node), rank);
-			for (auto &read : DecideEntryRows(tree, descent, node)) {
-				if (nulls[read.second]) {
-					mark(read.first);
-				}
-			}
-		};
-		// A decision it reads has no instance on a row, wherever the row lies: a term's, a product's factors, a
-		// square's terms'.
-		auto absent_rows = [&](idx_t variable) {
-			for (idx_t row = 0; row < num_rows; row++) {
-				if (columns.AbsentAt(variable, row)) {
-					mark(row);
-				}
-			}
-		};
-		null_rows(root, body.rhs);
-		for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
-			null_rows(body.linear[t].node, body.linear[t].program);
-			absent_rows(clause.lhs_terms[t].variable_index);
-		}
-		for (auto &product : clause.bilinear_terms) {
-			absent_rows(product.var_a);
-			absent_rows(product.var_b);
-		}
-		for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
-			for (idx_t t = 0; t < body.squares[g].size(); t++) {
-				null_rows(body.squares[g][t].node, body.squares[g][t].program);
-				absent_rows(clause.quadratic_groups[g].inner_terms[t].variable_index);
-			}
+		auto &node = *tree.nodes[root];
+		if (node.link != DConstants::INVALID_INDEX) {
+			mappings[tree.variable_scopes[node.value_var].keyed_scope_idx] = HelperMapping(root);
+		} else if (node.compiled.clause->defined_var != DConstants::INVALID_INDEX) {
+			DefinitionAbsence(root);
 		}
 	}
 	// A product's auxiliary has none where a factor has none (DecideTreeColumns::AbsentAt), which stage 06 reads too.
@@ -274,6 +279,54 @@ void DecideModelEmitter::ReadAbsence() {
 				absent.resize(num_rows, false);
 				absent[row] = true;
 			}
+		}
+	}
+}
+
+void DecideModelEmitter::DefinitionAbsence(idx_t root) {
+	auto &body = tree.nodes[root]->compiled;
+	auto &clause = *body.clause;
+	auto &absent = gstate.absent_reads[clause.defined_var];
+	auto mark = [&](idx_t row) {
+		absent.resize(num_rows, false);
+		absent[row] = true;
+	};
+	// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
+	// its bound, then each term's coefficient, then each square's terms', which flat reads in that order, so what
+	// one raises ranks there (DecideNode::value_rank). It reads no product's coefficient (DefinitionNulls).
+	auto rank = tree.nodes[root]->value_rank;
+	idx_t position = 0;
+	auto null_rows = [&](idx_t node, idx_t program) {
+		rank.position = position++;
+		const auto nulls = columns.NullEntries(node, program, columns.Tested(node), rank);
+		for (auto &read : DecideEntryRows(tree, descent, node)) {
+			if (nulls[read.second]) {
+				mark(read.first);
+			}
+		}
+	};
+	// A decision it reads has no instance on a row, wherever the row lies: a term's, a product's factors, a
+	// square's terms'.
+	auto absent_rows = [&](idx_t variable) {
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (columns.AbsentAt(variable, row)) {
+				mark(row);
+			}
+		}
+	};
+	null_rows(root, body.rhs);
+	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
+		null_rows(body.linear[t].node, body.linear[t].program);
+		absent_rows(clause.lhs_terms[t].variable_index);
+	}
+	for (auto &product : clause.bilinear_terms) {
+		absent_rows(product.var_a);
+		absent_rows(product.var_b);
+	}
+	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+		for (idx_t t = 0; t < body.squares[g].size(); t++) {
+			null_rows(body.squares[g][t].node, body.squares[g][t].program);
+			absent_rows(clause.quadratic_groups[g].inner_terms[t].variable_index);
 		}
 	}
 }
@@ -1091,6 +1144,46 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 		result.push_back(std::move(evaluated));
 	}
 	return result;
+}
+
+void DecideModelEmitter::ValueLinks() {
+	for (auto &link : op.reducer_value_links) {
+		const auto node = tree.value_nodes[link.value_var];
+		auto &body = tree.nodes[node]->compiled;
+		const auto site = DecideTreeOperand(tree, node);
+		auto &entries = descent.Containers()[site].entries;
+		auto &members = link_members[tree.nodes[node]->link];
+		// Its members' rows, each in its group, as flat's reducer partitions them by its `by` key.
+		EvaluatedConstraint listed;
+		listed.num_groups = members.groups;
+		listed.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+		vector<bool> listed_rows(num_rows, false);
+		for (auto &read : members.rows) {
+			listed.row_group_ids[read.first] = members.group_of_slot[entries[read.second].parent_slot];
+			listed_rows[read.first] = true;
+		}
+		// Each term's coefficient on every row it is computed on, a row in no group among them, which flat reads, and
+		// an AVG's divided by its group's members.
+		for (idx_t t = 0; t < body.members.size(); t++) {
+			auto &term = body.members[t];
+			auto &site_t = body.linear[t];
+			auto numbers = columns.Numbers(site, site_t.program, members.reads, nullptr, &site_t, &term.inputs);
+			listed.row_coefficients.emplace_back();
+			auto &column = listed.row_coefficients.back();
+			column.AssignDense(num_rows);
+			for (auto &read : members.rows) {
+				column.Set(read.first, numbers[read.second]);
+			}
+			listed.variable_indices.push_back(gstate.ReadVariable(term));
+			if (link.agg_name == "avg") {
+				ScaleAvgRows(column, true, listed_rows, false, num_rows, listed.row_group_ids, listed.num_groups);
+			}
+		}
+		auto spec = DecideValueLinkSpec(link);
+		DecideListRowMembers(listed, num_rows, link.label, spec.members);
+		gstate.evaluated_value_links.push_back(std::move(spec));
+	}
+	DecideCountValueLinks(gstate.evaluated_value_links);
 }
 
 } // namespace duckdb

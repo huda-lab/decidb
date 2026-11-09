@@ -320,12 +320,14 @@ def test_the_tree_walks_a_shared_value_once(decidb_cli):
     """Every row of a group reads the group's sum: x_i + S_g <= 10. RequireSupported (decide_tree_evaluation.cpp) runs
     once, in Finalize, and walks a value again only under an earlier rank, so the counter is linear in the rows.
     Without that memo each of the 600 rows walked its group's 200 members (about 124,000 walks); the formulator's
-    second call reported a second counter. The answer: with m the largest x of a group, S_g <= 10 - m and
-    S_g <= 200 m, so S_g = 10 - 10/201 and the total is 3 * (10 - 10/201) = 29.850746."""
+    second call reported a second counter. The cap of 1 is a frame's, which the model emitter has no arm for, so the
+    query takes the interim evaluation. The answer: with m the largest x of a group, S_g <= 10 - m and S_g <= 200 m,
+    so S_g = 10 - 10/201 and the total is 3 * (10 - 10/201) = 29.850746."""
     rows = 600
     sql = f"""SET threads=1; SET decide_direct_solve='off';
-        SELECT round(sum(x), 6) AS total FROM (SELECT i, x FROM (SELECT i, i % 3 AS g FROM range({rows}) r(i)) t
-        DECIDE x(REAL) SUCH THAT x <= 1 AND x + sum(x) by (t.g) <= 10 MAXIMIZE sum(x))"""
+        SELECT round(sum(x), 6) AS total FROM (SELECT i, x FROM (SELECT i, i % 3 AS g, 1 AS one FROM range({rows})
+        r(i)) t DECIDE x(REAL) SUCH THAT x <= at(previous else 1: t.one) over (t.i) AND x + sum(x) by (t.g) <= 10
+        MAXIMIZE sum(x))"""
     cli = decidb_cli.without_verify_serializer().with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_PROFILE": "1"})
     profiled = cli.execute_raw(sql)
     events = [

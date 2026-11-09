@@ -79,7 +79,6 @@ def test_a_query_with_no_arm_takes_the_interim_formulator(decidb_cli):
 #: with stage 06), then what the tree computes no value for.
 UNCOVERED = {
     "TIGHTEST_BOUND": "x(REAL) SUCH THAT x <= 9 AND sum(x) by (t.g) <= at(previous else 9: t.c) over (t.id within t.g)",
-    "VALUE_LINKS": "x(REAL) SUCH THAT x <= 9 AND x <= sum(x) by (t.g)",
     "FRAME_READS": "x(REAL) SUCH THAT x <= 9 AND x <= at(previous else 1: x) over (t.id)",
 }
 
@@ -1468,5 +1467,151 @@ def test_a_product_or_square_raises_flats_error(decidb_cli_gurobi, tmp_path, cas
     flat = run(decidb_cli_gurobi, sql, "flat").stderr
     assert message in flat, flat
     lines, result = coverage(decidb_cli_gurobi, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    assert result.stderr == flat
+
+
+LINK_ROWS = """(VALUES (1, 'a', 3.0, true), (2, 'a', 5.0, false), (3, 'b', 1.0, false), (4, NULL, 2.0, true),
+    (5, 'c', 4.0, true)) t(id, g, c, p)"""
+LINK_JOIN = """(VALUES (1, 'a', 3.0), (2, 'a', 5.0), (3, 'b', 1.0)) t(id, g, c)
+    JOIN (VALUES ('a', 1), ('a', 2), ('b', 3)) w(g, k) ON t.g = w.g"""
+
+#: Each a helper decision of a reducer the value rewrite lifted (VALUE_LINKS), its classes the groups of its `by` key
+#: that hold a member, formulated as flat formulates it, by the branch it reaches.
+VALUE_LINKS = {
+    # One group of every row: each row's cap reads it.
+    "a-sum": (LINK_ROWS, "x(REAL)", "x <= 0.5 * sum(x) + 1"),
+    # A row whose `by` key is NULL is computed on, as flat computes it, but is in no group: it lists no member and
+    # reads no helper.
+    "a-row-in-no-group": (LINK_ROWS, "x(REAL)", "x <= 0.5 * sum(t.c * x) by (t.g) + 1"),
+    # Group b keeps no row for the reducer's `when`, so it has no helper and its rows read none: the groups are
+    # numbered among those that hold a member.
+    "a-group-with-no-member": (LINK_ROWS, "x(REAL)", "x <= sum(when t.p: x) by (t.g) + 1"),
+    # Each member of an AVG divided by its group's members.
+    "an-avg": (LINK_ROWS, "x(REAL)", "x >= avg(x) by (t.g) - 1"),
+    # A relation-qualified reducer lists each class once in its group, at its first row: row a's two joined rows are
+    # one member.
+    "a-qualified-reducer": (LINK_JOIN, "per t: x(REAL)", "x <= 0.5 * sum(t: x) by (t.g) + 1"),
+    # Group b's helper of `when t.p` has no member, so the auxiliary of `abs` has no value there, and the outer sum, a
+    # helper too, lists no member of its rows: the inner helper's classes are read, then the auxiliary's definition,
+    # then the outer helper's members.
+    "a-member-reading-no-instance": (LINK_ROWS, "x(REAL)", "sum(abs(x - avg(when t.p: x) by (t.g))) <= 4"),
+    # A product's factor, which no clause reads but through the product's auxiliary: its helper is a root of its own.
+    "a-helper-no-clause-reads": (LINK_ROWS, "x(INT), b(BOOL)", "x + b * sum(when t.p: x) by (t.g) <= 5"),
+}
+
+
+@pytest.mark.parametrize("case", list(VALUE_LINKS))
+def test_a_helper_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case):
+    rows, decisions, clause = VALUE_LINKS[case]
+    sql = f"SELECT t.id FROM {rows} DECIDE {decisions} SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x)"
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+    # Verify compares the members and the classes, which a helper no row reads leaves out of the model.
+    verified = run(decidb_cli, sql, "verify")
+    assert verified.returncode == 0 and "differ" not in verified.stderr, verified.stderr
+
+
+def test_a_helper_over_every_row_is_one_column(decidb_cli, tmp_path):
+    """Each of 2,000 rows reads one helper of their sum: each row's two terms, x and the helper, and the helper's own
+    row of its 2,000 members and itself, 6,001 terms, where the interim formulator wrote the sum into every row,
+    4,000,000."""
+    sql = "SELECT i FROM range(2000) r(i) DECIDE x(REAL) SUCH THAT x <= 9 AND x <= 0.01 * SUM(x) + 1 MAXIMIZE sum(x)"
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+    assert sum(int(n) for n in re.findall(r"nnz=(\d+)", tree)) == 6001
+
+
+def test_a_helper_read_once_is_written_where_it_is_read(decidb_cli):
+    """D89: stage 06 writes the helper's members where its one reader, the auxiliary of `abs`, reads it, and EXPLAIN
+    ANALYZE accounts for it (PhysicalDecide::ReportInlinedHelpers), as under flat."""
+    sql = f"""EXPLAIN ANALYZE SELECT id FROM {ROWS} DECIDE x(REAL)
+        SUCH THAT x <= t.c AND sum(abs(x - avg(x) by (t.g))) <= 1 MAXIMIZE sum(x)"""
+    accounts = [re.sub(r"[│\s]+", " ", run(decidb_cli, sql, evaluator).stdout) for evaluator in ("flat", "tree")]
+    assert "avg(x) by (t.g) is written where it is read, with no column" in accounts[1], accounts[1]
+    assert re.sub(r"\d+\.\d+s", "", accounts[1]) == re.sub(r"\d+\.\d+s", "", accounts[0])
+
+
+LINK_FAULTS = "(VALUES (1, 'a', 4.0, 1.0), (2, NULL, -1.0, 2.0), (3, 'b', 9.0, 3.0)) t(id, g, s, c)"
+LINK_HUGE = "(VALUES (1, 'a', 1e308::DOUBLE, 1.0), (2, 'b', 1e308::DOUBLE, 2.0)) t(id, g, s, c)"
+LINK_DEFINITIONS = """(SELECT i AS id, CASE WHEN i = 30 THEN -1.0 ELSE 1.0 END AS c,
+    CASE WHEN i = 10 THEN 0.0 ELSE 1.0 END AS d, CASE WHEN i = 20 THEN -1.0 ELSE 1.0 END AS e FROM range(100) r(i)) t"""
+
+#: Each a helper's error, raised where flat raises it, by the branch it reaches.
+LINK_RAISED = {
+    # Flat reads a helper's members' NULL tests where it builds its classes, before any clause: the member's square
+    # root before the earlier clause's logarithm.
+    "a-members-rows-before-the-clauses": (
+        LINK_FAULTS,
+        "ln(t.c - 2.5) * x <= 9 AND x <= 0.5 * sum(sqrt(t.s) * x) + 9",
+        "cannot take square root of a negative number",
+    ),
+    # Row 2's `by` key is NULL, so it is in no group, but flat still computes the member there.
+    "a-member-on-a-row-in-no-group": (
+        LINK_FAULTS,
+        "x <= sum(sqrt(t.s) * x) by (t.g) AND ln(t.c - 2.5) * x <= 9",
+        "cannot take square root of a negative number",
+    ),
+    # Flat reads the helper's `by` key where it builds its classes, which the reading clause's own read of it keeps
+    # the row for: its square root (row 2) before the earlier clause's logarithm (row 1).
+    "a-helpers-by-key-before-the-clauses": (
+        LINK_FAULTS,
+        "ln(t.c - 2.5) * x <= 9 AND x <= 0.5 * sum(x) by (sqrt(t.s)) + 9",
+        "cannot take square root of a negative number",
+    ),
+    # Flat reads the rows the helper's path keeps, the reading clause's `when`, where it builds its classes.
+    "a-clause-when-before-the-clauses": (
+        LINK_FAULTS,
+        "ln(t.c - 2.5) * x <= 9 AND when sqrt(t.s) > 0: x <= 0.5 * sum(x) + 9",
+        "cannot take square root of a negative number",
+    ),
+    # Of two helpers the clause's `when` gates, flat reads it at the first's classes: its square root (row 2) before
+    # that helper's member's logarithm (row 1).
+    "a-clause-when-at-its-first-helper": (
+        LINK_FAULTS,
+        "when sqrt(t.s) > 0: x <= 0.5 * sum(ln(t.c - 1.5) * x) + 0.5 * sum(x) by (t.g) + 9",
+        "cannot take square root of a negative number",
+    ),
+    # Flat reads the helper's `by` key after its members' NULL tests: the member's square root (row 2) before the key's
+    # logarithm (row 1).
+    "a-helpers-by-key-after-its-members": (
+        LINK_FAULTS,
+        "x <= 0.5 * sum(sqrt(t.s) * x) by (ln(t.c - 1.5)) + 9",
+        "cannot take square root of a negative number",
+    ),
+    # The helper's member reads the auxiliary of the inner `abs`, whose definition flat reads before the helper's
+    # classes, and so before every other auxiliary's: its square root (row 30) before the first `abs`'s logarithm
+    # (row 20).
+    "an-auxiliary-a-helper-reads": (
+        LINK_DEFINITIONS,
+        "x + abs(x - ln(t.e)) <= 20 AND x + abs(sum(abs(x - sqrt(t.c))) - ln(t.d) * x) <= 20",
+        "cannot take square root of a negative number",
+    ),
+    # The helper's member's NULL test (row 20) after the definition of the auxiliary the member reads (row 30).
+    "a-helpers-rows-after-its-members-auxiliary": (
+        LINK_DEFINITIONS,
+        "x <= sum(ln(t.e) * abs(x - sqrt(t.c))) + 9",
+        "cannot take square root of a negative number",
+    ),
+    # A member's coefficient past a DOUBLE names the helper's reducer as written, which every reader shares.
+    "a-member-past-a-double": (
+        LINK_HUGE,
+        "t.c * sum(t.s * x + t.s * x) <= 10",
+        "sum(t.s * x + t.s * x) computes a number too large for a DOUBLE",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(LINK_RAISED))
+def test_a_helper_raises_flats_error(decidb_cli, tmp_path, case):
+    rows, clauses, message = LINK_RAISED[case]
+    sql = f"SELECT t.id FROM {rows} DECIDE x(REAL) SUCH THAT x <= 5 AND {clauses} MAXIMIZE sum(x)"
+    flat = run(decidb_cli, sql, "flat").stderr
+    assert message in flat, flat
+    lines, result = coverage(decidb_cli, sql, tmp_path)
     assert lines == ["covered: tree"], result.stderr
     assert result.stderr == flat

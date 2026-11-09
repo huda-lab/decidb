@@ -352,11 +352,58 @@ private:
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
 	DecideTreeSources sources;
+	//! Each gate a helper's G or a frame's O inherits from the nodes above it (RemoveInheritedPathGates): the node
+	//! holding it, then the node inheriting it.
+	vector<pair<idx_t, idx_t>> inherited_gates;
+
+	//! Where flat reads each keyed scope's classes and each auxiliary's definitions
+	//! (PhysicalDecide::BuildKeyedMappings): every scope in turn, a helper's once the definitions of the auxiliaries
+	//! its members read are, then every decision's definitions in turn. Flat's other recursions number nothing earlier
+	//! here: from a decision into its own scope, since the declared scopes come before the rewrites' helpers and a
+	//! nested helper before its reader, and from a definition into what it reads, since the rewrites number a nested
+	//! auxiliary first. Per scope and per clause, its place.
+	void KeyedMappingOrder(vector<idx_t> &scope_order, vector<idx_t> &definition_order) const {
+		auto &constraints = op.prepared.constraints;
+		vector<vector<idx_t>> definitions(op.decide_variables.size());
+		for (idx_t c = 0; c < constraints.size(); c++) {
+			if (constraints[c]->defined_var < definitions.size()) {
+				definitions[constraints[c]->defined_var].push_back(c);
+			}
+		}
+		scope_order.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
+		definition_order.assign(constraints.size(), DConstants::INVALID_INDEX);
+		vector<bool> reached(definitions.size(), false);
+		idx_t next = 0;
+		auto read = [&](idx_t variable) {
+			if (variable >= definitions.size() || reached[variable]) {
+				return;
+			}
+			reached[variable] = true;
+			for (auto c : definitions[variable]) {
+				definition_order[c] = next++;
+			}
+		};
+		for (idx_t scope = 0; scope < op.keyed_scopes.size(); scope++) {
+			const auto link = op.keyed_scopes[scope].value_link;
+			if (link != DConstants::INVALID_INDEX) {
+				for (auto &term : op.reducer_value_links[link].inner_terms) {
+					read(term.variable_index);
+				}
+			}
+			scope_order[scope] = next++;
+		}
+		for (idx_t variable = 0; variable < definitions.size(); variable++) {
+			read(variable);
+		}
+	}
 
 	//! A node's errors rank at the earliest phase that reads it, in flat's order of phases: a bound's reducer is read
-	//! after the data checks on the rows, a definition where its auxiliary's absence is resolved, a composed MIN/MAX
-	//! clause after the objective, and the objective's composed terms after the composed clauses.
+	//! after the data checks on the rows, a definition where its auxiliary's absence is resolved, a helper's rows where
+	//! its classes are, a composed MIN/MAX clause after the objective, and the objective's composed terms after the
+	//! composed clauses.
 	void ErrorRanks() {
+		vector<idx_t> scope_order, definition_order;
+		KeyedMappingOrder(scope_order, definition_order);
 		vector<bool> assigned(tree->nodes.size(), false);
 		std::function<void(idx_t, DecideErrorRank)> visit = [&](idx_t index, DecideErrorRank rank) {
 			auto &node = *tree->nodes[index];
@@ -372,9 +419,15 @@ private:
 				// Flat resolves each auxiliary's absence in turn, reading its definitions in their order (D88), then
 				// evaluates each definition again at its place among the clauses.
 				evaluated = {node.compiled.phase, 0, node.compiled.order, 0};
-				rank = {DecideErrorPhase::KEYED_MAPPING, node.defined_var, node.compiled.order, 0};
+				rank = {DecideErrorPhase::KEYED_MAPPING, definition_order[node.compiled.order], node.compiled.order, 0};
 			} else if (node.link != DConstants::INVALID_INDEX) {
-				rank = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
+				// Flat reads a helper's rows (its path's `when`s, its reducer's, its members' NULL tests and its `by`
+				// key) where it builds its classes, and its members' coefficients after every clause. The nodes holding
+				// its path's `when`s read them there too (DecideNode::when_rank), and a reader's sigma leaves the key's
+				// errors to it (DecideDescent::Signature).
+				evaluated = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
+				const auto scope = op.variable_scopes[node.value_var].keyed_scope_idx;
+				rank = {DecideErrorPhase::KEYED_MAPPING, scope_order[scope], node.link, 0};
 			} else if (node.compiled.phase != DecideErrorPhase::INVALID) {
 				// A body stage 05 lowered ranks by the list flat's evaluation reads it from: a constraint by its place
 				// there, the objective, the composed clauses, then the objective's composed terms.
@@ -414,6 +467,23 @@ private:
 				// window, before any term's own filter, which ranks after it (DecideNode::filter_group).
 				node.route_rank = tree->nodes[node.compiled.composed[0]]->route_rank;
 				node.filter_group = 0;
+			}
+		}
+		WhenRanks();
+	}
+
+	//! Flat reads a gate a helper's G or a frame's O inherits where it reads that node's rows (BuildScopeMapping,
+	//! BuildFrames), which may come before the clause holding it: its holder reads it at the earliest of those ranks
+	//! and its own (DecideNode::when_rank).
+	void WhenRanks() {
+		for (auto &node : tree->nodes) {
+			node->when_rank = node->route_rank;
+		}
+		for (auto &gate : inherited_gates) {
+			auto &holder = *tree->nodes[gate.first];
+			auto &reader = tree->nodes[gate.second]->route_rank;
+			if (reader < holder.when_rank) {
+				holder.when_rank = reader;
 			}
 		}
 	}
@@ -849,6 +919,9 @@ private:
 		node.key = link.group_key;
 		node.text = link.label;
 		node.decision_value = true;
+		// Flat reads a helper's `by` key on every row its path keeps, after its reducer's `when` and its members' NULL
+		// tests (PhysicalDecide::BuildScopeMapping): a row the key raises on still reaches them.
+		node.key_block = DecideBlock::BY_KEY;
 		Gates(index, link.when.get());
 		if (link.value_var < tree->value_nodes.size()) {
 			tree->value_nodes[link.value_var] = index;
@@ -1033,6 +1106,7 @@ private:
 	//! Record tables carry a complete path predicate. Descent already inherited
 	//! the parent's reach, so a path part guaranteed on every incoming edge is
 	//! not another written `when` of the child. Own operand filters stay intact.
+	//! Each gate removed is read by the ancestors holding it (inherited_gates).
 	void RemoveInheritedPathGates() {
 		vector<vector<idx_t>> parents(tree->nodes.size());
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
@@ -1040,8 +1114,8 @@ private:
 				parents[child].push_back(i);
 			}
 		}
-		std::function<bool(idx_t, const Expression &, vector<bool> &)> inherited =
-		    [&](idx_t index, const Expression &condition, vector<bool> &visiting) {
+		std::function<bool(idx_t, const Expression &, vector<bool> &, vector<idx_t> &)> inherited =
+		    [&](idx_t index, const Expression &condition, vector<bool> &visiting, vector<idx_t> &holders) {
 			    if (parents[index].empty() || tree->nodes[index]->root || visiting[index]) {
 				    return false;
 			    }
@@ -1051,7 +1125,9 @@ private:
 				    for (auto &gate : tree->nodes[parent]->when) {
 					    holds = holds || gate->Equals(condition);
 				    }
-				    if (!holds && !inherited(parent, condition, visiting)) {
+				    if (holds) {
+					    holders.push_back(parent);
+				    } else if (!inherited(parent, condition, visiting, holders)) {
 					    visiting[index] = false;
 					    return false;
 				    }
@@ -1066,7 +1142,14 @@ private:
 			}
 			auto end = std::remove_if(node.when.begin(), node.when.end(), [&](const unique_ptr<Expression> &gate) {
 				vector<bool> visiting(tree->nodes.size(), false);
-				return inherited(i, *gate, visiting);
+				vector<idx_t> holders;
+				if (!inherited(i, *gate, visiting, holders)) {
+					return false;
+				}
+				for (auto holder : holders) {
+					inherited_gates.emplace_back(holder, i);
+				}
+				return true;
 			});
 			node.when.erase(end, node.when.end());
 		}

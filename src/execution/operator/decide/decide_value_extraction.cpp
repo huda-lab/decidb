@@ -9,6 +9,7 @@
 
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/optimizer/expression_rewriter.hpp"
 #include "duckdb/optimizer/rule/constant_folding.hpp"
@@ -915,6 +916,86 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 		}
 		return values;
 	};
+}
+
+void DecideMapRowsInNoClass(KeyedMapping &mapping) {
+	for (auto &id : mapping.row_to_class) {
+		if (id == DConstants::INVALID_INDEX) {
+			mapping.absent_class = mapping.num_classes;
+			id = mapping.absent_class;
+		}
+	}
+	if (mapping.absent_class != DConstants::INVALID_INDEX) {
+		mapping.num_classes++;
+	}
+}
+
+ReducerValueLinkSpec DecideValueLinkSpec(const LogicalDecide::ReducerValueLink &link) {
+	ReducerValueLinkSpec spec;
+	spec.value_var = link.value_var;
+	spec.agg_name = link.agg_name;
+	spec.need_envelope = link.need_envelope;
+	spec.need_closing = link.need_closing;
+	spec.label = link.label;
+	spec.frame = link.frame != DConstants::INVALID_INDEX;
+	return spec;
+}
+
+void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
+                      const string &label, ReducerValueMembers &out) {
+	double constant = 0.0;
+	for (idx_t t = 0; t < variables.size(); t++) {
+		if (variables[t] == DConstants::INVALID_INDEX) {
+			constant += columns[t].Get(row) * scale;
+		}
+	}
+	if (!std::isfinite(constant)) {
+		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, label));
+	}
+	out.AddMember(constant);
+	for (idx_t t = 0; t < variables.size(); t++) {
+		const double c = columns[t].Get(row) * scale;
+		if (variables[t] != DConstants::INVALID_INDEX && c != 0.0) {
+			out.AddTerm(variables[t], row, c);
+		}
+	}
+}
+
+void DecideListRowMembers(const EvaluatedConstraint &ec, idx_t num_rows, const string &label,
+                          ReducerValueMembers &out) {
+	const bool grouped = !ec.row_group_ids.empty();
+	const idx_t num_groups = grouped ? ec.num_groups : 1;
+	vector<vector<idx_t>> rows_of(num_groups);
+	for (idx_t row = 0; row < num_rows; row++) {
+		const idx_t group = grouped ? ec.row_group_ids[row] : 0;
+		if (group != DConstants::INVALID_INDEX && group < num_groups) {
+			rows_of[group].push_back(row);
+		}
+	}
+	for (auto &rows : rows_of) {
+		if (rows.empty()) {
+			continue;
+		}
+		out.AddGroup(rows[0]);
+		for (auto row : rows) {
+			DecideListMember(ec.row_coefficients, ec.variable_indices, row, 1.0, label, out);
+		}
+	}
+}
+
+void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links) {
+	if (DecideProfileScope::Enabled() && !links.empty()) {
+		idx_t groups = 0, members = 0, terms = 0;
+		for (auto &spec : links) {
+			groups += spec.members.GroupCount();
+			members += spec.members.constants.size();
+			terms += spec.members.variables.size();
+		}
+		DecideProfileScope::Counter("anr.helpers", static_cast<double>(links.size()));
+		DecideProfileScope::Counter("anr.helper_instances", static_cast<double>(groups));
+		DecideProfileScope::Counter("anr.members", static_cast<double>(members));
+		DecideProfileScope::Counter("anr.member_terms", static_cast<double>(terms));
+	}
 }
 
 void DecideValueRange::Add(const Value &value) {

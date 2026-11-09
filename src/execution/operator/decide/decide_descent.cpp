@@ -308,8 +308,16 @@ vector<vector<Value>> DecideDescent::Signature(const DecideNode &node, DataChunk
 			break;
 		}
 		case DecideSignatureFieldKind::BY_KEY: {
+			// A field naming a reducer's `by` key reads its values as a `by` key's read, which keeps the row: the node
+			// grouping by the key raises what it raises, where flat reads it (a helper's G, where flat builds the
+			// helper's classes).
+			const auto block = read_block;
+			const auto position = current_rank.position;
+			read_block = DecideBlock::BY_KEY;
 			vector<bool> present;
 			auto values = Key(field.key, chunk, rows, present);
+			read_block = block;
+			current_rank.position = position;
 			for (idx_t i = 0; i < rows.size(); i++) {
 				for (auto &value : values[i]) {
 					result[i].push_back(std::move(value));
@@ -511,7 +519,8 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 	auto &node = *tree.nodes[node_index];
 	active_node = node_index;
 	active_row_base = row_base;
-	current_rank = node.route_rank;
+	// Its `when` first, where flat reads it (DecideNode::when_rank), then the rest at its own rank.
+	current_rank = node.when_rank;
 	if (context.interrupted) {
 		throw InterruptException();
 	}
@@ -550,6 +559,9 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 			return;
 		}
 	}
+	current_rank.phase = node.route_rank.phase;
+	current_rank.step = node.route_rank.step;
+	current_rank.clause = node.route_rank.clause;
 	if (rows.empty()) {
 		return;
 	}

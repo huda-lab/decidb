@@ -295,11 +295,14 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 		    }
 		    throw InternalException("DECIDE tree: a coefficient's input has no program");
 	    }};
-	// A coefficient's message names its clause where DeciDB's own arithmetic left the DOUBLE range; a bound's never.
-	const ValueSource source {program.role == DecideProgramRole::COEFFICIENT ? DecideValueRole::COEFFICIENT
-	                                                                         : DecideValueRole::BOUND,
-	                          *program.written, names, written_clause(tree.nodes[program.owner]->source_clause_id),
-	                          inputs ? &computed_from : nullptr};
+	// A coefficient's message names its clause where DeciDB's own arithmetic left the DOUBLE range, a helper's member
+	// the helper's reducer as written, which every clause reading it shares; a bound's never.
+	auto &owner = *tree.nodes[program.owner];
+	const ValueSource source {
+	    program.role == DecideProgramRole::COEFFICIENT ? DecideValueRole::COEFFICIENT : DecideValueRole::BOUND,
+	    *program.written, names,
+	    owner.link == DConstants::INVALID_INDEX ? written_clause(owner.source_clause_id) : owner.text,
+	    inputs ? &computed_from : nullptr};
 	vector<double> out;
 	out.reserve(count);
 	for (idx_t start = 0; start < count; start += STANDARD_VECTOR_SIZE) {
@@ -377,10 +380,11 @@ bool DecideTreeColumns::AbsentAt(idx_t variable, idx_t row) const {
 		}
 	}
 	auto &scope = tree.variable_scopes[variable];
-	return scope.IsKeyed() && descent.DecisionRows()[scope.keyed_scope_idx][row] == DConstants::INVALID_INDEX;
+	return scope.IsKeyed() && (*mappings)[scope.keyed_scope_idx].IsAbsent(row);
 }
 
-void DecideTreeColumns::ReadAbsence(const vector<vector<bool>> &reads) {
+void DecideTreeColumns::ReadAbsence(const vector<KeyedMapping> &classes, const vector<vector<bool>> &reads) {
+	mappings = &classes;
 	absent_reads = &reads;
 }
 
@@ -521,8 +525,9 @@ string DecideTreeColumns::Uncomputed(const DecideTree &tree) {
 		if (!node->compiled.uncompiled.empty()) {
 			return node->compiled.uncompiled;
 		}
-		// A hidden root other than a data check, a definition no clause reads, has no value here yet.
-		if (node->hidden && !node->value_check) {
+		// A hidden root other than a data check, a definition no clause reads, has no value here yet, but a helper's,
+		// which the links' arm reads whoever reads it (DecideModelEmitter::ValueLinks).
+		if (node->hidden && !node->value_check && tree.nodes[node->children[0]]->link == DConstants::INVALID_INDEX) {
 			return node->text;
 		}
 	}

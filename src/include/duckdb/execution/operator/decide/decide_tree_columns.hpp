@@ -20,6 +20,7 @@ namespace duckdb {
 
 class ClientContext;
 struct DecideSourceNames;
+struct KeyedMapping;
 
 //! A G over data's value per slot (language/guide.md §6.1): one AggregateFunction state per slot in a dense array, as
 //! DuckDB's PerfectAggregateHashTable lays out its groups, updated a window of members at a time and finalized once.
@@ -91,11 +92,13 @@ public:
 	//! its member tests keep that read an instance of the decision. A term reading none has no value there (D84).
 	vector<bool> ReadEntries(idx_t node, idx_t variable);
 	//! Whether decision `variable` has no instance to read at `row` (D84, D88): a keyed decision's row in no class of
-	//! its key, or an auxiliary's row where what defines it has no value (`absent_reads`, once given, or a factor of
-	//! its product). None for no decision (INVALID_INDEX).
+	//! its scope, a helper's where its group holds no member, or an auxiliary's row where what defines it has no value
+	//! (`absent_reads`, or a factor of its product). None for no decision (INVALID_INDEX).
 	bool AbsentAt(idx_t variable, idx_t row) const;
-	//! The rows at which each auxiliary has no value (DecideGlobalSinkState::absent_reads), which AbsentAt reads.
-	void ReadAbsence(const vector<vector<bool>> &reads);
+	//! The keyed scopes' classes and the rows at which each auxiliary has no value
+	//! (DecideGlobalSinkState::absent_reads), which AbsentAt reads: each complete once what defines it is read, before
+	//! what reads it.
+	void ReadAbsence(const vector<KeyedMapping> &classes, const vector<vector<bool>> &reads);
 	//! Of the entries `reads` marks, the first of each instance of `node` in a class of its key, in row order: a
 	//! reducer per K reads each variant of a class once in each group, at its first row (language/guide.md §5.1, §7.1),
 	//! however many entries the variant holds, and nothing of a row in no class.
@@ -109,8 +112,8 @@ public:
 
 	//! Interim, apart from the model emitter's shapes: the first node these columns compute no value for yet, a read
 	//! of a frame or a decision-valued child's read where only data is computed (DecideBody::uncompiled), or a hidden
-	//! root other than a data check, empty when there is none. A query with one has no arm. It goes once they compute
-	//! every node.
+	//! root other than a data check or a helper's, empty when there is none. A query with one has no arm. It goes once
+	//! they compute every node.
 	static string Uncomputed(const DecideTree &tree);
 
 private:
@@ -124,6 +127,7 @@ private:
 	std::function<string(idx_t)> written_clause;
 	DecideErrorLedger &errors;
 	vector<unique_ptr<NodeColumns>> nodes;
+	const vector<KeyedMapping> *mappings = nullptr;
 	const vector<vector<bool>> *absent_reads = nullptr;
 
 	//! Per G over data, its folds, once computed; per G, the slot each row lies in, once read.

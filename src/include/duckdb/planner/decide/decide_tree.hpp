@@ -140,6 +140,9 @@ struct DecideNode {
 	//! numbers and checks each: its value_rank, but a definition's at its place among the clauses, since flat first
 	//! computes a definition where it resolves its auxiliary's absence (BuildKeyedMappings).
 	DecideErrorRank clause_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
+	//! Where its `when` is read: its route_rank, or earlier where a helper's G or a frame's O below it inherits a gate
+	//! of it, which flat reads where it reads that node's rows, before the clause.
+	DecideErrorRank when_rank;
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
 	vector<unique_ptr<Expression>> member_tests;
@@ -182,8 +185,8 @@ struct DecideNode {
 	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3).
 	bool holds_rows_in_no_class = false;
 	//! Where flat reads its key: a grouped clause's root and its G's of its `by` key read it where flat groups the kept
-	//! rows, after their terms (DecideBlock::BY_KEY), so a row the key raises on still reaches them; any other key
-	//! routes its node's rows (ROUTE).
+	//! rows, after their terms, and a helper's G after its members' rows (DecideBlock::BY_KEY), so a row the key raises
+	//! on still reaches them; any other key routes its node's rows (ROUTE).
 	DecideBlock key_block = DecideBlock::ROUTE;
 	//! A hidden root's non-NULL string is the data check's error message.
 	bool value_check = false;

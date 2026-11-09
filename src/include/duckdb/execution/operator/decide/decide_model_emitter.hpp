@@ -17,8 +17,8 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 //! The shapes stage 06 accepts, by what it reads of the evaluated clauses and the query (EvaluatedConstraint,
-//! SolverInput): each has one arm, which calls flat's own blocks. The first twenty have theirs; a query with any other
-//! has none yet (DecideModelEmitter::Uncovered).
+//! SolverInput): each has one arm, which calls flat's own blocks. The first twenty-one have theirs; a query with any
+//! other has none yet (DecideModelEmitter::Uncovered).
 enum class DecideModelShape : uint8_t {
 	//! A clause with one model row per kept row.
 	ROWS,
@@ -68,8 +68,10 @@ enum class DecideModelShape : uint8_t {
 	//! A product with a BOOLEAN factor the optimizer made an auxiliary of (LogicalDecide::BilinearLink), whose rows
 	//! stage 06 writes, and which has no value where a factor has none (SolverInput::absent_reads).
 	PRODUCT_LINKS,
-	TIGHTEST_BOUND,
+	//! A helper decision of a reducer the value rewrite lifted (SolverInput::reducer_value_links): its members per
+	//! group of its `by` key, and its classes, the groups that hold one (KeyedMapping).
 	VALUE_LINKS,
+	TIGHTEST_BOUND,
 	FRAME_READS
 };
 
@@ -97,10 +99,10 @@ public:
 	//! no value for (DecideTreeColumns::Uncomputed).
 	static string Uncovered(const DecideTree &tree, const PhysicalDecide &op);
 
-	//! Each declared decision's classes, numbered by its key's values, and each relation-qualified reducer's, its
-	//! classes split by its body's values, a row in none in a class of its own; then the rows at which each auxiliary
-	//! has no value (DecideGlobalSinkState::absent_reads).
-	vector<KeyedMapping> KeyedMappings();
+	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
+	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
+	//! own; and the rows at which each auxiliary has no value (DecideGlobalSinkState::absent_reads).
+	void KeyedMappings(vector<KeyedMapping> &mappings);
 	//! Every clause in flat's order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
 	//! The objective's linear terms, its squared terms and its products, each on the rows it reads, and each one's
@@ -110,8 +112,20 @@ public:
 	//! The composed MIN/MAX clauses, then the objective's composed terms, each term a column over the members of its G
 	//! (DecideBody::composed), as flat reads them after the objective.
 	void Composed(PhysicalDecide::EvaluatedClauses &evaluated);
+	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
+	//! one, as flat lists them after the composed clauses.
+	void ValueLinks();
 
 private:
+	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
+	//! with an instance, and those it lists, each with its row, its G's slots numbered by rank among those that hold
+	//! one.
+	struct LinkMembers {
+		vector<bool> reads;
+		vector<pair<idx_t, idx_t>> rows;
+		vector<idx_t> group_of_slot;
+		idx_t groups = 0;
+	};
 	const PhysicalDecide &op;
 	ClientContext &context;
 	const DecideTree &tree;
@@ -125,6 +139,8 @@ private:
 	DecideErrorLedger &errors;
 	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
 	DataChunk &first;
+	//! Per link, its helper's members, read once where its classes are (HelperMapping), which ValueLinks lists.
+	vector<LinkMembers> link_members;
 
 	//! Each clause's root by its place in stage 05's lists (DecideBody::clause_index).
 	vector<idx_t> ClauseRoots() const;
@@ -148,8 +164,15 @@ private:
 	//! A relation-qualified reducer's scope: the variants of its operand over the rows the reducer reads.
 	KeyedMapping SignatureMapping(idx_t scope);
 	//! The rows at which each auxiliary has no value (D88): a row its definition keeps where what the definition reads
-	//! unreduced is NULL, and a row where a decision the definition reads has no instance.
-	void ReadAbsence();
+	//! unreduced is NULL, and a row where a decision the definition reads has no instance; and each helper's classes,
+	//! in the order the definitions read each other.
+	void ReadAbsence(vector<KeyedMapping> &mappings);
+	//! The rows at which the auxiliary `root`'s clause defines has no value.
+	void DefinitionAbsence(idx_t root);
+	LinkMembers Members(idx_t link);
+	//! A helper's classes: the groups of its `by` key that hold a member, each read by the rows of its group the
+	//! clause keeps; its members kept for ValueLinks (link_members).
+	KeyedMapping HelperMapping(idx_t link);
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
 	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);

@@ -308,6 +308,26 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
                         const vector<idx_t> &variants_per_class, const vector<idx_t> &first_rows,
                         SolverInput::KeyValues &key_values);
 
+//! A row in no class of a keyed scope (a NULL written key, a dropped row, a helper's group with no member) has no
+//! decision: it maps to one spare class, so that every row has an id (KeyedMapping::absent_class).
+void DecideMapRowsInNoClass(KeyedMapping &mapping);
+
+//! What stage 06 reads of a helper decision besides its members (ReducerValueLinkSpec), as the value rewrite made it.
+ReducerValueLinkSpec DecideValueLinkSpec(const LogicalDecide::ReducerValueLink &link);
+
+//! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
+//! times `scale`, those of no decision its constant. A constant past a DOUBLE names `label`, the helper as written.
+void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
+                      const string &label, ReducerValueMembers &out);
+
+//! `ec`'s members -- its rows, each in the group `row_group_ids` names, a reducer's `by` groups partitioning them --
+//! listed per group (ReducerValueMembers), each group read at its first member row; a group with no member is left
+//! out.
+void DecideListRowMembers(const EvaluatedConstraint &ec, idx_t num_rows, const string &label, ReducerValueMembers &out);
+
+//! The helpers' sizes, which DECIDB_PROFILE reports: their instances, members and members' terms.
+void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links);
+
 //! The least and the greatest of the values added, as ORDER BY places them (NULL last), so a message naming them does
 //! not depend on the order rows arrive in. It holds the values' addresses, which must outlive it.
 class DecideValueRange {
