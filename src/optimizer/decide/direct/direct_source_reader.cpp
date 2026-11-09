@@ -139,11 +139,12 @@ static vector<string> PositionalNames(idx_t count) {
 }
 
 void DirectSourceReader::AddSideTable(unique_ptr<LogicalOperator> definition, vector<unique_ptr<Expression>> keys,
-                                      ColumnBinding placeholder) {
+                                      const vector<bool> &equal, ColumnBinding placeholder) {
 	// A table added after a gate would be gated, and the verdict would read it.
 	D_ASSERT(verdicts.empty());
 	definition->ResolveOperatorTypes();
-	D_ASSERT(definition->types.size() == keys.size() + 1 && placeholder.column_index == keys.size());
+	D_ASSERT(definition->types.size() == keys.size() + 1 && placeholder.column_index == keys.size() &&
+	         equal.size() == keys.size());
 	// The value is read where the clauses' expressions have the placeholder.
 	bindings.push_back(placeholder);
 	types.push_back(definition->types.back());
@@ -151,6 +152,7 @@ void DirectSourceReader::AddSideTable(unique_ptr<LogicalOperator> definition, ve
 	table.types = definition->types;
 	table.definition = std::move(definition);
 	table.keys = std::move(keys);
+	table.equal = equal;
 	table.cte_index = optimizer.binder.GenerateTableIndex();
 	table.ref_index = placeholder.table_index;
 	side_tables.push_back(std::move(table));
@@ -183,7 +185,8 @@ unique_ptr<LogicalOperator> DirectSourceReader::JoinSideTables(unique_ptr<Logica
 			DirectReplaceColumns(row_keys.back(), source_columns, on_top);
 			table_keys.push_back(calc.Out(calc.Col(table.types[j], ColumnBinding(ref_index, j))));
 		}
-		top = DirectJoinGroupRow(std::move(top), std::move(reference), std::move(row_keys), std::move(table_keys));
+		top = DirectJoinGroupRow(std::move(top), std::move(reference), std::move(row_keys), std::move(table_keys),
+		                         table.equal);
 	}
 	return top;
 }

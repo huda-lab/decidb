@@ -582,19 +582,19 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! read computes the answer of each class once, on the class's one row; the second gives every row its class's answer.
 //! Each stage of the first reads only the columns of the stage before it:
 //!
-//!   scope the row's class: whether it has one, and its key (DirectProjectScope), for a keyed decision
+//!   scope the row's class key (DirectProjectScope), for a keyed decision
 //!   P1    raw values: the loss's values on the rows the objective keeps; each bound clause's ends on the rows it
 //!         keeps; the check of every value that can fail
 //!   P2    the loss's values for the row (a square's `a` and `b`, a center and its weight), each clause's lower and
 //!         upper end on the row (no bound where its `when` drops the row), and the row's checks
-//!   W     a hash aggregate on the class (whether the row has one, then its key), one row per class (one row for a
+//!   W     a hash aggregate on the class key, one row per class (one row for a
 //!         query-wide decision): the loss's aggregates, the MAX of each clause's lower ends and the MIN of its upper
 //!         ends, whether a floor-lifting clause keeps some row, and whether the checks of the rows held
 //!   P3    the class's interval as columns: each clause's tightest ends, and the floor
 //!   P4    the class's answer: the loss's target clamped into the interval (the box of DirectRowBox over the columns
-//!         of P3), NULL for a key with no class, and the column that keeps the checks live
+//!         of P3), NULL for a key with no class (DirectClassPresent), and the column that keeps the checks live
 //!
-//! The second read is the scope (the class and its key) and the join with the class plan, on them. A query-wide
+//! The second read is the scope (the class key) and the join with the class plan, on it. A query-wide
 //! decision joins the class's one row to every row. No joined row exists before its class row has passed its checks:
 //! the aggregate holds every row of the first read before it gives its row, so each check on a row (P2) has run on all
 //! of them, and P4's checks on the class's row sit below the join (DirectJoinClassAnswers), as the solver reads every
@@ -643,8 +643,8 @@ public:
 	DirectSubstitute JoinAnswers(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> classes) const {
 		auto state = DirectProjectScope(binder, std::move(rows), IsKeyed(), nullptr, condition.keys, {});
 		auto carried = DirectCarriedOf(state, source_bindings.size());
-		auto key = ClassKey(carried);
-		auto joined = DirectJoinClassAnswers(binder, std::move(state.plan), key.first, key.second, std::move(classes));
+		auto joined =
+		    DirectJoinClassAnswers(binder, std::move(state.plan), carried.keys, carried.key, std::move(classes));
 		DirectProjectionStage p5(binder.GenerateTableIndex());
 		p5.Forward(carried.source, source_types);
 		D_ASSERT(joined.answers.size() == 2);
@@ -677,18 +677,18 @@ private:
 		ColumnBinding upper;
 		ColumnBinding when;
 	};
-	//! Columns of P2: the class, which the aggregate reads, not the source's. A keyed row's class is whether it has one
-	//! (a row with a NULL in a key element that puts it in no class has none), then its key.
+	//! Columns of P2: the class, which the aggregate reads, not the source's. A keyed row's class is its key; a row
+	//! with a NULL in a key element that puts it in no class has none.
 	struct Rows {
 		vector<ColumnBinding> keys;
-		vector<LogicalType> key_types;
+		DirectClassKey key;
 		vector<ClauseEnds> ends;
 		ColumnBinding valid;
 	};
 	//! Columns of W: the class, and the aggregates of the clauses over the results.
 	struct Aggregates {
 		vector<ColumnBinding> keys;
-		vector<LogicalType> key_types;
+		DirectClassKey key;
 		ColumnBinding valid;
 		vector<DirectGroupValues> lowers;
 		vector<DirectGroupValues> uppers;
@@ -698,7 +698,7 @@ private:
 	//! Columns of P3.
 	struct Interval {
 		vector<ColumnBinding> keys;
-		vector<LogicalType> key_types;
+		DirectClassKey key;
 		ColumnBinding valid;
 		vector<ColumnBinding> clause_lowers;
 		vector<ColumnBinding> clause_uppers;
@@ -716,19 +716,6 @@ private:
 
 	bool IsKeyed() const {
 		return !condition.keys.empty();
-	}
-
-	//! The class of a row as DirectJoinClassAnswers keys it, from the scope: whether the row has one, then its key.
-	//! Nothing for a query-wide decision, which has one class.
-	std::pair<vector<ColumnBinding>, vector<LogicalType>> ClassKey(const DirectCarried &carried) const {
-		std::pair<vector<ColumnBinding>, vector<LogicalType>> key;
-		if (IsKeyed()) {
-			key.first.push_back(carried.eligible);
-			key.second.push_back(LogicalType::BOOLEAN);
-			key.first.insert(key.first.end(), carried.keys.begin(), carried.keys.end());
-			key.second.insert(key.second.end(), carried.key_types.begin(), carried.key_types.end());
-		}
-		return key;
 	}
 
 	//===------------------------------------------------------------------===//
@@ -759,7 +746,8 @@ private:
 		auto carried = raw.carried;
 		carried.source.clear();
 		carried = p2.Forward(carried, {}, IsKeyed());
-		std::tie(result.keys, result.key_types) = ClassKey(carried);
+		result.keys = carried.keys;
+		result.key = carried.key;
 		for (auto &columns : raw.clauses) {
 			ExprPtr lower, upper;
 			DirectClauseBounds(calc, columns, lower, upper);
@@ -787,9 +775,9 @@ private:
 	Aggregates AggregateClasses(const Rows &rows, unique_ptr<LogicalOperator> &plan, LossColumns &loss_columns) const {
 		DirectAggregateStage stage(binder);
 		Aggregates result;
-		result.key_types = rows.key_types;
+		result.key = rows.key;
 		for (idx_t i = 0; i < rows.keys.size(); i++) {
-			result.keys.push_back(stage.Group(calc.Out(calc.Col(rows.key_types[i], rows.keys[i]))));
+			result.keys.push_back(stage.Group(calc.Out(calc.Col(rows.key.types[i], rows.keys[i]))));
 		}
 		ClassAggregate classes(stage, optimizer, calc);
 		condition.loss->Aggregate(tools, classes, loss_columns);
@@ -831,8 +819,8 @@ private:
 	//! clause keeps exists.
 	Interval ComputeInterval(DirectProjectionStage &p3, const Aggregates &aggregates, LossColumns &loss_columns) const {
 		Interval result;
-		result.keys = p3.Forward(aggregates.keys, aggregates.key_types);
-		result.key_types = aggregates.key_types;
+		result.keys = p3.Forward(aggregates.keys, aggregates.key.types);
+		result.key = aggregates.key;
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
@@ -848,12 +836,16 @@ private:
 	//===------------------------------------------------------------------===//
 
 	void ComputeAnswer(DirectProjectionStage &p4, const Interval &interval, LossColumns &loss_columns) const {
-		p4.Forward(interval.keys, interval.key_types);
+		p4.Forward(interval.keys, interval.key.types);
 		ExprPtr lower, upper;
 		DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, interval.floor), condition.upper, interval.clause_lowers,
 		             interval.clause_uppers, lower, upper);
-		// A key with no class has no decision and shows NULL. Its flag is the first column of the key.
-		auto has_class = IsKeyed() ? calc.Col(LogicalType::BOOLEAN, interval.keys[0]) : calc.Bool(true);
+		// A key with no class has no decision and shows NULL.
+		vector<ExprPtr> key_columns;
+		for (idx_t i = 0; i < interval.keys.size(); i++) {
+			key_columns.push_back(calc.Col(interval.key.types[i], interval.keys[i]));
+		}
+		auto has_class = DirectClassPresent(calc, interval.key, key_columns);
 		auto finish = condition.loss->Finish(tools, loss_columns, lower, upper, has_class);
 		// The loss's target clamped into the interval. A NULL target leaves every point optimal, and the point of the
 		// interval nearest 0 is the answer: the clamp of 0. Adding 0.0 turns -0.0 into 0.0.

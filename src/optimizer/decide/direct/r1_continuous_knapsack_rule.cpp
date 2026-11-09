@@ -583,7 +583,7 @@ protected:
 struct ItemColumns {
 	//! The source columns, in source order.
 	vector<ColumnBinding> sources;
-	//! The group key: whether the row belongs to a budget (BOOLEAN), then the group keys. Empty without a scope.
+	//! The class key of the row's group (DirectClassKey). Empty without a scope.
 	vector<ColumnBinding> keys;
 	//! The message each check of a raw value or of a limit read from the data raises on the row (VARCHAR, NULL when it
 	//! passes), in the order the solver checks them: the NaN checks of what the limits read (`limit_messages` of them),
@@ -666,8 +666,9 @@ public:
 		}
 		if (condition.scoped) {
 			Declare(ELIGIBLE, state.eligible, LogicalType::BOOLEAN);
+			key_width = state.keys.size();
 			for (idx_t i = 0; i < state.keys.size(); i++) {
-				Declare(KeyName(i), state.keys[i], state.key_types[i]);
+				Declare(KeyName(i), state.keys[i], state.key.types[i]);
 			}
 		}
 		auto checks = LayoutRawValues();
@@ -684,11 +685,8 @@ public:
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {
 			items.sources.push_back(columns.at(SourceName(i)).binding);
 		}
-		if (condition.scoped) {
-			items.keys.push_back(columns.at(ELIGIBLE).binding);
-			for (idx_t i = 0; i < condition.group_keys.size(); i++) {
-				items.keys.push_back(columns.at(KeyName(i)).binding);
-			}
+		for (idx_t i = 0; i < key_width; i++) {
+			items.keys.push_back(columns.at(KeyName(i)).binding);
 		}
 		for (auto &name : message_names) {
 			items.messages.push_back(columns.at(name).binding);
@@ -756,6 +754,8 @@ private:
 	idx_t state_index = DConstants::INVALID_INDEX;
 	//! The table index of the projection that carries the source (a read of DirectSourceReader).
 	idx_t read_index = DConstants::INVALID_INDEX;
+	//! The number of columns of the class key (DirectClassKey), set by Build.
+	idx_t key_width = 0;
 
 	//! The plan so far and the columns it carries, in output order. Every stage forwards every column, and unused
 	//! ones are removed with the rest of the unused columns after the DECIDE optimizer has run.
@@ -1111,10 +1111,10 @@ private:
 
 //! Builds the plan of definition.md § The plan for one or several decisions, with limits that are constants or read
 //! from the data: aggregate-then-join. Each group is reduced to one row of numbers (its totals, its price, its sums at
-//! the price) and every source row joins its group's row and computes its answer in one projection. A group key is
-//! whether the row belongs to a budget, then its group keys; keys are compared with IS NOT DISTINCT FROM, so a NULL key
-//! matches. Without a scope there is one group: the aggregates have no GROUP BY and the join is a cross product with
-//! that one row.
+//! the price) and every source row joins its group's row and computes its answer in one projection. A group's key is
+//! its class key (DirectClassKey): a row in no budget has a NULL where the key is compared with `=`, and gets no
+//! group's row. Without a scope there is one group: the aggregates have no GROUP BY and the join is a cross product
+//! with that one row.
 //!
 //! Each stage reads the source once more (DirectSourceReader) through ItemStages::Build, which computes the
 //! values of every item on that read, and keeps what it needs of them in its own struct of bindings. A row has one
@@ -1152,10 +1152,7 @@ public:
 			                : DirectTightestBound(optimizer, limit.comparison, limit.value->Copy(), string(), nullptr));
 		}
 		if (condition.scoped) {
-			key_types.push_back(LogicalType::BOOLEAN);
-			for (auto &key : condition.group_keys) {
-				key_types.push_back(key.grouping->return_type);
-			}
+			class_key = DirectClassKeyOf(condition.group_keys, condition.when != nullptr || condition.gated);
 		}
 	}
 
@@ -1205,8 +1202,8 @@ private:
 	DirectSourceReader &reader;
 	const DirectStateErrors &errors;
 	idx_t reads_made = 0;
-	//! The types of the group key: BOOLEAN, then the group keys. Empty without a scope.
-	vector<LogicalType> key_types;
+	//! The class key of a group. Empty without a scope.
+	DirectClassKey class_key;
 
 	ExprPtr DoubleColumn(ColumnBinding binding) const {
 		return calc.Col(LogicalType::DOUBLE, binding);
@@ -1215,7 +1212,15 @@ private:
 		return calc.Col(LogicalType::BOOLEAN, binding);
 	}
 	ExprPtr KeyColumn(idx_t i, const vector<ColumnBinding> &key) const {
-		return calc.Col(key_types[i], key[i]);
+		return calc.Col(class_key.types[i], key[i]);
+	}
+	//! Whether the group the key columns `key` name exists (DirectClassPresent).
+	ExprPtr GroupExists(const vector<ColumnBinding> &key) const {
+		vector<ExprPtr> columns;
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
+			columns.push_back(KeyColumn(i, key));
+		}
+		return DirectClassPresent(calc, class_key, columns);
 	}
 	//! The budget's limits L and U in a group: the constants, or with a limit read from the data the group columns
 	//! stage 2 computes.
@@ -1262,7 +1267,7 @@ private:
 		auto inputs = TotalInputsOfRow(items.columns.decisions);
 		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> key;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
 		}
 		auto rows = aggregate.Add(DirectHashAggregate(optimizer, calc, "count_star", nullptr));
@@ -1292,7 +1297,7 @@ private:
 		}
 		auto imprecise = aggregate.Add(DirectHashAggregate(optimizer, calc, "bool_or", calc.Any(imprecise_items)));
 		DirectAggregateSink sink(aggregate);
-		auto limit_eligible = condition.scoped ? BoolColumn(key[0]) : nullptr;
+		auto limit_eligible = condition.scoped ? GroupExists(key) : nullptr;
 		vector<DirectGroupValues> limits;
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
 			limits.push_back(
@@ -1305,7 +1310,7 @@ private:
 			totals.push_back(DoubleColumn(sum));
 		}
 		auto lower = LimitOf(false, limits), upper = LimitOf(true, limits);
-		auto verdict = VerdictOf(totals, lower, upper, condition.scoped ? BoolColumn(key[0]) : nullptr);
+		auto verdict = VerdictOf(totals, lower, upper, condition.scoped ? GroupExists(key) : nullptr);
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
 		// The solver's order: the NaN checks of what the limits read, what the limits give (a NaN limit, an `=` limit
@@ -1343,7 +1348,7 @@ private:
 
 		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<TotalColumns> stage;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			out.Add(KeyColumn(i, key));
 		}
 		stage.columns.anchors = out.Add(totals[TOTAL_S]);
@@ -1383,7 +1388,7 @@ private:
 		Narrow narrow;
 		DirectProjectionStage narrowed(binder.GenerateTableIndex());
 		vector<ColumnBinding> item_key;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			item_key.push_back(narrowed.Add(KeyColumn(i, columns.keys)));
 		}
 		if (prices.size() == 1) {
@@ -1420,7 +1425,7 @@ private:
 			return chosen;
 		};
 		DirectProjectionStage out(binder.GenerateTableIndex());
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			narrow.key.push_back(out.Add(KeyColumn(i, item_key)));
 		}
 		narrow.price = out.Add(pick(price_columns));
@@ -1443,7 +1448,7 @@ private:
 		auto narrow = NarrowOf(ReadItems());
 		auto &narrow_key = narrow.key;
 		vector<ExprPtr> partitions;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			partitions.push_back(KeyColumn(i, narrow_key));
 		}
 		auto narrow_price = narrow.price;
@@ -1461,7 +1466,7 @@ private:
 
 		auto &group = totals.columns;
 		auto joined =
-		    DirectJoinClassAnswers(binder, std::move(window), narrow_key, key_types, std::move(totals.plan)).plan;
+		    DirectJoinClassAnswers(binder, std::move(window), narrow_key, class_key, std::move(totals.plan)).plan;
 		Verdict verdict;
 		verdict.over = BoolColumn(group.over);
 		verdict.under = BoolColumn(group.under);
@@ -1478,7 +1483,7 @@ private:
 		auto candidate = CandidatePrice(verdict, reach, t, LowerOf(group.limits), UpperOf(group.limits));
 		DirectProjectionStage candidates(binder.GenerateTableIndex());
 		vector<ColumnBinding> candidate_key;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			candidate_key.push_back(candidates.Add(KeyColumn(i, narrow_key)));
 		}
 		auto price_candidate = candidates.Add(candidate);
@@ -1493,7 +1498,7 @@ private:
 
 		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> price_key;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			price_key.push_back(aggregate.Group(calc.Out(KeyColumn(i, candidate_key))));
 		}
 		auto highest = aggregate.Add(DirectHashAggregate(optimizer, calc, "max", DoubleColumn(price_candidate)));
@@ -1511,7 +1516,7 @@ private:
 
 		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<PriceColumns> stage;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			out.Add(KeyColumn(i, price_key));
 		}
 		stage.columns.price = out.Add(
@@ -1536,14 +1541,14 @@ private:
 		auto items = ReadItems();
 		auto &group = price.columns;
 		auto joined =
-		    DirectJoinClassAnswers(binder, std::move(items.plan), items.columns.keys, key_types, std::move(price.plan))
+		    DirectJoinClassAnswers(binder, std::move(items.plan), items.columns.keys, class_key, std::move(price.plan))
 		        .plan;
 		auto lam = DoubleColumn(group.price);
 		auto inputs = PriceSumInputsOfRow(items.columns.decisions, lam);
 
 		DirectAggregateStage aggregate(binder);
 		vector<ColumnBinding> key;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
 		}
 		vector<ExprPtr> sums;
@@ -1572,7 +1577,7 @@ private:
 
 		DirectProjectionStage out(binder.GenerateTableIndex());
 		Stage<ShareColumns> stage;
-		for (idx_t i = 0; i < key_types.size(); i++) {
+		for (idx_t i = 0; i < class_key.types.size(); i++) {
 			out.Add(KeyColumn(i, key));
 		}
 		stage.columns.price = out.Add(DoubleColumn(group_price));
@@ -1592,7 +1597,7 @@ private:
 		auto items = ReadItems();
 		auto &group = shares.columns;
 		auto joined =
-		    DirectJoinClassAnswers(binder, std::move(items.plan), items.columns.keys, key_types, std::move(shares.plan))
+		    DirectJoinClassAnswers(binder, std::move(items.plan), items.columns.keys, class_key, std::move(shares.plan))
 		        .plan;
 		auto sources = items.columns.sources.size();
 		auto decisions = items.columns.decisions.size();

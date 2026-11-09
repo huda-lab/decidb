@@ -33,15 +33,42 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
 unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
                                         double scale, bool divides);
 
-//! The columns every stage of a rule forwards: the source columns, the eligible flag and the group key of its scope
+//! The class key of a scoped rule: the columns its rows group on and join their class's answer on. A row is in a class
+//! when its key has a class, and the key is built so that a row in no class has a NULL where the join compares with `=`
+//! (SQL's outer join: a NULL matches nothing, so the row gets NULL answers), with no flag column beside it:
+//!
+//!  - an element whose NULL puts a row in no class (`no_group`) is compared with `=`, and a row that a `when` or an
+//!    instance condition drops reads NULL in it;
+//!  - an element where NULL is a value is compared with `IS NOT DISTINCT FROM`;
+//!  - a key with no element of the first kind, and rows a `when` or an instance condition can drop, has one more
+//!    column, a marker that is 0 on a row in a class and NULL on a row in none, compared with `=`.
+//!
+//! An `=` key of one integer column is what DuckDB's perfect hash join takes. Rows with no class group together under
+//! a NULL in an `=` column, apart from every class.
+struct DirectClassKey {
+	//! The type of each column: the key's elements, then the marker when there is one.
+	vector<LogicalType> types;
+	//! Whether the column is compared with `=` (a NULL puts the row in no class), and not with IS NOT DISTINCT FROM.
+	vector<bool> equal;
+};
+
+//! The class key of rows grouped by `keys`; `drops_rows` says whether a `when` or an instance condition can put a row
+//! of the scope in no class.
+DirectClassKey DirectClassKeyOf(const vector<DirectKeyElement> &keys, bool drops_rows);
+
+//! Whether the class a key names exists: no column compared with `=` is NULL. `columns` are the key's columns, as
+//! expressions of the plan the class is read in. True for a key with no such column, whose rows are all in a class.
+ExprPtr DirectClassPresent(const ExpressionBuilder &calc, const DirectClassKey &key, const vector<ExprPtr> &columns);
+
+//! The columns every stage of a rule forwards: the source columns, the eligible flag and the class key of its scope
 //! (DirectScopeState).
 struct DirectCarried {
 	vector<ColumnBinding> source;
 	//! Set only for a scoped rule.
 	ColumnBinding eligible;
 	vector<ColumnBinding> keys;
-	//! The types of `keys`.
-	vector<LogicalType> key_types;
+	//! The shape of `keys`.
+	DirectClassKey key;
 };
 
 //! One projection under construction: each column is added as an expression and gets its binding at once, and the
@@ -172,11 +199,12 @@ unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_pt
                                                  vector<unique_ptr<Expression>> aggregates);
 
 //! Joins each row of `rows` to the one row of `groups` that has its key. `row_keys` and `group_keys` are the key
-//! expressions of the two sides, pairwise, compared with IS NOT DISTINCT FROM so a NULL key matches; with no key the
-//! join is the cross product with the group's one row.
+//! expressions of the two sides, pairwise, compared with `=` where `equal` is set (a NULL key matches nothing, and the
+//! row gets NULL answers) and with IS NOT DISTINCT FROM elsewhere (a NULL key matches a NULL key); with no key the join
+//! is the cross product with the group's one row.
 unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups,
                                                vector<unique_ptr<Expression>> row_keys,
-                                               vector<unique_ptr<Expression>> group_keys);
+                                               vector<unique_ptr<Expression>> group_keys, const vector<bool> &equal);
 
 //! What DirectJoinClassAnswers gives back: the join, whose columns are the rows' columns, then the class plan's, and
 //! where the answer columns of the class each row's key names are.
@@ -188,15 +216,11 @@ struct DirectJoinedAnswers {
 
 //! Group-then-join: a class's answer is computed once on the class's own row and joined back to every row of the
 //! class, in place of a window that repeats the class's aggregates on every row (the shape DuckDB gives a decorrelated
-//! scalar subquery). `classes` is a plan of one row per class: the key columns (`key_types`), then the answer columns;
+//! scalar subquery). `classes` is a plan of one row per class: the key columns (`key`), then the answer columns;
 //! a rule makes it as a hash aggregate of a first read of its source on the key (an ungrouped aggregate for a
 //! query-wide decision, whose one row joins to every row), computes the answer and its checks on the aggregate's rows,
 //! and passes it here with a second read as `rows`. `row_keys` are the key columns of `rows`, pairwise with the
-//! class's, compared as DirectJoinGroupRow compares them (a NULL key is a class of its own).
-//!
-//! Precondition: a row's class is its whole key. A rule that drops rows from its classes (a `when`, a NULL in a key
-//! element that puts a row in no class) makes whether the row is in one the first key column, on both sides, so that a
-//! row no class takes never joins a class's answer: its other key columns are NULL, which a real class's can be too.
+//! class's, compared as `key` says (DirectClassKey): a row in no class matches no class row, and gets NULL answers.
 //!
 //! No joined row exists before its class row has passed its checks: the aggregate consumes every row of the first read
 //! before it gives its one row, and the class plan computes the answer and its checks above the aggregate, below the
@@ -205,7 +229,7 @@ struct DirectJoinedAnswers {
 //! With a key the join is a SINGLE join, which has no inverse, so BuildProbeSideOptimizer keeps the classes on the
 //! build side and the rows stream; the cross product of a query-wide decision may be flipped, which changes nothing.
 DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOperator> rows,
-                                           const vector<ColumnBinding> &row_keys, const vector<LogicalType> &key_types,
+                                           const vector<ColumnBinding> &row_keys, const DirectClassKey &key,
                                            unique_ptr<LogicalOperator> classes);
 
 //! A verdict on every row of `rows` (DirectSourceReader::Gate): one row whose one BOOLEAN column is true when `valid`,
@@ -401,9 +425,9 @@ struct DirectScopeState {
 	idx_t state_index = DConstants::INVALID_INDEX;
 	//! Set only for a scoped state.
 	ColumnBinding eligible;
-	//! The group key's elements as the state carries them (NULL on a row whose `when` drops it), in key order.
+	//! The class key's columns as the state carries them, in key order.
 	vector<ColumnBinding> keys;
-	vector<LogicalType> key_types;
+	DirectClassKey key;
 	//! The rule's extra columns, in the order given.
 	vector<ColumnBinding> extra;
 };
@@ -416,7 +440,9 @@ DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width)
 //! `by` key (D5: a NULL key is in no group; the columns of a relation compare NULL as a value, and group). `keys` are
 //! the `by` key, its expressions over the input's columns; they are computed on the rows the `when` keeps alone, as
 //! nothing is computed on a row it drops. `extra` are expressions over the input. A row is eligible only when
-//! `instance` (a BOOLEAN over the input, or null for none) holds.
+//! `instance` (a BOOLEAN over the input, or null for none) holds. The class key the state carries (DirectClassKeyOf,
+//! with `drops_rows` when there is a `when` or an instance) is NULL in every column compared with `=` on a row that is
+//! not eligible.
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<DirectKeyElement> &keys,
                                     vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance = nullptr);

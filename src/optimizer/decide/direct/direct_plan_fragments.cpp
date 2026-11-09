@@ -80,8 +80,8 @@ DirectCarried DirectProjectionStage::Forward(const DirectCarried &from, const ve
 	if (scoped) {
 		to.eligible = Add(ColumnOf(LogicalType::BOOLEAN, from.eligible));
 	}
-	to.keys = Forward(from.keys, from.key_types);
-	to.key_types = from.key_types;
+	to.keys = Forward(from.keys, from.key.types);
+	to.key = from.key;
 	return to;
 }
 
@@ -318,8 +318,8 @@ unique_ptr<LogicalAggregate> DirectAggregateOver(Optimizer &optimizer, unique_pt
 
 unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> groups,
                                                vector<unique_ptr<Expression>> row_keys,
-                                               vector<unique_ptr<Expression>> group_keys) {
-	D_ASSERT(row_keys.size() == group_keys.size());
+                                               vector<unique_ptr<Expression>> group_keys, const vector<bool> &equal) {
+	D_ASSERT(row_keys.size() == group_keys.size() && row_keys.size() == equal.size());
 	if (row_keys.empty()) {
 		return LogicalCrossProduct::Create(std::move(rows), std::move(groups));
 	}
@@ -331,7 +331,7 @@ unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows,
 	auto join = make_uniq<LogicalComparisonJoin>(JoinType::SINGLE);
 	for (idx_t i = 0; i < row_keys.size(); i++) {
 		JoinCondition on_key;
-		on_key.comparison = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
+		on_key.comparison = equal[i] ? ExpressionType::COMPARE_EQUAL : ExpressionType::COMPARE_NOT_DISTINCT_FROM;
 		on_key.left = std::move(row_keys[i]);
 		on_key.right = std::move(group_keys[i]);
 		join->conditions.push_back(std::move(on_key));
@@ -342,20 +342,21 @@ unique_ptr<LogicalOperator> DirectJoinGroupRow(unique_ptr<LogicalOperator> rows,
 }
 
 DirectJoinedAnswers DirectJoinClassAnswers(Binder &binder, unique_ptr<LogicalOperator> rows,
-                                           const vector<ColumnBinding> &row_keys, const vector<LogicalType> &key_types,
+                                           const vector<ColumnBinding> &row_keys, const DirectClassKey &key,
                                            unique_ptr<LogicalOperator> classes) {
-	D_ASSERT(row_keys.size() == key_types.size());
+	D_ASSERT(row_keys.size() == key.types.size());
 	ExpressionBuilder calc(binder.context);
 	auto class_bindings = classes->GetColumnBindings();
-	D_ASSERT(class_bindings.size() >= key_types.size());
+	D_ASSERT(class_bindings.size() >= key.types.size());
 	vector<unique_ptr<Expression>> on_rows, on_classes;
-	for (idx_t i = 0; i < key_types.size(); i++) {
-		on_rows.push_back(calc.Out(calc.Col(key_types[i], row_keys[i])));
-		on_classes.push_back(calc.Out(calc.Col(key_types[i], class_bindings[i])));
+	for (idx_t i = 0; i < key.types.size(); i++) {
+		on_rows.push_back(calc.Out(calc.Col(key.types[i], row_keys[i])));
+		on_classes.push_back(calc.Out(calc.Col(key.types[i], class_bindings[i])));
 	}
 	DirectJoinedAnswers result;
-	result.answers.assign(class_bindings.begin() + NumericCast<int64_t>(key_types.size()), class_bindings.end());
-	result.plan = DirectJoinGroupRow(std::move(rows), std::move(classes), std::move(on_rows), std::move(on_classes));
+	result.answers.assign(class_bindings.begin() + NumericCast<int64_t>(key.types.size()), class_bindings.end());
+	result.plan =
+	    DirectJoinGroupRow(std::move(rows), std::move(classes), std::move(on_rows), std::move(on_classes), key.equal);
 	return result;
 }
 
@@ -537,8 +538,35 @@ DirectCarried DirectCarriedOf(const DirectScopeState &state, idx_t source_width)
 	                      state.input_bindings.begin() + NumericCast<int64_t>(source_width));
 	carried.eligible = state.eligible;
 	carried.keys = state.keys;
-	carried.key_types = state.key_types;
+	carried.key = state.key;
 	return carried;
+}
+
+DirectClassKey DirectClassKeyOf(const vector<DirectKeyElement> &keys, bool drops_rows) {
+	DirectClassKey key;
+	bool has_no_class_element = false;
+	for (auto &element : keys) {
+		key.types.push_back(element.grouping->return_type);
+		key.equal.push_back(element.no_group);
+		has_no_class_element = has_no_class_element || element.no_group;
+	}
+	if (drops_rows && !has_no_class_element) {
+		key.types.push_back(LogicalType::UTINYINT);
+		key.equal.push_back(true);
+	}
+	return key;
+}
+
+ExprPtr DirectClassPresent(const ExpressionBuilder &calc, const DirectClassKey &key, const vector<ExprPtr> &columns) {
+	D_ASSERT(columns.size() == key.types.size());
+	ExprPtr present;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		if (key.equal[i]) {
+			auto has_value = calc.Not(calc.IsNull(columns[i]));
+			present = present ? calc.And(present, has_value) : has_value;
+		}
+	}
+	return present ? present : calc.Bool(true);
 }
 
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
@@ -571,14 +599,26 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 				eligible = calc.If(calc.IsNull(key_values.back()), calc.Bool(false), eligible);
 			}
 		}
+		state.key = DirectClassKeyOf(keys, when != nullptr || instance != nullptr);
 		if (instance) {
 			eligible = calc.If(calc.Wrap(std::move(instance)), eligible, calc.Bool(false));
+			// The instance is the second reason a row is in no class, after a `when`, which has put NULL in every
+			// column of the key already and a NULL in an element that is no class's on its own.
+			for (idx_t i = 0; i < keys.size(); i++) {
+				if (keys[i].no_group) {
+					key_values[i] = calc.If(eligible, key_values[i], calc.Constant(Value(key_values[i]->return_type)));
+				}
+			}
+		}
+		if (key_values.size() < state.key.types.size()) {
+			// No element can say a row is in no class, and a `when` or an instance can: the marker does.
+			key_values.push_back(
+			    calc.If(eligible, calc.Constant(Value::UTINYINT(0)), calc.Constant(Value(LogicalType::UTINYINT))));
 		}
 		state.eligible = ColumnBinding(state.state_index, expressions.size());
 		expressions.push_back(calc.Out(eligible));
 		for (auto &value : key_values) {
 			state.keys.emplace_back(state.state_index, expressions.size());
-			state.key_types.push_back(value->return_type);
 			expressions.push_back(calc.Out(value));
 		}
 	}

@@ -25,12 +25,15 @@ public:
 		read = reader.ReadSource();
 		vector<ExprPtr> keys;
 		vector<unique_ptr<Expression>> source_keys;
+		vector<bool> equal;
 		for (auto &element : DecideKeyElements(decide.keys, record.key)) {
 			keys.push_back(Over(element.Grouping()));
 			source_keys.push_back(element.Grouping().Copy());
+			// A row whose element is NULL is in no group (D5), unless the element is a column of a relation.
+			equal.push_back(element.null_mode == DecideKeyNullMode::NO_GROUP);
 		}
 		auto definition = record.counts_classes ? CountedByClass(record, keys) : Plain(record, keys);
-		reader.AddSideTable(std::move(definition), std::move(source_keys), record.column);
+		reader.AddSideTable(std::move(definition), std::move(source_keys), equal, record.column);
 	}
 
 private:

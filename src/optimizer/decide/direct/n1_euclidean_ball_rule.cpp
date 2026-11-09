@@ -319,7 +319,7 @@ public:
 
 		DirectAggregateStage stage(binder);
 		for (idx_t i = 0; i < lengths.carried.keys.size(); i++) {
-			stage.Group(calc.Out(calc.Col(lengths.carried.key_types[i], lengths.carried.keys[i])));
+			stage.Group(calc.Out(calc.Col(lengths.carried.key.types[i], lengths.carried.keys[i])));
 		}
 		stage.Add(DirectHashAggregate(optimizer, calc, "sum", Double(lengths.squared_length)));
 		stage.Add(DirectHashAggregate(optimizer, calc, "bool_and", Boolean(lengths.valid)));
@@ -349,8 +349,7 @@ public:
 		plan = p3.Finish(std::move(plan));
 
 		auto &carried = values.carried;
-		auto joined =
-		    DirectJoinClassAnswers(binder, std::move(plan), carried.keys, carried.key_types, std::move(classes));
+		auto joined = DirectJoinClassAnswers(binder, std::move(plan), carried.keys, carried.key, std::move(classes));
 		D_ASSERT(joined.answers.size() == (limit_bound ? 3 : 2));
 		auto total = calc.Coalesce({Double(joined.answers[0]), calc.Num(0.0)});
 		// A row is in a ball when the clause keeps it and the group has a limit.
@@ -447,7 +446,7 @@ private:
 	//! so it adds nothing to the group whose key it shares, and the answer does not read what the window returns on it.
 	void PartitionByGroup(const DirectCarried &carried, BoundWindowExpression &window) const {
 		for (idx_t i = 0; i < carried.keys.size(); i++) {
-			window.partitions.push_back(calc.Out(calc.Col(carried.key_types[i], carried.keys[i])));
+			window.partitions.push_back(calc.Out(calc.Col(carried.key.types[i], carried.keys[i])));
 		}
 	}
 

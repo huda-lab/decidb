@@ -587,8 +587,9 @@ public:
 		score_binding = ColumnBinding(score_index, next_slot++);
 		score_message_binding = ColumnBinding(score_index, next_slot++);
 		if (condition.scoped) {
+			class_key = DirectClassKeyOf(condition.group_keys, condition.when_condition || condition.gated);
 			eligible_binding = ColumnBinding(score_index, next_slot++);
-			for (idx_t i = 0; i < condition.group_keys.size(); i++) {
+			for (idx_t i = 0; i < class_key.types.size(); i++) {
 				key_bindings.push_back(ColumnBinding(score_index, next_slot++));
 			}
 		}
@@ -629,9 +630,9 @@ public:
 		return substitute;
 	}
 
-	//! The class plan over the first read `rows`: a hash aggregate on the scope (whether the row is eligible, then the
-	//! group key; one row for all the rows when the bounds have no scope) holding the aggregates of the group bounds.
-	//! `group_values` are then expressions over its columns, which Build joins to every row.
+	//! The class plan over the first read `rows`: a hash aggregate on the scope (the class key; one row for all the
+	//! rows when the bounds have no scope) holding the aggregates of the group bounds. `group_values` are then
+	//! expressions over its columns, which Build joins to every row.
 	unique_ptr<LogicalOperator> BuildGroupBounds(unique_ptr<LogicalOperator> rows) const {
 		ScopeBindings scope;
 		auto plan = ProjectScopeState(std::move(rows), scope);
@@ -642,14 +643,8 @@ public:
 		DirectProjectionStage inputs(binder.GenerateTableIndex());
 		vector<vector<DirectGroupInputColumns>> columns(condition.source_bounds.size());
 		vector<ColumnBinding> key;
-		vector<LogicalType> key_types;
-		if (condition.scoped) {
-			key.push_back(inputs.Add(calc.Out(eligible)));
-			key_types.push_back(LogicalType::BOOLEAN);
-			for (idx_t i = 0; i < scope.key_bindings.size(); i++) {
-				key.push_back(inputs.Add(calc.Out(calc.Col(KeyType(i), scope.key_bindings[i]))));
-				key_types.push_back(KeyType(i));
-			}
+		for (idx_t i = 0; i < scope.key_bindings.size(); i++) {
+			key.push_back(inputs.Add(calc.Out(calc.Col(KeyType(i), scope.key_bindings[i]))));
 		}
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
@@ -671,11 +666,13 @@ public:
 
 		DirectAggregateStage stage(binder);
 		vector<ColumnBinding> groups;
+		vector<ExprPtr> group_columns;
 		for (idx_t i = 0; i < key.size(); i++) {
-			groups.push_back(stage.Group(calc.Out(calc.Col(key_types[i], key[i]))));
+			groups.push_back(stage.Group(calc.Out(calc.Col(class_key.types[i], key[i]))));
+			group_columns.push_back(calc.Col(class_key.types[i], groups.back()));
 		}
 		DirectAggregateSink sink(stage);
-		auto in_group = condition.scoped ? calc.Col(LogicalType::BOOLEAN, groups[0]) : nullptr;
+		auto in_group = condition.scoped ? DirectClassPresent(calc, class_key, group_columns) : nullptr;
 		group_values.assign(condition.source_bounds.size(), DirectGroupValues());
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
@@ -724,7 +721,8 @@ private:
 	//! The message the score raises on a row, NULL where it is valid.
 	ColumnBinding score_message_binding;
 	ColumnBinding eligible_binding;
-	//! The group key's elements in the score projection.
+	//! The class key of the scope, and its columns in the score projection. Empty without a scope.
+	DirectClassKey class_key;
 	vector<ColumnBinding> key_bindings;
 	ColumnBinding fixed_one_binding;
 	ColumnBinding fixed_zero_binding;
@@ -742,9 +740,9 @@ private:
 	mutable vector<ColumnBinding> message_minimum;
 	mutable ColumnBinding score_message_minimum;
 
-	//! The type of group key element `i`.
+	//! The type of class key column `i`.
 	const LogicalType &KeyType(idx_t i) const {
-		return condition.group_keys[i].grouping->return_type;
+		return class_key.types[i];
 	}
 
 	//! Copy of a proved expression whose source references follow the state projection, when there is one.
@@ -996,12 +994,12 @@ private:
 		return calc.Min(limits);
 	}
 
-	//! Partition a rank or count window by eligibility and group key.
+	//! Partition a rank or count window by class key: a row in no class has a NULL where the key is compared with `=`,
+	//! so it ranks apart from every class.
 	void AddScope(BoundWindowExpression &expression) const {
 		if (!condition.scoped) {
 			return;
 		}
-		expression.partitions.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, eligible_binding)));
 		for (idx_t i = 0; i < key_bindings.size(); i++) {
 			expression.partitions.push_back(calc.Out(calc.Col(KeyType(i), key_bindings[i])));
 		}
@@ -1069,19 +1067,10 @@ private:
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
 		if (classes) {
-			// Each row takes its group's bounds, whose class is the scope: whether the row is eligible, then its key.
-			vector<ColumnBinding> row_key;
-			vector<LogicalType> key_types;
-			if (condition.scoped) {
-				row_key.push_back(eligible_binding);
-				key_types.push_back(LogicalType::BOOLEAN);
-				for (idx_t i = 0; i < key_bindings.size(); i++) {
-					row_key.push_back(key_bindings[i]);
-					key_types.push_back(KeyType(i));
-				}
-			}
+			// Each row takes its group's bounds, whose class is the scope: its class key.
 			result.plan =
-			    DirectJoinClassAnswers(binder, std::move(result.plan), row_key, key_types, std::move(classes)).plan;
+			    DirectJoinClassAnswers(binder, std::move(result.plan), key_bindings, class_key, std::move(classes))
+			        .plan;
 		}
 		auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot));
 		feasible->children.push_back(std::move(result.plan));

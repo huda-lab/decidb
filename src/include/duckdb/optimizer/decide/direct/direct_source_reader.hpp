@@ -84,12 +84,14 @@ public:
 
 	//! Adds a side table: `definition` is a plan of one row per group whose columns are the group key's, then the one
 	//! value. `keys` are the key's expressions over the source's columns (none for one group); a read joins the table
-	//! to its rows on them with IS NOT DISTINCT FROM, so a NULL key is a group. The value is the column `placeholder`,
+	//! to its rows on them, element by element (DirectClassKey): with `=` where `equal` is set, so a row whose element
+	//! is NULL (and so in no group) has no row in the table, and with IS NOT DISTINCT FROM elsewhere, where a NULL is a
+	//! group of its own. The value is the column `placeholder`,
 	//! which the clauses' expressions read; `placeholder.column_index` is the number of key columns. Every group of a
 	//! row is in the table, because `definition` reads the source's rows. A table's definition may read the tables
 	//! added before it, not those after. The reader owns the table from here on.
 	void AddSideTable(unique_ptr<LogicalOperator> definition, vector<unique_ptr<Expression>> keys,
-	                  ColumnBinding placeholder);
+	                  const vector<bool> &equal, ColumnBinding placeholder);
 
 	//! Gates every later read on `verdict`, a plan of one row whose one BOOLEAN column is true or raises. A verdict
 	//! built from reads taken before the gate is gated by the verdicts before it; one added later reads only what the
@@ -110,6 +112,7 @@ private:
 	struct SideTable {
 		unique_ptr<LogicalOperator> definition;
 		vector<unique_ptr<Expression>> keys;
+		vector<bool> equal;
 		vector<LogicalType> types;
 		idx_t cte_index;
 		idx_t ref_index;

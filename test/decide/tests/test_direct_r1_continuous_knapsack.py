@@ -2963,9 +2963,10 @@ def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(de
     assert _count(plan, "COLUMN_DATA_SCAN") == 1, plan
     sorts = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
     assert [(rows, width <= (6 if scoped else 5) * 8) for _, rows, width in sorts] == [(4000, True)], sorts
-    # The unpivot reads the group key (with a scope), and the price and room of each decision, nothing else.
+    # The unpivot reads the group key (with a scope; one column, with no flag beside it), and the price and room of each
+    # decision, nothing else.
     unpivots = _profiled_unpivots(decidb_cli, tmp_path, pair)
-    assert [(rows, len(inputs)) for rows, inputs in unpivots] == [(4000, 6 if scoped else 4)], unpivots
+    assert [(rows, len(inputs)) for rows, inputs in unpivots] == [(4000, 5 if scoped else 4)], unpivots
 
 
 @pytest.mark.cons_aggregate

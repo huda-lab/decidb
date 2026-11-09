@@ -1,8 +1,9 @@
 """The reducers a bound reads from the data are computed once per group and joined back to the rows.
 
 `sum(x) by (g) <= sum(cap) by (g)` reads `sum(cap) by (g)` as one column of the source: a grouped aggregate over a
-read of the source (a side table), joined to each row by `g` with IS NOT DISTINCT FROM, the way DuckDB decorrelates a
-scalar subquery. Every case is judged by `_scope_oracle`, which states the rule independently: the solver path
+read of the source (a side table), joined to each row by `g` (with `=` for a written column, where a NULL is in no group,
+and with IS NOT DISTINCT FROM for a column of a relation, where it is a value), the way DuckDB decorrelates a scalar
+subquery. Every case is judged by `_scope_oracle`, which states the rule independently: the solver path
 (`off`) and the plan the default mode picks (`auto`, a direct-solve rule where one applies) must reach the oracle's
 optimum, and a case a rule takes also runs under `require`. Each case names the branch of the side table it reaches.
 """
