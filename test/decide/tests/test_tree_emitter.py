@@ -78,11 +78,8 @@ def test_a_query_with_no_arm_takes_the_interim_formulator(decidb_cli):
 #: with stage 06), then what the tree computes no value for.
 UNCOVERED = {
     "TIGHTEST_BOUND": "x(REAL) SUCH THAT x <= 9 AND sum(x) by (t.g) <= at(previous else 9: t.c) over (t.id within t.g)",
-    "NOT_EQUAL_ROWS": "x(INT) SUCH THAT x <= 9 AND x <> 3",
-    "DEFINED_READS": "x(REAL) SUCH THAT x <= 9 AND x + abs(x - t.c) <= 20",
     "EXTREMUM_ROWS": "x(REAL) SUCH THAT x <= 9 AND max(x) by (t.g) >= 2",
     "MEMBER_ROWS": "x(REAL) SUCH THAT x <= 9 AND max(x) by (t.g) <= 2",
-    "CLASS_ROWS": "x(REAL), y(REAL) SUCH THAT x <= 9 AND per t.g: x + y <= 5",
     "OBJECTIVE_SQUARES": "x(REAL) SUCH THAT x <= t.c MINIMIZE sum(power(x - t.c, 2))",
     "OBJECTIVE_EXTREMUM": "x(REAL) SUCH THAT x <= t.c MINIMIZE max(x)",
     "OBJECTIVE_COMPOSED": "x(REAL) SUCH THAT x <= t.c MAXIMIZE max(x) + min(x)",
@@ -90,8 +87,6 @@ UNCOVERED = {
     "VALUE_LINKS": "x(REAL) SUCH THAT x <= 9 AND x <= sum(x) by (t.g)",
     "FRAME_READS": "x(REAL) SUCH THAT x <= 9 AND x <= at(previous else 1: x) over (t.id)",
     "PRODUCT_LINKS": "x(REAL), b(BOOL) SUCH THAT x <= 9 AND b * x <= 5",
-    # t.c takes several values in a class of t.g, so the reducer reads one value per class and value of t.c.
-    "KEYED_SIGNATURE": "x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: t.c * y)",
     # A norm's value is folded from a body of its arguments, which the tree computes no value for yet.
     "a data reducer folds a norm": "x(REAL) SUCH THAT x <= norm(t.c, 1) by (t.g)",
 }
@@ -737,10 +732,257 @@ def test_a_null_key_value_is_the_last_group(decidb_cli, tmp_path):
     assert tree == flat
 
 
-def test_a_diagnosis_of_a_grouped_clause_has_no_arm_yet(decidb_cli, tmp_path):
-    """A diagnosis reports the classes a group's row stands for (SolverInput::class_sets), which no arm emits yet."""
-    lines, result = coverage(decidb_cli, f"DIAGNOSE {GROUPS_DIAGNOSED}", tmp_path)
-    assert lines == ["execution.tree_fallback: CLASS_SETS"], result.stderr
+def test_a_relations_null_key_class_is_numbered_last(decidb_cli, tmp_path):
+    """T's key compares NULL as a value, so the class of T.k NULL is the last class of y's scope, as flat numbers it
+    (DecideDescent::Finish): verify finds the tree's classes flat's."""
+    sql = """SELECT T.k, y FROM (VALUES (1, NULL), (2, 4.0), (NULL, 5.0)) T(k, v)
+        JOIN (VALUES (1, 'u'), (1, 'w'), (2, 'u'), (NULL, 'z')) W(k, c) ON T.k IS NOT DISTINCT FROM W.k
+        DECIDE per T: y(REAL) SUCH THAT y <= 9 MAXIMIZE sum(T: y)"""
+    _verified(decidb_cli, sql, tmp_path)
 
 
-GROUPS_DIAGNOSED = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x >= 9 AND sum(x) by (t.g) <= 5"
+def _verified(cli, sql, tmp_path):
+    """The query under verify, whose second run is the tree's: it raises if what the two hand stage 06 differs, and
+    prints what flat prints otherwise."""
+    lines, result = coverage(cli, sql, tmp_path, "verify")
+    assert lines == ["covered: verify"], result.stderr
+    assert result.stderr == run(cli, sql, "flat").stderr
+
+
+#: A diagnosis of a clause in the aggregate shape reports the classes each group's row stands for
+#: (SolverInput::class_sets), which verify compares, by the branch each case reaches (DecideGroupClassSets): x <= 9
+#: cannot meet a sum of 100.
+GROUP_CLASSES = {
+    # With no `per`, a group's row stands for each of its kept rows.
+    "kept-rows": "sum(x) by (t.g) >= 100",
+    # One group, which holds every kept row.
+    "one-group": "sum(x) >= 100",
+    # Under `per t.k:`, for the classes of t.k among its kept rows; row 1 is in none, though group a holds it
+    # (DecideModelEmitter::KeyClasses).
+    "classes-of-its-per": "per t.k: sum(x) by (t.g) >= 100",
+    # Under `per ()`, for the whole clause.
+    "the-whole-clause": "per (): sum(x) by (t.g) >= 100",
+}
+
+
+@pytest.mark.parametrize("case", list(GROUP_CLASSES))
+def test_a_diagnosis_reports_the_classes_a_groups_row_stands_for(decidb_cli, tmp_path, case):
+    sql = f"""DIAGNOSE SELECT id, x FROM {GROUPED_ROWS} DECIDE x(REAL) SUCH THAT x <= 9 AND {GROUP_CLASSES[case]}
+        MAXIMIZE sum(x)"""
+    _verified(decidb_cli, sql, tmp_path)
+
+
+#: Rows for the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS): class b's rows come before class
+#: a's, so flat's numbering by value is not its numbering by row; class a's rows 2 and 4 read one value of c, class b's
+#: rows 1 and 3 two; row 5's g is NULL, so it is in no class.
+CLASS_ROWS = "(VALUES (1, 'b', 3.0::DOUBLE), (2, 'a', 4.0), (3, 'b', 5.0), (4, 'a', 4.0), (5, NULL, 1.0)) t(id, g, c)"
+
+#: Each a clause with one model row per class or per variant of a class of its `per K:`, which the tree builds, names,
+#: counts and reports as flat does (verify compares them, and the classes a diagnosis reports), by the branch it
+#: reaches (DecideModelEmitter::Classes).
+CLASSES = {
+    # One row per class of t.g, at its first row, named by its class (KeyClasses).
+    "a-row-per-class": "per t.g: z + y <= 5",
+    # One row per value of c in a class: class b's two values make 3 variants of 2 classes, numbered by value, each
+    # named by its class and its value (NameVariants) and, under DIAGNOSE, standing for itself; EXPLAIN ANALYZE counts
+    # them (RecordVariants).
+    "a-row-per-value": "per t.g: z + t.c <= 20",
+    # x is per row, so each row is a variant of its own, numbered by its first row (Variants); rows 2 and 4 read one
+    # value of c, so each is named by its row too, and by no value of x's instance.
+    "a-row-per-decision": "per t.g: x + t.c <= 20",
+    # `per ()` has one class with no value, which its variants are named without; under DIAGNOSE they stand for the
+    # whole clause.
+    "one-class": "per (): z + t.c <= 20",
+    # A clause's `when`: its rows do not stand for every row of their class (rows_stand_with_their_class).
+    "a-when": "when t.c > 3.5 per t.g: z + y <= 5",
+}
+
+
+@pytest.mark.parametrize("diagnose", ["", "DIAGNOSE "], ids=["solve", "diagnose"])
+@pytest.mark.parametrize("case", list(CLASSES))
+def test_a_row_per_class_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case, diagnose):
+    sql = f"""SELECT id, x FROM {CLASS_ROWS} DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)
+        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {CLASSES[case]} MAXIMIZE sum(x) + sum(y) + z"""
+    _verified(decidb_cli, diagnose + sql, tmp_path)
+    if not diagnose:
+        flat, tree = models(decidb_cli, sql, tmp_path)
+        assert tree == flat
+
+
+#: A relation-qualified reducer reads one value per class and value of what its body reads (KeyedScopeInfo::signature):
+#: its classes are its operand's variants, numbered as flat numbers them (DecideModelEmitter::SignatureMapping). Row 5's
+#: g is NULL, so the reducer reads no value there, which maps it to a class of its own.
+SPLIT_CLASSES = {
+    # t.c takes two values in class b: 3 values of 2 classes, which EXPLAIN ANALYZE counts. y's instance is a field,
+    # so they are numbered by their first rows.
+    "by-first-row": "x + y <= t.c MAXIMIZE sum(per t.g: t.c * y)",
+    # z is one decision for every row, so they are numbered by value.
+    "by-value": "x + z <= t.c MAXIMIZE sum(per t.g: t.c * z)",
+}
+
+
+@pytest.mark.parametrize("case", list(SPLIT_CLASSES))
+def test_a_qualified_reducers_classes_are_split_by_its_values(decidb_cli, tmp_path, case):
+    sql = f"""SELECT id, x FROM {CLASS_ROWS} DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)
+        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {SPLIT_CLASSES[case]}"""
+    _verified(decidb_cli, sql, tmp_path)
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+#: A relation-qualified reducer reads its terms on every row its `when` keeps, and keeps no value of a row in no class
+#: of its `per` (ApplyQualifierToFilter): its operand holds such a row in a slot of its own
+#: (DecideNode::holds_rows_in_no_class), which the reducer reads nothing of (DecideTreeColumns::FirstOfEachInstance) and
+#: no variant holds (DecideModelEmitter::Variants). Row 5's g is NULL, and its c is each case's.
+NO_CLASS_ROWS = """(VALUES (1, 'b', 'u', 3.0::DOUBLE), (2, 'a', 'u', 4.0), (3, 'b', 'v', 5.0), (4, 'a', 'u', 4.0),
+    (5, NULL, 'z', {c})) t(id, g, h, c)"""
+
+IN_NO_CLASS = {
+    # Row 5 stays in the clause's one group.
+    "in-its-group": ("1.0", "x <= 9 AND sum(per t.g: t.c * x) <= 20 MAXIMIZE sum(x)"),
+    # Row 5 alone makes group z, in which the reducer reads no value, so z has none (D68).
+    "a-group-of-its-own": ("1.0", "x <= 9 AND sum(per t.g: x) by (t.h) >= 5 MAXIMIZE sum(x)"),
+    # Its coefficient is computed there, so its NaN is refused, in a clause and in the objective.
+    "a-nan-in-a-clause": ("'NaN'::DOUBLE", "x <= 9 AND sum(per t.g: t.c * x) <= 20 MAXIMIZE sum(x)"),
+    "a-nan-in-the-objective": ("'NaN'::DOUBLE", "x <= 9 MAXIMIZE sum(per t.g: t.c * x)"),
+}
+
+
+@pytest.mark.parametrize("case", list(IN_NO_CLASS))
+def test_a_qualified_reducer_reads_its_rows_in_no_class_as_flat_does(decidb_cli, tmp_path, case):
+    c, clause = IN_NO_CLASS[case]
+    sql = f"SELECT id, x FROM {NO_CLASS_ROWS.format(c=c)} DECIDE x(REAL) SUCH THAT {clause}"
+    _verified(decidb_cli, sql, tmp_path)
+    assert run(decidb_cli, sql).stderr == run(decidb_cli, sql, "flat").stderr
+
+
+#: A variant is named by what its class key and its fields read at its first row, as written (DecideBody::names), and
+#: a collated column of its class by its least spelling among the clause's rows of the class
+#: (DecideDescentGroup::spelling), as flat's reader names it; verify compares the names an expanded diagnosis shows.
+NAMED_VARIANTS = {
+    # The `by` key t.h is collated: its field is spelled as the variant's first row spells it, 'U', not as it groups.
+    "a-by-key-as-written": """SELECT id, y FROM (SELECT id, g, h COLLATE NOCASE AS h, c FROM (VALUES (1, 'a', 'U', 3.0),
+        (2, 'a', 'v', 4.0), (3, 'b', 'w', 7.0), (4, 'a', 'u', 2.0)) v(id, g, h, c)) t
+        DECIDE per t.g: y(BOOL) SUCH THAT per t.g: y + sum(t.c) by (t.h) <= 4.5 MAXIMIZE sum(y)""",
+    # -0.0 and 0.0 are one class: each variant is named by its own first row's g.
+    "a-class-at-its-first-row": """SELECT id, y FROM (VALUES (1, -0.0::DOUBLE, 4.0), (2, 0.0::DOUBLE, 1.0),
+        (3, 1.0::DOUBLE, 7.0)) t(id, g, c) DECIDE per t.g: y(BOOL) SUCH THAT per t.g: y + t.c <= 0.5""",
+    # y's key reads row 1's 'A', which the clause's `when` leaves out: its class is named 'a'.
+    "a-collated-class-among-its-rows": """SELECT id, y FROM (SELECT id, g COLLATE NOCASE AS g, c, v FROM (VALUES
+        (1, 'A', -1, 1.0), (2, 'a', 1, 2.0), (3, 'a', 1, 3.0), (4, 'b', 1, 1.0)) w(id, g, c, v)) t
+        DECIDE per t.g: y(BOOL) SUCH THAT when t.c > 0 per t.g: y + t.v >= 10 MAXIMIZE sum(y)""",
+}
+
+
+@pytest.mark.parametrize("case", list(NAMED_VARIANTS))
+def test_a_variant_is_named_as_written_at_its_first_row(decidb_cli, tmp_path, case):
+    expanded = "PRAGMA diagnose_decide_infeasible_slack_scope='expanded'; "
+    _verified(decidb_cli, f"{expanded}DIAGNOSE {NAMED_VARIANTS[case]}", tmp_path)
+
+
+def test_a_folded_row_of_one_class_has_no_name(decidb_cli, tmp_path):
+    """`2 * z >= 30` is folded into z's box, and only a repair model emits its row: one variant of the one class of
+    `per ()`, which has no value to name it by (Classes, under DIAGNOSE alone)."""
+    sql = f"""DIAGNOSE SELECT id, x FROM {CLASS_ROWS} DECIDE x(REAL), per (): z(REAL)
+        SUCH THAT x <= 9 AND z <= 9 AND per (): 2 * z >= 30 MAXIMIZE sum(x) + z"""
+    _verified(decidb_cli, sql, tmp_path)
+
+
+#: Rows for an auxiliary's absence: row 1's c is NULL; row 4's g is NULL, so y has no instance there.
+ABSENT_ROWS = "(VALUES (1, 'a', NULL::DOUBLE), (2, 'a', 3.0), (3, 'b', 5.0), (4, NULL, 2.0)) t(id, g, c)"
+
+#: An auxiliary has no value where what defines it reads none (SolverInput::absent_reads, D88), so a row reading it
+#: skips its instance, as flat does; verify compares the absence. By the branch each case reaches
+#: (DecideModelEmitter::ReadAbsence).
+DEFINED = {
+    # Row 1's NULL is in its definition's bound, `a >= x - t.c` read as `a - x >= -t.c`: the clause skips row 1.
+    "a-null-bound": "x + abs(x - t.c) <= 20",
+    # Row 1's NULL is in its definition's coefficient.
+    "a-null-coefficient": "x + abs(t.c * x - 1) <= 20",
+    # y has no instance on row 4, which its definition reads.
+    "a-decision-with-no-instance": "x + abs(y - 1) <= 20",
+    # The outer auxiliary's definition reads the inner one, which has no value on row 1.
+    "an-auxiliary-under-another": "x + abs(abs(x - t.c) - 1) <= 20",
+}
+
+
+@pytest.mark.parametrize("case", list(DEFINED))
+def test_an_auxiliary_has_no_value_where_its_definition_has_none(decidb_cli, tmp_path, case):
+    sql = f"""SELECT id, x FROM {ABSENT_ROWS} DECIDE x(REAL), per t.g: y(REAL)
+        SUCH THAT x <= 9 AND y <= 9 AND {DEFINED[case]} MAXIMIZE sum(x) + sum(y)"""
+    _verified(decidb_cli, sql, tmp_path)
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+#: Three thousand rows, two windows of 2,048 rows: row 10's d is 0 and row 2,500's c is -1, so ln(t.d) raises in the
+#: first window and sqrt(t.c) in the second.
+WINDOWS = """(SELECT i, CASE WHEN i = 2500 THEN -1.0 ELSE 1.0 END AS c, CASE WHEN i = 10 THEN 0.0 ELSE 1.0 END AS d
+    FROM range(3000) r(i)) t"""
+
+#: An error a definition raises ranks where flat raises it, under tree and under verify, by the branch each case
+#: reaches (DecideNode::value_rank, clause_rank).
+DEFINITION_ERRORS = {
+    # Flat checks a definition's numbers where it evaluates the row among the clauses (clause_rank), after
+    # `x <= t.d`'s: row 1's NaN bound raises, not row 2's NaN in |x - t.c|.
+    "its-numbers-at-its-place": """(VALUES (1, 1.0, 'NaN'::DOUBLE), (2, 'NaN'::DOUBLE, 1.0)) t(i, c, d)
+        DECIDE x(REAL) SUCH THAT x <= t.d AND x + abs(x - t.c) <= 20""",
+    # And after the clause before it reads ln(0): the clause's error raises, not the NaN in |t.c * x - 1|.
+    "its-numbers-after-an-earlier-clause": """(VALUES (1, 'NaN'::DOUBLE, 0.0), (2, 1.0, 1.0)) t(i, c, d)
+        DECIDE x(REAL) SUCH THAT x <= ln(t.d) + 9 AND x + abs(t.c * x - 1) <= 20""",
+    # Flat computes a definition first where it resolves the auxiliary's absence, before any clause
+    # (DecideTreeColumns::NullEntries): sqrt(-1) raises, though `x <= ln(t.d) + 9` comes first.
+    "its-execution-before-every-clause": """(VALUES (1, 1.0, 0.0), (2, -1.0, 1.0)) t(i, c, d)
+        DECIDE x(REAL) SUCH THAT x <= ln(t.d) + 9 AND x + abs(x - sqrt(t.c)) <= 20""",
+    # It computes a definition's bound and its coefficients together, the bound first: ln(0) on the same row.
+    "its-bound-before-its-coefficient": """(VALUES (1, -1.0, 0.0), (2, 1.0, 1.0)) t(i, c, d)
+        DECIDE x(REAL) SUCH THAT x <= 9 AND x + abs(sqrt(t.c) * x - ln(t.d)) <= 20""",
+    # A window at a time: ln(0) in the first window, though the coefficient comes before the bound in the clause.
+    "its-windows-in-order": f"""{WINDOWS}
+        DECIDE x(REAL) SUCH THAT x <= 9 AND x + abs(sqrt(t.c) * x - ln(t.d)) <= 20""",
+    # Auxiliary after auxiliary (DecideErrorRank::step): the inner |x - sqrt(t.c)|'s, though the outer's ln(t.d) is in
+    # the first window.
+    "an-auxiliary-before-the-next": f"""{WINDOWS}
+        DECIDE x(REAL) SUCH THAT x <= 9 AND x + abs(abs(x - sqrt(t.c)) - ln(t.d)) <= 20""",
+}
+
+
+@pytest.mark.parametrize("case", list(DEFINITION_ERRORS))
+def test_a_definitions_error_ranks_where_flat_raises_it(decidb_cli, tmp_path, case):
+    sql = f"SELECT i, x FROM {DEFINITION_ERRORS[case]} MAXIMIZE sum(x)"
+    flat = run(decidb_cli, sql, "flat").stderr
+    assert "Error" in flat
+    for evaluator in ("tree", "verify"):
+        folder = tmp_path / evaluator
+        folder.mkdir()
+        lines, result = coverage(decidb_cli, sql, folder, evaluator)
+        assert lines == [f"covered: {evaluator}"], result.stderr
+        assert result.stderr == flat
+
+
+def test_the_objective_drops_an_auxiliary_with_no_value(decidb_cli, tmp_path):
+    """Row 1's |x - t.c| has no value, so the objective drops its term there (D84; DecideTreeColumns::ReadEntries)."""
+    sql = f"SELECT id, x FROM {ABSENT_ROWS} DECIDE x(REAL) SUCH THAT x <= 9 AND x >= 1 MINIMIZE sum(abs(x - t.c))"
+    _verified(decidb_cli, sql, tmp_path)
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+def test_a_not_equal_answers_through_its_implied_bounds(decidb_cli, tmp_path):
+    """The sum bounds each x, which stage 06 reads into the `<>` it expands (EvaluatedConstraint::ne_clause_idx): the
+    tree's rows are flat's, so it answers as flat does."""
+    sql = f"SELECT id, x FROM {GROUPED_ROWS} DECIDE x(INT) SUCH THAT x >= 0 AND sum(x) <= 10 AND x <> 3 MAXIMIZE sum(x)"
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+    assert run(decidb_cli, f"{sql} ORDER BY id").stdout == run(decidb_cli, f"{sql} ORDER BY id", "flat").stdout
+
+
+def test_an_avg_under_not_equal_multiplies_its_bound(decidb_cli, tmp_path):
+    """An AVG under `<>` keeps its sums and multiplies its bound by its group's count instead
+    (HoistAvgIntoNotEqualBound), as flat's model does."""
+    sql = f"""SELECT id, x FROM {GROUPED_ROWS} DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 5 AND avg(x) by (t.g) <> 3 MAXIMIZE sum(x)"""
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat

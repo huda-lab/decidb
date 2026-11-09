@@ -70,6 +70,8 @@ public:
     //! Semantic E/G/O graph, captured before flat frame lowering during migration.
     unique_ptr<DecideTree> tree;
     static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::DECIDE;
+    //! The tree's back end, which records the variants it numbers as flat records them (RecordVariants).
+    friend class DecideModelEmitter;
 
 public:
     PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, 

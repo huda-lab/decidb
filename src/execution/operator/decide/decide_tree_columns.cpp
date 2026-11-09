@@ -243,7 +243,7 @@ void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 //! the block's bits. A member test ranks under its own node, whose terms' owner reaches it.
 DecideErrorRank DecideTreeColumns::Rank(idx_t node, idx_t p, idx_t entry, bool value) const {
 	auto &program = tree.nodes[node]->programs[p];
-	auto rank = tree.nodes[program.owner == DConstants::INVALID_INDEX ? node : program.owner]->value_rank;
+	auto rank = tree.nodes[program.owner == DConstants::INVALID_INDEX ? node : program.owner]->clause_rank;
 	const auto row = descent.Containers()[node].entries[entry].row;
 	rank.expression = DecideBlockExpression(program.block, row, value);
 	rank.group = program.group;
@@ -266,9 +266,9 @@ const vector<bool> &DecideTreeColumns::Tested(idx_t node) {
 
 vector<bool> DecideTreeColumns::ReadEntries(idx_t node, idx_t variable) {
 	auto reads = Tested(node);
-	const auto absent = Absent(node, variable);
+	auto &entries = descent.Containers()[node].entries;
 	for (idx_t e = 0; e < reads.size(); e++) {
-		reads[e] = reads[e] && !absent[e];
+		reads[e] = reads[e] && !AbsentAt(variable, entries[e].row);
 	}
 	return reads;
 }
@@ -331,18 +331,44 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	return out;
 }
 
-vector<bool> DecideTreeColumns::Absent(idx_t node, idx_t variable) const {
+vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, DecideErrorRank rank) {
+	auto &computed = Computed(node).programs[program];
 	auto &entries = descent.Containers()[node].entries;
-	vector<bool> absent(entries.size(), false);
+	// Flat executes a definition's reads together, a window at a time: one block, whose window ranks first.
+	for (auto &error : computed.errors) {
+		rank.row = entries[error.first].row;
+		rank.expression = DecideBlockExpression(DecideBlock::TERMS, rank.row, false);
+		errors.Add(rank, error.second);
+	}
+	auto &column = *computed.values;
+	const auto count = entries.size();
+	UnifiedVectorFormat format;
+	column.ToUnifiedFormat(count, format);
+	vector<bool> nulls(count, false);
+	for (idx_t e = 0; e < count; e++) {
+		nulls[e] = !format.validity.RowIsValid(format.sel->get_index(e));
+	}
+	return nulls;
+}
+
+Value DecideTreeColumns::ValueAt(idx_t node, idx_t program, idx_t entry) {
+	return Computed(node).programs[program].values->GetValue(entry);
+}
+
+bool DecideTreeColumns::AbsentAt(idx_t variable, idx_t row) const {
 	// A term of no decision, a constant term of the objective, reads none.
-	if (variable == DConstants::INVALID_INDEX || !tree.variable_scopes[variable].IsKeyed()) {
-		return absent;
+	if (variable == DConstants::INVALID_INDEX) {
+		return false;
 	}
-	auto &rows = descent.DecisionRows()[tree.variable_scopes[variable].keyed_scope_idx];
-	for (idx_t e = 0; e < entries.size(); e++) {
-		absent[e] = rows[entries[e].row] == DConstants::INVALID_INDEX;
+	if (absent_reads && !(*absent_reads)[variable].empty() && (*absent_reads)[variable][row]) {
+		return true;
 	}
-	return absent;
+	auto &scope = tree.variable_scopes[variable];
+	return scope.IsKeyed() && descent.DecisionRows()[scope.keyed_scope_idx][row] == DConstants::INVALID_INDEX;
+}
+
+void DecideTreeColumns::ReadAbsence(const vector<vector<bool>> &reads) {
+	absent_reads = &reads;
 }
 
 vector<Value> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
@@ -442,8 +468,9 @@ vector<bool> DecideTreeColumns::FirstOfEachInstance(idx_t node, const vector<boo
 	vector<bool> first(reads.size(), false);
 	vector<bool> seen(container.instance_entries.size(), false);
 	for (idx_t e = 0; e < reads.size(); e++) {
+		// A row in no class of the key has no value to read (DecideNode::holds_rows_in_no_class).
 		const auto instance = container.entries[e].instance;
-		if (reads[e] && !seen[instance]) {
+		if (reads[e] && container.groups[container.entries[e].slot].in_a_class && !seen[instance]) {
 			seen[instance] = true;
 			first[e] = true;
 		}

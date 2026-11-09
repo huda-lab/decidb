@@ -673,6 +673,162 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 	evaluated.avg_scaled = all_avg;
 }
 
+void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters,
+                               EvaluatedConstraint &evaluated) {
+	if (constraint.ne_clause_idx == DConstants::INVALID_INDEX || !constraint.lhs_is_aggregate ||
+	    constraint.has_bilinear || constraint.has_quadratic || constraint.lhs_terms.empty()) {
+		return;
+	}
+	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
+		if (!filters[term_idx].avg_scale) {
+			return;
+		}
+	}
+	evaluated.ne_avg_rhs_scale = true;
+	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
+		filters[term_idx].avg_scale = false;
+	}
+}
+
+vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_rows, const vector<bool> &kept_rows,
+                                   const vector<idx_t> &kept_row_group, idx_t groups,
+                                   const std::function<void(vector<idx_t> &, vector<GroupName> &)> &classes,
+                                   vector<SolverInput::ClassSet> &class_sets) {
+	using Kind = SolverInput::ClassSet::Kind;
+	const bool keyed = scope.per != DecideClauseScope::PerRole::NONE;
+	vector<idx_t> group_class_set(groups, DConstants::INVALID_INDEX);
+	if (keyed && scope.class_key == DConstants::INVALID_INDEX) {
+		group_class_set.assign(groups, class_sets.size());
+		class_sets.push_back({Kind::WHOLE_CLAUSE, {}, {}});
+		return group_class_set;
+	}
+	const bool one_group = kept_row_group.empty();
+	vector<vector<idx_t>> rows_of(groups);
+	for (idx_t row = 0; row < num_rows; row++) {
+		idx_t group = one_group ? (kept_rows[row] ? idx_t(0) : DConstants::INVALID_INDEX) : kept_row_group[row];
+		if (group != DConstants::INVALID_INDEX && group < groups) {
+			rows_of[group].push_back(row);
+		}
+	}
+	vector<idx_t> class_ids;
+	vector<GroupName> class_names;
+	if (keyed) {
+		classes(class_ids, class_names);
+	}
+	// `named_in[c]` is the last group that recorded class c; groups are walked one at a
+	// time, so it says whether this group has it already.
+	vector<idx_t> named_in(class_names.size(), DConstants::INVALID_INDEX);
+	for (idx_t group = 0; group < groups; group++) {
+		if (rows_of[group].empty()) {
+			continue;
+		}
+		SolverInput::ClassSet set {keyed ? Kind::KEY_VALUES : Kind::KEPT_ROWS, {}, {}};
+		if (keyed) {
+			for (auto row : rows_of[group]) {
+				idx_t cls = class_ids[row];
+				if (cls != DConstants::INVALID_INDEX && named_in[cls] != group) {
+					named_in[cls] = group;
+					set.classes.push_back(class_names[cls]);
+				}
+			}
+		} else {
+			set.rows = std::move(rows_of[group]);
+		}
+		group_class_set[group] = class_sets.size();
+		class_sets.push_back(std::move(set));
+	}
+	return group_class_set;
+}
+
+void DecideOneRowPerVariant(const vector<idx_t> &variant_of, const vector<idx_t> &class_of_row, idx_t num_variants,
+                            idx_t num_classes, const vector<vector<bool>> &absent_reads, idx_t defined_var,
+                            vector<idx_t> &row_group_ids, vector<idx_t> &class_of, vector<idx_t> &first_rows,
+                            vector<idx_t> &variants_per_class) {
+	const idx_t num_rows = variant_of.size();
+	row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+	class_of.assign(num_variants, DConstants::INVALID_INDEX);
+	first_rows.assign(num_variants, DConstants::INVALID_INDEX);
+	variants_per_class.assign(num_classes, 0);
+	// An auxiliary has no value on a row whose reads have none (D88), so its definition stands on a row
+	// where it has one, if any: a row that comes first must not leave it undefined for the rest.
+	const auto defines_at_no_value = [&](idx_t row) {
+		const auto var = defined_var;
+		return var < absent_reads.size() && !absent_reads[var].empty() && absent_reads[var][row];
+	};
+	for (idx_t row = 0; row < num_rows; row++) {
+		auto id = variant_of[row];
+		if (id == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (class_of[id] == DConstants::INVALID_INDEX) {
+			class_of[id] = class_of_row[row];
+			variants_per_class[class_of_row[row]]++;
+		} else if (defines_at_no_value(first_rows[id]) && !defines_at_no_value(row)) {
+			row_group_ids[first_rows[id]] = DConstants::INVALID_INDEX;
+		} else {
+			continue;
+		}
+		first_rows[id] = row;
+		row_group_ids[row] = id;
+	}
+}
+
+void DecideNameVariantClassSets(const vector<idx_t> &class_of, const vector<idx_t> &variants_per_class,
+                                const vector<GroupName> &group_names, vector<idx_t> &group_class_set,
+                                vector<SolverInput::ClassSet> &class_sets) {
+	// Only variants named as their own: a clause with more variants than classes (NameVariants).
+	for (idx_t id = 0; id < class_of.size() && class_of.size() > variants_per_class.size(); id++) {
+		if (variants_per_class[class_of[id]] > 1) {
+			group_class_set[id] = class_sets.size();
+			class_sets.push_back({SolverInput::ClassSet::Kind::KEY_VALUES, {group_names[id]}, {}});
+		}
+	}
+}
+
+void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_columns,
+                        std::function<vector<Value>(idx_t)> read, const vector<idx_t> &class_of,
+                        const vector<idx_t> &variants_per_class, const vector<idx_t> &first_rows,
+                        SolverInput::KeyValues &key_values) {
+	// Variants that differ only by the decision instance they read (`per t.g: x <= t.v` over two rows of one class with
+	// one `v`) show the same values: each is named by the row it is read at as well.
+	const bool reads_decisions = std::any_of(fields.begin(), fields.end(), [](const DecideSignatureField &field) {
+		return field.kind == DecideSignatureFieldKind::DECISION;
+	});
+	if (reads_decisions) {
+		key_values.null_modes.push_back(DecideKeyNullMode::NO_GROUP);
+	}
+	vector<vector<idx_t>> variants_of_class(variants_per_class.size());
+	for (idx_t variant = 0; variant < class_of.size(); variant++) {
+		variants_of_class[class_of[variant]].push_back(variant);
+	}
+	key_values.values_of = [read, class_of, variants_per_class, class_columns, reads_decisions, variants_of_class,
+	                        first_rows](idx_t variant) {
+		auto values = read(variant);
+		if (variants_per_class[class_of[variant]] <= 1) {
+			values.resize(class_columns);
+			return values;
+		}
+		auto same = [&](const vector<Value> &other) {
+			if (other.size() != values.size()) {
+				return false;
+			}
+			for (idx_t i = 0; i < values.size(); i++) {
+				if (!Value::NotDistinctFrom(values[i], other[i])) {
+					return false;
+				}
+			}
+			return true;
+		};
+		for (auto other : variants_of_class[class_of[variant]]) {
+			if (reads_decisions && other != variant && same(read(other))) {
+				values.push_back(Value(StringUtil::Format("row %llu", first_rows[variant] + 1)));
+				break;
+			}
+		}
+		return values;
+	};
+}
+
 void DecideValueRange::Add(const Value &value) {
 	auto before = [](const Value &left, const Value &right) {
 		return !left.IsNull() && (right.IsNull() || left < right);

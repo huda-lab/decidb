@@ -846,45 +846,9 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 		}
 	}
 	auto reader = make_shared_ptr<GroupKeyReader>(*chunk_expr_cache.store, exprs, std::move(group_rows));
-	auto class_columns = class_elements.size();
-	// Variants that differ only by the decision instance they read (`per t.g: x <= t.v` over two rows of one class with
-	// one `v`) show the same values: each is named by the row it is read at as well.
-	const bool reads_decisions =
-	    std::any_of(signature.fields.begin(), signature.fields.end(),
-	                [](const DecideSignatureField &field) { return field.kind == DecideSignatureFieldKind::DECISION; });
-	if (reads_decisions) {
-		key_values.null_modes.push_back(DecideKeyNullMode::NO_GROUP);
-	}
-	vector<vector<idx_t>> variants_of_class(variants_per_class.size());
-	for (idx_t variant = 0; variant < class_of.size(); variant++) {
-		variants_of_class[class_of[variant]].push_back(variant);
-	}
-	key_values.values_of = [reader, class_of, variants_per_class, class_columns, reads_decisions, variants_of_class,
-	                        first_rows](idx_t variant) {
-		auto values = reader->Read(variant);
-		if (variants_per_class[class_of[variant]] <= 1) {
-			values.resize(class_columns);
-			return values;
-		}
-		auto same = [&](const vector<Value> &other) {
-			if (other.size() != values.size()) {
-				return false;
-			}
-			for (idx_t i = 0; i < values.size(); i++) {
-				if (!Value::NotDistinctFrom(values[i], other[i])) {
-					return false;
-				}
-			}
-			return true;
-		};
-		for (auto other : variants_of_class[class_of[variant]]) {
-			if (reads_decisions && other != variant && same(reader->Read(other))) {
-				values.push_back(Value(StringUtil::Format("row %llu", first_rows[variant] + 1)));
-				break;
-			}
-		}
-		return values;
-	};
+	DecideNameVariants(
+	    signature.fields, class_elements.size(), [reader](idx_t variant) { return reader->Read(variant); }, class_of,
+	    variants_per_class, first_rows, key_values);
 	auto entry = per_group_cache.key_values.size();
 	per_group_cache.key_values.push_back(std::move(key_values));
 	vector<GroupName> names;
@@ -974,67 +938,23 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
     }
 }
 
-//! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for
-//! the diagnosis: under a `per K:`, K's values among the group's kept rows (key-value
-//! order); with no `per`, every kept row of the group; under `per ()`, the whole clause,
-//! one set its groups share. One `SolverInput::ClassSet` per group with kept rows,
-//! referenced from `ec.group_class_set`. `kept_row_group` maps each kept row to its group;
-//! empty when the clause has one implicit group, which then holds every kept row.
+//! The classes each group's rows stand for, kept for the diagnosis (DecideGroupClassSets), with each kept row's class
+//! of the `per` key read from the one pass.
 static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const vector<DecideKey> &keys,
                                          PerGroupCache &per_group_cache, ChunkExprCache &chunk_expr_cache,
                                          ClientContext &context, idx_t num_rows,
                                          const vector<bool> &kept_rows, const vector<idx_t> &kept_row_group,
                                          idx_t groups, vector<SolverInput::ClassSet> &class_sets) {
-	using Kind = SolverInput::ClassSet::Kind;
-	const bool keyed = scope.per != DecideClauseScope::PerRole::NONE;
-	const idx_t class_key = scope.class_key;
-	vector<idx_t> group_class_set(groups, DConstants::INVALID_INDEX);
-	if (keyed && class_key == DConstants::INVALID_INDEX) {
-		group_class_set.assign(groups, class_sets.size());
-		class_sets.push_back({Kind::WHOLE_CLAUSE, {}, {}});
-		return group_class_set;
-	}
-	const bool one_group = kept_row_group.empty();
-	std::function<bool(idx_t)> kept = [&](idx_t row) {
-		return kept_rows[row];
+	auto classes = [&](vector<idx_t> &class_ids, vector<GroupName> &class_names) {
+		std::function<bool(idx_t)> kept = [&](idx_t row) {
+			return kept_rows[row];
+		};
+		idx_t num_classes = 0;
+		auto kept_classes = LookupOrBuildPerGroupIds(per_group_cache, keys, scope.class_key, chunk_expr_cache, context,
+		                                             num_rows, kept, &kept_rows, class_ids, num_classes);
+		class_names = GroupNames(per_group_cache, scope.class_key, kept_classes);
 	};
-	vector<vector<idx_t>> rows_of(groups);
-	for (idx_t row = 0; row < num_rows; row++) {
-		idx_t group = one_group ? (kept_rows[row] ? idx_t(0) : DConstants::INVALID_INDEX) : kept_row_group[row];
-		if (group != DConstants::INVALID_INDEX && group < groups) {
-			rows_of[group].push_back(row);
-		}
-	}
-	vector<idx_t> class_ids;
-	idx_t num_classes = 0;
-	vector<GroupName> class_names;
-	if (keyed) {
-		auto classes = LookupOrBuildPerGroupIds(per_group_cache, keys, class_key, chunk_expr_cache, context, num_rows, kept, &kept_rows, class_ids, num_classes);
-		class_names = GroupNames(per_group_cache, class_key, classes);
-	}
-	// `named_in[c]` is the last group that recorded class c; groups are walked one at a
-	// time, so it says whether this group has it already.
-	vector<idx_t> named_in(num_classes, DConstants::INVALID_INDEX);
-	for (idx_t group = 0; group < groups; group++) {
-		if (rows_of[group].empty()) {
-			continue;
-		}
-		SolverInput::ClassSet set {keyed ? Kind::KEY_VALUES : Kind::KEPT_ROWS, {}, {}};
-		if (keyed) {
-			for (auto row : rows_of[group]) {
-				idx_t cls = class_ids[row];
-				if (cls != DConstants::INVALID_INDEX && named_in[cls] != group) {
-					named_in[cls] = group;
-					set.classes.push_back(class_names[cls]);
-				}
-			}
-		} else {
-			set.rows = std::move(rows_of[group]);
-		}
-		group_class_set[group] = class_sets.size();
-		class_sets.push_back(std::move(set));
-	}
-	return group_class_set;
+	return DecideGroupClassSets(scope, num_rows, kept_rows, kept_row_group, groups, classes, class_sets);
 }
 
 //! Narrows `rows`, one per row of `chunk`, to those where `condition` holds (NULL keeps
@@ -3663,33 +3583,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					                  num_variants);
 				}
 				const auto &instance_ids = signature ? variant_ids : class_ids;
-				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-				vector<idx_t> class_of(num_variants, DConstants::INVALID_INDEX);
-				vector<idx_t> first_rows(num_variants, DConstants::INVALID_INDEX);
-				vector<idx_t> variants_per_class(num_classes, 0);
-				// An auxiliary has no value on a row whose reads have none (D88), so its definition stands on a row
-				// where it has one, if any: a row that comes first must not leave it undefined for the rest.
-				const auto defines_at_no_value = [&](idx_t row) {
-					const auto var = constraint->defined_var;
-					return var < gstate.absent_reads.size() && !gstate.absent_reads[var].empty() &&
-					       gstate.absent_reads[var][row];
-				};
-				for (idx_t row = 0; row < num_rows; row++) {
-					auto id = instance_ids[row];
-					if (id == DConstants::INVALID_INDEX) {
-						continue;
-					}
-					if (class_of[id] == DConstants::INVALID_INDEX) {
-						class_of[id] = class_ids[row];
-						variants_per_class[class_ids[row]]++;
-					} else if (defines_at_no_value(first_rows[id]) && !defines_at_no_value(row)) {
-						eval_const.row_group_ids[first_rows[id]] = DConstants::INVALID_INDEX;
-					} else {
-						continue;
-					}
-					first_rows[id] = row;
-					eval_const.row_group_ids[row] = id;
-				}
+				vector<idx_t> class_of, first_rows, variants_per_class;
+				DecideOneRowPerVariant(instance_ids, class_ids, num_variants, num_classes, gstate.absent_reads,
+				                       constraint->defined_var, eval_const.row_group_ids, class_of, first_rows,
+				                       variants_per_class);
 				eval_const.num_groups = num_variants;
 				eval_const.rows_stand_with_their_class = !has_when;
 				if (num_variants > num_classes) {
@@ -3711,13 +3608,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					eval_const.group_class_set = CollectGroupClasses(
 					    constraint->scope, keys, per_group_cache, chunk_expr_cache, context, num_rows,
 					    scoped_kept, eval_const.row_group_ids, num_variants, gstate.class_sets);
-					for (idx_t id = 0; id < num_variants && num_variants > num_classes; id++) {
-						if (variants_per_class[class_of[id]] > 1) {
-							eval_const.group_class_set[id] = gstate.class_sets.size();
-							gstate.class_sets.push_back(
-							    {SolverInput::ClassSet::Kind::KEY_VALUES, {eval_const.group_names[id]}, {}});
-						}
-					}
+					DecideNameVariantClassSets(class_of, variants_per_class, eval_const.group_names,
+					                           eval_const.group_class_set, gstate.class_sets);
 				}
 			} else if (has_when) {
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -3928,30 +3820,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 			}
 		}
-		// AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator
-        // produces fractional coefficients, which the NE integer-step guard rejects.
-        // For pure linear LHS where every term is AVG-scaled, hoist the denominator to
-        // the RHS instead — keep LHS as SUM and multiply per-group RHS by group size
-        // in the deferred NE expansion. Mixed AVG/non-AVG terms or bilinear/quadratic
-        // LHS fall through to the existing path (which may still reject).
-        bool ne_avg_hoist = false;
-        if (constraint->ne_clause_idx != DConstants::INVALID_INDEX &&
-            constraint->lhs_is_aggregate && !constraint->has_bilinear && !constraint->has_quadratic &&
-            !constraint->lhs_terms.empty()) {
-            ne_avg_hoist = true;
-            for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-                if (!term_filters[term_idx].avg_scale) {
-                    ne_avg_hoist = false;
-                    break;
-                }
-            }
-        }
-        if (ne_avg_hoist) {
-            eval_const.ne_avg_rhs_scale = true;
-            for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-                term_filters[term_idx].avg_scale = false;
-            }
-        }
+        // An AVG under `<>` multiplies its bound by its group's count instead of dividing its terms, where it can.
+        HoistAvgIntoNotEqualBound(*constraint, term_filters, eval_const);
 
         // Each AVG term over its group's rows, and whether the left side is a pure AVG (I2.d).
         ScaleAvgTerms(*constraint, term_filters, num_rows, eval_const);

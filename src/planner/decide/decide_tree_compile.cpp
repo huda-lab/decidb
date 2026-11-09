@@ -357,6 +357,29 @@ public:
 		return tree.nodes[node]->programs;
 	}
 
+	//! What a variant of `root`'s clause is named by at its first row (DecideBody::names), as flat's NameVariants
+	//! reads it: its class key's elements as written, then each value and `by` key its sigma reads. A key's or a
+	//! value's error is the descent's or the terms' to raise, so these are never reported.
+	void AddNames(idx_t root) {
+		auto &node = *tree.nodes[root];
+		auto add = [&](const Expression &expression) {
+			node.compiled.names.push_back(
+			    Add(root, DecideProgramRole::VALUE, expression, root, DecideBlock::BOUND, 0, 0));
+		};
+		for (auto &element : DecideKeyElements(tree.keys, node.key)) {
+			add(*element.expression);
+		}
+		for (auto &field : node.signature) {
+			if (field.kind == DecideSignatureFieldKind::VALUE) {
+				add(*field.value);
+			} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
+				for (auto &element : DecideKeyElements(tree.keys, field.key)) {
+					add(*element.expression);
+				}
+			}
+		}
+	}
+
 	//! A node's member tests, over its own carried columns, once every term is compiled. Flat reads them in their
 	//! reducer's filter, which it reads for each of its owner's terms in their order, window by window, before any
 	//! coefficient: so a test's group is the first term its node holds, and its position its place in the filter,
@@ -574,6 +597,9 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 		for (idx_t t = 0; t < group.inner_terms.size(); t++) {
 			compiler.AddTerm(group.inner_terms[t], body.squares[g][t], root, DecideBlock::SQUARES, g, 1 + t);
 		}
+	}
+	if (clause.scope.signature != DConstants::INVALID_INDEX) {
+		compiler.AddNames(root);
 	}
 }
 

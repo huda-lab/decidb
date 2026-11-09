@@ -17,7 +17,7 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 //! The shapes stage 06 accepts, by what it reads of the evaluated clauses and the query (EvaluatedConstraint,
-//! SolverInput): each has one arm, which calls flat's own blocks. The first five have theirs; a query with any other
+//! SolverInput): each has one arm, which calls flat's own blocks. The first ten have theirs; a query with any other
 //! has none yet (DecideModelEmitter::Uncovered).
 enum class DecideModelShape : uint8_t {
 	//! A clause with one model row per kept row.
@@ -31,16 +31,22 @@ enum class DecideModelShape : uint8_t {
 	//! A clause in the aggregate shape (EvaluatedConstraint::lhs_is_aggregate): one model row per group of its `by`
 	//! key, named by the key's values.
 	GROUP_ROWS,
-	PRODUCT_TERMS,
-	SQUARE_TERMS,
-	TIGHTEST_BOUND,
+	//! A `<>` clause's rows, each excluding its bound (EvaluatedConstraint::ne_clause_idx), which stage 06 expands.
 	NOT_EQUAL_ROWS,
+	//! A row defining an auxiliary, which has no value where the row's reads have none (SolverInput::absent_reads).
 	DEFINED_READS,
-	EXTREMUM_ROWS,
-	MEMBER_ROWS,
+	//! A clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS): one model row per variant
+	//! of each class of K, named by the class.
 	CLASS_ROWS,
 	//! The classes a clause's rows stand for, which a diagnosis reports (SolverInput::class_sets).
 	CLASS_SETS,
+	//! A relation-qualified reducer's classes, split by the values its body reads (KeyedScopeInfo::signature).
+	KEYED_SIGNATURE,
+	PRODUCT_TERMS,
+	SQUARE_TERMS,
+	TIGHTEST_BOUND,
+	EXTREMUM_ROWS,
+	MEMBER_ROWS,
 	OBJECTIVE_SQUARES,
 	OBJECTIVE_PRODUCTS,
 	OBJECTIVE_EXTREMUM,
@@ -48,9 +54,17 @@ enum class DecideModelShape : uint8_t {
 	COMPOSED,
 	VALUE_LINKS,
 	FRAME_READS,
-	PRODUCT_LINKS,
-	//! A relation-qualified reducer's classes, split by the values its body reads (KeyedScopeInfo::signature).
-	KEYED_SIGNATURE
+	PRODUCT_LINKS
+};
+
+//! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered as flat numbers them,
+//! and the classes of its key, numbered by the key's values: each row's, INVALID_INDEX for a row the node does not
+//! hold in a class.
+struct DecideVariants {
+	vector<idx_t> of_row;
+	vector<idx_t> class_of_row;
+	idx_t count = 0;
+	idx_t num_classes = 0;
 };
 
 //! Writes what PhysicalDecide::Evaluate writes for the model, from the tree's containers: gstate's evaluated clauses
@@ -66,7 +80,9 @@ public:
 	//! no value for (DecideTreeColumns::Uncomputed).
 	static string Uncovered(const DecideTree &tree, const PhysicalDecide &op);
 
-	//! Each declared decision's classes, numbered by its key's values, a row in none in a class of its own.
+	//! Each declared decision's classes, numbered by its key's values, and each relation-qualified reducer's, its
+	//! classes split by its body's values, a row in none in a class of its own; then the rows at which each auxiliary
+	//! has no value (DecideGlobalSinkState::absent_reads).
 	vector<KeyedMapping> KeyedMappings();
 	//! Every clause in flat's order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
@@ -86,8 +102,30 @@ private:
 	idx_t num_rows;
 	DecideErrorLedger &errors;
 
-	//! A clause in the per-row shape: one model row per kept row of its root.
+	//! Each clause's root by its place in stage 05's lists (DecideBody::clause_index).
+	vector<idx_t> ClauseRoots() const;
+	//! A clause in the per-row shape: one model row per kept row of its root, or under `per K:` one per variant of
+	//! each class among them (Classes).
 	EvaluatedConstraint Rows(idx_t root, bool counted);
+	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
+	//! kept rows `rows`: one per variant of each class of K, at its first row with a value (D88), numbered and named
+	//! as flat numbers and names them, and the classes each stands for under DIAGNOSE.
+	void Classes(idx_t root, const vector<pair<idx_t, idx_t>> &rows, EvaluatedConstraint &evaluated);
+	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
+	//! flat's numbering (BuildSignatureIds).
+	DecideVariants Variants(idx_t node, const DecideSignature *signature) const;
+	//! The names of `root`'s variants, by their class's values and their own, read at their first rows as written
+	//! (DecideBody::names, DecideNameVariants).
+	vector<GroupName> NameVariants(idx_t root, const DecideSignature &signature, const vector<idx_t> &class_of,
+	                               const vector<idx_t> &first_rows, const vector<idx_t> &variants_per_class);
+	//! Each row `root` holds in a class of its `per K:` key, its class, numbered by K's values, and each class's
+	//! name, which the class sets read.
+	void KeyClasses(idx_t root, vector<idx_t> &class_ids, vector<GroupName> &class_names);
+	//! A relation-qualified reducer's scope: the variants of its operand over the rows the reducer reads.
+	KeyedMapping SignatureMapping(idx_t scope);
+	//! The rows at which each auxiliary has no value (D88): a row its definition keeps where what the definition reads
+	//! unreduced is NULL, and a row where a decision the definition reads has no instance.
+	void ReadAbsence();
 	//! A clause in the aggregate shape: one model row per group of its `by` key, its kept rows grouped by flat's own
 	//! rules (GroupRowsByShape).
 	EvaluatedConstraint Groups(idx_t root);

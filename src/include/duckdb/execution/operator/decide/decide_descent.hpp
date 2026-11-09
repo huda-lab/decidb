@@ -18,6 +18,10 @@
 
 namespace duckdb {
 
+//! The order of a key's groups, value by value with NULL after every value, as ORDER BY places it and flat numbers a
+//! key's groups (NumberGroupsByValue), so a group's rank is flat's group number.
+bool DecideDescentKeyLess(const vector<Value> &left, const vector<Value> &right);
+
 struct DecideDescentEntry {
 	idx_t row;
 	//! The enclosing reducer/timeline slot; E's per never changes it.
@@ -43,6 +47,17 @@ struct DecideDescentEntry {
 	bool partition_present = true;
 };
 
+//! A group's least spelling of each collated column of its key, as `min` folds a group's values (D69): its label, a
+//! column not collated as it groups, and per column the sort key of the spelling the label holds.
+struct DecideSpelling {
+	vector<Value> label;
+	vector<string> least;
+	//! Folds row `i` of `spelled`, the columns' spellings on rows of the group whose key values are `group`, by their
+	//! sort keys `sort_keys`, empty for a column not collated.
+	void Fold(const vector<Value> &group, const vector<vector<Value>> &spelled, const vector<vector<string>> &sort_keys,
+	          idx_t i);
+};
+
 struct DecideDescentGroup {
 	//! The G or O slot an E's class lies in; INVALID for a G's or O's group, whose key is its whole path key.
 	idx_t parent_slot;
@@ -55,6 +70,9 @@ struct DecideDescentGroup {
 	//! False for a slot of rows in no class of the key: a root's (DecideNode::holds_rows_in_no_class), and a G's, whose
 	//! rows reach its operand alone and hold no entry of it.
 	bool in_a_class = true;
+	//! A collated key's least spelling over the rows its node holds in it, which flat names a variant of the class by
+	//! (LeastSpellingRows); Label's is the least over every read of the key. Empty for a key with no collated column.
+	DecideSpelling spelling;
 };
 
 struct DecideDescentPosition {
@@ -137,9 +155,13 @@ private:
 	//! whose label Label returns.
 	struct KeySpelling {
 		vector<Value> group;
-		vector<Value> label;
-		//! Per column, the sort key of its spelling in `label`; empty for a column that is not collated.
-		vector<string> least;
+		DecideSpelling spelling;
+	};
+	//! What a read of a collated key spelled, per column and row, and the sort keys of those spellings: empty for a
+	//! column that is not collated.
+	struct KeySpellings {
+		vector<vector<Value>> spelled;
+		vector<vector<string>> sort_keys;
 	};
 	const DecideTree &tree;
 	ClientContext &context;
@@ -168,8 +190,10 @@ private:
 	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const vector<RoutingRow> &incoming);
 	vector<Value> Evaluate(const Expression &expression, DataChunk &chunk, const vector<RoutingRow> &rows);
 	vector<uint8_t> Truth(const Expression &expression, DataChunk &chunk, const vector<RoutingRow> &rows);
-	vector<vector<Value>> Key(idx_t key, DataChunk &chunk, const vector<RoutingRow> &rows,
-	                          vector<bool> &present);
+	//! The values of `key` on `rows`, and which hold no NULL that leaves a row in no group; with `read`, what a
+	//! collated key spelled, left empty for a key with no collated column.
+	vector<vector<Value>> Key(idx_t key, DataChunk &chunk, const vector<RoutingRow> &rows, vector<bool> &present,
+	                          KeySpellings *read = nullptr);
 	void Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
 	           const vector<vector<string>> &sort_keys);
 	vector<vector<Value>> Signature(const DecideNode &node, DataChunk &chunk,

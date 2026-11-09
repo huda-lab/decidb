@@ -97,6 +97,10 @@ struct DecideBody {
 	idx_t admits = DConstants::INVALID_INDEX;
 	idx_t lower = DConstants::INVALID_INDEX;
 	idx_t upper = DConstants::INVALID_INDEX;
+	//! A clause whose rows a signature splits into variants (DecideClauseScope::signature): what a variant's name reads
+	//! at its first row, programs on its root, as written: its class key's elements, then each value and each `by`
+	//! key's elements its signature reads (language/guide.md §7.1).
+	vector<idx_t> names;
 	//! A data check's message, a program on its hidden root; INVALID for any other node.
 	idx_t check = DConstants::INVALID_INDEX;
 	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot.
@@ -129,6 +133,10 @@ struct DecideNode {
 	//! objective's when the scope check reads its kept rows (D72).
 	DecideErrorRank route_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	DecideErrorRank value_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
+	//! Where flat evaluates its clause or objective (PhysicalDecide::EvaluateConstraints), which reads its programs as
+	//! numbers and checks each: its value_rank, but a definition's at its place among the clauses, since flat first
+	//! computes a definition where it resolves its auxiliary's absence (BuildKeyedMappings).
+	DecideErrorRank clause_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
 	vector<unique_ptr<Expression>> member_tests;
@@ -167,7 +175,8 @@ struct DecideNode {
 	bool tightest_bound = false;
 	//! A grouped root whose `per K:` names the classes its rows stand for (DecideClauseScope::NAMES_CLASSES): its
 	//! instances are its `by` key's groups (language/guide.md §6.4), so it holds a kept row in no class of K too, in a
-	//! slot of its own (DecideDescentGroup::in_a_class).
+	//! slot of its own (DecideDescentGroup::in_a_class). So does a relation-qualified reducer's operand: its reducer
+	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3).
 	bool holds_rows_in_no_class = false;
 	//! Where flat reads its key: a grouped clause's root and its G's of its `by` key read it where flat groups the kept
 	//! rows, after their terms (DecideBlock::BY_KEY), so a row the key raises on still reaches them; any other key
@@ -210,6 +219,9 @@ struct DecideTree {
 	vector<idx_t> value_nodes;
 	//! Roots defining an ABS/body/indicator helper, in written order.
 	vector<vector<idx_t>> definition_nodes;
+	//! Per keyed scope, the operand of the reducer or link it qualifies, whose instances are its classes split by what
+	//! its body reads (KeyedScopeInfo::signature); INVALID for a scope that qualifies none.
+	vector<idx_t> qualified_operands;
 	vector<LogicalDecide::BilinearLink> bilinear_links;
 	vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
 	vector<DecideBoundBox> singleton_row_boxes;

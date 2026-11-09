@@ -223,6 +223,52 @@ void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &f
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
                    EvaluatedConstraint &evaluated);
 
+//! An AVG under `<>`: dividing its terms by their group's count gives fractional coefficients, which the `<>`
+//! expansion's integer step refuses. So a left side of linear terms that are all AVG keeps them as sums, and the
+//! bound is multiplied by each group's count instead (EvaluatedConstraint::ne_avg_rhs_scale): `filters` then scale
+//! nothing. A mixed, bilinear or quadratic left side keeps the division, which may still be refused.
+void HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters,
+                               EvaluatedConstraint &evaluated);
+
+//! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for the diagnosis: under a `per K:`,
+//! K's classes among the group's kept rows, in the order its rows first read them; with no `per`, every kept row of
+//! the group; under `per ()`, the whole clause, one set its groups share. One SolverInput::ClassSet per group with
+//! kept rows, appended to `class_sets` and referenced from the result. `kept_row_group` maps each kept row to its
+//! group; empty when the clause has one implicit group, which then holds every kept row. `classes` reads K: each kept
+//! row's class (INVALID_INDEX in none) and each class's name.
+vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_rows, const vector<bool> &kept_rows,
+                                   const vector<idx_t> &kept_row_group, idx_t groups,
+                                   const std::function<void(vector<idx_t> &, vector<GroupName> &)> &classes,
+                                   vector<SolverInput::ClassSet> &class_sets);
+
+//! The row each variant of a clause in the per-row shape under `per K:` stands on (D70): `variant_of` numbers each
+//! kept row's variant, INVALID_INDEX on every other row, and `class_of_row` its class of K. A variant's rows agree on
+//! every field the clause reads, so its first stands for them, unless the auxiliary the clause defines
+//! (`defined_var`) has no value there and has one at a later row of the variant: its definition stands on a row where
+//! it has one, if any, so a row that comes first does not leave it undefined for the rest (D88, `absent_reads`).
+//! Writes `row_group_ids` (one row per variant), each variant's class and row, and each class's count of variants.
+void DecideOneRowPerVariant(const vector<idx_t> &variant_of, const vector<idx_t> &class_of_row, idx_t num_variants,
+                            idx_t num_classes, const vector<vector<bool>> &absent_reads, idx_t defined_var,
+                            vector<idx_t> &row_group_ids, vector<idx_t> &class_of, vector<idx_t> &first_rows,
+                            vector<idx_t> &variants_per_class);
+
+//! Under DIAGNOSE, a variant of a class that holds more than one stands for itself, named as its row is
+//! (`group_names`), not for its class (D28): its own class set replaces its class's in `group_class_set`. Only where
+//! the clause has more variants than classes are its variants named as their own.
+void DecideNameVariantClassSets(const vector<idx_t> &class_of, const vector<idx_t> &variants_per_class,
+                                const vector<GroupName> &group_names, vector<idx_t> &group_class_set,
+                                vector<SolverInput::ClassSet> &class_sets);
+
+//! The names of a clause's variants, for a diagnosis (D28): each is named by its class's key values, followed by its
+//! own field values where its class holds more than one variant (`D1, 100` beside `D1, 90`), and by the row it is read
+//! at where another variant of its class shows the same values, differing only by the decision instance it reads.
+//! `read(variant)` gives a variant's values, its class's `class_columns` and then its fields', each at its first row
+//! (`first_rows`). Sets the reader of `key_values`, which holds a NULL mode per value read, and adds the row's.
+void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_columns,
+                        std::function<vector<Value>(idx_t)> read, const vector<idx_t> &class_of,
+                        const vector<idx_t> &variants_per_class, const vector<idx_t> &first_rows,
+                        SolverInput::KeyValues &key_values);
+
 //! The least and the greatest of the values added, as ORDER BY places them (NULL last), so a message naming them does
 //! not depend on the order rows arrive in. It holds the values' addresses, which must outlive it.
 class DecideValueRange {

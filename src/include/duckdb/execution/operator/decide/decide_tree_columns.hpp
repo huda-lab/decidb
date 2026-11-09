@@ -76,18 +76,28 @@ public:
 	vector<double> Numbers(idx_t node, idx_t program, const vector<bool> &reads, vector<bool> *nulls,
 	                       const DecideTermSite *site = nullptr,
 	                       const vector<unique_ptr<Expression>> *inputs = nullptr);
+	//! The entries of `node` at which `program` is NULL, as flat reads what a definition reads for its absence
+	//! (DefinitionNulls), and what its evaluation raised, held at `rank` in the window of its entry's row: no value is
+	//! checked, which the clause's read of the program does (Numbers).
+	vector<bool> NullEntries(idx_t node, idx_t program, DecideErrorRank rank);
+	//! `program` on entry `entry` of `node`, as written: what a variant's name reads (DecideBody::names). What it
+	//! raises is never read: the descent read the same key, and the clause the same value.
+	Value ValueAt(idx_t node, idx_t program, idx_t entry);
 	//! The entries of `node` its member tests keep (DecideNode::tests), flat's read rows of a reducer's terms: its
 	//! other programs are read on these alone.
 	const vector<bool> &Tested(idx_t node);
 	//! The entries of `node` an objective term of decision `variable` is read on, flat's read rows of the term: those
 	//! its member tests keep that read an instance of the decision. A term reading none has no value there (D84).
 	vector<bool> ReadEntries(idx_t node, idx_t variable);
-	//! The entries of `node` that read no instance of decision `variable`: a keyed decision's at a row in no class of
-	//! its key (D84). None for no decision (INVALID_INDEX).
-	vector<bool> Absent(idx_t node, idx_t variable) const;
-	//! Of the entries `reads` marks, the first of each instance of `node`, in row order: a reducer per K reads each
-	//! variant of a class once in each group, at its first row (language/guide.md §5.1, §7.1), however many entries
-	//! the variant holds.
+	//! Whether decision `variable` has no instance to read at `row` (D84, D88): a keyed decision's row in no class of
+	//! its key, or an auxiliary's row where what defines it has no value (`absent_reads`, once given). None for no
+	//! decision (INVALID_INDEX).
+	bool AbsentAt(idx_t variable, idx_t row) const;
+	//! The rows at which each auxiliary has no value (DecideGlobalSinkState::absent_reads), which AbsentAt reads.
+	void ReadAbsence(const vector<vector<bool>> &reads);
+	//! Of the entries `reads` marks, the first of each instance of `node` in a class of its key, in row order: a
+	//! reducer per K reads each variant of a class once in each group, at its first row (language/guide.md §5.1, §7.1),
+	//! however many entries the variant holds, and nothing of a row in no class.
 	vector<bool> FirstOfEachInstance(idx_t node, const vector<bool> &reads) const;
 
 	//! The value of a G over data in each of its slots: its function folded over its operand's members there
@@ -113,6 +123,7 @@ private:
 	std::function<string(idx_t)> written_clause;
 	DecideErrorLedger &errors;
 	vector<unique_ptr<NodeColumns>> nodes;
+	const vector<vector<bool>> *absent_reads = nullptr;
 
 	//! Per G over data, its folds, once computed; per G, the slot each row lies in, once read.
 	unordered_map<idx_t, vector<Value>> folds;

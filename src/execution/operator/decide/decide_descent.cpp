@@ -44,7 +44,7 @@ static bool DescentLess(const Value &left, const Value &right) {
 	return left < right;
 }
 
-static bool DescentKeyLess(const vector<Value> &left, const vector<Value> &right) {
+bool DecideDescentKeyLess(const vector<Value> &left, const vector<Value> &right) {
 	for (idx_t i = 0; i < MinValue(left.size(), right.size()); i++) {
 		if (!Value::NotDistinctFrom(left[i], right[i])) {
 			return DescentLess(left[i], right[i]);
@@ -207,7 +207,7 @@ vector<uint8_t> DecideDescent::Truth(const Expression &expression, DataChunk &ch
 }
 
 vector<vector<Value>> DecideDescent::Key(idx_t key, DataChunk &chunk, const vector<RoutingRow> &rows,
-                                        vector<bool> &present) {
+                                         vector<bool> &present, KeySpellings *read) {
 	vector<vector<Value>> result(rows.size());
 	present.assign(rows.size(), true);
 	auto &elements = DecideKeyElements(tree.keys, key);
@@ -239,7 +239,25 @@ vector<vector<Value>> DecideDescent::Key(idx_t key, DataChunk &chunk, const vect
 	if (collated) {
 		Spell(key, result, spelled, sort_keys);
 	}
+	if (collated && read) {
+		read->spelled = std::move(spelled);
+		read->sort_keys = std::move(sort_keys);
+	}
 	return result;
+}
+
+void DecideSpelling::Fold(const vector<Value> &group, const vector<vector<Value>> &spelled,
+                          const vector<vector<string>> &sort_keys, idx_t i) {
+	if (least.empty()) {
+		label = group;
+		least.resize(group.size());
+	}
+	for (idx_t c = 0; c < sort_keys.size(); c++) {
+		if (!sort_keys[c].empty() && (least[c].empty() || sort_keys[c][i] < least[c])) {
+			least[c] = sort_keys[c][i];
+			label[c] = spelled[c][i];
+		}
+	}
 }
 
 //! Folds the spellings `spelled` of `groups`, groups of `key`, into each group's least, as `min` folds a group's
@@ -252,15 +270,10 @@ void DecideDescent::Spell(idx_t key, const vector<vector<Value>> &groups, const 
 		auto known = std::find_if(bucket.begin(), bucket.end(),
 		                          [&](const KeySpelling &spelling) { return DescentEqual(spelling.group, groups[i]); });
 		if (known == bucket.end()) {
-			bucket.push_back({groups[i], groups[i], vector<string>(groups[i].size())});
+			bucket.push_back({groups[i], DecideSpelling()});
 			known = bucket.end() - 1;
 		}
-		for (idx_t c = 0; c < sort_keys.size(); c++) {
-			if (!sort_keys[c].empty() && (known->least[c].empty() || sort_keys[c][i] < known->least[c])) {
-				known->least[c] = sort_keys[c][i];
-				known->label[c] = spelled[c][i];
-			}
-		}
+		known->spelling.Fold(groups[i], spelled, sort_keys, i);
 	}
 }
 
@@ -272,7 +285,7 @@ vector<Value> DecideDescent::Label(idx_t key, const vector<Value> &group) const 
 	if (bucket != spellings[key].end()) {
 		for (auto &spelling : bucket->second) {
 			if (DescentEqual(spelling.group, group)) {
-				return spelling.label;
+				return spelling.spelling.label;
 			}
 		}
 	}
@@ -539,9 +552,10 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		return;
 	}
 	vector<bool> present;
+	KeySpellings spelled;
 	// A grouped clause's keys are read where flat groups its kept rows, after its terms (DecideNode::key_block).
 	read_block = node.key_block;
-	auto keys = Key(node.key, chunk, rows, present);
+	auto keys = Key(node.key, chunk, rows, present, &spelled);
 	read_block = DecideBlock::ROUTE;
 	current_rank.position = 0;
 	vector<RoutingRow> children;
@@ -571,7 +585,12 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		// generates, as S3's tightest bound, is on no reducer's path: the reducers its operand reads keep their groups.
 		const auto within = node.kind == DecideNodeKind::SCOPE ? rows[i].parent_slot : DConstants::INVALID_INDEX;
 		const auto slot = FindGroup(node_index, within, std::move(key), row_base + rows[i].row);
-		container.groups[slot].in_a_class = present[i];
+		auto &group = container.groups[slot];
+		group.in_a_class = present[i];
+		// A collated key's own least spelling over the rows the node holds in the group.
+		if (!spelled.sort_keys.empty()) {
+			group.spelling.Fold(group.key, spelled.spelled, spelled.sort_keys, i);
+		}
 		if (node.kind != DecideNodeKind::SCOPE) {
 			child.parent_slot = slot;
 		}
@@ -743,7 +762,7 @@ void DecideDescent::Finish() {
 		vector<idx_t> order(groups.size());
 		std::iota(order.begin(), order.end(), 0);
 		std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
-			return DescentKeyLess(groups[left].key, groups[right].key);
+			return DecideDescentKeyLess(groups[left].key, groups[right].key);
 		});
 		for (idx_t rank = 0; rank < order.size(); rank++) {
 			groups[order[rank]].rank = rank;
@@ -757,7 +776,7 @@ void DecideDescent::Finish() {
 		std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
 			auto &l = container.groups[left];
 			auto &r = container.groups[right];
-			return l.parent_slot != r.parent_slot ? l.parent_slot < r.parent_slot : DescentKeyLess(l.key, r.key);
+			return l.parent_slot != r.parent_slot ? l.parent_slot < r.parent_slot : DecideDescentKeyLess(l.key, r.key);
 		});
 		for (idx_t rank = 0; rank < order.size(); rank++) {
 			container.groups[order[rank]].rank = rank;

@@ -171,6 +171,7 @@ public:
 		tree->keyed_scopes = op.keyed_scopes;
 		tree->value_nodes.assign(op.decide_variables.size(), DConstants::INVALID_INDEX);
 		tree->definition_nodes.resize(op.decide_variables.size());
+		tree->qualified_operands.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
 		tree->bilinear_links = op.bilinear_links;
 		tree->abs_maximize_links = op.abs_maximize_links;
 		tree->singleton_row_boxes = op.singleton_row_boxes;
@@ -353,12 +354,14 @@ private:
 	DecideTreeSources sources;
 
 	//! A node's errors rank at the earliest phase that reads it, in flat's order of phases: a bound's reducer is read
-	//! after the data checks on the rows, a composed MIN/MAX clause after the objective, and the objective's composed
-	//! terms after the composed clauses.
+	//! after the data checks on the rows, a definition where its auxiliary's absence is resolved, a composed MIN/MAX
+	//! clause after the objective, and the objective's composed terms after the composed clauses.
 	void ErrorRanks() {
 		vector<bool> assigned(tree->nodes.size(), false);
 		std::function<void(idx_t, DecideErrorRank)> visit = [&](idx_t index, DecideErrorRank rank) {
 			auto &node = *tree->nodes[index];
+			// Where its clause evaluates it, if not where it is first computed.
+			DecideErrorRank evaluated;
 			if (node.value_check) {
 				rank = {DecideErrorPhase::SOURCE_CHECK, 0, rank.clause, 0};
 			} else if (std::find(record_nodes.begin(), record_nodes.end(), index) != record_nodes.end()) {
@@ -366,7 +369,10 @@ private:
 			} else if (node.kind == DecideNodeKind::FRAME) {
 				rank = {DecideErrorPhase::FRAMES, 1, node.frame, 0};
 			} else if (node.defined_var != DConstants::INVALID_INDEX) {
-				rank = {DecideErrorPhase::KEYED_MAPPING, 0, rank.clause, 0};
+				// Flat resolves each auxiliary's absence in turn, reading its definitions in their order (D88), then
+				// evaluates each definition again at its place among the clauses.
+				evaluated = {node.compiled.phase, 0, node.compiled.order, 0};
+				rank = {DecideErrorPhase::KEYED_MAPPING, node.defined_var, node.compiled.order, 0};
 			} else if (node.link != DConstants::INVALID_INDEX) {
 				rank = {DecideErrorPhase::VALUE_LINKS, 0, node.link, 0};
 			} else if (node.compiled.phase != DecideErrorPhase::INVALID) {
@@ -379,6 +385,7 @@ private:
 			}
 			assigned[index] = true;
 			node.route_rank = node.value_rank = rank;
+			node.clause_rank = evaluated.phase == DecideErrorPhase::INVALID ? rank : evaluated;
 			if (node.kind == DecideNodeKind::FRAME) {
 				// A frame's timelines are built and checked, frame after frame, before any frame's values are read
 				// (language/guide.md §5.6).
@@ -770,6 +777,9 @@ private:
 		if (qualified && qualifier < op.keyed_scopes.size()) {
 			entry.key = op.keyed_scopes[qualifier].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
+			// Flat reads the reducer's terms on every row its `when` keeps, and its qualifier keeps no value of a row
+			// in no class (ApplyQualifierToFilter): such a row still lies in its group.
+			entry.holds_rows_in_no_class = true;
 		}
 		for (auto &argument : aggregate.children) {
 			entry.arguments.push_back(Lower(operand, *argument));
@@ -788,6 +798,7 @@ private:
 		}
 		if (qualified && qualifier < op.keyed_scopes.size()) {
 			UseSignature(entry, op.keyed_scopes[qualifier].signature);
+			tree->qualified_operands[qualifier] = operand;
 		}
 		return index;
 	}
@@ -836,6 +847,7 @@ private:
 		}
 		if (link.qualifier_scope_idx < op.keyed_scopes.size()) {
 			UseSignature(entry, op.keyed_scopes[link.qualifier_scope_idx].signature);
+			tree->qualified_operands[link.qualifier_scope_idx] = operand;
 		}
 		return index;
 	}

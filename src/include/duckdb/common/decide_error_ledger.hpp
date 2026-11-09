@@ -32,7 +32,8 @@ struct DecideErrorRank {
 	DecideErrorPhase phase = DecideErrorPhase::INVALID;
 	//! A part of a phase that runs whole before the next, whatever the clauses: SOURCE_CHECK runs the data checks (0)
 	//! before it reads a bound's reducer (1), FRAMES checks every frame's timelines (0) before it reads any frame's
-	//! values (1), and COMPOSED reads the clauses (0) before the objective (1).
+	//! values (1), KEYED_MAPPING reads an auxiliary's definitions (its index) before the next auxiliary's, and
+	//! COMPOSED reads the clauses (0) before the objective (1).
 	idx_t step = 0;
 	idx_t clause = DConstants::INVALID_INDEX;
 	idx_t expression = DConstants::INVALID_INDEX;
