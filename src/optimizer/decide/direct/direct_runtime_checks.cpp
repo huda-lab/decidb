@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
+#include <set>
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
@@ -9,6 +11,8 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 
 namespace duckdb {
 
@@ -91,6 +95,61 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 	DirectNumberNames names;
 	names.clause = clause;
 	return DirectNumberMessage(calc, number, names, nullptr);
+}
+
+//! The texts at the leaves of a message.
+static void MessageTexts(const Expression &message, std::set<string> &texts) {
+	if (message.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
+		auto &branch = message.Cast<BoundCaseExpression>();
+		for (auto &check : branch.case_checks) {
+			MessageTexts(*check.then_expr, texts);
+		}
+		MessageTexts(*branch.else_expr, texts);
+		return;
+	}
+	// The caller promises a CASE over constants.
+	auto &value = message.Cast<BoundConstantExpression>().value;
+	if (!value.IsNull()) {
+		texts.insert(StringValue::Get(value));
+	}
+}
+
+//! `message` with each text replaced by its code.
+static unique_ptr<Expression> MessageWithCodes(const Expression &message, const std::map<string, idx_t> &codes) {
+	if (message.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
+		auto &branch = message.Cast<BoundCaseExpression>();
+		auto result = make_uniq<BoundCaseExpression>(DirectMessageCodes::Type());
+		for (auto &check : branch.case_checks) {
+			result->case_checks.push_back({check.when_expr->Copy(), MessageWithCodes(*check.then_expr, codes)});
+		}
+		result->else_expr = MessageWithCodes(*branch.else_expr, codes);
+		return std::move(result);
+	}
+	auto &value = message.Cast<BoundConstantExpression>().value;
+	return make_uniq<BoundConstantExpression>(
+	    value.IsNull() ? Value(DirectMessageCodes::Type())
+	                   : Value::UINTEGER(NumericCast<uint32_t>(codes.at(StringValue::Get(value)))));
+}
+
+ExprPtr DirectEncodeMessage(const ExpressionBuilder &calc, const ExprPtr &message, DirectMessageCodes &codes) {
+	std::set<string> texts;
+	MessageTexts(*message, texts);
+	codes.texts.assign(texts.begin(), texts.end());
+	std::map<string, idx_t> code_of;
+	for (idx_t i = 0; i < codes.texts.size(); i++) {
+		code_of[codes.texts[i]] = i;
+	}
+	return calc.Wrap(MessageWithCodes(*message, code_of));
+}
+
+ExprPtr DirectDecodeMessage(const ExpressionBuilder &calc, const DirectMessageCodes &codes, const ExprPtr &code) {
+	auto message = calc.Constant(Value(LogicalType::VARCHAR));
+	for (idx_t i = codes.texts.size(); i > 0; i--) {
+		auto is_code =
+		    calc.Cmp(ExpressionType::COMPARE_EQUAL, code, calc.Constant(Value::UINTEGER(NumericCast<uint32_t>(i - 1))));
+		message = calc.If(is_code, calc.Constant(Value(codes.texts[i - 1])), message);
+	}
+	return message;
 }
 
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {

@@ -64,6 +64,26 @@ struct DirectNumberNames {
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
                             const std::function<ExprPtr(const Expression &)> &into);
 
+//! The texts a message can take, for a message kept as a code. Code i stands for texts[i], and the texts are in
+//! ascending order, so the least code is the code of the least text.
+struct DirectMessageCodes {
+	vector<string> texts;
+
+	static LogicalType Type() {
+		return LogicalType::UINTEGER;
+	}
+};
+
+//! Dictionary encoding of a message, for an aggregate that takes the least message of a group (late materialization of
+//! strings). `message` is a VARCHAR expression whose results are constants: CASEs over constants, as
+//! DirectNumberMessage and DirectOnKeptRows build them, so every text it can take is known when the plan is built.
+//! Returns the expression with each text replaced by its code (a NULL stays NULL) and fills `codes`. The aggregate
+//! takes MIN of the codes and DirectDecodeMessage gives the text back on the group's row, where it raises.
+ExprPtr DirectEncodeMessage(const ExpressionBuilder &calc, const ExprPtr &message, DirectMessageCodes &codes);
+
+//! The message a code (of type DirectMessageCodes::Type()) stands for, and NULL for a NULL code.
+ExprPtr DirectDecodeMessage(const ExpressionBuilder &calc, const DirectMessageCodes &codes, const ExprPtr &code);
+
 //! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
 //! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause);

@@ -2185,6 +2185,34 @@ def test_r1_source_is_one_copy_read_four_times_when_the_copy_fits(decidb_cli):
     assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 1, plan
 
 
+# The group's rows fail the one check of the budget's coefficient `z * x + a * x` in two ways. The plan aggregates the
+# messages as codes (DirectEncodeMessage) and the least text wins, whichever row comes first: "a is NaN or infinite" is
+# less than "z is NaN or infinite", which the plan meets first in the coefficient, and the clause's "computes a number
+# too large" (an overflow of z + a) is less than both, but for the one of `z`.
+_A_IS_BAD = "DECIDE: a is NaN or infinite on some rows. Skip those rows with 'when isfinite(a):'."
+_TOO_LARGE = "DECIDE: SUM(z * x + a * x) by (g) <= 100 computes a number too large for a DOUBLE. Scale its data down."
+TWO_BAD_ROWS = {
+    "z_infinite_then_a_nan": ("(1, 1, 'Infinity'::DOUBLE, 1.0::DOUBLE), (2, 1, 1.0, 'NaN'::DOUBLE)", _A_IS_BAD),
+    "a_nan_then_z_infinite": ("(1, 1, 1.0::DOUBLE, 'NaN'::DOUBLE), (2, 1, 'Infinity'::DOUBLE, 1.0)", _A_IS_BAD),
+    "overflow_then_nan": ("(1, 1, 1e308::DOUBLE, 1e308::DOUBLE), (2, 1, 'NaN'::DOUBLE, 1.0)", _TOO_LARGE),
+    "nan_then_overflow": ("(1, 1, 'NaN'::DOUBLE, 1.0::DOUBLE), (2, 1, 1e308, 1e308)", _TOO_LARGE),
+}
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(TWO_BAD_ROWS))
+def test_r1_two_different_messages_in_one_group_raise_the_least(decidb_cli, name):
+    rows, message = TWO_BAD_ROWS[name]
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, z, a) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 3 AND "
+        "SUM(z * x + a * x) by (g) <= 100 MAXIMIZE SUM(x)) q"
+    )
+    with pytest.raises(DeciDBCliError) as raised:
+        _run(decidb_cli, sql, "require")
+    assert message in str(raised.value), str(raised.value)
+
+
 def _plan_tree(decidb_cli, prefix, query):
     """The EXPLAIN (FORMAT JSON) tree of `query` as nested nodes."""
     out = decidb_cli.execute_raw(f"{prefix} EXPLAIN (FORMAT JSON) {query}").stdout
