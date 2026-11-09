@@ -492,6 +492,8 @@ public:
         //! Γ, into `keys`; INVALID_INDEX for `by ()`, every kept row.
         idx_t group_key = DConstants::INVALID_INDEX;
         unique_ptr<Expression> when; //!< the clause's `when`, or null
+        //! The clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause with none.
+        idx_t class_key = DECIDE_ROW_KEY;
         //! The sides that pin the helper, read from the way the clause pushes it; both when the sign of its
         //! factor is not known before the query runs or the comparison is `=` or `<>`. MIN/MAX: the
         //! extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`

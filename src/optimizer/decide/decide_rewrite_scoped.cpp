@@ -122,12 +122,27 @@ struct Helpers {
 	LogicalDecide &decide;
 	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
 
-	//! The link holding `agg`, or INVALID_INDEX.
-	idx_t Find(const BoundAggregateExpression &agg) const {
+	//! The class key of a clause: its `per` key, DECIDE_ROW_KEY with no `per`.
+	static idx_t ClassKeyOf(const DecideEnclosingScope &scope) {
+		return scope.per_wrapper ? scope.PerKey() : DECIDE_ROW_KEY;
+	}
+
+	//! The link holding `agg` as the clause under `scope` reads it, or INVALID_INDEX. A helper is a reducer's value
+	//! over the rows a clause keeps, one per class of its `by` key, so what it stands for is the reducer (Equals,
+	//! which ignores aliases, where a reducer's `by` and `per` tags live), that `by` key, the key scope of its own
+	//! `per`, the clause's `when` and the clause's `per` key. Clauses that agree on all five share one helper, however
+	//! they spell the reducer.
+	idx_t Find(const BoundAggregateExpression &agg, const DecideEnclosingScope &scope) const {
+		idx_t group_key = DConstants::INVALID_INDEX;
+		TryParseGroupKeyTag(agg.GetAlias(), group_key);
+		idx_t qualifier = DConstants::INVALID_INDEX;
+		TryParseQualifiedReducerTag(agg.GetAlias(), qualifier);
+		auto when = scope.Condition();
 		for (idx_t i = 0; i < reducers.size(); i++) {
-			// Equal aliases are copies of one written reducer (each carries the source fragment of its text), which
-			// sit in one clause under its one `when`.
-			if (reducers[i]->Equals(agg) && reducers[i]->GetAlias() == agg.GetAlias()) {
+			auto &link = decide.reducer_value_links[i];
+			bool same_when = when ? link.when && link.when->Equals(*when) : !link.when;
+			if (reducers[i]->Equals(agg) && link.group_key == group_key && link.qualifier_scope_idx == qualifier &&
+			    same_when && link.class_key == ClassKeyOf(scope)) {
 				return i;
 			}
 		}
@@ -193,7 +208,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	auto account_kind = group_key == DConstants::INVALID_INDEX
 	                        ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER
 	                        : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP;
-	idx_t link_idx = helpers.Find(agg);
+	idx_t link_idx = helpers.Find(agg, scope);
 	if (link_idx != DConstants::INVALID_INDEX) {
 		auto &link = decide.reducer_value_links[link_idx];
 		link.need_envelope |= need_envelope;
@@ -223,6 +238,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	if (scope.Condition()) {
 		link.when = scope.Condition()->Copy();
 	}
+	link.class_key = Helpers::ClassKeyOf(scope);
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
 	link_idx = decide.reducer_value_links.size();
