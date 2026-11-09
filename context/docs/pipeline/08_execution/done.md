@@ -153,27 +153,32 @@ does (P6).
   rewrites already make a reducer's key its whole path key (`language/guide.md` §5.5): only a `by` opens a level, and an
   E's classes lie within the G or O they feed. A collated key folds each read's spelling into its group's least at
   insert, one dictionary per key across every node, and a position takes its rows' least spelling when the descent
-  finishes (D69). A set E keeps one entry per distinct slot, σ, carried columns and reads, at least one per variant, and
-  records each row it keeps with the entry standing for it (`DecideNodeContainer::routed`): a pair per kept row, for
-  every set E, which the objective's root and a grouped root read. A grouped root under `per K:` holds a kept row in no
-  class of K too, in a slot of its own (`DecideDescentGroup::in_a_class`), since the row still lies in a group whose row
-  reads it; the interim evaluation does not read that slot. A G holds a row its key leaves in no group (a NULL in a
-  written column, `language/guide.md` §5.2) in a slot of its own too, with no entry, so the row reads no value of the G;
-  the row still reaches the G's operand, which flat computes on every row the G reads (a clause's terms on every kept
-  row, a side plan a data reducer's arguments), so an error there is raised. The objective's G's hold no such slot: flat
-  reads the objective's terms in place, on the rows of each group alone (D81). A group's rank is flat's group number:
-  NULL sorts after every value, as `ORDER BY` places it.
+  finishes (D69). Each group of a collated key also keeps its own least spelling over the rows its node holds in it
+  (`DecideDescentGroup::spelling`), which flat names a variant's class by. A set E keeps one entry per distinct slot, σ,
+  carried columns and reads, at least one per variant, and records each row it keeps with the entry standing for it
+  (`DecideNodeContainer::routed`): a pair per kept row, for every set E, which the objective's root, a grouped or class
+  root and a relation-qualified reducer's operand read. A grouped root under `per K:` holds a kept row in no class of K
+  too, in a slot of its own (`DecideDescentGroup::in_a_class`), since the row still lies in a group whose row reads it;
+  the interim evaluation does not read that slot. So does a relation-qualified reducer's operand hold a row its `when`
+  keeps in no class of its `per`: flat computes the reducer's terms there and its qualifier keeps no value of the row
+  (`ApplyQualifierToFilter`), which still lies in its group (`language/guide.md` §5.3). A G holds a row its key leaves
+  in no group (a NULL in a written column, `language/guide.md` §5.2) in a slot of its own too, with no entry, so the row
+  reads no value of the G; the row still reaches the G's operand, which flat computes on every row the G reads (a
+  clause's terms on every kept row, a side plan a data reducer's arguments), so an error there is raised. The
+  objective's G's hold no such slot: flat reads the objective's terms in place, on the rows of each group alone (D81). A
+  group's rank is flat's group number: NULL sorts after every value, as `ORDER BY` places it.
 - *Coverage*: a query is covered when every shape it has has an arm in the model emitter
   (`DecideModelEmitter::Uncovered`, keyed on what stage 06 reads of the clauses and the query: products, squares, a
-  tightest bound, `<>` rows, a defined auxiliary, an extremum, the class shape, a diagnosis's class sets of a grouped
-  clause, the objective's squares, products, MIN/MAX and composed terms, composed clauses, links, frames, product links,
-  a relation-qualified reducer's classes split by its body's values) and the tree computes a value for every node
-  (`DecideTreeColumns::Uncomputed`, an interim predicate apart from the shapes: a read of a frame, a norm's fold, a read
-  of a decision-valued child where only data is computed, a hidden root other than a data check). The arms today are a
-  clause with a model row per kept row, the folded bounds' rows a repair model emits, the declared decisions' classes,
-  the objective's linear terms and a clause in the aggregate shape. A covered query runs `EvaluateTree` and then flat's
-  tail (`BuildSolverInput`, `FormulateModel`, the solve); one that is not takes `FinalizeWithTreeFormulator`, the
-  interim path of the next two bullets, which the profile counter `execution.tree_fallback` counts.
+  tightest bound, an extremum, the objective's squares, products, MIN/MAX and composed terms, composed clauses, links,
+  frames, product links) and the tree computes a value for every node (`DecideTreeColumns::Uncomputed`, an interim
+  predicate apart from the shapes: a read of a frame, a norm's fold, a read of a decision-valued child where only data
+  is computed, a hidden root other than a data check). The arms today are a clause with a model row per kept row, or per
+  variant of a class of its `per K:`, the folded bounds' rows a repair model emits, the declared decisions' classes and
+  a relation-qualified reducer's, the objective's linear terms, a clause in the aggregate shape, a `<>` clause, a row
+  defining an auxiliary and the classes a diagnosis reports a row stands for. A covered query runs `EvaluateTree` and
+  then flat's tail (`BuildSolverInput`, `FormulateModel`, the solve); one that is not takes
+  `FinalizeWithTreeFormulator`, the interim path of the next two bullets, which the profile counter
+  `execution.tree_fallback` counts.
 - *Bottom-up, covered* (`decide_tree_columns.hpp`): partial evaluation, as DuckDB's executor runs a projection, with no
   expression interpreted per entry. Each node's programs run over its entries, one executor per window of 2,048 entries,
   with the one pass's per-row error capture (`DecideEvaluateWindow`), and are read through flat's `ExtractDoubleColumn`,
@@ -182,27 +187,32 @@ does (P6).
   (a test is `X IS NOT NULL`, NULL only where it raised, and such an entry is no member either), its other programs are
   read on the members alone, so a value or an error elsewhere is never read (flat's read rows). An objective term is
   read only on the entries that read an instance of its decision as well (`ReadEntries`, D84). A G over data, a data
-  reducer, folds its operand's members, each variant of a class once at its first row (`FirstOfEachInstance`), with
-  DuckDB's aggregate functions over a dense array of states, one per slot, as `PerfectAggregateHashTable` lays out its
-  groups (`DecideAggregateStates`, which the interim evaluation folds through too); a NaN among its values is the data
-  check's to refuse, as flat's is, since the check ranks first; the interim's fold of a reducer over a frame, which no
-  check reads, refuses one itself. A node reads a data reducer's value as a hole of its layout, after its carried and
-  program columns: the fold in the slot its row lies in, NULL where the row reaches none. A data check's message is a
-  program on its hidden root, raised at its rank before any clause is read (`CheckData`); the check stands for a side
-  plan's, so a window of it that raises raises the error its whole evaluation meets first, as DuckDB's vectorized
-  evaluation of the side plan's chunk does. A node is computed when it is first read, a hole's G before the node that
-  reads it, rather than in an `eval_order` walk. The descent's errors and the programs' go to one ledger, in flat's
-  order inside a clause or the objective (`DecideBlock`): the descent's reads that route the rows (a `when`, a key that
-  is no grouped clause's `by` key), in the order it reads them, then the blocks, the term filters, the terms, the
-  grouping by the `by` key, the bound and admitted ends, the products, the squares. A program's error ranks under its
-  owner's rank by its block, then flat's window of the input's rows, which the failing entry's row places (not the
-  window of entries, since a `when` keeps fewer entries than rows), execution before value, then the program's group and
-  place in its block (`DecideErrorRank::group`, `position`), then the row. A reducer's filter is read as flat reads it:
-  after the clause's or the objective's `when`, before every term, window by window, by the first term its node holds
-  (`DecideNode::filter_group`), the reducer's own `when`, which the descent reads, then its member tests. A grouped
-  clause's root and its G's of the `by` key read the key in the grouping block (`DecideNode::key_block`), element by
-  element, after the terms: a row the key raises on, or leaves in no group, still reaches the terms, whose errors rank
-  first. A value error is found by reading its window entry by entry.
+  reducer, folds its operand's members, each variant of a class once at its first row and nothing of a row in no class
+  (`FirstOfEachInstance`), with DuckDB's aggregate functions over a dense array of states, one per slot, as
+  `PerfectAggregateHashTable` lays out its groups (`DecideAggregateStates`, which the interim evaluation folds through
+  too); a NaN among its values is the data check's to refuse, as flat's is, since the check ranks first; the interim's
+  fold of a reducer over a frame, which no check reads, refuses one itself. A node reads a data reducer's value as a
+  hole of its layout, after its carried and program columns: the fold in the slot its row lies in, NULL where the row
+  reaches none. A data check's message is a program on its hidden root, raised at its rank before any clause is read
+  (`CheckData`); the check stands for a side plan's, so a window of it that raises raises the error its whole evaluation
+  meets first, as DuckDB's vectorized evaluation of the side plan's chunk does. A node is computed when it is first
+  read, a hole's G before the node that reads it, rather than in an `eval_order` walk. The descent's errors and the
+  programs' go to one ledger, in flat's order inside a clause or the objective (`DecideBlock`): the descent's reads that
+  route the rows (a `when`, a key that is no grouped clause's `by` key), in the order it reads them, then the blocks,
+  the term filters, the terms, the grouping by the `by` key, the bound and admitted ends, the products, the squares. A
+  program's error ranks under its owner's rank by its block, then flat's window of the input's rows, which the failing
+  entry's row places (not the window of entries, since a `when` keeps fewer entries than rows), execution before value,
+  then the program's group and place in its block (`DecideErrorRank::group`, `position`), then the row. A definition's
+  programs rank where flat reads them, twice: where it resolves the auxiliary's absence (`BuildKeyedMappings`),
+  auxiliary by auxiliary in index order (`DecideErrorRank::step`) and each one's definitions in their order, the bound
+  and then the coefficients together, a window at a time (`NullEntries`), which raises an error their evaluation meets
+  (`DecideNode::value_rank`); and where its clause is evaluated among the clauses, which checks their numbers
+  (`DecideNode::clause_rank`). A reducer's filter is read as flat reads it: after the clause's or the objective's
+  `when`, before every term, window by window, by the first term its node holds (`DecideNode::filter_group`), the
+  reducer's own `when`, which the descent reads, then its member tests. A grouped clause's root and its G's of the `by`
+  key read the key in the grouping block (`DecideNode::key_block`), element by element, after the terms: a row the key
+  raises on, or leaves in no group, still reaches the terms, whose errors rank first. A value error is found by reading
+  its window entry by entry.
 - *Formulation, covered* (`decide_model_emitter.hpp`): the model emitter, an Adapter onto stage 06, writes what
   `PhysicalDecide::Evaluate` writes for the model, gstate's evaluated clauses and the keyed mappings, in flat's order,
   through flat's own blocks (`InitializeEvaluatedConstraint`, `DescribeBound`, `SkipNullInstances`, `CountInstances`),
@@ -221,7 +231,34 @@ does (P6).
   what flat's de-duplication keeps, and AVG then divides them as flat does (`ScaleObjectiveAvg`; by the G's slots for an
   AVG read in place, D81). An objective with a second variant over its kept rows raises flat's message (D72): both
   evaluators build it with `DecideObjectiveTwiceMessage`, flat reading the signature's fields from the rows and the tree
-  from its root's entries (`DecideObjectiveDifference`, which the interim evaluation shares).
+  from its root's entries (`DecideObjectiveDifference`, which the interim evaluation shares). A clause in the per-row
+  shape under `per K:` emits one model row per variant of each class of K among its kept rows, its root's instances,
+  numbered as flat numbers them (by value, its class's and then its fields', or by first row where a field reads a
+  decision's instance) and placed through flat's own block (`DecideOneRowPerVariant`): on its first row, or the first
+  with a value of the auxiliary the clause defines (D88). It is named by its class, or, where its class holds more than
+  one variant, as flat's reader names it (`DecideNameVariants`): by what its class key and its fields read at its first
+  row, as written (`DecideBody::names`, programs on its root), and a collated column of its class by its least spelling
+  among the clause's rows of the class; flat names a class of one variant by its key's least spelling over every read of
+  the key (D69, `DecideDescent::Label`). The variants are counted for EXPLAIN ANALYZE as flat counts them. Under
+  DIAGNOSE the classes each model row stands for are flat's (`DecideGroupClassSets`, `DecideNameVariantClassSets`), each
+  kept row's class of K read from its root's slots; so a grouped root under `per K:` stays keyed by K, its instances a
+  class of K and a group of the `by` key each, though the clause's model rows are its G's groups. A relation-qualified
+  reducer whose classes its body's values split (`KeyedScopeInfo::signature`) takes the instances of its operand
+  (`DecideTree::qualified_operands`) for its classes, numbered as flat numbers a signature's variants, a row it does not
+  read in a class of its own. A row its `when` keeps in no class of its key stays in its group, as flat keeps it: its
+  terms are computed and checked there, and the reducer reads no value of it. An auxiliary has no value where its
+  definition reads a NULL unreduced or a decision with no instance (`absent_reads`, D88): the definitions are read in
+  `eval_order`, which puts what defines a decision before what reads it, and a row reading an auxiliary with no value
+  skips its instance, as the objective drops its term there. A `<>` clause's rows are flat's, and an AVG under `<>`
+  multiplies its bound by its group's count (`HoistAvgIntoNotEqualBound`). Two of flat's rules have no arm yet, since no
+  covered query reaches them: in the aggregate shape a reducer's member reading an auxiliary with no value, which flat
+  skips the group for (`MarkAbsentDecisionReads`; a covered member's NULL test drops it first, and a value link's
+  absence needs the links' arm), and a tightest frame bound (`TakeTightestFrameBound`), which reads a frame. Three
+  differences are open, each where no covered query is known to reach it: an objective term reads an auxiliary's absence
+  at its entry's first row rather than on each row the entry stands for (`ReadEntries`), which differs where the absence
+  varies inside an entry; a variant whose first row D88 moves to a later row of its entry is named by the entry's first
+  row; and a definition reading an auxiliary numbered after its own, which flat resolves right after the reader's
+  definition, ranks by that auxiliary's index, which only a value link's definition does.
 - *Bottom-up, interim* (`decide_tree_evaluation.hpp`): each node in `eval_order`, after what it reads, entry by entry.
   An auxiliary has no value where something it is defined from has none, a defining root or a product's factor (D88). A
   shared value is walked once for errors, and the least-ranked error is raised (`DecideErrorLedger`), in flat's blocks
@@ -252,8 +289,9 @@ covered, which is how a suite run counts what the tree covers. Profile counters
 `execution.required_values` (values walked for errors by the interim evaluation, linear in the entries),
 `execution.tree_fallback` and `verify.no_arm`. Tests: `test_tree_emitter.py` (the covered and uncovered branches,
 each shape with no arm, flat's model and flat's error, the objective's reads, the aggregate shape's rows, the data
-reducers, the reducers' filters, the `by` key's rank, the rows in no group and the interim's blocks) and
-`test_evaluator_verify.py`.
+reducers, the reducers' filters, the `by` key's rank, the rows in no group, the interim's blocks, the rows per class and
+variant, the classes a diagnosis reports, a qualified reducer's split classes and its rows in no class, a variant's
+names as written, an auxiliary's absence, a definition's error ranks and `<>`) and `test_evaluator_verify.py`.
 
 ## 2. The folded variable box
 
