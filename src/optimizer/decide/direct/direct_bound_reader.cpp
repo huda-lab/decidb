@@ -144,19 +144,35 @@ ExprPtr DirectStaticFloor(const ExpressionBuilder &calc, double static_lower,
 	return calc.If(calc.Any(whens), calc.Num(NEGATIVE_INFINITY), calc.Num(static_lower));
 }
 
+//! Whether `expr` is the DOUBLE constant `value`.
+static bool DirectIsDoubleConstant(const Expression &expr, double value) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+		return false;
+	}
+	auto &constant = expr.Cast<BoundConstantExpression>().value;
+	return !constant.IsNull() && constant.type().id() == LogicalTypeId::DOUBLE && DoubleValue::Get(constant) == value;
+}
+
 void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, double static_upper,
                   const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
                   ExprPtr &lower, ExprPtr &upper) {
-	vector<ExprPtr> lowers {static_lower};
-	vector<ExprPtr> uppers {calc.Num(static_upper)};
+	// An infinite static end clamps nothing: +infinity is LEAST's identity and -infinity GREATEST's for every value but
+	// NaN, and a NaN bound has raised before the box is read. With no other end the box is open on that side.
+	vector<ExprPtr> lowers, uppers;
+	if (!DirectIsDoubleConstant(*static_lower, NEGATIVE_INFINITY)) {
+		lowers.push_back(static_lower);
+	}
+	if (static_upper != POSITIVE_INFINITY) {
+		uppers.push_back(calc.Num(static_upper));
+	}
 	for (auto &binding : clause_lowers) {
 		lowers.push_back(calc.Col(LogicalType::DOUBLE, binding));
 	}
 	for (auto &binding : clause_uppers) {
 		uppers.push_back(calc.Col(LogicalType::DOUBLE, binding));
 	}
-	lower = calc.Max(lowers);
-	upper = calc.Min(uppers);
+	lower = lowers.empty() ? calc.Num(NEGATIVE_INFINITY) : calc.Max(lowers);
+	upper = uppers.empty() ? calc.Num(POSITIVE_INFINITY) : calc.Min(uppers);
 }
 
 ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper) {

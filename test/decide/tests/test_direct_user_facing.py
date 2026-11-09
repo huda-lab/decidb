@@ -275,6 +275,53 @@ def test_a1_a_plan_over_not_null_columns_has_no_check_the_statistics_prove_false
     assert "WHEN(false)" not in "".join(plan.replace("│", "").split()), plan
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "bounds,kept,left_out",
+    [
+        # DirectRowBox clamps a row to the decision's static box only where an end is finite. The default floor of 0 and
+        # no upper end: the floor clamps, the open upper end does not.
+        ("s >= 0 AND s <= q", "greatest(0.0,#", ("least(1e1000,",)),
+        # A finite static upper end keeps its clamp.
+        ("s >= 0 AND s <= 7 AND s <= q", "least(7.0,#", ("least(1e1000,",)),
+        # A written lower end of -1e30 is infinite: the default floor is gone and nothing clamps from below.
+        ("s >= -1e30 AND s <= q", None, ("greatest(0.0,", "greatest(-1e1000,")),
+        # No end at all (no clause, and an infinite static box): the box is open on both sides.
+        ("s >= -1e30", None, ("greatest(0.0,", "greatest(-1e1000,", "least(1e1000,")),
+    ],
+)
+def test_a1_a_box_clamps_only_to_a_finite_static_end(decidb_cli, bounds, kept, left_out):
+    sql = f"""
+        CREATE OR REPLACE TEMP TABLE stock(id INTEGER NOT NULL, q DOUBLE NOT NULL);
+        INSERT INTO stock VALUES (1, 2.0), (2, 3.0);
+        EXPLAIN SELECT id, s FROM stock DECIDE s(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(s - 3, 2))
+    """
+    plan = _raw(decidb_cli, sql).stdout
+    assert "A1_SEPARABLE_BOX" in plan, plan
+    plan = "".join(plan.replace("│", "").split())
+    assert not any(text in plan for text in left_out), plan
+    if kept:
+        assert kept in plan, plan
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+def test_a1_a_nan_upper_end_raises_though_no_static_end_clamps_it(decidb_cli):
+    # A NaN bound raises in the plan's checks before the box is read, so the open static upper end can drop out of the
+    # box's LEAST: the text is the solver path's, and the message names the column.
+    sql = """
+        SELECT id, s FROM (VALUES (1, 2.0, 5.0), (2, 3.0, 'NaN'::DOUBLE)) v(id, t, cap)
+        DECIDE s(REAL) SUCH THAT s >= 0 AND s <= cap MINIMIZE SUM(POWER(s - t, 2))
+    """
+    messages = []
+    for mode in ("off", "require"):
+        with pytest.raises(Exception) as error:
+            _run(decidb_cli, sql, mode)
+        messages.append(str(error.value))
+    assert "the bound cap is NaN on some rows" in messages[1], messages
+    assert messages[0] == messages[1]
+
+
 def _r1_too_large_checks(cli, decisions, constraint, objective):
     sql = f"""
         EXPLAIN SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)

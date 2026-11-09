@@ -108,7 +108,8 @@ ExprPtr DirectStaticFloor(const ExpressionBuilder &calc, double static_lower,
                           const vector<ColumnBinding> &lowering_whens);
 
 //! A decision's box on one row: the static box intersected with the bounds of its clauses. `static_lower` is the
-//! decision's static lower end on the row (DirectStaticFloor).
+//! decision's static lower end on the row (DirectStaticFloor). A static end that is infinite is left out of the
+//! LEAST/GREATEST, so a box with no finite static end clamps nothing it does not need to.
 void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, double static_upper,
                   const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
                   ExprPtr &lower, ExprPtr &upper);
