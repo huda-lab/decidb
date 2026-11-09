@@ -120,6 +120,22 @@ def test_a_between_in_a_macro_tail_with_an_argument_is_written_from_its_halves(d
 
 
 @pytest.mark.explain
+def test_a_reducer_in_a_macro_body_keeps_its_name_in_the_bound_check(decidb_cli):
+    """The reducer inside `ts` has no location in the query (its body was parsed from the macro's definition), so the
+    column that stands for its value in a group bound carries the text it prints as. Without it the check of the bound
+    reads `2 * #0`; the message names the call, `ts(cap)`."""
+    create = "CREATE TEMP MACRO ts(c) AS 2 * SUM(c)"
+    query = (
+        "EXPLAIN SELECT id, x FROM (VALUES (1, 'a', 5.0), (2, 'a', 6.0), (3, 'b', 7.0)) t(id, g, cap) "
+        "DECIDE x(REAL) SUCH THAT x <= 3 AND SUM(x) by (g) <= ts(cap) MAXIMIZE SUM(x)"
+    )
+    cli = decidb_cli.without_verify_serializer()
+    plan = re.sub(r"[│\s]", "", cli.execute_raw(f"{_OFF}{create}; {query}").stdout)
+    assert "*sum(cap))ASDOUBLE)" in plan, plan
+    assert "THEN('DECIDE:theboundts(cap)isNaNonsome" in plan, plan
+
+
+@pytest.mark.explain
 def test_a_macro_without_arguments_in_its_tail_keeps_its_text(decidb_cli):
     create = (
         "CREATE TEMP MACRO n() AS TABLE SELECT id, x FROM (VALUES (1, 5)) t(id, cap) "

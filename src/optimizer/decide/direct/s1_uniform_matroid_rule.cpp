@@ -870,8 +870,7 @@ private:
 				}
 			}
 			candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
-			auto score_message = candidates.size() > 1 ? calc.Coalesce(candidates) : candidates[0];
-			append_at(score_message_binding, calc.Out(score_message));
+			append_at(score_message_binding, calc.Out(calc.Coalesce(candidates)));
 		}
 		if (condition.scoped) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));

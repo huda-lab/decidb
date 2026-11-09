@@ -149,8 +149,10 @@ static bool DirectIsDoubleConstant(const Expression &expr, double value) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		return false;
 	}
+	// Every constant the caller passes is one the engine built with `ExpressionBuilder::Num`.
 	auto &constant = expr.Cast<BoundConstantExpression>().value;
-	return !constant.IsNull() && constant.type().id() == LogicalTypeId::DOUBLE && DoubleValue::Get(constant) == value;
+	D_ASSERT(!constant.IsNull() && constant.type().id() == LogicalTypeId::DOUBLE);
+	return DoubleValue::Get(constant) == value;
 }
 
 void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, double static_upper,

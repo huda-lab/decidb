@@ -608,11 +608,9 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 		if (instance) {
 			eligible = calc.If(calc.Wrap(std::move(instance)), eligible, calc.Bool(false));
 			// The instance is the second reason a row is in no class, after a `when`, which has put NULL in every
-			// column of the key already and a NULL in an element that is no class's on its own.
-			for (idx_t i = 0; i < keys.size(); i++) {
-				if (keys[i].no_group) {
-					key_values[i] = calc.If(eligible, key_values[i], calc.Constant(Value(key_values[i]->return_type)));
-				}
+			// column of the key already: it does the same, so no join finds a class for the row.
+			for (auto &value : key_values) {
+				value = calc.If(eligible, value, calc.Constant(Value(value->return_type)));
 			}
 		}
 		if (key_values.size() < state.key.types.size()) {

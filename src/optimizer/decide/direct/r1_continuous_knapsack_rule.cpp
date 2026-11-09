@@ -1289,12 +1289,10 @@ private:
 		Items items;
 		items.plan = std::move(staged.plan);
 		items.columns = layout->Columns([&](ColumnBinding binding) {
-			for (idx_t i = 0; i < top.size(); i++) {
-				if (top[i] == binding) {
-					return staged.columns[i];
-				}
-			}
-			throw InternalException("Direct solve: an item column is not among the columns of the stage");
+			auto found = std::find(top.begin(), top.end(), binding);
+			// Every column the layout names is one of the stage's.
+			D_ASSERT(found != top.end());
+			return staged.columns[found - top.begin()];
 		});
 		return items;
 	}

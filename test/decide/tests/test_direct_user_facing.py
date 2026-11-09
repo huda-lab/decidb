@@ -872,6 +872,17 @@ def test_n1_a_number_past_a_double_names_the_objective_as_the_other_rules_do(dec
     assert "DECIDE: MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE. Scale its data down." in direct
 
 
+@pytest.mark.correctness
+def test_s1_a_score_past_a_double_from_parts_that_each_fit_names_the_objective(decidb_cli):
+    # Each reducer's score is a literal inside the range of a DOUBLE, so no part has a message of its own (the plan
+    # holds the objective's message alone); the three together pass the range, and the one message names the objective.
+    objective = "SUM(6e307 * x) + SUM(6.1e307 * x) + SUM(6.2e307 * x)"
+    sql = f"SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}"
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert f"DECIDE: MAXIMIZE {objective} computes a number too large for a DOUBLE. Scale its data down." in direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
 def _s1_source_bound_error(decidb_cli, cap_type, cap):
     sql = f"""
         SELECT x FROM (
