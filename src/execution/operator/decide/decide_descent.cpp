@@ -529,14 +529,16 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 	}
 	container.rows_in += rows.size();
 	for (idx_t k = 0; k < node.when.size(); k++) {
-		// A reducer's own `when` is read in its terms' filter, at its place there (DecideNode::filter_group).
+		// A reducer's own `when` is read in its terms' filter, at its place there (DecideNode::filter_group,
+		// filter_part).
 		const auto filter = node.filter_group != DConstants::INVALID_INDEX;
 		read_block = filter ? DecideBlock::FILTERS : DecideBlock::ROUTE;
+		current_rank.part = node.filter_part;
 		current_rank.group = filter ? node.filter_group : 0;
 		current_rank.position = filter ? k : 0;
 		auto truth = Truth(*node.when[k], chunk, rows);
 		read_block = DecideBlock::ROUTE;
-		current_rank.group = current_rank.position = 0;
+		current_rank.part = current_rank.group = current_rank.position = 0;
 		vector<RoutingRow> kept;
 		for (idx_t i = 0; i < rows.size(); i++) {
 			if (truth[i] == 1 && !Failed(rows[i].row)) {

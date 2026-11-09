@@ -17,7 +17,7 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 //! The shapes stage 06 accepts, by what it reads of the evaluated clauses and the query (EvaluatedConstraint,
-//! SolverInput): each has one arm, which calls flat's own blocks. The first fifteen have theirs; a query with any other
+//! SolverInput): each has one arm, which calls flat's own blocks. The first twenty have theirs; a query with any other
 //! has none yet (DecideModelEmitter::Uncovered).
 enum class DecideModelShape : uint8_t {
 	//! A clause with one model row per kept row.
@@ -55,14 +55,22 @@ enum class DecideModelShape : uint8_t {
 	COMPOSED,
 	//! The objective's composed terms (EvaluatedClauses::composed_objective_terms).
 	OBJECTIVE_COMPOSED,
+	//! A clause's products of two decisions (EvaluatedConstraint::bilinear_terms), each a column over the rows it is
+	//! read on.
 	PRODUCT_TERMS,
+	//! A clause's squares (EvaluatedConstraint::quadratic_groups): each a sign, its query-wide factor applied, and a
+	//! column per term of what it squares.
 	SQUARE_TERMS,
-	TIGHTEST_BOUND,
+	//! The objective's squares, a column per term of what it squares (SolverInput::quadratic_inner_coefficients).
 	OBJECTIVE_SQUARES,
+	//! The objective's products of two decisions (SolverInput::bilinear_objective_terms).
 	OBJECTIVE_PRODUCTS,
+	//! A product with a BOOLEAN factor the optimizer made an auxiliary of (LogicalDecide::BilinearLink), whose rows
+	//! stage 06 writes, and which has no value where a factor has none (SolverInput::absent_reads).
+	PRODUCT_LINKS,
+	TIGHTEST_BOUND,
 	VALUE_LINKS,
-	FRAME_READS,
-	PRODUCT_LINKS
+	FRAME_READS
 };
 
 //! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered as flat numbers them,
@@ -81,8 +89,8 @@ class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
-	                   PerGroupCache &groups, const DecideSourceNames &names, idx_t num_rows,
-	                   DecideErrorLedger &errors);
+	                   PerGroupCache &groups, const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
+	                   DataChunk &first);
 
 	//! The query's first shape with no arm, empty when every shape it has has one. Such a query takes the interim
 	//! formulator, or verify's flat second run, until every shape has one; so does one with a node the tree computes
@@ -95,13 +103,13 @@ public:
 	vector<KeyedMapping> KeyedMappings();
 	//! Every clause in flat's order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
-	//! The objective's linear terms, each on the rows it reads, and each term's filter of those rows, which the
-	//! qualifiers and AVG then read (PhysicalDecide::EvaluateObjective); none without an objective.
-	vector<TermFilterState> Objective();
+	//! The objective's linear terms, its squared terms and its products, each on the rows it reads, and each one's
+	//! filter of those rows in `evaluated`, which the qualifiers and AVG then read (PhysicalDecide::EvaluateObjective);
+	//! none without an objective.
+	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
 	//! The composed MIN/MAX clauses, then the objective's composed terms, each term a column over the members of its G
-	//! (DecideBody::composed), as flat reads them after the objective; `first` is the input's first chunk, where a
-	//! term's factor is read.
-	void Composed(PhysicalDecide::EvaluatedClauses &evaluated, DataChunk &first);
+	//! (DecideBody::composed), as flat reads them after the objective.
+	void Composed(PhysicalDecide::EvaluatedClauses &evaluated);
 
 private:
 	const PhysicalDecide &op;
@@ -115,6 +123,8 @@ private:
 	const DecideSourceNames &names;
 	idx_t num_rows;
 	DecideErrorLedger &errors;
+	//! The input's first chunk, where a value the whole query shares is read (FirstRowValue).
+	DataChunk &first;
 
 	//! Each clause's root by its place in stage 05's lists (DecideBody::clause_index).
 	vector<idx_t> ClauseRoots() const;
@@ -151,16 +161,50 @@ private:
 	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
 	//! by a NULL one.
 	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
-	                                             const char *what, DataChunk &first, bool &null_factor);
-	//! A grouped clause's terms on `rows`, its kept rows and their root's entries, with each term's filter as flat
-	//! reads it, and the rows some reducer's filter keeps (`active`, every row with a term that keeps every kept row).
-	//! Returns whether some term's filter keeps fewer than the kept rows.
+	                                             const char *what, bool &null_factor);
+	//! A factor the whole query shares (a composed term's, a square's), as flat reads it: on the input's first row,
+	//! whatever a clause keeps.
+	Value FirstRowValue(const Expression &factor);
+	//! A clause's products and squares (EvaluatedConstraint::bilinear_terms, quadratic_groups), once its rows are
+	//! grouped: each term on the rows its site's members stand for, each AVG over its group's rows its filter keeps
+	//! (`filters`: the terms', then the products', then the squares'), and each square's factor applied; a NULL
+	//! coefficient, a decision with no instance or a NULL factor leaves an instance no value (`null_rows`).
+	void Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
+	                EvaluatedConstraint &evaluated);
+	//! A term of a product or a square at its site `site`, its column on each row its site's members stand for, a
+	//! relation-qualified one's first of each class, which flat computes it on once it has left the repeats out
+	//! (language/guide.md §5.1): a NULL coefficient there, or a decision of `variables` with no instance there, leaves
+	//! the row's instance no value (`null_rows`, D84).
+	void ReadPart(const DecideTermSite &site, bool qualified, int sign, const vector<unique_ptr<Expression>> &inputs,
+	              const vector<idx_t> &variables, CoefficientColumn &column, vector<bool> &null_rows);
+	//! The sign of `root`'s square `g`, its factor applied (ScaleSquaredGroup), read as flat reads it on the input's
+	//! first row, whatever the clause keeps, first in the square's part (DecideErrorRank::part); a NULL factor leaves
+	//! every instance of the clause no value.
+	double SquareSign(idx_t root, idx_t g, vector<bool> &null_rows);
+	//! The objective's terms `terms` (its linear or its squared terms) at their sites `sites`: each its decision as a
+	//! row reads it, its column and its filter, the rows it is read on (D84).
+	vector<TermFilterState> ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
+	                                       const vector<DecideTermSite> &sites, vector<CoefficientColumn> &coefficients,
+	                                       vector<idx_t> &variables);
+	//! An objective AVG of a `by` key (`avg_group_key`, D81), in the G `child`, its site `site`: each member's group
+	//! there, which its 1/n divides by (TermFilterState::avg_group_ids).
+	void AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site, TermFilterState &filter);
+	//! A grouped clause's terms on `rows`, its kept rows and their root's entries, with each term's, product's and
+	//! square's filter as flat reads it, and the rows some reducer's filter keeps (`active`, every row with a part that
+	//! keeps every kept row). Returns whether some filter keeps fewer than the kept rows.
 	bool ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<bool> &kept,
 	                      EvaluatedConstraint &evaluated, vector<TermFilterState> &filters, vector<bool> &active);
 	//! The rows a term in a reducer is read on, each with the entry of its site `site` standing for it: of the entries
 	//! `reads` marks, every row each stands for, but a relation-qualified reducer's term its entry's first row alone,
 	//! the first of its class (language/guide.md §5.1).
 	vector<pair<idx_t, idx_t>> ReadRows(idx_t site, const vector<bool> &reads, bool qualified) const;
+	//! The entries of `site` a term in a reducer is read on: those its member tests keep, a relation-qualified
+	//! reducer's first of each class (language/guide.md §5.1).
+	vector<bool> ReadEntriesOf(idx_t site, bool qualified);
+	//! A reducer's filter of a part of a grouped clause (a term, a product, a square), its site `site`: the rows the
+	//! part is read on (ReadRows, ReadEntriesOf), returned with their entries, and every row its members stand for
+	//! (`members`), which decide whether the filter keeps fewer than the clause.
+	vector<pair<idx_t, idx_t>> Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries).
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
 	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column);

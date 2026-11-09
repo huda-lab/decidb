@@ -79,36 +79,15 @@ def test_a_query_with_no_arm_takes_the_interim_formulator(decidb_cli):
 #: with stage 06), then what the tree computes no value for.
 UNCOVERED = {
     "TIGHTEST_BOUND": "x(REAL) SUCH THAT x <= 9 AND sum(x) by (t.g) <= at(previous else 9: t.c) over (t.id within t.g)",
-    "OBJECTIVE_SQUARES": "x(REAL) SUCH THAT x <= t.c MINIMIZE sum(power(x - t.c, 2))",
     "VALUE_LINKS": "x(REAL) SUCH THAT x <= 9 AND x <= sum(x) by (t.g)",
     "FRAME_READS": "x(REAL) SUCH THAT x <= 9 AND x <= at(previous else 1: x) over (t.id)",
-    "PRODUCT_LINKS": "x(REAL), b(BOOL) SUCH THAT x <= 9 AND b * x <= 5",
-    # A norm's value is folded from a body of its arguments, which the tree computes no value for yet.
-    "a data reducer folds a norm": "x(REAL) SUCH THAT x <= norm(t.c, 1) by (t.g)",
 }
-
-#: The shapes that multiply or square decisions in a clause, or multiply them in the objective, which HiGHS refuses
-#: before the query reads a row.
-GUROBI_UNCOVERED = {
-    "PRODUCT_TERMS": "x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND t.c * x * y <= 10",
-    "SQUARE_TERMS": "x(REAL) SUCH THAT x <= 9 AND power(x - t.c, 2) <= 50",
-    "OBJECTIVE_PRODUCTS": "x(REAL), y(REAL) SUCH THAT x <= t.c AND y <= 9 MAXIMIZE sum(x * y)",
-}
-
-
-def _assert_named(cli, shapes, shape, tmp_path):
-    lines, result = coverage(cli, f"SELECT id FROM {ROWS} DECIDE {shapes[shape]}", tmp_path)
-    assert lines == [f"execution.tree_fallback: {shape}"], result.stderr
 
 
 @pytest.mark.parametrize("shape", list(UNCOVERED))
 def test_a_shape_with_no_arm_is_named(decidb_cli, shape, tmp_path):
-    _assert_named(decidb_cli, UNCOVERED, shape, tmp_path)
-
-
-@pytest.mark.parametrize("shape", list(GUROBI_UNCOVERED))
-def test_a_product_or_square_with_no_arm_is_named(decidb_cli_gurobi, shape, tmp_path):
-    _assert_named(decidb_cli_gurobi, GUROBI_UNCOVERED, shape, tmp_path)
+    lines, result = coverage(decidb_cli, f"SELECT id FROM {ROWS} DECIDE {UNCOVERED[shape]}", tmp_path)
+    assert lines == [f"execution.tree_fallback: {shape}"], result.stderr
 
 
 @pytest.mark.parametrize("evaluator", ["tree", "verify"])
@@ -1235,3 +1214,259 @@ def test_a_composed_when_raises_in_its_terms_filters(decidb_cli, tmp_path, case)
         lines, result = coverage(decidb_cli, sql, folder, evaluator)
         assert lines == [f"covered: {evaluator}"], result.stderr
         assert result.stderr == flat
+
+
+def test_a_square_objective_answers_under_tree(decidb_cli, tmp_path):
+    """The objective's squares are a column per term of what each squares (OBJECTIVE_SQUARES), so `**` is formulated
+    as flat formulates it: x lands on each row's c."""
+    sql = """SELECT id, x FROM (VALUES (1, 3.0), (2, 5.0)) t(id, c) DECIDE x(REAL)
+        SUCH THAT x <= 10 MINIMIZE sum((x - t.c) ** 2) ORDER BY id"""
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    values = [round(float(value), 4) for value in re.findall(r"│\s+\d+ │\s+([\d.]+) │", result.stdout)]
+    assert values == [3.0, 5.0], result.stdout
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+#: Four rows in two groups; NULL_POLYNOMIAL_ROWS has a NULL g on row 2 and a NULL c on row 4.
+POLYNOMIAL_ROWS = """(VALUES (1, 'a', 3.0, 1.0, true), (2, 'a', 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),
+    (4, 'b', 4.0, 2.0, true)) t(id, g, c, w, p)"""
+NULL_POLYNOMIAL_ROWS = """(VALUES (1, 'a', 3.0, 1.0, true), (2, NULL, 5.0, 2.0, false), (3, 'b', 1.0, 3.0, true),
+    (4, 'b', NULL, 2.0, true)) t(id, g, c, w, p)"""
+#: A join that repeats t's rows 1 and 3, whose classes a relation-qualified reducer reads once.
+POLYNOMIAL_JOIN = """(VALUES (1, 'a', 3.0, true), (2, 'a', 4.0, false), (3, 'b', 5.0, true), (4, NULL, 6.0, true))
+    t(id, g, c, p) JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v'), (3, 'w'), (4, 'u')) s(id, k)
+    ON t.id = s.id"""
+
+#: Products and squares of decisions, which HiGHS refuses before a row is read, so these run on Gurobi: each covered
+#: with flat's model, by the branch it reaches (DecideModelEmitter::Polynomial, Objective).
+POLYNOMIALS = {
+    # Stage 05 leaves a coefficient of 1 out: the product reads its sign, -1 here.
+    "a-product-of-one": (POLYNOMIAL_ROWS, "x(REAL), y(REAL)", "y <= 9 AND 10 - x * y >= 0 MAXIMIZE sum(x + y)"),
+    # A NULL coefficient skips its row's instance.
+    "a-null-coefficient": (
+        NULL_POLYNOMIAL_ROWS,
+        "x(REAL), y(REAL)",
+        "y <= 9 AND t.c * x * y <= 10 MAXIMIZE sum(x + y)",
+    ),
+    # A factor with no instance at a row (y's NULL key) skips its row's instance (D84).
+    "a-factor-with-no-instance": (
+        NULL_POLYNOMIAL_ROWS,
+        "x(REAL), per t.g: y(REAL)",
+        "y <= 9 AND t.w * x * y <= 10 MAXIMIZE sum(x) + sum(y)",
+    ),
+    # An AVG of products divides by its group's rows.
+    "an-avg-of-products": (
+        POLYNOMIAL_ROWS,
+        "x(REAL), y(REAL)",
+        "y <= 9 AND avg(t.c * x * y) by (t.g) <= 5 MAXIMIZE sum(x + y)",
+    ),
+    # A product that reads no row of group b leaves it no instance (D68).
+    "a-product-over-no-row": (
+        POLYNOMIAL_ROWS,
+        "x(REAL), y(REAL)",
+        "y <= 9 AND sum(when t.g = 'a': t.w * x * y) by (t.g) <= 5 MAXIMIZE sum(x + y)",
+    ),
+    # A relation-qualified product reads each class once in its group.
+    "a-qualified-product": (
+        POLYNOMIAL_JOIN,
+        "per t.id: x(REAL), per t.id: y(REAL)",
+        "y <= 9 AND sum(t: t.c * x * y) by (t.g) <= 20 MAXIMIZE sum(t: x + y)",
+    ),
+    "an-avg-of-squares": (POLYNOMIAL_ROWS, "x(REAL)", "avg(power(x - t.c, 2)) by (t.g) <= 5 MAXIMIZE sum(x)"),
+    "a-square-over-no-row": (
+        POLYNOMIAL_ROWS,
+        "x(REAL)",
+        "sum(when t.g = 'a': power(x - t.c, 2)) by (t.g) <= 5 MAXIMIZE sum(x)",
+    ),
+    "a-qualified-square": (
+        POLYNOMIAL_JOIN,
+        "per t.id: x(REAL)",
+        "sum(t: power(x - t.c, 2)) by (t.g) <= 20 MAXIMIZE sum(t: x)",
+    ),
+    # A square's factor, read on the input's first row (ScaleSquaredGroup).
+    "a-squares-factor": (POLYNOMIAL_ROWS, "x(REAL)", "sum(power(x - t.c, 2)) / (SELECT 2.0) <= 50 MAXIMIZE sum(x)"),
+    # A square with no factor reads its sign, -1 here (SquareSign).
+    "a-negated-square": (POLYNOMIAL_ROWS, "x(REAL)", "4 - power(x - t.c, 2) >= 0 MAXIMIZE sum(x)"),
+    # A non-Boolean product in the objective, its coefficient of 1 left out.
+    "an-objective-product": (POLYNOMIAL_ROWS, "x(REAL), y(REAL)", "x <= t.c AND y <= 9 MAXIMIZE sum(x * y)"),
+    "a-qualified-objective-product": (
+        POLYNOMIAL_JOIN,
+        "per t.id: x(REAL), per t.id: y(REAL)",
+        "x <= 9 AND y <= 9 MAXIMIZE sum(t: t.c * x * y)",
+    ),
+    # An AVG of filtered products divides by the rows its filter keeps, 3 of 4.
+    "an-objective-avg-of-filtered-products": (
+        POLYNOMIAL_ROWS,
+        "x(REAL), y(REAL)",
+        "x <= t.c AND y <= 9 MAXIMIZE avg(when t.p: t.w * x * y)",
+    ),
+    # An AVG of a `by` key divides by its own group's rows (D81).
+    "an-objective-avg-of-products-by-key": (
+        POLYNOMIAL_ROWS,
+        "x(REAL), y(REAL)",
+        "x <= t.c AND y <= 9 MAXIMIZE sum(per t.g: avg(t.w * x * y) by (t.g))",
+    ),
+    # A product outside every reducer counts once, on the first row the objective keeps.
+    "an-objective-product-outside-the-reducers": (
+        POLYNOMIAL_ROWS,
+        "x(REAL), per (): y(REAL), per (): z(REAL)",
+        "x <= 9 AND y <= 3 AND z <= 3 MAXIMIZE when t.id > 1: sum(x) + 2 * y * z",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(POLYNOMIALS))
+def test_a_product_or_square_is_formulated_as_flat_formulates_it(decidb_cli_gurobi, tmp_path, case):
+    rows, decisions, rest = POLYNOMIALS[case]
+    sql = f"SELECT t.id FROM {rows} DECIDE {decisions} SUCH THAT x <= 9 AND {rest}"
+    _covered_as_flat(decidb_cli_gurobi, sql, tmp_path)
+
+
+def test_a_null_square_factor_skips_its_clause(decidb_cli_gurobi, tmp_path):
+    """A NULL factor makes every instance of its clause NULL, which is skipped and reported as flat reports it."""
+    sql = f"""SELECT t.id FROM {POLYNOMIAL_ROWS} DECIDE x(REAL)
+        SUCH THAT x <= 9 AND (SELECT NULL::DOUBLE) * sum(power(x - t.c, 2)) <= 50 MAXIMIZE sum(x)"""
+    lines, result = coverage(decidb_cli_gurobi, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    assert "constrains nothing" in result.stderr
+    assert result.stderr == run(decidb_cli_gurobi, sql, "flat").stderr
+    flat, tree = [
+        decidb_cli_gurobi.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(
+            sql, tmp_path / f"{evaluator}.dump", expect_warnings=("constrains nothing",)
+        )
+        for evaluator in ("flat", "tree")
+    ]
+    assert tree == flat
+
+
+def test_a_data_norm_is_folded_as_its_reducer(decidb_cli, tmp_path):
+    """A norm of data folds its desugared reducer, a sum of squares here, in each group of its `by` key, and a NaN in
+    its body is its data check's to refuse: it is covered with flat's model."""
+    sql = f"SELECT t.id FROM {POLYNOMIAL_ROWS} DECIDE x(REAL) SUCH THAT x <= norm(t.c, 2) by (t.g) MAXIMIZE sum(x)"
+    _covered_as_flat(decidb_cli, sql, tmp_path)
+
+
+def test_a_products_auxiliary_has_no_value_where_its_factor_has_none(decidb_cli, tmp_path):
+    """A McCormick product's auxiliary has no value where its factor b has none, at row 2's NULL key
+    (LogicalDecide::BilinearLink): the clause reading it skips that row, and stage 06 reads its absence."""
+    sql = f"""SELECT t.id FROM {NULL_POLYNOMIAL_ROWS} DECIDE x(REAL), per t.g: b(BOOL)
+        SUCH THAT x <= 9 AND b * x <= 5 MAXIMIZE sum(x) + sum(b)"""
+    _covered_as_flat(decidb_cli, sql, tmp_path)
+
+
+#: A row defining an auxiliary that holds a product or a square: an ABS auxiliary's, or the helper per row a MIN or MAX
+#: of a product takes, whose row reads the reducer's body on its members. The auxiliary has no value where flat says it
+#: has none, and the helper's row stands only on a member, each covered with flat's model, by the branch it reaches
+#: (DecideModelEmitter::ReadAbsence, Rows).
+POLYNOMIAL_DEFINITIONS = {
+    # x and y have no instance on row 2, its NULL g, so neither has |x * y - t.w|: `<= t.w` skips row 2.
+    "a-products-factor-with-no-instance": (
+        NULL_POLYNOMIAL_ROWS,
+        "per t.g: x(REAL), per t.g: y(REAL)",
+        "y <= 9 AND x >= 0 AND y >= 0 AND abs(x * y - t.w) <= t.w MAXIMIZE sum(y)",
+    ),
+    # x has no instance on row 2, which the square's term reads.
+    "a-squares-term-with-no-instance": (
+        NULL_POLYNOMIAL_ROWS,
+        "per t.g: x(REAL)",
+        "x >= 0 AND abs((x - t.w) ** 2 - 1) <= t.w MAXIMIZE sum(x)",
+    ),
+    # Row 4's NULL c is in a square's coefficient.
+    "a-null-square-coefficient": (
+        NULL_POLYNOMIAL_ROWS,
+        "x(REAL)",
+        "x >= 0 AND abs((t.c * x - 1) ** 2 - 1) <= 5 MAXIMIZE sum(x)",
+    ),
+    # The MAX's NULL test keeps row 4, its NULL c, from its members: its helper's row 4 is no model row, and its NULL
+    # bound there leaves the helper a value.
+    "a-helpers-row-on-its-members": (
+        NULL_POLYNOMIAL_ROWS,
+        "x(REAL), y(REAL)",
+        "y <= 9 AND x >= 0 AND y >= 0 MINIMIZE max(x * y - t.c)",
+    ),
+    # Row 2's c, which a TINYINT cannot hold, is on a row its NULL tests drop, its NULL g: its cast never raises.
+    "an-error-on-a-row-its-tests-drop": (
+        "(VALUES (1, 'a', 3.0), (2, NULL, 1000.0), (3, 'b', 1.0)) t(id, g, c)",
+        "per t.g: x(REAL), per t.g: y(REAL)",
+        "y <= 9 AND x >= 0 AND y >= 0 MINIMIZE max(x * y - t.c::TINYINT)",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(POLYNOMIAL_DEFINITIONS))
+def test_a_definition_holding_a_product_or_square_is_read_as_flat_reads_it(decidb_cli_gurobi, tmp_path, case):
+    rows, decisions, rest = POLYNOMIAL_DEFINITIONS[case]
+    sql = f"SELECT t.id FROM {rows} DECIDE {decisions} SUCH THAT x <= 9 AND {rest}"
+    _covered_as_flat(decidb_cli_gurobi, sql, tmp_path)
+
+
+#: Three thousand rows: a is NaN and la is -1 on row 2,500, in the second window; b is NaN and lb is -1 on row 10, in
+#: the first.
+POLYNOMIAL_WINDOWS = """(SELECT i AS id, CASE WHEN i = 2500 THEN 'NaN'::DOUBLE ELSE 1.0 END AS a,
+    CASE WHEN i = 10 THEN 'NaN'::DOUBLE ELSE 1.0 END AS b, CASE WHEN i = 2500 THEN -1.0 ELSE 1.0 END AS la,
+    CASE WHEN i = 10 THEN -1.0 ELSE 1.0 END AS lb FROM range(3000) r(i)) t"""
+#: Three rows: la is -1 on row 1 and lb on row 2.
+POLYNOMIAL_FILTERS = "(VALUES (1, -1.0, 1.0), (2, 1.0, -1.0), (3, 1.0, 1.0)) t(id, la, lb)"
+
+#: Each a product's or a square's error, raised where flat raises it, by the branch it reaches.
+POLYNOMIAL_RAISED = {
+    # A square's factor of 0, which the clause names.
+    "a-factor-of-zero": (
+        POLYNOMIAL_ROWS,
+        "sum(power(x - t.c, 2)) / (SELECT 0.0) <= 9",
+        "division by zero -- the factor on a squared aggregate",
+    ),
+    # A divisor whose reciprocal passes a DOUBLE names the clause as written, where the clause is read: before the
+    # objective's logarithm of a negative number.
+    "a-factor-past-a-double": (
+        POLYNOMIAL_ROWS,
+        "sum(power(x - t.c, 2)) / (SELECT 1e-320) <= 1e308 MAXIMIZE sum(ln(t.w - 2) * x)",
+        "sum(power(x - t.c, 2)) / (SELECT 1e-320) <= 1e308 computes a number too large",
+    ),
+    # Square 0's NaN in the second window before square 1's NaN factor and its NaN in the first: flat reads each square
+    # whole, in turn, its factor first.
+    "a-square-before-the-next": (
+        POLYNOMIAL_WINDOWS,
+        "sum(power(t.a * x - 1, 2)) + (SELECT 'nan'::DOUBLE) * sum(power(t.b * y - 1, 2)) <= 5000",
+        "t.a is NaN",
+    ),
+    # In one window, a term's filter (row 2) before a product's (row 1): the product's filter after the terms'.
+    "a-terms-filter-before-a-products": (
+        POLYNOMIAL_FILTERS,
+        "sum(when sqrt(t.la) > -1: x * y) + sum(when ln(t.lb) > -100: x) <= 50",
+        "logarithm of a negative number",
+    ),
+    # In one window, a product's filter (row 2) before a square's (row 1): the square's after the terms' and the
+    # products'.
+    "a-products-filter-before-a-squares": (
+        POLYNOMIAL_FILTERS,
+        "sum(x) + sum(when sqrt(t.la) > -1: power(x - 1, 2)) + sum(when ln(t.lb) > -100: x * y) <= 50",
+        "logarithm of a negative number",
+    ),
+    # The objective's term (second window) before its product's filter (first window): flat reads the products'
+    # filters after the objective's other terms.
+    "an-objective-term-before-a-products-filter": (
+        POLYNOMIAL_WINDOWS,
+        "x <= 9 MAXIMIZE sum(t.a * x) + sum(when ln(t.lb) > -100: x * y)",
+        "t.a is NaN",
+    ),
+    # The objective's product's filter (second window) before its coefficient (first window).
+    "an-objective-products-filter-before-its-coefficient": (
+        POLYNOMIAL_WINDOWS,
+        "x <= 9 MAXIMIZE sum(x) + sum(when ln(t.la) > -100: t.b * x * y)",
+        "logarithm of a negative number",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(POLYNOMIAL_RAISED))
+def test_a_product_or_square_raises_flats_error(decidb_cli_gurobi, tmp_path, case):
+    rows, clauses, message = POLYNOMIAL_RAISED[case]
+    sql = f"SELECT t.id FROM {rows} DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 AND {clauses}"
+    flat = run(decidb_cli_gurobi, sql, "flat").stderr
+    assert message in flat, flat
+    lines, result = coverage(decidb_cli_gurobi, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    assert result.stderr == flat

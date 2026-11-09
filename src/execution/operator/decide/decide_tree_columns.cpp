@@ -332,11 +332,15 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool
 	return out;
 }
 
-vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, DecideErrorRank rank) {
+vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, const vector<bool> &reads,
+                                            DecideErrorRank rank) {
 	auto &computed = Computed(node).programs[program];
 	auto &entries = descent.Containers()[node].entries;
 	// Flat executes a definition's reads together, a window at a time: one block, whose window ranks first.
 	for (auto &error : computed.errors) {
+		if (!reads[error.first]) {
+			continue;
+		}
 		rank.row = entries[error.first].row;
 		rank.expression = DecideBlockExpression(DecideBlock::TERMS, rank.row, false);
 		errors.Add(rank, error.second);
@@ -347,7 +351,7 @@ vector<bool> DecideTreeColumns::NullEntries(idx_t node, idx_t program, DecideErr
 	column.ToUnifiedFormat(count, format);
 	vector<bool> nulls(count, false);
 	for (idx_t e = 0; e < count; e++) {
-		nulls[e] = !format.validity.RowIsValid(format.sel->get_index(e));
+		nulls[e] = reads[e] && !format.validity.RowIsValid(format.sel->get_index(e));
 	}
 	return nulls;
 }
@@ -363,6 +367,14 @@ bool DecideTreeColumns::AbsentAt(idx_t variable, idx_t row) const {
 	}
 	if (absent_reads && !(*absent_reads)[variable].empty() && (*absent_reads)[variable][row]) {
 		return true;
+	}
+	// A product's auxiliary has none where a factor has none (LogicalDecide::BilinearLink), whose absence is read
+	// first, as what defines it.
+	for (auto &product : tree.bilinear_links) {
+		if (product.aux_idx == variable &&
+		    (AbsentAt(product.bool_var_idx, row) || AbsentAt(product.other_var_idx, row))) {
+			return true;
+		}
 	}
 	auto &scope = tree.variable_scopes[variable];
 	return scope.IsKeyed() && descent.DecisionRows()[scope.keyed_scope_idx][row] == DConstants::INVALID_INDEX;

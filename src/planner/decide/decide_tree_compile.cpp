@@ -316,7 +316,7 @@ public:
 	DecideProgramCompiler(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
 	                      const vector<idx_t> &record_nodes)
 	    : context(context), op(op), tree(tree), record_nodes(record_nodes),
-	      first_terms(tree.nodes.size(), DConstants::INVALID_INDEX) {
+	      first_reads(tree.nodes.size(), {0, DConstants::INVALID_INDEX}) {
 	}
 
 	//! A program on `site` computing `expression`, ranked with `owner`'s body; returns its index on the site.
@@ -337,23 +337,37 @@ public:
 		return programs.size() - 1;
 	}
 
-	//! A term's coefficient and its inputs on its site.
+	//! A term's coefficient and its inputs on its site, whose filter flat reads at `slot` among its owner's (Reads).
 	void AddTerm(const DecideTerm &term, DecideTermSite &site, idx_t owner, DecideBlock block, idx_t group,
-	             idx_t position) {
+	             idx_t position, idx_t slot) {
 		site.program =
 		    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, block, group, position, term.sign);
 		AddInputs(term.inputs, site, owner, block, group, position);
-		first_terms[site.node] = MinValue(first_terms[site.node], position);
+		Reads(site.node, 0, slot);
 	}
 
-	//! A product's coefficient, none when stage 05 left it out (1), and its inputs.
+	//! A product's coefficient, none when stage 05 left it out (1), and its inputs; its filter is read at `slot` of
+	//! the part `part` (Reads).
 	template <class PRODUCT>
-	void AddProduct(const PRODUCT &term, DecideTermSite &site, idx_t owner, idx_t position) {
+	void AddProduct(const PRODUCT &term, DecideTermSite &site, idx_t owner, idx_t position, idx_t part, idx_t slot) {
 		if (term.coefficient) {
 			site.program = Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner,
 			                   DecideBlock::PRODUCTS, 0, position, term.sign);
 		}
 		AddInputs(term.inputs, site, owner, DecideBlock::PRODUCTS, 0, position);
+		Reads(site.node, part, slot);
+	}
+
+	//! A term's programs lie in the part `part` of its owner's evaluation (DecideErrorRank::part): a pass flat makes
+	//! over the rows whole before the next.
+	void Part(const DecideTermSite &site, idx_t part) {
+		auto &programs = Programs(site.node);
+		if (site.program != DConstants::INVALID_INDEX) {
+			programs[site.program].part = part;
+		}
+		for (auto input : site.inputs) {
+			programs[input].part = part;
+		}
 	}
 
 	vector<DecideProgram> &Programs(idx_t node) {
@@ -362,7 +376,7 @@ public:
 
 	//! The group a node's filter is read in, its `when` and its member tests, where it is not its first term's place.
 	void FilterGroup(idx_t node, idx_t group) {
-		first_terms[node] = group;
+		first_reads[node] = {0, group};
 	}
 
 	//! What a variant of `root`'s clause is named by at its first row (DecideBody::names), as flat's NameVariants
@@ -394,15 +408,18 @@ public:
 	//! after the reducer's own `when`, which the descent reads at the same group (DecideNode::filter_group).
 	void AddTests(idx_t index) {
 		auto &node = *tree.nodes[index];
+		auto &first = first_reads[index];
 		if (!node.root) {
-			node.filter_group = first_terms[index];
+			node.filter_part = first.first;
+			node.filter_group = first.second;
 		}
 		for (idx_t i = 0; i < node.member_tests.size(); i++) {
 			DecideProgram program;
 			program.role = DecideProgramRole::TEST;
 			program.expression = TranslateTree(index, *node.member_tests[i], "a member test reads a child");
 			program.written = node.member_tests[i]->Copy();
-			program.group = first_terms[index];
+			program.part = first.first;
+			program.group = first.second;
 			program.position = node.when.size() + i;
 			node.tests.push_back(node.programs.size());
 			node.programs.push_back(std::move(program));
@@ -410,7 +427,8 @@ public:
 	}
 
 	//! What a node computes from the data alone, in the tree's own terms: a data check's message on its hidden root,
-	//! and a data reducer's arguments on its operand, which the G folds.
+	//! and a data reducer's arguments on its operand, which the G folds: a norm's are its desugared reducer's (a sum
+	//! of squares, of absolute values), and a NaN in its body is its data check's to refuse (DecideWrittenNormBody).
 	void AddData(idx_t index) {
 		auto &node = *tree.nodes[index];
 		if (node.value_check) {
@@ -424,10 +442,6 @@ public:
 		for (auto &argument : operand_node.arguments) {
 			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer reads a child"));
 		}
-		// A norm folds a body of its arguments, which its value checks for NaN first (DecideWrittenNormBody).
-		if (node.body) {
-			Uncompiled(operand_node.compiled, "a data reducer folds a norm", LogicalType::BOOLEAN);
-		}
 	}
 
 private:
@@ -435,8 +449,20 @@ private:
 	const LogicalDecide &op;
 	DecideTree &tree;
 	const vector<idx_t> &record_nodes;
-	//! Per node, the place among its owner's terms of the first term it holds; INVALID while it holds none.
-	vector<idx_t> first_terms;
+	//! Per node, where flat first reads its filter for a term it holds: the part of its owner's evaluation and the
+	//! term's slot among the filters read there (Reads); the slot INVALID while it holds none.
+	vector<pair<idx_t, idx_t>> first_reads;
+
+	//! A term on `node` whose filter flat reads at `slot` of the part `part` of its owner's evaluation: a clause reads
+	//! its terms' filters, then its products', then its squares', in one pass before any coefficient, and the
+	//! objective its products' after its other terms' coefficients (PhysicalDecide::EvaluateObjective). The node's
+	//! filter is read at the first.
+	void Reads(idx_t node, idx_t part, idx_t slot) {
+		auto &first = first_reads[node];
+		if (first.second == DConstants::INVALID_INDEX || make_pair(part, slot) < first) {
+			first = {part, slot};
+		}
+	}
 
 	//! A program of `index`'s own computing `expression`, in the tree's terms, ranked with the node.
 	idx_t AddValue(idx_t index, const Expression &expression, const char *child_reason) {
@@ -565,11 +591,13 @@ private:
 	}
 };
 
-//! A clause root's programs: its terms, its bound and admitted ends, its products and squares.
+//! A clause root's programs: its terms, its bound and admitted ends, its products and squares. Flat reads each square
+//! whole before the next, after everything else the clause computes, each in a part of its own; its query-wide factor
+//! is read on the input's first row (DecideModelEmitter::Polynomial).
 static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &clause = *body.clause;
 	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
-		compiler.AddTerm(clause.lhs_terms[t], body.linear[t], root, DecideBlock::TERMS, 0, t);
+		compiler.AddTerm(clause.lhs_terms[t], body.linear[t], root, DecideBlock::TERMS, 0, t, t);
 	}
 	// A constant bound is a program too: it folds where it is executed.
 	const auto role = clause.tightest_frame_bound ? DecideProgramRole::TIGHTEST_BOUND : DecideProgramRole::BOUND;
@@ -591,16 +619,18 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 			programs[end].arguments = {a, r};
 		}
 	}
+	const auto products = clause.lhs_terms.size();
 	for (idx_t i = 0; i < clause.bilinear_terms.size(); i++) {
-		compiler.AddProduct(clause.bilinear_terms[i], body.products[i], root, i);
+		compiler.AddProduct(clause.bilinear_terms[i], body.products[i], root, i, 0, products + i);
 	}
+	const auto squares = products + clause.bilinear_terms.size();
 	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
 		auto &group = clause.quadratic_groups[g];
-		body.square_scales.push_back(
-		    group.scale ? compiler.Add(root, DecideProgramRole::VALUE, *group.scale, root, DecideBlock::SQUARES, g, 0)
-		                : DConstants::INVALID_INDEX);
+		// Its factor ranks at position 0 of its part.
 		for (idx_t t = 0; t < group.inner_terms.size(); t++) {
-			compiler.AddTerm(group.inner_terms[t], body.squares[g][t], root, DecideBlock::SQUARES, g, 1 + t);
+			compiler.AddTerm(group.inner_terms[t], body.squares[g][t], root, DecideBlock::SQUARES, g, 1 + t,
+			                 squares + g);
+			compiler.Part(body.squares[g][t], 1 + g);
 		}
 	}
 	if (clause.scope.signature != DConstants::INVALID_INDEX) {
@@ -608,29 +638,32 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 	}
 }
 
-//! The objective's programs: its terms then its squared terms, then its products.
+//! The objective's programs: its terms then its squared terms, read together, then its products, whose filters and
+//! coefficients flat reads in a pass after them (PhysicalDecide::EvaluateObjective).
 static void CompileObjective(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &objective = *body.objective;
 	for (idx_t t = 0; t < objective.terms.size(); t++) {
-		compiler.AddTerm(objective.terms[t], body.linear[t], root, DecideBlock::TERMS, 0, t);
+		compiler.AddTerm(objective.terms[t], body.linear[t], root, DecideBlock::TERMS, 0, t, t);
 	}
 	for (idx_t t = 0; t < objective.squared_terms.size(); t++) {
-		compiler.AddTerm(objective.squared_terms[t], body.squares[0][t], root, DecideBlock::TERMS, 0,
-		                 objective.terms.size() + t);
+		const auto position = objective.terms.size() + t;
+		compiler.AddTerm(objective.squared_terms[t], body.squares[0][t], root, DecideBlock::TERMS, 0, position,
+		                 position);
 	}
 	for (idx_t i = 0; i < objective.bilinear_terms.size(); i++) {
-		compiler.AddProduct(objective.bilinear_terms[i], body.products[i], root, i);
+		compiler.AddProduct(objective.bilinear_terms[i], body.products[i], root, i, 1, i);
+		compiler.Part(body.products[i], 1);
 	}
 }
 
 //! A composed term's or a helper's members, then a frame helper's else terms.
 static void CompileMembers(DecideProgramCompiler &compiler, idx_t holder, DecideBody &body) {
 	for (idx_t t = 0; t < body.members.size(); t++) {
-		compiler.AddTerm(body.members[t], body.linear[t], holder, DecideBlock::TERMS, 0, t);
+		compiler.AddTerm(body.members[t], body.linear[t], holder, DecideBlock::TERMS, 0, t, t);
 	}
 	for (idx_t t = 0; t < body.fallback.size(); t++) {
-		compiler.AddTerm(body.fallback[t], body.fallback_sites[t], holder, DecideBlock::TERMS, 0,
-		                 body.members.size() + t);
+		const auto position = body.members.size() + t;
+		compiler.AddTerm(body.fallback[t], body.fallback_sites[t], holder, DecideBlock::TERMS, 0, position, position);
 	}
 }
 
@@ -796,8 +829,7 @@ static void ClauseLines(std::ostringstream &out, const DecideConstraint &clause,
 	Products(out, clause.bilinear_terms, body.products);
 	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
 		auto &group = clause.quadratic_groups[g];
-		out << "  square " << g << " child=" << Signed(group.child) << " sign=" << group.sign
-		    << " scale=" << Signed(body.square_scales[g]) << "\n";
+		out << "  square " << g << " child=" << Signed(group.child) << " sign=" << group.sign << "\n";
 		Terms(out, group.inner_terms, body.squares[g], "    ", "inner");
 	}
 	out << "  bound rhs=" << Signed(body.rhs) << " lower=" << Signed(body.lower) << " upper=" << Signed(body.upper)

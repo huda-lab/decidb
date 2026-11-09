@@ -76,10 +76,11 @@ public:
 	vector<double> Numbers(idx_t node, idx_t program, const vector<bool> &reads, vector<bool> *nulls,
 	                       const DecideTermSite *site = nullptr,
 	                       const vector<unique_ptr<Expression>> *inputs = nullptr);
-	//! The entries of `node` at which `program` is NULL, as flat reads what a definition reads for its absence
-	//! (DefinitionNulls), and what its evaluation raised, held at `rank` in the window of its entry's row: no value is
-	//! checked, which the clause's read of the program does (Numbers).
-	vector<bool> NullEntries(idx_t node, idx_t program, DecideErrorRank rank);
+	//! Of the entries of `node` that `reads` marks, those at which `program` is NULL, as flat reads what a definition
+	//! reads for its absence on the rows it keeps (DefinitionNulls), and what its evaluation raised there, held at
+	//! `rank` in the window of its entry's row: no value is checked, which the clause's read of the program does
+	//! (Numbers).
+	vector<bool> NullEntries(idx_t node, idx_t program, const vector<bool> &reads, DecideErrorRank rank);
 	//! `program` on entry `entry` of `node`, as written: what a variant's name reads (DecideBody::names). What it
 	//! raises is never read: the descent read the same key, and the clause the same value.
 	Value ValueAt(idx_t node, idx_t program, idx_t entry);
@@ -90,8 +91,8 @@ public:
 	//! its member tests keep that read an instance of the decision. A term reading none has no value there (D84).
 	vector<bool> ReadEntries(idx_t node, idx_t variable);
 	//! Whether decision `variable` has no instance to read at `row` (D84, D88): a keyed decision's row in no class of
-	//! its key, or an auxiliary's row where what defines it has no value (`absent_reads`, once given). None for no
-	//! decision (INVALID_INDEX).
+	//! its key, or an auxiliary's row where what defines it has no value (`absent_reads`, once given, or a factor of
+	//! its product). None for no decision (INVALID_INDEX).
 	bool AbsentAt(idx_t variable, idx_t row) const;
 	//! The rows at which each auxiliary has no value (DecideGlobalSinkState::absent_reads), which AbsentAt reads.
 	void ReadAbsence(const vector<vector<bool>> &reads);
@@ -107,9 +108,9 @@ public:
 	void CheckData();
 
 	//! Interim, apart from the model emitter's shapes: the first node these columns compute no value for yet, a read
-	//! of a frame, a norm's fold or a decision-valued child's read where only data is computed
-	//! (DecideBody::uncompiled), or a hidden root other than a data check, empty when there is none. A query with one
-	//! has no arm. It goes once they compute every node.
+	//! of a frame or a decision-valued child's read where only data is computed (DecideBody::uncompiled), or a hidden
+	//! root other than a data check, empty when there is none. A query with one has no arm. It goes once they compute
+	//! every node.
 	static string Uncomputed(const DecideTree &tree);
 
 private:

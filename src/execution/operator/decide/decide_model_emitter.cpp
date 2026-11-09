@@ -20,42 +20,21 @@
 namespace duckdb {
 
 static const char *const DECIDE_MODEL_SHAPE_NAMES[] = {
-    "ROWS",           "REPAIR_ROWS",   "KEYED_DECLARED",     "OBJECTIVE_LINEAR",  "GROUP_ROWS",
-    "NOT_EQUAL_ROWS", "DEFINED_READS", "CLASS_ROWS",         "CLASS_SETS",        "KEYED_SIGNATURE",
-    "EXTREMUM_ROWS",  "MEMBER_ROWS",   "OBJECTIVE_EXTREMUM", "COMPOSED",          "OBJECTIVE_COMPOSED",
-    "PRODUCT_TERMS",  "SQUARE_TERMS",  "TIGHTEST_BOUND",     "OBJECTIVE_SQUARES", "OBJECTIVE_PRODUCTS",
-    "VALUE_LINKS",    "FRAME_READS",   "PRODUCT_LINKS",
+    "ROWS",           "REPAIR_ROWS",   "KEYED_DECLARED",     "OBJECTIVE_LINEAR",   "GROUP_ROWS",
+    "NOT_EQUAL_ROWS", "DEFINED_READS", "CLASS_ROWS",         "CLASS_SETS",         "KEYED_SIGNATURE",
+    "EXTREMUM_ROWS",  "MEMBER_ROWS",   "OBJECTIVE_EXTREMUM", "COMPOSED",           "OBJECTIVE_COMPOSED",
+    "PRODUCT_TERMS",  "SQUARE_TERMS",  "OBJECTIVE_SQUARES",  "OBJECTIVE_PRODUCTS", "PRODUCT_LINKS",
+    "TIGHTEST_BOUND", "VALUE_LINKS",   "FRAME_READS",
 };
 
-//! The shapes of a clause beyond its rows, groups, classes and extrema, from what stage 06 reads of it
-//! (EvaluatedConstraint): its products and squares, what its bound reads.
-static void ClauseShapes(const DecideConstraint &clause, vector<DecideModelShape> &shapes) {
-	if (clause.has_bilinear) {
-		shapes.push_back(DecideModelShape::PRODUCT_TERMS);
-	}
-	if (clause.has_quadratic) {
-		shapes.push_back(DecideModelShape::SQUARE_TERMS);
-	}
-	if (clause.tightest_frame_bound) {
-		shapes.push_back(DecideModelShape::TIGHTEST_BOUND);
-	}
-}
-
-//! The shapes the query has beyond rows, classes, extrema, composed clauses, declared classes and a linear or extremum
-//! objective: each clause's, the objective's, then what the query hands stage 06 beside its clauses. A helper's
-//! classes reach stage 06 with its link.
+//! The shapes the query has that have no arm yet: a clause's bound that reads a frame, then what the query hands stage
+//! 06 beside its clauses. A helper's classes reach stage 06 with its link.
 static vector<DecideModelShape> QueryShapes(const DecideTree &tree, const PhysicalDecide &op) {
 	vector<DecideModelShape> shapes;
 	for (auto root : tree.roots) {
 		auto &body = tree.nodes[root]->compiled;
-		if (body.clause) {
-			ClauseShapes(*body.clause, shapes);
-		}
-		if (body.objective && body.objective->has_quadratic) {
-			shapes.push_back(DecideModelShape::OBJECTIVE_SQUARES);
-		}
-		if (body.objective && body.objective->has_bilinear) {
-			shapes.push_back(DecideModelShape::OBJECTIVE_PRODUCTS);
+		if (body.clause && body.clause->tightest_frame_bound) {
+			shapes.push_back(DecideModelShape::TIGHTEST_BOUND);
 		}
 	}
 	if (!op.reducer_value_links.empty()) {
@@ -64,12 +43,13 @@ static vector<DecideModelShape> QueryShapes(const DecideTree &tree, const Physic
 	if (!op.frames.empty()) {
 		shapes.push_back(DecideModelShape::FRAME_READS);
 	}
-	// A product with a BOOLEAN factor the optimizer made an auxiliary of (LogicalDecide::BilinearLink), whose rows
-	// stage 06 writes and whose absence its factors' make.
-	if (!op.bilinear_links.empty()) {
-		shapes.push_back(DecideModelShape::PRODUCT_LINKS);
-	}
 	return shapes;
+}
+
+//! A clause's parts a reducer may filter, which flat reads the filters of in this order: its terms, its products, its
+//! squares.
+static idx_t Parts(const DecideConstraint &clause) {
+	return clause.lhs_terms.size() + clause.bilinear_terms.size() + clause.quadratic_groups.size();
 }
 
 string DecideModelEmitter::Uncovered(const DecideTree &tree, const PhysicalDecide &op) {
@@ -80,9 +60,10 @@ string DecideModelEmitter::Uncovered(const DecideTree &tree, const PhysicalDecid
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
                                        DecideGlobalSinkState &gstate, PerGroupCache &groups,
-                                       const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors)
+                                       const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors,
+                                       DataChunk &first)
     : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), groups(groups),
-      names(names), num_rows(num_rows), errors(errors) {
+      names(names), num_rows(num_rows), errors(errors), first(first) {
 }
 
 SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const DecideDescent &descent, idx_t node) {
@@ -246,26 +227,52 @@ void DecideModelEmitter::ReadAbsence() {
 			absent.resize(num_rows, false);
 			absent[row] = true;
 		};
-		// What it reads unreduced is NULL on a row it keeps: its bound, then each term's coefficient, which flat reads
-		// in that order, so what one raises ranks there (DecideNode::value_rank).
+		// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
+		// its bound, then each term's coefficient, then each square's terms', which flat reads in that order, so what
+		// one raises ranks there (DecideNode::value_rank). It reads no product's coefficient (DefinitionNulls).
 		auto rank = tree.nodes[root]->value_rank;
-		auto null_rows = [&](idx_t node, idx_t program, idx_t position) {
-			rank.position = position;
-			const auto nulls = columns.NullEntries(node, program, rank);
+		idx_t position = 0;
+		auto null_rows = [&](idx_t node, idx_t program) {
+			rank.position = position++;
+			const auto nulls = columns.NullEntries(node, program, columns.Tested(node), rank);
 			for (auto &read : DecideEntryRows(tree, descent, node)) {
 				if (nulls[read.second]) {
 					mark(read.first);
 				}
 			}
 		};
-		null_rows(root, body.rhs, 0);
-		for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
-			null_rows(body.linear[t].node, body.linear[t].program, 1 + t);
-			// A decision it reads has no instance on a row, wherever the row lies.
+		// A decision it reads has no instance on a row, wherever the row lies: a term's, a product's factors, a
+		// square's terms'.
+		auto absent_rows = [&](idx_t variable) {
 			for (idx_t row = 0; row < num_rows; row++) {
-				if (columns.AbsentAt(clause.lhs_terms[t].variable_index, row)) {
+				if (columns.AbsentAt(variable, row)) {
 					mark(row);
 				}
+			}
+		};
+		null_rows(root, body.rhs);
+		for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
+			null_rows(body.linear[t].node, body.linear[t].program);
+			absent_rows(clause.lhs_terms[t].variable_index);
+		}
+		for (auto &product : clause.bilinear_terms) {
+			absent_rows(product.var_a);
+			absent_rows(product.var_b);
+		}
+		for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+			for (idx_t t = 0; t < body.squares[g].size(); t++) {
+				null_rows(body.squares[g][t].node, body.squares[g][t].program);
+				absent_rows(clause.quadratic_groups[g].inner_terms[t].variable_index);
+			}
+		}
+	}
+	// A product's auxiliary has none where a factor has none (DecideTreeColumns::AbsentAt), which stage 06 reads too.
+	for (auto &product : op.bilinear_links) {
+		auto &absent = gstate.absent_reads[product.aux_idx];
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (columns.AbsentAt(product.aux_idx, row)) {
+				absent.resize(num_rows, false);
+				absent[row] = true;
 			}
 		}
 	}
@@ -303,11 +310,12 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	auto &entries = descent.Containers()[root].entries;
 	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index,
 	                                               [&](const DecideTerm &term) { return gstate.ReadVariable(term); });
-	// The rows the clause keeps, which its `when` routed, with the entry standing for each: one model row stands on
+	// The rows the clause keeps, which its `when` routed and its NULL tests keep (DecideNode::member_tests: a helper's
+	// row reads a reducer's body on the reducer's members), with the entry standing for each: one model row stands on
 	// each, or under `per K:` on one row of each variant of a class.
-	const auto rows = DecideEntryRows(tree, descent, root);
-	vector<bool> nulls(entries.size(), false);
 	auto &tested = columns.Tested(root);
+	const auto rows = ReadRows(root, tested, false);
+	vector<bool> nulls(entries.size(), false);
 	auto scatter = [&](const vector<double> &numbers, CoefficientColumn &column) {
 		column.AssignDense(num_rows);
 		for (auto &read : rows) {
@@ -345,6 +353,8 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	if (clause.admitted_lower) {
 		Admit(body, evaluated);
 	}
+	// Its products and squares, which no reducer filters.
+	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, evaluated);
 	SkipNullInstances(null_rows, false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
 		gstate.CountInstances(evaluated.source_clause_id, instances,
@@ -553,27 +563,38 @@ vector<pair<idx_t, idx_t>> DecideModelEmitter::ReadRows(idx_t site, const vector
 	return rows;
 }
 
+vector<bool> DecideModelEmitter::ReadEntriesOf(idx_t site, bool qualified) {
+	const auto &tested = columns.Tested(site);
+	return qualified ? columns.FirstOfEachInstance(site, tested) : tested;
+}
+
+vector<pair<idx_t, idx_t>> DecideModelEmitter::Filter(idx_t site, bool qualified, TermFilterState &filter,
+                                                      vector<bool> &members) {
+	auto rows = ReadRows(site, ReadEntriesOf(site, qualified), qualified);
+	filter.has_filter = qualified;
+	filter.mask.assign(num_rows, false);
+	for (auto &read : rows) {
+		filter.mask[read.first] = true;
+	}
+	const auto &tested = columns.Tested(site);
+	members.assign(num_rows, false);
+	for (auto &read : DecideEntryRows(tree, descent, site)) {
+		members[read.first] = members[read.first] || tested[read.second];
+	}
+	return rows;
+}
+
 vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const DecideTermSite &site,
                                                CoefficientColumn &column, TermFilterState &filter) {
 	// Its member tests are its filter's NULL tests of what its body reads and of its decisions' keys, so no member's
-	// coefficient is NULL and every member's decision has an instance (D84).
-	const auto &tested = columns.Tested(site.node);
-	auto numbers = columns.Numbers(site.node, site.program, tested, nullptr, &site, &term.inputs);
-	// A relation-qualified reducer reads each class of its qualifier once in each group, at its first row
-	// (language/guide.md §5.1).
-	const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
-	const auto reads = qualified ? columns.FirstOfEachInstance(site.node, tested) : tested;
+	// coefficient is NULL and every member's decision has an instance (D84). Flat computes it on every member, and
+	// leaves a relation-qualified one's repeats out afterwards.
+	auto numbers = columns.Numbers(site.node, site.program, columns.Tested(site.node), nullptr, &site, &term.inputs);
 	filter.avg_scale = term.avg_scale;
-	filter.has_filter = qualified;
-	filter.mask.assign(num_rows, false);
+	vector<bool> members;
 	column.AssignDense(num_rows);
-	for (auto &read : ReadRows(site.node, reads, qualified)) {
-		filter.mask[read.first] = true;
+	for (auto &read : Filter(site.node, term.qualifier_scope_idx != DConstants::INVALID_INDEX, filter, members)) {
 		column.Set(read.first, numbers[read.second]);
-	}
-	vector<bool> members(num_rows, false);
-	for (auto &read : DecideEntryRows(tree, descent, site.node)) {
-		members[read.first] = members[read.first] || tested[read.second];
 	}
 	return members;
 }
@@ -592,9 +613,26 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, i
                                           EvaluatedConstraint &evaluated, vector<TermFilterState> &filters,
                                           vector<bool> &active) {
 	auto &body = tree.nodes[root]->compiled;
-	auto &terms = body.clause->lhs_terms;
+	auto &clause = *body.clause;
+	auto &terms = clause.lhs_terms;
 	bool has_local_filters = false;
 	bool unfiltered = false;
+	// A filter that keeps every kept row filters nothing, as flat reads it (ReadTermFilters).
+	auto read_filter = [&](const vector<bool> &members, TermFilterState &filter) {
+		bool filters_rows = false;
+		for (idx_t row = 0; row < num_rows && !filters_rows; row++) {
+			filters_rows = kept[row] && !members[row];
+		}
+		if (!filters_rows) {
+			unfiltered = true;
+			return;
+		}
+		filter.has_filter = true;
+		has_local_filters = true;
+		for (idx_t row = 0; row < num_rows; row++) {
+			active[row] = active[row] || members[row];
+		}
+	};
 	for (idx_t t = 0; t < terms.size(); t++) {
 		auto &site = body.linear[t];
 		if (site.node == root) {
@@ -603,21 +641,22 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, i
 			unfiltered = true;
 			continue;
 		}
-		const auto members = ReadInReducer(terms[t], site, evaluated.row_coefficients[t], filters[t]);
-		// A filter that keeps every kept row filters nothing, as flat reads it (ReadTermFilters).
-		bool filters_rows = false;
-		for (idx_t row = 0; row < num_rows && !filters_rows; row++) {
-			filters_rows = kept[row] && !members[row];
-		}
-		if (!filters_rows) {
-			unfiltered = true;
-			continue;
-		}
-		filters[t].has_filter = true;
-		has_local_filters = true;
-		for (idx_t row = 0; row < num_rows; row++) {
-			active[row] = active[row] || members[row];
-		}
+		read_filter(ReadInReducer(terms[t], site, evaluated.row_coefficients[t], filters[t]), filters[t]);
+	}
+	// A product's and a square's filter, on the members of its reducer, which flat reads with the terms'; their
+	// coefficients follow once the rows are grouped (Polynomial).
+	vector<bool> members;
+	for (idx_t i = 0; i < clause.bilinear_terms.size(); i++) {
+		auto &filter = filters[terms.size() + i];
+		Filter(body.products[i].node, clause.bilinear_terms[i].qualifier_scope_idx != DConstants::INVALID_INDEX, filter,
+		       members);
+		read_filter(members, filter);
+	}
+	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+		auto &filter = filters[terms.size() + clause.bilinear_terms.size() + g];
+		Filter(body.squares[g].front().node,
+		       clause.quadratic_groups[g].qualifier_scope_idx != DConstants::INVALID_INDEX, filter, members);
+		read_filter(members, filter);
 	}
 	if (unfiltered) {
 		std::fill(active.begin(), active.end(), true);
@@ -637,7 +676,8 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 		kept[read.first] = true;
 	}
 	vector<bool> null_rows(num_rows, false);
-	vector<TermFilterState> filters(clause.lhs_terms.size());
+	// Each term's filter, then each product's, then each square's.
+	vector<TermFilterState> filters(Parts(clause));
 	// The rows some reducer's filter keeps, which alone emit their group's row when every term has a filter.
 	vector<bool> active(num_rows, false);
 	const auto has_local_filters = ReadGroupedTerms(root, rows, kept, evaluated, filters, active);
@@ -702,6 +742,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	HoistAvgIntoNotEqualBound(clause, filters, evaluated);
 	ScaleAvgTerms(clause, filters, num_rows, evaluated);
+	Polynomial(root, filters, null_rows, evaluated);
 	SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
 		gstate.CountInstances(evaluated.source_clause_id, grouped_instances,
@@ -728,6 +769,99 @@ void DecideModelEmitter::Admit(const DecideBody &body, EvaluatedConstraint &eval
 	}
 }
 
+Value DecideModelEmitter::FirstRowValue(const Expression &factor) {
+	auto lowered = TransformToChunkExpression(factor, context);
+	ExpressionExecutor executor(context, *lowered);
+	DataChunk value;
+	value.Initialize(context, {lowered->return_type});
+	executor.Execute(first, value);
+	return value.data[0].GetValue(0);
+}
+
+void DecideModelEmitter::ReadPart(const DecideTermSite &site, bool qualified, int sign,
+                                  const vector<unique_ptr<Expression>> &inputs, const vector<idx_t> &variables,
+                                  CoefficientColumn &column, vector<bool> &null_rows) {
+	const auto reads = ReadEntriesOf(site.node, qualified);
+	vector<bool> nulls(reads.size(), false);
+	// Stage 05 leaves a coefficient of 1 out.
+	auto numbers = site.program == DConstants::INVALID_INDEX
+	                   ? vector<double>(reads.size(), double(sign))
+	                   : columns.Numbers(site.node, site.program, reads, &nulls, &site, &inputs);
+	column.AssignDense(num_rows);
+	for (auto &read : ReadRows(site.node, reads, qualified)) {
+		column.Set(read.first, numbers[read.second]);
+		null_rows[read.first] = null_rows[read.first] || nulls[read.second];
+		for (auto variable : variables) {
+			null_rows[read.first] = null_rows[read.first] || columns.AbsentAt(variable, read.first);
+		}
+	}
+}
+
+double DecideModelEmitter::SquareSign(idx_t root, idx_t g, vector<bool> &null_rows) {
+	auto &node = *tree.nodes[root];
+	auto &group = node.compiled.clause->quadratic_groups[g];
+	if (!group.scale) {
+		return group.sign;
+	}
+	try {
+		bool is_null = false;
+		const auto sign = ScaleSquaredGroup(
+		    FirstRowValue(*group.scale), group,
+		    {DecideValueRole::COEFFICIENT, *group.scale, names, op.WrittenClause(node.source_clause_id)}, is_null);
+		// A NULL one makes every instance of the clause NULL.
+		for (auto &read : DecideEntryRows(tree, descent, root)) {
+			null_rows[read.first] = null_rows[read.first] || is_null;
+		}
+		return sign;
+	} catch (std::exception &ex) {
+		auto rank = node.clause_rank;
+		rank.part = 1 + g;
+		rank.expression = DecideBlockExpression(DecideBlock::SQUARES, 0, false);
+		rank.group = g;
+		rank.row = 0;
+		errors.Add(rank, ErrorData(ex));
+		return group.sign;
+	}
+}
+
+void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
+                                    EvaluatedConstraint &evaluated) {
+	auto &body = tree.nodes[root]->compiled;
+	auto &clause = *body.clause;
+	auto &products = clause.bilinear_terms;
+	for (idx_t i = 0; i < products.size(); i++) {
+		auto &product = products[i];
+		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
+		ReadPart(body.products[i], product.qualifier_scope_idx != DConstants::INVALID_INDEX, product.sign,
+		         product.inputs, {product.var_a, product.var_b}, column.row_coefficients, null_rows);
+		auto &filter = filters[clause.lhs_terms.size() + i];
+		if (product.avg_scale) {
+			ScaleAvgRows(column.row_coefficients, filter.has_filter, filter.mask, false, num_rows,
+			             evaluated.row_group_ids, evaluated.num_groups);
+		}
+		evaluated.bilinear_terms.push_back(std::move(column));
+	}
+	evaluated.has_quadratic = clause.has_quadratic;
+	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+		auto &group = clause.quadratic_groups[g];
+		auto &filter = filters[clause.lhs_terms.size() + products.size() + g];
+		EvaluatedConstraint::QuadraticGroup square;
+		square.sign = SquareSign(root, g, null_rows);
+		for (idx_t t = 0; t < group.inner_terms.size(); t++) {
+			auto &inner = group.inner_terms[t];
+			square.variable_indices.push_back(gstate.ReadVariable(inner));
+			square.row_coefficients.emplace_back();
+			ReadPart(body.squares[g][t], group.qualifier_scope_idx != DConstants::INVALID_INDEX, inner.sign,
+			         inner.inputs, {inner.variable_index}, square.row_coefficients.back(), null_rows);
+			if (group.avg_scale) {
+				ScaleAvgRows(square.row_coefficients.back(), filter.has_filter, filter.mask, true, num_rows,
+				             evaluated.row_group_ids, evaluated.num_groups);
+			}
+		}
+		evaluated.quadratic_groups.push_back(std::move(square));
+	}
+}
+
 void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedConstraint &evaluated) {
 	// Each group is named by its key's values, which the solver input reads by its rank.
 	auto &slots = descent.Containers()[by].groups;
@@ -742,16 +876,15 @@ void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, Evalua
 	}
 }
 
-vector<TermFilterState> DecideModelEmitter::Objective() {
-	vector<TermFilterState> filters;
+void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) {
 	auto found = std::find_if(tree.roots.begin(), tree.roots.end(),
 	                          [&](idx_t root) { return tree.nodes[root]->compiled.objective != nullptr; });
 	if (found == tree.roots.end()) {
-		return filters;
+		return;
 	}
 	const auto root = *found;
 	auto &body = tree.nodes[root]->compiled;
-	auto &terms = body.objective->terms;
+	auto &objective = *body.objective;
 	auto &container = descent.Containers()[root];
 	// The objective is produced once (D72): a second variant over its kept rows would be a second objective, which
 	// flat checks before it reads any clause.
@@ -765,14 +898,60 @@ vector<TermFilterState> DecideModelEmitter::Objective() {
 	for (auto &read : container.routed) {
 		kept[read.first] = true;
 	}
-	auto &coefficients = gstate.evaluated_objective_coefficients;
+	evaluated.linear_filters = ObjectiveTerms(
+	    root, objective.terms, body.linear, gstate.evaluated_objective_coefficients, gstate.objective_variable_indices);
+	// A term outside every reducer counts once, on the first row the objective keeps.
+	CountTupleTermsOnce(objective.terms, gstate.evaluated_objective_coefficients, &kept, num_rows);
+	// Each squared term lies in a reducer, and is read as a term there is.
+	if (objective.has_quadratic) {
+		gstate.has_quadratic_objective = true;
+		gstate.quadratic_sign = objective.quadratic_sign;
+		evaluated.quadratic_filters =
+		    ObjectiveTerms(root, objective.squared_terms, body.squares[0], gstate.evaluated_quadratic_coefficients,
+		                   gstate.quadratic_variable_indices);
+	}
+	// A product is read as a term is, on the members of the G it ranges over or on each row the objective keeps, but
+	// stage 05 dropped none of its rows for a decision with no instance (DropNullObjectiveTerms), so none is dropped
+	// here; one outside every reducer counts once.
+	auto &products = objective.bilinear_terms;
+	evaluated.bilinear_filters.resize(products.size());
+	for (idx_t i = 0; i < products.size(); i++) {
+		auto &product = products[i];
+		auto &site = body.products[i];
+		auto &filter = evaluated.bilinear_filters[i];
+		const auto &tested = columns.Tested(site.node);
+		// Stage 05 leaves a coefficient of 1 out.
+		auto numbers = site.program == DConstants::INVALID_INDEX
+		                   ? vector<double>(tested.size(), double(product.sign))
+		                   : columns.Numbers(site.node, site.program, tested, nullptr, &site, &product.inputs);
+		EvaluatedConstraint::BilinearTerm column {product.var_a, product.var_b, CoefficientColumn()};
+		column.row_coefficients.AssignDense(num_rows);
+		const auto qualified = product.qualifier_scope_idx != DConstants::INVALID_INDEX;
+		filter.avg_scale = product.avg_scale;
+		filter.has_filter = true;
+		filter.mask.assign(num_rows, false);
+		for (auto &read : ReadRows(site.node, ReadEntriesOf(site.node, qualified), qualified)) {
+			filter.mask[read.first] = true;
+			column.row_coefficients.Set(read.first, numbers[read.second]);
+		}
+		AvgGroups(product.avg_scale, product.avg_group_key, product.child, site.node, filter);
+		gstate.evaluated_bilinear_terms.push_back(std::move(column));
+	}
+	CountProductsOnce(products, gstate.evaluated_bilinear_terms, &kept, num_rows);
+}
+
+vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
+                                                           const vector<DecideTermSite> &sites,
+                                                           vector<CoefficientColumn> &coefficients,
+                                                           vector<idx_t> &variables) {
+	auto &container = descent.Containers()[root];
+	vector<TermFilterState> filters(terms.size());
 	coefficients.resize(terms.size());
-	filters.resize(terms.size());
 	for (idx_t t = 0; t < terms.size(); t++) {
 		auto &term = terms[t];
-		auto &site = body.linear[t];
+		auto &site = sites[t];
 		auto &filter = filters[t];
-		gstate.objective_variable_indices.push_back(gstate.ReadVariable(term));
+		variables.push_back(gstate.ReadVariable(term));
 		filter.avg_scale = term.avg_scale;
 		filter.has_filter = true;
 		filter.mask.assign(num_rows, false);
@@ -790,10 +969,9 @@ vector<TermFilterState> DecideModelEmitter::Objective() {
 				coefficients[t].Set(row, numbers[entry]);
 			}
 		};
-		auto &entries = descent.Containers()[site.node].entries;
 		if (site.node == root) {
 			// A term outside every reducer is read on each row the objective keeps, at its variant's entry, and
-			// counted once below.
+			// counted once there (Objective).
 			for (auto &routed : container.routed) {
 				read(routed.first, routed.second);
 			}
@@ -805,21 +983,25 @@ vector<TermFilterState> DecideModelEmitter::Objective() {
 				read(member.first, member.second);
 			}
 		}
-		if (term.avg_scale && term.avg_group_key != DConstants::INVALID_INDEX) {
-			// An AVG of a `by` key divides by the members of its own group (D81): the slot of the G each lies in.
-			filter.avg_num_groups = descent.Containers()[term.child].groups.size();
-			filter.avg_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-			for (auto &entry : entries) {
-				filter.avg_group_ids[entry.row] = entry.parent_slot;
-			}
-		}
+		AvgGroups(term.avg_scale, term.avg_group_key, term.child, site.node, filter);
 	}
-	// A term outside every reducer counts once, on the first row the objective keeps.
-	CountTupleTermsOnce(terms, coefficients, &kept, num_rows);
 	return filters;
 }
 
-void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated, DataChunk &first) {
+void DecideModelEmitter::AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site,
+                                   TermFilterState &filter) {
+	if (!avg_scale || avg_group_key == DConstants::INVALID_INDEX) {
+		return;
+	}
+	// An AVG of a `by` key divides by the members of its own group (D81): the slot of the G each lies in.
+	filter.avg_num_groups = descent.Containers()[child].groups.size();
+	filter.avg_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+	for (auto &entry : descent.Containers()[site].entries) {
+		filter.avg_group_ids[entry.row] = entry.parent_slot;
+	}
+}
+
+void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 	// Each composed clause's root, by its place among them, and the objective's, which hold their terms' G's.
 	vector<idx_t> clauses(op.composed_minmax_constraints.size(), DConstants::INVALID_INDEX);
 	idx_t objective = DConstants::INVALID_INDEX;
@@ -834,7 +1016,7 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated, D
 		PhysicalDecide::EvaluatedClauses::ComposedConstraint clause;
 		clause.rhs = DecideComposedBound(context, spec);
 		bool null_factor = false;
-		clause.terms = ComposedTerms(clauses[c], spec.terms, "constraint", first, null_factor);
+		clause.terms = ComposedTerms(clauses[c], spec.terms, "constraint", null_factor);
 		// The rows its `when` keeps are the rows its root holds, and their classes those of its `per K:`.
 		auto kept_rows = [&]() {
 			vector<bool> kept(num_rows, false);
@@ -854,7 +1036,7 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated, D
 	}
 	if (objective != DConstants::INVALID_INDEX) {
 		bool null_factor = false;
-		auto terms = ComposedTerms(objective, op.composed_minmax_objective_terms, "objective", first, null_factor);
+		auto terms = ComposedTerms(objective, op.composed_minmax_objective_terms, "objective", null_factor);
 		// A term with a NULL factor reads 0; one that reads no row is dropped.
 		terms.erase(std::remove_if(terms.begin(), terms.end(), DecideComposedTermReadsNoRow), terms.end());
 		evaluated.composed_objective_terms = std::move(terms);
@@ -863,8 +1045,7 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated, D
 
 vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
                                                                  const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
-                                                                 const char *what, DataChunk &first,
-                                                                 bool &null_factor) {
+                                                                 const char *what, bool &null_factor) {
 	auto &body = tree.nodes[root]->compiled;
 	const auto clause = op.WrittenClause(tree.nodes[root]->source_clause_id);
 	vector<ComposedMinMaxTermData> result;
@@ -875,13 +1056,8 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 			// A value the whole query shares, read as flat reads it, on the input's first rows, whatever the clause
 			// keeps: before the term's members, which follow its predecessor's (DecideErrorRank::part).
 			try {
-				auto lowered = TransformToChunkExpression(*term.scale, context);
-				ExpressionExecutor executor(context, *lowered);
-				DataChunk value;
-				value.Initialize(context, {lowered->return_type});
-				executor.Execute(first, value);
 				evaluated.scale =
-				    DecideQueryWideScale(value.data[0].GetValue(0), term.scale_divides, what,
+				    DecideQueryWideScale(FirstRowValue(*term.scale), term.scale_divides, what,
 				                         {DecideValueRole::COEFFICIENT, *term.scale, names, clause}, null_factor);
 			} catch (std::exception &ex) {
 				auto rank = tree.nodes[body.composed[t]]->clause_rank;
@@ -895,9 +1071,8 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 		// first of each class (language/guide.md §5.1). Every other row reads 0.
 		auto &members = tree.nodes[body.composed[t]]->compiled;
 		const auto site = DecideTreeOperand(tree, body.composed[t]);
-		const auto &tested = columns.Tested(site);
 		const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
-		const auto reads = qualified ? columns.FirstOfEachInstance(site, tested) : tested;
+		const auto reads = ReadEntriesOf(site, qualified);
 		const auto rows = ReadRows(site, reads, qualified);
 		evaluated.filter_mask.assign(num_rows, false);
 		for (auto &read : rows) {

@@ -347,15 +347,12 @@ GUROBI_PROGRAMS = {
         decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9 AND t.c * x * y <= 10", "MAXIMIZE sum(x + y)"),
         r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) block=PRODUCTS ",
     ),
-    # A square's query-wide scale is a program on its root; an unscaled square has none.
-    "a-square-scale": (
+    # A square's terms are programs on its reducer's operand; its query-wide factor is read on the input's first row,
+    # so it has none.
+    "a-square": (
         decide(ROWS, "x(REAL)", "x <= 9 AND (SELECT 2.0) * sum(power(x - t.c, 2)) <= 50"),
-        r"square 0 child=\d+ sign=1 scale=1\n(?:.*\n)*  program 1 VALUE expr=CAST\(#0 AS DOUBLE\) [^\n]* "
-        r"block=SQUARES group=0",
-    ),
-    "a-square-unscaled": (
-        decide(ROWS, "x(REAL)", "x <= 9 AND sum(power(x - t.c, 2)) <= 50"),
-        r"square 0 child=\d+ sign=1 scale=-1",
+        r"square 0 child=(\d+) sign=1\n    inner 0 var=0 child=\1 site=(\d+) program=0 [^\n]*\n(?:.*\n)*"
+        r"node \2 entries\n(?:  .*\n)*  program 0 COEFFICIENT [^\n]* block=SQUARES group=0 position=1 ",
     ),
     # The objective's products are their own block.
     "objective-product": (

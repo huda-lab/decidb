@@ -2423,7 +2423,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	DecideProfileScope phase("execution.tree_descent");
 	descent = make_uniq<DecideDescent>(*tree, context);
 	DecideInputScans() = 0;
-	// The input's first chunk, where a value the whole query shares is read (a composed term's factor).
+	// The input's first chunk, where a value the whole query shares is read (a composed term's or a square's factor).
 	DataChunk first;
 	DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
 		AppendDecideDescent(*descent, chunk, offset);
@@ -2462,14 +2462,14 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
 	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, per_group_cache, names, num_rows,
-	                           errors);
+	                           errors, first);
 	keyed_mappings = emitter.KeyedMappings();
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
 	// qualified as they are read (ApplyObjectiveQualifiers).
-	evaluated.linear_filters = emitter.Objective();
+	emitter.Objective(evaluated);
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
-	emitter.Composed(evaluated, first);
+	emitter.Composed(evaluated);
 	// Flat reports what the data left of each clause once its clauses, its objective and its composed clauses are
 	// read, unless one raised.
 	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
@@ -3872,29 +3872,16 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 						DataChunk scale_result;
                         scale_result.Initialize(context, {transformed.return_type});
 						scale_windows.Execute(scale_executor, nullptr, scale_result);
-						Value value = scale_result.data[0].GetValue(0);
 						got_scale = true;
-						if (value.IsNull()) {
+						bool is_null = false;
+						eqg.sign = ScaleSquaredGroup(scale_result.data[0].GetValue(0), qg,
+						                             {DecideValueRole::COEFFICIENT, *qg.scale, names, clause}, is_null);
+						if (is_null) {
 							// A NULL factor makes every instance of the clause NULL.
 							for (idx_t row = 0; row < num_rows; row++) {
 								null_rows[row] = null_rows[row] || scoped_kept[row];
 							}
-							continue;
 						}
-                        double factor = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                        if (!std::isfinite(factor)) {
-							ThrowInvalidValue({DecideValueRole::COEFFICIENT, *qg.scale, names, clause});
-						}
-                        if (qg.scale_divides && factor == 0.0) {
-                            throw InvalidInputException(
-                                "DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.");
-                        }
-                        eqg.sign *= qg.scale_divides ? 1.0 / factor : factor;
-                        // The reciprocal of a finite factor is a number DeciDB computes: past a DOUBLE it names the
-                        // clause.
-                        if (!std::isfinite(eqg.sign)) {
-                            throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, clause));
-                        }
                     }
                 }
 
@@ -4294,16 +4281,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			    gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context, num_rows, Names(), WrittenClause(DConstants::INVALID_INDEX), every_row, nullptr);
 			// A product outside every reducer (`MAXIMIZE sum(x) + s * u`) counts once, as a
 			// linear term there does; one inside a reducer sums over its rows.
-			idx_t first_kept = FirstKeptRow(objective_has_when ? &objective_when_mask : nullptr, num_rows);
-			vector<idx_t> counted;
-			if (first_kept != DConstants::INVALID_INDEX) {
-				counted.push_back(first_kept);
-			}
-			for (idx_t i = 0; i < gstate.evaluated_bilinear_terms.size(); i++) {
-				if (gstate.objective->bilinear_terms[i].reduction == LinearTermReduction::NONE) {
-					CountOnce(gstate.evaluated_bilinear_terms[i].row_coefficients, counted);
-				}
-			}
+			CountProductsOnce(gstate.objective->bilinear_terms, gstate.evaluated_bilinear_terms,
+			                  objective_has_when ? &objective_when_mask : nullptr, num_rows);
 		}
 
 		// An AVG with a `by` key -- a nested `sum(per k: avg(e) by (k))` the value rewrite inlined (D81) -- divides by

@@ -134,6 +134,11 @@ bool CountsOnce(const DecideTerm &term);
 void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColumn> &coefficients,
                          const vector<bool> *kept, idx_t num_rows);
 
+//! The objective's products outside its reducers (`MAXIMIZE sum(x) + s * u`), counted on its first kept row as a
+//! linear term there is; one inside a reducer sums over its rows.
+void CountProductsOnce(const vector<DecideObjective::BilinearTerm> &terms,
+                       vector<EvaluatedConstraint::BilinearTerm> &products, const vector<bool> *kept, idx_t num_rows);
+
 //! The first row of each group of a clause in the aggregate shape: every row for `row_group_ids` empty (one group),
 //! none for a group with no row.
 vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows);
@@ -226,6 +231,14 @@ ComposedMinMaxTermData DecideComposedTerm(const LogicalDecide::ComposedMinMaxTer
 //! division by zero in `what`, the clause ("constraint") or the objective.
 double DecideQueryWideScale(const Value &value, bool divides, const char *what, const ValueSource &source,
                             bool &is_null);
+
+//! A squared reducer's factor (DecideConstraint::QuadraticGroup::scale), one value for the whole query, as read on the
+//! input's first row: the square's sign times the factor, or over it where it divides. A NULL factor makes every
+//! instance of the clause NULL, which sets `is_null` and leaves the sign as written; one the model cannot read is
+//! refused, named by `source`; a divisor of 0 is a division by zero, and a reciprocal past a DOUBLE names the clause
+//! (`source.clause`).
+double ScaleSquaredGroup(const Value &value, const DecideConstraint::QuadraticGroup &group, const ValueSource &source,
+                         bool &is_null);
 
 //! Whether a composed term reads no row: a reducer over none is NULL (deck p. 56), so its clause is skipped and its
 //! objective term dropped.

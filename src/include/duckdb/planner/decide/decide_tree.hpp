@@ -95,8 +95,6 @@ struct DecideBody {
 	vector<DecideTermSite> linear, products, fallback_sites;
 	//! Per quadratic group (the objective has one, its squared terms), its inner terms' sites.
 	vector<vector<DecideTermSite>> squares;
-	//! Per quadratic group, its scale's program on the holder; INVALID with no scale to compute.
-	vector<idx_t> square_scales;
 	//! A clause's bound, a program on its root, and its admitted ends, programs on its one term's site, read on its
 	//! members there; INVALID when it has none.
 	idx_t rhs = DConstants::INVALID_INDEX;
@@ -193,6 +191,9 @@ struct DecideNode {
 	//! computed: on a node that holds terms, the first of them (DecideProgram::group), which its `when` ranks under;
 	//! INVALID on a node whose rows are routed before any term is read.
 	idx_t filter_group = DConstants::INVALID_INDEX;
+	//! The part of its owner's evaluation that filter is read in (DecideErrorRank::part): 0, but 1 for a node of the
+	//! objective's products alone, whose filters flat reads after the objective's other terms.
+	idx_t filter_part = 0;
 	//! Immutable clause metadata shared with flat lowering. Its term vectors are
 	//! empty: the graph's bodies and child results supply the model's terms.
 	unique_ptr<DecideConstraint> facts;

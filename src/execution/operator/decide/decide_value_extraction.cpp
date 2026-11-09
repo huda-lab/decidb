@@ -324,6 +324,20 @@ void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColu
 	}
 }
 
+void CountProductsOnce(const vector<DecideObjective::BilinearTerm> &terms,
+                       vector<EvaluatedConstraint::BilinearTerm> &products, const vector<bool> *kept, idx_t num_rows) {
+	idx_t first_kept = FirstKeptRow(kept, num_rows);
+	vector<idx_t> counted;
+	if (first_kept != DConstants::INVALID_INDEX) {
+		counted.push_back(first_kept);
+	}
+	for (idx_t i = 0; i < products.size(); i++) {
+		if (terms[i].reduction == LinearTermReduction::NONE) {
+			CountOnce(products[i].row_coefficients, counted);
+		}
+	}
+}
+
 vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows) {
 	if (row_group_ids.empty()) {
 		return num_rows > 0 ? vector<idx_t> {0} : vector<idx_t>();
@@ -649,6 +663,29 @@ double DecideQueryWideScale(const Value &value, bool divides, const char *what, 
 		return 1.0 / v;
 	}
 	return v;
+}
+
+double ScaleSquaredGroup(const Value &value, const DecideConstraint::QuadraticGroup &group, const ValueSource &source,
+                         bool &is_null) {
+	if (value.IsNull()) {
+		is_null = true;
+		return group.sign;
+	}
+	double factor = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	if (!std::isfinite(factor)) {
+		ThrowInvalidValue(source);
+	}
+	if (group.scale_divides && factor == 0.0) {
+		throw InvalidInputException(
+		    "DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.");
+	}
+	double sign = group.sign;
+	sign *= group.scale_divides ? 1.0 / factor : factor;
+	// The reciprocal of a finite factor is a number DeciDB computes: past a DOUBLE it names the clause.
+	if (!std::isfinite(sign)) {
+		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
+	}
+	return sign;
 }
 
 bool DecideComposedTermReadsNoRow(const ComposedMinMaxTermData &term) {
