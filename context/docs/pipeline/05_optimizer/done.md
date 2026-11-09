@@ -46,7 +46,7 @@ envelope, so lowering it would be work that only loses accuracy.
 
 **Choosing a formulation is this stage's job, and it is settled here rather than
 where the rows are built.** Stage 08 reads the fields above and translates; it does not
-read `Capabilities()` itself. Deciding here keeps the layer boundary and lets a rewrite
+read `Constructs()` itself. Deciding here keeps the layer boundary and lets a rewrite
 *see* the choice. Seeing it matters — a rewrite that knows ABS will be stated
 natively can skip the sign indicator that only a Big-M envelope has a use for (§ABS
 below), which is not expressible while the arm is picked two stages later.

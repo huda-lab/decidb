@@ -66,6 +66,8 @@ ir.model_shape))` asks the solver-support check `DIAGNOSE` goes through (`FindDe
 gate in `decide_solver_gate.cpp`), and the driver hands the rule the matching texts (`DirectStateErrors`). With no
 Gurobi licence, a quadratic limit or an `INT` decision under a square objective has no backend, so its errors read
 `DECIDE optimization is infeasible.` and stop. The IR's model shape reports less when unsure, which keeps the advice.
+A model every backend takes gets the advice without a backend being picked, so such a query loads no solver
+(§ Capabilities).
 Where `DIAGNOSE` runs but cannot name a variable, the error keeps the advice.
 
 ---
@@ -106,14 +108,21 @@ is "no", so they are two **types**, not two halves of one struct:
 Splitting them is what lets each predicate take exactly the table it reads.
 `FindModelClassGap(needed, supported)` takes `SolverModelClass` on **both** sides —
 what a query demands against what a backend accepts — so it is a plain containment test
-with nothing to ignore. `SolverCapabilities` is only the pair
-(`.constructs`, `.model_classes`) the registry asks each backend for in one call; no
-call site below it reads both members.
+with nothing to ignore. A registry row asks each backend the two questions apart
+(`ModelClasses()`, `Constructs()`), because their answers have different costs.
 
-Capability is asked through a function, not read off a constant, because it is partly
-a **runtime** fact — a dynamically loaded library may not export the symbol a native
-construct needs, so the answer is not known until the library is open. Gurobi's
-`Capabilities()` therefore calls `GurobiLoader::Load()` **before** reading the symbol
+A backend's model classes are mathematics, the same on every host: `ModelClasses()`
+opens no library and checks no licence. So a refusal can name a solver the host lacks,
+and a question whose answer every backend shares is answered without picking one:
+`DecideSolverRuns`, which a direct-solve rule asks only for the wording of its state
+errors, returns yes when every backend takes the model, and picks a backend (whose
+availability probe loads Gurobi's library and starts a licensed environment, about 5 ms
+once per process) only when the answer depends on it.
+
+Constructs are asked through a function that may open the library, because they are
+partly a **runtime** fact: a dynamically loaded library may not export the symbol a
+native construct needs, so the answer is not known until the library is open. Gurobi's
+`Constructs()` therefore calls `GurobiLoader::Load()` **before** reading the symbol
 table: the answer is cached for the process, so reading it while the library is still
 closed would be a permanent false negative.
 
@@ -121,7 +130,7 @@ A flag is only worth a field if it is A/B-verifiable: forcing the construct back
 its lowering path must reach the same optimum. `DECIDB_NATIVE_CONSTRUCTS=off` is how
 that is checked — a test-only switch, mirroring `DECIDB_FORCE_SOLVER`, that turns every
 construct capability off so both arms run on one machine. It is applied **centrally**,
-in `SolverBackend::Capabilities()`, which is why that accessor returns by value: the
+in `SolverBackend::Constructs()`, which is why that accessor returns by value: the
 switch is part of the capability contract, so every registered backend inherits it
 instead of copy-pasting it. Model classes are never masked — a gate has no fallback
 path to force a query onto, so masking one would refuse the query rather than slow it.
@@ -317,9 +326,9 @@ order:
    bound all stay in the model, which step 6 answers.
 2. `AssertBackendAcceptsBuiltModel(model, backend)` — both halves of the capability
    contract, re-read off the model *as built*. The model class is checked against
-   `Capabilities().model_classes` (stage 05 already refused the query if the backend
+   `ModelClasses()` (stage 05 already refused the query if the backend
    could not take it, so this asserts the prediction matched the fact), and every
-   native construct against `Capabilities().constructs` — which stage 05 read when it
+   native construct against `Constructs()` — which stage 05 read when it
    chose the formulation, so a mismatch here means the plan and the solve disagree about
    which backend is in play. Layer 8 does not repair, it checks — a mismatch is an
    `InternalException`, never a user error.
@@ -650,12 +659,12 @@ HiGHS has no thread-safe terminate, so it never sets `user_interrupted`.
    receives or adds it. Map the backend's terminal statuses onto `SolverStatus`; anything
    unmapped goes to `OTHER` with `status_text` holding the backend's own words for it, when
    it has any. Override a `SolverSession` virtual only for behavior the backend alone acts on.
-2. Add `IsAvailable()`, `Capabilities()`, and `CreateSession()` statics.
+2. Add `IsAvailable()`, `ModelClasses()`, `Constructs()` and `CreateSession()` statics.
 3. Append one `SolverBackendInfo` row to `REGISTERED_BACKENDS` in
    `solver_registry.cpp`, positioned by preference.
 
 That is the whole list, and step 3 is the only edit outside the new backend's own
-files. A backend's `Capabilities()` reports what it *can* do and nothing else — the
+files. A backend's `ModelClasses()` and `Constructs()` report what it *can* do and nothing else — the
 `DECIDB_NATIVE_CONSTRUCTS` switch is applied above it, so a new backend inherits the
 A/B harness for free. If a fourth step ever appears — an `if` on the backend's name, a
 `switch` on a new enum — the difference it is branching on belongs in

@@ -48,6 +48,37 @@ solver path answers those queries, so none of them is wrong, only slower.
   s1 s1_global r1 r1_global`, and the same with
   `--modes direct highs`).
 
+## H-50 — A direct plan costs two to three times DuckDB's own plan for the same answer
+
+- **Problem.** At `sf=1` (800,000 rows), a direct plan takes two to three times what DuckDB takes for a hand-written
+  query that computes the same answer, and the gap is the plan's shape, not the engine: the same relational plan
+  written by hand costs the same. Measured with `PRAGMA enable_profiling='json'` (latency / summed operator CPU):
+  - `a2_keyed` 25 ms / 73 ms against 16 ms / 38 ms for `WITH g AS (SELECT ps_suppkey, avg(...) FROM partsupp GROUP
+    BY ps_suppkey) ... JOIN g USING (ps_suppkey)`. The class join (`DirectJoinGroupRow`, `direct_plan_fragments.cpp`)
+    is a SINGLE join on `IS NOT DISTINCT FROM` over two keys, the row's eligibility flag and the key, and takes 20 ms
+    of CPU where DuckDB's inner join takes 1.6 ms: DuckDB's perfect hash join takes only an inner join on one integer
+    key compared with `=` (`PerfectHashJoinExecutor::CanDoPerfectHashJoin`), and its perfect hash aggregate takes
+    only integer group keys (`CanUsePerfectHashAggregate`), so the BOOLEAN flag keeps the class aggregate a radix hash
+    aggregate too. The flag is the constant `CASE WHEN false THEN false ELSE true END` when no key element can put a
+    row in no class. At 100,000 rows the plan runs slower on all threads than on one (34 ms against 30 ms, peak 83
+    MiB against 38 MiB), where DuckDB's plan does not.
+  - `a2` 26 ms / 83 ms against 8.5 ms / 22 ms for a cross product with `(SELECT sum(c) / count(*) FROM partsupp)`.
+    About 70 ms of the CPU is the projections over the 800,000 rows.
+  - No expression the rules build is simplified: the DECIDE optimizer runs after DuckDB's `EXPRESSION_REWRITER`
+    (`optimizer.cpp`), so constant conditions (`CASE WHEN (true) THEN ... ELSE 0.0 END`), constant terms
+    (`"*"(1.0, "+"(0.0, ...))`) and the checks of values a type proves finite (`isfinite(CAST(<DECIMAL> AS
+    DOUBLE))`) are evaluated on every row.
+  The SINGLE join is deliberate (the comment in `DirectJoinGroupRow`): an inner join is estimated from the
+  aggregate's child cardinality, and DuckDB then builds on the rows.
+- **Change.** Make each direct plan the plan DuckDB would choose for the same answer written as SQL: simplify the
+  replacement the way DuckDB simplifies a query (the expression rewriter, one pass, no case list), put a flag in the
+  key only where it can be false, and join the class answers in a form DuckDB runs as a perfect hash join where the key
+  allows one, keeping the class plan the build side. Each piece names the standard technique it follows (constant
+  folding after lowering, as a compiler's back end does).
+- **Done when.** Each query of `benchmark/decide/direct_solve/run.py` runs within 1.3 times DuckDB's hand-written plan
+  for the same answer at `sf=1`, measured in one process (`PRAGMA enable_profiling`), and on all threads no slower than
+  on one at every size; answers, errors and goldens unchanged, and the matrix passes.
+
 ## TEST-2 — Direct-solve arms no test reaches
 
 - **Problem.** At `73b52ab1d1`, `make decide-coverage` reaches 2,397 of the 2,450 arms in `direct/*.cpp` and
