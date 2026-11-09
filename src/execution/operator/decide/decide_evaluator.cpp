@@ -39,10 +39,12 @@ static int64_t OrderedBits(double value) {
 	return bits;
 }
 
+bool DecideTreeDumpRequested() {
+	return std::getenv("DECIDB_DUMP_TREE") || std::getenv("DECIDB_DUMP_CONTAINERS");
+}
+
 bool DecideTreeRequested() {
-	const auto selected = SelectedDecideEvaluator();
-	return selected == DecideEvaluator::TREE || selected == DecideEvaluator::TREE_NOSIDE ||
-	       std::getenv("DECIDB_DUMP_TREE") || std::getenv("DECIDB_DUMP_CONTAINERS");
+	return SelectedDecideEvaluator() != DecideEvaluator::FLAT || DecideTreeDumpRequested();
 }
 
 //! Within a few representable values of each other; NaN equals NaN, as both runs read one.
@@ -186,7 +188,15 @@ void CompareDecideEvaluations(const DecideEvaluationRecord &flat, const ErrorDat
 	auto raised = [](const ErrorData &error) {
 		return error.HasError() ? error.Message() : string("no error");
 	};
+	auto &allowed = AllowedDifferences();
 	if (raised(flat_error) != raised(second_error)) {
+		// A known difference in what they raised leaves nothing to compare: the runs stopped in different places.
+		for (auto &known : allowed) {
+			if (known.group == "raised") {
+				LogAllowedDifference(known);
+				return;
+			}
+		}
 		ThrowDifference("what they raised", raised(flat_error), raised(second_error));
 	}
 	if (flat_error.HasError()) {
@@ -202,7 +212,6 @@ void CompareDecideEvaluations(const DecideEvaluationRecord &flat, const ErrorDat
 			}
 		}
 	}
-	auto &allowed = AllowedDifferences();
 	for (auto &group : groups) {
 		// The fields a known difference covers are compared apart, and a difference there is logged, not raised.
 		for (auto &known : allowed) {

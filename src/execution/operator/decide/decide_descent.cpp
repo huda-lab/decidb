@@ -562,13 +562,18 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		}
 	}
 	auto signatures = Signature(node, chunk, stored, row_base);
-	vector<vector<Value>> columns(stored.size());
-	for (auto &column : node.columns) {
-		auto values = Evaluate(*column, chunk, stored);
-		for (idx_t i = 0; i < stored.size(); i++) {
-			columns[i].push_back(std::move(values[i]));
+	auto carry = [&](const vector<unique_ptr<Expression>> &carried) {
+		vector<vector<Value>> result(stored.size());
+		for (auto &column : carried) {
+			auto values = Evaluate(*column, chunk, stored);
+			for (idx_t i = 0; i < stored.size(); i++) {
+				result[i].push_back(std::move(values[i]));
+			}
 		}
-	}
+		return result;
+	};
+	auto columns = carry(node.columns);
+	auto program_columns = carry(node.program_columns);
 	vector<Value> order, order_keys;
 	vector<vector<Value>> partitions;
 	vector<bool> partition_present;
@@ -620,6 +625,7 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		entry.slot = slots[i];
 		entry.signature = std::move(signatures[i]);
 		entry.columns = std::move(columns[i]);
+		entry.program_columns = std::move(program_columns[i]);
 		if (!order.empty()) {
 			entry.order = std::move(order[i]);
 			entry.order_key = std::move(order_keys[i]);

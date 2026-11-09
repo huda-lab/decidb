@@ -10,6 +10,7 @@
 
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
+#include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -30,57 +31,6 @@ static bool ReadsColumnFrom(const Expression &lowered, idx_t first) {
 	bool reads = false;
 	ForEachColumnRead(lowered, [&](idx_t column) { reads = reads || column >= first; });
 	return reads;
-}
-
-//! Whether an error stops the query wherever it is raised, rather than belonging to the row it is raised on.
-static bool StopsTheQuery(const ErrorData &error) {
-	auto type = error.Type();
-	return type == ExceptionType::INTERRUPT || type == ExceptionType::OUT_OF_MEMORY || type == ExceptionType::FATAL;
-}
-
-//! Expression `expr_idx` of `*executor` on `chunk`, whose first row is row `offset` of the input, into `slot`. When a
-//! row raises, each row is evaluated alone, a failing one keeping its error and NULL; the executor, whose states the
-//! failure may have left half written, is made again by `remake`.
-static void EvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor> &executor, idx_t expr_idx,
-                           const std::function<unique_ptr<ExpressionExecutor>()> &remake, DecideRowStore::Slot &slot,
-                           DataChunk &chunk, idx_t offset) {
-	const idx_t count = chunk.size();
-	const auto &type = slot.lowered->return_type;
-	Vector out(type);
-	try {
-		executor->SetChunk(chunk);
-		executor->ExecuteExpression(expr_idx, out);
-	} catch (std::exception &ex) {
-		ErrorData error(ex);
-		if (StopsTheQuery(error)) {
-			throw;
-		}
-		executor = remake();
-		Vector rows(type);
-		auto row_executor = make_uniq<ExpressionExecutor>(context, *slot.lowered);
-		for (idx_t i = 0; i < count; i++) {
-			SelectionVector at_row(1);
-			at_row.set_index(0, i);
-			DataChunk row;
-			row.InitializeEmpty(chunk.GetTypes());
-			row.Slice(chunk, at_row, 1);
-			Vector value(type);
-			try {
-				row_executor->ExecuteExpression(row, value);
-				rows.SetValue(i, value.GetValue(0));
-			} catch (std::exception &row_ex) {
-				ErrorData row_error(row_ex);
-				if (StopsTheQuery(row_error)) {
-					throw;
-				}
-				slot.errors.emplace(offset + i, std::move(row_error));
-				rows.SetValue(i, Value(type));
-				row_executor = make_uniq<ExpressionExecutor>(context, *slot.lowered);
-			}
-		}
-		out.Reference(rows);
-	}
-	VectorOperations::Copy(out, slot.values, count, 0, offset);
 }
 
 DecideRowStore::DecideRowStore(ClientContext &context, ColumnDataCollection &data)
@@ -120,7 +70,7 @@ DecideRowStore::Slot &DecideRowStore::AddSlot(const Expression &lowered, bool co
 			slot.values.SetValue(0, ExpressionExecutor::EvaluateScalar(context, held));
 		} catch (std::exception &ex) {
 			slot.constant_error = ErrorData(ex);
-			if (StopsTheQuery(slot.constant_error)) {
+			if (DecideErrorStopsTheQuery(slot.constant_error)) {
 				throw;
 			}
 			FlatVector::SetNull(slot.values, 0, true);
@@ -200,7 +150,8 @@ void DecideRowStore::Build(const std::function<void(DataChunk &, idx_t)> &observ
 			}
 		}
 		for (idx_t i = 0; i < varying.size(); i++) {
-			EvaluateWindow(context, executor, i, remake, *varying[i], chunk, offset);
+			DecideEvaluateWindow(context, executor, i, remake, *varying[i]->lowered, varying[i]->values,
+			                     varying[i]->errors, chunk, offset);
 		}
 		offset += chunk.size();
 	}
@@ -279,7 +230,7 @@ void DecideRowStore::Fill(Slot &slot) {
 			}
 		}
 		chunk.SetCardinality(count);
-		EvaluateWindow(context, executor, 0, remake, slot, chunk, offset);
+		DecideEvaluateWindow(context, executor, 0, remake, *slot.lowered, slot.values, slot.errors, chunk, offset);
 		std::map<idx_t, bool> affected;
 		ForEachColumnRead(*slot.lowered, [&](idx_t column) {
 			for (auto it = column_errors[column].lower_bound(offset);
@@ -304,7 +255,7 @@ void DecideRowStore::Fill(Slot &slot) {
 				slot.errors.erase(row);
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
-				if (StopsTheQuery(error)) {
+				if (DecideErrorStopsTheQuery(error)) {
 					throw;
 				}
 				slot.errors.erase(row);

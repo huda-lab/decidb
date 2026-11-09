@@ -1,5 +1,8 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/execution/operator/decide/decide_evaluator.hpp"
+#include "duckdb/execution/operator/decide/decide_global_sink_state.hpp"
+#include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
+#include "duckdb/execution/operator/decide/decide_tree_columns.hpp"
 #include "duckdb/execution/operator/decide/decide_frame_map.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/execution/operator/decide/decide_row_store.hpp"
@@ -18,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <numeric>
@@ -935,27 +939,6 @@ static vector<GroupName> NameVariants(const DecideSignature &signature, const ve
 	return names;
 }
 
-//! True when a bound contains a flattened scalar-subquery value. Its bound alias is
-//! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
-//! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
-//! leaking an internal placeholder into a diagnostic suggestion.
-static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
-	if (IsQueryWideValueTag(expr.GetAlias()) || IsRowVaryingSubqueryTag(expr.GetAlias())) {
-		return true;
-	}
-	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!found) {
-			found = ContainsScalarSubqueryProvenance(child);
-		}
-	});
-	return found;
-}
-
-
-
-
-
 //===--------------------------------------------------------------------===//
 // Phase 2 shared evaluation helpers
 //===--------------------------------------------------------------------===//
@@ -1489,11 +1472,6 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 
-//! Singleton-row folding is decided at layer 05 (DecideOptimizer::FoldSingletonRows).
-//! `UserBoundSpec` lives on LogicalDecide with it; execution reads the resulting box
-//! rather than deriving one.
-using UserBoundSpec = LogicalDecide::UserBoundSpec;
-
 //! Keep the diagnostic chunk-size setting on the same path used by the source pipeline and the shadow scan.
 static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t row_base) {
 	idx_t chunk_size = STANDARD_VECTOR_SIZE;
@@ -1517,265 +1495,6 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 		descent.Append(slice, row_base + first);
 	}
 }
-
-class DecideGlobalSinkState : public GlobalSinkState {
-public:
-	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
-	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var) {
-        // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
-        // A variable whose box never had a lower bound written is one the query never
-        // lowered, and Finalize resolves it to the default 0 floor.
-        idx_t num_decide_vars = op.decide_variables.size();
-        singleton_row_boxes = op.singleton_row_boxes;
-        user_singleton_row_bounds = op.user_singleton_row_bounds;
-
-        // A user bound that contradicts the variable's INTRINSIC domain (a non-negative
-        // REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
-        // error, not a constraint conflict to diagnose — loosening can't help, the type can.
-        // It is raised here (the main pipeline), before any row is read, so it never reaches the
-        // elastic engine and supersedes the generic infeasible error.
-        //   - `x <= -1` (REAL): upper below the non-negativity floor → infeasible. But
-        //     `x = -1` or `x <= -1 AND x >= -5` explicitly lower the floor below 0, so the
-        //     guard is `U < 0 AND L >= 0` (floor still at/above the intrinsic 0).
-        //   - `x >= 2` / `x <= -1` (BOOLEAN): outside the 0/1 box. This is Boolean arithmetic, not
-        //     a wider variable, so the box stays [0,1] and the query is infeasible; the error quotes
-        //     the bound.
-        // Both are raised under DIAGNOSE too. A purely user-vs-user inverted box (e.g. `x >= 5 AND
-        // x <= 1`, both >= 0) does NOT match and proceeds to the elastic engine, which reports a
-        // least-change loosen.
-        // A helper decision of the value rewrite has no intrinsic domain: it holds a
-        // reducer's value, `sum(w * x)` negative wherever `w` is, so no bound on it
-        // contradicts a type (its floor is free, DecideOptimizer::FoldSingletonRows).
-        vector<bool> is_helper(num_decide_vars, false);
-        for (auto &link : op.reducer_value_links) {
-            if (link.value_var < num_decide_vars) {
-                is_helper[link.value_var] = true;
-            }
-        }
-		// An auxiliary whose definition may read no value -- a data value (NULL), a frame, a keyed decision (a row in
-		// no class), or another such auxiliary -- has none on those rows, where no bound on it binds (D88): the data
-		// says whether one row is left that the bound contradicts, so the solve reports it.
-		std::function<bool(idx_t, idx_t)> may_lack_value = [&](idx_t var, idx_t depth) {
-			if (depth > num_decide_vars) {
-				return true;
-			}
-			auto reads_none = [&](const DecideTerm &term) {
-				if (term.coefficient && !term.coefficient->IsFoldable()) {
-					return true;
-				}
-				auto read = term.variable_index;
-				if (read == DConstants::INVALID_INDEX || read == var) {
-					return false;
-				}
-				return term.frame_read != DConstants::INVALID_INDEX ||
-				       (read < op.variable_scopes.size() && op.variable_scopes[read].IsKeyed()) ||
-				       may_lack_value(read, depth + 1);
-			};
-			for (const auto &constraint : op.prepared.constraints) {
-				if (constraint->defined_var != var) {
-					continue;
-				}
-				if (constraint->rhs_expr && !constraint->rhs_expr->IsFoldable()) {
-					return true;
-				}
-				for (auto &term : constraint->lhs_terms) {
-					if (reads_none(term)) {
-						return true;
-					}
-				}
-				for (auto &group : constraint->quadratic_groups) {
-					for (auto &term : group.inner_terms) {
-						if (reads_none(term)) {
-							return true;
-						}
-					}
-				}
-			}
-			return false;
-		};
-        for (idx_t var = 0; var < num_decide_vars; var++) {
-            if (is_helper[var] || may_lack_value(var, 0)) {
-                continue;
-            }
-            bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
-            // The box of the bounds as written. The folded box holds the admitted ends instead
-            // (`x = -0.5` admits no INT, which the solve reports as infeasible), so it is not the
-            // box the user wrote.
-            DecideWrittenBox written;
-            for (const auto &bound : user_singleton_row_bounds) {
-                if (bound.decide_var_idx != var) {
-                    continue;
-                }
-                if (bound.removal_group_id == DConstants::INVALID_INDEX) {
-                    written.Add(bound.sense, bound.k);
-                } else {
-                    written.AddLowered(bound.sense, bound.k);
-                }
-            }
-            // A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
-            // negative). The solve says whether the clauses on the other rows leave a value.
-            for (const auto &constraint : op.prepared.constraints) {
-                if (constraint->lifted_floor == var) {
-                    written.AddLowered('>', constraint->lifted_floor_k);
-                }
-            }
-            if (!written.ContradictsDomain(is_bool)) {
-                continue;
-            }
-            const auto &box = written.Box();
-			// An auxiliary decision (an ABS, a norm) is named by what it stands for.
-			const bool is_aux = var >= num_decide_vars - op.num_auxiliary_vars;
-			string vname = op.decide_variables[var]->GetName();
-			for (auto &label : op.aux_var_expressions) {
-				if (is_aux && label.first == var) {
-					vname = label.second;
-				}
-			}
-			// The clause that set the bound `k`, as written (`max(x) <= -5` as much as `x <= -5`, a strict
-			// `x < 0` as typed rather than the folded `x <= -1`).
-			auto written_bound = [&](bool upper, double k) {
-				for (const auto &bound : user_singleton_row_bounds) {
-					if (bound.decide_var_idx == var && bound.sense != (upper ? '>' : '<') && bound.k == k &&
-					    bound.source_clause_id < op.constraint_sources.size()) {
-						auto &source = op.constraint_sources[bound.source_clause_id];
-						return QuoteWrittenClause(source);
-					}
-				}
-				return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", k);
-			};
-			if (is_bool) {
-				// Both sides can contradict at once (`x <= -1 AND x >= 2`); the upper bound is reported.
-				bool upper = box.upper < 0.0;
-				throw InvalidInputException(
-				    StringUtil::Format("DECIDE optimization is infeasible: %s cannot hold for a BOOL variable.",
-				                       written_bound(upper, upper ? box.upper : box.lower)));
-			}
-			if (is_aux) {
-				throw InvalidInputException(StringUtil::Format(
-				    "DECIDE optimization is infeasible: %s cannot hold because %s is never negative.",
-				    written_bound(true, box.upper), vname));
-			}
-			throw InvalidInputException(StringUtil::Format(
-			    "DECIDE optimization is infeasible: %s cannot hold because %s is non-negative (>= 0). "
-			    "Add an explicit lower bound if it may be negative.",
-			    written_bound(true, box.upper), vname));
-		}
-
-		// Minimal: keep constructor lean; detailed solver output comes from HiGHS
-	}
-
-    mutex lock;
-	unique_ptr<DecideDescent> descent;
-	idx_t descent_rows = 0;
-    // This collection will hold all the data from the child operator
-    ColumnDataCollection data;
-
-    //! Needed to evaluate coefficient expressions against the materialized rows.
-    ClientContext &context;
-
-    const PhysicalDecide &op;
-    DecideCanonicalizer canonicalizer;
-
-    //! The flattened constraints and objective, decided by BuildDecidePreparedModel
-    //! (stage 05). Aliases rather than copies: this state evaluates their
-    //! coefficients against the data, it does not derive or alter their shape.
-    const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
-    const vector<unique_ptr<DecideConstraint>> &singleton_row_constraints = op.prepared.singleton_row_constraints;
-    const unique_ptr<DecideObjective> &objective = op.prepared.objective;
-
-    //! Local copies of the decision column box and the singleton-row-bound records that
-    //! DecideOptimizer::FoldSingletonRows resolved. Finalize copies the box into
-    //! solver_input; the records quote a bound that contradicts its domain and re-open its
-    //! direction of the rigid box, while its clause reaches the repair model through
-    //! `singleton_row_constraints`.
-    vector<DecideBoundBox> singleton_row_boxes;
-    vector<UserBoundSpec> user_singleton_row_bounds;
-
-    //===--------------------------------------------------------------------===//
-    // Evaluated Coefficients (Phase 2)
-    //===--------------------------------------------------------------------===//
-
-    vector<EvaluatedConstraint> evaluated_constraints;
-    //! `singleton_row_constraints`, evaluated under DIAGNOSE for the repair model alone.
-    vector<EvaluatedConstraint> evaluated_singleton_row_constraints;
-    //! The classes each aggregate-shape row's group stands for (D28), referenced from the
-    //! rows; filled under DIAGNOSE only and moved into SolverInput::class_sets.
-    vector<SolverInput::ClassSet> class_sets;
-    //! The value rewrite's helper decisions, each with its reducer's members evaluated
-    //! (EvaluateReducerValueLinks); moved into SolverInput::reducer_value_links.
-    vector<ReducerValueLinkSpec> evaluated_value_links;
-    vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
-    vector<idx_t> objective_variable_indices;
-
-    // Quadratic objective: evaluated inner linear expression coefficients
-    vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]
-    vector<idx_t> quadratic_variable_indices;
-    bool has_quadratic_objective = false;
-    double quadratic_sign = 1.0;
-
-    // Bilinear objective: pairs of different decide variables with data coefficients.
-    // Reuses EvaluatedConstraint::BilinearTerm (solver_input.hpp) rather than declaring
-    // a field-identical duplicate — the two are populated by the same shared evaluator.
-    vector<EvaluatedConstraint::BilinearTerm> evaluated_bilinear_terms;
-
-    vector<double> ilp_solution;
-    VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
-
-	//! The frame selectors' timelines and selections (PhysicalDecide::BuildFrames), one per
-	//! frame, in LogicalDecide::frames order.
-	vector<DecideFrameMap> frame_maps;
-	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
-	//! a decision and a frame once, the variable after the plan's decisions.
-	vector<std::pair<idx_t, idx_t>> frame_reads;
-	//! A reference to each column the frames computed (DecidePreparedModel::frame_columns), held for the
-	//! query so the chunk expression cache, keyed by node, never meets a freed one.
-	vector<unique_ptr<Expression>> frame_column_refs;
-	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
-	//! whose definition reads an instance with none there (D88, PhysicalDecide::BuildKeyedMappings); empty where none.
-	vector<vector<bool>> absent_reads;
-	//! Per clause (its source clause id), the instances its rows hold once grouped, and those left once each with no
-	//! value is skipped (deck pp. 50, 56): the most any of its rows holds, as a rewrite states the clause's instances
-	//! in each of its rows (PhysicalDecide::ReportSkippedInstances).
-	struct ClauseInstances {
-		idx_t grouped = 0;
-		idx_t kept = 0;
-	};
-	map<idx_t, ClauseInstances> clause_instances;
-	void CountInstances(idx_t source_clause_id, idx_t grouped, idx_t kept) {
-		if (source_clause_id == DConstants::INVALID_INDEX) {
-			return;
-		}
-		auto &counts = clause_instances[source_clause_id];
-		counts.grouped = MaxValue(counts.grouped, grouped);
-		counts.kept = MaxValue(counts.kept, kept);
-	}
-
-	//! The variable a term reads at each row: its own, or -- for a frame's payload term --
-	//! the read of it at the row the frame selects. A query-wide decision has one column,
-	//! which every row reads, so it is its own read.
-	idx_t ReadVariable(const DecideTerm &term) {
-		if (term.frame_read == DConstants::INVALID_INDEX) {
-			return term.variable_index;
-		}
-		auto var = term.variable_index;
-		if (var < op.variable_scopes.size() && op.variable_scopes[var].IsGlobal()) {
-			return var;
-		}
-		auto read = std::make_pair(var, term.frame_read);
-		auto it = std::find(frame_reads.begin(), frame_reads.end(), read);
-		if (it == frame_reads.end()) {
-			frame_reads.push_back(read);
-			it = frame_reads.end() - 1;
-		}
-		return op.decide_variables.size() + static_cast<idx_t>(it - frame_reads.begin());
-	}
-
-	//! Set when the solve failed under DIAGNOSE: the findings were handed off instead of
-    //! raised, so there is no solution to read back and this operator emits no rows. The
-    //! DIAGNOSE operator above turns the handoff into the answer.
-    bool diagnosis_only = false;
-};
 
 //! Late materialization of the group names extraction made: each names its group by a row, which falls in one group
 //! of its key's final grouping, computed over every row a clause read the key on. So a group is spelled one way in
@@ -2737,6 +2456,23 @@ vector<bool> PhysicalDecide::ValueLinkMembers(ClientContext &context, DecideGlob
 	return read;
 }
 
+//! Why a query has no arm, empty when it has one: its first shape with none (DecideModelEmitter::Uncovered), else a
+//! node the tree computes no value for yet (DecideTreeColumns::Uncomputed). `counter` counts in DECIDB_PROFILE each
+//! query that had none, and DECIDB_TREE_COVERAGE_LOG gets a line per query, the reason after `counter`, or `covered`.
+static string TreeCoverage(const char *counter, const DecideTree &tree, const PhysicalDecide &op) {
+	auto reason = DecideModelEmitter::Uncovered(tree, op);
+	if (reason.empty()) {
+		reason = DecideTreeColumns::Uncomputed(tree);
+	}
+	if (!reason.empty()) {
+		DecideProfileScope::Counter(counter, 1);
+	}
+	if (const char *path = std::getenv("DECIDB_TREE_COVERAGE_LOG")) {
+		std::ofstream(path, std::ios::app) << (reason.empty() ? string("covered") : counter + (": " + reason)) << "\n";
+	}
+	return reason;
+}
+
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     DecideProfileScope profile("execution.finalize");
@@ -2776,139 +2512,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // by every other call site that asks for the same expression set.
     PerGroupCache per_group_cache;
 
-	// The descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a row is the
-	// position the buffer gives it, the one every later phase reads.
+	// A query the tree has an arm for is evaluated by it and formulated as flat's; one with none takes the interim
+	// formulator.
 	if (tree && (SelectedDecideEvaluator() == DecideEvaluator::TREE ||
 	             SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE)) {
-		gstate.descent = make_uniq<DecideDescent>(*tree, context);
-		DecideInputScans() = 0;
-		DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
-			AppendDecideDescent(*gstate.descent, chunk, offset);
-			gstate.descent_rows += chunk.size();
-		});
-		gstate.descent->Finish();
-		if (std::getenv("DECIDB_DUMP_BODIES")) {
-			fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
+		if (!TreeCoverage("execution.tree_fallback", *tree, *this).empty()) {
+			return FinalizeWithTreeFormulator(context, gstate, num_rows, bench, model_timer, solver_timer);
 		}
-		DecideTreeEvaluation values(*tree, *gstate.descent, context);
-		values.Evaluate();
-		values.RequireSupported();
-		for (auto root : tree->roots) {
-			auto &node = *tree->nodes[root];
-			if (node.objective || node.hidden || node.folded || node.repair_rows) {
-				continue;
-			}
-			auto &result = values.Results()[root];
-			gstate.CountInstances(node.source_clause_id, result.held, result.instance_entries.size());
-		}
-		ReportSkippedInstances(gstate, false);
-		if (std::getenv("DECIDB_DUMP_TREE")) {
-			fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
-		}
-		if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
-			fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n",
-			        gstate.descent->Dump().c_str());
-		}
-		if (std::getenv("DECIDB_DUMP_VALUES")) {
-			fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", values.Dump().c_str());
-		}
-		SolverInput solver_input;
-		solver_input.num_rows = num_rows;
-		solver_input.num_decide_vars = decide_variables.size();
-		solver_input.first_frame_read = solver_input.num_decide_vars;
-		solver_input.variable_scopes = variable_scopes;
-		solver_input.variable_scopes.resize(solver_input.num_decide_vars, DecideVarScopeInfo::Row());
-		solver_input.sense = decide_sense;
-		solver_input.objective_constant = objective_constant_offset;
-		solver_input.constraint_sources = constraint_sources;
-		solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
-		auto &groups = gstate.descent->DecisionGroups();
-		auto &rows = gstate.descent->DecisionRows();
-		solver_input.keyed_mappings.resize(groups.size());
-		for (idx_t scope = 0; scope < groups.size(); scope++) {
-			auto &mapping = solver_input.keyed_mappings[scope];
-			mapping.num_classes = groups[scope].size();
-			mapping.row_to_class = rows[scope];
-			for (auto &group : mapping.row_to_class) {
-				if (group == DConstants::INVALID_INDEX) {
-					if (mapping.absent_class == DConstants::INVALID_INDEX) {
-						mapping.absent_class = mapping.num_classes++;
-					}
-					group = mapping.absent_class;
-				} else {
-					group = groups[scope][group].rank;
-				}
-			}
-		}
-		vector<string> variable_names;
-		for (idx_t var = 0; var < decide_variables.size(); var++) {
-			auto &variable = *decide_variables[var];
-			const bool boolean = var < is_boolean_var.size() && is_boolean_var[var];
-			solver_input.variable_types.push_back(boolean ? LogicalType::BOOLEAN : variable.return_type);
-			variable_names.push_back(variable.GetName());
-			solver_input.lower_bounds.push_back(gstate.singleton_row_boxes[var].EffectiveLower());
-			solver_input.upper_bounds.push_back(gstate.singleton_row_boxes[var].upper);
-			if (var < tree->value_nodes.size() && tree->value_nodes[var] != DConstants::INVALID_INDEX) {
-				solver_input.variable_scopes[var].scope = DecideVarScope::INLINED;
-			}
-		}
-		solver_input.rigid_lower_bounds = solver_input.lower_bounds;
-		solver_input.rigid_upper_bounds = solver_input.upper_bounds;
-		for (auto &bound : gstate.user_singleton_row_bounds) {
-			auto variable = bound.decide_var_idx;
-			const bool boolean = variable < is_boolean_var.size() && is_boolean_var[variable];
-			if (bound.sense == '<' || bound.sense == '=') {
-				solver_input.rigid_upper_bounds[variable] = boolean ? 1.0 : NumericLimits<double>::Maximum();
-			}
-			if (bound.sense == '>' || bound.sense == '=') {
-				solver_input.rigid_lower_bounds[variable] = boolean ? 0.0 : -NumericLimits<double>::Maximum();
-			}
-		}
-		auto indexer = VarIndexer::Build(solver_input);
-		unique_ptr<ElasticFormulation> elastic;
-		if (diagnose) {
-			elastic = make_uniq<ElasticFormulation>();
-			elastic->input = solver_input;
-			elastic->var_indexer = indexer;
-			elastic->formulate = [&](SolverInput &repair_input, VarIndexer &repair_indexer) {
-				// The snapshot's raw rows serve only to size the widened box. Rebuild every row and auxiliary.
-				repair_input.global_constraints.clear();
-				FormulateDecideTree(*tree, *gstate.descent, values, repair_input, repair_indexer,
-				                   NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs},
-				                   variable_names, true);
-				repair_indexer.total_vars = repair_indexer.global_block_start + repair_input.num_global_vars;
-			};
-		}
-		FormulateDecideTree(*tree, *gstate.descent, values, solver_input, indexer,
-		                   NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs}, variable_names);
-		if (elastic) {
-			elastic->input.global_constraints = solver_input.global_constraints;
-			for (auto &polynomial : solver_input.raw_quadratic_constraints) {
-				elastic->input.global_constraints.push_back(polynomial.linear);
-			}
-			// Data bounds refine individual instances during tree formulation. Their hull gives the repair box
-			// finite starting magnitudes; each bound is emitted as a loosenable row when repair is formulated.
-			for (idx_t var = 0; var < solver_input.num_decide_vars; var++) {
-				const auto count = indexer.NamedInstances(var);
-				if (!count) {
-					continue;
-				}
-				double lower = NumericLimits<double>::Maximum(), upper = -NumericLimits<double>::Maximum();
-				for (idx_t instance = 0; instance < count; instance++) {
-					lower = MinValue(lower, solver_input.InstanceBoxLower(var, instance, solver_input.lower_bounds));
-					upper = MaxValue(upper, solver_input.InstanceBoxUpper(var, instance, solver_input.upper_bounds));
-				}
-				elastic->input.lower_bounds[var] = lower;
-				elastic->input.upper_bounds[var] = upper;
-			}
-		}
-		indexer.total_vars = indexer.global_block_start + solver_input.num_global_vars;
-		ReportAnEmptyObjective(solver_input);
-		EvaluatedClauses evaluated;
-		DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
-		DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
-		return FinalizeSolveResult(context, gstate, solver_input, indexer, evaluated, elastic.get(), bench, model_timer,
-		                           solver_timer);
 	}
 	DecideRowStore row_store(context, gstate.data);
 	vector<KeyedMapping> keyed_mappings;
@@ -2923,7 +2533,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 		                 evaluated);
 		break;
 	default:
-		throw NotImplementedException("DECIDB_EVALUATOR: the tree evaluator is not built yet");
+		// Every evaluator but flat requests the tree (DecideTreeRequested).
+		D_ASSERT(tree);
+		EvaluateTree(context, gstate, num_rows, gstate.descent, keyed_mappings, false);
+		break;
 	}
 
     //===--------------------------------------------------------------------===//
@@ -2969,6 +2582,174 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                bench, model_timer, solver_timer);
 }
 
+void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                  unique_ptr<DecideDescent> &descent, vector<KeyedMapping> &keyed_mappings,
+                                  bool silent) const {
+	// Top-down: the descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a
+	// row is the position the buffer gives it, the one every later phase reads.
+	DecideProfileScope phase("execution.tree_descent");
+	descent = make_uniq<DecideDescent>(*tree, context);
+	DecideInputScans() = 0;
+	DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
+		AppendDecideDescent(*descent, chunk, offset);
+		gstate.descent_rows += chunk.size();
+	});
+	descent->Finish();
+	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
+	// One ledger for the evaluation: what the descent's routing raised, then what the programs raise where a read
+	// reaches them, each at its rank in flat's order; the least is raised once every phase has run.
+	DecideErrorLedger errors;
+	errors.Append(descent->Errors());
+	if (!silent && std::getenv("DECIDB_DUMP_BODIES")) {
+		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
+	}
+	if (!silent && std::getenv("DECIDB_DUMP_TREE")) {
+		fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
+	}
+	if (!silent && std::getenv("DECIDB_DUMP_CONTAINERS")) {
+		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", descent->Dump().c_str());
+	}
+	// The bottom-up values are the interim interpreter's, run for this dump alone: the columns keep no dump.
+	if (!silent && std::getenv("DECIDB_DUMP_VALUES")) {
+		DecideTreeEvaluation values(*tree, *descent, context);
+		values.Evaluate();
+		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", values.Dump().c_str());
+	}
+	// Bottom-up: each node's programs over its entries, written as stage 06 reads them, in flat's order.
+	phase.Next("execution.tree_model");
+	const auto names = Names();
+	DecideTreeColumns columns(
+	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
+	DecideModelEmitter emitter(*this, *tree, *descent, columns, gstate, names, num_rows);
+	keyed_mappings = emitter.KeyedMappings();
+	emitter.Constraints();
+	// Flat reports what the data left of each clause once its clauses are read, unless one raised.
+	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
+		ReportSkippedInstances(gstate, silent);
+	}
+	errors.ThrowIfAny();
+}
+
+//! The interim formulator's Finalize, for a query the model emitter has no arm for yet: the descent, the
+//! per-entry evaluation and TreeFormulator. It goes when every shape has an arm.
+SinkFinalizeType PhysicalDecide::FinalizeWithTreeFormulator(ClientContext &context, DecideGlobalSinkState &gstate,
+                                                            idx_t num_rows, bool bench, Profiler &model_timer,
+                                                            Profiler &solver_timer) const {
+	// The descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a row is the
+	// position the buffer gives it, the one every later phase reads.
+	gstate.descent = make_uniq<DecideDescent>(*tree, context);
+	DecideInputScans() = 0;
+	DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
+		AppendDecideDescent(*gstate.descent, chunk, offset);
+		gstate.descent_rows += chunk.size();
+	});
+	gstate.descent->Finish();
+	if (std::getenv("DECIDB_DUMP_BODIES")) {
+		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
+	}
+	DecideTreeEvaluation values(*tree, *gstate.descent, context);
+	values.Evaluate();
+	values.RequireSupported();
+	for (auto root : tree->roots) {
+		auto &node = *tree->nodes[root];
+		if (node.objective || node.hidden || node.folded || node.repair_rows) {
+			continue;
+		}
+		auto &result = values.Results()[root];
+		gstate.CountInstances(node.source_clause_id, result.held, result.instance_entries.size());
+	}
+	ReportSkippedInstances(gstate, false);
+	if (std::getenv("DECIDB_DUMP_TREE")) {
+		fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
+	}
+	if (std::getenv("DECIDB_DUMP_CONTAINERS")) {
+		fprintf(stderr, "DECIDB_CONTAINERS_BEGIN\n%sDECIDB_CONTAINERS_END\n", gstate.descent->Dump().c_str());
+	}
+	if (std::getenv("DECIDB_DUMP_VALUES")) {
+		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", values.Dump().c_str());
+	}
+	SolverInput solver_input;
+	solver_input.num_rows = num_rows;
+	solver_input.num_decide_vars = decide_variables.size();
+	solver_input.first_frame_read = solver_input.num_decide_vars;
+	solver_input.variable_scopes = variable_scopes;
+	solver_input.variable_scopes.resize(solver_input.num_decide_vars, DecideVarScopeInfo::Row());
+	solver_input.sense = decide_sense;
+	solver_input.objective_constant = objective_constant_offset;
+	solver_input.constraint_sources = constraint_sources;
+	solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
+	solver_input.keyed_mappings = DecideDeclaredMappings(*gstate.descent);
+	vector<string> variable_names;
+	for (idx_t var = 0; var < decide_variables.size(); var++) {
+		auto &variable = *decide_variables[var];
+		const bool boolean = var < is_boolean_var.size() && is_boolean_var[var];
+		solver_input.variable_types.push_back(boolean ? LogicalType::BOOLEAN : variable.return_type);
+		variable_names.push_back(variable.GetName());
+		solver_input.lower_bounds.push_back(gstate.singleton_row_boxes[var].EffectiveLower());
+		solver_input.upper_bounds.push_back(gstate.singleton_row_boxes[var].upper);
+		if (var < tree->value_nodes.size() && tree->value_nodes[var] != DConstants::INVALID_INDEX) {
+			solver_input.variable_scopes[var].scope = DecideVarScope::INLINED;
+		}
+	}
+	solver_input.rigid_lower_bounds = solver_input.lower_bounds;
+	solver_input.rigid_upper_bounds = solver_input.upper_bounds;
+	for (auto &bound : gstate.user_singleton_row_bounds) {
+		auto variable = bound.decide_var_idx;
+		const bool boolean = variable < is_boolean_var.size() && is_boolean_var[variable];
+		if (bound.sense == '<' || bound.sense == '=') {
+			solver_input.rigid_upper_bounds[variable] = boolean ? 1.0 : NumericLimits<double>::Maximum();
+		}
+		if (bound.sense == '>' || bound.sense == '=') {
+			solver_input.rigid_lower_bounds[variable] = boolean ? 0.0 : -NumericLimits<double>::Maximum();
+		}
+	}
+	auto indexer = VarIndexer::Build(solver_input);
+	unique_ptr<ElasticFormulation> elastic;
+	if (diagnose) {
+		elastic = make_uniq<ElasticFormulation>();
+		elastic->input = solver_input;
+		elastic->var_indexer = indexer;
+		elastic->formulate = [&](SolverInput &repair_input, VarIndexer &repair_indexer) {
+			// The snapshot's raw rows serve only to size the widened box. Rebuild every row and auxiliary.
+			repair_input.global_constraints.clear();
+			FormulateDecideTree(*tree, *gstate.descent, values, repair_input, repair_indexer,
+			                    NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs},
+			                    variable_names, true);
+			repair_indexer.total_vars = repair_indexer.global_block_start + repair_input.num_global_vars;
+		};
+	}
+	FormulateDecideTree(*tree, *gstate.descent, values, solver_input, indexer,
+	                    NativeConstructPolicy {use_native_constructs.min_max, force_native_constructs}, variable_names);
+	if (elastic) {
+		elastic->input.global_constraints = solver_input.global_constraints;
+		for (auto &polynomial : solver_input.raw_quadratic_constraints) {
+			elastic->input.global_constraints.push_back(polynomial.linear);
+		}
+		// Data bounds refine individual instances during tree formulation. Their hull gives the repair box
+		// finite starting magnitudes; each bound is emitted as a loosenable row when repair is formulated.
+		for (idx_t var = 0; var < solver_input.num_decide_vars; var++) {
+			const auto count = indexer.NamedInstances(var);
+			if (!count) {
+				continue;
+			}
+			double lower = NumericLimits<double>::Maximum(), upper = -NumericLimits<double>::Maximum();
+			for (idx_t instance = 0; instance < count; instance++) {
+				lower = MinValue(lower, solver_input.InstanceBoxLower(var, instance, solver_input.lower_bounds));
+				upper = MaxValue(upper, solver_input.InstanceBoxUpper(var, instance, solver_input.upper_bounds));
+			}
+			elastic->input.lower_bounds[var] = lower;
+			elastic->input.upper_bounds[var] = upper;
+		}
+	}
+	indexer.total_vars = indexer.global_block_start + solver_input.num_global_vars;
+	ReportAnEmptyObjective(solver_input);
+	EvaluatedClauses evaluated;
+	DecideProfileScope::Counter("execution.input_scans", static_cast<double>(DecideInputScans()));
+	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
+	return FinalizeSolveResult(context, gstate, solver_input, indexer, evaluated, elastic.get(), bench, model_timer,
+	                           solver_timer);
+}
+
 void PhysicalDecide::Evaluate(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                               DecideRowStore &row_store, ChunkExprCache &chunk_expr_cache,
                               PerGroupCache &per_group_cache, vector<KeyedMapping> &keyed_mappings,
@@ -2982,8 +2763,10 @@ void PhysicalDecide::Evaluate(ClientContext &context, DecideGlobalSinkState &gst
 
 	DecideProfileScope phase("execution.one_pass");
 	RegisterEvaluation(context, chunk_expr_cache, row_store);
+	// A structural dump under flat reads the tree's own descent, walked beside the pass (D10): only in the run that
+	// prints.
 	unique_ptr<DecideDescent> descent;
-	if (tree) {
+	if (tree && !silent && DecideTreeDumpRequested()) {
 		descent = make_uniq<DecideDescent>(*tree, context);
 		if (!silent && std::getenv("DECIDB_DUMP_TREE")) {
 			fprintf(stderr, "DECIDB_TREE_BEGIN\n%sDECIDB_TREE_END\n", tree->ToString().c_str());
@@ -3335,9 +3118,17 @@ void PhysicalDecide::VerifyEvaluation(ClientContext &context, DecideGlobalSinkSt
 	EvaluatedClauses second_evaluated;
 	ErrorData second_error;
 	DecideEvaluationRecord second;
+	// The second run is the tree's where it has an arm for the query, flat's again where it has none. Its descent
+	// outlives the record, whose names read it.
+	const auto reason = TreeCoverage("verify.no_arm", *tree, *this);
+	unique_ptr<DecideDescent> second_descent;
 	try {
-		Evaluate(context, gstate, num_rows, second_store, second_chunk_exprs, second_groups, second_mappings,
-		         second_evaluated, true);
+		if (reason.empty()) {
+			EvaluateTree(context, gstate, num_rows, second_descent, second_mappings, true);
+		} else {
+			Evaluate(context, gstate, num_rows, second_store, second_chunk_exprs, second_groups, second_mappings,
+			         second_evaluated, true);
+		}
 		second = RecordEvaluation(gstate, num_rows, second_groups, second_mappings, second_evaluated);
 	} catch (std::exception &ex) {
 		second_error = ErrorData(ex);
@@ -3808,34 +3599,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         auto &constraint =
             c < num_constraints ? gstate.constraints[c] : gstate.singleton_row_constraints[c - num_constraints];
 
-        EvaluatedConstraint eval_const;
-        eval_const.comparison_type = constraint->comparison_type;
-        eval_const.source_clause_id = constraint->source_clause_id;
-        eval_const.repair_group_id = c;
-        eval_const.removal_group_id = constraint->removal_group_id;
-        // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
-        eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
-        eval_const.lifted_floor = constraint->lifted_floor;
-        eval_const.minmax_clause_idx = constraint->minmax_clause_idx;
-        eval_const.minmax_agg_type = constraint->minmax_agg_type;
-        eval_const.ne_clause_idx = constraint->ne_clause_idx;
-        eval_const.abs_aux_idx = constraint->abs_aux_idx;
-        eval_const.abs_is_pos_bound = constraint->abs_is_pos_bound;
-        eval_const.kind = constraint->kind;
-
-        // Initialize result storage
-        eval_const.row_coefficients.resize(constraint->lhs_terms.size());
-
-
-        // Store variable indices for all terms (before scanning data). Capture each term's
-        // symbolic coefficient label too (`l_extendedprice` for `buy * l_extendedprice`) so
-        // infeasible diagnosis can render a data-weighted SUM clause symbolically instead of
-        // dumping the per-row numeric fan-out.
-        for (auto &term : constraint->lhs_terms) {
-			eval_const.variable_indices.push_back(gstate.ReadVariable(term));
-			eval_const.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName()
-                                                                      : string());
-        }
+		auto eval_const = InitializeEvaluatedConstraint(
+		    *constraint, c, [&](const DecideTerm &term) { return gstate.ReadVariable(term); });
 
         vector<TermFilterState> term_filters(constraint->lhs_terms.size());
         vector<TermFilterState> bilinear_filters(constraint->bilinear_terms.size());
@@ -4214,36 +3979,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// Evaluate RHS: a constant, or a value of each row.
 
 		clause_phase.Next("extraction.rhs");
-		eval_const.rhs_written = RenderDecideSource(*constraint->rhs_expr, names);
-		if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
-            double rhs_constant = const_expr.value.GetValue<double>();
-            eval_const.rhs_values.AssignScalar(num_rows, rhs_constant);
-            // A constant RHS is one editable scalar shared across every row this
-            // clause emits, so the elastic engine collapses them to one shared slack.
-            eval_const.rhs_is_shared_scalar = true;
-		} else {
-			// A bound of data, read per row. The optimizer's bound-side window rewrite made each reducer on it a
-			// column, and the bound of a clause in the aggregate shape its group's tightest value, already checked by
-			// the VALUE_IS_VALID scope checks. A row-wise bound is checked here, as it is read.
-			// Canonicalization classifies the complete rebuilt bound. This is what
-			// keeps forward/reversed subquery spellings and arithmetic over query-wide
-			// values equivalent without re-deciding shape in the physical layer.
-			eval_const.rhs_is_shared_scalar = IsQueryWideBoundTag(constraint->rhs_expr->GetAlias());
-			// Capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
-			// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
-			// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
-			if (!eval_const.rhs_is_shared_scalar &&
-                !ContainsScalarSubqueryProvenance(*constraint->rhs_expr)) {
-				eval_const.rhs_label = RenderDecideSource(*constraint->rhs_expr, source_fragments, keyed_scopes, &keys);
-			}
-			eval_const.rhs_values.Reserve(num_rows);
-		}
+		const bool rhs_per_row =
+		    DescribeBound(*constraint, num_rows, names, source_fragments, keyed_scopes, keys, eval_const);
 
 		// One pass over the rows reads what each row holds: a right side of data, and, for a bound on one decision,
 		// the values it admits there, which the model builder folds into the decision's column. The right side is
 		// read first, so a NULL or NaN there is reported as the right side's.
-		bool rhs_per_row = constraint->rhs_expr->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT;
 		bool admitted = constraint->admitted_lower != nullptr;
 		const bool tightest_frame_bound = rhs_per_row && constraint->tightest_frame_bound;
 		vector<bool> bound_null(tightest_frame_bound ? num_rows : 0, false);

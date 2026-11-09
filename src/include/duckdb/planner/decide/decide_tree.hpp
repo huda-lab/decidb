@@ -164,8 +164,8 @@ struct DecideNode {
 	vector<DecideProgram> programs;
 	vector<idx_t> tests;
 	//! The source columns its programs read beyond `columns` (a query-wide scale on a reducer's operand), as chunk
-	//! references. They are no field and split no entry; the descent does not carry them on its entries yet, so a
-	//! program that reads one has no value there.
+	//! references. Its entries carry them (DecideDescentEntry::program_columns), but they are no field and split no
+	//! entry.
 	vector<unique_ptr<Expression>> program_columns;
 };
 

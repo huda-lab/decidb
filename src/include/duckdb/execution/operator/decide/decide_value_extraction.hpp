@@ -16,6 +16,7 @@
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 #include <functional>
+#include <map>
 
 namespace duckdb {
 
@@ -53,6 +54,18 @@ void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row
 //! The same, with one set of rows for every expression; without one, every row.
 void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset, const vector<bool> *rows,
                        DataChunk &results);
+
+//! Whether an error stops the query wherever it is raised, rather than belonging to the row it is raised on.
+bool DecideErrorStopsTheQuery(const ErrorData &error);
+
+//! Expression `expr_idx` of `*executor` (`lowered`) on `chunk`, whose first row is row `offset` of what it is evaluated
+//! over, into `values` from `offset` on. When a row raises, each row is evaluated alone, a failing one keeping its
+//! error in `errors` and NULL; the executor, whose states the failure may have left half written, is made again by
+//! `remake`. So an error waits for a read that reaches its row (language/guide.md §6.3), and the one pass's rows
+//! (DecideRowStore) and a tree node's entries (DecideTreeColumns) are evaluated alike.
+void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor> &executor, idx_t expr_idx,
+                          const std::function<unique_ptr<ExpressionExecutor>()> &remake, const Expression &lowered,
+                          Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset);
 
 //! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and how a message reads one of them on the
 //! row the coefficient fails on: `value_at(input, i)` is its value at row i of the window the coefficient was computed
@@ -131,5 +144,18 @@ idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t
 //! is every row in one group.
 void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t num_rows, vector<idx_t> &row_group_ids,
                        idx_t &num_groups);
+
+//! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
+//! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable) and coefficient as written, which
+//! a diagnosis renders a data-weighted clause with.
+EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
+                                                  const std::function<idx_t(const DecideTerm &)> &read_variable);
+
+//! How a message and a repair name `constraint`'s bound (EvaluatedConstraint::rhs_written, rhs_label), whether one
+//! editable value stands for it on every row, and a constant's value there. Returns whether it is read on each row
+//! instead.
+bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const DecideSourceNames &names,
+                   const vector<string> &source_fragments, const vector<KeyedScopeInfo> &keyed_scopes,
+                   const vector<DecideKey> &keys, EvaluatedConstraint &evaluated);
 
 } // namespace duckdb

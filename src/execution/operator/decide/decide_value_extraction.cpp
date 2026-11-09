@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -161,6 +162,53 @@ void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row
 		return;
 	}
 	ExecuteOnReadRows(executor, chunk, row_offset, vector<const vector<bool> *>(results.ColumnCount(), rows), results);
+}
+
+bool DecideErrorStopsTheQuery(const ErrorData &error) {
+	auto type = error.Type();
+	return type == ExceptionType::INTERRUPT || type == ExceptionType::OUT_OF_MEMORY || type == ExceptionType::FATAL;
+}
+
+void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor> &executor, idx_t expr_idx,
+                          const std::function<unique_ptr<ExpressionExecutor>()> &remake, const Expression &lowered,
+                          Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset) {
+	const idx_t count = chunk.size();
+	const auto &type = lowered.return_type;
+	Vector out(type);
+	try {
+		executor->SetChunk(chunk);
+		executor->ExecuteExpression(expr_idx, out);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (DecideErrorStopsTheQuery(error)) {
+			throw;
+		}
+		executor = remake();
+		Vector rows(type);
+		auto row_executor = make_uniq<ExpressionExecutor>(context, lowered);
+		for (idx_t i = 0; i < count; i++) {
+			SelectionVector at_row(1);
+			at_row.set_index(0, i);
+			DataChunk row;
+			row.InitializeEmpty(chunk.GetTypes());
+			row.Slice(chunk, at_row, 1);
+			Vector value(type);
+			try {
+				row_executor->ExecuteExpression(row, value);
+				rows.SetValue(i, value.GetValue(0));
+			} catch (std::exception &row_ex) {
+				ErrorData row_error(row_ex);
+				if (DecideErrorStopsTheQuery(row_error)) {
+					throw;
+				}
+				errors.emplace(offset + i, std::move(row_error));
+				rows.SetValue(i, Value(type));
+				row_executor = make_uniq<ExpressionExecutor>(context, lowered);
+			}
+		}
+		out.Reference(rows);
+	}
+	VectorOperations::Copy(out, values, count, 0, offset);
 }
 
 //! Whether `input` is a finite number or NULL on row `row` of the window, the one row a failing coefficient reads.
@@ -335,6 +383,84 @@ void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t num_ro
 			group = DConstants::INVALID_INDEX;
 		}
 	}
+}
+
+//! True when a bound contains a flattened scalar-subquery value. Its bound alias is
+//! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
+//! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
+//! leaking an internal placeholder into a diagnostic suggestion.
+static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
+	if (IsQueryWideValueTag(expr.GetAlias()) || IsRowVaryingSubqueryTag(expr.GetAlias())) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = ContainsScalarSubqueryProvenance(child);
+		}
+	});
+	return found;
+}
+
+EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
+                                                  const std::function<idx_t(const DecideTerm &)> &read_variable) {
+	EvaluatedConstraint evaluated;
+	evaluated.comparison_type = constraint.comparison_type;
+	evaluated.source_clause_id = constraint.source_clause_id;
+	evaluated.repair_group_id = repair_group_id;
+	evaluated.removal_group_id = constraint.removal_group_id;
+	// Preserve whether the original LHS was an aggregate (e.g., SUM(...))
+	evaluated.lhs_is_aggregate = constraint.lhs_is_aggregate;
+	evaluated.lifted_floor = constraint.lifted_floor;
+	evaluated.minmax_clause_idx = constraint.minmax_clause_idx;
+	evaluated.minmax_agg_type = constraint.minmax_agg_type;
+	evaluated.ne_clause_idx = constraint.ne_clause_idx;
+	evaluated.abs_aux_idx = constraint.abs_aux_idx;
+	evaluated.abs_is_pos_bound = constraint.abs_is_pos_bound;
+	evaluated.kind = constraint.kind;
+
+	// Initialize result storage
+	evaluated.row_coefficients.resize(constraint.lhs_terms.size());
+
+	// Store variable indices for all terms (before scanning data). Capture each term's
+	// symbolic coefficient label too (`l_extendedprice` for `buy * l_extendedprice`) so
+	// infeasible diagnosis can render a data-weighted SUM clause symbolically instead of
+	// dumping the per-row numeric fan-out.
+	for (auto &term : constraint.lhs_terms) {
+		evaluated.variable_indices.push_back(read_variable(term));
+		evaluated.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName() : string());
+	}
+	return evaluated;
+}
+
+bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const DecideSourceNames &names,
+                   const vector<string> &source_fragments, const vector<KeyedScopeInfo> &keyed_scopes,
+                   const vector<DecideKey> &keys, EvaluatedConstraint &evaluated) {
+	evaluated.rhs_written = RenderDecideSource(*constraint.rhs_expr, names);
+	if (constraint.rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		auto &const_expr = constraint.rhs_expr->Cast<BoundConstantExpression>();
+		double rhs_constant = const_expr.value.GetValue<double>();
+		evaluated.rhs_values.AssignScalar(num_rows, rhs_constant);
+		// A constant RHS is one editable scalar shared across every row this
+		// clause emits, so the elastic engine collapses them to one shared slack.
+		evaluated.rhs_is_shared_scalar = true;
+		return false;
+	}
+	// A bound of data, read per row. The optimizer's bound-side window rewrite made each reducer on it a
+	// column, and the bound of a clause in the aggregate shape its group's tightest value, already checked by
+	// the VALUE_IS_VALID scope checks. A row-wise bound is checked here, as it is read.
+	// Canonicalization classifies the complete rebuilt bound. This is what
+	// keeps forward/reversed subquery spellings and arithmetic over query-wide
+	// values equivalent without re-deciding shape in the physical layer.
+	evaluated.rhs_is_shared_scalar = IsQueryWideBoundTag(constraint.rhs_expr->GetAlias());
+	// Capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
+	// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
+	// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
+	if (!evaluated.rhs_is_shared_scalar && !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
+		evaluated.rhs_label = RenderDecideSource(*constraint.rhs_expr, source_fragments, keyed_scopes, &keys);
+	}
+	evaluated.rhs_values.Reserve(num_rows);
+	return true;
 }
 
 } // namespace duckdb

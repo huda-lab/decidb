@@ -9,6 +9,7 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/vector.hpp"
 
+#include <algorithm>
 #include <tuple>
 
 namespace duckdb {
@@ -34,11 +35,16 @@ struct DecideErrorRank {
 	idx_t step = 0;
 	idx_t clause = DConstants::INVALID_INDEX;
 	idx_t expression = DConstants::INVALID_INDEX;
+	//! Inside an expression's evaluation, the part that raised, in the order flat evaluates its parts: a tree program's
+	//! group and its place in its block (DecideProgram).
+	idx_t group = 0;
+	idx_t position = 0;
 	idx_t row = DConstants::INVALID_INDEX;
 
 	bool operator<(const DecideErrorRank &other) const {
-		return std::tie(phase, step, clause, expression, row) <
-		       std::tie(other.phase, other.step, other.clause, other.expression, other.row);
+		return std::tie(phase, step, clause, expression, group, position, row) <
+		       std::tie(other.phase, other.step, other.clause, other.expression, other.group, other.position,
+		                other.row);
 	}
 };
 
@@ -55,6 +61,14 @@ public:
 			error.Throw();
 		}
 		errors.push_back({rank, error});
+	}
+	//! Another ledger's errors, each at its own rank: one evaluation's walks report as one.
+	void Append(const DecideErrorLedger &other) {
+		errors.insert(errors.end(), other.errors.begin(), other.errors.end());
+	}
+	//! Whether an error ranks in a phase before `phase`: one flat raises before that phase runs.
+	bool HasErrorBefore(DecideErrorPhase phase) const {
+		return std::any_of(errors.begin(), errors.end(), [&](const Entry &entry) { return entry.rank.phase < phase; });
 	}
 	void ThrowIfAny() const {
 		if (errors.empty()) {

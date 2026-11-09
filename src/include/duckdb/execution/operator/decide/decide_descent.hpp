@@ -29,6 +29,8 @@ struct DecideDescentEntry {
 	idx_t instance = DConstants::INVALID_INDEX;
 	vector<Value> signature;
 	vector<Value> columns;
+	//! What its node's programs read beyond `columns` (DecideNode::program_columns): no field, so it splits no entry.
+	vector<Value> program_columns;
 	//! A set E's, per node it depends on, where its row reads that node's value: a G's group, an O's timeline, or the
 	//! row where the O has an `else`, INVALID where the row did not reach it or an E's, read by class (D88). Rows
 	//! equal in sigma, columns and reads are one entry.
