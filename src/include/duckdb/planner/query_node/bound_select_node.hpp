@@ -57,7 +57,7 @@ public:
     vector<unique_ptr<Expression>> decide_variables;
     unique_ptr<Expression> decide_constraints;
     //! Stable display provenance captured before PlanSubqueries and finalized after
-    //! canonicalization. source_fragments preserves casts/subqueries while planning.
+    //! canonicalization. Located nodes are quoted from decide_text, so casts and subqueries read as written.
     vector<ConstraintSourceInfo> decide_constraint_sources;
     //! The DECIDE tail as written, for the canonicalizer to quote a term it respells (NormalizeProducts).
     DecideSourceText decide_text;
