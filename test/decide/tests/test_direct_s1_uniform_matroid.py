@@ -1941,9 +1941,7 @@ def test_s1_a_relation_in_a_class_key_keeps_a_row_whose_column_is_null(decidb_cl
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_s1_a_prepared_parameter_bound_answers_as_the_solver_does(decidb_cli):
-    # A parameter is no constant before it is bound and holds no reducer of the group, so it is not a bound of the
-    # group's own reducers (IsGroupBound), and the prepared query is the solver's. This reaches that arm; neither an
-    # answer nor a plan tells the arm from its removal.
+    # A count bound that is a prepared parameter answers as the solver does, and the prepared query is the solver's.
     prepared = (
         f"PREPARE s1_parameter AS SELECT id, x FROM (FROM (VALUES {_PER_CLASS_ROWS}) t(id, g, score, cap) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= $1 MAXIMIZE SUM(score*x)) q ORDER BY id; EXECUTE s1_parameter(2);"

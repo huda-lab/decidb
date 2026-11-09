@@ -164,15 +164,13 @@ private:
 		if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 			return false;
 		}
-		idx_t reducers = 0;
-		return ReadsOnlyGroupReducers(*comparison.right, GroupKeyOf(comparison), reducers) && reducers > 0;
+		return ReadsOnlyGroupReducers(*comparison.right, GroupKeyOf(comparison));
 	}
 
-	bool ReadsOnlyGroupReducers(const Expression &expr, const vector<const Expression *> &keys, idx_t &reducers) const {
+	bool ReadsOnlyGroupReducers(const Expression &expr, const vector<const Expression *> &keys) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			idx_t scope_idx;
 			auto own = GroupKeyOf(expr);
-			reducers++;
 			return !TryParseQualifiedReducerTag(expr.GetAlias(), scope_idx) && own.size() == keys.size() &&
 			       KeysWithin(own, keys);
 		}
@@ -181,7 +179,7 @@ private:
 		}
 		bool only = true;
 		ExpressionIterator::EnumerateChildren(
-		    expr, [&](const Expression &child) { only = only && ReadsOnlyGroupReducers(child, keys, reducers); });
+		    expr, [&](const Expression &child) { only = only && ReadsOnlyGroupReducers(child, keys); });
 		return only;
 	}
 
