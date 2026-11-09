@@ -92,12 +92,12 @@ unique_ptr<LogicalOperator> DirectProjectionStage::Finish(unique_ptr<LogicalOper
 }
 
 unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSignedValue> &values,
-                                   const std::function<unique_ptr<Expression>(const Expression &)> &over) {
+                                   const std::function<unique_ptr<Expression>(const Expression &)> &over, int sign) {
 	ExpressionBuilder calc(optimizer.context);
 	unique_ptr<Expression> total;
 	for (auto &value : values) {
-		auto term =
-		    DirectScaledTerm(optimizer, over ? over(*value.expr) : value.expr->Copy(), value.sign, false, 1.0, false);
+		auto term = DirectScaledTerm(optimizer, over ? over(*value.expr) : value.expr->Copy(), value.sign * sign, false,
+		                             1.0, false);
 		total = total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
 	}
 	return total;
@@ -107,7 +107,7 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
                                                  DirectProjectionStage &p1, const DirectQuadraticPart &part,
                                                  idx_t decision_count, const vector<ColumnBinding> &source_bindings,
                                                  const std::function<unique_ptr<Expression>(const Expression &)> &over,
-                                                 vector<unique_ptr<Expression>> &checks) {
+                                                 vector<unique_ptr<Expression>> &checks, int constant_sign) {
 	DirectQuadraticColumns columns;
 	// A value is computed and checked only on the rows the part reads.
 	ExprPtr kept;
@@ -138,7 +138,7 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 		if (inner.constant.empty()) {
 			laid.t = p1.Add(calc.Out(calc.Num(0.0)));
 		} else {
-			laid.t = on_kept(calc.Wrap(DirectSumOf(optimizer, inner.constant, over)));
+			laid.t = on_kept(calc.Wrap(DirectSumOf(optimizer, inner.constant, over, constant_sign)));
 			check_number(laid.t, inner.constant_names, inner.constant);
 		}
 		columns.squares.push_back(laid);

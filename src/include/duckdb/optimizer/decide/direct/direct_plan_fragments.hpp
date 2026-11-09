@@ -113,9 +113,11 @@ private:
 };
 
 //! `sum(sign * value)` over proved values, each read as DOUBLE (DirectScaledTerm); null for none. `over` re-points a
-//! value before it is read (null: the value as it is).
+//! value before it is read (null: the value as it is). `sign` multiplies every term's sign: -1 builds the negated sum
+//! from negated terms, with no negation of the sum.
 unique_ptr<Expression> DirectSumOf(Optimizer &optimizer, const vector<DirectSignedValue> &values,
-                                   const std::function<unique_ptr<Expression>(const Expression &)> &over = nullptr);
+                                   const std::function<unique_ptr<Expression>(const Expression &)> &over = nullptr,
+                                   int sign = 1);
 
 //===--------------------------------------------------------------------===//
 // A separable quadratic objective: `a*x^2 + b*x` per decision
@@ -143,12 +145,13 @@ struct DirectQuadraticColumns {
 //! Lays out a part in the projection `p1`: its mask, its sums and its squares, each computed on the rows the part
 //! reads. The check of each value that can fail (DirectCheckNumber) is appended to `checks`; a value NULL on a row the
 //! part drops raises nothing there. `over` re-points a value of the source before it is read (null: as it is), and
-//! `source_bindings` are the source columns `p1` carries first.
+//! `source_bindings` are the source columns `p1` carries first. A rule that reads the opposite of a square's constant
+//! `t` asks for it with `constant_sign` -1: the column then holds `-t`, built from the negated terms.
 DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const ExpressionBuilder &calc,
                                                  DirectProjectionStage &p1, const DirectQuadraticPart &part,
                                                  idx_t decision_count, const vector<ColumnBinding> &source_bindings,
                                                  const std::function<unique_ptr<Expression>(const Expression &)> &over,
-                                                 vector<unique_ptr<Expression>> &checks);
+                                                 vector<unique_ptr<Expression>> &checks, int constant_sign = 1);
 
 //! The columns of each bound clause (DirectBoundClause) in the projection `p1`: its coefficient, right side and
 //! admitted ends, each computed only on the rows the clause keeps (NULL elsewhere), and the row's `when`. The check of

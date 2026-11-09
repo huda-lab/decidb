@@ -407,6 +407,7 @@ private:
 		DirectCarried carried;
 		vector<DirectGroupInputColumns> limit_inputs;
 		ColumnBinding a;
+		//! The linear coefficient oriented as a minimum; the direction -b of a row with no square.
 		ColumnBinding b;
 		ColumnBinding valid;
 	};
@@ -540,9 +541,11 @@ private:
 			result.limit_inputs.push_back(columns);
 		}
 		auto sum = DirectFoldQuadratic(optimizer, calc, condition.parts, raw.parts, 0);
-		auto sense = calc.Num(condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0);
-		result.a = p2.Add(calc.Out(calc.Mul(sense, sum.a)));
-		result.b = p2.Add(calc.Out(calc.Mul(sense, sum.b)));
+		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
+		result.a = p2.Add(calc.Out(calc.Mul(calc.Num(sense), sum.a)));
+		// Without a square the row's target is the direction -b (TargetOf), so b is oriented that way here, and no
+		// column is negated again above it.
+		result.b = p2.Add(calc.Out(calc.Mul(calc.Num(condition.has_square ? sense : -sense), sum.b)));
 		// Every check is true or raises; a row passes when all of them do.
 		result.valid = p2.Add(DirectAllHold(calc, std::move(raw.checks)));
 		return result;
@@ -565,12 +568,12 @@ private:
 		auto b = Double(coefficients.b);
 		auto zero = calc.Num(0.0);
 		// With a square the target -b / (2*K) (DirectTurningPoint). A row with no square has no objective at all.
-		// Without one the direction -b.
+		// Without one the direction, which ComputeCoefficients has stored as b.
 		auto turning = DirectTurningPoint(calc, a, b, false);
 		RowTarget result;
 		result.target = condition.has_square
 		                    ? calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero), turning.target, zero)
-		                    : calc.Neg(b);
+		                    : b;
 		result.value = condition.nonnegative ? calc.Max({result.target, zero}) : result.target;
 		result.loses_precision = turning.loses_precision;
 		return result;

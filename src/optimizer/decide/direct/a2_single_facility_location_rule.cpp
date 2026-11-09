@@ -244,7 +244,8 @@ private:
 //! The columns of a loss over centers: a term's slope and constant (P1), then the row's center and weight (P2).
 struct CenteredColumns : LossColumns {
 	ColumnBinding slope;
-	ColumnBinding constant;
+	//! The term's constant `t`, negated.
+	ColumnBinding minus_constant;
 	ColumnBinding center;
 	ColumnBinding weight;
 };
@@ -274,11 +275,12 @@ public:
 	//! The term's slope and constant.
 	void LayoutRaw(const PlanTools &tools, DirectProjectionStage &p1, const OverSource &over, LossColumns &columns,
 	               vector<unique_ptr<Expression>> &checks) const override {
-		auto laid =
-		    DirectLayoutQuadraticPart(tools.optimizer, tools.calc, p1, term, 1, tools.source_bindings, over, checks);
+		// The center is -t / w, so the constant is laid out negated and no column is negated again above it.
+		auto laid = DirectLayoutQuadraticPart(tools.optimizer, tools.calc, p1, term, 1, tools.source_bindings, over,
+		                                      checks, -1);
 		auto &centered = columns.Cast<CenteredColumns>();
 		centered.slope = laid.squares[0].w;
-		centered.constant = laid.squares[0].t;
+		centered.minus_constant = laid.squares[0].t;
 	}
 
 	//! The row's center and weight. The center divides by the slope, so it warns where the slope, or a nonzero constant
@@ -288,13 +290,13 @@ public:
 		auto &calc = tools.calc;
 		auto &centered = columns.Cast<CenteredColumns>();
 		auto slope = calc.Col(LogicalType::DOUBLE, centered.slope);
-		auto constant = calc.Col(LogicalType::DOUBLE, centered.constant);
+		auto minus_constant = calc.Col(LogicalType::DOUBLE, centered.minus_constant);
 		auto zero = calc.Num(0.0);
 		auto present = calc.And(calc.Not(calc.IsNull(slope)), calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, slope, zero));
-		auto center = calc.If(present, calc.Div(calc.Neg(constant), slope), calc.Constant(Value(LogicalType::DOUBLE)));
+		auto center = calc.If(present, calc.Div(minus_constant, slope), calc.Constant(Value(LogicalType::DOUBLE)));
 		auto row_weight = calc.If(present, calc.Mul(calc.Num(weight), calc.Fn("abs", slope)), zero);
-		auto small_constant = calc.And(calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, constant, zero),
-		                               DirectBelowNormalRange(calc, constant));
+		auto small_constant = calc.And(calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, minus_constant, zero),
+		                               DirectBelowNormalRange(calc, minus_constant));
 		checks.push_back(DirectWarnIf(
 		    calc, calc.Out(calc.And(present, calc.Any({DirectBelowNormalRange(calc, slope), small_constant})))));
 		centered.center = p2.Add(calc.Out(center));
