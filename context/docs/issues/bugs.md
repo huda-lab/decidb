@@ -1,46 +1,5 @@
 # Known bugs
 
-Each entry: short title, location, what's wrong, why it matters, and when it was found. Each of these fails a test of
-DuckDB's own suite (`build/release/test/unittest "test/sql/*"`).
-
-## COMPAT-1 — DeciDB cannot open a database file whose views DuckDB stored
-
-Location: `src/include/duckdb/storage/serialization/query_node.json`, `SelectNode` members 211 (`decide_sense`) and 213
-(`decide_text`), generated as `WriteProperty`/`ReadProperty` in `src/storage/serialization/serialize_query_node.cpp`.
-Every stored `SELECT` carries them and every read requires them, so a view DuckDB stored, which has neither, does not
-load: `Serialization Error: Failed to deserialize: field id mismatch, expected: 211, got: 65535`. The DECIDE members
-beside them (209, 210, 212) are written with a default, which is how DuckDB adds a member to a stored node. Fix: give
-both members the default a `SELECT` without DECIDE holds, so they are written only when set, and regenerate
-(`scripts/generate_serialization.py`); check with `DECIDB_VERIFY_SERIALIZER=1 make decide-test`. Fails
-`test/sql/storage_version/storage_version.test_slow`, `test/sql/storage/bc/test_view_v092.test` and
-`test/sql/attach/attach_huggingface_index.test:12`. Found 2026-11-09 in H-52's gate.
-
-## COMPAT-2 — the `BOOL` keyword quotes DuckDB's names in messages
-
-Location: `third_party/libpg_query/grammar/keywords/unreserved_keywords.list` (`BOOL_P`, for a decision written
-`x(BOOL)`). DuckDB quotes any keyword when it writes a name (`KeywordHelper::RequiresQuotes`,
-`src/parser/keyword_helper.cpp`), so the member `bool` of `UNION(string VARCHAR, bool BOOLEAN)` prints as `"bool"`, and
-a user's column or member named `bool` is quoted in every message and rendered query. Fix direction: the grammar reads a
-decision's type as a name, and the transformer checks it, as DuckDB reads a type name, so DECIDE adds no keyword; if
-another DECIDE keyword is a name DuckDB prints, the same fix covers it. Fails
-`test/sql/index/art/types/test_art_union.test:29`. Found 2026-11-09 in H-52's gate.
-
-## COMPAT-3 — a list comprehension over subscripted names reaches the binder
-
-Location: the grammar (not yet traced). `select [a for a[1], b[2] in [1,2,3,4]]` raises `Binder Error: Invalid lambda
-parameters!` where DuckDB raises `Parser Error: syntax error at or near "["`. First find the grammar change that admits
-it (`git log -p -- third_party/libpg_query/grammar`), then decide whether it is DuckDB's or DeciDB's. Fails
-`test/sql/function/list/lambdas/list_comprehension.test:93`. Found 2026-11-09 in H-52's gate (also failing before it).
-
-## COMPAT-4 — `concurrent_append_metadata_queries` fails intermittently
-
-Location: `DependencyManager::Scan` (`src/catalog/dependency_manager.cpp`) dereferences an unset `optional_ptr` in
-`CatalogSet::Scan` while appends run beside `duckdb_dependencies()`; the database is then invalidated. It failed at line
-22 in one run and at lines 54 to 78 in another. Whether DeciDB causes it is unknown: run the test repeatedly on a build
-of the DuckDB commit DeciDB forked from; if it fails there it is a limitation inside DuckDB (recorded below), otherwise
-bisect. Fails `test/sql/parallelism/interquery/concurrent_append_metadata_queries.test_slow`. Found 2026-11-09 in
-H-52's gate.
-
 ## Limitations (not bugs)
 
 - **Gurobi's non-convex tolerance.** On `SUM(POWER(x, 2)) BY (k) <= 25 MAXIMIZE SUM(POWER(x, 2))`, with optimum 50,

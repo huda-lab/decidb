@@ -28,8 +28,11 @@ DeciDB extends DuckDB's parser and planner to inject a new operator. It register
 - **A physical operator** — `PhysicalDecide`.
 
 The design goal is to keep core DuckDB changes small and DeciDB's own code
-cohesive. Standard SQL is unaffected: the DECIDE-specific tokens are gated, and every
-grammar conflict DECIDE introduces is keyed on a DECIDE token.
+cohesive. Standard SQL is unaffected: the DECIDE-specific tokens are gated, every
+grammar conflict DECIDE introduces is keyed on a DECIDE token, a decision's type is read
+as a name rather than a keyword (DuckDB quotes every keyword it prints), and the DECIDE
+members of a stored `SELECT` are written only when set, so a file DuckDB wrote loads.
+DuckDB's own suite (`build/release/test/unittest "test/sql/*"`) is the check.
 
 ### Edits to existing DuckDB code
 
@@ -94,6 +97,14 @@ Tests: `test/optimizer/statistics/statistics_case.test` (each fold, a nested `CA
 `test_not_distinct_from_to_equal.test`, `test/sql/join/left_outer/test_left_join_perfect_hash.test` (gaps, a NULL probe
 key, a key out of range, duplicate build keys, an empty build), and `test/common/test_decidb_perfect_hash_join.cpp`
 (which join types the executor takes).
+
+One edit fixes a defect in DuckDB itself. `StringUtil::CILessThan` (`common/string_util.cpp`), the order of every
+case-insensitive catalog map, compares the common prefix and then puts the shorter string first. It used to read the
+end of the shorter string as a NUL, so a name prefix was equal to every longer key that continues it with the NUL
+separator dependency keys use, which is not a strict weak ordering. `CatalogSet::ScanWithPrefix` then began its scan at
+whichever such key the tree put first and skipped the others, so `DROP TABLE` or `DROP INDEX` left an index's schema
+dependency behind and `duckdb_dependencies()` raised an internal error. DuckDB's `main` orders the same way. Test:
+`test/sql/catalog/dependencies/test_dependencies_after_index_drop.test`.
 
 ---
 

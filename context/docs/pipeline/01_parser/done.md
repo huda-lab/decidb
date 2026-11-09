@@ -62,6 +62,12 @@ name the `per` spelling that replaces them (`decideTypeWord` turns the type mark
 into `INT`, `BOOL` or `REAL`). `scalar` is an unreserved keyword, so it still names a
 column or a decision (`DECIDE scalar(INT)`).
 
+The type in the parentheses is a `ColId`, which `makeDecideVariableType` (`grammar.cpp`)
+reads as `INT`, `REAL` or `BOOL` in any case; any other name is a syntax error at it.
+DECIDE adds no keyword for a type: DuckDB quotes every keyword when it prints a name, so
+a keyword `BOOL` would quote a column or a `UNION` member named `bool` in every message
+and rendered query.
+
 `decide_constraint_list` joins its items with `AND`. A comma is refused with
 *"comma-separated SUCH THAT constraints are not supported; use AND between
 constraints"*, unless `absorbRemovedPerKey` folds it into the key of a removed `PER`
@@ -124,7 +130,9 @@ five alternatives of `decide_constraint_item` and of `decide_objective_item` (a 
 a `PER` with one or several columns, or both, after the item), and the `c_expr`
 alternatives of a `WHEN` after a call or after the colon form. They build
 `PG_AEXPR_WHEN_CONSTRAINT` and `PG_AEXPR_PER_CONSTRAINT` markers, nested
-`PER(WHEN(body, condition), key)` when both are written.
+`PER(WHEN(body, condition), key)` when both are written. Their key is a
+`decide_per_columnList`, whose columns are bare or qualified (`r.id`); the shared
+`columnrefList`, which a list comprehension's names also use, stays plain columns.
 
 - After a constraint the condition is an `a_expr`, so `NOT f` or `g IN (...)` is named
   as written; `WHEN_DECIDE` outranks `AND`, so it ends where the next constraint
@@ -359,8 +367,9 @@ body` (WHEN first, as written, although PER is the outer tag), `PER ROW: body`,
 expression. A marker of a removed spelling, and a `scalar_` type marker, print as
 written, so a view stored before the removal still shows its own SQL and is refused when
 bound. Ordinary parsed functions keep DuckDB's generic renderer.
-`SelectNode::decide_sense` defaults to `FEASIBILITY`, so generated parsed-statement
-serialization also has a defined value for ordinary non-DECIDE selects.
+`SelectNode::decide_sense` defaults to `FEASIBILITY` and `decide_text` to empty, and
+`query_node.json` gives both that default, so they are written only for a DECIDE query
+and a view DuckDB stored, which has neither, loads with the defaults.
 
 This is a structural round trip, not source-text preservation: DuckDB may normalize
 case, quotes, parentheses, or the accepted split clause order. The contract is:
