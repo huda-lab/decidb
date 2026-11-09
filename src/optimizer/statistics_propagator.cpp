@@ -10,12 +10,10 @@
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
-#include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_join.hpp"
-#include "duckdb/planner/operator/logical_materialized_cte.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_positional_join.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -83,12 +81,6 @@ unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(LogicalOper
 		break;
 	case LogicalOperatorType::LOGICAL_DECIDE:
 		result = PropagateStatistics(node.Cast<LogicalDecide>(), node_ptr);
-		break;
-	case LogicalOperatorType::LOGICAL_MATERIALIZED_CTE:
-		result = PropagateStatistics(node.Cast<LogicalMaterializedCTE>(), node_ptr);
-		break;
-	case LogicalOperatorType::LOGICAL_CTE_REF:
-		result = PropagateStatistics(node.Cast<LogicalCTERef>(), node_ptr);
 		break;
 	default:
 		result = PropagateChildren(node, node_ptr);

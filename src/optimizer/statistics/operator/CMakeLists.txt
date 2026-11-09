@@ -2,7 +2,6 @@ add_library_unity(
   duckdb_optimizer_statistics_op
   OBJECT
   propagate_aggregate.cpp
-  propagate_cte.cpp
   propagate_cross_product.cpp
   propagate_decide.cpp
   propagate_filter.cpp
