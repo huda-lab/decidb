@@ -118,6 +118,22 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 (not exactly representable); an objective with a `per` or a two-level reducer, other reducers (`MIN`, `MAX`, `AVG`),
 `norm`; an objective `when` that is volatile or can raise; `DIAGNOSE`.
 
+## How it works
+
+The plan is a scope projection, a score projection, a rank window with the feasibility filter, and the assignment
+projection. The group bounds' aggregates are computed once per group, by a hash aggregate over a first read of the
+source, and joined to the rows of the window (group-then-join, as A2).
+
+- **Class key.** A scoped problem carries the framework's [class key](../../framework/done.md): the `by` key's
+  elements, compared with `=` where a NULL puts a row in no group, and one marker column when a `when` can drop rows
+  and no element says so. The rank and count windows partition by it, so a row in no group ranks apart from every
+  group, and the group bounds join on it, so that row meets no group's bounds. No BOOLEAN eligibility column is part of
+  the key.
+- **The score's message.** The score projection carries a message column, the least of which the plan raises, only for a
+  score that can fail: the sum of the bounds of its terms, with their factors, is not below half the range of a DOUBLE
+  (the framework's [Number messages](../../framework/done.md)). A score made of values of exact types has no message
+  column, and a per-row bound of an exact type is not checked for NaN.
+
 ## Verified by
 
 | Check | What it covers |
@@ -128,6 +144,18 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 | C++ `[decidb]` | S1 applicability condition, IR, rule driver |
 
 ## Performance
+
+**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
+machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
+with the same DOUBLE arithmetic.
+
+| Query | Direct | Hand-written | Ratio | Summed operator CPU, ratio |
+|---|---:|---:|---:|---:|
+| `s1` | 18.3 ms | 16.3 ms | 1.12 | 1.08 |
+| `s1_global` | 19.8 ms | 19.0 ms | 1.04 | 1.10 |
+
+On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
+of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07).
 
 Measured 2026-10-13 (macOS arm64, 11 cores): the global narrow rows on top of `95ee8bf58c` with only variable-width columns late-materialized, the rest at `7a480a1a71`, where those shapes plan the same way. 5,000,000 stored rows; every query ran in a fresh process
 that only opens the database file, so peak memory is the query's own. Times are median query-plus-collection seconds

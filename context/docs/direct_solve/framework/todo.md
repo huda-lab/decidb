@@ -12,10 +12,11 @@ solver path answers those queries, so none of them is wrong, only slower.
 - The baseline to compare against is the stamp at the top of `done.md`. Any other failure after your change is yours.
 - Checks that every code task runs (from the repository root): `make decide-test`,
   `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
-  `DECIDB_FORCE_SOLVER=highs make decide-test`,
-  and `build/release/test/unittest "[decidb]"`. Rebuild first with `make release`. `test/decide/run_direct_matrix.sh` runs all
-  five and prints one line each (about 3 minutes). Doc-only tasks need no checks.
-- Do not loosen or delete a test to make it pass. If a test fails for a reason the task did not predict, stop and report it.
+  `DECIDB_FORCE_SOLVER=highs make decide-test`, and `build/release/test/unittest "[decidb]"`. Rebuild first with
+  `make release`. `test/decide/run_direct_matrix.sh` runs all five and prints one line each (about 3 minutes). Doc-only
+  tasks need no checks.
+- Do not loosen or delete a test to make it pass. If a test fails for a reason the task did not predict, stop and report
+  it.
 - Tasks marked **Decision needed** have two or more reasonable answers. Ask the owner before coding.
 - The oracle tests cache solver results under the test's node id (`results/oracle_cache.json`). Do not rename a test
   function or move it to another file unless the task says so; a miss re-runs Gurobi, which needs a licence.
@@ -48,85 +49,12 @@ solver path answers those queries, so none of them is wrong, only slower.
   s1 s1_global r1 r1_global`, and the same with
   `--modes direct highs`).
 
-## H-50 — A direct plan costs two to three times DuckDB's own plan for the same answer
-
-- **Problem.** At `sf=1` (800,000 rows), a direct plan takes two to three times what DuckDB takes for a hand-written
-  query that computes the same answer, and the gap is the plan's shape, not the engine: the same relational plan
-  written by hand costs the same. Measured with `PRAGMA enable_profiling='json'` (latency / summed operator CPU):
-  - `a2_keyed` 25 ms / 73 ms against 16 ms / 38 ms for `WITH g AS (SELECT ps_suppkey, avg(...) FROM partsupp GROUP
-    BY ps_suppkey) ... JOIN g USING (ps_suppkey)`. The class join (`DirectJoinGroupRow`, `direct_plan_fragments.cpp`)
-    is a SINGLE join on `IS NOT DISTINCT FROM` over two keys, the row's eligibility flag and the key, and takes 20 ms
-    of CPU where DuckDB's inner join takes 1.6 ms: DuckDB's perfect hash join takes only an inner join on one integer
-    key compared with `=` (`PerfectHashJoinExecutor::CanDoPerfectHashJoin`), and its perfect hash aggregate takes
-    only integer group keys (`CanUsePerfectHashAggregate`), so the BOOLEAN flag keeps the class aggregate a radix hash
-    aggregate too. The flag is the constant `CASE WHEN false THEN false ELSE true END` when no key element can put a
-    row in no class. At 100,000 rows the plan runs slower on all threads than on one (34 ms against 30 ms, peak 83
-    MiB against 38 MiB), where DuckDB's plan does not.
-  - `a2` 26 ms / 83 ms against 8.5 ms / 22 ms for a cross product with `(SELECT sum(c) / count(*) FROM partsupp)`.
-    About 70 ms of the CPU is the projections over the 800,000 rows.
-  - No expression the rules build is simplified: the DECIDE optimizer runs after DuckDB's `EXPRESSION_REWRITER`
-    (`optimizer.cpp`), so constant conditions (`CASE WHEN (true) THEN ... ELSE 0.0 END`), constant terms
-    (`"*"(1.0, "+"(0.0, ...))`) and the checks of values a type proves finite (`isfinite(CAST(<DECIMAL> AS
-    DOUBLE))`) are evaluated on every row.
-  The SINGLE join is deliberate (the comment in `DirectJoinGroupRow`): an inner join is estimated from the
-  aggregate's child cardinality, and DuckDB then builds on the rows.
-- **Change.** Make each direct plan the plan DuckDB would choose for the same answer written as SQL: simplify the
-  replacement the way DuckDB simplifies a query (the expression rewriter, one pass, no case list), put a flag in the
-  key only where it can be false, and join the class answers in a form DuckDB runs as a perfect hash join where the key
-  allows one, keeping the class plan the build side. Each piece names the standard technique it follows (constant
-  folding after lowering, as a compiler's back end does).
-- **Design (architect review, 2026-11-09).** Measured at `sf=1` in one process: the class join takes 20.8 ms of CPU as
-  built, 15.2 ms as a LEFT join on `=` and 2.1 ms as DuckDB's perfect hash join; the rewriter alone saves about 10% of
-  the row-side projections, since DuckDB's arithmetic rules match integer types only. Commits, in order:
-  1. **Cheap checks.** `DirectRaiseMessage` gates on the BOOLEAN `number IS NULL OR isfinite(number)` and builds the
-     message only in its error arm (today it builds the VARCHAR on every row and tests it for NULL).
-  2. **Type-derived finiteness** (abstract interpretation over magnitudes, seeded by types; `overview.md`'s "Prove,
-     don't guess"): one `DirectMagnitudeBound(expr)` (a constant's |c|; an exact numeric type's largest magnitude; FLOAT
-     and DOUBLE infinite). `DirectIsFiniteWhereKept` asks "Σ bound × scale < DBL_MAX", so `DirectCheckNumber`, S1 and
-     R1 drop checks no value can fail; `DirectRowBoundMessage` drops `isfinite`/`isnan` on exact types. FLOAT/DOUBLE
-     inputs and every too-large check of a product a rule computes stay.
-  3. **Canonicalization after lowering** (MLIR's canonicalize, LLVM's InstCombine), one post-pass in the driver over the
-     rule-built operators, stopping at the source as `StripTagsAbove` does: constant-column propagation (a reference to
-     a projection column holding a constant becomes the constant, except across the NULL-padded side of an outer
-     join), then `optimizer.rewriter` with the rule set `Optimizer` builds, and sums built without a `0.0` seed
-     (`DirectFoldQuadratic`). The IEEE-exact identities `x * 1.0`, `x / 1.0`, `x - 0.0` (not `x + 0.0`, inexact at
-     -0.0; A2's final `+ 0.0` turns -0.0 into +0.0 and stays) go into DuckDB's `ArithmeticSimplificationRule` for
-     floating types.
-  4. **`CaseSimplificationRule` evaluates a constant WHEN with `TryEvaluateScalar`** and leaves the CASE alone when
-     evaluation fails, as `ConstantFoldingRule` does: today it calls the throwing `EvaluateScalar`, so a WHEN whose
-     evaluation throws raises at plan time, even over no rows.
-  5. **Perfect hash join for the probe-outer joins** (SINGLE, LEFT) in DuckDB's `PerfectHashJoinExecutor`, with one
-     all-NULL sentinel slot past the build range that an unmatched or NULL probe key points at. The SINGLE join stays
-     (its build side is structural); duplicate build keys keep falling back, so its more-than-one-row error stays.
-     sqllogictests: gaps, a NULL probe key, a key out of range, duplicate build keys, an empty build.
-  6. **`IS NOT DISTINCT FROM` → `=` in statistics propagation** (`propagate_join.cpp`) when neither side's statistics
-     can hold a NULL.
-  7. **The class key without the flag** (NULL as the absent-group marker, SQL's outer-join semantics): an element whose
-     NULL puts a row in no class is compared with `=`, and is `CASE WHEN eligible THEN key END` where a `when` or an
-     instance condition can drop the row; an element where NULL is a value is compared with `IS NOT DISTINCT FROM`;
-     only a key with no `no_group` element whose eligibility can be false gets one integer marker,
-     `CASE WHEN eligible THEN 0::UTINYINT END`. `DirectProjectScope`/`DirectCarried`, `DirectJoinGroupRow`,
-     `DirectJoinClassAnswers`, A2's `ClassKey`, N1, S1 (class key and window partition), R1, and the bound side
-     tables, which the solver path shares.
-  8. S1's and R1's remaining gap, profiled after 1–7 and closed the same way, then the H-48 sweep.
-- **Ruling (owner, 2026-11-09, delegated).** (1) No exact aggregation of exact-typed values (`sum(CAST(x AS DOUBLE))` →
-  `CAST(sum(x) AS DOUBLE)`): a DECIMAL sum can overflow where the DOUBLE sum does not, a new error the solver path
-  never raises; the bar is DuckDB's hand-written plan doing the same DOUBLE arithmetic. (2) The core edits are taken
-  (perfect hash join for SINGLE/LEFT, NOT DISTINCT FROM → `=`, the float identities in DuckDB's rule, the CASE
-  rule's fix): each is generic and helps every query. (3) The solver path's side tables take the per-element
-  comparison, so one key form exists. (4) The `0.0` seeds go; a message that would print `-0` is a stop. (5) No
-  interval propagation through products: no measured payoff. (6) The CASE rule is fixed at its cause (commit 4).
-- **Done when.** Each query of `benchmark/decide/direct_solve/run.py` runs within 1.3 times DuckDB's hand-written plan
-  that computes the same answer with the same DOUBLE arithmetic, at `sf=1`, measured in one process (`PRAGMA
-  enable_profiling`), and on all threads no slower than on one at every size; answers, error texts and the first
-  error to raise unchanged, goldens unchanged, and the matrix passes.
-
 ## H-51 — A direct plan does per-row work that belongs to a group, a constant or one read
 
-- **Problem.** After H-50's expression work, the queries of `benchmark/decide/direct_solve/run.py` at `sf=1` stand at
-  a1 4.6×, n1 3.2×, n1_groups 2.7×, r1 4.5× DuckDB's hand-written plans, and a2 1.6× in latency. The architect's
-  profile (build `8805a87e35`, 8 threads, `PRAGMA enable_profiling`) finds four causes, none of them the plan's shape
-  for A1, N1 and A2:
+- **Problem.** With every plan's expressions as cheap as DuckDB's, the queries of `benchmark/decide/direct_solve/run.py`
+  at `sf=1` stand at a1 4.6×, n1 3.2×, n1_groups 2.7×, r1 4.5× DuckDB's hand-written plans, and a2 1.6× in latency. The
+  architect's profile (build `8805a87e35`, 8 threads, `PRAGMA enable_profiling`) finds four causes, none of them the
+  plan's shape for A1, N1 and A2:
   - **Constants the statistics prove are never folded.** Statistics propagation turns `x IS NULL` over a NOT NULL
     column into `false`, but its CASE handler (`propagate_case.cpp`) only merges statistics, so `CASE WHEN false ...`
     runs per row in every rule's first projection (a1, n1, a2, a2_keyed, r1). Its conjunction and comparison handlers
@@ -178,9 +106,9 @@ solver path answers those queries, so none of them is wrong, only slower.
   obligations; one that skips the gate, a clamp or a check measures the obligation, not the plan. (2) The measure is
   summed operator CPU; latency is reported with DECIDE planning apart. (3) R1 keeps proportional tie sharing (the same
   answer on every run); the one-window shape that breaks ties by row id is not taken. Totals as full-partition window
-  aggregates inside R1's window are measured after commit 4 and taken only if they win. (4) Ruling (5) of H-50 stands:
-  no interval propagation. Statistics for `least`/`greatest` in core come in only if A1 misses after commits 1 and 2
-  and its profile shows the empty-box test as the gap. (5) Commit 3 is the rule-side hoist, not a core
+  aggregates inside R1's window are measured after commit 4 and taken only if they win. (4) No interval propagation
+  through products: no measured payoff. Statistics for `least`/`greatest` in core come in only if A1 misses after
+  commits 1 and 2 and its profile shows the empty-box test as the gap. (5) Commit 3 is the rule-side hoist, not a core
   ProjectJoinTransposeRule. (6) Commit 3's earlier raise under `LIMIT` is taken: it matches the solver path and the
   "every row is read" rule.
 - **Done when.** Each `run.py` query at `sf=1`, one process, best of 5, is within 1.3× of its fair comparator in summed

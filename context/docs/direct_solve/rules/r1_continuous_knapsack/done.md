@@ -107,6 +107,11 @@ SINGLE join of items to group rows (`definition.md` § The plan; `DirectJoinClas
 JOIN_ORDER estimates it as its item side, so the hash table is always built on the group rows; an inner join would be
 estimated far larger than either side and flipped to build on the items.
 
+A group's key is the framework's [class key](../../framework/done.md): the `by` keys, each compared by what a NULL means
+in it, and one marker column when a `when` or a `per K:` clause with no instance can drop an item and no element says
+so. An item in no budget has a NULL in each column of the key compared with `=`, so it meets no group's row and takes
+its best end. No BOOLEAN column stands in the key.
+
 2. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
    every raw value and `v`, so a NaN raises here, before any verdict; a NULL weight or value leaves its row out of the
    sums, and a NULL limit is no limit. A data limit is one value on the group's rows, so its MIN (upper) or MAX
@@ -147,6 +152,19 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 | C++ `[decidb]` | R1's applicability condition: each decline branch (among them budget clauses that cover different rows, budgets that are not one sum, and limits the solver reads as no bound), and the forms that apply (a column and an aggregate limit, a minimum, an exact fill, one sum compared twice, two decisions); R1 never applies where S1 or A1 does; the rule driver reaches R1, S1 and A1 each for their own shapes. |
 
 ## Performance
+
+**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
+machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
+with the same DOUBLE arithmetic.
+
+| Query | Direct | Hand-written | Ratio |
+|---|---:|---:|---:|
+| `r1` | 124 ms | 27.8 ms | 4.47 |
+| `r1_global` | 81.6 ms | 78.5 ms | 1.04 |
+
+On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
+of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07). The gap
+of `r1` is the plan's shape: the plan reads its source more than once. It is open work.
 
 Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/direct_solve/archive/profile_direct_r1.py`.
 The per-group rows come from an earlier per-group plan and are not re-measured on the plan that reads a `by` key.

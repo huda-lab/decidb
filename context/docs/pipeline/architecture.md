@@ -31,6 +31,48 @@ The design goal is to keep core DuckDB changes small and DeciDB's own code
 cohesive. Standard SQL is unaffected: the DECIDE-specific tokens are gated, and every
 grammar conflict DECIDE introduces is keyed on a DECIDE token.
 
+### Edits to existing DuckDB code
+
+Direct solve (`../direct_solve/`) replaces a DECIDE node with ordinary DuckDB operators, so its plans are only as cheap
+as DuckDB's own rules and operators make them. Five edits to DuckDB, none of which names DECIDE, make a plan the rules
+build run as DuckDB would run the same answer written as SQL. Each helps any query that has the shape it handles, and a
+standard query returns the same rows.
+
+- **`CaseSimplificationRule` (`optimizer/rule/case_simplification.cpp`).** It evaluates a constant `WHEN` with
+  `ExpressionExecutor::TryEvaluateScalar`. When the evaluation fails (an overflow, a bad cast) the check stays in the
+  `CASE` and raises at run time, on the rows that reach it, as `ConstantFoldingRule` leaves an expression it cannot
+  evaluate. Reason: the throwing `EvaluateScalar` would raise while planning, even over no rows and for a row an earlier
+  `WHEN` takes, and the rewriter runs on direct plans, whose checks are `CASE`s that must raise only where they are
+  chosen. The edit changes when an error is raised, not whether.
+- **`ArithmeticSimplificationRule` (`optimizer/rule/arithmetic_simplification.cpp`).** For a FLOAT or DOUBLE expression
+  it removes `x * 1.0`, `1.0 * x`, `x / 1.0` and `x - 0.0`. It matches `/` and the floating types
+  (`IntegerOrFloatingTypeMatcher`, `matcher/type_matcher.hpp`) as well as the integer ones. Reason: these are the
+  identities that hold bit for bit under IEEE 754 for every `x`, the sign of zero, NaN, the infinities and NULL
+  included. `x + 0.0` is not one (`-0.0 + 0.0` is `+0.0`), nor is `x * 0.0` (`x` may be NaN or infinite), nor `x - -0.0`
+  (it is `x + 0.0`), so those stay. DuckDB's rule set otherwise matches integer types only, and a direct plan computes
+  in DOUBLE.
+- **`StatisticsPropagator::PropagateStatistics` for a comparison join
+  (`optimizer/statistics/operator/propagate_join.cpp`).** It changes a condition written IS NOT DISTINCT FROM to `=`
+  when the statistics of neither side can hold a NULL. Reason: two keys that cannot be NULL are not distinct exactly
+  when they are equal, and the perfect hash join takes only `=`.
+- **`PerfectHashJoinExecutor` (`execution/operator/join/perfect_hash_join_executor.cpp`).** It takes the LEFT and SINGLE
+  joins, the joins that keep every probe row, as well as the inner join, on one integer `=` condition. The build table
+  has one slot past the build range, NULL in every column. A probe row whose key is NULL, outside the range or absent
+  from the build reads that slot, and every probe row stays. A build side with duplicate keys still falls back to the
+  hash join, so a SINGLE join's more-than-one-row error is still raised there. Reason: the class join of a direct plan
+  is a SINGLE join on the class key. At `sf=1` it costs 20.8 ms of CPU as a SINGLE join on IS NOT DISTINCT FROM, 15.2 ms
+  as a hash join on `=`, and 2.1 ms as a perfect hash join. Any LEFT join on a unique integer key of small range takes
+  the same path.
+- **`ExpressionRewriter::RewriteOperatorExpressions` (`optimizer/expression_rewriter.cpp`).** It rewrites the
+  expressions of one operator, not of its children: `VisitOperator` without the descent. Reason: `DirectCanonicalize`
+  walks the plan itself, to stop at the DECIDE source, which the user wrote and DuckDB has simplified
+  (`../direct_solve/framework/done.md`, Canonicalization after lowering).
+
+Tests: `test/sql/optimizer/expression/test_case_simplification_error.test`, `test_nop_arithmetic_float.test` and
+`test_not_distinct_from_to_equal.test`, `test/sql/join/left_outer/test_left_join_perfect_hash.test` (gaps, a NULL probe
+key, a key out of range, duplicate build keys, an empty build), and `test/common/test_decidb_perfect_hash_join.cpp`
+(which join types the executor takes).
+
 ---
 
 ## 2. Query lifecycle

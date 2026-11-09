@@ -106,6 +106,13 @@ row as it comes; nothing is held, and unreferenced source columns are pruned fro
 constants, with no `when`, fails the same way on every row, so it takes one read: the check is a projected validation
 column on that read.
 
+**Checks and sums.** A value of an exact type (an integer or DECIMAL column) plans no invalid-value check, since its
+type holds no NaN or infinity, and a bound whose right side has an exact type no NaN check; a FLOAT or DOUBLE column, a
+part factor that overflows the type, and every too-large check of a number the plan computes keep theirs (the
+framework's [Number messages](../../framework/done.md)). A check gates on `isfinite` and builds its message only where
+it raises. The objective's sums start from their first term, with no `0.0` seed, and the plan is canonicalized after it
+is built (constant columns propagated, DuckDB's expression rewriter over it).
+
 ## Verified by
 
 | Check | What it covers |
@@ -118,6 +125,12 @@ column on that read.
 | C++ `[decidb]` | `variable_bound` over 19 spellings, the IR for every objective spelling, A1's applicability condition and its declines, S1 and A1 never both applying, and the rule driver choosing the right real rule for each shape |
 
 ## Performance
+
+**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
+machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
+with the same DOUBLE arithmetic. `a1` takes 13.8 ms against 3.0 ms for the hand-written query, a ratio of 4.6. On all
+threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. The gap is the plan's shape: A1
+reads its source twice (verify, then stream). It is open work.
 
 Measured on this machine with `benchmark/decide/direct_solve/archive/profile_direct_a1.py`: direct 2026-10-30 at
 `5b2d175ec7`, median of 3 runs (load about 9); the solver (Gurobi, 1 run) 2026-10-13 at `7a480a1a71`, a path verify,

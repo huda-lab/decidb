@@ -17,6 +17,7 @@ bound, canonical LogicalDecide
         two rules apply: internal error, the rules must be disjoint
    -> Apply          build the substitute, a relational plan
    -> result adapter   keep DECIDE's output columns and bindings      (result_adapter.md)
+   -> canonicalize   simplify what lowering leaves in the plan        (../framework/done.md)
    -> ordinary DuckDB optimizer and execution
 ```
 
@@ -58,6 +59,15 @@ Names follow [the glossary](../../glossary.md).
 - **Template Method.** The rule driver runs the same steps for every rule: build the IR, offer it to each rule, accept
   at most one, apply it, wrap the substitute.
 - **Transformation rules** (Volcano, Cascades). A rule replaces the DECIDE node with an equivalent relational plan.
+- **Canonicalization after lowering** (compiler practice: MLIR's canonicalize, LLVM's InstCombine). Rules build their
+  expressions in general form. One pass over the finished plan propagates the columns that hold a constant and runs
+  DuckDB's own expression rewriter, which removes the work a constant decides.
+- **Abstract interpretation over magnitudes, seeded by types.** A check that a number is finite is planned only for a
+  number whose bound, computed from the bounds of its values, can pass the range of a DOUBLE; a value of an integer or
+  DECIMAL type is bounded by its type.
+- **Class key as an outer-join key** (SQL's outer-join semantics). A row in no class has a NULL where the join compares
+  with `=`, so the join gives it NULL answers and no flag column is needed. The same key is what DuckDB's perfect hash
+  join takes.
 - **Adapter with an optimization fence.** The result adapter presents the substitute with the DECIDE node's columns
   and types under bindings it owns (a binding boundary, as a projection is) and keeps parent filters and limits from
   crossing it.

@@ -148,9 +148,11 @@ budget is one L and U per group (§ Admitted class), so the steps are unchanged.
 ### The plan
 
 The plan follows aggregate-then-join: each group is reduced to one row of numbers (its totals, its price, its sums at
-the price), and every source row joins its group's row and computes its answers in one projection. A *group key* is
-whether the row belongs to a budget, then its `by` keys, compared with IS NOT DISTINCT FROM so a NULL key matches. Each join of items to group rows is a SINGLE join (each item finds its one group row,
-as a scalar subquery does), so its hash table is built on the group rows.
+the price), and every source row joins its group's row and computes its answers in one projection. A *group key* is its
+`by` keys, each compared by what a NULL means in it (`=` where a NULL puts the item in no budget, IS NOT DISTINCT FROM
+for a column of a relation), so an item in no budget meets no group's row; a key of relation columns only, whose items a
+`when` can drop, has one marker column besides. Each join of items to group rows is a SINGLE join (each item finds its
+one group row, as a scalar subquery does), so its hash table is built on the group rows.
 With no scope there is one group: the aggregates have no `GROUP BY` and the join is a cross product with one row.
 
 | Stage | Operator | Columns it carries | Holds every row |

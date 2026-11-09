@@ -48,20 +48,70 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     each value that can fail to the rule's list, and reads a constant one term at a time, never summed.
     `DirectFoldQuadratic` (P2) folds one decision's `a` and `b` over the parts, each scaled by its sign and factor, and
     returns the part of `b` the linear terms make, which the rule tests for a number past a DOUBLE; the rule applies the
-    objective's sense. `DirectTurningPoint` returns the turning point `-b / (2a)`, or for a whole-numbered decision the
-    first integer whose next step no longer improves (the smaller one on a tie), with its precision flag (Number-range
-    warning, below).
+    objective's sense. Every sum starts from its first term and has no `0.0` seed: `0.0 + x` is `x` except at
+    `x = -0.0`, and a seed is one addition more on every row. A sum of no term is `0.0`. `DirectTurningPoint` returns
+    the turning point `-b / (2a)`, or for a whole-numbered decision the first integer whose next step no longer improves
+    (the smaller one on a tie), with its precision flag (Number-range warning, below).
   - **A group's aggregates** take one interface, `DirectGroupSink`. `DirectWindowSink` is its window form: each
-    aggregate becomes a window over the whole partition, with the rule's group as the partition (S1 and N1).
+    aggregate becomes a window over the whole partition, with the rule's group as the partition (N1's data limit).
     `DirectAggregateSink` is its hash form: each aggregate goes into the rule's hash aggregate through
-    `DirectAggregateOf`, which the bound side tables use too (R1 and A2).
+    `DirectAggregateOf`, which the bound side tables use too (S1, R1 and A2).
   - **Group-then-join** (`DirectJoinClassAnswers`): a rule that gives one answer per class computes it once, on a
-    class plan of one row per class (a hash aggregate of a first read on the key, the answer and its checks above it),
-    and joins it back to a second read of the rows on the key, a SINGLE join, or a cross product for a query-wide
-    decision. Its precondition is that a row's class is its whole key: a rule that drops rows from its classes makes
-    whether the row has a class the first key column on both sides, so a row no class takes never meets a class's
-    answer. The checks sit below the join, so no joined row leaves before its class's row has passed them, as the
-    solver reads every row before it answers. A2 takes it; R1's `JoinOnKey` is the same join (H-49).
+    class plan of one row per class (a hash aggregate of a first read on the class key, the answer and its checks above
+    it), and joins it back to a second read of the rows on the class key, a SINGLE join, or a cross product for a
+    query-wide decision. The join compares each key column as `DirectClassKey` says (below), so a row that is in no
+    class matches no class row and reads NULL answers. The checks sit below the join, so no joined row leaves before
+    its class's row has passed them, as the solver reads every row before it answers. A2 takes it; R1's `JoinOnKey` is
+    the same join. DuckDB runs the SINGLE join on an integer `=` key as a perfect hash join, the classes on the
+    build side (the edits to DuckDB's own code are in [architecture.md](../../pipeline/architecture.md) § 1).
+- **The class key** (`DirectClassKey`, `DirectClassKeyOf`, `DirectClassPresent` in `direct_plan_fragments.hpp`). The
+  columns a scoped rule groups its rows on and joins a class's answer on. A row is in a class when its key names one,
+  and the key is built so that a row in no class has a NULL in a column the join compares with `=`. SQL's outer join
+  then gives that row NULL answers (a NULL matches nothing), and no flag column stands beside the key. Each key column
+  is compared by what a NULL means in it:
+  - An element whose NULL puts a row in no class (a written column, D5) is compared with `=`. Where a `when` or an
+    instance condition can also drop the row, the element is `CASE WHEN eligible THEN key END`, so the dropped row reads
+    NULL in it.
+  - An element where NULL is a value (a column of a relation) is compared with IS NOT DISTINCT FROM.
+  - A key with no element of the first kind, whose rows a `when` or an instance condition can drop, has one marker
+    column, `CASE WHEN eligible THEN 0::UTINYINT END`, compared with `=`. A key whose rows nothing can drop has no
+    marker.
+  - `DirectClassPresent` is true when no `=` column is NULL: the class exists. A rule tests it where it needs "this row
+    has a class" (A2's answer, S1's and R1's group checks), on the class row's columns.
+
+  Rows in no class group together under the NULL of an `=` column in a hash aggregate or a window, apart from every
+  class, and no row joins their group. The reason for the form is the join. DuckDB's perfect hash join takes one
+  integer key compared with `=`, and its perfect hash aggregate takes integer group keys, so a BOOLEAN flag among the
+  key columns, compared with IS NOT DISTINCT FROM, kept both from taking a keyed plan. The scope projection
+  (`DirectProjectScope`) builds the key and the rule's stages forward it (`DirectCarried`, with its `DirectClassKey`).
+  The eligible flag (`DirectCarried::eligible`) stays a column of its own for the stages that need it (a row's
+  membership in a ball or a budget), outside the key. A2, N1, S1 (its class key, and the rank and count windows
+  partitioned by it), R1 and the bound side tables take this one form.
+- **Canonicalization after lowering** (`direct_canonicalizer.{hpp,cpp}`; MLIR's canonicalize, LLVM's InstCombine). A
+  rule builds its expressions in general form, with a constant where a case does not arise (a flag that is always true,
+  a CASE on it), and DuckDB's expression rewriter has run before the DECIDE optimizer, so nothing simplifies them.
+  `DirectCanonicalize` is one pass over the operators a rule built, in the order a plan is read, which the rule driver
+  runs after `StripTagsAbove`, on the adapter's child. It stops at the DECIDE input (`source`), which the user wrote and
+  DuckDB has simplified. At each operator, children first:
+  1. Constant-column propagation: a reference to a projection column that holds a constant becomes the constant in
+     the expressions above the projection (projections, filters, windows, the aggregates of an aggregate). The constant
+     is not carried into the keys and conditions of a join or an aggregate, which stay columns because a hash join and
+     a hash aggregate are built on columns. Filters, windows and cross products pass their constant columns on. An
+     inner join passes both sides'; a LEFT or SINGLE join passes its left side's only, because a column of the
+     NULL-padded side is NULL for a row with no partner.
+  2. DuckDB's own rule set (`Optimizer::rewriter`) over the operator's expressions
+     (`ExpressionRewriter::RewriteOperatorExpressions`).
+
+  The plan computes in DOUBLE, as the solver path does. A sum of an exact type stays a DOUBLE sum
+  (`sum(CAST(x AS DOUBLE))`, not `CAST(sum(x) AS DOUBLE)`): a DECIMAL sum can overflow where the DOUBLE sum does not,
+  an error the solver path never raises.
+
+  The pass changes no value and no error: each rule it applies is one DuckDB applies to any query. What it removes is
+  per-row work a constant decides (a CASE on a constant flag, an addition of a seed, a multiplication by 1.0). Measured
+  at `sf=1`, the rewriter alone lowers the cost of the row-side projections by about a tenth. Folding a constant
+  subtree alone saves nothing, since DuckDB evaluates one once per chunk (`../../performance/findings.md`, PERF-16).
+  The float identities the rewriter needs here, and the fix to its CASE rule, are in
+  [architecture.md](../../pipeline/architecture.md) § 1. Tests: `test_decidb_direct_canonicalizer.cpp`.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),
   `DirectValidBoundPredicate` and `DirectNumberMessage`. The two state errors come from `DirectStateErrors {infeasible,
@@ -69,8 +119,10 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   and hands to every rule's `Apply`; `DirectInfeasibleErrorPredicate` and `DirectUnboundedErrorPredicate` take it. Their
   texts are `DecideInfeasibleMessage` and `DecideUnboundedMessage` (`decide_value_messages.hpp`, given `diagnose_runs`),
   which advise prefixing the query with `DIAGNOSE` only where `DIAGNOSE` would run. `DirectCheckNumber` checks a raw
-  value a projection computes, naming the values it is made of, and is null when they are finite constants;
-  `DirectRaiseTooLarge` checks a number computed from values checked before it. Every check that raises is built with
+  value a projection computes, naming the values it is made of, and is null when no value it is made of can fail
+  (Number messages, below); `DirectRaiseTooLarge` checks a number computed from values checked before it. Both gate on
+  one BOOLEAN per row, `isfinite(number)`, and build the message only in the arm that raises, as a `CASE` evaluates a
+  branch only where it is chosen, so a row that passes computes no message. Every check that raises is built with
   `DirectRaiseUnless(ok, error)`, `DirectRaiseIf(bad, error)` (both return true or raise), `DirectRaiseMessage` (raises
   a per-row message where it is not NULL). A check of a value computed only on the rows a `when` keeps needs no mask of
   its own: the value is NULL on a dropped row, and `DirectCheckNumber` and `DirectValidBoundPredicate` pass a NULL.
@@ -81,33 +133,33 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
   One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
-  from the real total, whether to recompute or materialize the source, the choice DuckDB makes for a CTE. A source
-  that `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table
-  scan) is copied once when `DirectSourceCopyIsCheaper` says so, else rebuilt per read with fresh table indexes, its
-  pushed-down table filters copied, so each read is a parallel scan. A read of the copy costs `COPY_READ_COST` (0.4) of
-  a re-scan, so a source read three times or more is copied, provided the copy (estimated rows times its row width,
-  which leaves out the variable-width columns late materialization reads back) is at most `1/COPY_MEMORY_SHARE` (1/8)
-  of the memory limit; with no row estimate it is re-scanned. Both constants come from interleaved timings on partsupp
-  and a 20-column wide table at 10K to 1M rows: at 100K the copy took 68 ms against 96 (narrow) and 66 against 94
-  (wide), and past an eighth of the memory limit it lost. At 10K rows on partsupp it is 14 ms slower, in R1's sort, not
-  in the reads. On a copy of only the columns the plan reads (partsupp, lineitem and the wide table, 100K and 1M rows),
-  the copy took 1.0 to 1.2 of the re-scans' time at two reads, 0.57 to 0.98 at three and 0.62 to 1.05 at four. Any
-  constant from 1/3 to 1/2 copies at three reads and re-scans at two, so 0.4 stays. Any other source (a join, a
-  subquery with an aggregate, a table function, a volatile expression) is one `LogicalMaterializedCTE`, defined through
-  a projection that names its columns (a join under it may reorder its output in later passes) and read by
-  `LogicalCTERef`s. Every read returns the same rows, and no plan depends on their order. `DirectAddRowChecks` gives each check its own
-  read and a grouped aggregate over only the columns the check reads (counts, least and greatest value, the least label
-  per key), then an ungrouped `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least
-  failing group, NULL keys last. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row
-  materialized CTE, and the reader is gated on it (`DirectSourceReader::Gate`): every later read is
-  `Filter[v](CrossProduct(rows, CTERef v))` under the read's forwarding projection, which keeps the rows' bindings. A
-  gated read passes a row only once the CTE is computed, whichever side of the product is built first, so a check raises
-  before any rule-built raise. Gates chain: a rule gates the reader again on its own verdict (A1), computed from reads
-  the row checks gate, so a scope error raises before a rule's own, and every read after waits for the newest verdict
-  alone; the verdict CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path uses the same reader
-  with one read plus the side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps
-  only an entity-scoped decision's determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over
-  its only read with `DirectBuildOverOneRead`.
+  from the real total, whether to recompute or materialize the source, the choice DuckDB makes for a CTE. A source that
+  `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table scan) is
+  copied once when `DirectSourceCopyIsCheaper` says so, else rebuilt per read with fresh table indexes, its pushed-down
+  table filters copied, so each read is a parallel scan. A read of the copy costs `COPY_READ_COST` (0.4) of a re-scan,
+  so a source read three times or more is copied, provided the copy (estimated rows times its row width, which leaves
+  out the variable-width columns late materialization reads back) is at most `1/COPY_MEMORY_SHARE` (1/8) of the memory
+  limit; with no row estimate it is re-scanned. Both constants come from interleaved timings on partsupp and a 20-column
+  wide table at 10K to 1M rows: at 100K the copy took 68 ms against 96 (narrow) and 66 against 94 (wide), and past an
+  eighth of the memory limit it lost. At 10K rows on partsupp it is 14 ms slower, in R1's sort, not in the reads. On a
+  copy of only the columns the plan reads (partsupp, lineitem and the wide table, 100K and 1M rows), the copy took 1.0
+  to 1.2 of the re-scans' time at two reads, 0.57 to 0.98 at three and 0.62 to 1.05 at four. Any constant from 1/3 to
+  1/2 copies at three reads and re-scans at two, so 0.4 stays. Any other source (a join, a subquery with an aggregate, a
+  table function, a volatile expression) is one `LogicalMaterializedCTE`, defined through a projection that names its
+  columns (a join under it may reorder its output in later passes) and read by `LogicalCTERef`s. Every read returns the
+  same rows, and no plan depends on their order. `DirectAddRowChecks` gives each check its own read and a grouped
+  aggregate over only the columns the check reads (counts, least and greatest value, the least label per key), then an
+  ungrouped `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least failing group, NULL
+  keys last. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row materialized CTE, and
+  the reader is gated on it (`DirectSourceReader::Gate`): every later read is `Filter[v](CrossProduct(rows, CTERef v))`
+  under the read's forwarding projection, which keeps the rows' bindings. A gated read passes a row only once the CTE is
+  computed, whichever side of the product is built first, so a check raises before any rule-built raise. Gates chain: a
+  rule gates the reader again on its own verdict (A1), computed from reads the row checks gate, so a scope error raises
+  before a rule's own, and every read after waits for the newest verdict alone; the verdict CTEs nest oldest outermost
+  (`DirectSourceReader::Finish`). The solver path uses the same reader with one read plus the side tables' and the
+  checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped decision's
+  determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
+  `DirectBuildOverOneRead`.
 - **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads two things,
   and reads each once, so that no two rules read a bound or an objective term differently. Its header defines
   `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
@@ -143,13 +195,13 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
   build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
-  arithmetic, comparisons, `IsNull`, `Cast`, `Coalesce`, `If`, `Min`, `Max`, `And`, `Not` and `Any`. `And` and `Not`
-  are `CASE` forms that read a NULL condition as false, and `And` evaluates its second value only where the first holds. It takes the `ClientContext`,
-  which it binds functions with (as DuckDB's `FunctionBinder` does), so a rule's `CheckCondition`, a binder and the
-  optimizer can all make one. The nodes it has no operation for are built by hand, each with a comment: the window
-  expressions, and the typed NULLs in `LogicalDirectResultAdapter::PruneUnusedOutputs`, an overridden DuckDB method
-  that gets no context. `Any` tests its first condition first; S1's fixed-value flags and the rewrite's left-side
-  filter reverse their lists to test the last first.
+  arithmetic, comparisons, `IsNull`, `Cast`, `Coalesce`, `If`, `Min`, `Max`, `And`, `Not` and `Any`. `And` and `Not` are
+  `CASE` forms that read a NULL condition as false, and `And` evaluates its second value only where the first holds. It
+  takes the `ClientContext`, which it binds functions with (as DuckDB's `FunctionBinder` does), so a rule's
+  `CheckCondition`, a binder and the optimizer can all make one. The nodes it has no operation for are built by hand,
+  each with a comment: the window expressions, and the typed NULLs in `LogicalDirectResultAdapter::PruneUnusedOutputs`,
+  an overridden DuckDB method that gets no context. `Any` tests its first condition first; S1's fixed-value flags and
+  the rewrite's left-side filter reverse their lists to test the last first.
 - **Rule-local helpers.** A helper only one rule uses stays in that rule's files, in its namespace, and moves to the
   shared files when a second rule needs it. Inside a rule's namespace, names drop the `Direct` and class prefixes. The
   scope projection (`DirectProjectScope`), the message of a per-row bound read from the data
@@ -172,14 +224,15 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     quadratic rows and S1's count limits all shift a strict bound with it, so none reads a strict comparison
     differently.
   - `DecideRoundedAnswerWithin`: an integer answer is returnable when, rounded half away from zero, it lies within the
-    column's range. Beyond it both paths raise one message, `DecideWholeNumberRangeMessage`, which names the variable and
-    its rounded value. A1 spells the test in SQL once (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the
-    message at run time around `printf('%.0f', round(answer))`, so the text matches the solver's character for character.
+    column's range. Beyond it both paths raise one message, `DecideWholeNumberRangeMessage`, which names the variable
+    and its rounded value. A1 spells the test in SQL once (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds
+    the message at run time around `printf('%.0f', round(answer))`, so the text matches the solver's character for
+    character.
   - `DecideBoundBox`, the box described below.
 
   Outside the header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in input, a
-  report or a diagnostic; HiGHS's own infinite bound and large-matrix limits in `deterministic_naive.cpp`; Gurobi's 1e100;
-  `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp` (diagnostic-only thresholds).
+  report or a diagnostic; HiGHS's own infinite bound and large-matrix limits in `deterministic_naive.cpp`; Gurobi's
+  1e100; `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp` (diagnostic-only thresholds).
   `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing,
   and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5
   cases).
@@ -187,34 +240,35 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   `DirectIsSourceOnlyNumericMayRaise`, `DirectIsSourceOnlyValue` (which admits a value that can raise),
   `DirectIsSourceOnlyPredicate` (a deterministic, nonthrowing BOOLEAN over source columns: a `when` the plan evaluates
   on every row), `DirectHasColumnReference`, `DirectRemapSourceReferences` (re-points source columns at a projection
-  over the source), `DirectIsWholeNumbered` (an `INT` or `BOOL` decision), `DirectIsLowerBound` and
-  `DirectIsUpperBound` (which comparisons bound a count from below and from above), `DirectPartScale`,
-  `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and `DirectPart::IsPlainSum` answer "may a rule use this value"
-  once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's own
-  `when` or the clause's `when`; with both, the rules decline (the solver reads both).
+  over the source), `DirectIsWholeNumbered` (an `INT` or `BOOL` decision), `DirectIsLowerBound` and `DirectIsUpperBound`
+  (which comparisons bound a count from below and from above), `DirectPartScale`, `DIRECT_CONSTANT`,
+  `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and `DirectPart::IsPlainSum` answer "may a rule use this
+  value" once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's
+  own `when` or the clause's `when`; with both, the rules decline (the solver reads both).
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
   Callers differ only in the flags they pass: `FOLD_STABLE` (no row, parameter or subquery can change it),
-  `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`), `FOLD_CATCH_DUCKDB_ERRORS` and
-  `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test
-  for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
-  `DIRECT_FINITE_CONSTANT`.
+  `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`), `FOLD_CATCH_DUCKDB_ERRORS` and `FOLD_CATCH_ALL`. The
+  planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test for a scale factor
+  and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or `DIRECT_FINITE_CONSTANT`.
 - **The bound-side rewrite is the one evaluator of a data bound** (`decide_rewrite_rhs_bounds.cpp`,
-  `RewriteRhsAggregates`, called by `DecideOptimizer::OptimizeDecide` before the direct rules, in every mode). Every reducer
-  over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed or colon
+  `RewriteRhsAggregates`, called by `DecideOptimizer::OptimizeDecide` before the direct rules, in every mode). Every
+  reducer over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed or colon
   reducer) becomes a placeholder column of the DECIDE source, recorded on the node (`LogicalDecide::bound_aggregates`;
   equal reducers share one). The path that answers the node builds each record as a side table of the source reader
   (`DirectAddBoundTables`, `DirectSourceReader::AddSideTable`): the same DuckDB aggregate over another read of the
   source, grouped by the reducer's `by` key, with the rows the clause's `when` keeps and the reducer's own `when` as its
   `FILTER`. The table has one row per group, is materialized once (`direct_bound`), and every read of the source joins
-  it back by the key with a SINGLE join on IS NOT DISTINCT FROM, so a NULL key is a group. This is how DuckDB
-  decorrelates a scalar subquery (FlattenDependentJoins). A keyed or colon reducer counts each class of its key once:
-  an aggregate per group and class takes the class's body (`ARBITRARY`; a scope check proves the key determines it),
-  and the reducer runs over the classes of each group. On a row whose written `by` column is NULL the column is NULL,
-  so the instance is skipped (D5), and a row whose inner `per` column is NULL is in no class. A `per K:` in front of the
-  clause groups no reducer (D6). A table may read the tables added before it. The binder rejects `DISTINCT` and drops
-  an `ORDER BY` inside these reducers, so neither reaches the rewrite. A data norm of order 0 is the count of its
-  non-zero rows, `SUM(ABS(SIGN(e)))`.
+  it back by the key with a SINGLE join that compares each key element as the class key does (above): with `=` for a
+  written column, whose NULL puts a row in no group (D5), so the row has no table row and reads NULL; with IS NOT
+  DISTINCT FROM for a column of a relation, where a NULL is a group. This is how DuckDB decorrelates a scalar subquery
+  (FlattenDependentJoins). A keyed or colon reducer counts each class of its key once: an aggregate per group and class
+  takes the class's body (`ARBITRARY`; a scope check proves the key determines it), and the reducer runs over the
+  classes of each group. On a row whose written `by` column is NULL the column is NULL, so the instance is skipped (D5),
+  and a row whose inner `per` column is NULL is in no class. A `per K:` in front of the clause groups no reducer (D6). A
+  table may read the tables added before it. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these
+  reducers, so neither reaches the rewrite. A data norm of order 0 is the count of its non-zero rows,
+  `SUM(ABS(SIGN(e)))`.
   - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper
     bound, the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's
     `per K:` (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a reducer
@@ -226,7 +280,7 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule proves it can compute
     the bound (`DirectGroupBoundIsReadable`), lays out the columns of each input (`DirectGroupLayout`,
     `DirectGroupInputs`) and adds the aggregates to the group aggregate it already runs, with no branch per bound
-    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: S1 and N1 a window through `DirectWindowSink`, R1 and A2
+    (`DirectAddGroupBound` and a rule's `DirectGroupSink`: N1 a window through `DirectWindowSink`; S1, R1 and A2
     their hash aggregate through `DirectAggregateSink`), so a direct plan has no side table for them. Only the
     solver path records their aggregates (`RecordGroupBound`, from `RecordReducedBounds`), and it returns the checks
     in the order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A
@@ -239,11 +293,11 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     always reported before a bad value, and both paths raise the same text.
   - A data reducer on the bound side over exactly the clause's group is computed in the rule's group aggregate, not
     as a side table; one on another `by` key, qualified, or beside a column is a side table.
-  - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1,
-    -2^60 reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's
-    types. On a row a reducer does not read, its argument is not computed (syntax reference §6.3). A read carries the
-    tables' values after the source columns, so they renumber none, and the driver drops them from a rule's output
-    with the source row id, one block of the read. A side table leaves a recomputable source recomputed. Output row order and the
+  - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60
+    reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types.
+    On a row a reducer does not read, its argument is not computed (syntax reference §6.3). A read carries the tables'
+    values after the source columns, so they renumber none, and the driver drops them from a rule's output with the
+    source row id, one block of the read. A side table leaves a recomputable source recomputed. Output row order and the
     choice among equal optima are not guaranteed. Tests: `test_rhs_aggregate_window.py`, `test_bound_side_tables.py`.
 - **NULL values.** A NULL is skipped where it is read, as on the solver path (deck p. 50). A reducer's NULL summand
   arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of `part.filter`
@@ -252,7 +306,9 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   as a guard so a rule that needs the constant reads through it (`DecideUnguarded`). A NULL limit or per-row bound is
   open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and
   `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the instance no bound. The driver strips
-  every tag from the operators above the source (`StripTagsAbove`), so EXPLAIN never prints one.
+  every tag from the operators above the source (`StripTagsAbove`), and an aggregate built from a reducer
+  (`DirectAggregateOf`, for a side table or a group bound, on either path) drops the reducer's alias, which carries its
+  tags, so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
   (`NULL_GUARD_TAG` keeps a NULL guard out of the text). It names no row: a row's place in the input depends on the
@@ -264,12 +320,23 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     literal left the DOUBLE range, and the clause is named (TOO_LARGE). Only the first failing row is classified.
   - A number no answer reads is not computed: an objective's per-row constants are checked one term at a time, as the
     solver path reads them, and never summed.
-  - A number that cannot fail gets no check: `DirectIsFiniteWhereKept` (S1 and R1, and `DirectCheckNumber` for A1 and
-    N1) evaluates a coefficient's signed, scaled sum at plan time, reading each value through its NULL guard
-    (`DecideUnguarded`), and a finite constant plans no `isfinite`. A guard reads a column, so asking the guard instead
-    would treat a literal (the `1` of `x` inside `POWER(x - c, 2)`, the `2` of `2 * x + p * y`) as data. A constant that
-    is not finite keeps its runtime check, so a query over no rows still returns none, and `DirectNamesOf` names the
-    clause (TOO_LARGE), as the solver path does.
+  - A number that cannot fail gets no check. The test is abstract interpretation over magnitudes, seeded by types
+    (`overview.md`, "Prove, don't guess"): `DirectMagnitudeBound` (`direct_expression.cpp`) is an upper bound on |value|
+    on every row. A constant's bound is its own magnitude (infinite for NaN). An integer or DECIMAL value is bounded by
+    its type (`DirectTypeMagnitude`: the largest of its greatest and its least value), since an exact type holds no
+    infinity or NaN. A FLOAT or DOUBLE column, or any expression the bound does not read through, is infinite. A cast
+    keeps its operand's bound only while its type holds it: past the largest finite FLOAT or DOUBLE the cast rounds to
+    an infinity, and past an exact type's range it raises, so the bound is then the type's. `DirectIsFiniteWhereKept`
+    (S1 and R1, and `DirectCheckNumber` for A1 and N1) sums the bounds of the values a number is made of, each read
+    through its NULL guard (`DecideUnguarded`) and times the part's factor, and plans no `isfinite` when the sum is
+    below half the range of a DOUBLE (`DirectSumIsFinite`; the half leaves room for the rounding of the products and
+    sums). S1 drops the score message of a score whose terms' bounds (`DirectScaledMagnitude`) sum below it. A per-row
+    bound or a right side of an exact type is not checked for NaN (`DirectRowBoundMessage`, `DirectLayoutBoundClauses`).
+    A guard reads a column, so asking the guard instead would treat a literal (the `1` of `x` inside `POWER(x - c, 2)`,
+    the `2` of `2 * x + p * y`) as data. A constant that is not finite keeps its runtime check, so a query over no rows
+    still returns none, and `DirectNamesOf` names the clause (TOO_LARGE), as the solver path does. A FLOAT or DOUBLE
+    input and every too-large check of a product a rule computes keep their checks. The bound reads no product of two
+    values (no interval arithmetic through `*`): measured on the benchmark queries, it removes no check that costs.
   - A number the model computes from finite ones (like coefficients merged across rows, a square, fixed terms moved to
     the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
     path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks and R1's checks of each
@@ -318,16 +385,15 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   solver raises the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
-  solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` all
-  call it. The box keeps a `lower_written` flag apart from the value: a written lower bound of -1e30 or below is no bound,
-  like any bound of magnitude 1e20 or more, and only a decision with no lower bound written takes the default floor of 0
+  solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` all call it.
+  The box keeps a `lower_written` flag apart from the value: a written lower bound of -1e30 or below is no bound, like
+  any bound of magnitude 1e20 or more, and only a decision with no lower bound written takes the default floor of 0
   (`EffectiveLower`). No value is reserved to mean "unset".
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
-  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, `sql_literal` (one spelling of a constant: a `CAST` to the column's type, so a
-  column's type does not depend on which row comes first, with infinities and NaN spelled as strings), and
-  `agree_with_oracle` (oracle model, `off`,
-  `require`, then a rule-supplied check of one assignment). Each rule's suite keeps its own case tables, oracle-model
-  builder and assignment check. Every direct
+  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, `sql_literal` (one spelling of a constant: a
+  `CAST` to the column's type, so a column's type does not depend on which row comes first, with infinities and NaN
+  spelled as strings), and `agree_with_oracle` (oracle model, `off`, `require`, then a rule-supplied check of one
+  assignment). Each rule's suite keeps its own case tables, oracle-model builder and assignment check. Every direct
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`../architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
@@ -345,25 +411,39 @@ rank window or a verified, streamed plan) and run on the same two central files.
 
 ## Verified by
 
-- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: a per-row term the splitter cannot read, an order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not
-  an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
-  when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
-  front end could not read offered to no rule, mismatched slot, a shared plan fragment handed an input that does not
-  fit, each way a substitute can misfit the adapter (no child, a missing prunable flag, a slot,
-  validated column or row id slot beyond the child), a pipelined check and a gated verdict under `LIMIT 1` and
-  `COUNT(*)`),
-  `test_decidb_direct_decline.cpp` (each decline branch of the five rules' `CheckCondition` and of `DirectIRIsReadable`,
-  tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
-  small query that is only planned, edits it for the few shapes SQL cannot write, and asks the rule whether it
-  applies; each case reaches an arm no other case of its rule reaches, and each rule has forms that apply). The IR comes
-  from a query rather than from a hand-built struct because a hand-built IR has no resolved source columns, so the
-  source-column checks would pass without checking anything.
+- C++ for the canonicalizer: `test_decidb_direct_canonicalizer.cpp` (a constant column carried up through the
+  operators that pass it on, the source left as it is, no constant across the padded side of an outer join, the keys of
+  a join and of an aggregate kept as columns).
+- DuckDB core edits (`../../pipeline/architecture.md` § 1): sqllogictests `test_case_simplification_error`,
+  `test_nop_arithmetic_float`, `test_not_distinct_from_to_equal` (`test/sql/optimizer/expression/`) and
+  `test_left_join_perfect_hash` (`test/sql/join/left_outer/`), and `test/common/test_decidb_perfect_hash_join.cpp`
+  (which join types the executor takes).
+- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: a per-row term the splitter cannot read, an
+  order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not an exception),
+  `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback when no rule applies, a rule that
+  applies beside one that does not, two rules applying as an internal error, an IR the front end could not read offered
+  to no rule, mismatched slot, a shared plan fragment handed an input that does not fit, each way a substitute can
+  misfit the adapter (no child, a missing prunable flag, a slot, validated column or row id slot beyond the child), a
+  pipelined check and a gated verdict under `LIMIT 1` and `COUNT(*)`), `test_decidb_direct_decline.cpp` (each decline
+  branch of the five rules' `CheckCondition` and of `DirectIRIsReadable`, tested on the IR: a probe rule installed
+  through the rule driver's test seam receives the IR the driver reads from a small query that is only planned, edits it
+  for the few shapes SQL cannot write, and asks the rule whether it applies; each case reaches an arm no other case of
+  its rule reaches, and each rule has forms that apply). The IR comes from a query rather than from a hand-built struct
+  because a hand-built IR has no resolved source columns, so the source-column checks would pass without checking
+  anything.
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE` and an empty source) and the
   parent-context rows of `test_direct_s1_uniform_matroid.py`. With A1's domain check disabled,
   `test_bool_bound_outside_domain.py` (a bound against the domain over an empty source) and two cases of
   `test_error_infeasible.py` fail. `test_direct_user_facing.py` checks
-  which noun a NaN or infinite coefficient names.
+  which noun a NaN or infinite coefficient names, that a value of an exact type plans no invalid-value check (a
+  part factor that overflows the type keeps it), that a bound of an exact type is not checked for NaN, that S1 plans no
+  score message for a score no value can fail, and that a quadratic sum of columns has no `0.0` seed.
+  `test_direct_class_key.py` reads from the plan the comparison of each SINGLE join that gives a row its class's or its
+  group's values: a written column (`=`), a relation's column (IS NOT DISTINCT FROM), a relation's column under a
+  `when` (the marker, `=`), a written column under a `when` (no marker), no key under a `when` (the marker), and the
+  side tables of a bound; and that a clause with no instance bounds none of its groups. What the plans answer is the
+  oracle suites' business (`test_bound_side_tables.py`, `test_per_class_null_key_bound.py`).
 - Result adapter parent contexts, identical under `auto`, `off` and `require`: `CREATE TABLE AS`, `INSERT ... SELECT`, a
   view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
   of results, an empty source and a prepared statement with a parameter.

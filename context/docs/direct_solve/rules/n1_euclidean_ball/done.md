@@ -105,7 +105,9 @@ group's row on the key.
 The first read:
 
 1. `[W0]`, for a `per K:` a NULL in K can leave with no instance: whether the clause has one (`DirectAddInstanceFlag`).
-2. The scope projection: the row's membership and key (`DirectProjectScope`).
+2. The scope projection: the row's eligibility and its class key (`DirectProjectScope`; the framework's [class
+   key](../../framework/done.md)). A row in no ball has a NULL in each column of the key compared with `=`, and no flag
+   column stands in the key.
 3. `P1`, raw values: every coefficient, constant and limit, each on the rows that read it (`DirectOnKeptRows`).
 4. `P2`: K and b of the row, oriented as a minimum, and the check on every raw value.
 5. `[W1]`, for a limit from the data: the tightest limit of the group.
@@ -115,7 +117,8 @@ The first read:
 8. `H`: a hash aggregate on the group key (`DirectHashAggregate`), one row per group: `h`, the sum of the squared
    lengths; whether every row's checks held (`bool_and`); and the group's limit, for a limit from the data.
 
-The second read takes `[W0]`, the scope, `P1` and `P2` again and the row's value in the domain, joins the group's row,
+The second read takes `[W0]`, the scope, `P1` and `P2` again and the row's value in the domain, joins the group's row
+on the class key (a SINGLE join, each column compared by what a NULL means in it, so a row in no ball matches no group),
 and ends in `P5`: the source columns, the answer, and the validation column that keeps the checks and the warning live.
 
 `H` holds every row of the first read before it gives one, and each check on a row stands below it, so a bad last row
@@ -158,6 +161,19 @@ The objective tolerance (5e-6 relative) and the ball tolerances (1e-7 on `off`, 
 cases and stated in the test file. They are that file's own.
 
 ## Performance
+
+**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
+machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
+with the same DOUBLE arithmetic.
+
+| Query | Direct | Hand-written | Ratio |
+|---|---:|---:|---:|
+| `n1` | 9.5 ms | 3.0 ms | 3.19 |
+| `n1_groups` | 14.4 ms | 5.4 ms | 2.65 |
+
+On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
+of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07). The gap
+is the plan's shape: the plan reads its source more than once. It is open work.
 
 Measured with `benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries n1 n1_groups` on 2026-11-05 at
 `d5a5559a49` (median of 3 runs, load about 8). Every size agreed with Gurobi on the objective within 1e-6, and no solver

@@ -72,7 +72,9 @@ checks, then the answer's too-large check where the loss asks for one (`Answer::
 convex class), then the loss's warnings, since a warning prints as it runs. The objective as written, which the
 too-large message names, is held once, by the rule's condition.
 
-1. Scope (`DirectProjectScope`, keyed decisions only): the row's class, whether it has one, and its key.
+1. Scope (`DirectProjectScope`, keyed decisions only): the row's class key (`DirectClassKey`, the framework's [class
+   key](../../framework/done.md)). A row in no class has a NULL in each column of the key compared with `=`, and no flag
+   column stands beside the key.
 2. P1 (`LayoutRawValues`): the loss's raw values on the rows the objective keeps (`DirectLayoutQuadraticPart`: weight,
    slope and constant) and each bound clause's values on the rows it keeps (`DirectLayoutBoundClauses`, shared with
    A1), with the check of every value that can fail.
@@ -90,12 +92,14 @@ too-large message names, is held once, by the rule's condition.
 5. P3 (`ComputeInterval`): the class's interval as columns, with the floor; the loss forwards its class values
    through it (`CarryClasses`), since P4 reads only P3's columns.
 6. P4 (`ComputeAnswer`), on the class's row: the target clamped into the interval (`DirectRowBox`; `+ 0.0` turns
-   `-0.0` into `0.0`), NULL on a key with no class, and the column that keeps the checks live. The class's validity
+   `-0.0` into `0.0`; this `+ 0.0` is not an IEEE 754 identity, so the rewriter keeps it), NULL on a key with no class
+   (`DirectClassPresent`), and the column that keeps the checks live. The class's validity
    is the first check (`DirectAllHold`), so an empty source's one query-wide row, whose `bool_and` is NULL, runs no
    check.
 7. Join (`JoinAnswers`, `DirectJoinClassAnswers`): the second read takes its scope again and joins each row to its
-   class's answer, a SINGLE join on the key whose first column is whether the row has a class, or a cross product
-   with the one row of a query-wide decision. P4 sits below the join, so no joined row exists before its class's
+   class's answer, a SINGLE join on the class key, each column compared by what a NULL means in it, so a row with no
+   class matches no class row; or a cross product with the one row of a query-wide decision. DuckDB runs a join on one
+   integer `=` column as a perfect hash join. P4 sits below the join, so no joined row exists before its class's
    row has passed its checks; the SINGLE join keeps the classes on the build side and the rows stream through the
    probe.
 8. P5: the source columns, the answer and the check column.
@@ -147,6 +151,21 @@ on these shapes is in [todo.md](todo.md).
   square weight in `test_decidb_direct_ir.cpp`.
 
 ## Performance
+
+**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
+machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
+with the same DOUBLE arithmetic.
+
+| Query | Direct | Hand-written | Ratio | Summed operator CPU, ratio |
+|---|---:|---:|---:|---:|
+| `a2` | 5.5 ms | 3.5 ms | 1.58 | 1.18 |
+| `a2_keyed` | 9.9 ms | 7.2 ms | 1.38 | 1.17 |
+| `a2_abs` | 17.6 ms | 14.9 ms | 1.18 | 1.16 |
+| `a2_abs_global` | 16.1 ms | 16.1 ms | 1.00 | not measured |
+
+On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
+of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07). The
+latency gap of `a2` (ratio 1.58) is the plan's shape: the plan reads its source more than once. It is open work.
 
 Measured with `benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs` (Gurobi) and
 the same with `--modes direct highs` on 2026-11-07 at `09f510c7e9` (median of 3 runs, load about 4 to 6). Every size
