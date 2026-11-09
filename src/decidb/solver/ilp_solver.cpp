@@ -40,10 +40,8 @@ bool DidDiagnosticSolveStopEarly(const SolverResult &result) {
 	return result.status == SolverStatus::TIME_LIMIT;
 }
 
-void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backend,
-                                   const SolveModelOptions &options,
-                                   const SolveModelOptions &diagnostic_options,
-                                   SolverResult &result) {
+void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options,
+                                   const SolveModelOptions &diagnostic_options, SolverResult &result) {
 	if (!options.extract_unbounded_ray ||
 	    (result.status != SolverStatus::UNBOUNDED && result.status != SolverStatus::INF_OR_UNBD)) {
 		return;
@@ -232,8 +230,8 @@ void DumpSolverModel(const SolverModel &model) {
 
 	for (idx_t i = 0; i < model.indicator_constraints.size(); i++) {
 		auto &ic = model.indicator_constraints[i];
-		out += "ind " + std::to_string(i) + ": bin=" + std::to_string(ic.binary_column) + "==" +
-		       std::to_string(ic.binary_value) + " sense=" + std::string(1, ic.sense) + " rhs=";
+		out += "ind " + std::to_string(i) + ": bin=" + std::to_string(ic.binary_column) +
+		       "==" + std::to_string(ic.binary_value) + " sense=" + std::string(1, ic.sense) + " rhs=";
 		AppendDouble(out, ic.rhs);
 		out += " |";
 		AppendSparseRow(out, ic.indices, ic.coefficients);
@@ -308,8 +306,8 @@ SolverBackend SelectSolverBackend() {
 			for (auto &backend : SolverRegistry::Backends()) {
 				names.emplace_back(backend.Name());
 			}
-			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s is not a solver DeciDB knows. Valid names: %s",
-			                            force, StringUtil::Join(names, ", "));
+			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s is not a solver DeciDB knows. Valid names: %s", force,
+			                            StringUtil::Join(names, ", "));
 		}
 		if (!forced.IsAvailable()) {
 			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s but that solver is not available "
@@ -350,28 +348,28 @@ static SolverResult SolveOnce(const SolverModel &model, SolverBackend backend, c
 //! no objective cannot be unbounded, so the status of that probe is final and says which one it is.
 static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
                                           const SolveModelOptions &options, const SolverResult &original) {
-    if (original.status != SolverStatus::INF_OR_UNBD) {
-        return original;
-    }
+	if (original.status != SolverStatus::INF_OR_UNBD) {
+		return original;
+	}
 
-    SolverModel probe_model = MakeZeroObjectiveProbeModel(model);
-    SolverResult probe_result = SolveOnce(probe_model, backend, MakeDiagnosticSolveOptions(options));
+	SolverModel probe_model = MakeZeroObjectiveProbeModel(model);
+	SolverResult probe_result = SolveOnce(probe_model, backend, MakeDiagnosticSolveOptions(options));
 
-    SolverResult disambiguated = original;
-    if (DidDiagnosticSolveStopEarly(probe_result)) {
-        disambiguated.diagnostic_timed_out = true;
-        return disambiguated;
-    }
-    switch (probe_result.status) {
-    case SolverStatus::OPTIMAL:
-        disambiguated.status = SolverStatus::UNBOUNDED;
-        return disambiguated;
-    case SolverStatus::INFEASIBLE:
-        disambiguated.status = SolverStatus::INFEASIBLE;
-        return disambiguated;
-    default:
-        return original;
-    }
+	SolverResult disambiguated = original;
+	if (DidDiagnosticSolveStopEarly(probe_result)) {
+		disambiguated.diagnostic_timed_out = true;
+		return disambiguated;
+	}
+	switch (probe_result.status) {
+	case SolverStatus::OPTIMAL:
+		disambiguated.status = SolverStatus::UNBOUNDED;
+		return disambiguated;
+	case SolverStatus::INFEASIBLE:
+		disambiguated.status = SolverStatus::INFEASIBLE;
+		return disambiguated;
+	default:
+		return original;
+	}
 }
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend, const SolveModelOptions &options) {
@@ -404,8 +402,7 @@ static SolverResult RejectIntegerCeilingOptimum(const SolverModel &model, const 
 		// large, and is a real optimum.
 		bool open_above = DecideIsOpenAbove(model.col_upper[col]);
 		bool open_below = DecideIsOpenBelow(model.col_lower[col]);
-		if ((open_above && value >= INTEGER_SOLVER_CEILING) ||
-		    (open_below && value <= -INTEGER_SOLVER_CEILING)) {
+		if ((open_above && value >= INTEGER_SOLVER_CEILING) || (open_below && value <= -INTEGER_SOLVER_CEILING)) {
 			SolverResult unbounded = result;
 			unbounded.status = SolverStatus::UNBOUNDED;
 			unbounded.solution.clear();
@@ -447,13 +444,11 @@ static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBacke
 	// backend is in play — and the adapter would have no way to express it.
 	auto constructs = backend.Constructs();
 	if (!model.indicator_constraints.empty() && !constructs.not_equal) {
-		throw InternalException("DECIDE left a construct native for %s, which does not declare it",
-		                        backend.Name());
+		throw InternalException("DECIDE left a construct native for %s, which does not declare it", backend.Name());
 	}
 	for (auto &gc : model.general_constraints) {
 		if (!DeclaresGeneralConstraint(constructs, gc.kind)) {
-			throw InternalException("DECIDE left a construct native for %s, which does not declare it",
-			                        backend.Name());
+			throw InternalException("DECIDE left a construct native for %s, which does not declare it", backend.Name());
 		}
 	}
 }
@@ -491,8 +486,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// per-row spec becomes a row per data row, one grouped spec a row per group. Captured here,
 	// before any `std::move(model)` below.
 	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size() +
-	                              model.general_constraints.size() +
-	                              model.indicator_constraints.size();
+	                              model.general_constraints.size() + model.indicator_constraints.size();
 	// A model with no solution is answered here, retaining it for diagnosis, rather than
 	// handed to a backend (SolverModel::ProvesInfeasible). On an unprefixed statement the
 	// retained model is simply discarded and the operator throws its static error.
@@ -542,35 +536,33 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 }
 
 void ThrowDecideSolveError(const SolverResult &result, SolverBackend backend) {
-    // A query with no DIAGNOSE prefix reports its state and stops. It does not name a
-    // clause and does not suggest a repair — working either out means running the
-    // diagnosis engines, which is exactly what the prefix asks for and what an
-    // unprefixed query must not be made to pay for. So: the state, and how to ask for
-    // more.
-    switch (result.status) {
-    case SolverStatus::INFEASIBLE:
-        throw InvalidInputException(DecideInfeasibleMessage(true));
-    case SolverStatus::UNBOUNDED:
-        throw InvalidInputException(DecideUnboundedMessage(true));
-    case SolverStatus::INF_OR_UNBD:
-        throw InvalidInputException(
-            "DECIDE optimization is infeasible or unbounded. "
-            "Prefix the query with DIAGNOSE to see which clause to change.");
-    case SolverStatus::TIME_LIMIT:
-        throw InvalidInputException(
-            "DECIDE optimization hit the time limit. Simplify the constraints or reduce the input size.");
-    case SolverStatus::ITERATION_LIMIT:
-        throw InvalidInputException(
-            "DECIDE optimization hit the iteration limit. Simplify the constraints.");
-    case SolverStatus::OTHER:
-    case SolverStatus::OPTIMAL:
-    case SolverStatus::SUBOPTIMAL:
-        // OTHER, or OPTIMAL / SUBOPTIMAL passed here in error: fall through to the
-        // generic message. (SUBOPTIMAL routes to the SOLVED success terminal, so it
-        // never reaches this error path in practice — it is listed only so -Wswitch
-        // flags any future addition; control still reaches the throw below.)
-        break;
-    }
+	// A query with no DIAGNOSE prefix reports its state and stops. It does not name a
+	// clause and does not suggest a repair — working either out means running the
+	// diagnosis engines, which is exactly what the prefix asks for and what an
+	// unprefixed query must not be made to pay for. So: the state, and how to ask for
+	// more.
+	switch (result.status) {
+	case SolverStatus::INFEASIBLE:
+		throw InvalidInputException(DecideInfeasibleMessage(true));
+	case SolverStatus::UNBOUNDED:
+		throw InvalidInputException(DecideUnboundedMessage(true));
+	case SolverStatus::INF_OR_UNBD:
+		throw InvalidInputException("DECIDE optimization is infeasible or unbounded. "
+		                            "Prefix the query with DIAGNOSE to see which clause to change.");
+	case SolverStatus::TIME_LIMIT:
+		throw InvalidInputException(
+		    "DECIDE optimization hit the time limit. Simplify the constraints or reduce the input size.");
+	case SolverStatus::ITERATION_LIMIT:
+		throw InvalidInputException("DECIDE optimization hit the iteration limit. Simplify the constraints.");
+	case SolverStatus::OTHER:
+	case SolverStatus::OPTIMAL:
+	case SolverStatus::SUBOPTIMAL:
+		// OTHER, or OPTIMAL / SUBOPTIMAL passed here in error: fall through to the
+		// generic message. (SUBOPTIMAL routes to the SOLVED success terminal, so it
+		// never reaches this error path in practice — it is listed only so -Wswitch
+		// flags any future addition; control still reaches the throw below.)
+		break;
+	}
 	// No state to name: the solver stopped without an answer. Say which solver, in its own words when it has some,
 	// never by a status number the user cannot look up.
 	string reason = result.status_text.empty() ? string() : " (" + result.status_text + ")";

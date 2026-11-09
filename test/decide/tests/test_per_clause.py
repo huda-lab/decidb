@@ -39,12 +39,14 @@ def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(s_suppkey AS BIGINT),
                CAST(s_acctbal AS DOUBLE),
                CAST(s_nationkey AS BIGINT)
         FROM supplier
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("per_basic")
@@ -54,7 +56,9 @@ def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     for group_key, rows in _group_indices(data, lambda r: r[2]).items():
         oracle_solver.add_constraint(
             {f"x_{i}": 1.0 for i in rows},
-            "<=", 5.0, name=f"per_{group_key}",
+            "<=",
+            5.0,
+            name=f"per_{group_key}",
         )
     oracle_solver.set_objective(
         {f"x_{i}": data[i][1] for i in range(n)},
@@ -64,22 +68,31 @@ def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("s_acctbal")])},
     )
     perf_tracker.record(
-        "per_basic", decidb_time, build_time, result.solve_time_seconds,
-        n, n, len(set(r[2] for r in data)),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "per_basic",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(set(r[2] for r in data)),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_with_integer_variable(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_per_with_integer_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`per` with integer variables and a weighted constraint."""
     sql = """
         SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost, x
@@ -92,13 +105,15 @@ def test_per_with_integer_variable(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_suppkey AS BIGINT),
                CAST(ps_availqty AS DOUBLE),
                CAST(ps_supplycost AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("per_integer")
@@ -108,7 +123,9 @@ def test_per_with_integer_variable(
     for group_key, rows in _group_indices(data, lambda r: r[0]).items():
         oracle_solver.add_constraint(
             {f"x_{i}": data[i][3] for i in rows},
-            "<=", 1000.0, name=f"per_{group_key}",
+            "<=",
+            1000.0,
+            name=f"per_{group_key}",
         )
     oracle_solver.set_objective(
         {f"x_{i}": data[i][2] for i in range(n)},
@@ -118,23 +135,32 @@ def test_per_with_integer_variable(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "per_with_integer_variable", decidb_time, build_time,
-        result.solve_time_seconds, n, n, len(set(r[0] for r in data)),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "per_with_integer_variable",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(set(r[0] for r in data)),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 @pytest.mark.correctness
-def test_per_combined_with_when(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_per_combined_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`per` and `when` used together — group-level constraint with row filter."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -149,14 +175,16 @@ def test_per_combined_with_when(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                CAST(l_returnflag AS VARCHAR)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("per_when")
@@ -166,24 +194,29 @@ def test_per_combined_with_when(
     for group_key, rows in _group_indices(data, lambda r: r[4]).items():
         oracle_solver.add_constraint(
             {f"x_{i}": data[i][3] for i in rows},
-            "<=", 50.0, name=f"per_{group_key}",
+            "<=",
+            50.0,
+            name=f"per_{group_key}",
         )
     oracle_solver.add_constraint(
         {f"x_{i}": 1.0 for i in range(n)},
-        "<=", 30.0, name="global_cap",
+        "<=",
+        30.0,
+        name="global_cap",
     )
     oracle_solver.set_objective(
-        {
-            f"x_{i}": data[i][2] if data[i][4] == "R" else 0.0
-            for i in range(n)
-        },
+        {f"x_{i}": data[i][2] if data[i][4] == "R" else 0.0 for i in range(n)},
         ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {
             "x": (
                 float(row[decidb_cols.index("l_extendedprice")])
@@ -193,19 +226,24 @@ def test_per_combined_with_when(
         },
     )
     perf_tracker.record(
-        "per_combined_with_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n, len(set(r[4] for r in data)) + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "per_combined_with_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(set(r[4] for r in data)) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.cons_comparison
 @pytest.mark.correctness
-def test_per_not_equal(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_per_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`per` with <> operator — Big-M disjunction generated per group."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_returnflag, l_extendedprice, x
@@ -219,13 +257,15 @@ def test_per_not_equal(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_returnflag AS VARCHAR),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("per_ne")
@@ -236,11 +276,15 @@ def test_per_not_equal(
         _add_ne_bigm(
             oracle_solver,
             {f"x_{i}": 1.0 for i in rows},
-            rhs=3.0, row_count=len(rows), name=f"ne_{group_key}",
+            rhs=3.0,
+            row_count=len(rows),
+            name=f"ne_{group_key}",
         )
     oracle_solver.add_constraint(
         {f"x_{i}": 1.0 for i in range(n)},
-        "<=", 15.0, name="global_cap",
+        "<=",
+        15.0,
+        name="global_cap",
     )
     oracle_solver.set_objective(
         {f"x_{i}": data[i][3] for i in range(n)},
@@ -250,14 +294,25 @@ def test_per_not_equal(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "per_not_equal", decidb_time, build_time, result.solve_time_seconds,
-        n, n, len(set(r[2] for r in data)) + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "per_not_equal",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(set(r[2] for r in data)) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -379,9 +434,7 @@ def test_per_null_group_key(decidb_cli, scope_solver, scope, when):
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_different_grouping_columns(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_per_different_grouping_columns(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Two `per` constraints on different columns — overlapping group structures."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
@@ -396,14 +449,16 @@ def test_per_different_grouping_columns(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_returnflag AS VARCHAR),
                CAST(l_linestatus AS VARCHAR),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("per_two_groupings")
@@ -413,12 +468,16 @@ def test_per_different_grouping_columns(
     for group_key, rows in _group_indices(data, lambda r: r[2]).items():
         oracle_solver.add_constraint(
             {f"x_{i}": 1.0 for i in rows},
-            "<=", 5.0, name=f"per_rflag_{group_key}",
+            "<=",
+            5.0,
+            name=f"per_rflag_{group_key}",
         )
     for group_key, rows in _group_indices(data, lambda r: r[3]).items():
         oracle_solver.add_constraint(
             {f"x_{i}": 1.0 for i in rows},
-            "<=", 8.0, name=f"per_lstatus_{group_key}",
+            "<=",
+            8.0,
+            name=f"per_lstatus_{group_key}",
         )
     oracle_solver.set_objective(
         {f"x_{i}": data[i][4] for i in range(n)},
@@ -428,15 +487,25 @@ def test_per_different_grouping_columns(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "per_different_grouping_columns", decidb_time, build_time,
-        result.solve_time_seconds, n, n,
+        "per_different_grouping_columns",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
         len(set(r[2] for r in data)) + len(set(r[3] for r in data)),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -445,9 +514,7 @@ def test_per_different_grouping_columns(
 @pytest.mark.cons_between
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_between_per_oracle(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_real_between_per_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`per` grouping combined with BETWEEN on a REAL variable.
 
     Regression test for the integer-step rewrite sweep. The `per` rewrite
@@ -468,12 +535,14 @@ def test_real_between_per_oracle(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                l_linestatus,
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 25
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -485,23 +554,37 @@ def test_real_between_per_oracle(
     for group_key, rows in groups.items():
         oracle_solver.add_constraint(
             {vnames[i]: 1.0 for i in rows},
-            "<=", 10.0, name=f"per_{group_key}",
+            "<=",
+            10.0,
+            name=f"per_{group_key}",
         )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "real_between_per_oracle", decidb_time, build_time,
-        result.solve_time_seconds, n, n, len(groups),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "real_between_per_oracle",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 

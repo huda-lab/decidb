@@ -103,7 +103,7 @@ static string ColLabel(const vector<ColumnProvenance> &cols, int col) {
 //! (e.g. "x", "2*x + 3*y"). Coefficient ±1 is elided to keep the rendering close
 //! to what the user wrote.
 static string FormatTerms(const vector<int> &indices, const vector<double> &coeffs,
-                   const vector<ColumnProvenance> &cols) {
+                          const vector<ColumnProvenance> &cols) {
 	string out;
 	for (idx_t i = 0; i < indices.size(); i++) {
 		double c = coeffs[i];
@@ -143,16 +143,14 @@ struct TermGrouping {
 //! preserve across them), `FormatSumLhs` gives each its own key so they stay separate
 //! `SUM(...)` terms.
 static TermGrouping GroupTermsByVariable(const vector<int> &indices, const vector<double> &coeffs,
-                                  const vector<ColumnProvenance> &cols, bool merge_auxiliaries) {
+                                         const vector<ColumnProvenance> &cols, bool merge_auxiliaries) {
 	TermGrouping g;
 	for (idx_t i = 0; i < indices.size(); i++) {
 		int col = indices[i];
-		idx_t var_key = (col >= 0 && static_cast<idx_t>(col) < cols.size())
-		                    ? cols[col].decide_var_idx
-		                    : DConstants::INVALID_INDEX;
-		idx_t key = (merge_auxiliaries || var_key != DConstants::INVALID_INDEX)
-		                ? var_key
-		                : DConstants::INVALID_INDEX - 1 - i;
+		idx_t var_key =
+		    (col >= 0 && static_cast<idx_t>(col) < cols.size()) ? cols[col].decide_var_idx : DConstants::INVALID_INDEX;
+		idx_t key =
+		    (merge_auxiliaries || var_key != DConstants::INVALID_INDEX) ? var_key : DConstants::INVALID_INDEX - 1 - i;
 		double c = coeffs[i];
 		auto it = g.coeff_of.find(key);
 		if (it == g.coeff_of.end()) {
@@ -187,8 +185,8 @@ static std::map<idx_t, string> WeightLabelOf(const vector<std::pair<idx_t, strin
 //! coefficient). Returns false (caller falls back to the raw reconstruction) for a
 //! data-varying coefficient (`AVG(price * x)`), where no single literal coefficient
 //! exists to re-quote.
-static bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeffs,
-                  const vector<ColumnProvenance> &cols, string &out) {
+static bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeffs, const vector<ColumnProvenance> &cols,
+                         string &out) {
 	TermGrouping g = GroupTermsByVariable(indices, coeffs, cols, /*merge_auxiliaries=*/true);
 	const auto &order = g.order;
 	auto &coeff_of = g.coeff_of;
@@ -292,9 +290,9 @@ static bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeff
 //! data-varying term has no symbolic name — the caller then falls back to the raw
 //! reconstruction, i.e. to today's behaviour.
 static bool FormatFoldedSumLhs(const vector<int> &indices, const vector<FoldedAggTerm> &folded,
-                        const vector<ColumnProvenance> &cols,
-                        const vector<std::pair<idx_t, string>> &weight_labels, string &out,
-                        const char *agg_name) {
+                               const vector<ColumnProvenance> &cols,
+                               const vector<std::pair<idx_t, string>> &weight_labels, string &out,
+                               const char *agg_name) {
 	std::map<idx_t, const FoldedAggTerm *> term_of;
 	for (const auto &t : folded) {
 		term_of[t.decide_var_idx] = &t;
@@ -411,8 +409,7 @@ static string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenanc
 //! LHS for a quadratic constraint: the linear part plus its Q terms, rendered as
 //! `POWER(x, 2)` (diagonal) or `x*y` (off-diagonal). Best-effort labelling; the
 //! slack only ever touches the linear RHS (I2.d).
-static string FormatQuadraticLhs(const SolverModel::QuadraticConstraint &qc,
-                          const vector<ColumnProvenance> &cols) {
+static string FormatQuadraticLhs(const SolverModel::QuadraticConstraint &qc, const vector<ColumnProvenance> &cols) {
 	string out = FormatTerms(qc.linear_indices, qc.linear_coefficients, cols);
 	if (out == "0") {
 		out.clear();
@@ -444,8 +441,7 @@ const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model, const
 	return &model.constraint_sources[source_id];
 }
 
-string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row,
-	                  const vector<ColumnProvenance> &columns) {
+string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row, const vector<ColumnProvenance> &columns) {
 	auto source = FindConstraintSource(model, row.provenance);
 	if (!source) {
 		return FormatLhs(row, columns);
@@ -469,15 +465,14 @@ string SourceWrittenRhs(const SolverModel &model, const ConstraintProvenance &pr
 }
 
 string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::QuadraticConstraint &row,
-	                           const vector<ColumnProvenance> &columns) {
+                               const vector<ColumnProvenance> &columns) {
 	auto source = FindConstraintSource(model, row.provenance);
 	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatQuadraticLhs(row, columns);
 }
 
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback) {
 	auto source = FindConstraintSource(model, provenance);
-	if (source && source->rhs_kind == ConstraintSourceRhsKind::DATA_EXPRESSION &&
-	    !source->canonical_rhs.empty()) {
+	if (source && source->rhs_kind == ConstraintSourceRhsKind::DATA_EXPRESSION && !source->canonical_rhs.empty()) {
 		return source->canonical_rhs;
 	}
 	return provenance.rhs_label.empty() ? FormatNum(fallback) : provenance.rhs_label;
@@ -722,16 +717,14 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 	};
 	for (const auto &row : model.constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
-		    row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
-		    !IsUnreachableBound(row.sense, row.rhs)) {
+		    row.provenance.removal_group_id != DConstants::INVALID_INDEX || !IsUnreachableBound(row.sense, row.rhs)) {
 			continue;
 		}
 		record(row.provenance, SourceAwareLhs(model, row, columns), row.rhs, row.sense);
 	}
 	for (const auto &row : model.quadratic_constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
-		    row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
-		    !IsUnreachableBound(row.sense, row.rhs)) {
+		    row.provenance.removal_group_id != DConstants::INVALID_INDEX || !IsUnreachableBound(row.sense, row.rhs)) {
 			continue;
 		}
 		record(row.provenance, SourceAwareQuadraticLhs(model, row, columns), row.rhs, row.sense);

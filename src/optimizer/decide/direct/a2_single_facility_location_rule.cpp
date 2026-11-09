@@ -433,7 +433,8 @@ public:
 		// The class plan reads the source, and the rows read it again to be given their class's answer.
 		condition->source_reads = 2;
 		if (ir.decisions[0].scope == DecideVarScope::KEYED) {
-			// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it takes.
+			// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it
+			// takes.
 			for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
 				condition->keys.push_back(element.Copy());
 			}
@@ -732,8 +733,8 @@ private:
 			return state_index == DConstants::INVALID_INDEX ? value.Copy()
 			                                                : DirectOverProjection(value, source_bindings, state_index);
 		};
-		raw.clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over_state,
-		                                       raw.checks);
+		raw.clauses =
+		    DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, over_state, raw.checks);
 		condition.loss->LayoutRaw(tools, p1, over_state, loss_columns, raw.checks);
 		return raw;
 	}
@@ -826,8 +827,10 @@ private:
 		result.valid = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, aggregates.valid)));
 		condition.loss->CarryClasses(tools, p3, loss_columns);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			result.clause_lowers.push_back(p3.Add(calc.Out(calc.Cast(aggregates.lowers[j].lower, LogicalType::DOUBLE))));
-			result.clause_uppers.push_back(p3.Add(calc.Out(calc.Cast(aggregates.uppers[j].upper, LogicalType::DOUBLE))));
+			result.clause_lowers.push_back(
+			    p3.Add(calc.Out(calc.Cast(aggregates.lowers[j].lower, LogicalType::DOUBLE))));
+			result.clause_uppers.push_back(
+			    p3.Add(calc.Out(calc.Cast(aggregates.uppers[j].upper, LogicalType::DOUBLE))));
 		}
 		result.floor = p3.Add(calc.Out(DirectStaticFloor(calc, condition.lower, aggregates.lowering_whens)));
 		return result;

@@ -138,22 +138,20 @@ class TestSolidBranches:
         subj = "per l_orderkey: sum(x) by (l_orderkey) >= 5"
         assert _attr(q, "clause", "edit_source", subject=subj) == "source_literal"
         assert _attr(q, "clause", "offset_scope", subject=subj) == "clause"
-        assert int(float(_attr(q, "clause", "amount", subject=subj))) == max(
-            5 - s for s in sizes.values())
+        assert int(float(_attr(q, "clause", "amount", subject=subj))) == max(5 - s for s in sizes.values())
         assert not [r for r in q if r["attribute"] == "group"]
 
         # --- expanded mode: one expanded_group edit per failing order ---
         e_result = _diagnose(
-            cli, sql,
+            cli,
+            sql,
             extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
         )
         e = _rows(e_result)
         reported = {r["value"] for r in e if r["attribute"] == "group"}
         assert reported == set(sizes)
         # The clause reads as written; the group is its own column.
-        by_group = {
-            f["group"]: f for f in _flat(e_result) if f["edit_source"] == "expanded_group"
-        }
+        by_group = {f["group"]: f for f in _flat(e_result) if f["edit_source"] == "expanded_group"}
         for gkey, size in sizes.items():
             edit = by_group[gkey]
             assert edit["clause"] == "per l_orderkey: sum(x) by (l_orderkey) >= 5"
@@ -171,9 +169,7 @@ class TestSolidBranches:
         cli = request.getfixturevalue(cli_fixture)
         # A BOOLEAN can reach at most 1, so the tightest row (max l_quantity) needs a
         # -(max-1) offset. Take it from the data, not a hand-computed constant.
-        expected_delta = _scalar(
-            cli, "SELECT max(l_quantity) - 1 FROM lineitem WHERE l_orderkey <= 20"
-        )
+        expected_delta = _scalar(cli, "SELECT max(l_quantity) - 1 FROM lineitem WHERE l_orderkey <= 20")
 
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 20 "
@@ -201,16 +197,15 @@ class TestSolidBranches:
             "DECIDE x(BOOL) SUCH THAT x >= l_quantity MAXIMIZE SUM(x)"
         )
         result = _diagnose(
-            cli, sql,
+            cli,
+            sql,
             extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
         )
         rows = _rows(result)
 
         sources = {r["value"] for r in rows if r["attribute"] == "edit_source"}
         assert sources == {"expanded_row"}
-        assert all(
-            r["value"] == "row" for r in rows if r["attribute"] == "offset_scope"
-        )
+        assert all(r["value"] == "row" for r in rows if r["attribute"] == "offset_scope")
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_D2_many_groups_each_get_their_own_row(self, request, cli_fixture):
@@ -224,10 +219,13 @@ class TestSolidBranches:
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
             "DECIDE x(BOOL) SUCH THAT per l_orderkey: sum(x) by (l_orderkey) >= 5 MAXIMIZE SUM(x)"
         )
-        flat = _flat(_diagnose(
-            cli, sql,
-            extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
-        ))
+        flat = _flat(
+            _diagnose(
+                cli,
+                sql,
+                extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
+            )
+        )
         # Every failing group gets its own row — a relation does not truncate, and the
         # user filters or aggregates it themselves.
         groups = {f["group"] for f in flat if f["edit_source"] == "expanded_group"}

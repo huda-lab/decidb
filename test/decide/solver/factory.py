@@ -21,4 +21,5 @@ def get_solver() -> OracleSolver:
         ) from exc
 
     from .gurobi_backend import GurobiSolver
+
     return GurobiSolver()

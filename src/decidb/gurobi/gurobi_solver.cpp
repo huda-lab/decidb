@@ -22,93 +22,93 @@ namespace duckdb {
 
 //! RAII wrapper for Gurobi C resources (uses function pointers from loader)
 struct GurobiGuard {
-    void *model = nullptr;
-    void *env = nullptr;
-    ~GurobiGuard() {
-        DecideProfileScope phase("gurobi.free_model");
-        auto &api = GurobiLoader::API();
-        if (model) {
-            api.freemodel(model);
-        }
-        if (env) {
-            phase.Next("gurobi.free_environment");
-            api.freeenv(env);
-        }
-    }
+	void *model = nullptr;
+	void *env = nullptr;
+	~GurobiGuard() {
+		DecideProfileScope phase("gurobi.free_model");
+		auto &api = GurobiLoader::API();
+		if (model) {
+			api.freemodel(model);
+		}
+		if (env) {
+			phase.Next("gurobi.free_environment");
+			api.freeenv(env);
+		}
+	}
 };
 
 bool GurobiSolver::IsAvailable() {
-    // Result is cached for the process lifetime. A Gurobi license that expires
-    // mid-session will not be detected until the next fresh process start.
-    static bool available = []() {
-        DecideProfileScope phase("gurobi.availability_probe");
-        if (!GurobiLoader::Load()) {
-            return false;
-        }
-        // Trial: can we actually create and start an environment? (license check)
-        auto &api = GurobiLoader::API();
-        void *env = nullptr;
-        bool ok = false;
-        if (api.emptyenv_internal(&env, api.version_major, api.version_minor, api.version_tech) == 0 && env) {
-            api.setintparam(env, "OutputFlag", 0);
-            ok = (api.startenv(env) == 0);
-        }
-        if (env) {
-            api.freeenv(env);
-        }
-        return ok;
-    }();
-    return available;
+	// Result is cached for the process lifetime. A Gurobi license that expires
+	// mid-session will not be detected until the next fresh process start.
+	static bool available = []() {
+		DecideProfileScope phase("gurobi.availability_probe");
+		if (!GurobiLoader::Load()) {
+			return false;
+		}
+		// Trial: can we actually create and start an environment? (license check)
+		auto &api = GurobiLoader::API();
+		void *env = nullptr;
+		bool ok = false;
+		if (api.emptyenv_internal(&env, api.version_major, api.version_minor, api.version_tech) == 0 && env) {
+			api.setintparam(env, "OutputFlag", 0);
+			ok = (api.startenv(env) == 0);
+		}
+		if (env) {
+			api.freeenv(env);
+		}
+		return ok;
+	}();
+	return available;
 }
 
 SolverModelClass GurobiSolver::ModelClasses() {
-    // Model classes Gurobi accepts directly. These are gates: nothing lowers a
-    // non-convex objective into linear rows, so a backend that says false here
-    // makes the query unrunnable rather than slow. A fact about Gurobi, not about
-    // this host, so nothing here opens the library.
-    SolverModelClass classes;
-    classes.quadratic_constraints = true;
-    classes.nonconvex_quadratic = true;
-    classes.miqp = true;
-    // Gurobi's QP solver handles a rank-deficient Q — the flat valley one squared
-    // expression over several decisions produces — and reaches the true optimum on
-    // it. Verified against the sweep behind the HiGHS refusal.
-    classes.singular_quadratic = true;
-    return classes;
+	// Model classes Gurobi accepts directly. These are gates: nothing lowers a
+	// non-convex objective into linear rows, so a backend that says false here
+	// makes the query unrunnable rather than slow. A fact about Gurobi, not about
+	// this host, so nothing here opens the library.
+	SolverModelClass classes;
+	classes.quadratic_constraints = true;
+	classes.nonconvex_quadratic = true;
+	classes.miqp = true;
+	// Gurobi's QP solver handles a rank-deficient Q — the flat valley one squared
+	// expression over several decisions produces — and reaches the true optimum on
+	// it. Verified against the sweep behind the HiGHS refusal.
+	classes.singular_quadratic = true;
+	return classes;
 }
 
 const SolverConstructSupport &GurobiSolver::Constructs() {
-    // Cached alongside IsAvailable(): both are answers about the library that was
-    // loaded into THIS process, and neither can change without a fresh start.
-    //
-    // This reports what Gurobi CAN do. The test-only DECIDB_NATIVE_CONSTRUCTS switch is
-    // not applied here — SolverBackend::Constructs() masks constructs centrally, for
-    // every backend, so no backend carries its own copy of the switch.
-    static const SolverConstructSupport constructs = []() {
-        SolverConstructSupport supported;
-        // Each flag is true only when the loaded library actually exported the symbol
-        // behind it — a construct is partly a runtime fact — and each is
-        // A/B-verifiable: DECIDB_NATIVE_CONSTRUCTS=off forces every one back down its
-        // lowering path, which must reach the same optimum. A flag that cannot be
-        // tested that way does not belong in the table.
-        //
-        // Load() FIRST, and note this answer is cached for the process: reading the
-        // symbol table before the library is open would report every construct as
-        // unexported, and nothing later could undo that false negative. Load() is itself
-        // call_once, so asking here costs nothing on the paths that already ran it.
-        //
-        // The remaining construct (bilinear) stays false until the loader binds its
-        // symbols and stage 08 knows how to emit it: a capability may not be declared
-        // ahead of the code that honors it.
-        if (GurobiLoader::Load()) {
-            auto &api = GurobiLoader::API();
-            supported.abs = api.addgenconstrAbs != nullptr;
-            supported.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
-            supported.not_equal = api.addgenconstrIndicator != nullptr;
-        }
-        return supported;
-    }();
-    return constructs;
+	// Cached alongside IsAvailable(): both are answers about the library that was
+	// loaded into THIS process, and neither can change without a fresh start.
+	//
+	// This reports what Gurobi CAN do. The test-only DECIDB_NATIVE_CONSTRUCTS switch is
+	// not applied here — SolverBackend::Constructs() masks constructs centrally, for
+	// every backend, so no backend carries its own copy of the switch.
+	static const SolverConstructSupport constructs = []() {
+		SolverConstructSupport supported;
+		// Each flag is true only when the loaded library actually exported the symbol
+		// behind it — a construct is partly a runtime fact — and each is
+		// A/B-verifiable: DECIDB_NATIVE_CONSTRUCTS=off forces every one back down its
+		// lowering path, which must reach the same optimum. A flag that cannot be
+		// tested that way does not belong in the table.
+		//
+		// Load() FIRST, and note this answer is cached for the process: reading the
+		// symbol table before the library is open would report every construct as
+		// unexported, and nothing later could undo that false negative. Load() is itself
+		// call_once, so asking here costs nothing on the paths that already ran it.
+		//
+		// The remaining construct (bilinear) stays false until the loader binds its
+		// symbols and stage 08 knows how to emit it: a capability may not be declared
+		// ahead of the code that honors it.
+		if (GurobiLoader::Load()) {
+			auto &api = GurobiLoader::API();
+			supported.abs = api.addgenconstrAbs != nullptr;
+			supported.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
+			supported.not_equal = api.addgenconstrIndicator != nullptr;
+		}
+		return supported;
+	}();
+	return constructs;
 }
 
 namespace {
@@ -120,44 +120,44 @@ namespace {
 //! Continue() is just another RunAndReadback() with a fresh chunk budget.
 class GurobiSession : public SolverSession {
 public:
-    void SetInterruptPoll(std::function<bool()> poll) override {
-        should_interrupt = std::move(poll);
-    }
+	void SetInterruptPoll(std::function<bool()> poll) override {
+		should_interrupt = std::move(poll);
+	}
 
 protected:
-    SolverResult SolveChunk(const SolverModel &ilp, double time_limit_seconds) override {
-        Load(ilp);
-        return RunAndReadback(time_limit_seconds);
-    }
+	SolverResult SolveChunk(const SolverModel &ilp, double time_limit_seconds) override {
+		Load(ilp);
+		return RunAndReadback(time_limit_seconds);
+	}
 
-    SolverResult ContinueChunk(double time_limit_seconds) override {
-        // Precondition: SolveChunk() already loaded the model into `guard`.
-        return RunAndReadback(time_limit_seconds);
-    }
+	SolverResult ContinueChunk(double time_limit_seconds) override {
+		// Precondition: SolveChunk() already loaded the model into `guard`.
+		return RunAndReadback(time_limit_seconds);
+	}
 
 private:
-    GurobiGuard guard;
-    idx_t total_vars = 0;
-    //! When set, a watcher thread polls this during optimize() and calls GRBterminate()
-    //! to cut the solve short; empty = boundary-only (the default). Ordinary execution
-    //! installs it for the initial solve as well as for every Continue() chunk.
-    std::function<bool()> should_interrupt;
+	GurobiGuard guard;
+	idx_t total_vars = 0;
+	//! When set, a watcher thread polls this during optimize() and calls GRBterminate()
+	//! to cut the solve short; empty = boundary-only (the default). Ordinary execution
+	//! installs it for the initial solve as well as for every Continue() chunk.
+	std::function<bool()> should_interrupt;
 
-    void Load(const SolverModel &ilp);
-    SolverResult RunAndReadback(double time_limit_seconds);
+	void Load(const SolverModel &ilp);
+	SolverResult RunAndReadback(double time_limit_seconds);
 };
 
 void GurobiSession::Load(const SolverModel &ilp) {
-    DecideProfileScope profile("gurobi.load");
-    DecideProfileScope phase("gurobi.environment");
-    auto &api = GurobiLoader::API();
-    total_vars = ilp.num_vars;
+	DecideProfileScope profile("gurobi.load");
+	DecideProfileScope phase("gurobi.environment");
+	auto &api = GurobiLoader::API();
+	total_vars = ilp.num_vars;
 
-    //===--------------------------------------------------------------------===//
-    // 1. Create Gurobi environment
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 1. Create Gurobi environment
+	//===--------------------------------------------------------------------===//
 
-    int error = api.emptyenv_internal(&guard.env, api.version_major, api.version_minor, api.version_tech);
+	int error = api.emptyenv_internal(&guard.env, api.version_major, api.version_minor, api.version_tech);
 	if (error || !guard.env) {
 		// Gurobi's own words when it made an environment to hold them, never its error number.
 		string reason = guard.env ? StringUtil::Format(" (%s)", api.geterrormsg(guard.env)) : string();
@@ -165,7 +165,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 		                        "Check that GUROBI_HOME is set and license is valid.",
 		                        reason);
 	}
-    api.setintparam(guard.env, "OutputFlag", std::getenv("DECIDB_PROFILE_SOLVER_LOG") ? 1 : 0);
+	api.setintparam(guard.env, "OutputFlag", std::getenv("DECIDB_PROFILE_SOLVER_LOG") ? 1 : 0);
 	// By default a query answers with the optimum (`decide_mip_gap` = 0), not an incumbent within Gurobi's default
 	// relative gap of 1e-4: on a 1.6M-row selection that default returned objectives up to 0.005% short of the
 	// optimum, different on every run. A user who accepts a near-optimal answer sets the gap. HiGHS reads the same
@@ -177,279 +177,255 @@ void GurobiSession::Load(const SolverModel &ilp) {
 	api.setdblparam(guard.env, "FeasibilityTol", DECIDE_FEASIBILITY_TOLERANCE);
 	api.setdblparam(guard.env, "OptimalityTol", DECIDE_OPTIMALITY_TOLERANCE);
 	// Note: the TimeLimit is NOT set here — it is a per-chunk budget applied in
-    // RunAndReadback() (on the live model's env), so a warm Continue() can raise it
-    // without a reload.
-    // Enable non-convex QP solving via spatial branching when needed
-    if (ilp.nonconvex_quadratic) {
-        api.setintparam(guard.env, "NonConvex", 2);
-    }
-    error = api.startenv(guard.env);
+	// RunAndReadback() (on the live model's env), so a warm Continue() can raise it
+	// without a reload.
+	// Enable non-convex QP solving via spatial branching when needed
+	if (ilp.nonconvex_quadratic) {
+		api.setintparam(guard.env, "NonConvex", 2);
+	}
+	error = api.startenv(guard.env);
 	if (error) {
 		throw InternalException("Failed to start Gurobi environment (%s). "
 		                        "Check that GUROBI_HOME is set and license is valid.",
 		                        api.geterrormsg(guard.env));
 	}
 
-    //===--------------------------------------------------------------------===//
-    // 2. Create model with variables
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 2. Create model with variables
+	//===--------------------------------------------------------------------===//
 
-    // An open column box has to arrive as Gurobi's OWN infinity, not ours. The model
-    // builder writes 1e30 for "no bound" and every DeciDB-side check reads it that way
-    // (DECIDE_EFFECTIVE_INFINITY is 1e20), but GRB_INFINITY is 1e100 — so 1e30 lands as a
-    // perfectly finite bound. Gurobi then solves an unbounded query to "optimality"
-    // against that ceiling, and an INTEGER column comes back at its integer limit
-    // (2147483647) instead of the query being reported as unbounded. Translating here
-    // keeps the sentinel local to each backend rather than forcing one on the model.
-    phase.Next("gurobi.variable_arrays");
-    vector<double> col_lower(ilp.col_lower.begin(), ilp.col_lower.end());
-    vector<double> col_upper(ilp.col_upper.begin(), ilp.col_upper.end());
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (DecideIsOpenBelow(col_lower[i])) {
-            col_lower[i] = -GRB_INFINITY_VALUE;
-        }
-        if (DecideIsOpenAbove(col_upper[i])) {
-            col_upper[i] = GRB_INFINITY_VALUE;
-        }
-    }
+	// An open column box has to arrive as Gurobi's OWN infinity, not ours. The model
+	// builder writes 1e30 for "no bound" and every DeciDB-side check reads it that way
+	// (DECIDE_EFFECTIVE_INFINITY is 1e20), but GRB_INFINITY is 1e100 — so 1e30 lands as a
+	// perfectly finite bound. Gurobi then solves an unbounded query to "optimality"
+	// against that ceiling, and an INTEGER column comes back at its integer limit
+	// (2147483647) instead of the query being reported as unbounded. Translating here
+	// keeps the sentinel local to each backend rather than forcing one on the model.
+	phase.Next("gurobi.variable_arrays");
+	vector<double> col_lower(ilp.col_lower.begin(), ilp.col_lower.end());
+	vector<double> col_upper(ilp.col_upper.begin(), ilp.col_upper.end());
+	for (idx_t i = 0; i < total_vars; i++) {
+		if (DecideIsOpenBelow(col_lower[i])) {
+			col_lower[i] = -GRB_INFINITY_VALUE;
+		}
+		if (DecideIsOpenAbove(col_upper[i])) {
+			col_upper[i] = GRB_INFINITY_VALUE;
+		}
+	}
 
-    vector<char> var_types(total_vars);
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (ilp.is_binary[i]) {
-            var_types[i] = GRB_BINARY;
-        } else if (ilp.is_integer[i]) {
-            var_types[i] = GRB_INTEGER;
-        } else {
-            var_types[i] = GRB_CONTINUOUS;
-        }
-    }
+	vector<char> var_types(total_vars);
+	for (idx_t i = 0; i < total_vars; i++) {
+		if (ilp.is_binary[i]) {
+			var_types[i] = GRB_BINARY;
+		} else if (ilp.is_integer[i]) {
+			var_types[i] = GRB_INTEGER;
+		} else {
+			var_types[i] = GRB_CONTINUOUS;
+		}
+	}
 
-    phase.Next("gurobi.new_model");
-    error = api.newmodel(guard.env, &guard.model, "decidb_decide",
-                         (int)total_vars,
-                         const_cast<double *>(ilp.obj_coeffs.data()),
-                         col_lower.data(),
-                         col_upper.data(),
-                         var_types.data(), nullptr);
-    if (error) {
-        throw InternalException("Failed to create Gurobi model: %s",
-                                api.geterrormsg(guard.env));
-    }
+	phase.Next("gurobi.new_model");
+	error = api.newmodel(guard.env, &guard.model, "decidb_decide", (int)total_vars,
+	                     const_cast<double *>(ilp.obj_coeffs.data()), col_lower.data(), col_upper.data(),
+	                     var_types.data(), nullptr);
+	if (error) {
+		throw InternalException("Failed to create Gurobi model: %s", api.geterrormsg(guard.env));
+	}
 
-    int grb_sense = ilp.maximize ? GRB_MAXIMIZE : GRB_MINIMIZE;
-    error = api.setintattr(guard.model, GRB_INT_ATTR_MODELSENSE, grb_sense);
-    if (error) {
-        throw InternalException("Failed to set Gurobi model sense: %s",
-                                api.geterrormsg(guard.env));
-    }
+	int grb_sense = ilp.maximize ? GRB_MAXIMIZE : GRB_MINIMIZE;
+	error = api.setintattr(guard.model, GRB_INT_ATTR_MODELSENSE, grb_sense);
+	if (error) {
+		throw InternalException("Failed to set Gurobi model sense: %s", api.geterrormsg(guard.env));
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 3. Add constraints
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 3. Add constraints
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("gurobi.linear_rows");
-    for (auto &constr : ilp.constraints) {
-        error = api.addconstr(guard.model, (int)constr.indices.size(),
-                             const_cast<int *>(constr.indices.data()),
-                             const_cast<double *>(constr.coefficients.data()),
-                             constr.sense, constr.rhs, nullptr);
-        if (error) {
-            // Use InvalidInputException so a malformed constraint rejects this query
-            // without invalidating the DuckDB session for subsequent queries.
-            throw InvalidInputException("Failed to add constraint to Gurobi: %s",
-                                        api.geterrormsg(guard.env));
-        }
-    }
+	phase.Next("gurobi.linear_rows");
+	for (auto &constr : ilp.constraints) {
+		error = api.addconstr(guard.model, (int)constr.indices.size(), const_cast<int *>(constr.indices.data()),
+		                      const_cast<double *>(constr.coefficients.data()), constr.sense, constr.rhs, nullptr);
+		if (error) {
+			// Use InvalidInputException so a malformed constraint rejects this query
+			// without invalidating the DuckDB session for subsequent queries.
+			throw InvalidInputException("Failed to add constraint to Gurobi: %s", api.geterrormsg(guard.env));
+		}
+	}
 
-    // 3b. Add quadratic constraints (QCQP)
-    phase.Next("gurobi.quadratic_rows");
-    for (auto &qc : ilp.quadratic_constraints) {
-        if (!api.addqconstr) {
-            throw InvalidInputException(
-                "Quadratic constraints require Gurobi with GRBaddqconstr support. "
-                "Your Gurobi version does not support this function.");
-        }
-        error = api.addqconstr(guard.model,
-                               (int)qc.linear_indices.size(),
-                               const_cast<int *>(qc.linear_indices.data()),
-                               const_cast<double *>(qc.linear_coefficients.data()),
-                               (int)qc.q_rows.size(),
-                               const_cast<int *>(qc.q_rows.data()),
-                               const_cast<int *>(qc.q_cols.data()),
-                               const_cast<double *>(qc.q_coefficients.data()),
-                               qc.sense, qc.rhs, nullptr);
-        if (error) {
-            throw InvalidInputException("Failed to add quadratic constraint to Gurobi: %s",
-                                        api.geterrormsg(guard.env));
-        }
-    }
+	// 3b. Add quadratic constraints (QCQP)
+	phase.Next("gurobi.quadratic_rows");
+	for (auto &qc : ilp.quadratic_constraints) {
+		if (!api.addqconstr) {
+			throw InvalidInputException("Quadratic constraints require Gurobi with GRBaddqconstr support. "
+			                            "Your Gurobi version does not support this function.");
+		}
+		error = api.addqconstr(guard.model, (int)qc.linear_indices.size(), const_cast<int *>(qc.linear_indices.data()),
+		                       const_cast<double *>(qc.linear_coefficients.data()), (int)qc.q_rows.size(),
+		                       const_cast<int *>(qc.q_rows.data()), const_cast<int *>(qc.q_cols.data()),
+		                       const_cast<double *>(qc.q_coefficients.data()), qc.sense, qc.rhs, nullptr);
+		if (error) {
+			throw InvalidInputException("Failed to add quadratic constraint to Gurobi: %s", api.geterrormsg(guard.env));
+		}
+	}
 
-    // 3b'. General constraints — constructs DeciDB left native rather than lowering.
-    // Pure translation: the model only ever holds a kind this backend declared in
-    // GurobiSolver::Constructs() (checked by AssertBackendAcceptsBuiltModel), and that
-    // declaration is itself gated on the loader having found the symbol.
-    phase.Next("gurobi.general_constraints");
-    for (auto &gc : ilp.general_constraints) {
-        switch (gc.kind) {
-        case GeneralConstraintKind::ABS: {
-            D_ASSERT(api.addgenconstrAbs && gc.argument_columns.size() == 1);
-            error = api.addgenconstrAbs(guard.model, nullptr, gc.result_column,
-                                        gc.argument_columns[0]);
-            break;
-        }
-        case GeneralConstraintKind::MIN: {
-            D_ASSERT(api.addgenconstrMin && !gc.argument_columns.empty());
-            // The trailing constant is a neutral element, not a participant: +inf can
-            // never be the minimum of the listed columns.
-            error = api.addgenconstrMin(guard.model, nullptr, gc.result_column,
-                                        static_cast<int>(gc.argument_columns.size()),
-                                        gc.argument_columns.data(), GRB_INFINITY_VALUE);
-            break;
-        }
-        case GeneralConstraintKind::MAX: {
-            D_ASSERT(api.addgenconstrMax && !gc.argument_columns.empty());
-            error = api.addgenconstrMax(guard.model, nullptr, gc.result_column,
-                                        static_cast<int>(gc.argument_columns.size()),
-                                        gc.argument_columns.data(), -GRB_INFINITY_VALUE);
-            break;
-        }
-        }
-        if (error) {
-            throw InvalidInputException("Failed to add general constraint to Gurobi: %s",
-                                        api.geterrormsg(guard.env));
-        }
-    }
+	// 3b'. General constraints — constructs DeciDB left native rather than lowering.
+	// Pure translation: the model only ever holds a kind this backend declared in
+	// GurobiSolver::Constructs() (checked by AssertBackendAcceptsBuiltModel), and that
+	// declaration is itself gated on the loader having found the symbol.
+	phase.Next("gurobi.general_constraints");
+	for (auto &gc : ilp.general_constraints) {
+		switch (gc.kind) {
+		case GeneralConstraintKind::ABS: {
+			D_ASSERT(api.addgenconstrAbs && gc.argument_columns.size() == 1);
+			error = api.addgenconstrAbs(guard.model, nullptr, gc.result_column, gc.argument_columns[0]);
+			break;
+		}
+		case GeneralConstraintKind::MIN: {
+			D_ASSERT(api.addgenconstrMin && !gc.argument_columns.empty());
+			// The trailing constant is a neutral element, not a participant: +inf can
+			// never be the minimum of the listed columns.
+			error = api.addgenconstrMin(guard.model, nullptr, gc.result_column,
+			                            static_cast<int>(gc.argument_columns.size()), gc.argument_columns.data(),
+			                            GRB_INFINITY_VALUE);
+			break;
+		}
+		case GeneralConstraintKind::MAX: {
+			D_ASSERT(api.addgenconstrMax && !gc.argument_columns.empty());
+			error = api.addgenconstrMax(guard.model, nullptr, gc.result_column,
+			                            static_cast<int>(gc.argument_columns.size()), gc.argument_columns.data(),
+			                            -GRB_INFINITY_VALUE);
+			break;
+		}
+		}
+		if (error) {
+			throw InvalidInputException("Failed to add general constraint to Gurobi: %s", api.geterrormsg(guard.env));
+		}
+	}
 
-    // 3b''. Indicator constraints — a row conditioned on a binary, rather than the
-    // Big-M that would otherwise stand in for the implication.
-    phase.Next("gurobi.indicators");
-    for (auto &ic : ilp.indicator_constraints) {
-        D_ASSERT(api.addgenconstrIndicator);
-        error = api.addgenconstrIndicator(guard.model, nullptr, ic.binary_column, ic.binary_value,
-                                          static_cast<int>(ic.indices.size()), ic.indices.data(),
-                                          ic.coefficients.data(), ic.sense, ic.rhs);
-        if (error) {
-            throw InvalidInputException("Failed to add indicator constraint to Gurobi: %s",
-                                        api.geterrormsg(guard.env));
-        }
-    }
+	// 3b''. Indicator constraints — a row conditioned on a binary, rather than the
+	// Big-M that would otherwise stand in for the implication.
+	phase.Next("gurobi.indicators");
+	for (auto &ic : ilp.indicator_constraints) {
+		D_ASSERT(api.addgenconstrIndicator);
+		error = api.addgenconstrIndicator(guard.model, nullptr, ic.binary_column, ic.binary_value,
+		                                  static_cast<int>(ic.indices.size()), ic.indices.data(),
+		                                  ic.coefficients.data(), ic.sense, ic.rhs);
+		if (error) {
+			throw InvalidInputException("Failed to add indicator constraint to Gurobi: %s", api.geterrormsg(guard.env));
+		}
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 3c. Add quadratic objective terms (QP/MIQP)
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 3c. Add quadratic objective terms (QP/MIQP)
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("gurobi.quadratic_objective");
-    if (ilp.has_quadratic_obj && !ilp.q_vals.empty()) {
-        error = api.addqpterms(guard.model,
-                               (int)ilp.q_vals.size(),
-                               const_cast<int *>(ilp.q_rows.data()),
-                               const_cast<int *>(ilp.q_cols.data()),
-                               const_cast<double *>(ilp.q_vals.data()));
-        if (error) {
-            throw InvalidInputException("Failed to add quadratic objective terms to Gurobi: %s",
-                                        api.geterrormsg(guard.env));
-        }
-    }
+	phase.Next("gurobi.quadratic_objective");
+	if (ilp.has_quadratic_obj && !ilp.q_vals.empty()) {
+		error = api.addqpterms(guard.model, (int)ilp.q_vals.size(), const_cast<int *>(ilp.q_rows.data()),
+		                       const_cast<int *>(ilp.q_cols.data()), const_cast<double *>(ilp.q_vals.data()));
+		if (error) {
+			throw InvalidInputException("Failed to add quadratic objective terms to Gurobi: %s",
+			                            api.geterrormsg(guard.env));
+		}
+	}
 }
 
 //! What an incumbent readback found. Both flags are false when Gurobi is holding no
 //! feasible solution at all.
 struct GurobiIncumbent {
-    //! SolCount > 0: Gurobi has a feasible incumbent, so its incumbent attributes are
-    //! real numbers rather than the ±1e100 "nothing here" sentinels it returns anyway.
-    //! This alone does not make the result usable: row delivery also needs the vector.
-    bool exists = false;
-    //! The solution vector itself was read back into `result.solution`.
-    bool vector_read = false;
+	//! SolCount > 0: Gurobi has a feasible incumbent, so its incumbent attributes are
+	//! real numbers rather than the ±1e100 "nothing here" sentinels it returns anyway.
+	//! This alone does not make the result usable: row delivery also needs the vector.
+	bool exists = false;
+	//! The solution vector itself was read back into `result.solution`.
+	bool vector_read = false;
 };
 
 //! Read the incumbent Gurobi is holding into `result`: its objective value and its
 //! solution vector, both gated on SolCount. Shared by every non-optimal status that
 //! still returns rows -- a time-limit or interrupt stop and a SUBOPTIMAL finish --
 //! which differ only in what they require of the answer, not in how they read it.
-static GurobiIncumbent ReadIncumbent(const GurobiAPI &api, void *model, idx_t total_vars,
-                                     SolverResult &result) {
-    GurobiIncumbent found;
-    int sol_count = 0;
-    if (api.getintattr(model, GRB_INT_ATTR_SOLCOUNT, &sol_count) != 0 || sol_count <= 0) {
-        return found;
-    }
-    found.exists = true;
-    double obj_val = 0.0;
-    if (api.getdblattr(model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
-        result.objective_value = obj_val;
-    }
-    vector<double> incumbent(total_vars);
-    if (api.getdblattrarray(model, GRB_DBL_ATTR_X, 0, (int)total_vars, incumbent.data()) == 0) {
-        result.solution = std::move(incumbent);
-        found.vector_read = true;
-    }
-    return found;
+static GurobiIncumbent ReadIncumbent(const GurobiAPI &api, void *model, idx_t total_vars, SolverResult &result) {
+	GurobiIncumbent found;
+	int sol_count = 0;
+	if (api.getintattr(model, GRB_INT_ATTR_SOLCOUNT, &sol_count) != 0 || sol_count <= 0) {
+		return found;
+	}
+	found.exists = true;
+	double obj_val = 0.0;
+	if (api.getdblattr(model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
+		result.objective_value = obj_val;
+	}
+	vector<double> incumbent(total_vars);
+	if (api.getdblattrarray(model, GRB_DBL_ATTR_X, 0, (int)total_vars, incumbent.data()) == 0) {
+		result.solution = std::move(incumbent);
+		found.vector_read = true;
+	}
+	return found;
 }
 
 SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
-    DecideProfileScope profile("gurobi.run_and_readback");
-    DecideProfileScope phase("gurobi.solve_setup");
-    auto &api = GurobiLoader::API();
+	DecideProfileScope profile("gurobi.run_and_readback");
+	DecideProfileScope phase("gurobi.solve_setup");
+	auto &api = GurobiLoader::API();
 
-    //===--------------------------------------------------------------------===//
-    // 4. Solve
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 4. Solve
+	//===--------------------------------------------------------------------===//
 
-    // Apply the per-chunk wall-clock cap on the live model's env. Setting it here
-    // (rather than on the base env at Load) is what lets a warm Continue() extend
-    // the budget without rebuilding.
-    void *model_env = api.getenv_model(guard.model);
-    if (model_env) {
-        api.setdblparam(model_env, "TimeLimit", time_limit_seconds);
-    }
+	// Apply the per-chunk wall-clock cap on the live model's env. Setting it here
+	// (rather than on the base env at Load) is what lets a warm Continue() extend
+	// the budget without rebuilding.
+	void *model_env = api.getenv_model(guard.model);
+	if (model_env) {
+		api.setdblparam(model_env, "TimeLimit", time_limit_seconds);
+	}
 
-    // Mid-solve interrupt: while optimize() blocks, a watcher thread polls `should_interrupt`
-    // and calls GRBterminate() (thread-safe) to end the solve early on Ctrl-C — otherwise the
-    // interrupt would only be seen at the next chunk boundary. Gated on the poll being set
-    // (ordinary execution sets it for the initial solve and every continuation chunk alike)
-    // AND the optional terminate symbol being present; absent either, this is a no-op and the
-    // solve runs exactly as before. optimize() then returns status GRB_INTERRUPTED, mapped to
-    // TIME_LIMIT below (a stop-with-best-so-far, like a real limit).
-    //
-    // The gap between polls is a timed wait rather than a plain sleep so that completion can
-    // wake the watcher at once: an answer Gurobi has already computed is never held back for
-    // the remainder of a poll interval nobody still needs.
-    std::atomic<bool> solve_finished {false};
-    std::mutex watcher_mutex;
-    std::condition_variable watcher_cv;
-    std::thread interrupt_watcher;
-    if (should_interrupt && api.terminate) {
-        interrupt_watcher =
-            std::thread([this, &api, &solve_finished, &watcher_mutex, &watcher_cv]() {
-                while (!solve_finished.load(std::memory_order_acquire)) {
-                    // Polled without the lock held: `should_interrupt` runs caller code, and
-                    // the completing thread must never queue behind it to publish the flag.
-                    if (should_interrupt()) {
-                        api.terminate(guard.model);
-                        return;
-                    }
-                    std::unique_lock<std::mutex> lock(watcher_mutex);
-                    watcher_cv.wait_for(lock, std::chrono::milliseconds(25), [&solve_finished]() {
-                        return solve_finished.load(std::memory_order_acquire);
-                    });
-                }
-            });
-    }
-    phase.Next("gurobi.optimize");
-    int error = api.optimize(guard.model);
-    phase.Next("gurobi.watcher_join");
-    {
-        // Publish the flag under the same lock the watcher waits on. Without it, a store
-        // landing between the watcher's predicate check and its wait would be missed and the
-        // join would sit out the full interval anyway — the very stall this avoids.
-        std::lock_guard<std::mutex> lock(watcher_mutex);
-        solve_finished.store(true, std::memory_order_release);
-    }
-    watcher_cv.notify_one();
-    if (interrupt_watcher.joinable()) {
-        interrupt_watcher.join();
-    }
+	// Mid-solve interrupt: while optimize() blocks, a watcher thread polls `should_interrupt`
+	// and calls GRBterminate() (thread-safe) to end the solve early on Ctrl-C — otherwise the
+	// interrupt would only be seen at the next chunk boundary. Gated on the poll being set
+	// (ordinary execution sets it for the initial solve and every continuation chunk alike)
+	// AND the optional terminate symbol being present; absent either, this is a no-op and the
+	// solve runs exactly as before. optimize() then returns status GRB_INTERRUPTED, mapped to
+	// TIME_LIMIT below (a stop-with-best-so-far, like a real limit).
+	//
+	// The gap between polls is a timed wait rather than a plain sleep so that completion can
+	// wake the watcher at once: an answer Gurobi has already computed is never held back for
+	// the remainder of a poll interval nobody still needs.
+	std::atomic<bool> solve_finished {false};
+	std::mutex watcher_mutex;
+	std::condition_variable watcher_cv;
+	std::thread interrupt_watcher;
+	if (should_interrupt && api.terminate) {
+		interrupt_watcher = std::thread([this, &api, &solve_finished, &watcher_mutex, &watcher_cv]() {
+			while (!solve_finished.load(std::memory_order_acquire)) {
+				// Polled without the lock held: `should_interrupt` runs caller code, and
+				// the completing thread must never queue behind it to publish the flag.
+				if (should_interrupt()) {
+					api.terminate(guard.model);
+					return;
+				}
+				std::unique_lock<std::mutex> lock(watcher_mutex);
+				watcher_cv.wait_for(lock, std::chrono::milliseconds(25),
+				                    [&solve_finished]() { return solve_finished.load(std::memory_order_acquire); });
+			}
+		});
+	}
+	phase.Next("gurobi.optimize");
+	int error = api.optimize(guard.model);
+	phase.Next("gurobi.watcher_join");
+	{
+		// Publish the flag under the same lock the watcher waits on. Without it, a store
+		// landing between the watcher's predicate check and its wait would be missed and the
+		// join would sit out the full interval anyway — the very stall this avoids.
+		std::lock_guard<std::mutex> lock(watcher_mutex);
+		solve_finished.store(true, std::memory_order_release);
+	}
+	watcher_cv.notify_one();
+	if (interrupt_watcher.joinable()) {
+		interrupt_watcher.join();
+	}
 	if (error) {
 		// A solve Gurobi could not run (a size-limited license, memory): reported as OTHER, as HiGHS reports a kError,
 		// in Gurobi's own words. A model's errors are recorded on the model's environment.
@@ -459,161 +435,158 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
 		return result;
 	}
 
-    //===--------------------------------------------------------------------===//
-    // 5. Check status
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 5. Check status
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("gurobi.status_and_readback");
-    if (DecideProfileScope::Enabled()) {
-        int barrier_iterations;
-        if (api.getintattr(guard.model, "BarIterCount", &barrier_iterations) == 0) {
-            DecideProfileScope::Counter("BarIterCount", barrier_iterations);
-        }
-        for (const auto *attribute : {"Runtime", "IterCount", "NodeCount", "ObjVal", "ObjBound", "MIPGap"}) {
-            double value;
-            if (api.getdblattr(guard.model, attribute, &value) == 0 && std::isfinite(value)) {
-                DecideProfileScope::Counter(attribute, value);
-            }
-        }
-    }
-    int status;
-    error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
-    if (error) {
-        throw InternalException("Failed to get Gurobi status: %s",
-                                api.geterrormsg(guard.env));
-    }
+	phase.Next("gurobi.status_and_readback");
+	if (DecideProfileScope::Enabled()) {
+		int barrier_iterations;
+		if (api.getintattr(guard.model, "BarIterCount", &barrier_iterations) == 0) {
+			DecideProfileScope::Counter("BarIterCount", barrier_iterations);
+		}
+		for (const auto *attribute : {"Runtime", "IterCount", "NodeCount", "ObjVal", "ObjBound", "MIPGap"}) {
+			double value;
+			if (api.getdblattr(guard.model, attribute, &value) == 0 && std::isfinite(value)) {
+				DecideProfileScope::Counter(attribute, value);
+			}
+		}
+	}
+	int status;
+	error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
+	if (error) {
+		throw InternalException("Failed to get Gurobi status: %s", api.geterrormsg(guard.env));
+	}
 
-    // Presolve's dual reductions can leave Gurobi unable to tell infeasible from unbounded, and it reports
-    // GRB_INF_OR_UNBD. The adapter does not re-solve with DualReductions=0: on a non-convex model that re-solve
-    // switches Gurobi to spatial branching, which does not settle the status (an unbounded model ended SUBOPTIMAL
-    // with an arbitrary incumbent). The status goes out as INF_OR_UNBD and the facade's DisambiguateInfOrUnbd settles
-    // it for every backend.
+	// Presolve's dual reductions can leave Gurobi unable to tell infeasible from unbounded, and it reports
+	// GRB_INF_OR_UNBD. The adapter does not re-solve with DualReductions=0: on a non-convex model that re-solve
+	// switches Gurobi to spatial branching, which does not settle the status (an unbounded model ended SUBOPTIMAL
+	// with an arbitrary incumbent). The status goes out as INF_OR_UNBD and the facade's DisambiguateInfOrUnbd settles
+	// it for every backend.
 
-    // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
-    // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
-    // not a proof of optimality; returning it as if it were optimal would silently
-    // mislead the caller. Instead we map the raw status to a SolverStatus and attach
-    // an incumbent only for statuses whose contract supports one. The operator then
-    // decides whether to deliver it with a caveat or surface the status as an error.
-    if (status != GRB_OPTIMAL) {
-        SolverResult result;
-        switch (status) {
-        case GRB_INFEASIBLE:
-            result.status = SolverStatus::INFEASIBLE;
-            break;
-        case GRB_UNBOUNDED:
-            result.status = SolverStatus::UNBOUNDED;
-            break;
-        case GRB_INF_OR_UNBD:
-            // Settled by the facade's DisambiguateInfOrUnbd.
-            result.status = SolverStatus::INF_OR_UNBD;
-            break;
-        case GRB_INTERRUPTED: // mid-solve Ctrl-C (terminate): a stop-with-best-so-far, exactly
-                              // like a time-limit stop — read the incumbent the same way, but
-                              // flag it so the report says "you stopped it", not "hit the limit".
-            result.user_interrupted = true;
-            // fall through
-        case GRB_TIME_LIMIT: {
-            result.status = SolverStatus::TIME_LIMIT;
-            // A proven bound only exists for MIP timeouts; on an LP/QP timeout
-            // ObjBound reads back the ±1e100 infinity sentinel (which is finite,
-            // so it would sail through downstream isfinite guards). Keep the NaN
-            // "unavailable" default unless the read succeeds with a real value.
-            double obj_bound = 0.0;
-            if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJBOUND, &obj_bound) == 0 &&
-                std::isfinite(obj_bound) && std::fabs(obj_bound) < DECIDE_EFFECTIVE_INFINITY) {
-                result.best_bound = obj_bound;
-            }
-            // A stop-with-best-so-far is usable only when the solution vector itself
-            // was read. SolCount and ObjVal without X describe an incumbent Gurobi has,
-            // but not one DECIDE can safely turn into output rows.
-            auto incumbent = ReadIncumbent(api, guard.model, total_vars, result);
-            if (incumbent.vector_read) {
-                result.has_solution = true;
-                // MIPGap is unavailable on LP/QP models (the read fails) and is
-                // the 1e100 sentinel when no bound exists yet; keep NaN in both
-                // cases so the report omits the closeness claim instead of
-                // asserting "within 0.00%" on an unproven incumbent.
-                double mip_gap = 0.0;
-                if (api.getdblattr(guard.model, GRB_DBL_ATTR_MIPGAP, &mip_gap) == 0 &&
-                    std::isfinite(mip_gap) && mip_gap < DECIDE_EFFECTIVE_INFINITY) {
-                    result.gap = mip_gap;
-                }
-            } else if (incumbent.exists) {
-                // Do not leave an objective behind for a solution we cannot deliver.
-                result.objective_value = 0.0;
-            }
-            break;
-        }
-        case GRB_ITERATION_LIMIT:
-            result.status = SolverStatus::ITERATION_LIMIT;
-            break;
-        case GRB_SUBOPTIMAL: {
-            // Gurobi could not satisfy optimality tolerances (typically a numerically
-            // hard barrier on a QCP/SOC model) but a feasible solution IS available.
-            // Read it back and return it as a feasible-but-unproven result rather than
-            // discarding it; the operator delivers the rows with a "not proven best"
-            // caveat. Guard on SolCount and a successful vector read: if no usable
-            // incumbent exists (should not happen for SUBOPTIMAL), fall back to the
-            // generic error path so we never route an empty solution to success.
-            if (ReadIncumbent(api, guard.model, total_vars, result).vector_read) {
-                result.status = SolverStatus::SUBOPTIMAL;
-                result.has_solution = true;
-            } else {
-                // Drop an objective the readback may have set: without the vector
-                // behind it there is no solution to report it against.
-                result.objective_value = 0.0;
-                result.status = SolverStatus::OTHER;
-            }
-            break;
-        }
-        case GRB_NUMERIC:
-            // No solution, and GRBgeterrormsg is empty after this stop. The words are those of Gurobi's log.
-            result.status = SolverStatus::OTHER;
-            result.status_text = "numerical trouble";
-            break;
-        default:
-            result.status = SolverStatus::OTHER;
-            break;
-        }
-        return result;
-    }
+	// Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
+	// suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
+	// not a proof of optimality; returning it as if it were optimal would silently
+	// mislead the caller. Instead we map the raw status to a SolverStatus and attach
+	// an incumbent only for statuses whose contract supports one. The operator then
+	// decides whether to deliver it with a caveat or surface the status as an error.
+	if (status != GRB_OPTIMAL) {
+		SolverResult result;
+		switch (status) {
+		case GRB_INFEASIBLE:
+			result.status = SolverStatus::INFEASIBLE;
+			break;
+		case GRB_UNBOUNDED:
+			result.status = SolverStatus::UNBOUNDED;
+			break;
+		case GRB_INF_OR_UNBD:
+			// Settled by the facade's DisambiguateInfOrUnbd.
+			result.status = SolverStatus::INF_OR_UNBD;
+			break;
+		case GRB_INTERRUPTED: // mid-solve Ctrl-C (terminate): a stop-with-best-so-far, exactly
+		                      // like a time-limit stop — read the incumbent the same way, but
+		                      // flag it so the report says "you stopped it", not "hit the limit".
+			result.user_interrupted = true;
+			// fall through
+		case GRB_TIME_LIMIT: {
+			result.status = SolverStatus::TIME_LIMIT;
+			// A proven bound only exists for MIP timeouts; on an LP/QP timeout
+			// ObjBound reads back the ±1e100 infinity sentinel (which is finite,
+			// so it would sail through downstream isfinite guards). Keep the NaN
+			// "unavailable" default unless the read succeeds with a real value.
+			double obj_bound = 0.0;
+			if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJBOUND, &obj_bound) == 0 && std::isfinite(obj_bound) &&
+			    std::fabs(obj_bound) < DECIDE_EFFECTIVE_INFINITY) {
+				result.best_bound = obj_bound;
+			}
+			// A stop-with-best-so-far is usable only when the solution vector itself
+			// was read. SolCount and ObjVal without X describe an incumbent Gurobi has,
+			// but not one DECIDE can safely turn into output rows.
+			auto incumbent = ReadIncumbent(api, guard.model, total_vars, result);
+			if (incumbent.vector_read) {
+				result.has_solution = true;
+				// MIPGap is unavailable on LP/QP models (the read fails) and is
+				// the 1e100 sentinel when no bound exists yet; keep NaN in both
+				// cases so the report omits the closeness claim instead of
+				// asserting "within 0.00%" on an unproven incumbent.
+				double mip_gap = 0.0;
+				if (api.getdblattr(guard.model, GRB_DBL_ATTR_MIPGAP, &mip_gap) == 0 && std::isfinite(mip_gap) &&
+				    mip_gap < DECIDE_EFFECTIVE_INFINITY) {
+					result.gap = mip_gap;
+				}
+			} else if (incumbent.exists) {
+				// Do not leave an objective behind for a solution we cannot deliver.
+				result.objective_value = 0.0;
+			}
+			break;
+		}
+		case GRB_ITERATION_LIMIT:
+			result.status = SolverStatus::ITERATION_LIMIT;
+			break;
+		case GRB_SUBOPTIMAL: {
+			// Gurobi could not satisfy optimality tolerances (typically a numerically
+			// hard barrier on a QCP/SOC model) but a feasible solution IS available.
+			// Read it back and return it as a feasible-but-unproven result rather than
+			// discarding it; the operator delivers the rows with a "not proven best"
+			// caveat. Guard on SolCount and a successful vector read: if no usable
+			// incumbent exists (should not happen for SUBOPTIMAL), fall back to the
+			// generic error path so we never route an empty solution to success.
+			if (ReadIncumbent(api, guard.model, total_vars, result).vector_read) {
+				result.status = SolverStatus::SUBOPTIMAL;
+				result.has_solution = true;
+			} else {
+				// Drop an objective the readback may have set: without the vector
+				// behind it there is no solution to report it against.
+				result.objective_value = 0.0;
+				result.status = SolverStatus::OTHER;
+			}
+			break;
+		}
+		case GRB_NUMERIC:
+			// No solution, and GRBgeterrormsg is empty after this stop. The words are those of Gurobi's log.
+			result.status = SolverStatus::OTHER;
+			result.status_text = "numerical trouble";
+			break;
+		default:
+			result.status = SolverStatus::OTHER;
+			break;
+		}
+		return result;
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 6. Extract solution
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 6. Extract solution
+	//===--------------------------------------------------------------------===//
 
-    vector<double> result(total_vars);
-    error = api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars, result.data());
-    if (error) {
-        throw InternalException("Failed to extract Gurobi solution: %s",
-                                api.geterrormsg(guard.env));
-    }
+	vector<double> result(total_vars);
+	error = api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars, result.data());
+	if (error) {
+		throw InternalException("Failed to extract Gurobi solution: %s", api.geterrormsg(guard.env));
+	}
 
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (!std::isfinite(result[i])) {
-            throw InternalException(
-                "Gurobi returned invalid solution value (NaN or Infinity) for variable %llu", i);
-        }
-    }
+	for (idx_t i = 0; i < total_vars; i++) {
+		if (!std::isfinite(result[i])) {
+			throw InternalException("Gurobi returned invalid solution value (NaN or Infinity) for variable %llu", i);
+		}
+	}
 
-    SolverResult solve_result;
-    solve_result.status = SolverStatus::OPTIMAL;
-    solve_result.solution = std::move(result);
-    // Objective value at the optimum, in the model's own sense (the diagnostics
-    // stage-2 re-solve reads this as the achievable objective). A failure to read it
-    // is non-fatal — leave the 0.0 default.
-    double obj_val = 0.0;
-    if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
-        solve_result.objective_value = obj_val;
-    }
-    return solve_result;
+	SolverResult solve_result;
+	solve_result.status = SolverStatus::OPTIMAL;
+	solve_result.solution = std::move(result);
+	// Objective value at the optimum, in the model's own sense (the diagnostics
+	// stage-2 re-solve reads this as the achievable objective). A failure to read it
+	// is non-fatal — leave the 0.0 default.
+	double obj_val = 0.0;
+	if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
+		solve_result.objective_value = obj_val;
+	}
+	return solve_result;
 }
 
 } // namespace
 
 unique_ptr<SolverSession> GurobiSolver::CreateSession() {
-    return make_uniq<GurobiSession>();
+	return make_uniq<GurobiSession>();
 }
 
 } // namespace duckdb

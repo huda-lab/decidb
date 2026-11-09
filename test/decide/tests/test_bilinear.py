@@ -82,13 +82,19 @@ class TestBilinearBooleanObjectives:
         b1_col = cols.index("b1")
         b2_col = cols.index("b2")
         decidb_obj = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
-        assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-6
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "bool_times_bool_constrained", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3 + 2,
-            res.objective_value, oracle_solver.solver_name(),
+            "bool_times_bool_constrained",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 3,
+            n * 3 + 2,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -134,18 +140,27 @@ class TestBilinearBooleanObjectives:
         b_col = cols.index("b")
         x_col = cols.index("x")
         decidb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result)
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-3
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "bool_times_real_objective", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3 + 1,
-            res.objective_value, oracle_solver.solver_name(),
+            "bool_times_real_objective",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 3,
+            n * 3 + 1,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_bool_times_integer_objective(
-        self, decidb_cli, oracle_solver, perf_tracker,
+        self,
+        decidb_cli,
+        oracle_solver,
+        perf_tracker,
     ):
         """MAXIMIZE SUM(b * n) where b(BOOL), n(INT) ∈ [0,5]."""
         sql = """
@@ -186,18 +201,27 @@ class TestBilinearBooleanObjectives:
         b_col = cols.index("b")
         ncol = cols.index("n")
         decidb_obj = sum(int(row[b_col]) * int(row[ncol]) for row in result)
-        assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-6
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "bool_times_integer_objective", decidb_time, build_time,
-            res.solve_time_seconds, n_rows, n_rows * 3, n_rows * 3 + 1,
-            res.objective_value, oracle_solver.solver_name(),
+            "bool_times_integer_objective",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n_rows,
+            n_rows * 3,
+            n_rows * 3 + 1,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_bool_times_real_with_data_coefficient(
-        self, decidb_cli, oracle_solver, perf_tracker,
+        self,
+        decidb_cli,
+        oracle_solver,
+        perf_tracker,
     ):
         """SUM(profit * b * x) parses as (profit * b) * x; bilinear in (b, x)
         with profit as a per-row coefficient. Oracle uses the same McCormick
@@ -234,7 +258,8 @@ class TestBilinearBooleanObjectives:
         for i in range(n):
             _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
         oracle_solver.set_objective(
-            {wnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+            {wnames[i]: data[i][1] for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
         res = oracle_solver.solve()
@@ -244,17 +269,20 @@ class TestBilinearBooleanObjectives:
         x_col = cols.index("x")
         id_col = cols.index("id")
         profit_by_id = dict(data)
-        decidb_obj = sum(
-            profit_by_id[int(row[id_col])] * int(row[b_col]) * float(row[x_col])
-            for row in result
-        )
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        decidb_obj = sum(profit_by_id[int(row[id_col])] * int(row[b_col]) * float(row[x_col]) for row in result)
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-3
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "bool_times_real_with_data_coefficient", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3,
-            res.objective_value, oracle_solver.solver_name(),
+            "bool_times_real_with_data_coefficient",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 3,
+            n * 3,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -288,8 +316,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"needs Gurobi", e.message), f"Unexpected error: {e.message}"
             return
 
         t_build = time.perf_counter()
@@ -297,7 +324,9 @@ class TestBilinearNonConvexObjectives:
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)
         oracle_solver.add_variable("y", VarType.CONTINUOUS, lb=0.0, ub=10.0)
         oracle_solver.set_quadratic_objective(
-            {}, {("x", "y"): 1.0}, ObjSense.MAXIMIZE,
+            {},
+            {("x", "y"): 1.0},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
         res = oracle_solver.solve()
@@ -306,13 +335,19 @@ class TestBilinearNonConvexObjectives:
         x_val = float(result[0][cols.index("x")])
         y_val = float(result[0][cols.index("y")])
         decidb_obj = x_val * y_val
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-3
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "real_times_real_objective", decidb_time, build_time,
-            res.solve_time_seconds, 1, 2, 0,
-            res.objective_value, oracle_solver.solver_name(),
+            "real_times_real_objective",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            1,
+            2,
+            0,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -331,8 +366,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"needs Gurobi", e.message), f"Unexpected error: {e.message}"
             return
 
         t_build = time.perf_counter()
@@ -340,7 +374,9 @@ class TestBilinearNonConvexObjectives:
         oracle_solver.add_variable("x", VarType.INTEGER, lb=0.0, ub=5.0)
         oracle_solver.add_variable("y", VarType.INTEGER, lb=0.0, ub=5.0)
         oracle_solver.set_quadratic_objective(
-            {}, {("x", "y"): 1.0}, ObjSense.MAXIMIZE,
+            {},
+            {("x", "y"): 1.0},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
         res = oracle_solver.solve()
@@ -349,13 +385,19 @@ class TestBilinearNonConvexObjectives:
         x_val = int(result[0][cols.index("x")])
         y_val = int(result[0][cols.index("y")])
         decidb_obj = x_val * y_val
-        assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-6
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "int_times_int_objective", decidb_time, build_time,
-            res.solve_time_seconds, 1, 2, 0,
-            res.objective_value, oracle_solver.solver_name(),
+            "int_times_int_objective",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            1,
+            2,
+            0,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -374,8 +416,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
-            assert re.search(r"needs Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"needs Gurobi", e.message), f"Unexpected error: {e.message}"
             return
 
         t_build = time.perf_counter()
@@ -383,7 +424,9 @@ class TestBilinearNonConvexObjectives:
         oracle_solver.add_variable("n", VarType.INTEGER, lb=0.0, ub=5.0)
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)
         oracle_solver.set_quadratic_objective(
-            {}, {("n", "x"): 1.0}, ObjSense.MAXIMIZE,
+            {},
+            {("n", "x"): 1.0},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
         res = oracle_solver.solve()
@@ -392,13 +435,19 @@ class TestBilinearNonConvexObjectives:
         n_val = int(result[0][cols.index("n")])
         x_val = float(result[0][cols.index("x")])
         decidb_obj = n_val * x_val
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-3
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "int_times_real_objective", decidb_time, build_time,
-            res.solve_time_seconds, 1, 2, 0,
-            res.objective_value, oracle_solver.solver_name(),
+            "int_times_real_objective",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            1,
+            2,
+            0,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -456,13 +505,18 @@ class TestBilinearMixedObjectives:
         x_col = cols.index("x")
         decidb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch (bilinear part): DeciDB={decidb_obj}, "
-            f"Oracle={res.objective_value}"
+            f"Objective mismatch (bilinear part): DeciDB={decidb_obj}, " f"Oracle={res.objective_value}"
         )
         perf_tracker.record(
-            "linear_plus_bilinear", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3,
-            res.objective_value, oracle_solver.solver_name(),
+            "linear_plus_bilinear",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 3,
+            n * 3,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -525,17 +579,20 @@ class TestBilinearFeatureInteractions:
         cat_col = cols.index("category")
         b_col = cols.index("b")
         x_col = cols.index("x")
-        decidb_obj = sum(
-            int(row[b_col]) * float(row[x_col])
-            for row in result if row[cat_col] == "A"
-        )
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        decidb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result if row[cat_col] == "A")
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-3
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "bilinear_with_when", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3,
-            res.objective_value, oracle_solver.solver_name(),
+            "bilinear_with_when",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 3,
+            n * 3,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -572,10 +629,12 @@ class TestBilinearConstraints:
     @pytest.mark.cons_perrow
     def test_bilinear_constraint_coeff_split_shape_matches_flat_product(self, decidb_cli_gurobi):
         split_result, split_cols = self._run_coeff_constraint(
-            decidb_cli_gurobi, "(2 * x) * (3 * y) >= 4",
+            decidb_cli_gurobi,
+            "(2 * x) * (3 * y) >= 4",
         )
         flat_result, flat_cols = self._run_coeff_constraint(
-            decidb_cli_gurobi, "6 * x * y >= 4",
+            decidb_cli_gurobi,
+            "6 * x * y >= 4",
         )
 
         self._assert_single_xy_one(split_result, split_cols)
@@ -587,10 +646,13 @@ class TestBilinearConstraints:
     @pytest.mark.var_integer
     @pytest.mark.cons_perrow
     # The coefficient sits on the left factor, then on the right one: each side is read apart.
-    @pytest.mark.parametrize("constraint_expr", [
-        "(2 * x) * y >= 2",
-        "x * (3 * y) >= 3",
-    ])
+    @pytest.mark.parametrize(
+        "constraint_expr",
+        [
+            "(2 * x) * y >= 2",
+            "x * (3 * y) >= 3",
+        ],
+    )
     def test_bilinear_constraint_coeff_one_sided(self, decidb_cli_gurobi, constraint_expr):
         result, cols = self._run_coeff_constraint(decidb_cli_gurobi, constraint_expr)
 
@@ -614,7 +676,8 @@ class TestBilinearConstraints:
     @pytest.mark.cons_perrow
     def test_bilinear_constraint_coeff_preserves_negative_sign(self, decidb_cli_gurobi):
         result, cols = self._run_coeff_constraint(
-            decidb_cli_gurobi, "-((2 * x) * (3 * y)) <= -4",
+            decidb_cli_gurobi,
+            "-((2 * x) * (3 * y)) <= -4",
         )
 
         self._assert_single_xy_one(result, cols)
@@ -639,7 +702,8 @@ class TestBilinearConstraints:
     @pytest.mark.obj_minimize
     def test_bilinear_aggregate_constraint_grouped_product_forces_y(self, decidb_cli_gurobi):
         result, cols = self._run_grouped_product_minimize_y(
-            decidb_cli_gurobi, "SUM((a * b) * (x * y)) >= 10",
+            decidb_cli_gurobi,
+            "SUM((a * b) * (x * y)) >= 10",
         )
 
         self._assert_single_xy_one(result, cols)
@@ -650,7 +714,8 @@ class TestBilinearConstraints:
     @pytest.mark.obj_minimize
     def test_bilinear_per_row_constraint_grouped_product_forces_y(self, decidb_cli_gurobi):
         result, cols = self._run_grouped_product_minimize_y(
-            decidb_cli_gurobi, "(a * b) * (x * y) >= 10",
+            decidb_cli_gurobi,
+            "(a * b) * (x * y) >= 10",
         )
 
         self._assert_single_xy_one(result, cols)
@@ -688,7 +753,8 @@ class TestBilinearConstraints:
             _mccormick_link(oracle_solver, zn[i], b1n[i], b2n[i], 1.0, f"mc_{i}")
         oracle_solver.add_constraint({z: 1.0 for z in zn}, "<=", 1.0, name="cap_z")
         oracle_solver.set_objective(
-            {**{b: 1.0 for b in b1n}, **{b: 1.0 for b in b2n}}, ObjSense.MAXIMIZE,
+            {**{b: 1.0 for b in b1n}, **{b: 1.0 for b in b2n}},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
         res = oracle_solver.solve()
@@ -697,22 +763,31 @@ class TestBilinearConstraints:
         b1_col = cols.index("b1")
         b2_col = cols.index("b2")
         decidb_sum = sum(int(row[b1_col]) + int(row[b2_col]) for row in result)
-        assert abs(decidb_sum - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DeciDB={decidb_sum}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_sum - res.objective_value) <= 1e-6
+        ), f"Objective mismatch: DeciDB={decidb_sum}, Oracle={res.objective_value}"
 
         total_product = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
         assert total_product <= 1, f"Constraint violated: SUM(b1*b2)={total_product}"
 
         perf_tracker.record(
-            "bool_bilinear_constraint", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 3, n * 3 + 1,
-            res.objective_value, oracle_solver.solver_name(),
+            "bool_bilinear_constraint",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 3,
+            n * 3 + 1,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_bilinear_constraint_and_bilinear_objective_together(
-        self, decidb_cli, oracle_solver, perf_tracker,
+        self,
+        decidb_cli,
+        oracle_solver,
+        perf_tracker,
     ):
         """SUCH THAT SUM(b1 * b2) <= 1, MAXIMIZE SUM(b2 * b3) — a bilinear term in
         SUCH THAT and a *different* bilinear term in the objective, in one query.
@@ -761,17 +836,23 @@ class TestBilinearConstraints:
         b2_col = cols.index("b2")
         b3_col = cols.index("b3")
         decidb_obj = sum(int(row[b2_col]) * int(row[b3_col]) for row in result)
-        assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-6
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
         total_product = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
         assert total_product <= 1, f"Constraint violated: SUM(b1*b2)={total_product}"
 
         perf_tracker.record(
-            "bilinear_constraint_and_objective_together", decidb_time, build_time,
-            res.solve_time_seconds, n, n * 5, n * 5 + 1,
-            res.objective_value, oracle_solver.solver_name(),
+            "bilinear_constraint_and_objective_together",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n * 5,
+            n * 5 + 1,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -823,22 +904,24 @@ class TestFactoredProductDegree:
     @pytest.mark.cons_aggregate
     # Each case is a different factor shape of the degree count (DecideDegreeOf: `+` takes the maximum, `*` adds): a
     # sum beside one decision, a sum beside a sum, a data coefficient, and one decision on both sides.
-    @pytest.mark.parametrize("factored,expanded", [
-        # Two-term sum times a third variable — the canonical gating shape.
-        ("SUM((x + y) * z) <= 1",
-         "SUM(x * z + y * z) <= 1"),
-        # Sum times sum: 4 occurrences, still degree 2.
-        ("SUM((x + y) * (z + w)) <= 1",
-         "SUM(x * z + x * w + y * z + y * w) <= 1"),
-        # Data coefficient on a factored bilinear term.
-        ("SUM(p * (x + y) * z) <= 2",
-         "SUM(p * x * z + p * y * z) <= 2"),
-        # Factored quadratic: the same variable on both sides of the product.
-        ("SUM((x + y) * x) <= 1",
-         "SUM(x * x + y * x) <= 1"),
-    ])
+    @pytest.mark.parametrize(
+        "factored,expanded",
+        [
+            # Two-term sum times a third variable — the canonical gating shape.
+            ("SUM((x + y) * z) <= 1", "SUM(x * z + y * z) <= 1"),
+            # Sum times sum: 4 occurrences, still degree 2.
+            ("SUM((x + y) * (z + w)) <= 1", "SUM(x * z + x * w + y * z + y * w) <= 1"),
+            # Data coefficient on a factored bilinear term.
+            ("SUM(p * (x + y) * z) <= 2", "SUM(p * x * z + p * y * z) <= 2"),
+            # Factored quadratic: the same variable on both sides of the product.
+            ("SUM((x + y) * x) <= 1", "SUM(x * x + y * x) <= 1"),
+        ],
+    )
     def test_factored_aggregate_constraint_matches_expanded(
-        self, decidb_cli_gurobi, factored, expanded,
+        self,
+        decidb_cli_gurobi,
+        factored,
+        expanded,
     ):
         factored_rows, factored_cols = self._run_constraint(decidb_cli_gurobi, factored)
         expanded_rows, expanded_cols = self._run_constraint(decidb_cli_gurobi, expanded)
@@ -850,26 +933,32 @@ class TestFactoredProductDegree:
     def test_factored_per_row_constraint_matches_expanded(self, decidb_cli_gurobi):
         """The per-row path (no reducer) must accept the factored form too."""
         factored_rows, factored_cols = self._run_constraint(
-            decidb_cli_gurobi, "(x + y) * z <= 1",
+            decidb_cli_gurobi,
+            "(x + y) * z <= 1",
         )
         expanded_rows, expanded_cols = self._run_constraint(
-            decidb_cli_gurobi, "x * z + y * z <= 1",
+            decidb_cli_gurobi,
+            "x * z + y * z <= 1",
         )
 
         assert factored_cols == expanded_cols
         assert factored_rows == expanded_rows
 
     @pytest.mark.cons_aggregate
-    @pytest.mark.parametrize("constraint_expr", [
-        # Three distinct variables multiplied: genuinely degree 3.
-        "SUM(x * y * z) <= 1",
-        # A degree-2 factor multiplied by a third variable: degree 3.
-        "SUM((x + y) * z * w) <= 1",
-        "SUM((x + y) * (z * w)) <= 1",
-    ])
+    @pytest.mark.parametrize(
+        "constraint_expr",
+        [
+            # Three distinct variables multiplied: genuinely degree 3.
+            "SUM(x * y * z) <= 1",
+            # A degree-2 factor multiplied by a third variable: degree 3.
+            "SUM((x + y) * z * w) <= 1",
+            "SUM((x + y) * (z * w)) <= 1",
+        ],
+    )
     def test_genuine_degree_three_still_rejected(self, decidb_cli, constraint_expr):
         """The fix must not widen the gate: real degree > 2 still fails."""
-        decidb_cli.assert_error(f"""
+        decidb_cli.assert_error(
+            f"""
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y, z, w
             FROM data
@@ -878,7 +967,9 @@ class TestFactoredProductDegree:
                   AND z >= 0 AND z <= 1 AND w >= 0 AND w <= 1
                   AND {constraint_expr}
             {self.OBJECTIVE}
-        """, match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver")
+        """,
+            match=r"Invalid Input Error: DECIDE: .* has a term of degree \d+, which no solver",
+        )
 
 
 # ===================================================================
@@ -892,13 +983,16 @@ class TestBilinearErrors:
 
     def test_missing_upper_bound_rejected(self, decidb_cli):
         """b * x without an upper bound on x should be rejected."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             WITH data AS (SELECT 1 AS id)
             SELECT id, b, x FROM data
             DECIDE b(BOOL), x(REAL)
             SUCH THAT b >= 0
             MAXIMIZE SUM(b * x)
-        """, match=r"finite upper bound|upper bound")
+        """,
+            match=r"finite upper bound|upper bound",
+        )
 
 
 # ===================================================================
@@ -911,7 +1005,10 @@ class TestBilinearBackwardCompat:
     """Ensure an existing linear objective still works; the QP spellings are tested in `test_quadratic.py`."""
 
     def test_linear_objective_still_works(
-        self, decidb_cli, oracle_solver, perf_tracker,
+        self,
+        decidb_cli,
+        oracle_solver,
+        perf_tracker,
     ):
         """Simple linear MAXIMIZE SUM(profit * x) — oracle-compared."""
         sql = """
@@ -938,10 +1035,14 @@ class TestBilinearBackwardCompat:
         for xn in xnames:
             oracle_solver.add_variable(xn, VarType.BINARY)
         oracle_solver.add_constraint(
-            {xn: 1.0 for xn in xnames}, "<=", 2.0, name="cap",
+            {xn: 1.0 for xn in xnames},
+            "<=",
+            2.0,
+            name="cap",
         )
         oracle_solver.set_objective(
-            {xnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+            {xnames[i]: data[i][1] for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
         res = oracle_solver.solve()
@@ -949,18 +1050,23 @@ class TestBilinearBackwardCompat:
 
         x_col = cols.index("x")
         profit_col = cols.index("profit")
-        decidb_obj = sum(
-            float(row[profit_col]) * int(row[x_col]) for row in result
-        )
-        assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-        )
+        decidb_obj = sum(float(row[profit_col]) * int(row[x_col]) for row in result)
+        assert (
+            abs(decidb_obj - res.objective_value) <= 1e-3
+        ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         perf_tracker.record(
-            "linear_objective_still_works", decidb_time, build_time,
-            res.solve_time_seconds, n, n, 1,
-            res.objective_value, oracle_solver.solver_name(),
+            "linear_objective_still_works",
+            decidb_time,
+            build_time,
+            res.solve_time_seconds,
+            n,
+            n,
+            1,
+            res.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
+
 
 # ===================================================================
 # Cross-feature interactions (oracle-compared, module-level)
@@ -1003,12 +1109,14 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT), CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE), CAST(l_returnflag AS VARCHAR)
         FROM lineitem WHERE l_orderkey <= 10
         ORDER BY l_orderkey, l_linenumber
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     U = 50.0
     K = 100.0
@@ -1032,11 +1140,15 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         groups.setdefault(row[3], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {wnames[i]: 1.0 for i in idxs}, "<=", K, name=f"per_{g}",
+            {wnames[i]: 1.0 for i in idxs},
+            "<=",
+            K,
+            name=f"per_{g}",
         )
 
     oracle_solver.set_objective(
-        {wnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {wnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -1044,12 +1156,11 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_obj = sum(
-        int(row[ci["b"]]) * float(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
+        int(row[ci["b"]]) * float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result
     )
-    assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1.0
+    ), f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
 
     by_grp: dict[str, float] = {}
     for row in decidb_result:
@@ -1059,9 +1170,15 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         assert total <= K + 1e-6, f"Group {g}: SUM(b*x)={total} > {K}"
 
     perf_tracker.record(
-        "bilinear_per_group", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, n * 3 + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "bilinear_per_group",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        n * 3 + len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1091,13 +1208,15 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT), CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE), CAST(l_returnflag AS VARCHAR),
                CAST(l_shipmode AS VARCHAR)
         FROM lineitem WHERE l_orderkey <= 10
         ORDER BY l_orderkey, l_linenumber
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     U = 50.0
     K = 80.0
@@ -1124,7 +1243,10 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
             groups.setdefault(row[3], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {wnames[i]: 1.0 for i in idxs}, "<=", K, name=f"per_{g}",
+            {wnames[i]: 1.0 for i in idxs},
+            "<=",
+            K,
+            name=f"per_{g}",
         )
 
     oracle_solver.set_objective(
@@ -1141,9 +1263,9 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
         for row in decidb_result
         if str(row[ci["l_shipmode"]]) in ("AIR", "RAIL")
     )
-    assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1.0
+    ), f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
 
     by_grp: dict[str, float] = {}
     for row in decidb_result:
@@ -1155,9 +1277,15 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
         assert total <= K + 1e-6, f"Group {g} (AIR/RAIL only): SUM(b*x)={total} > {K}"
 
     perf_tracker.record(
-        "bilinear_when_per_triple", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, n * 3 + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "bilinear_when_per_triple",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        n * 3 + len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1183,13 +1311,15 @@ def test_bilinear_keyed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT), CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
         ORDER BY c.c_custkey, n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     U = 100.0
     K = 1000.0
@@ -1211,10 +1341,14 @@ def test_bilinear_keyed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         _mccormick_link(oracle_solver, wnames[i], knames[nk], xnames[i], U, f"mc_{i}")
 
     oracle_solver.add_constraint(
-        {wnames[i]: 1.0 for i in range(n)}, "<=", K, name="cap",
+        {wnames[i]: 1.0 for i in range(n)},
+        "<=",
+        K,
+        name="cap",
     )
     oracle_solver.set_objective(
-        {wnames[i]: float(data[i][2]) for i in range(n)}, ObjSense.MAXIMIZE,
+        {wnames[i]: float(data[i][2]) for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -1232,22 +1366,23 @@ def test_bilinear_keyed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         else:
             nation_keep[nk] = kv
 
-    decidb_obj = sum(
-        int(row[ci["keepN"]]) * float(row[ci["x"]]) * float(row[ci["c_acctbal"]])
-        for row in decidb_result
-    )
-    total_w = sum(
-        int(row[ci["keepN"]]) * float(row[ci["x"]]) for row in decidb_result
-    )
+    decidb_obj = sum(int(row[ci["keepN"]]) * float(row[ci["x"]]) * float(row[ci["c_acctbal"]]) for row in decidb_result)
+    total_w = sum(int(row[ci["keepN"]]) * float(row[ci["x"]]) for row in decidb_result)
     assert total_w <= K + 1e-6, f"SUM(keepN*x)={total_w} > {K}"
-    assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1.0
+    ), f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
 
     perf_tracker.record(
-        "bilinear_keyed", decidb_time, build_time,
-        result.solve_time_seconds, n, len(nations) + n * 2, n * 3 + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "bilinear_keyed",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(nations) + n * 2,
+        n * 3 + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1300,31 +1435,38 @@ def test_bilinear_minimize_objective(decidb_cli, duckdb_conn, oracle_solver, per
         _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
 
     oracle_solver.add_constraint(
-        {bnames[i]: 1.0 for i in range(n)}, ">=", 2.0, name="card",
+        {bnames[i]: 1.0 for i in range(n)},
+        ">=",
+        2.0,
+        name="card",
     )
     oracle_solver.set_objective(
-        {wnames[i]: float(data[i][1]) for i in range(n)}, ObjSense.MINIMIZE,
+        {wnames[i]: float(data[i][1]) for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        float(row[ci["cost"]]) * int(row[ci["b"]]) * float(row[ci["x"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={result.objective_value:.4f}"
-    )
+    decidb_obj = sum(float(row[ci["cost"]]) * int(row[ci["b"]]) * float(row[ci["x"]]) for row in decidb_result)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-3
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={result.objective_value:.4f}"
 
     n_picked = sum(int(row[ci["b"]]) for row in decidb_result)
     assert n_picked >= 2, f"Cardinality violated: SUM(b)={n_picked} < 2"
 
     perf_tracker.record(
-        "bilinear_minimize_objective", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, n * 3 + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "bilinear_minimize_objective",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        n * 3 + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1355,10 +1497,16 @@ def _build_split_coefficient_bilinear_oracle(oracle_solver):
         oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=1.0)
 
     oracle_solver.add_constraint(
-        {xnames[i]: 1.0 for i in range(n)}, "=", 1.0, name="pick_x",
+        {xnames[i]: 1.0 for i in range(n)},
+        "=",
+        1.0,
+        name="pick_x",
     )
     oracle_solver.add_constraint(
-        {ynames[i]: 1.0 for i in range(n)}, "=", 1.0, name="pick_y",
+        {ynames[i]: 1.0 for i in range(n)},
+        "=",
+        1.0,
+        name="pick_y",
     )
     oracle_solver.set_quadratic_objective(
         {},
@@ -1372,18 +1520,12 @@ def _build_split_coefficient_bilinear_oracle(oracle_solver):
 
 def _decidb_split_coefficient_objective(decidb_rows, decidb_cols):
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    return sum(
-        float(row[ci["a"]]) * float(row[ci["b"]]) * int(row[ci["x"]]) * int(row[ci["y"]])
-        for row in decidb_rows
-    )
+    return sum(float(row[ci["a"]]) * float(row[ci["b"]]) * int(row[ci["x"]]) * int(row[ci["y"]]) for row in decidb_rows)
 
 
 def _selected_ids_xy(decidb_rows, decidb_cols):
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    return {
-        int(row[ci["id"]]) for row in decidb_rows
-        if int(row[ci["x"]]) == 1 and int(row[ci["y"]]) == 1
-    }
+    return {int(row[ci["id"]]) for row in decidb_rows if int(row[ci["x"]]) == 1 and int(row[ci["y"]]) == 1}
 
 
 @pytest.mark.var_integer
@@ -1394,26 +1536,24 @@ def _selected_ids_xy(decidb_rows, decidb_cols):
 def test_bilinear_objective_split_shape_matches_flat_product(decidb_cli_gurobi, oracle_solver):
     """(a*x)*(b*y) and a*b*x*y should produce the same optimal objective."""
     split_rows, split_cols = _run_split_coefficient_bilinear_query(
-        decidb_cli_gurobi, "(a * x) * (b * y)",
+        decidb_cli_gurobi,
+        "(a * x) * (b * y)",
     )
     flat_rows, flat_cols = _run_split_coefficient_bilinear_query(
-        decidb_cli_gurobi, "a * b * x * y",
+        decidb_cli_gurobi,
+        "a * b * x * y",
     )
     oracle_result = _build_split_coefficient_bilinear_oracle(oracle_solver)
 
     split_obj = _decidb_split_coefficient_objective(split_rows, split_cols)
     flat_obj = _decidb_split_coefficient_objective(flat_rows, flat_cols)
     assert abs(split_obj - oracle_result.objective_value) <= 1e-6, (
-        f"Split-shape objective mismatch: DeciDB={split_obj}, "
-        f"Oracle={oracle_result.objective_value}"
+        f"Split-shape objective mismatch: DeciDB={split_obj}, " f"Oracle={oracle_result.objective_value}"
     )
     assert abs(flat_obj - oracle_result.objective_value) <= 1e-6, (
-        f"Flat-shape objective mismatch: DeciDB={flat_obj}, "
-        f"Oracle={oracle_result.objective_value}"
+        f"Flat-shape objective mismatch: DeciDB={flat_obj}, " f"Oracle={oracle_result.objective_value}"
     )
-    assert abs(split_obj - flat_obj) <= 1e-6, (
-        f"Shape mismatch: split={split_obj}, flat={flat_obj}"
-    )
+    assert abs(split_obj - flat_obj) <= 1e-6, f"Shape mismatch: split={split_obj}, flat={flat_obj}"
     assert _selected_ids_xy(split_rows, split_cols) == {1}
     assert _selected_ids_xy(flat_rows, flat_cols) == {1}
 
@@ -1425,10 +1565,12 @@ def test_bilinear_objective_split_shape_matches_flat_product(decidb_cli_gurobi, 
 @pytest.mark.correctness
 def test_bilinear_objective_grouped_data_product_matches_flat_product(decidb_cli_gurobi):
     grouped_rows, grouped_cols = _run_split_coefficient_bilinear_query(
-        decidb_cli_gurobi, "(a * b) * (x * y)",
+        decidb_cli_gurobi,
+        "(a * b) * (x * y)",
     )
     flat_rows, flat_cols = _run_split_coefficient_bilinear_query(
-        decidb_cli_gurobi, "a * b * x * y",
+        decidb_cli_gurobi,
+        "a * b * x * y",
     )
 
     grouped_obj = _decidb_split_coefficient_objective(grouped_rows, grouped_cols)
@@ -1460,10 +1602,12 @@ def _run_single_row_bilinear_objective(decidb_cli, objective_expr):
 @pytest.mark.correctness
 def test_bilinear_objective_expands_linear_plus_constant_factor(decidb_cli_gurobi):
     factored_rows, factored_cols = _run_single_row_bilinear_objective(
-        decidb_cli_gurobi, "(x + 1) * y",
+        decidb_cli_gurobi,
+        "(x + 1) * y",
     )
     expanded_rows, expanded_cols = _run_single_row_bilinear_objective(
-        decidb_cli_gurobi, "x * y + y",
+        decidb_cli_gurobi,
+        "x * y + y",
     )
 
     assert factored_rows == expanded_rows
@@ -1479,10 +1623,12 @@ def test_bilinear_objective_expands_linear_plus_constant_factor(decidb_cli_gurob
 @pytest.mark.correctness
 def test_bilinear_objective_expands_sum_factor(decidb_cli_gurobi):
     factored_rows, factored_cols = _run_single_row_bilinear_objective(
-        decidb_cli_gurobi, "(x + y) * z",
+        decidb_cli_gurobi,
+        "(x + y) * z",
     )
     expanded_rows, expanded_cols = _run_single_row_bilinear_objective(
-        decidb_cli_gurobi, "x * z + y * z",
+        decidb_cli_gurobi,
+        "x * z + y * z",
     )
 
     assert factored_rows == expanded_rows
@@ -1540,25 +1686,28 @@ def test_bilinear_bool_bool_coeff_minimize(decidb_cli, oracle_solver):
         add_bool_and(oracle_solver, f"b1_{i}", f"b2_{i}", f"z_{i}")
 
     oracle_solver.add_constraint(
-        {f"b1_{i}": 1.0 for i in range(n)}, "=", 4.0, name="pin_b1",
+        {f"b1_{i}": 1.0 for i in range(n)},
+        "=",
+        4.0,
+        name="pin_b1",
     )
     oracle_solver.add_constraint(
-        {f"b2_{i}": 1.0 for i in range(n)}, "=", 2.0, name="pin_b2",
+        {f"b2_{i}": 1.0 for i in range(n)},
+        "=",
+        2.0,
+        name="pin_b2",
     )
     oracle_solver.set_objective(
-        {f"z_{i}": costs[i] for i in range(n)}, ObjSense.MINIMIZE,
+        {f"z_{i}": costs[i] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        float(row[ci["cost"]]) * int(row[ci["b1"]]) * int(row[ci["b2"]])
-        for row in decidb_result
-    )
+    decidb_obj = sum(float(row[ci["cost"]]) * int(row[ci["b1"]]) * int(row[ci["b2"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, "
-        f"Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, " f"Oracle={result.objective_value}"
     )
 
     n_b1 = sum(int(row[ci["b1"]]) for row in decidb_result)
@@ -1609,10 +1758,14 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
         _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
 
     oracle_solver.add_constraint(
-        {wnames[i]: 1.0 for i in range(n)}, "<=", K, name="cap",
+        {wnames[i]: 1.0 for i in range(n)},
+        "<=",
+        K,
+        name="cap",
     )
     oracle_solver.set_objective(
-        {xnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {xnames[i]: 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -1620,18 +1773,22 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_x_sum = sum(float(row[ci["x"]]) for row in decidb_result)
-    decidb_bx_sum = sum(
-        int(row[ci["b"]]) * float(row[ci["x"]]) for row in decidb_result
-    )
+    decidb_bx_sum = sum(int(row[ci["b"]]) * float(row[ci["x"]]) for row in decidb_result)
     assert decidb_bx_sum <= K + 1e-6, f"SUM(b*x)={decidb_bx_sum} > {K}"
-    assert abs(decidb_x_sum - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_x_sum:.4f}, Oracle={result.objective_value:.4f}"
-    )
+    assert (
+        abs(decidb_x_sum - result.objective_value) <= 1e-3
+    ), f"Objective mismatch: DeciDB={decidb_x_sum:.4f}, Oracle={result.objective_value:.4f}"
 
     perf_tracker.record(
-        "bilinear_bool_real_constraint", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, n * 3 + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "bilinear_bool_real_constraint",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        n * 3 + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 

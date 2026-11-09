@@ -589,10 +589,9 @@ private:
 
 			auto constraint_class = canonicalizer.ClassifyCanonicalComparison(comp);
 			if (constraint_class == CanonicalConstraintClass::INVALID) {
-				throw InternalException(
-				    "DECIDE constraint reached term extraction with invalid aggregate/per-row "
-				    "homogeneity: '%s'. Canonical validation must reject this during planning.",
-				    comp.ToString());
+				throw InternalException("DECIDE constraint reached term extraction with invalid aggregate/per-row "
+				                        "homogeneity: '%s'. Canonical validation must reject this during planning.",
+				                        comp.ToString());
 			}
 			if (constraint_class == CanonicalConstraintClass::VALUE) {
 				throw InternalException("DECIDE constraint in the VALUE shape reached term extraction: the value "
@@ -735,8 +734,7 @@ private:
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
 			throw InvalidInputException(
-			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-			    agg.function.name);
+			    "DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution", agg.function.name);
 		}
 		idx_t before = obj.terms.size();
 		idx_t group_before = obj.product_groups.size();

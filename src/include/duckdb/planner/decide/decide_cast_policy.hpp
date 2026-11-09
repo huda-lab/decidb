@@ -153,8 +153,7 @@ struct BooleanDecisions {
 	const vector<bool> &is_boolean;
 };
 
-PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr,
-                            const BooleanDecisions *booleans = nullptr);
+PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, const BooleanDecisions *booleans = nullptr);
 
 //! The sign a factor on a reducer contributes: +1, -1, or 0 when it is not known until
 //! the query runs (PlanTimeSignOf). A factor that is exactly zero reads as +1: the term

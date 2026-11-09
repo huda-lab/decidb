@@ -53,11 +53,13 @@ def test_signed_linear(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_linear")
@@ -68,7 +70,9 @@ def test_signed_linear(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(n)},
-        ">=", 0.0, name="sign_mix",
+        ">=",
+        0.0,
+        name="sign_mix",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][0] for i in range(n)},
@@ -78,14 +82,24 @@ def test_signed_linear(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "signed_linear", decidb_time, build_time,
-        result.solve_time_seconds, n, len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "signed_linear",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -113,10 +127,12 @@ def test_signed_mccormick(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 40
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_mccormick")
@@ -129,7 +145,10 @@ def test_signed_mccormick(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=-8.0, ub=8.0)
 
     oracle_solver.add_constraint(
-        {bnames[i]: 1.0 for i in range(n)}, "<=", 3.0, name="card",
+        {bnames[i]: 1.0 for i in range(n)},
+        "<=",
+        3.0,
+        name="card",
     )
     # Exact product objective: minimize SUM(price_i * b_i * x_i).
     quadratic = {(bnames[i], xnames[i]): float(data[i][0]) for i in range(n)}
@@ -145,14 +164,24 @@ def test_signed_mccormick(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         return sum(float(r[pi]) * float(r[bi]) * float(r[xi]) for r in rows)
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["b", "x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["b", "x"],
         decidb_objective_fn=decidb_objective_fn,
     )
 
     perf_tracker.record(
-        "signed_mccormick", decidb_time, build_time,
-        result.solve_time_seconds, n, len(bnames) + len(xnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "signed_mccormick",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(bnames) + len(xnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -178,10 +207,12 @@ def test_signed_lower_bound_only(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_lower_only")
@@ -190,23 +221,38 @@ def test_signed_lower_bound_only(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=-4.0)  # ub=None -> +inf
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, ">=", 10.0, name="sum_floor",
+        {vnames[i]: 1.0 for i in range(n)},
+        ">=",
+        10.0,
+        name="sum_floor",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][0] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][0] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "signed_lower_only", decidb_time, build_time,
-        result.solve_time_seconds, n, len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "signed_lower_only",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -229,10 +275,12 @@ def test_signed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_integer")
@@ -241,23 +289,38 @@ def test_signed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.INTEGER, lb=-5.0)
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, ">=", 3.0, name="sum_floor",
+        {vnames[i]: 1.0 for i in range(n)},
+        ">=",
+        3.0,
+        name="sum_floor",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][0] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][0] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["d"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["d"],
         coeff_fn=lambda row: {"d": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "signed_integer", decidb_time, build_time,
-        result.solve_time_seconds, n, len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "signed_integer",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -283,10 +346,12 @@ def test_signed_default_preserved(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 40
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_default_preserved")
@@ -311,7 +376,11 @@ def test_signed_default_preserved(decidb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x", "y"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x", "y"],
         coeff_fn=lambda row: {
             "x": float(row[decidb_cols.index("l_extendedprice")]),
             "y": float(row[decidb_cols.index("l_extendedprice")]),
@@ -319,13 +388,21 @@ def test_signed_default_preserved(decidb_cli, duckdb_conn, oracle_solver, perf_t
     )
     # Independent invariant: every default-typed y must be non-negative.
     yi = decidb_cols.index("y")
-    assert all(float(r[yi]) >= -1e-6 for r in decidb_result), \
-        "default variable y went negative — the non-negative default was not preserved"
+    assert all(
+        float(r[yi]) >= -1e-6 for r in decidb_result
+    ), "default variable y went negative — the non-negative default was not preserved"
     perf_tracker.record(
-        "signed_default_preserved", decidb_time, build_time,
-        result.solve_time_seconds, n, len(xs) + len(ys), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "signed_default_preserved",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(xs) + len(ys),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -349,10 +426,12 @@ def test_signed_mccormick_asymmetric(decidb_cli, duckdb_conn, oracle_solver, per
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 40
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_mccormick_asym")
@@ -364,7 +443,10 @@ def test_signed_mccormick_asymmetric(decidb_cli, duckdb_conn, oracle_solver, per
     for vn in xnames:
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=-100.0, ub=5.0)
     oracle_solver.add_constraint(
-        {bnames[i]: 1.0 for i in range(n)}, "<=", 3.0, name="card",
+        {bnames[i]: 1.0 for i in range(n)},
+        "<=",
+        3.0,
+        name="card",
     )
     quadratic = {(bnames[i], xnames[i]): float(data[i][0]) for i in range(n)}
     oracle_solver.set_quadratic_objective({}, quadratic, ObjSense.MINIMIZE)
@@ -376,15 +458,25 @@ def test_signed_mccormick_asymmetric(decidb_cli, duckdb_conn, oracle_solver, per
     pi = decidb_cols.index("l_extendedprice")
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["b", "x"],
-        decidb_objective_fn=lambda rows, cols: sum(
-            float(r[pi]) * float(r[bi]) * float(r[xi]) for r in rows),
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["b", "x"],
+        decidb_objective_fn=lambda rows, cols: sum(float(r[pi]) * float(r[bi]) * float(r[xi]) for r in rows),
     )
     perf_tracker.record(
-        "signed_mccormick_asym", decidb_time, build_time,
-        result.solve_time_seconds, n, len(bnames) + len(xnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "signed_mccormick_asym",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(bnames) + len(xnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -407,8 +499,7 @@ def test_signed_abs_objective(decidb_cli, duckdb_conn, oracle_solver, perf_track
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    nrows = duckdb_conn.execute(
-        "SELECT COUNT(*) FROM lineitem WHERE l_orderkey < 20").fetchone()[0]
+    nrows = duckdb_conn.execute("SELECT COUNT(*) FROM lineitem WHERE l_orderkey < 20").fetchone()[0]
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_abs")
@@ -429,14 +520,25 @@ def test_signed_abs_objective(decidb_cli, duckdb_conn, oracle_solver, perf_track
 
     xi = decidb_cols.index("x")
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, [(0.0,)] * n, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        [(0.0,)] * n,
+        ["x"],
         decidb_objective_fn=lambda rows, cols: sum(abs(float(r[xi])) for r in rows),
     )
     perf_tracker.record(
-        "signed_abs", decidb_time, build_time,
-        result.solve_time_seconds, n, len(xs) + len(aux), 2 * n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "signed_abs",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(xs) + len(aux),
+        2 * n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -461,10 +563,12 @@ def test_signed_strict_integer(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 40
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("signed_strict_integer")
@@ -474,23 +578,38 @@ def test_signed_strict_integer(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         oracle_solver.add_variable(vn, VarType.INTEGER, lb=-10.0, ub=0.0)
     # SUM(d) > -8 on integer-valued LHS == SUM(d) >= -7 (integer step).
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, ">=", -7.0, name="strict_step",
+        {vnames[i]: 1.0 for i in range(n)},
+        ">=",
+        -7.0,
+        name="strict_step",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][0] for i in range(n)}, ObjSense.MINIMIZE,
+        {vnames[i]: data[i][0] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["d"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["d"],
         coeff_fn=lambda row: {"d": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "signed_strict_integer", decidb_time, build_time,
-        result.solve_time_seconds, n, len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "signed_strict_integer",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -695,64 +814,132 @@ _LIFT_CASES = {
     # The floor lowers the instances of the rows the `when` keeps, and the others keep 0: -5 on A, 0 on B and C.
     "row_scoped_real": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(REAL) SUCH THAT when g = 'A': x >= -5 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [_KEPT_A], uppers=[_ANY], kind=_REAL),
+        _LIFT_ROWS,
+        _ROW,
+        [_KEPT_A],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # A keyed decision is lowered by one kept row: class A has a kept row (id 1) and an unkept one (id 2).
     "keyed_class_lowered_by_one_kept_row": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE per g: x(REAL) SUCH THAT when p: x >= -5 AND x <= 10"),
-        _LIFT_ROWS, _BY_G, [_KEPT_P], uppers=[_ANY], kind=_REAL),
+        _LIFT_ROWS,
+        _BY_G,
+        [_KEPT_P],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # A query-wide decision is lowered when any row the `when` keeps lowers it.
     "query_wide_lowered_by_one_kept_row": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE per (): x(REAL) SUCH THAT when p: x >= -5 AND x <= 10", objective="MINIMIZE x"),
-        _LIFT_ROWS, _ONE, [_KEPT_P], uppers=[_ANY], once=True, kind=_REAL),
+        _LIFT_ROWS,
+        _ONE,
+        [_KEPT_P],
+        uppers=[_ANY],
+        once=True,
+        kind=_REAL,
+    ),
     # Two floors keep one row: the tighter one decides.
     "two_floors_on_one_row": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(REAL) SUCH THAT when p: x >= -5 AND when p: x >= -3 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [_KEPT_P, lambda r: -3 if r["p"] is True else None], uppers=[_ANY], kind=_REAL),
+        _LIFT_ROWS,
+        _ROW,
+        [_KEPT_P, lambda r: -3 if r["p"] is True else None],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # A floor written without a `when` leaves the decision with a lower bound written: a floor under a `when` only
     # intersects with it, on every row.
     "unconditional_floor_beside_a_conditional_one": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(REAL) SUCH THAT x >= -2 AND when p: x >= -5 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [lambda r: -2, _KEPT_P], uppers=[_ANY], kind=_REAL),
+        _LIFT_ROWS,
+        _ROW,
+        [lambda r: -2, _KEPT_P],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # A bound of data is a row and does not replace the default floor.
     "data_bound_under_a_when_intersects": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(REAL) SUCH THAT when p: x >= lo - 8 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [], lowers=[lambda r: r["lo"] - 8 if r["p"] is True else None], uppers=[_ANY], kind=_REAL),
+        _LIFT_ROWS,
+        _ROW,
+        [],
+        lowers=[lambda r: r["lo"] - 8 if r["p"] is True else None],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # A NULL `when` keeps no row: the default holds on row 2, and row 3 is kept.
     "null_when_keeps_the_default": lambda: _Lift(
         _lift_query(
             [{"id": 1, "g": "A", "p": None, "lo": 3}, {"id": 2, "g": "A", "p": True, "lo": 3}],
-            "DECIDE x(REAL) SUCH THAT when p: x >= -5 AND x <= 10"),
+            "DECIDE x(REAL) SUCH THAT when p: x >= -5 AND x <= 10",
+        ),
         [{"id": 1, "g": "A", "p": None, "lo": 3}, {"id": 2, "g": "A", "p": True, "lo": 3}],
-        _ROW, [_KEPT_P], uppers=[_ANY], kind=_REAL),
+        _ROW,
+        [_KEPT_P],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # A `when` that keeps no row lowers nothing.
     "when_that_keeps_no_row": lambda: _Lift(
         _lift_query([dict(r, p=False) for r in _LIFT_ROWS], "DECIDE x(REAL) SUCH THAT when p: x >= -5 AND x <= 10"),
-        [dict(r, p=False) for r in _LIFT_ROWS], _ROW, [_KEPT_P], uppers=[_ANY], kind=_REAL),
+        [dict(r, p=False) for r in _LIFT_ROWS],
+        _ROW,
+        [_KEPT_P],
+        uppers=[_ANY],
+        kind=_REAL,
+    ),
     # An easy MIN reads each member as `x >= K`, under the clause's `when` and under its own filter.
     "easy_min_under_a_when": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(INT) SUCH THAT when p: min(x) >= -5 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [_KEPT_P], uppers=[_ANY]),
+        _LIFT_ROWS,
+        _ROW,
+        [_KEPT_P],
+        uppers=[_ANY],
+    ),
     "easy_min_with_a_reducer_filter": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(INT) SUCH THAT min(when p: x) >= -5 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [_KEPT_P], uppers=[_ANY]),
+        _LIFT_ROWS,
+        _ROW,
+        [_KEPT_P],
+        uppers=[_ANY],
+    ),
     # The recorded bug: a negative value in an IN domain under a `when`.
     "in_domain_under_a_when": lambda: _Lift(
         _lift_query(_LIFT_ROWS[:3], "DECIDE x(INT) SUCH THAT when p: x IN (-5, 7, 12) AND x <= 20"),
-        _LIFT_ROWS[:3], _ROW, [_KEPT_P], uppers=[lambda r: 20],
-        domain=lambda r: [-5, 7, 12] if r["p"] is True else None),
+        _LIFT_ROWS[:3],
+        _ROW,
+        [_KEPT_P],
+        uppers=[lambda r: 20],
+        domain=lambda r: [-5, 7, 12] if r["p"] is True else None,
+    ),
     # A positive floor under a `when` replaces the default of 0 on the rows it keeps, which a normal solve cannot tell
     # from an intersection; test_diagnose_repairs_a_conditional_floor_as_it_repairs_an_unconditional_one does.
     "positive_floor_under_a_when": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(INT) SUCH THAT when p: x >= 3 AND x <= 10"),
-        _LIFT_ROWS, _ROW, [lambda r: 3 if r["p"] is True else None], uppers=[_ANY]),
+        _LIFT_ROWS,
+        _ROW,
+        [lambda r: 3 if r["p"] is True else None],
+        uppers=[_ANY],
+    ),
     # `x <= -2` beside `when p: x >= -5`: every row kept leaves -5..-2 to the solve, and an unkept row (id 2) holds the
     # default floor of 0, which `x <= -2` rules out. The solve says so, not the early check of the domain.
     "upper_below_zero_every_row_kept": lambda: _Lift(
         _lift_query([dict(r, p=True) for r in _LIFT_ROWS], "DECIDE x(REAL) SUCH THAT x <= -2 AND when p: x >= -5"),
-        [dict(r, p=True) for r in _LIFT_ROWS], _ROW, [_KEPT_P], uppers=[lambda r: -2], kind=_REAL),
+        [dict(r, p=True) for r in _LIFT_ROWS],
+        _ROW,
+        [_KEPT_P],
+        uppers=[lambda r: -2],
+        kind=_REAL,
+    ),
     "upper_below_zero_some_row_unkept": lambda: _Lift(
         _lift_query(_LIFT_ROWS, "DECIDE x(REAL) SUCH THAT x <= -2 AND when p: x >= -5"),
-        _LIFT_ROWS, _ROW, [_KEPT_P], uppers=[lambda r: -2], kind=_REAL),
+        _LIFT_ROWS,
+        _ROW,
+        [_KEPT_P],
+        uppers=[lambda r: -2],
+        kind=_REAL,
+    ),
 }
 
 

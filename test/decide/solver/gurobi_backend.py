@@ -20,6 +20,7 @@ class GurobiSolver(OracleSolver):
 
     def __init__(self) -> None:
         import gurobipy as gp
+
         self._gp = gp
         self._model = None
         self._vars: dict[str, object] = {}
@@ -80,9 +81,7 @@ class GurobiSolver(OracleSolver):
         expr = gp.LinExpr()
         for vname, coeff in coeffs.items():
             expr.add(self._vars[vname], coeff)
-        grb_sense = (
-            gp.GRB.MAXIMIZE if sense == ObjSense.MAXIMIZE else gp.GRB.MINIMIZE
-        )
+        grb_sense = gp.GRB.MAXIMIZE if sense == ObjSense.MAXIMIZE else gp.GRB.MINIMIZE
         self._model.setObjective(expr, grb_sense)
 
     def set_quadratic_objective(
@@ -99,9 +98,7 @@ class GurobiSolver(OracleSolver):
         merged = _merge_symmetric_quadratic(quadratic)
         for (a, b), coeff in merged.items():
             expr.add(self._vars[a] * self._vars[b] * coeff)
-        grb_sense = (
-            gp.GRB.MAXIMIZE if sense == ObjSense.MAXIMIZE else gp.GRB.MINIMIZE
-        )
+        grb_sense = gp.GRB.MAXIMIZE if sense == ObjSense.MAXIMIZE else gp.GRB.MINIMIZE
         self._model.setObjective(expr, grb_sense)
         if constant:
             self._model.ObjCon = constant
@@ -157,7 +154,10 @@ class GurobiSolver(OracleSolver):
         else:
             raise ValueError(f"unsupported sense: {sense!r}")
         self._model.addGenConstrIndicator(
-            self._vars[indicator_var], bool(indicator_val), tc, name=name,
+            self._vars[indicator_var],
+            bool(indicator_val),
+            tc,
+            name=name,
         )
 
     def solve(self, time_limit: float = 60.0) -> SolverResult:

@@ -35,8 +35,7 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 
-	vector<ColumnProvenance> columns =
-	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux);
+	vector<ColumnProvenance> columns = BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux);
 
 	std::map<idx_t, VarAgg> by_var;
 	for (idx_t col = 0; col < input.result.ray.size() && col < columns.size(); col++) {
@@ -208,8 +207,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		const auto &qc = elastic.quadratic_constraints[qr];
 		assert_blamable_row(qc.provenance);
 		qc_norm[qr] = rms_norm(qc.linear_coefficients);
-		if (qc.provenance.removal_group_id == DConstants::INVALID_INDEX &&
-		    IsRelaxableForElastic(qc.provenance.kind)) {
+		if (qc.provenance.removal_group_id == DConstants::INVALID_INDEX && IsRelaxableForElastic(qc.provenance.kind)) {
 			consider_ref(qc_norm[qr]);
 		}
 	}
@@ -217,7 +215,9 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		ref_norm = 1.0;
 	}
 	// ref / rms(Aᵢ), guarding a degenerate all-zero row.
-	auto editable_weight = [&](double norm) { return norm > 0.0 ? ref_norm / norm : 1.0; };
+	auto editable_weight = [&](double norm) {
+		return norm > 0.0 ? ref_norm / norm : 1.0;
+	};
 
 	// Wire a (possibly shared) slack into one row by its sense. `<` loosens upward
 	// (Ax − s ≤ b), `>` downward (Ax + s ≥ b), `=` both ways (Ax − s⁺ + s⁻ = b).
@@ -471,8 +471,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks, 
 		// Non-empty only when canonicalization moved a term across the comparison, in
 		// which case it pairs with the written LHS that SourceAwareLhs just returned.
 		string written_rhs = SourceWrittenRhs(orig_model, prov);
-		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
-		                prov.repair_group_id != DConstants::INVALID_INDEX;
+		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA && prov.repair_group_id != DConstants::INVALID_INDEX;
 		if (expanded) {
 			// Only a row that stands for its own data row expands row by row: an unreduced
 			// clause's data-derived bound, or any row of a scoped clause with no `per` key.
@@ -587,8 +586,7 @@ static double SlackTierCoefficient(const BlockSlackRef &sl, ElasticRepairTier ti
 	return 1.0;
 }
 
-static bool AppendTierTerms(ModelConstraint &row, const vector<BlockSlackRef> &slacks,
-                            ElasticRepairTier tier) {
+static bool AppendTierTerms(ModelConstraint &row, const vector<BlockSlackRef> &slacks, ElasticRepairTier tier) {
 	for (const auto &sl : slacks) {
 		double coeff = SlackTierCoefficient(sl, tier);
 		if (coeff == 0.0) {
@@ -615,8 +613,7 @@ static bool TierHasTerms(const vector<BlockSlackRef> &slacks, ElasticRepairTier 
 	return false;
 }
 
-static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &slacks,
-                             ElasticRepairTier tier) {
+static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &slacks, ElasticRepairTier tier) {
 	model.ClearObjective();
 	model.maximize = false;
 
@@ -653,8 +650,7 @@ static TierBudget MakeTierBudget(const vector<double> &solution, const vector<Bl
 	return {tier, active ? ComputeTierValue(solution, slacks, tier) : 0.0, active};
 }
 
-static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &slacks,
-                             const TierBudget &budget) {
+static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &slacks, const TierBudget &budget) {
 	if (!budget.active) {
 		return;
 	}
@@ -793,10 +789,14 @@ static vector<RemovalGroupInfo> CollectRemovalGroups(const SolverModel &model) {
 			entry.first->second.source_clause_id = prov.source_clause_id;
 		}
 	};
-	for (const auto &row : model.constraints) record(row.provenance);
-	for (const auto &row : model.quadratic_constraints) record(row.provenance);
-	for (const auto &row : model.indicator_constraints) record(row.provenance);
-	for (const auto &row : model.general_constraints) record(row.provenance);
+	for (const auto &row : model.constraints)
+		record(row.provenance);
+	for (const auto &row : model.quadratic_constraints)
+		record(row.provenance);
+	for (const auto &row : model.indicator_constraints)
+		record(row.provenance);
+	for (const auto &row : model.general_constraints)
+		record(row.provenance);
 	vector<RemovalGroupInfo> result;
 	for (const auto &entry : by_group) {
 		result.push_back(entry.second);
@@ -849,9 +849,9 @@ static double BudgetValue(const vector<TierBudget> &budgets, ElasticRepairTier t
 }
 
 static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &input,
-	                                            const vector<ColumnProvenance> &columns,
-	                                            const vector<RemovalGroupInfo> &all_groups,
-	                                            const vector<idx_t> &selected_indices) {
+                                              const vector<ColumnProvenance> &columns,
+                                              const vector<RemovalGroupInfo> &all_groups,
+                                              const vector<idx_t> &selected_indices) {
 	RemovalCandidate result;
 	std::set<idx_t> dropped_ids;
 	for (idx_t index : selected_indices) {
@@ -981,21 +981,24 @@ static int CompareDisplayed(double lhs, double rhs) {
 
 static bool BetterCandidate(const RemovalCandidate &lhs, const RemovalCandidate &rhs, bool maximize) {
 	int cmp = CompareDisplayed(lhs.data_cost, rhs.data_cost);
-	if (cmp != 0) return cmp < 0;
+	if (cmp != 0)
+		return cmp < 0;
 	cmp = CompareDisplayed(lhs.editable_cost, rhs.editable_cost);
-	if (cmp != 0) return cmp < 0;
-	if (lhs.objective_unbounded != rhs.objective_unbounded) return lhs.objective_unbounded;
+	if (cmp != 0)
+		return cmp < 0;
+	if (lhs.objective_unbounded != rhs.objective_unbounded)
+		return lhs.objective_unbounded;
 	if (!lhs.objective_unbounded && lhs.has_objective && rhs.has_objective) {
 		cmp = CompareDisplayed(lhs.objective_value, rhs.objective_value);
-		if (cmp != 0) return maximize ? cmp > 0 : cmp < 0;
+		if (cmp != 0)
+			return maximize ? cmp > 0 : cmp < 0;
 	}
-	return std::lexicographical_compare(lhs.signature.begin(), lhs.signature.end(),
-	                                    rhs.signature.begin(), rhs.signature.end());
+	return std::lexicographical_compare(lhs.signature.begin(), lhs.signature.end(), rhs.signature.begin(),
+	                                    rhs.signature.end());
 }
 
-static bool EnumerateCombinations(
-    idx_t n, idx_t choose, idx_t start, vector<idx_t> &current,
-    const std::function<bool(const vector<idx_t> &)> &visit) {
+static bool EnumerateCombinations(idx_t n, idx_t choose, idx_t start, vector<idx_t> &current,
+                                  const std::function<bool(const vector<idx_t> &)> &visit) {
 	if (current.size() == choose) {
 		return visit(current);
 	}
@@ -1017,8 +1020,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 	vector<ColumnProvenance> columns =
-	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
-	                          input.global_variable_labels);
+	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux, input.global_variable_labels);
 	auto unreachable = CollectUnreachableClauses(input.model, columns, input.params.slack_scope == "expanded");
 	if (!unreachable.empty()) {
 		return BuildUnreachableBoundDiagnostic(unreachable);
@@ -1033,8 +1035,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		bool found = false;
 		bool aborted = false;
 		RemovalCandidate best;
-		EnumerateCombinations(groups.size(), cardinality, 0, current,
-		                      [&](const vector<idx_t> &selection) {
+		EnumerateCombinations(groups.size(), cardinality, 0, current, [&](const vector<idx_t> &selection) {
 			RemovalCandidate candidate = SolveRemovalCandidate(input, columns, groups, selection);
 			if (candidate.status == CandidateStatus::ABORT) {
 				aborted = true;

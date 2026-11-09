@@ -15,85 +15,85 @@ namespace duckdb {
 
 double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const vector<idx_t> *rows, idx_t begin,
                                   idx_t end, const string &written) {
-    double offset = 0.0;
-    for (idx_t term_idx = 0; term_idx < constraint.variable_indices.size(); term_idx++) {
-        if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
-            continue;
-        }
-        auto &column = constraint.row_coefficients[term_idx];
-        for (idx_t k = begin; k < end; k++) {
-            idx_t row = rows ? (*rows)[k] : k;
-            AddCoefficient(offset, column.Get(row), written);
-        }
-    }
-    return offset;
+	double offset = 0.0;
+	for (idx_t term_idx = 0; term_idx < constraint.variable_indices.size(); term_idx++) {
+		if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto &column = constraint.row_coefficients[term_idx];
+		for (idx_t k = begin; k < end; k++) {
+			idx_t row = rows ? (*rows)[k] : k;
+			AddCoefficient(offset, column.Get(row), written);
+		}
+	}
+	return offset;
 }
 
 string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const string &objective_written,
                            idx_t source_clause_id) {
-    if (source_clause_id < sources.size()) {
-        return QuoteWrittenClause(sources[source_clause_id]);
-    }
-    return objective_written;
+	if (source_clause_id < sources.size()) {
+		return QuoteWrittenClause(sources[source_clause_id]);
+	}
+	return objective_written;
 }
 
 string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
-    return DecideWrittenClause(input.constraint_sources, input.objective_written, source_clause_id);
+	return DecideWrittenClause(input.constraint_sources, input.objective_written, source_clause_id);
 }
 
 static uint64_t PackQKey(int row, int col) {
-    return (static_cast<uint64_t>(row) << 32) | static_cast<uint32_t>(col);
+	return (static_cast<uint64_t>(row) << 32) | static_cast<uint32_t>(col);
 }
 
 //! A linear form on one row: its decisions, as flat columns with their nonzero coefficients, and its constant.
 struct FormRow {
-    vector<std::pair<int, double>> terms;
-    double constant = 0.0;
+	vector<std::pair<int, double>> terms;
+	double constant = 0.0;
 };
 
 static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t row,
                            const VarIndexer &indexer, const string &written) {
-    FormRow form;
+	FormRow form;
 	// `variables` and `columns` are pushed together (EvaluateProductGroups), and each column holds every data row.
 	for (idx_t t = 0; t < variables.size(); t++) {
 		double a = columns[t].Get(row);
 		if (a == 0.0) {
-            continue;
-        }
-        if (variables[t] == DConstants::INVALID_INDEX) {
-            AddCoefficient(form.constant, a, written);
-            continue;
-        }
-        form.terms.emplace_back(static_cast<int>(indexer.Get(variables[t], row)), a);
+			continue;
+		}
+		if (variables[t] == DConstants::INVALID_INDEX) {
+			AddCoefficient(form.constant, a, written);
+			continue;
+		}
+		form.terms.emplace_back(static_cast<int>(indexer.Get(variables[t], row)), a);
 	}
 	return form;
 }
 
 //! Q's entry for the monomial `x_a * x_b`, which `x_b * x_a` shares: the lower triangle (ilp_model.hpp).
 static double &QEntry(std::unordered_map<uint64_t, double> &q, int a, int b) {
-    return q[PackQKey(std::max(a, b), std::min(a, b))];
+	return q[PackQKey(std::max(a, b), std::min(a, b))];
 }
 
 //! A square `w * (a·x + c)^2` on one row: the symmetric rank-one update `w * a * aᵀ` (BLAS SYR), its triangle computed
 //! once and an off-diagonal pair doubled; `2wc·a` to the linear part and `wc^2` to the constant.
 template <class ADD_LINEAR>
-static void AddSquareRow(const FormRow &form, double w, std::unordered_map<uint64_t, double> &q,
-                         ADD_LINEAR &add_linear, double &constant, const string &written) {
-    for (idx_t i = 0; i < form.terms.size(); i++) {
-        for (idx_t j = 0; j <= i; j++) {
-            double val = w * form.terms[i].second * form.terms[j].second;
-            if (i != j) {
-                val *= 2.0;
-            }
-            AddCoefficient(QEntry(q, form.terms[i].first, form.terms[j].first), val, written);
-        }
-    }
-    if (form.constant != 0.0) {
-        for (auto &term : form.terms) {
-            add_linear(term.first, w * 2.0 * form.constant * term.second);
-        }
-        AddCoefficient(constant, w * form.constant * form.constant, written);
-    }
+static void AddSquareRow(const FormRow &form, double w, std::unordered_map<uint64_t, double> &q, ADD_LINEAR &add_linear,
+                         double &constant, const string &written) {
+	for (idx_t i = 0; i < form.terms.size(); i++) {
+		for (idx_t j = 0; j <= i; j++) {
+			double val = w * form.terms[i].second * form.terms[j].second;
+			if (i != j) {
+				val *= 2.0;
+			}
+			AddCoefficient(QEntry(q, form.terms[i].first, form.terms[j].first), val, written);
+		}
+	}
+	if (form.constant != 0.0) {
+		for (auto &term : form.terms) {
+			add_linear(term.first, w * 2.0 * form.constant * term.second);
+		}
+		AddCoefficient(constant, w * form.constant * form.constant, written);
+	}
 }
 
 //! A product `w * (a·x + c) * (b·x + d)` on one row: the rank-one update `w * a * bᵀ`, each pair added to the monomial
@@ -101,22 +101,22 @@ static void AddSquareRow(const FormRow &form, double w, std::unordered_map<uint6
 template <class ADD_LINEAR>
 static void AddProductRow(const FormRow &left, const FormRow &right, double w, std::unordered_map<uint64_t, double> &q,
                           ADD_LINEAR &add_linear, double &constant, const string &written) {
-    for (auto &l : left.terms) {
-        for (auto &r : right.terms) {
-            AddCoefficient(QEntry(q, l.first, r.first), w * l.second * r.second, written);
-        }
-    }
-    if (right.constant != 0.0) {
-        for (auto &l : left.terms) {
-            add_linear(l.first, w * l.second * right.constant);
-        }
-    }
-    if (left.constant != 0.0) {
-        for (auto &r : right.terms) {
-            add_linear(r.first, w * left.constant * r.second);
-        }
-    }
-    AddCoefficient(constant, w * left.constant * right.constant, written);
+	for (auto &l : left.terms) {
+		for (auto &r : right.terms) {
+			AddCoefficient(QEntry(q, l.first, r.first), w * l.second * r.second, written);
+		}
+	}
+	if (right.constant != 0.0) {
+		for (auto &l : left.terms) {
+			add_linear(l.first, w * l.second * right.constant);
+		}
+	}
+	if (left.constant != 0.0) {
+		for (auto &r : right.terms) {
+			add_linear(r.first, w * left.constant * r.second);
+		}
+	}
+	AddCoefficient(constant, w * left.constant * right.constant, written);
 }
 
 //! One product group (EvaluatedProductGroup) on one row: Q gets `w * l * rᵀ` in the monomial convention, the cross
@@ -127,74 +127,73 @@ static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t row, co
                                const string &written) {
 	double w = group.weight.Get(row);
 	if (w == 0.0) {
-        return;
-    }
-    auto left = ReadFormRow(group.left_variables, group.left_coefficients, row, indexer, written);
-    if (group.square) {
-        AddSquareRow(left, w, q, add_linear, constant, written);
-        return;
-    }
-    auto right = ReadFormRow(group.right_variables, group.right_coefficients, row, indexer, written);
-    AddProductRow(left, right, w, q, add_linear, constant, written);
+		return;
+	}
+	auto left = ReadFormRow(group.left_variables, group.left_coefficients, row, indexer, written);
+	if (group.square) {
+		AddSquareRow(left, w, q, add_linear, constant, written);
+		return;
+	}
+	auto right = ReadFormRow(group.right_variables, group.right_coefficients, row, indexer, written);
+	AddProductRow(left, right, w, q, add_linear, constant, written);
 }
 
 static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
-    idx.num_rows = input.num_rows;
-    idx_t num_decide_vars = input.num_decide_vars;
+	idx.num_rows = input.num_rows;
+	idx_t num_decide_vars = input.num_decide_vars;
 
-    idx.var_scope.resize(num_decide_vars, DecideVarScope::ROW);
-    idx.row_var_offset.resize(num_decide_vars, DConstants::INVALID_INDEX);
-    idx.keyed_var_base.resize(num_decide_vars, DConstants::INVALID_INDEX);
-    idx.var_keyed_mapping_idx.resize(num_decide_vars, DConstants::INVALID_INDEX);
-    idx.scalar_var_index.resize(num_decide_vars, DConstants::INVALID_INDEX);
+	idx.var_scope.resize(num_decide_vars, DecideVarScope::ROW);
+	idx.row_var_offset.resize(num_decide_vars, DConstants::INVALID_INDEX);
+	idx.keyed_var_base.resize(num_decide_vars, DConstants::INVALID_INDEX);
+	idx.var_keyed_mapping_idx.resize(num_decide_vars, DConstants::INVALID_INDEX);
+	idx.scalar_var_index.resize(num_decide_vars, DConstants::INVALID_INDEX);
 
-    // Classify variables and compute row-block offsets
-    idx_t row_var_count = 0;
-    for (idx_t v = 0; v < num_decide_vars; v++) {
-        // A variable with no recorded scope (synthesized auxiliaries appended after
-        // the declaration list) is row-scoped, matching the previous default.
-        auto scope = v < input.variable_scopes.size() ? input.variable_scopes[v].scope
-                                                     : DecideVarScope::ROW;
-        idx.var_scope[v] = scope;
-        if (scope == DecideVarScope::ROW) {
-            idx.row_var_offset[v] = row_var_count;
-            idx.row_offset_var.push_back(v);
-            row_var_count++;
-        }
-    }
-    idx.num_row_vars = row_var_count;
+	// Classify variables and compute row-block offsets
+	idx_t row_var_count = 0;
+	for (idx_t v = 0; v < num_decide_vars; v++) {
+		// A variable with no recorded scope (synthesized auxiliaries appended after
+		// the declaration list) is row-scoped, matching the previous default.
+		auto scope = v < input.variable_scopes.size() ? input.variable_scopes[v].scope : DecideVarScope::ROW;
+		idx.var_scope[v] = scope;
+		if (scope == DecideVarScope::ROW) {
+			idx.row_var_offset[v] = row_var_count;
+			idx.row_offset_var.push_back(v);
+			row_var_count++;
+		}
+	}
+	idx.num_row_vars = row_var_count;
 
-    // Row block: num_rows * num_row_vars
-    idx.keyed_block_start = input.num_rows * row_var_count;
+	// Row block: num_rows * num_row_vars
+	idx.keyed_block_start = input.num_rows * row_var_count;
 
-    // Keyed block: assign base offsets per keyed variable
-    idx_t keyed_offset = 0;
-    for (idx_t v = 0; v < num_decide_vars; v++) {
-        if (idx.var_scope[v] != DecideVarScope::KEYED) {
-            continue;
-        }
-        idx_t scope_idx = input.variable_scopes[v].keyed_scope_idx;
-        D_ASSERT(scope_idx < idx.keyed_mappings.size());
-        idx.var_keyed_mapping_idx[v] = scope_idx;
-        idx.keyed_var_base[v] = idx.keyed_block_start + keyed_offset;
-        idx.keyed_block_var.push_back(v);
-        keyed_offset += idx.keyed_mappings[scope_idx].num_classes;
-    }
+	// Keyed block: assign base offsets per keyed variable
+	idx_t keyed_offset = 0;
+	for (idx_t v = 0; v < num_decide_vars; v++) {
+		if (idx.var_scope[v] != DecideVarScope::KEYED) {
+			continue;
+		}
+		idx_t scope_idx = input.variable_scopes[v].keyed_scope_idx;
+		D_ASSERT(scope_idx < idx.keyed_mappings.size());
+		idx.var_keyed_mapping_idx[v] = scope_idx;
+		idx.keyed_var_base[v] = idx.keyed_block_start + keyed_offset;
+		idx.keyed_block_var.push_back(v);
+		keyed_offset += idx.keyed_mappings[scope_idx].num_classes;
+	}
 
-    // Scalar block: exactly one column per query-wide variable, independent of num_rows
-    idx.scalar_block_start = idx.keyed_block_start + keyed_offset;
-    idx_t scalar_count = 0;
-    for (idx_t v = 0; v < num_decide_vars; v++) {
-        if (idx.var_scope[v] != DecideVarScope::GLOBAL) {
-            continue;
-        }
-        idx.scalar_var_index[v] = idx.scalar_block_start + scalar_count;
-        idx.scalar_slot_var.push_back(v);
-        scalar_count++;
-    }
+	// Scalar block: exactly one column per query-wide variable, independent of num_rows
+	idx.scalar_block_start = idx.keyed_block_start + keyed_offset;
+	idx_t scalar_count = 0;
+	for (idx_t v = 0; v < num_decide_vars; v++) {
+		if (idx.var_scope[v] != DecideVarScope::GLOBAL) {
+			continue;
+		}
+		idx.scalar_var_index[v] = idx.scalar_block_start + scalar_count;
+		idx.scalar_slot_var.push_back(v);
+		scalar_count++;
+	}
 
-    idx.global_block_start = idx.scalar_block_start + scalar_count;
-    idx.total_vars = idx.global_block_start + input.num_global_vars;
+	idx.global_block_start = idx.scalar_block_start + scalar_count;
+	idx.total_vars = idx.global_block_start + input.num_global_vars;
 }
 
 idx_t VarIndexer::OwnerOf(idx_t col) const {
@@ -204,27 +203,27 @@ idx_t VarIndexer::OwnerOf(idx_t col) const {
 		// none).
 		return row_offset_var[col % num_row_vars];
 	}
-    if (col < scalar_block_start) {
-        // Keyed block: bases ascend in keyed_block_var order, so the owner is the
-        // last variable whose base does not exceed `col`.
-        idx_t owner = DConstants::INVALID_INDEX;
-        for (idx_t v : keyed_block_var) {
-            if (keyed_var_base[v] > col) {
-                break;
-            }
-            owner = v;
-        }
-        return owner;
-    }
-    return scalar_slot_var[col - scalar_block_start];
+	if (col < scalar_block_start) {
+		// Keyed block: bases ascend in keyed_block_var order, so the owner is the
+		// last variable whose base does not exceed `col`.
+		idx_t owner = DConstants::INVALID_INDEX;
+		for (idx_t v : keyed_block_var) {
+			if (keyed_var_base[v] > col) {
+				break;
+			}
+			owner = v;
+		}
+		return owner;
+	}
+	return scalar_slot_var[col - scalar_block_start];
 }
 
 VarIndexer VarIndexer::Build(const SolverInput &input) {
-    VarIndexer idx;
-    // Own a copy so this VarIndexer can outlive the SolverInput
-    idx.keyed_mappings = input.keyed_mappings;
-    BuildVarIndexer(idx, input);
-    return idx;
+	VarIndexer idx;
+	// Own a copy so this VarIndexer can outlive the SolverInput
+	idx.keyed_mappings = input.keyed_mappings;
+	BuildVarIndexer(idx, input);
+	return idx;
 }
 
 #ifdef DEBUG
@@ -234,150 +233,152 @@ VarIndexer VarIndexer::Build(const SolverInput &input) {
 //! checks that used to live at the emission sites are gone. Debug-only — a regression here is a wrong model, not a bad
 //! query, so it should fail loudly in development rather than produce a user-facing error.
 static bool RhsIsConstantWithinGroups(const EvaluatedConstraint &ec) {
-    if (ec.rhs_values.IsUniform() || ec.rhs_values.Empty()) {
-        return true;
-    }
-    const bool has_groups = !ec.row_group_ids.empty();
-    std::unordered_map<idx_t, double> first_seen;
-    for (idx_t row = 0; row < ec.rhs_values.Size(); row++) {
-        idx_t g = has_groups ? ec.row_group_ids[row] : 0;
-        if (g == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        auto it = first_seen.find(g);
-        if (it == first_seen.end()) {
-            first_seen.emplace(g, ec.rhs_values.Get(row));
-        } else if (it->second != ec.rhs_values.Get(row)) {
-            return false;
-        }
-    }
-    return true;
+	if (ec.rhs_values.IsUniform() || ec.rhs_values.Empty()) {
+		return true;
+	}
+	const bool has_groups = !ec.row_group_ids.empty();
+	std::unordered_map<idx_t, double> first_seen;
+	for (idx_t row = 0; row < ec.rhs_values.Size(); row++) {
+		idx_t g = has_groups ? ec.row_group_ids[row] : 0;
+		if (g == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto it = first_seen.find(g);
+		if (it == first_seen.end()) {
+			first_seen.emplace(g, ec.rhs_values.Get(row));
+		} else if (it->second != ec.rhs_values.Get(row)) {
+			return false;
+		}
+	}
+	return true;
 }
 #endif
 
-void BuildGroupCSR(const vector<idx_t> &row_group_ids,
-                   idx_t num_groups,
-                   vector<idx_t> &offsets,
+void BuildGroupCSR(const vector<idx_t> &row_group_ids, idx_t num_groups, vector<idx_t> &offsets,
                    vector<idx_t> &flat_rows) {
 	if (num_groups == 0) {
 		offsets.clear();
-        flat_rows.clear();
-        return;
+		flat_rows.clear();
+		return;
 	}
 	offsets.assign(num_groups + 1, 0);
-    // First pass: count rows per group
-    for (idx_t r = 0; r < row_group_ids.size(); r++) {
-        idx_t gid = row_group_ids[r];
-        if (gid == DConstants::INVALID_INDEX) continue;
-        offsets[gid + 1]++;
-    }
-    // Prefix sum
-    for (idx_t g = 0; g < num_groups; g++) {
-        offsets[g + 1] += offsets[g];
-    }
-    // Second pass: scatter rows into their group bucket using a tmp cursor
-    flat_rows.assign(offsets[num_groups], 0);
-    vector<idx_t> cursor = offsets;
-    for (idx_t r = 0; r < row_group_ids.size(); r++) {
-        idx_t gid = row_group_ids[r];
-        if (gid == DConstants::INVALID_INDEX) continue;
-        flat_rows[cursor[gid]++] = r;
-    }
+	// First pass: count rows per group
+	for (idx_t r = 0; r < row_group_ids.size(); r++) {
+		idx_t gid = row_group_ids[r];
+		if (gid == DConstants::INVALID_INDEX)
+			continue;
+		offsets[gid + 1]++;
+	}
+	// Prefix sum
+	for (idx_t g = 0; g < num_groups; g++) {
+		offsets[g + 1] += offsets[g];
+	}
+	// Second pass: scatter rows into their group bucket using a tmp cursor
+	flat_rows.assign(offsets[num_groups], 0);
+	vector<idx_t> cursor = offsets;
+	for (idx_t r = 0; r < row_group_ids.size(); r++) {
+		idx_t gid = row_group_ids[r];
+		if (gid == DConstants::INVALID_INDEX)
+			continue;
+		flat_rows[cursor[gid]++] = r;
+	}
 }
 
 const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
-    D_ASSERT(!ec.row_group_ids.empty());
-    if (ec.group_offsets.empty()) {
-        BuildGroupCSR(ec.row_group_ids, ec.num_groups, ec.group_offsets, ec.group_row_ids);
-    }
-    return ec.group_row_ids;
+	D_ASSERT(!ec.row_group_ids.empty());
+	if (ec.group_offsets.empty()) {
+		BuildGroupCSR(ec.row_group_ids, ec.num_groups, ec.group_offsets, ec.group_row_ids);
+	}
+	return ec.group_row_ids;
 }
 
 //! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, and each
 //! is row-scoped. Then no two (term, data row) pairs share a column, and a row's terms are read without summing them.
 static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarIndexer &indexer) {
-    std::unordered_set<idx_t> seen_vars;
-    for (idx_t v : ec.variable_indices) {
-        if (v == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        // Keyed and query-wide decisions both put many rows on one column.
-        if (indexer.var_scope[v] != DecideVarScope::ROW || !seen_vars.insert(v).second) {
-            return false;
-        }
-    }
-    return true;
+	std::unordered_set<idx_t> seen_vars;
+	for (idx_t v : ec.variable_indices) {
+		if (v == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		// Keyed and query-wide decisions both put many rows on one column.
+		if (indexer.var_scope[v] != DecideVarScope::ROW || !seen_vars.insert(v).second) {
+			return false;
+		}
+	}
+	return true;
 }
 
-//! Calls `add(column, coefficient)` for each decision term of one row a clause emits: each term's nonzero coefficient on
-//! the rows [begin, end) of `rows` (row k itself when `rows` is null). A term beside the reducers counts once:
+//! Calls `add(column, coefficient)` for each decision term of one row a clause emits: each term's nonzero coefficient
+//! on the rows [begin, end) of `rows` (row k itself when `rows` is null). A term beside the reducers counts once:
 //! execution kept its coefficient on one row (CountOnce).
 template <class ADD>
 static void ForEachClauseRowTerm(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
                                  idx_t begin, idx_t end, ADD &&add) {
-    for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-        idx_t decide_var_idx = ec.variable_indices[term_idx];
-        if (decide_var_idx == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        auto &col = ec.row_coefficients[term_idx];
-        for (idx_t k = begin; k < end; k++) {
-            idx_t row = rows ? (*rows)[k] : k;
-            double coeff = col.Get(row);
-            if (coeff != 0.0) {
-                add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
-            }
-        }
-    }
+	for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+		idx_t decide_var_idx = ec.variable_indices[term_idx];
+		if (decide_var_idx == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto &col = ec.row_coefficients[term_idx];
+		for (idx_t k = begin; k < end; k++) {
+			idx_t row = rows ? (*rows)[k] : k;
+			double coeff = col.Get(row);
+			if (coeff != 0.0) {
+				add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
+			}
+		}
+	}
 }
 
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer, const string &written) {
-    auto &out = ec.emitted_rows;
-    if (!out.offsets.empty()) {
-        return out;
-    }
-    const idx_t num_rows = indexer.num_rows;
-    // The data rows of each emitted row: a grouped aggregate's group (ClauseRows), all rows for an ungrouped one, the
-    // row itself for a per-row clause.
-    const vector<idx_t> *rows = nullptr;
-    idx_t num_emitted = num_rows;
-    if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
-        rows = &ClauseRows(ec);
-        num_emitted = ec.num_groups;
-    } else if (ec.lhs_is_aggregate) {
-        num_emitted = 1;
-    }
-    // Terms with columns of their own are copied; any other row sums its terms per column first.
-    bool own_columns = TermsHaveTheirOwnColumns(ec, indexer);
-    SparseCoeffAccumulator accum;
-    if (own_columns) {
-        out.columns.reserve(ec.variable_indices.size() * num_rows);
-        out.values.reserve(ec.variable_indices.size() * num_rows);
-    } else {
-        accum.BeginForDecisions(indexer, ec.variable_indices.size() * (num_rows / std::max<idx_t>(num_emitted, 1)),
-                                written);
-    }
-    auto copy = [&](int column, double coeff) {
-        out.columns.push_back(column);
-        out.values.push_back(coeff);
-    };
-    auto sum = [&](int column, double coeff) { accum.Add(column, coeff); };
-    out.offsets.reserve(num_emitted + 1);
-    out.offsets.push_back(0);
-    for (idx_t e = 0; e < num_emitted; e++) {
-        idx_t begin = rows ? ec.group_offsets[e] : (ec.lhs_is_aggregate ? 0 : e);
-        idx_t end = rows ? ec.group_offsets[e + 1] : (ec.lhs_is_aggregate ? num_rows : e + 1);
-        bool excluded = !ec.lhs_is_aggregate && !ec.row_group_ids.empty() &&
-                        ec.row_group_ids[e] == DConstants::INVALID_INDEX;
-        if (!excluded && own_columns) {
-            ForEachClauseRowTerm(ec, indexer, rows, begin, end, copy);
-        } else if (!excluded) {
-            ForEachClauseRowTerm(ec, indexer, rows, begin, end, sum);
-            accum.Flush(out.columns, out.values);
-        }
-        out.offsets.push_back(out.columns.size());
-    }
-    return out;
+	auto &out = ec.emitted_rows;
+	if (!out.offsets.empty()) {
+		return out;
+	}
+	const idx_t num_rows = indexer.num_rows;
+	// The data rows of each emitted row: a grouped aggregate's group (ClauseRows), all rows for an ungrouped one, the
+	// row itself for a per-row clause.
+	const vector<idx_t> *rows = nullptr;
+	idx_t num_emitted = num_rows;
+	if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
+		rows = &ClauseRows(ec);
+		num_emitted = ec.num_groups;
+	} else if (ec.lhs_is_aggregate) {
+		num_emitted = 1;
+	}
+	// Terms with columns of their own are copied; any other row sums its terms per column first.
+	bool own_columns = TermsHaveTheirOwnColumns(ec, indexer);
+	SparseCoeffAccumulator accum;
+	if (own_columns) {
+		out.columns.reserve(ec.variable_indices.size() * num_rows);
+		out.values.reserve(ec.variable_indices.size() * num_rows);
+	} else {
+		accum.BeginForDecisions(indexer, ec.variable_indices.size() * (num_rows / std::max<idx_t>(num_emitted, 1)),
+		                        written);
+	}
+	auto copy = [&](int column, double coeff) {
+		out.columns.push_back(column);
+		out.values.push_back(coeff);
+	};
+	auto sum = [&](int column, double coeff) {
+		accum.Add(column, coeff);
+	};
+	out.offsets.reserve(num_emitted + 1);
+	out.offsets.push_back(0);
+	for (idx_t e = 0; e < num_emitted; e++) {
+		idx_t begin = rows ? ec.group_offsets[e] : (ec.lhs_is_aggregate ? 0 : e);
+		idx_t end = rows ? ec.group_offsets[e + 1] : (ec.lhs_is_aggregate ? num_rows : e + 1);
+		bool excluded =
+		    !ec.lhs_is_aggregate && !ec.row_group_ids.empty() && ec.row_group_ids[e] == DConstants::INVALID_INDEX;
+		if (!excluded && own_columns) {
+			ForEachClauseRowTerm(ec, indexer, rows, begin, end, copy);
+		} else if (!excluded) {
+			ForEachClauseRowTerm(ec, indexer, rows, begin, end, sum);
+			accum.Flush(out.columns, out.values);
+		}
+		out.offsets.push_back(out.columns.size());
+	}
+	return out;
 }
 
 //! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
@@ -400,84 +401,83 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarInd
 static void StampConstraintProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const,
                                       idx_t repair_group_id, idx_t group_key = DConstants::INVALID_INDEX,
                                       double lhs_offset = 0.0) {
-    provenance.source_clause_id = eval_const.source_clause_id;
-    provenance.repair_group_id = repair_group_id;
-    provenance.removal_group_id = eval_const.removal_group_id;
-    provenance.kind = eval_const.kind;
-    // A literal RHS is one editable knob shared across every row/group this clause
-    // emits (paper §5); a data-derived RHS repairs as a symbolic offset instead.
-    provenance.shape = eval_const.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
-                                                        : ElasticShape::PER_ROW_DATA;
-    if (!eval_const.rhs_is_shared_scalar) {
-        provenance.rhs_label = eval_const.rhs_label;
-    }
-    provenance.rhs_mechanism_offset = eval_const.rhs_mechanism_offset - lhs_offset;
-    if (group_key != DConstants::INVALID_INDEX) {
-        provenance.group_key = group_key;
-    }
-    provenance.group_name = eval_const.NameOf(group_key);
+	provenance.source_clause_id = eval_const.source_clause_id;
+	provenance.repair_group_id = repair_group_id;
+	provenance.removal_group_id = eval_const.removal_group_id;
+	provenance.kind = eval_const.kind;
+	// A literal RHS is one editable knob shared across every row/group this clause
+	// emits (paper §5); a data-derived RHS repairs as a symbolic offset instead.
+	provenance.shape = eval_const.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
+	if (!eval_const.rhs_is_shared_scalar) {
+		provenance.rhs_label = eval_const.rhs_label;
+	}
+	provenance.rhs_mechanism_offset = eval_const.rhs_mechanism_offset - lhs_offset;
+	if (group_key != DConstants::INVALID_INDEX) {
+		provenance.group_key = group_key;
+	}
+	provenance.group_name = eval_const.NameOf(group_key);
 }
 
 //! The data row a per-row row was emitted at (DIAGNOSE's `row`). A row that stands for
 //! no class set is a kept row, a class of its own (D28). Stamped after `class_set`.
 static void StampDataRow(ConstraintProvenance &provenance, idx_t row) {
-    provenance.data_row = row;
-    provenance.per_kept_row = provenance.class_set == DConstants::INVALID_INDEX;
+	provenance.data_row = row;
+	provenance.per_kept_row = provenance.class_set == DConstants::INVALID_INDEX;
 }
 
 //! The class set group `group`'s rows stand for (D28), INVALID_INDEX for none.
 static idx_t ClassSetOf(const EvaluatedConstraint &eval_const, idx_t group) {
-    return group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
+	return group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
 }
 
 //! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
 //! SUM(...)-wrapping (Facet B). A per-row constraint has no reducer, so this is never
 //! called there.
 static void StampAggregateProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const) {
-    provenance.is_aggregate = eval_const.lhs_is_aggregate;
+	provenance.is_aggregate = eval_const.lhs_is_aggregate;
 }
 
 //! The model class this built model demands: the facts the build settled, in the shape the plan-time prediction
 //! (DeriveDecideModelClass) fills, classified by the same function. SolveModel checks the two agree before handing the
 //! model to a backend.
 SolverModelClass SolverModel::ModelClass() const {
-    DecideModelShape shape;
-    shape.quadratic_constraints = !quadratic_constraints.empty();
-    shape.quadratic_objective = has_quadratic_obj;
-    shape.nonconvex_objective = nonconvex_quadratic;
-    // Any integral column, auxiliaries included: a Big-M indicator makes the program mixed-integer just as a user's
-    // `x(INT)` does.
+	DecideModelShape shape;
+	shape.quadratic_constraints = !quadratic_constraints.empty();
+	shape.quadratic_objective = has_quadratic_obj;
+	shape.nonconvex_objective = nonconvex_quadratic;
+	// Any integral column, auxiliaries included: a Big-M indicator makes the program mixed-integer just as a user's
+	// `x(INT)` does.
 	for (idx_t col = 0; col < num_vars; col++) {
 		if (is_integer[col]) {
-            shape.integral_column = true;
-            break;
-        }
+			shape.integral_column = true;
+			break;
+		}
 	}
 	// An off-diagonal entry means two decision variables are coupled in the objective, which makes Q rank-deficient.
 	for (idx_t k = 0; k < q_vals.size(); k++) {
 		if (q_rows[k] != q_cols[k]) {
 			shape.coupled_objective = true;
-            break;
+			break;
 		}
 	}
 	return ClassifyDecideModel(shape);
 }
 
 bool SolverModel::ProvesInfeasible() const {
-    for (const auto &row : constraints) {
-        if ((row.indices.empty() && row.constant_fails) || IsUnreachableBound(row.sense, row.rhs)) {
-            return true;
-        }
-    }
-    for (const auto &row : quadratic_constraints) {
-        if (IsUnreachableBound(row.sense, row.rhs)) {
-            return true;
-        }
-    }
+	for (const auto &row : constraints) {
+		if ((row.indices.empty() && row.constant_fails) || IsUnreachableBound(row.sense, row.rhs)) {
+			return true;
+		}
+	}
+	for (const auto &row : quadratic_constraints) {
+		if (IsUnreachableBound(row.sense, row.rhs)) {
+			return true;
+		}
+	}
 	for (idx_t col = 0; col < num_vars; col++) {
 		if (col_lower[col] > col_upper[col]) {
-            return true;
-        }
+			return true;
+		}
 	}
 	return false;
 }
@@ -493,80 +493,80 @@ void SolverModel::ClearObjective() {
 }
 
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
-    DecideProfileScope profile("model.build");
-    DecideProfileScope phase("model.variables_and_bounds");
-    SolverModel model;
-    model.class_sets = std::move(input.class_sets);
-    model.key_values = std::move(input.key_values);
+	DecideProfileScope profile("model.build");
+	DecideProfileScope phase("model.variables_and_bounds");
+	SolverModel model;
+	model.class_sets = std::move(input.class_sets);
+	model.key_values = std::move(input.key_values);
 
-    idx_t num_rows = input.num_rows;
-    idx_t num_decide_vars = input.num_decide_vars;
+	idx_t num_rows = input.num_rows;
+	idx_t num_decide_vars = input.num_decide_vars;
 
-    // VarIndexer is built once in PhysicalDecide::Finalize() and threaded in.
-    idx_t total_vars = indexer.total_vars;
+	// VarIndexer is built once in PhysicalDecide::Finalize() and threaded in.
+	idx_t total_vars = indexer.total_vars;
 
-    model.num_vars = total_vars;
+	model.num_vars = total_vars;
 
-    //===--------------------------------------------------------------------===//
-    // 1. Set up variables with bounds and types
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 1. Set up variables with bounds and types
+	//===--------------------------------------------------------------------===//
 
-    // Determine per-variable types and default bounds
-    vector<double> per_var_lower(num_decide_vars);
-    vector<double> per_var_upper(num_decide_vars);
-    vector<bool> per_var_binary(num_decide_vars, false);
+	// Determine per-variable types and default bounds
+	vector<double> per_var_lower(num_decide_vars);
+	vector<double> per_var_upper(num_decide_vars);
+	vector<bool> per_var_binary(num_decide_vars, false);
 
-    for (idx_t var = 0; var < num_decide_vars; var++) {
-        auto logical_type = input.variable_types[var];
+	for (idx_t var = 0; var < num_decide_vars; var++) {
+		auto logical_type = input.variable_types[var];
 
 		if (logical_type == LogicalType::DOUBLE) {
 			per_var_binary[var] = false;
-            per_var_lower[var] = 0.0;
-            per_var_upper[var] = DECIDE_SOLVER_INFINITY;
+			per_var_lower[var] = 0.0;
+			per_var_upper[var] = DECIDE_SOLVER_INFINITY;
 		} else if (logical_type == LogicalType::BOOLEAN) {
 			per_var_binary[var] = true;
-            per_var_lower[var] = 0.0;
-            per_var_upper[var] = 1.0;
+			per_var_lower[var] = 0.0;
+			per_var_upper[var] = 1.0;
 		} else {
 			// INTEGER / BIGINT or default
-            per_var_lower[var] = 0.0;
-            per_var_upper[var] = DECIDE_SOLVER_INFINITY;
+			per_var_lower[var] = 0.0;
+			per_var_upper[var] = DECIDE_SOLVER_INFINITY;
 		}
 	}
 
-    // Merge with explicit bounds from input. The physical operator already
-    // resolved each variable's lower bound (defaulting unconstrained variables to
-    // 0 and honoring explicit negative bounds), so it is authoritative: take it
-    // directly rather than std::max-ing with the type default, which would clamp a
-    // legitimate negative bound back to 0. The upper bound is still intersected
-    // (the type default is a true ceiling, e.g. 1.0 for BOOLEAN).
-    for (idx_t var = 0; var < num_decide_vars; var++) {
-        if (var < input.lower_bounds.size()) {
-            per_var_lower[var] = input.lower_bounds[var];
-        }
-        if (var < input.upper_bounds.size()) {
-            per_var_upper[var] = std::min(per_var_upper[var], input.upper_bounds[var]);
-        }
-    }
+	// Merge with explicit bounds from input. The physical operator already
+	// resolved each variable's lower bound (defaulting unconstrained variables to
+	// 0 and honoring explicit negative bounds), so it is authoritative: take it
+	// directly rather than std::max-ing with the type default, which would clamp a
+	// legitimate negative bound back to 0. The upper bound is still intersected
+	// (the type default is a true ceiling, e.g. 1.0 for BOOLEAN).
+	for (idx_t var = 0; var < num_decide_vars; var++) {
+		if (var < input.lower_bounds.size()) {
+			per_var_lower[var] = input.lower_bounds[var];
+		}
+		if (var < input.upper_bounds.size()) {
+			per_var_upper[var] = std::min(per_var_upper[var], input.upper_bounds[var]);
+		}
+	}
 
-    // Expand per-variable config to all solver variables
-    model.col_lower.resize(total_vars);
-    model.col_upper.resize(total_vars);
-    model.is_integer.resize(total_vars, false);
-    model.is_binary.resize(total_vars, false);
+	// Expand per-variable config to all solver variables
+	model.col_lower.resize(total_vars);
+	model.col_upper.resize(total_vars);
+	model.is_integer.resize(total_vars, false);
+	model.is_binary.resize(total_vars, false);
 
-    for (idx_t var = 0; var < num_decide_vars; var++) {
-        idx_t num_instances = indexer.NumInstances(var);
-        for (idx_t inst = 0; inst < num_instances; inst++) {
-            idx_t var_idx = indexer.InstanceColumn(var, inst);
-            // The instance's box: the decision's, with the floor raised by the refinement where the default floor of 0
-            // still holds (a constant lower bound under a `when` replaces the default floor on the instances it keeps
-            // alone), and a helper's ends at its own group's reach.
-            model.col_lower[var_idx] = input.InstanceBoxLower(var, inst, per_var_lower);
-            model.col_upper[var_idx] = input.InstanceBoxUpper(var, inst, per_var_upper);
+	for (idx_t var = 0; var < num_decide_vars; var++) {
+		idx_t num_instances = indexer.NumInstances(var);
+		for (idx_t inst = 0; inst < num_instances; inst++) {
+			idx_t var_idx = indexer.InstanceColumn(var, inst);
+			// The instance's box: the decision's, with the floor raised by the refinement where the default floor of 0
+			// still holds (a constant lower bound under a `when` replaces the default floor on the instances it keeps
+			// alone), and a helper's ends at its own group's reach.
+			model.col_lower[var_idx] = input.InstanceBoxLower(var, inst, per_var_lower);
+			model.col_upper[var_idx] = input.InstanceBoxUpper(var, inst, per_var_upper);
 			model.is_integer[var_idx] = input.variable_types[var] != LogicalType::DOUBLE;
 			model.is_binary[var_idx] = per_var_binary[var];
-        }
+		}
 		// A row with no decision maps to the absent class: fixed at 0, so an objective term
 		// that reads it is dropped (KeyedMapping::absent_class).
 		if (indexer.var_scope[var] == DecideVarScope::KEYED) {
@@ -579,729 +579,739 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		}
 	}
 
-    // Append global auxiliary variables after row+keyed blocks.
-    //
-    // Stage 05 derives every auxiliary's box from the expression it stands for, so an
-    // infinite bound here means one of two things: the expression genuinely reaches an
-    // unbounded decision variable (flagged, and legitimate), or a creation site skipped
-    // the derivation. The second is a silent performance cliff rather than a wrong
-    // answer — a free continuous column leaves the root simplex without a box and it
-    // crawls — so it is asserted rather than left to a benchmark to notice.
-    for (idx_t g = 0; g < input.num_global_vars; g++) {
-        idx_t var_idx = indexer.global_block_start + g;
-        auto gtype = input.global_variable_types[g];
-        D_ASSERT(g >= input.global_bounds_unbounded.size() || input.global_bounds_unbounded[g] ||
-                 (input.global_lower_bounds[g] > -DECIDE_EFFECTIVE_INFINITY &&
-                  input.global_upper_bounds[g] < DECIDE_EFFECTIVE_INFINITY));
-        model.col_lower[var_idx] = input.global_lower_bounds[g];
-        model.col_upper[var_idx] = input.global_upper_bounds[g];
+	// Append global auxiliary variables after row+keyed blocks.
+	//
+	// Stage 05 derives every auxiliary's box from the expression it stands for, so an
+	// infinite bound here means one of two things: the expression genuinely reaches an
+	// unbounded decision variable (flagged, and legitimate), or a creation site skipped
+	// the derivation. The second is a silent performance cliff rather than a wrong
+	// answer — a free continuous column leaves the root simplex without a box and it
+	// crawls — so it is asserted rather than left to a benchmark to notice.
+	for (idx_t g = 0; g < input.num_global_vars; g++) {
+		idx_t var_idx = indexer.global_block_start + g;
+		auto gtype = input.global_variable_types[g];
+		D_ASSERT(g >= input.global_bounds_unbounded.size() || input.global_bounds_unbounded[g] ||
+		         (input.global_lower_bounds[g] > -DECIDE_EFFECTIVE_INFINITY &&
+		          input.global_upper_bounds[g] < DECIDE_EFFECTIVE_INFINITY));
+		model.col_lower[var_idx] = input.global_lower_bounds[g];
+		model.col_upper[var_idx] = input.global_upper_bounds[g];
 		model.is_integer[var_idx] = gtype != LogicalType::DOUBLE;
 		model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
-    }
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 2. Set up objective function
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 2. Set up objective function
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("model.linear_objective");
-    model.obj_coeffs.resize(total_vars, 0.0);
+	phase.Next("model.linear_objective");
+	model.obj_coeffs.resize(total_vars, 0.0);
 
-    // Set objective coefficients for global variables
-    for (idx_t g = 0; g < input.num_global_vars; g++) {
-        idx_t var_idx = indexer.global_block_start + g;
+	// Set objective coefficients for global variables
+	for (idx_t g = 0; g < input.num_global_vars; g++) {
+		idx_t var_idx = indexer.global_block_start + g;
 		model.obj_coeffs[var_idx] = input.global_obj_coeffs[g];
 	}
-    model.maximize = (input.sense == DecideSense::MAXIMIZE);
-    model.obj_constant = input.objective_constant;
+	model.maximize = (input.sense == DecideSense::MAXIMIZE);
+	model.obj_constant = input.objective_constant;
 
-    if (!input.objective_variable_indices.empty()) {
-        for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
-            idx_t decide_var_idx = input.objective_variable_indices[term_idx];
-            // Every row's coefficient counts. A term beside the reducers counts once: execution kept its
-            // coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
-            auto &col = input.objective_coefficients[term_idx];
-            // A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed
-            // without a check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
-            if (decide_var_idx == DConstants::INVALID_INDEX) {
+	if (!input.objective_variable_indices.empty()) {
+		for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
+			idx_t decide_var_idx = input.objective_variable_indices[term_idx];
+			// Every row's coefficient counts. A term beside the reducers counts once: execution kept its
+			// coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
+			auto &col = input.objective_coefficients[term_idx];
+			// A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed
+			// without a check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
+			if (decide_var_idx == DConstants::INVALID_INDEX) {
 				for (idx_t row = 0; row < num_rows; row++) {
 					model.obj_constant += col.Get(row);
 				}
 				continue;
-            }
-            for (idx_t row = 0; row < num_rows; row++) {
-                idx_t var_idx = indexer.Get(decide_var_idx, row);
-                // Use += because keyed vars: multiple rows map to same solver var
-                AddCoefficient(model.obj_coeffs[var_idx], col.Get(row), input.objective_written);
-            }
-        }
-    }
+			}
+			for (idx_t row = 0; row < num_rows; row++) {
+				idx_t var_idx = indexer.Get(decide_var_idx, row);
+				// Use += because keyed vars: multiple rows map to same solver var
+				AddCoefficient(model.obj_coeffs[var_idx], col.Get(row), input.objective_written);
+			}
+		}
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 2b. Build quadratic objective (Q matrix) if present
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 2b. Build quadratic objective (Q matrix) if present
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("model.quadratic_objective");
-    if (!input.objective_product_groups.empty()) {
-        // Q accumulates in a map: (var_i, var_j) -> value, lower triangle only (var_i >= var_j).
-        std::unordered_map<uint64_t, double> q_map;
-        model.has_quadratic_obj = true;
-        for (auto &group : input.objective_product_groups) {
-            // Shared with stage 05's plan-time prediction, so the refusal there and the fact recorded here cannot
-            // disagree.
-            model.nonconvex_quadratic = model.nonconvex_quadratic ||
-                                        IsNonconvexProductGroup(group.square, group.weight_sign, input.sense);
-            for (idx_t row = 0; row < num_rows; row++) {
-                AddProductGroupRow(
-                    group, row, indexer, q_map,
-                    [&](int flat_idx, double value) {
-                        AddCoefficient(model.obj_coeffs[flat_idx], value, input.objective_written);
-                    },
-                    model.obj_constant, input.objective_written);
-            }
-        }
+	phase.Next("model.quadratic_objective");
+	if (!input.objective_product_groups.empty()) {
+		// Q accumulates in a map: (var_i, var_j) -> value, lower triangle only (var_i >= var_j).
+		std::unordered_map<uint64_t, double> q_map;
+		model.has_quadratic_obj = true;
+		for (auto &group : input.objective_product_groups) {
+			// Shared with stage 05's plan-time prediction, so the refusal there and the fact recorded here cannot
+			// disagree.
+			model.nonconvex_quadratic =
+			    model.nonconvex_quadratic || IsNonconvexProductGroup(group.square, group.weight_sign, input.sense);
+			for (idx_t row = 0; row < num_rows; row++) {
+				AddProductGroupRow(
+				    group, row, indexer, q_map,
+				    [&](int flat_idx, double value) {
+					    AddCoefficient(model.obj_coeffs[flat_idx], value, input.objective_written);
+				    },
+				    model.obj_constant, input.objective_written);
+			}
+		}
 
-        // Convert map to COO vectors
-        model.q_rows.reserve(q_map.size());
-        model.q_cols.reserve(q_map.size());
-        model.q_vals.reserve(q_map.size());
-        for (auto &entry : q_map) {
-            if (entry.second == 0.0) continue;
-            model.q_rows.push_back(static_cast<int>(entry.first >> 32));
-            model.q_cols.push_back(static_cast<int>(entry.first & 0xFFFFFFFF));
-            model.q_vals.push_back(entry.second);
-        }
-    }
+		// Convert map to COO vectors
+		model.q_rows.reserve(q_map.size());
+		model.q_cols.reserve(q_map.size());
+		model.q_vals.reserve(q_map.size());
+		for (auto &entry : q_map) {
+			if (entry.second == 0.0)
+				continue;
+			model.q_rows.push_back(static_cast<int>(entry.first >> 32));
+			model.q_cols.push_back(static_cast<int>(entry.first & 0xFFFFFFFF));
+			model.q_vals.push_back(entry.second);
+		}
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 3. Build constraints
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 3. Build constraints
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("model.constraints");
+	phase.Next("model.constraints");
 
-    // Helper: apply comparison sense to a constraint. A strict `<` / `>` steps the bound to the next integer, which
-    // is exact because the bind-time type gate (ValidateDecideNoIntegerStepComparisonOnReal,
-    // ValidateDecideIntegralComparisonOperands) admits only an integer-valued left-hand side.
-    // `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
-    auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs, double lhs_offset) {
-        if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-            constr.sense = '>'; constr.rhs = rhs;
-        } else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
-            // δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
-            // diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
-            constr.sense = '>'; constr.rhs = DecideStrictBound(true, rhs);
-            constr.provenance.strict = true; constr.provenance.typed_k = rhs + lhs_offset;
-        } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-            constr.sense = '<'; constr.rhs = rhs;
-        } else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
-            // δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
-            constr.sense = '<'; constr.rhs = DecideStrictBound(false, rhs);
-            constr.provenance.strict = true; constr.provenance.typed_k = rhs + lhs_offset;
-        } else if (cmp == ExpressionType::COMPARE_EQUAL) {
-            constr.sense = '='; constr.rhs = rhs;
-        } else {
-            throw InternalException("Unsupported comparison type in ILP model builder");
-        }
-    };
+	// Helper: apply comparison sense to a constraint. A strict `<` / `>` steps the bound to the next integer, which
+	// is exact because the bind-time type gate (ValidateDecideNoIntegerStepComparisonOnReal,
+	// ValidateDecideIntegralComparisonOperands) admits only an integer-valued left-hand side.
+	// `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
+	auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs, double lhs_offset) {
+		if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+			constr.sense = '>';
+			constr.rhs = rhs;
+		} else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
+			// δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
+			// diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
+			constr.sense = '>';
+			constr.rhs = DecideStrictBound(true, rhs);
+			constr.provenance.strict = true;
+			constr.provenance.typed_k = rhs + lhs_offset;
+		} else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+			constr.sense = '<';
+			constr.rhs = rhs;
+		} else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
+			// δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
+			constr.sense = '<';
+			constr.rhs = DecideStrictBound(false, rhs);
+			constr.provenance.strict = true;
+			constr.provenance.typed_k = rhs + lhs_offset;
+		} else if (cmp == ExpressionType::COMPARE_EQUAL) {
+			constr.sense = '=';
+			constr.rhs = rhs;
+		} else {
+			throw InternalException("Unsupported comparison type in ILP model builder");
+		}
+	};
 
-    // Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
-    // all variables folded into column bounds). A tautology is dropped; a
-    // violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row,
-    // so the whole model still gets built and retained.
-    // Keeping the row is what lets the infeasible-diagnosis engine name and relax
-    // the offending clause — it stays a USER_PARAMETER row with its own source
-    // provenance, and the elastic weighting already guards an all-zero row. No
-    // backend ever sees it: SolverModel::ProvesInfeasible answers the model first.
-    auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
-        // A coefficient-free row that fails is kept, with its provenance, so ProvesInfeasible
-        // answers the model and diagnosis can relax the row; one that holds is a tautology.
-        constr.constant_fails = constr.indices.empty() && ConstantRowFails(constr.sense, constr.rhs);
-        if (!constr.indices.empty() || constr.constant_fails) {
-            model.constraints.push_back(std::move(constr));
-        }
-    };
+	// Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
+	// all variables folded into column bounds). A tautology is dropped; a
+	// violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row,
+	// so the whole model still gets built and retained.
+	// Keeping the row is what lets the infeasible-diagnosis engine name and relax
+	// the offending clause — it stays a USER_PARAMETER row with its own source
+	// provenance, and the elastic weighting already guards an all-zero row. No
+	// backend ever sees it: SolverModel::ProvesInfeasible answers the model first.
+	auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
+		// A coefficient-free row that fails is kept, with its provenance, so ProvesInfeasible
+		// answers the model and diagnosis can relax the row; one that holds is a tautology.
+		constr.constant_fails = constr.indices.empty() && ConstantRowFails(constr.sense, constr.rhs);
+		if (!constr.indices.empty() || constr.constant_fails) {
+			model.constraints.push_back(std::move(constr));
+		}
+	};
 
-    // A per-row bound on one decision (`x <= cap`, `2 * x >= lo`, `0.1 * x <= c`) is a fact about one column, so it
-    // goes into that column's box rather than becoming a model row, as a literal bound already does
-    // (decide_singleton_row_folding.cpp). A literal is the same for every row and folds once in the optimizer; a
-    // data-valued bound differs per row and is known only here, as the values it admits on each row (stage 08 reads
-    // them from the classifier both paths share). The bound narrows the box it finds, as the row did: it never
-    // replaces the default floor of 0 itself (D41). A constant floor under a `when` has set the floor of
-    // the instances its rows keep before this runs (ResolveLiftedFloors), and its row then sets the exact value. An
-    // infinite end on the side it binds (`x >= c` with c = +inf) admits no value and keeps the row, and a box the
-    // folds invert stays inverted: ProvesInfeasible answers both, as it would the row.
-    //
-    // HiGHS's QP solver does not turn such rows back into bounds: a 9,600-row box-bounded QP ran past 60 s as rows
-    // and solves in 0.4 s as bounds. Under diagnosis the rows stay, because the elastic engine relaxes rows and
-    // quotes the clause from their provenance (`x <= cap_col + delta`).
-    //
-    // A coefficient of 0 on a row (`cap * x <= -1e-10` where `cap` is 0) leaves the comparison of a constant, which
-    // holds for every value or for none. DuckDB's comparison says which (the admitted ends are all or nothing), not
-    // the builder's tolerance, under diagnosis too; a row that fails is kept for ProvesInfeasible.
-    auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t row, ModelConstraint &constr) -> bool {
-        if (ec.admitted_lower.logical_size == 0) {
-            return false;
-        }
-        double lower = ec.admitted_lower[row];
-        double upper = ec.admitted_upper[row];
-        if (constr.indices.empty()) {
-            constr.constant_fails = lower > upper;
-            if (constr.constant_fails) {
-                model.constraints.push_back(std::move(constr));
-            }
-            return true;
-        }
+	// A per-row bound on one decision (`x <= cap`, `2 * x >= lo`, `0.1 * x <= c`) is a fact about one column, so it
+	// goes into that column's box rather than becoming a model row, as a literal bound already does
+	// (decide_singleton_row_folding.cpp). A literal is the same for every row and folds once in the optimizer; a
+	// data-valued bound differs per row and is known only here, as the values it admits on each row (stage 08 reads
+	// them from the classifier both paths share). The bound narrows the box it finds, as the row did: it never
+	// replaces the default floor of 0 itself (D41). A constant floor under a `when` has set the floor of
+	// the instances its rows keep before this runs (ResolveLiftedFloors), and its row then sets the exact value. An
+	// infinite end on the side it binds (`x >= c` with c = +inf) admits no value and keeps the row, and a box the
+	// folds invert stays inverted: ProvesInfeasible answers both, as it would the row.
+	//
+	// HiGHS's QP solver does not turn such rows back into bounds: a 9,600-row box-bounded QP ran past 60 s as rows
+	// and solves in 0.4 s as bounds. Under diagnosis the rows stay, because the elastic engine relaxes rows and
+	// quotes the clause from their provenance (`x <= cap_col + delta`).
+	//
+	// A coefficient of 0 on a row (`cap * x <= -1e-10` where `cap` is 0) leaves the comparison of a constant, which
+	// holds for every value or for none. DuckDB's comparison says which (the admitted ends are all or nothing), not
+	// the builder's tolerance, under diagnosis too; a row that fails is kept for ProvesInfeasible.
+	auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t row, ModelConstraint &constr) -> bool {
+		if (ec.admitted_lower.logical_size == 0) {
+			return false;
+		}
+		double lower = ec.admitted_lower[row];
+		double upper = ec.admitted_upper[row];
+		if (constr.indices.empty()) {
+			constr.constant_fails = lower > upper;
+			if (constr.constant_fails) {
+				model.constraints.push_back(std::move(constr));
+			}
+			return true;
+		}
 		if (input.keep_singleton_rows) {
 			return false;
 		}
 		D_ASSERT(constr.indices.size() == 1); // a bound on one decision: one term, merged by the canonicalizer
 		if (lower == std::numeric_limits<double>::infinity() || upper == -std::numeric_limits<double>::infinity()) {
-            return false;
-        }
-        // The column's box is finite, so an open end (±infinity) leaves it as it is.
-        idx_t col = (idx_t)constr.indices[0];
-        model.col_lower[col] = std::max(model.col_lower[col], lower);
-        model.col_upper[col] = std::min(model.col_upper[col], upper);
-        return true;
-    };
+			return false;
+		}
+		// The column's box is finite, so an open end (±infinity) leaves it as it is.
+		idx_t col = (idx_t)constr.indices[0];
+		model.col_lower[col] = std::max(model.col_lower[col], lower);
+		model.col_upper[col] = std::min(model.col_upper[col], upper);
+		return true;
+	};
 
-    // Rough upper-bound on total model.constraints rows to avoid repeated
-    // vector reallocation — aggregate w/o groups contributes 1, aggregate w/
-    // groups contributes num_groups, per-row contributes num_rows. Plus any
-    // raw global constraints appended after the main loop.
-    {
-        idx_t est_rows = input.global_constraints.size();
-        for (auto &ec : input.constraints) {
-            if (!ec.product_groups.empty()) continue;
-            if (ec.lhs_is_aggregate) {
-                bool ec_has_groups = !ec.row_group_ids.empty();
-                est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
-            } else {
-                est_rows += num_rows;
-            }
-        }
-        model.constraints.reserve(model.constraints.size() + est_rows);
-    }
+	// Rough upper-bound on total model.constraints rows to avoid repeated
+	// vector reallocation — aggregate w/o groups contributes 1, aggregate w/
+	// groups contributes num_groups, per-row contributes num_rows. Plus any
+	// raw global constraints appended after the main loop.
+	{
+		idx_t est_rows = input.global_constraints.size();
+		for (auto &ec : input.constraints) {
+			if (!ec.product_groups.empty())
+				continue;
+			if (ec.lhs_is_aggregate) {
+				bool ec_has_groups = !ec.row_group_ids.empty();
+				est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
+			} else {
+				est_rows += num_rows;
+			}
+		}
+		model.constraints.reserve(model.constraints.size() + est_rows);
+	}
 
-    for (auto &eval_const : input.constraints) {
-        // Skip constraints with product groups — handled in quadratic section below
-        if (!eval_const.product_groups.empty()) {
-            continue;
-        }
+	for (auto &eval_const : input.constraints) {
+		// Skip constraints with product groups — handled in quadratic section below
+		if (!eval_const.product_groups.empty()) {
+			continue;
+		}
 
-        idx_t repair_group_id = eval_const.repair_group_id != DConstants::INVALID_INDEX
-                                    ? eval_const.repair_group_id
-                                    : static_cast<idx_t>(&eval_const - input.constraints.data());
+		idx_t repair_group_id = eval_const.repair_group_id != DConstants::INVALID_INDEX
+		                            ? eval_const.repair_group_id
+		                            : static_cast<idx_t>(&eval_const - input.constraints.data());
 
-        bool is_aggregate = eval_const.lhs_is_aggregate;
-        bool has_groups = !eval_const.row_group_ids.empty();
-        const string written = DecideWrittenClause(input, eval_const.source_clause_id);
+		bool is_aggregate = eval_const.lhs_is_aggregate;
+		bool has_groups = !eval_const.row_group_ids.empty();
+		const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
-        // Symbolic coefficient labels for a data-weighted aggregate: map each summed decide
-        // variable to its coefficient expression (`buy → l_extendedprice`) so infeasible
-        // diagnosis can render `SUM(buy * l_extendedprice)` rather than the numeric fan-out.
-        auto StampWeightLabels = [&](ConstraintProvenance &prov) {
-            for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
-                idx_t v = eval_const.variable_indices[t];
-                if (v == DConstants::INVALID_INDEX || t >= eval_const.coefficient_labels.size() ||
-                    eval_const.coefficient_labels[t].empty()) {
-                    continue;
-                }
-                prov.weight_labels.emplace_back(v, eval_const.coefficient_labels[t]);
-            }
-        };
+		// Symbolic coefficient labels for a data-weighted aggregate: map each summed decide
+		// variable to its coefficient expression (`buy → l_extendedprice`) so infeasible
+		// diagnosis can render `SUM(buy * l_extendedprice)` rather than the numeric fan-out.
+		auto StampWeightLabels = [&](ConstraintProvenance &prov) {
+			for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
+				idx_t v = eval_const.variable_indices[t];
+				if (v == DConstants::INVALID_INDEX || t >= eval_const.coefficient_labels.size() ||
+				    eval_const.coefficient_labels[t].empty()) {
+					continue;
+				}
+				prov.weight_labels.emplace_back(v, eval_const.coefficient_labels[t]);
+			}
+		};
 
-        // Written per-term coefficients, for the accumulating path only. There the row's
-        // coefficient is a *sum* over the folded rows (keyed vars collapse many
-        // rows onto one column), so the reconstruction cannot recover what the user typed
-        // from the matrix alone.
-        //
-        // `coefficient_labels[t]` is the source text of the term's coefficient expression
-        // (physical_decide.cpp:3069) — "1" for a bare `SUM(keepS)`, "l_extendedprice" for
-        // `SUM(buy * l_extendedprice)`. A label that is wholly a number therefore *is* the
-        // written coefficient; anything else is data-varying and has no single value to
-        // quote (weight_labels covers that case). The column's own `IsUniform()` only
-        // catches the Scalar representation — a written constant usually materializes
-        // dense — so the label is the reliable discriminator.
-        auto ParseLiteralCoefficient = [](const string &label, double &value) -> bool {
-            if (label.empty()) {
-                return false;
-            }
-            const char *begin = label.c_str();
-            char *end = nullptr;
-            double parsed = std::strtod(begin, &end);
-            if (end != begin + label.size() || !std::isfinite(parsed)) {
-                return false;
-            }
-            value = parsed;
-            return true;
-        };
-        // Computed once per clause, not per group: the grouped path below emits one constraint
-        // per group and would otherwise rebuild this (and its scratch set) for every one.
-        // Empty unless the clause is an aggregate that takes the accumulating path, which
-        // is the only case whose matrix coefficients are folded totals.
-        vector<FoldedAggTerm> clause_folded_terms;
-        if (is_aggregate && !TermsHaveTheirOwnColumns(eval_const, indexer)) {
-            std::unordered_set<idx_t> seen;
-            for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
-                idx_t v = eval_const.variable_indices[t];
-                if (v == DConstants::INVALID_INDEX || !seen.insert(v).second) {
-                    continue;
-                }
-                FoldedAggTerm term;
-                term.decide_var_idx = v;
+		// Written per-term coefficients, for the accumulating path only. There the row's
+		// coefficient is a *sum* over the folded rows (keyed vars collapse many
+		// rows onto one column), so the reconstruction cannot recover what the user typed
+		// from the matrix alone.
+		//
+		// `coefficient_labels[t]` is the source text of the term's coefficient expression
+		// (physical_decide.cpp:3069) — "1" for a bare `SUM(keepS)`, "l_extendedprice" for
+		// `SUM(buy * l_extendedprice)`. A label that is wholly a number therefore *is* the
+		// written coefficient; anything else is data-varying and has no single value to
+		// quote (weight_labels covers that case). The column's own `IsUniform()` only
+		// catches the Scalar representation — a written constant usually materializes
+		// dense — so the label is the reliable discriminator.
+		auto ParseLiteralCoefficient = [](const string &label, double &value) -> bool {
+			if (label.empty()) {
+				return false;
+			}
+			const char *begin = label.c_str();
+			char *end = nullptr;
+			double parsed = std::strtod(begin, &end);
+			if (end != begin + label.size() || !std::isfinite(parsed)) {
+				return false;
+			}
+			value = parsed;
+			return true;
+		};
+		// Computed once per clause, not per group: the grouped path below emits one constraint
+		// per group and would otherwise rebuild this (and its scratch set) for every one.
+		// Empty unless the clause is an aggregate that takes the accumulating path, which
+		// is the only case whose matrix coefficients are folded totals.
+		vector<FoldedAggTerm> clause_folded_terms;
+		if (is_aggregate && !TermsHaveTheirOwnColumns(eval_const, indexer)) {
+			std::unordered_set<idx_t> seen;
+			for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
+				idx_t v = eval_const.variable_indices[t];
+				if (v == DConstants::INVALID_INDEX || !seen.insert(v).second) {
+					continue;
+				}
+				FoldedAggTerm term;
+				term.decide_var_idx = v;
 				// A term's label is pushed with its variable, wherever an aggregate is evaluated.
 				term.has_unit = ParseLiteralCoefficient(eval_const.coefficient_labels[t], term.unit);
 				clause_folded_terms.push_back(term);
-            }
-        }
+			}
+		}
 
-        // The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
-        // from the clause, and they are freed with this iteration.
-        ClauseEmittedRows(eval_const, indexer, written);
-        auto emitted = std::move(eval_const.emitted_rows);
-        auto copy_emitted_row = [&](idx_t e, ModelConstraint &constr) {
-            auto begin = NumericCast<int64_t>(emitted.offsets[e]);
-            auto end = NumericCast<int64_t>(emitted.offsets[e + 1]);
-            constr.indices.assign(emitted.columns.begin() + begin, emitted.columns.begin() + end);
-            constr.coefficients.assign(emitted.values.begin() + begin, emitted.values.begin() + end);
-        };
+		// The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
+		// from the clause, and they are freed with this iteration.
+		ClauseEmittedRows(eval_const, indexer, written);
+		auto emitted = std::move(eval_const.emitted_rows);
+		auto copy_emitted_row = [&](idx_t e, ModelConstraint &constr) {
+			auto begin = NumericCast<int64_t>(emitted.offsets[e]);
+			auto end = NumericCast<int64_t>(emitted.offsets[e + 1]);
+			constr.indices.assign(emitted.columns.begin() + begin, emitted.columns.begin() + end);
+			constr.coefficients.assign(emitted.values.begin() + begin, emitted.values.begin() + end);
+		};
 
-        if (is_aggregate) {
-            if (!has_groups) {
-                // No `when`, no groups: one constraint summing all rows, the clause's one emitted row.
-                ModelConstraint constr;
-                constr.indices = std::move(emitted.columns);
-                constr.coefficients = std::move(emitted.values);
+		if (is_aggregate) {
+			if (!has_groups) {
+				// No `when`, no groups: one constraint summing all rows, the clause's one emitted row.
+				ModelConstraint constr;
+				constr.indices = std::move(emitted.columns);
+				constr.coefficients = std::move(emitted.values);
 
-                // One value for the whole constraint: the optimizer's bound-side
-                // window rewrite reduced a row-varying bound to the tightest one on
-                // every kept row (RewriteRhsAggregates). No per-row check is needed here.
-                D_ASSERT(RhsIsConstantWithinGroups(eval_const));
-                double rhs = eval_const.rhs_values.Get(0);
-                double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written);
-                rhs -= lhs_offset;
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
-                // F2 site 1: aggregate, ungrouped.
-                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
-                                          DConstants::INVALID_INDEX, lhs_offset);
-                StampAggregateProvenance(constr.provenance, eval_const);
-                constr.provenance.class_set = ClassSetOf(eval_const, 0);
-                constr.provenance.avg_scaled = eval_const.avg_scaled;
-                StampWeightLabels(constr.provenance);
-                constr.provenance.folded_terms = clause_folded_terms;
-                PushNormalizedConstraint(std::move(constr));
+				// One value for the whole constraint: the optimizer's bound-side
+				// window rewrite reduced a row-varying bound to the tightest one on
+				// every kept row (RewriteRhsAggregates). No per-row check is needed here.
+				D_ASSERT(RhsIsConstantWithinGroups(eval_const));
+				double rhs = eval_const.rhs_values.Get(0);
+				double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written);
+				rhs -= lhs_offset;
+				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
+				// F2 site 1: aggregate, ungrouped.
+				StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
+				                          lhs_offset);
+				StampAggregateProvenance(constr.provenance, eval_const);
+				constr.provenance.class_set = ClassSetOf(eval_const, 0);
+				constr.provenance.avg_scaled = eval_const.avg_scaled;
+				StampWeightLabels(constr.provenance);
+				constr.provenance.folded_terms = clause_folded_terms;
+				PushNormalizedConstraint(std::move(constr));
 
-            } else {
-                // A `when` and/or groups: one constraint per group, the group's emitted row.
-                auto &flat_rows = ClauseRows(eval_const);
-                auto &offsets = eval_const.group_offsets;
+			} else {
+				// A `when` and/or groups: one constraint per group, the group's emitted row.
+				auto &flat_rows = ClauseRows(eval_const);
+				auto &offsets = eval_const.group_offsets;
 
-                // Each group's bound is read from one of its own rows below; the
-                // physical operator guarantees it is constant within the group.
-                D_ASSERT(RhsIsConstantWithinGroups(eval_const));
+				// Each group's bound is read from one of its own rows below; the
+				// physical operator guarantees it is constant within the group.
+				D_ASSERT(RhsIsConstantWithinGroups(eval_const));
 
-                for (idx_t g = 0; g < eval_const.num_groups; g++) {
-                    idx_t g_begin = offsets[g];
-                    idx_t g_end = offsets[g + 1];
-                    if (g_begin == g_end) {
-                        continue;
-                    }
-                    ModelConstraint constr;
-                    copy_emitted_row(g, constr);
+				for (idx_t g = 0; g < eval_const.num_groups; g++) {
+					idx_t g_begin = offsets[g];
+					idx_t g_end = offsets[g + 1];
+					if (g_begin == g_end) {
+						continue;
+					}
+					ModelConstraint constr;
+					copy_emitted_row(g, constr);
 
-                    // Read this group's own bound. The guard above still proves every
-                    // row agrees, so today this equals Get(0); once the RHS carries one
-                    // value per group it is what lets each group see its own bound.
-                    // Row 0 would be wrong twice over: it may belong to another group,
-                    // and it may be excluded by WHEN.
-                    double group_lhs_offset =
-                        SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written);
-                    double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
-                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
-                    // F2 site 2: grouped aggregate (`by` and/or `when`).
-                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_lhs_offset);
-                    StampAggregateProvenance(constr.provenance, eval_const);
-                    constr.provenance.class_set = ClassSetOf(eval_const, g);
-                    constr.provenance.avg_scaled = eval_const.avg_scaled;
-                    StampWeightLabels(constr.provenance);
-                    constr.provenance.folded_terms = clause_folded_terms;
-                    PushNormalizedConstraint(std::move(constr));
-                }
-            }
+					// Read this group's own bound. The guard above still proves every
+					// row agrees, so today this equals Get(0); once the RHS carries one
+					// value per group it is what lets each group see its own bound.
+					// Row 0 would be wrong twice over: it may belong to another group,
+					// and it may be excluded by WHEN.
+					double group_lhs_offset =
+					    SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written);
+					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
+					ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
+					// F2 site 2: grouped aggregate (`by` and/or `when`).
+					StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_lhs_offset);
+					StampAggregateProvenance(constr.provenance, eval_const);
+					constr.provenance.class_set = ClassSetOf(eval_const, g);
+					constr.provenance.avg_scaled = eval_const.avg_scaled;
+					StampWeightLabels(constr.provenance);
+					constr.provenance.folded_terms = clause_folded_terms;
+					PushNormalizedConstraint(std::move(constr));
+				}
+			}
 
-        } else {
-            // PER-ROW CONSTRAINT: one constraint per row, the row's emitted row
-            for (idx_t row = 0; row < num_rows; row++) {
-                // Skip rows excluded by `when` (row_group_ids with INVALID_INDEX)
-                if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                ModelConstraint constr;
-                copy_emitted_row(row, constr);
-                // LHS terms that don't reference a DECIDE variable (row-varying
-                // data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
-                // in `x - col <= K`) must move to RHS, not be dropped. The
-                // symbolic normalizer only canonicalizes aggregate constraints;
-                // per-row LHS arrives here with constant/data terms still attached.
-                double rhs_adjustment = SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written);
+		} else {
+			// PER-ROW CONSTRAINT: one constraint per row, the row's emitted row
+			for (idx_t row = 0; row < num_rows; row++) {
+				// Skip rows excluded by `when` (row_group_ids with INVALID_INDEX)
+				if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				ModelConstraint constr;
+				copy_emitted_row(row, constr);
+				// LHS terms that don't reference a DECIDE variable (row-varying
+				// data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
+				// in `x - col <= K`) must move to RHS, not be dropped. The
+				// symbolic normalizer only canonicalizes aggregate constraints;
+				// per-row LHS arrives here with constant/data terms still attached.
+				double rhs_adjustment = SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written);
 
-                double rhs = eval_const.rhs_values[row] - rhs_adjustment;
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, rhs_adjustment);
-                // F2 site 3: per-row. The group label is stamped here for the same reason
-                // the aggregate sites stamp it: a diagnosis over a grouped clause has to
-                // name the group its failure sits in, not just the clause. It matters most
-                // for a hard MIN/MAX whose bound is out of every row's reach — the rewrite
-                // re-emits that group as ordinary per-row rows, so this is the only site
-                // that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
-                idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
-                                          rhs_adjustment);
-                // A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
-                // `per K:` clause's row for its class; any other per-row row for its data row.
-                constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
-                StampDataRow(constr.provenance, row);
-                if (TryFoldPerRowBound(eval_const, row, constr)) {
-                    continue;
-                }
-                PushNormalizedConstraint(std::move(constr));
-            }
-        }
-    }
+				double rhs = eval_const.rhs_values[row] - rhs_adjustment;
+				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, rhs_adjustment);
+				// F2 site 3: per-row. The group label is stamped here for the same reason
+				// the aggregate sites stamp it: a diagnosis over a grouped clause has to
+				// name the group its failure sits in, not just the clause. It matters most
+				// for a hard MIN/MAX whose bound is out of every row's reach — the rewrite
+				// re-emits that group as ordinary per-row rows, so this is the only site
+				// that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
+				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+				StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
+				                          rhs_adjustment);
+				// A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
+				// `per K:` clause's row for its class; any other per-row row for its data row.
+				constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
+				StampDataRow(constr.provenance, row);
+				if (TryFoldPerRowBound(eval_const, row, constr)) {
+					continue;
+				}
+				PushNormalizedConstraint(std::move(constr));
+			}
+		}
+	}
 
-    // Build quadratic constraints from product groups. These constraints were skipped in
-    // the linear loop above. A single QuadraticConstraint holds linear terms and every
-    // group's Q entries, all accumulated together.
+	// Build quadratic constraints from product groups. These constraints were skipped in
+	// the linear loop above. A single QuadraticConstraint holds linear terms and every
+	// group's Q entries, all accumulated together.
 
-    // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
-    // lhs_constant: out, the constant part of the LHS folded into the bound (the linear
-    // path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
-    auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec, const vector<idx_t> &row_set, double rhs,
-                                        double &lhs_constant,
-                                        const string &written) -> SolverModel::QuadraticConstraint {
-        SolverModel::QuadraticConstraint qc;
-        std::unordered_map<int, double> linear_accum;
-        std::unordered_map<uint64_t, double> q_accum;
-        double rhs_adjustment = 0.0;
+	// Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
+	// lhs_constant: out, the constant part of the LHS folded into the bound (the linear
+	// path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
+	auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec, const vector<idx_t> &row_set, double rhs,
+	                                    double &lhs_constant,
+	                                    const string &written) -> SolverModel::QuadraticConstraint {
+		SolverModel::QuadraticConstraint qc;
+		std::unordered_map<int, double> linear_accum;
+		std::unordered_map<uint64_t, double> q_accum;
+		double rhs_adjustment = 0.0;
 
-        // Linear terms from the constraint LHS
-        for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-            idx_t decide_var_idx = ec.variable_indices[term_idx];
-            if (decide_var_idx != DConstants::INVALID_INDEX) {
-                for (idx_t row : row_set) {
-                    double coeff = ec.row_coefficients[term_idx][row];
-                    int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                    AddCoefficient(linear_accum[var_idx], coeff, written);
-                }
-            } else {
-                for (idx_t row : row_set) {
-                    AddCoefficient(rhs_adjustment, ec.row_coefficients[term_idx].Get(row), written);
-                }
-            }
-        }
+		// Linear terms from the constraint LHS
+		for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+			idx_t decide_var_idx = ec.variable_indices[term_idx];
+			if (decide_var_idx != DConstants::INVALID_INDEX) {
+				for (idx_t row : row_set) {
+					double coeff = ec.row_coefficients[term_idx][row];
+					int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+					AddCoefficient(linear_accum[var_idx], coeff, written);
+				}
+			} else {
+				for (idx_t row : row_set) {
+					AddCoefficient(rhs_adjustment, ec.row_coefficients[term_idx].Get(row), written);
+				}
+			}
+		}
 
-        // Product groups: each adds its rank-one update to Q, its cross terms to the linear part,
-        // and its constant to the RHS (AddProductGroupRow). GRBaddqconstr reads x^T Q x with no
-        // 1/2 factor, which is the monomial convention Q is held in.
-        for (auto &group : ec.product_groups) {
-            for (idx_t row : row_set) {
-                AddProductGroupRow(
-                    group, row, indexer, q_accum,
-                    [&](int flat_idx, double value) { AddCoefficient(linear_accum[flat_idx], value, written); },
-                    rhs_adjustment, written);
-            }
-        }
+		// Product groups: each adds its rank-one update to Q, its cross terms to the linear part,
+		// and its constant to the RHS (AddProductGroupRow). GRBaddqconstr reads x^T Q x with no
+		// 1/2 factor, which is the monomial convention Q is held in.
+		for (auto &group : ec.product_groups) {
+			for (idx_t row : row_set) {
+				AddProductGroupRow(
+				    group, row, indexer, q_accum,
+				    [&](int flat_idx, double value) { AddCoefficient(linear_accum[flat_idx], value, written); },
+				    rhs_adjustment, written);
+			}
+		}
 
-        // Flush linear terms
-        for (auto &pair : linear_accum) {
-            if (pair.second != 0.0) {
-                qc.linear_indices.push_back(pair.first);
-                qc.linear_coefficients.push_back(pair.second);
-            }
-        }
-        // Flush Q terms
-        for (auto &entry : q_accum) {
-            if (entry.second != 0.0) {
-                qc.q_rows.push_back(static_cast<int>(entry.first >> 32));
-                qc.q_cols.push_back(static_cast<int>(entry.first & 0xFFFFFFFF));
-                qc.q_coefficients.push_back(entry.second);
-            }
-        }
+		// Flush linear terms
+		for (auto &pair : linear_accum) {
+			if (pair.second != 0.0) {
+				qc.linear_indices.push_back(pair.first);
+				qc.linear_coefficients.push_back(pair.second);
+			}
+		}
+		// Flush Q terms
+		for (auto &entry : q_accum) {
+			if (entry.second != 0.0) {
+				qc.q_rows.push_back(static_cast<int>(entry.first >> 32));
+				qc.q_cols.push_back(static_cast<int>(entry.first & 0xFFFFFFFF));
+				qc.q_coefficients.push_back(entry.second);
+			}
+		}
 
-        // RHS and sense (move constant terms to RHS). A strict `< K` / `> K` steps the bound as the linear path does.
-        double adjusted_rhs = rhs - rhs_adjustment;
-        qc.rhs = adjusted_rhs;
-        lhs_constant = rhs_adjustment;
-        switch (ec.comparison_type) {
-        case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-            qc.sense = '<'; break;
-        case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-            qc.sense = '>'; break;
-        case ExpressionType::COMPARE_EQUAL:
-            qc.sense = '='; break;
-        case ExpressionType::COMPARE_LESSTHAN:
-            qc.sense = '<';
-            qc.rhs = DecideStrictBound(false, adjusted_rhs);
-            qc.provenance.strict = true;
-            qc.provenance.typed_k = rhs;
-            break;
-        case ExpressionType::COMPARE_GREATERTHAN:
-            qc.sense = '>';
-            qc.rhs = DecideStrictBound(true, adjusted_rhs);
-            qc.provenance.strict = true;
-            qc.provenance.typed_k = rhs;
-            break;
-        default:
-            throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
-        }
-        return qc;
-    };
+		// RHS and sense (move constant terms to RHS). A strict `< K` / `> K` steps the bound as the linear path does.
+		double adjusted_rhs = rhs - rhs_adjustment;
+		qc.rhs = adjusted_rhs;
+		lhs_constant = rhs_adjustment;
+		switch (ec.comparison_type) {
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+			qc.sense = '<';
+			break;
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+			qc.sense = '>';
+			break;
+		case ExpressionType::COMPARE_EQUAL:
+			qc.sense = '=';
+			break;
+		case ExpressionType::COMPARE_LESSTHAN:
+			qc.sense = '<';
+			qc.rhs = DecideStrictBound(false, adjusted_rhs);
+			qc.provenance.strict = true;
+			qc.provenance.typed_k = rhs;
+			break;
+		case ExpressionType::COMPARE_GREATERTHAN:
+			qc.sense = '>';
+			qc.rhs = DecideStrictBound(true, adjusted_rhs);
+			qc.provenance.strict = true;
+			qc.provenance.typed_k = rhs;
+			break;
+		default:
+			throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
+		}
+		return qc;
+	};
 
-    phase.Next("model.quadratic_constraints");
-    for (auto &eval_const : input.constraints) {
-        if (eval_const.product_groups.empty()) {
-            continue;  // Already handled as linear above
-        }
+	phase.Next("model.quadratic_constraints");
+	for (auto &eval_const : input.constraints) {
+		if (eval_const.product_groups.empty()) {
+			continue; // Already handled as linear above
+		}
 
 		// A clause with a product group is the user's: it is numbered where it is evaluated.
 		idx_t repair_group_id = eval_const.repair_group_id;
 
 		bool is_aggregate = eval_const.lhs_is_aggregate;
-        bool has_groups = !eval_const.row_group_ids.empty();
-        const string written = DecideWrittenClause(input, eval_const.source_clause_id);
+		bool has_groups = !eval_const.row_group_ids.empty();
+		const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
-        if (is_aggregate) {
+		if (is_aggregate) {
 			double rhs = eval_const.rhs_values.Get(0);
 
 			// Before the RHS was reduced per group this path read row 0's value for
-            // every group with no check at all, so a row-varying bound was silently
-            // wrong here rather than refused. Now the invariant holds by construction.
-            D_ASSERT(RhsIsConstantWithinGroups(eval_const));
+			// every group with no check at all, so a row-varying bound was silently
+			// wrong here rather than refused. Now the invariant holds by construction.
+			D_ASSERT(RhsIsConstantWithinGroups(eval_const));
 
-            if (!has_groups) {
-                // Single aggregate: all rows
-                vector<idx_t> all_rows(num_rows);
-                std::iota(all_rows.begin(), all_rows.end(), 0);
-                double lhs_constant;
-                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_constant, written);
-                // F2 site 4: quadratic aggregate, ungrouped.
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
-                                          lhs_constant);
-                StampAggregateProvenance(qc.provenance, eval_const);
-                qc.provenance.class_set = ClassSetOf(eval_const, 0);
-                model.quadratic_constraints.push_back(std::move(qc));
-            } else {
-                // Groups: one QuadraticConstraint per group, reuse CSR
-                auto &flat_rows = ClauseRows(eval_const);
-                auto &offsets = eval_const.group_offsets;
-                for (idx_t g = 0; g < eval_const.num_groups; g++) {
-                    idx_t g_begin = offsets[g];
-                    idx_t g_end = offsets[g + 1];
-                    if (g_begin == g_end) {
-                        continue;
-                    }
-                    vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin,
-                                                   flat_rows.begin() + g_end);
-                    // This group's own bound — see the linear grouped path for why row 0
-                    // is the wrong row to read once the RHS varies by group.
+			if (!has_groups) {
+				// Single aggregate: all rows
+				vector<idx_t> all_rows(num_rows);
+				std::iota(all_rows.begin(), all_rows.end(), 0);
+				double lhs_constant;
+				auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_constant, written);
+				// F2 site 4: quadratic aggregate, ungrouped.
+				StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX,
+				                          lhs_constant);
+				StampAggregateProvenance(qc.provenance, eval_const);
+				qc.provenance.class_set = ClassSetOf(eval_const, 0);
+				model.quadratic_constraints.push_back(std::move(qc));
+			} else {
+				// Groups: one QuadraticConstraint per group, reuse CSR
+				auto &flat_rows = ClauseRows(eval_const);
+				auto &offsets = eval_const.group_offsets;
+				for (idx_t g = 0; g < eval_const.num_groups; g++) {
+					idx_t g_begin = offsets[g];
+					idx_t g_end = offsets[g + 1];
+					if (g_begin == g_end) {
+						continue;
+					}
+					vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin, flat_rows.begin() + g_end);
+					// This group's own bound — see the linear grouped path for why row 0
+					// is the wrong row to read once the RHS varies by group.
 					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]);
 					double lhs_constant;
-                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
-                    // F2 site 5: grouped quadratic aggregate.
-                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, lhs_constant);
-                    StampAggregateProvenance(qc.provenance, eval_const);
-                    qc.provenance.class_set = ClassSetOf(eval_const, g);
-                    model.quadratic_constraints.push_back(std::move(qc));
-                }
-            }
-        } else {
-            // Per-row: each row gets its own QuadraticConstraint
-            for (idx_t row = 0; row < num_rows; row++) {
-                if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                vector<idx_t> single_row{row};
-                double rhs = eval_const.rhs_values.Get(row);
-                double lhs_constant;
-                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_constant, written);
-                // F2 site 6: quadratic per-row.
-                idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, lhs_constant);
-                qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
-                StampDataRow(qc.provenance, row);
-                model.quadratic_constraints.push_back(std::move(qc));
-            }
-        }
-    }
+					auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_constant, written);
+					// F2 site 5: grouped quadratic aggregate.
+					StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, lhs_constant);
+					StampAggregateProvenance(qc.provenance, eval_const);
+					qc.provenance.class_set = ClassSetOf(eval_const, g);
+					model.quadratic_constraints.push_back(std::move(qc));
+				}
+			}
+		} else {
+			// Per-row: each row gets its own QuadraticConstraint
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
+					continue;
+				}
+				vector<idx_t> single_row {row};
+				double rhs = eval_const.rhs_values.Get(row);
+				double lhs_constant;
+				auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_constant, written);
+				// F2 site 6: quadratic per-row.
+				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+				StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, lhs_constant);
+				qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
+				StampDataRow(qc.provenance, row);
+				model.quadratic_constraints.push_back(std::move(qc));
+			}
+		}
+	}
 
-    // Append raw global constraints (for MIN/MAX objective linking, etc.).
-    // Move the index/coefficient vectors out of `input` to avoid deep copies —
-    // SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
-    phase.Next("model.global_rows");
-    for (auto &raw : input.global_constraints) {
-        ModelConstraint constr;
-        constr.indices = std::move(raw.indices);
-        constr.coefficients = std::move(raw.coefficients);
-        constr.sense = raw.sense;
-        constr.rhs = raw.rhs;
-        // Raw rows include both structural links and user-facing composed outer
-        // constraints, so their provenance is explicit on RawConstraint rather than
-        // inferred from an EvaluatedConstraint position.
-        constr.provenance.kind = raw.kind;
-        constr.provenance.shape = raw.shape;
-        constr.provenance.source_clause_id = raw.source_clause_id;
-        constr.provenance.repair_group_id = raw.repair_group_id;
-        constr.provenance.removal_group_id = raw.removal_group_id;
-        // I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
-        // removal dial groups the two global rows just like a per-row `<>`.
-        constr.provenance.indicator_col = raw.indicator_col;
-        constr.provenance.class_set = raw.class_set;
-        // The display half. A per-row clause emitted through EvaluatedConstraint gets
-        // these stamped from its group columns; one emitted in flat columns states them
-        // itself, so a clause reads the same in a diagnosis whichever shape its rows took.
-        constr.provenance.group_key = raw.group_key;
-        constr.provenance.group_name = raw.group_name;
-        constr.provenance.is_aggregate = raw.is_aggregate;
-        constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
-        constr.provenance.rhs_label = raw.rhs_label;
-        constr.provenance.strict = raw.strict;
-        constr.provenance.typed_k = raw.typed_k;
-        PushNormalizedConstraint(std::move(constr));
-    }
+	// Append raw global constraints (for MIN/MAX objective linking, etc.).
+	// Move the index/coefficient vectors out of `input` to avoid deep copies —
+	// SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
+	phase.Next("model.global_rows");
+	for (auto &raw : input.global_constraints) {
+		ModelConstraint constr;
+		constr.indices = std::move(raw.indices);
+		constr.coefficients = std::move(raw.coefficients);
+		constr.sense = raw.sense;
+		constr.rhs = raw.rhs;
+		// Raw rows include both structural links and user-facing composed outer
+		// constraints, so their provenance is explicit on RawConstraint rather than
+		// inferred from an EvaluatedConstraint position.
+		constr.provenance.kind = raw.kind;
+		constr.provenance.shape = raw.shape;
+		constr.provenance.source_clause_id = raw.source_clause_id;
+		constr.provenance.repair_group_id = raw.repair_group_id;
+		constr.provenance.removal_group_id = raw.removal_group_id;
+		// I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
+		// removal dial groups the two global rows just like a per-row `<>`.
+		constr.provenance.indicator_col = raw.indicator_col;
+		constr.provenance.class_set = raw.class_set;
+		// The display half. A per-row clause emitted through EvaluatedConstraint gets
+		// these stamped from its group columns; one emitted in flat columns states them
+		// itself, so a clause reads the same in a diagnosis whichever shape its rows took.
+		constr.provenance.group_key = raw.group_key;
+		constr.provenance.group_name = raw.group_name;
+		constr.provenance.is_aggregate = raw.is_aggregate;
+		constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
+		constr.provenance.rhs_label = raw.rhs_label;
+		constr.provenance.strict = raw.strict;
+		constr.provenance.typed_k = raw.typed_k;
+		PushNormalizedConstraint(std::move(constr));
+	}
 
-    // Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`
-    // did not lower arrives here still conditioned; everything it did lower is an ordinary
-    // row in `global_constraints` above. A model holds one or the other for a given
-    // clause, never both. The row half carries the same provenance a matrix row does, so
-    // this only re-homes it.
-    model.indicator_constraints.reserve(input.indicator_constraints.size());
-    for (auto &spec : input.indicator_constraints) {
-        SolverModel::IndicatorConstraint ic;
-        ic.binary_column = spec.binary_column;
-        ic.binary_value = spec.binary_value;
-        ic.indices = std::move(spec.row.indices);
-        ic.coefficients = std::move(spec.row.coefficients);
-        ic.sense = spec.row.sense;
-        ic.rhs = spec.row.rhs;
-        ic.provenance.kind = spec.row.kind;
-        ic.provenance.shape = spec.row.shape;
-        ic.provenance.source_clause_id = spec.row.source_clause_id;
-        ic.provenance.repair_group_id = spec.row.repair_group_id;
-        ic.provenance.removal_group_id = spec.row.removal_group_id;
-        ic.provenance.indicator_col = spec.row.indicator_col;
-        ic.provenance.group_key = spec.row.group_key;
-        ic.provenance.group_name = spec.row.group_name;
-        ic.provenance.is_aggregate = spec.row.is_aggregate;
-        ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
-        ic.provenance.rhs_label = spec.row.rhs_label;
-        model.indicator_constraints.push_back(std::move(ic));
-    }
+	// Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`
+	// did not lower arrives here still conditioned; everything it did lower is an ordinary
+	// row in `global_constraints` above. A model holds one or the other for a given
+	// clause, never both. The row half carries the same provenance a matrix row does, so
+	// this only re-homes it.
+	model.indicator_constraints.reserve(input.indicator_constraints.size());
+	for (auto &spec : input.indicator_constraints) {
+		SolverModel::IndicatorConstraint ic;
+		ic.binary_column = spec.binary_column;
+		ic.binary_value = spec.binary_value;
+		ic.indices = std::move(spec.row.indices);
+		ic.coefficients = std::move(spec.row.coefficients);
+		ic.sense = spec.row.sense;
+		ic.rhs = spec.row.rhs;
+		ic.provenance.kind = spec.row.kind;
+		ic.provenance.shape = spec.row.shape;
+		ic.provenance.source_clause_id = spec.row.source_clause_id;
+		ic.provenance.repair_group_id = spec.row.repair_group_id;
+		ic.provenance.removal_group_id = spec.row.removal_group_id;
+		ic.provenance.indicator_col = spec.row.indicator_col;
+		ic.provenance.group_key = spec.row.group_key;
+		ic.provenance.group_name = spec.row.group_name;
+		ic.provenance.is_aggregate = spec.row.is_aggregate;
+		ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
+		ic.provenance.rhs_label = spec.row.rhs_label;
+		model.indicator_constraints.push_back(std::move(ic));
+	}
 
-    phase.Next("model.general_constraints");
-    model.general_constraints.reserve(input.general_constraints.size());
-    for (auto &spec : input.general_constraints) {
-        SolverModel::GeneralConstraint gc;
-        gc.kind = spec.kind;
-        gc.result_column = spec.result_column;
-        gc.argument_columns = std::move(spec.argument_columns);
-        gc.provenance.kind = ConstraintKind::STRUCTURAL;
-        gc.provenance.source_clause_id = spec.source_clause_id;
-        gc.provenance.repair_group_id = spec.repair_group_id;
-        gc.provenance.removal_group_id = spec.removal_group_id;
-        model.general_constraints.push_back(std::move(gc));
-    }
+	phase.Next("model.general_constraints");
+	model.general_constraints.reserve(input.general_constraints.size());
+	for (auto &spec : input.general_constraints) {
+		SolverModel::GeneralConstraint gc;
+		gc.kind = spec.kind;
+		gc.result_column = spec.result_column;
+		gc.argument_columns = std::move(spec.argument_columns);
+		gc.provenance.kind = ConstraintKind::STRUCTURAL;
+		gc.provenance.source_clause_id = spec.source_clause_id;
+		gc.provenance.repair_group_id = spec.repair_group_id;
+		gc.provenance.removal_group_id = spec.removal_group_id;
+		model.general_constraints.push_back(std::move(gc));
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 4. Sanity checks
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 4. Sanity checks
+	//===--------------------------------------------------------------------===//
 
-    phase.Next("model.sanity_checks");
+	phase.Next("model.sanity_checks");
 
-    // Every number below was read finite or merged by AddCoefficient, so one that is not finite is a reach or a
-    // Big-M DeciDB derived past a DOUBLE: the user's error names the clause it belongs to. A column belongs to the
-    // first row that reads it, else to the objective.
-    auto too_large = [&](idx_t source_clause_id) {
-        return InvalidInputException(
-            DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, source_clause_id)));
-    };
-    auto column_clause = [&](idx_t col) {
-        for (auto &constr : model.constraints) {
-            if (std::find(constr.indices.begin(), constr.indices.end(), (int)col) != constr.indices.end()) {
-                return constr.provenance.source_clause_id;
-            }
-        }
-        return DConstants::INVALID_INDEX;
-    };
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i])) {
-            throw too_large(column_clause(i));
-        }
-        if (!std::isfinite(model.obj_coeffs[i])) {
-            throw too_large(DConstants::INVALID_INDEX);
-        }
-    }
+	// Every number below was read finite or merged by AddCoefficient, so one that is not finite is a reach or a
+	// Big-M DeciDB derived past a DOUBLE: the user's error names the clause it belongs to. A column belongs to the
+	// first row that reads it, else to the objective.
+	auto too_large = [&](idx_t source_clause_id) {
+		return InvalidInputException(
+		    DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, source_clause_id)));
+	};
+	auto column_clause = [&](idx_t col) {
+		for (auto &constr : model.constraints) {
+			if (std::find(constr.indices.begin(), constr.indices.end(), (int)col) != constr.indices.end()) {
+				return constr.provenance.source_clause_id;
+			}
+		}
+		return DConstants::INVALID_INDEX;
+	};
+	for (idx_t i = 0; i < total_vars; i++) {
+		if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i])) {
+			throw too_large(column_clause(i));
+		}
+		if (!std::isfinite(model.obj_coeffs[i])) {
+			throw too_large(DConstants::INVALID_INDEX);
+		}
+	}
 
-    for (auto &constr : model.constraints) {
-        for (auto coefficient : constr.coefficients) {
-            if (!std::isfinite(coefficient)) {
-                throw too_large(constr.provenance.source_clause_id);
-            }
-        }
-    }
+	for (auto &constr : model.constraints) {
+		for (auto coefficient : constr.coefficients) {
+			if (!std::isfinite(coefficient)) {
+				throw too_large(constr.provenance.source_clause_id);
+			}
+		}
+	}
 
-    // Moved last: every row above names its clause from them (DecideWrittenClause).
-    model.constraint_sources = std::move(input.constraint_sources);
-    return model;
+	// Moved last: every row above names its clause from them (DecideWrittenClause).
+	model.constraint_sources = std::move(input.constraint_sources);
+	return model;
 }
 
-vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
-                                               const vector<string> &var_labels,
+vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer, const vector<string> &var_labels,
                                                const vector<bool> &var_is_aux,
                                                const vector<string> &global_var_labels) {
-    // Every flat column defaults to an unnamed global-block auxiliary; the row /
-    // keyed blocks are then overwritten below. Columns in [global_block_start,
-    // total_vars) (internal global auxiliaries) keep the default unless named via
-    // global_var_labels (an aggregate `<>` indicator — see below).
-    vector<ColumnProvenance> provenance(indexer.total_vars);
+	// Every flat column defaults to an unnamed global-block auxiliary; the row /
+	// keyed blocks are then overwritten below. Columns in [global_block_start,
+	// total_vars) (internal global auxiliaries) keep the default unless named via
+	// global_var_labels (an aggregate `<>` indicator — see below).
+	vector<ColumnProvenance> provenance(indexer.total_vars);
 
-    idx_t num_decide_vars = var_labels.size();
-    for (idx_t var = 0; var < num_decide_vars; var++) {
+	idx_t num_decide_vars = var_labels.size();
+	for (idx_t var = 0; var < num_decide_vars; var++) {
 		ColumnKind kind = var_is_aux[var] ? ColumnKind::AUX : ColumnKind::USER;
 		// Inverting Get(var, row) over all rows visits every column this variable
-        // owns. Keyed variables collapse multiple rows onto one column;
-        // the repeated writes are idempotent (same var/label, instance pinned to
-        // the class id via Get's mapping).
-        for (idx_t row = 0; row < indexer.num_rows; row++) {
-            idx_t col = indexer.Get(var, row);
-            ColumnProvenance &slot = provenance[col];
-            slot.kind = kind;
-            slot.label = var_labels[var];
-            slot.decide_var_idx = var;
-            // For keyed vars, the instance is the class id (col - base);
-            // for row-scoped vars it is the row; a scalar has exactly one instance.
-            switch (indexer.var_scope[var]) {
-            case DecideVarScope::KEYED:
-                slot.instance = col - indexer.keyed_var_base[var];
-                break;
-            case DecideVarScope::GLOBAL:
-                slot.instance = 0;
-                break;
-            default:
-                slot.instance = row;
-                break;
-            }
-        }
-    }
-    // Name any labeled global-block columns (today: aggregate `<>` indicators).
-    // global_var_labels is parallel to the global block at [global_block_start, ...);
-    // empty entries leave the default unnamed GLOBAL_AUX. Kind stays GLOBAL_AUX —
-    // only the label is consumed (the removal dial reads columns[indicator_col].label).
-    for (idx_t g = 0; g < global_var_labels.size(); g++) {
-        if (global_var_labels[g].empty()) {
-            continue;
-        }
+		// owns. Keyed variables collapse multiple rows onto one column;
+		// the repeated writes are idempotent (same var/label, instance pinned to
+		// the class id via Get's mapping).
+		for (idx_t row = 0; row < indexer.num_rows; row++) {
+			idx_t col = indexer.Get(var, row);
+			ColumnProvenance &slot = provenance[col];
+			slot.kind = kind;
+			slot.label = var_labels[var];
+			slot.decide_var_idx = var;
+			// For keyed vars, the instance is the class id (col - base);
+			// for row-scoped vars it is the row; a scalar has exactly one instance.
+			switch (indexer.var_scope[var]) {
+			case DecideVarScope::KEYED:
+				slot.instance = col - indexer.keyed_var_base[var];
+				break;
+			case DecideVarScope::GLOBAL:
+				slot.instance = 0;
+				break;
+			default:
+				slot.instance = row;
+				break;
+			}
+		}
+	}
+	// Name any labeled global-block columns (today: aggregate `<>` indicators).
+	// global_var_labels is parallel to the global block at [global_block_start, ...);
+	// empty entries leave the default unnamed GLOBAL_AUX. Kind stays GLOBAL_AUX —
+	// only the label is consumed (the removal dial reads columns[indicator_col].label).
+	for (idx_t g = 0; g < global_var_labels.size(); g++) {
+		if (global_var_labels[g].empty()) {
+			continue;
+		}
 		provenance[indexer.global_block_start + g].label = global_var_labels[g];
 	}
-    return provenance;
+	return provenance;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1309,74 +1319,72 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
 //===----------------------------------------------------------------------===//
 
 void SparseCoeffAccumulator::BeginDense(idx_t total_vars, const string &written_p) {
-    written = &written_p;
-    use_dense = true;
-    if (dense.size() < total_vars) {
-        dense.assign(total_vars, 0.0);
-    }
-    // Cells previously written were already zeroed in Flush(); no full re-zero needed.
-    touched.clear();
-    pairs.clear();
+	written = &written_p;
+	use_dense = true;
+	if (dense.size() < total_vars) {
+		dense.assign(total_vars, 0.0);
+	}
+	// Cells previously written were already zeroed in Flush(); no full re-zero needed.
+	touched.clear();
+	pairs.clear();
 }
 
 void SparseCoeffAccumulator::BeginSparse(idx_t expected_size, const string &written_p) {
-    written = &written_p;
-    use_dense = false;
-    pairs.clear();
-    if (expected_size > pairs.capacity()) {
-        pairs.reserve(expected_size);
-    }
-    touched.clear();
+	written = &written_p;
+	use_dense = false;
+	pairs.clear();
+	if (expected_size > pairs.capacity()) {
+		pairs.reserve(expected_size);
+	}
+	touched.clear();
 }
 
 void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t expected_size,
                                                const string &written_p) {
-    constexpr idx_t DENSE_CAP = 1u << 20;
-    if (indexer.global_block_start <= DENSE_CAP) {
-        BeginDense(indexer.global_block_start, written_p);
-    } else {
-        BeginSparse(expected_size, written_p);
-    }
+	constexpr idx_t DENSE_CAP = 1u << 20;
+	if (indexer.global_block_start <= DENSE_CAP) {
+		BeginDense(indexer.global_block_start, written_p);
+	} else {
+		BeginSparse(expected_size, written_p);
+	}
 }
 
 void SparseCoeffAccumulator::Flush(vector<int> &out_indices, vector<double> &out_coefficients) {
-    if (use_dense) {
-        for (int idx : touched) {
-            double v = dense[idx];
-            if (v != 0.0) {
-                out_indices.push_back(idx);
-                out_coefficients.push_back(v);
-            }
-            dense[idx] = 0.0;
-        }
-        touched.clear();
-    } else {
-        if (pairs.empty()) {
-            return;
-        }
-        std::sort(pairs.begin(), pairs.end(),
-                  [](const std::pair<int, double> &a, const std::pair<int, double> &b) {
-                      return a.first < b.first;
-                  });
-        // Merge consecutive equal indices, drop zeros.
-        idx_t n = pairs.size();
-        idx_t i = 0;
-        while (i < n) {
-            int idx = pairs[i].first;
-            double sum = pairs[i].second;
-            idx_t j = i + 1;
-            while (j < n && pairs[j].first == idx) {
-                AddCoefficient(sum, pairs[j].second, *written);
-                j++;
-            }
-            if (sum != 0.0) {
-                out_indices.push_back(idx);
-                out_coefficients.push_back(sum);
-            }
-            i = j;
-        }
-        pairs.clear();
-    }
+	if (use_dense) {
+		for (int idx : touched) {
+			double v = dense[idx];
+			if (v != 0.0) {
+				out_indices.push_back(idx);
+				out_coefficients.push_back(v);
+			}
+			dense[idx] = 0.0;
+		}
+		touched.clear();
+	} else {
+		if (pairs.empty()) {
+			return;
+		}
+		std::sort(pairs.begin(), pairs.end(),
+		          [](const std::pair<int, double> &a, const std::pair<int, double> &b) { return a.first < b.first; });
+		// Merge consecutive equal indices, drop zeros.
+		idx_t n = pairs.size();
+		idx_t i = 0;
+		while (i < n) {
+			int idx = pairs[i].first;
+			double sum = pairs[i].second;
+			idx_t j = i + 1;
+			while (j < n && pairs[j].first == idx) {
+				AddCoefficient(sum, pairs[j].second, *written);
+				j++;
+			}
+			if (sum != 0.0) {
+				out_indices.push_back(idx);
+				out_coefficients.push_back(sum);
+			}
+			i = j;
+		}
+		pairs.clear();
+	}
 }
 
 } // namespace duckdb

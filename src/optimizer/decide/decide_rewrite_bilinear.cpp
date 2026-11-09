@@ -59,9 +59,8 @@ static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, 
 			out.push_back(colref.binding.column_index);
 		}
 	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		CollectDecideVarIndices(child, decide_index, out);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { CollectDecideVarIndices(child, decide_index, out); });
 }
 
 //! Whether a side of a product is a reducer. A reducer is always the whole side: the binder refuses one inside the
@@ -114,9 +113,9 @@ void AddAffine(Optimizer &optimizer, Affine &into, Affine other) {
 		into.terms.push_back(std::move(term));
 	}
 	if (other.constant) {
-		into.constant = into.constant ? optimizer.BindScalarFunction("+", std::move(into.constant),
-		                                                             std::move(other.constant))
-		                              : std::move(other.constant);
+		into.constant = into.constant
+		                    ? optimizer.BindScalarFunction("+", std::move(into.constant), std::move(other.constant))
+		                    : std::move(other.constant);
 	}
 }
 
@@ -126,8 +125,7 @@ void ScaleAffine(Optimizer &optimizer, Affine &affine, const Expression &factor,
 		if (!divides) {
 			return factor.Copy();
 		}
-		return optimizer.BindScalarFunction("/", make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)),
-		                                    factor.Copy());
+		return optimizer.BindScalarFunction("/", make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)), factor.Copy());
 	};
 	for (auto &term : affine.terms) {
 		term.coefficient = MultiplyCoefficients(optimizer, scale(), std::move(term.coefficient));
@@ -250,7 +248,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const string &clause_alias, idx_t
 } // namespace
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                              const string &source_alias) {
+                                             const string &source_alias) {
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
 	if (IsDecideProductNode(optimizer.context, *expr, decide.decide_index)) {
@@ -308,8 +306,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				};
 				for (auto &a : left.terms) {
 					for (auto &b : right.terms) {
-						add(a.var, b.var,
-						    MultiplyCoefficients(optimizer, copy(a.coefficient), copy(b.coefficient)));
+						add(a.var, b.var, MultiplyCoefficients(optimizer, copy(a.coefficient), copy(b.coefficient)));
 					}
 					if (right.constant) {
 						add(a.var, DConstants::INVALID_INDEX,
@@ -332,7 +329,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					return make_uniq<BoundColumnRefExpression>(ref.alias, ref.return_type, ref.binding);
 				};
 				// The product's coefficient, its data factors and sign, scales every term.
-				unique_ptr<Expression> scale = form.sign < 0 ? make_uniq<BoundConstantExpression>(Value::INTEGER(-1)) : nullptr;
+				unique_ptr<Expression> scale =
+				    form.sign < 0 ? make_uniq<BoundConstantExpression>(Value::INTEGER(-1)) : nullptr;
 				for (auto &factor : form.coefficient) {
 					// A data factor has power 1: the canonical spelling holds `POWER(w, 2)` as one base, and a
 					// power of a form over a decision with data in it is a degree the shape check refuses.
@@ -359,8 +357,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					auto value = MultiplyCoefficients(
 					    optimizer, MultiplyCoefficients(optimizer, copy(scale), std::move(term.coefficient)),
 					    std::move(factor));
-					sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value))
-					          : std::move(value);
+					sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
 				}
 				expr = std::move(sum);
 				return;

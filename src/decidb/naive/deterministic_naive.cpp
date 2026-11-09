@@ -15,32 +15,32 @@
 namespace duckdb {
 
 bool DeterministicNaive::IsAvailable() {
-    // HiGHS is vendored and statically linked: it is the backend that makes
-    // selection total, so it can never be missing.
-    return true;
+	// HiGHS is vendored and statically linked: it is the backend that makes
+	// selection total, so it can never be missing.
+	return true;
 }
 
 SolverModelClass DeterministicNaive::ModelClasses() {
-    // The floor of the registry, and the reason every field can be left at its default:
-    // HiGHS declares nothing. Plain linear objectives, and convex quadratic objectives
-    // whose Q is diagonal. Every model class is false, so a query needing one is refused
-    // with a message about the host.
-    //
-    // `singular_quadratic` is false for a different reason than the other three. HiGHS
-    // LOADS a rank-deficient Q without complaint; it just answers it wrong, stopping
-    // partway along the flat valley of optima or failing outright, on roughly half of
-    // them. Refusing is the only way to keep a wrong answer from being returned as an
-    // optimal one. Revisit as HiGHS's QP solver improves.
-    return SolverModelClass();
+	// The floor of the registry, and the reason every field can be left at its default:
+	// HiGHS declares nothing. Plain linear objectives, and convex quadratic objectives
+	// whose Q is diagonal. Every model class is false, so a query needing one is refused
+	// with a message about the host.
+	//
+	// `singular_quadratic` is false for a different reason than the other three. HiGHS
+	// LOADS a rank-deficient Q without complaint; it just answers it wrong, stopping
+	// partway along the flat valley of optima or failing outright, on roughly half of
+	// them. Refusing is the only way to keep a wrong answer from being returned as an
+	// optimal one. Revisit as HiGHS's QP solver improves.
+	return SolverModelClass();
 }
 
 const SolverConstructSupport &DeterministicNaive::Constructs() {
-    // Every construct is false, so each arrives fully lowered — the path DeciDB has
-    // always taken. Nothing here reads DECIDB_NATIVE_CONSTRUCTS: SolverBackend::Constructs()
-    // masks constructs for every backend, so the switch reaches HiGHS whether or not
-    // HiGHS ever declares one. It is a no-op today precisely because this table is empty.
-    static const SolverConstructSupport constructs;
-    return constructs;
+	// Every construct is false, so each arrives fully lowered — the path DeciDB has
+	// always taken. Nothing here reads DECIDB_NATIVE_CONSTRUCTS: SolverBackend::Constructs()
+	// masks constructs for every backend, so the switch reaches HiGHS whether or not
+	// HiGHS ever declares one. It is a no-op today precisely because this table is empty.
+	static const SolverConstructSupport constructs;
+	return constructs;
 }
 
 namespace {
@@ -50,16 +50,16 @@ namespace {
 //! matrix row. `rhs_text` is the bound as the caller wants it spelled. Empty when the row
 //! has no source clause to quote; the caller then falls back to a clause-free message.
 string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr, const string &rhs_text) {
-    auto source_id = constr.provenance.source_clause_id;
-    if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
-        return string();
-    }
-    const auto &source = model.constraint_sources[source_id];
-    if (source.canonical_lhs.empty()) {
-        return string();
-    }
-    const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
-    return QuoteEditedClause(&source, source.canonical_lhs, sense, rhs_text);
+	auto source_id = constr.provenance.source_clause_id;
+	if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
+		return string();
+	}
+	const auto &source = model.constraint_sources[source_id];
+	if (source.canonical_lhs.empty()) {
+		return string();
+	}
+	const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
+	return QuoteEditedClause(&source, source.canonical_lhs, sense, rhs_text);
 }
 
 //===--------------------------------------------------------------------===//
@@ -193,8 +193,8 @@ HighsScaleResult ChooseHighsScale(double lo, double hi, double bound, int &expon
 void ScaleRowsIntoHighsWindow(const SolverModel &model, const std::vector<HighsInt> &start, std::vector<double> &value,
                               std::vector<double> &row_lower, std::vector<double> &row_upper) {
 	idx_t num_rows = row_lower.size();
-    vector<double> lo(num_rows, std::numeric_limits<double>::infinity());
-    vector<double> hi(num_rows, 0.0);
+	vector<double> lo(num_rows, std::numeric_limits<double>::infinity());
+	vector<double> hi(num_rows, 0.0);
 	for (idx_t r = 0; r < num_rows; r++) {
 		for (auto i = start[r]; i < start[r + 1]; i++) {
 			double v = std::fabs(value[i]);
@@ -210,37 +210,37 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const std::vector<HighsI
 	}
 
 	vector<int> exponent(num_rows, 0);
-    bool any = false;
-    for (idx_t r = 0; r < num_rows; r++) {
-        if (hi[r] == 0.0) {
-            continue; // empty row: nothing to scale
-        }
-        // The row's bound moves with the row, so it both constrains how far the row may
-        // be scaled and, when it is already unrepresentable, forces a scaling of its own.
-        // The requirement is the same in either direction: a finite bound must end up with
-        // |b| < `infinite_bound`. HiGHS reads anything at or above that as ±infinity, which
-        // on one side of a row is an error and on the other silently drops the constraint
-        // — a rescue that deletes a row is the model change this exists to prevent.
-        //
-        // The bound is read from the CLAUSE, not from the packed range row: the row's open
-        // side holds HiGHS's ±1e30 "no bound here" sentinel, and a user limit of 1e40 is
-        // indistinguishable from that sentinel by magnitude alone. The sense says which
-        // side is which, exactly as the loop that packed them did. A non-finite rhs is the
-        // vacuous infinity (SolverModel::ProvesInfeasible answers the other direction before
-        // HiGHS sees the model) — HiGHS reads it as no bound at all, and it is not a number
-        // to scale.
-        const auto &constr = model.constraints[r];
-        double bound = std::isfinite(constr.rhs) ? std::fabs(constr.rhs) : 0.0;
-        if (ChooseHighsScale(lo[r], hi[r], bound, exponent[r]) != HighsScaleResult::OK) {
-            ThrowUnscalableRow(model, constr, bound);
-        }
-        any = any || exponent[r] != 0;
-    }
-    if (!any) {
-        return;
-    }
+	bool any = false;
+	for (idx_t r = 0; r < num_rows; r++) {
+		if (hi[r] == 0.0) {
+			continue; // empty row: nothing to scale
+		}
+		// The row's bound moves with the row, so it both constrains how far the row may
+		// be scaled and, when it is already unrepresentable, forces a scaling of its own.
+		// The requirement is the same in either direction: a finite bound must end up with
+		// |b| < `infinite_bound`. HiGHS reads anything at or above that as ±infinity, which
+		// on one side of a row is an error and on the other silently drops the constraint
+		// — a rescue that deletes a row is the model change this exists to prevent.
+		//
+		// The bound is read from the CLAUSE, not from the packed range row: the row's open
+		// side holds HiGHS's ±1e30 "no bound here" sentinel, and a user limit of 1e40 is
+		// indistinguishable from that sentinel by magnitude alone. The sense says which
+		// side is which, exactly as the loop that packed them did. A non-finite rhs is the
+		// vacuous infinity (SolverModel::ProvesInfeasible answers the other direction before
+		// HiGHS sees the model) — HiGHS reads it as no bound at all, and it is not a number
+		// to scale.
+		const auto &constr = model.constraints[r];
+		double bound = std::isfinite(constr.rhs) ? std::fabs(constr.rhs) : 0.0;
+		if (ChooseHighsScale(lo[r], hi[r], bound, exponent[r]) != HighsScaleResult::OK) {
+			ThrowUnscalableRow(model, constr, bound);
+		}
+		any = any || exponent[r] != 0;
+	}
+	if (!any) {
+		return;
+	}
 
-    for (idx_t r = 0; r < num_rows; r++) {
+	for (idx_t r = 0; r < num_rows; r++) {
 		if (exponent[r] == 0) {
 			continue;
 		}
@@ -252,15 +252,15 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const std::vector<HighsI
 			continue;
 		}
 		double scaled = std::ldexp(constr.rhs, exponent[r]);
-        if (constr.sense == '>') {
-            row_lower[r] = scaled;
-        } else if (constr.sense == '<') {
-            row_upper[r] = scaled;
-        } else {
-            row_lower[r] = scaled;
-            row_upper[r] = scaled;
-        }
-    }
+		if (constr.sense == '>') {
+			row_lower[r] = scaled;
+		} else if (constr.sense == '<') {
+			row_upper[r] = scaled;
+		} else {
+			row_lower[r] = scaled;
+			row_upper[r] = scaled;
+		}
+	}
 }
 
 //! The power of two `e` each column is scaled by, x = 2^e·x', so its bounds land inside
@@ -355,8 +355,9 @@ int ScaleObjectiveIntoHighsWindow(const SolverModel &model, const vector<int> &c
 class HighsSession : public SolverSession {
 public:
 	//! HiGHS asks its interrupt callbacks beside its `time_limit` checks in the MIP search, simplex and IPM. One
-	//! callback answers all three from the poll, so a Ctrl-C stops the solve at the next check with status kInterrupt. The poll is read on every call, so an empty one (set at a continuation
-	//! prompt) leaves the solve to run to its limit.
+	//! callback answers all three from the poll, so a Ctrl-C stops the solve at the next check with status kInterrupt.
+	//! The poll is read on every call, so an empty one (set at a continuation prompt) leaves the solve to run to its
+	//! limit.
 	void SetInterruptPoll(std::function<bool()> poll) override {
 		should_interrupt = std::move(poll);
 		highs.setCallback([this](int, const std::string &, const HighsCallbackOutput *, HighsCallbackInput *data_in,
@@ -367,28 +368,28 @@ public:
 	}
 
 protected:
-    SolverResult SolveChunk(const SolverModel &model, double time_limit_seconds) override {
+	SolverResult SolveChunk(const SolverModel &model, double time_limit_seconds) override {
 		SolverResult not_loaded;
 		if (!Load(model, not_loaded)) {
 			return not_loaded;
 		}
 		return RunAndReadback(time_limit_seconds);
-    }
+	}
 
-    SolverResult ContinueChunk(double time_limit_seconds) override {
-        // Precondition: SolveChunk() already loaded the model into `highs`.
-        return RunAndReadback(time_limit_seconds);
-    }
+	SolverResult ContinueChunk(double time_limit_seconds) override {
+		// Precondition: SolveChunk() already loaded the model into `highs`.
+		return RunAndReadback(time_limit_seconds);
+	}
 
 private:
-    Highs highs;
+	Highs highs;
 	//! Polled by the interrupt callback during run(); true stops the solve.
 	std::function<bool()> should_interrupt;
-    idx_t total_vars = 0;
-    //! Whether the loaded model has any integer variable. HiGHS only populates
-    //! `mip_dual_bound` / `mip_gap` for MIP solves; on an LP/QP timeout they hold
-    //! defaults (0 / nan) that must not be read back as a proven bound.
-    bool is_mip = false;
+	idx_t total_vars = 0;
+	//! Whether the loaded model has any integer variable. HiGHS only populates
+	//! `mip_dual_bound` / `mip_gap` for MIP solves; on an LP/QP timeout they hold
+	//! defaults (0 / nan) that must not be read back as a proven bound.
+	bool is_mip = false;
 	//! The powers of two Load placed the model in HiGHS's window with (ChooseHighsColumnScales,
 	//! ScaleObjectiveIntoHighsWindow), so readback can return the model's own values.
 	vector<int> column_exponent;
@@ -413,15 +414,15 @@ private:
 };
 
 bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
-    DecideProfileScope profile("highs.load");
-    DecideProfileScope phase("highs.variable_types");
-    total_vars = model.num_vars;
+	DecideProfileScope profile("highs.load");
+	DecideProfileScope phase("highs.variable_types");
+	total_vars = model.num_vars;
 
-    //===--------------------------------------------------------------------===//
-    // 1. Create HiGHS model and set up variables
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 1. Create HiGHS model and set up variables
+	//===--------------------------------------------------------------------===//
 
-    highs.setOptionValue("log_to_console", std::getenv("DECIDB_PROFILE_SOLVER_LOG") != nullptr);
+	highs.setOptionValue("log_to_console", std::getenv("DECIDB_PROFILE_SOLVER_LOG") != nullptr);
 	// The gap the user accepts (`decide_mip_gap`, default 0: the optimum, not HiGHS's default incumbent within 1e-4);
 	// Gurobi's `MIPGap` is set the same way.
 	highs.setOptionValue("mip_rel_gap", mip_gap);
@@ -430,19 +431,19 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 	highs.setOptionValue("mip_feasibility_tolerance", DECIDE_INTEGRALITY_TOLERANCE);
 	highs.setOptionValue("primal_feasibility_tolerance", DECIDE_FEASIBILITY_TOLERANCE);
 	// Note: the time_limit is NOT set here — it is a per-chunk budget applied in
-    // RunAndReadback(), so a warm Continue() can extend it without a reload.
+	// RunAndReadback(), so a warm Continue() can extend it without a reload.
 
-    vector<HighsVarType> var_types(total_vars);
-    is_mip = false;
-    for (idx_t i = 0; i < total_vars; i++) {
-        var_types[i] = model.is_integer[i] ? HighsVarType::kInteger : HighsVarType::kContinuous;
-        is_mip = is_mip || model.is_integer[i];
-    }
+	vector<HighsVarType> var_types(total_vars);
+	is_mip = false;
+	for (idx_t i = 0; i < total_vars; i++) {
+		var_types[i] = model.is_integer[i] ? HighsVarType::kInteger : HighsVarType::kContinuous;
+		is_mip = is_mip || model.is_integer[i];
+	}
 
-    ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
-    // Columns first: a column's scale multiplies its matrix entries, cost and Hessian
-    // entries, which the row and objective scaling below then place.
-    column_exponent = ChooseHighsColumnScales(model);
+	ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
+	// Columns first: a column's scale multiplies its matrix entries, cost and Hessian
+	// entries, which the row and objective scaling below then place.
+	column_exponent = ChooseHighsColumnScales(model);
 
 	//===--------------------------------------------------------------------===//
 	// 2. The rows, straight into the row-wise matrix HiGHS takes
@@ -455,9 +456,9 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 	auto &matrix = lp.a_matrix_;
 	matrix.format_ = MatrixFormat::kRowwise;
 	idx_t total_nnz = 0;
-    for (auto &constr : model.constraints) {
-        total_nnz += constr.indices.size();
-    }
+	for (auto &constr : model.constraints) {
+		total_nnz += constr.indices.size();
+	}
 	matrix.start_.reserve(model.constraints.size() + 1);
 	matrix.index_.reserve(total_nnz);
 	matrix.value_.reserve(total_nnz);
@@ -465,7 +466,7 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 	lp.row_upper_.reserve(model.constraints.size());
 	matrix.start_.assign(1, 0);
 	for (auto &constr : model.constraints) {
-        for (idx_t j = 0; j < constr.indices.size(); j++) {
+		for (idx_t j = 0; j < constr.indices.size(); j++) {
 			matrix.index_.push_back(constr.indices[j]);
 			matrix.value_.push_back(std::ldexp(constr.coefficients[j], column_exponent[constr.indices[j]]));
 		}
@@ -488,39 +489,39 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 	lp.num_col_ = total_vars;
 	lp.num_row_ = model.constraints.size();
 	lp.sense_ = sense;
-    lp.offset_ = 0.0;
-    lp.col_lower_ = model.col_lower;
-    lp.col_upper_ = model.col_upper;
-    lp.col_cost_.resize(total_vars);
-    for (idx_t i = 0; i < total_vars; i++) {
-        lp.col_cost_[i] = std::ldexp(model.obj_coeffs[i], column_exponent[i]);
-        if (column_exponent[i] == 0) {
-            continue;
-        }
-        // A scaled column's bound past its window is divided into it. Its other side is
-        // open (a floor past `infinite_bound` leaves no finite ceiling above it), and stays
-        // open: divided, the 1e30 sentinel could land inside the window as a real bound.
-        lp.col_lower_[i] = DecideIsOpenBelow(model.col_lower[i]) ? -kHighsInf
-                                                                 : std::ldexp(model.col_lower[i], -column_exponent[i]);
-        lp.col_upper_[i] = DecideIsOpenAbove(model.col_upper[i]) ? kHighsInf
-                                                                 : std::ldexp(model.col_upper[i], -column_exponent[i]);
-    }
-    objective_exponent = ScaleObjectiveIntoHighsWindow(model, column_exponent, lp.col_cost_);
-    // HiGHS can answer below a fractional bound of an integer column whose other side is
-    // open (`x >= -2.5` minimized to -3), so an integer column takes the whole bounds its
-    // bounds imply. One left with no whole number cannot be loaded: HiGHS refuses an
-    // inverted box.
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (var_types[i] != HighsVarType::kInteger) {
-            continue;
-        }
-        lp.col_lower_[i] = std::ceil(lp.col_lower_[i] - DECIDE_INTEGRALITY_TOLERANCE);
-        lp.col_upper_[i] = std::floor(lp.col_upper_[i] + DECIDE_INTEGRALITY_TOLERANCE);
-        if (lp.col_lower_[i] > lp.col_upper_[i]) {
+	lp.offset_ = 0.0;
+	lp.col_lower_ = model.col_lower;
+	lp.col_upper_ = model.col_upper;
+	lp.col_cost_.resize(total_vars);
+	for (idx_t i = 0; i < total_vars; i++) {
+		lp.col_cost_[i] = std::ldexp(model.obj_coeffs[i], column_exponent[i]);
+		if (column_exponent[i] == 0) {
+			continue;
+		}
+		// A scaled column's bound past its window is divided into it. Its other side is
+		// open (a floor past `infinite_bound` leaves no finite ceiling above it), and stays
+		// open: divided, the 1e30 sentinel could land inside the window as a real bound.
+		lp.col_lower_[i] =
+		    DecideIsOpenBelow(model.col_lower[i]) ? -kHighsInf : std::ldexp(model.col_lower[i], -column_exponent[i]);
+		lp.col_upper_[i] =
+		    DecideIsOpenAbove(model.col_upper[i]) ? kHighsInf : std::ldexp(model.col_upper[i], -column_exponent[i]);
+	}
+	objective_exponent = ScaleObjectiveIntoHighsWindow(model, column_exponent, lp.col_cost_);
+	// HiGHS can answer below a fractional bound of an integer column whose other side is
+	// open (`x >= -2.5` minimized to -3), so an integer column takes the whole bounds its
+	// bounds imply. One left with no whole number cannot be loaded: HiGHS refuses an
+	// inverted box.
+	for (idx_t i = 0; i < total_vars; i++) {
+		if (var_types[i] != HighsVarType::kInteger) {
+			continue;
+		}
+		lp.col_lower_[i] = std::ceil(lp.col_lower_[i] - DECIDE_INTEGRALITY_TOLERANCE);
+		lp.col_upper_[i] = std::floor(lp.col_upper_[i] + DECIDE_INTEGRALITY_TOLERANCE);
+		if (lp.col_lower_[i] > lp.col_upper_[i]) {
 			not_loaded.status = SolverStatus::INFEASIBLE;
 			return false;
-        }
-    }
+		}
+	}
 	lp.integrality_ = std::move(var_types);
 
 	phase.Next("highs.pass_model");
@@ -542,68 +543,67 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 		return false;
 	}
 
-    //===--------------------------------------------------------------------===//
-    // 3b. Add quadratic objective (Hessian) if present
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 3b. Add quadratic objective (Hessian) if present
+	//===--------------------------------------------------------------------===//
 
-    // The model classes HiGHS cannot take — quadratic constraints, a non-convex
-    // objective, MIQP, and a rank-deficient Q — are all declared false in its
-    // SolverModelClass and refused at plan time (stage 05's RequireDecideSolverSupport),
-    // before this query reads a row. `SolveModel` re-checks the built model against the
-    // same table before loading it, so no such model reaches this function.
-    //
-    // The last of those is why every Q arriving here is diagonal, and why the conversion
-    // below has no off-diagonal case left to exercise in practice. It is still written
-    // for the general matrix: the refusal is a solver-quality judgement that should be
-    // lifted when HiGHS improves, and the conversion must be correct when it is.
-    phase.Next("highs.hessian");
-    if (model.has_quadratic_obj && !model.q_vals.empty()) {
-        // Convert COO lower-triangle Q to CSC format for HiGHS passHessian.
-        // HiGHS expects the lower triangle in column-major compressed sparse column format.
-        //
-        // The two solvers spell the same objective differently, and SolverModel commits to
-        // Gurobi's spelling (see ilp_model.hpp): a stored value is the plain coefficient of
-        // its monomial. HiGHS's passHessian instead takes the Q of `(1/2) x^T Q x`, and it
-        // applies that 1/2 to the triangle it is given -- HighsHessian::objectiveValue sums
-        // `0.5*q_ii*x_i^2` over the diagonal but a full `q_ij*x_i*x_j` off it. The 1/2 is
-        // there to undo the double-counting of an off-diagonal pair, which appears at both
-        // (i,j) and (j,i) of the symmetric matrix; a diagonal entry is never mirrored, so
-        // nothing cancels its 1/2. HighsHessianValue doubles the diagonal on the way in and
-        // leaves the rest.
-        //
-        // Doubling every entry instead would not merely rescale the objective: it inflates
-        // the cross terms relative to the squares, which turns the PSD Q of a multi-variable
-        // POWER group into an indefinite one and puts the model outside what HiGHS solves.
-        idx_t num_nz = model.q_vals.size();
+	// The model classes HiGHS cannot take — quadratic constraints, a non-convex
+	// objective, MIQP, and a rank-deficient Q — are all declared false in its
+	// SolverModelClass and refused at plan time (stage 05's RequireDecideSolverSupport),
+	// before this query reads a row. `SolveModel` re-checks the built model against the
+	// same table before loading it, so no such model reaches this function.
+	//
+	// The last of those is why every Q arriving here is diagonal, and why the conversion
+	// below has no off-diagonal case left to exercise in practice. It is still written
+	// for the general matrix: the refusal is a solver-quality judgement that should be
+	// lifted when HiGHS improves, and the conversion must be correct when it is.
+	phase.Next("highs.hessian");
+	if (model.has_quadratic_obj && !model.q_vals.empty()) {
+		// Convert COO lower-triangle Q to CSC format for HiGHS passHessian.
+		// HiGHS expects the lower triangle in column-major compressed sparse column format.
+		//
+		// The two solvers spell the same objective differently, and SolverModel commits to
+		// Gurobi's spelling (see ilp_model.hpp): a stored value is the plain coefficient of
+		// its monomial. HiGHS's passHessian instead takes the Q of `(1/2) x^T Q x`, and it
+		// applies that 1/2 to the triangle it is given -- HighsHessian::objectiveValue sums
+		// `0.5*q_ii*x_i^2` over the diagonal but a full `q_ij*x_i*x_j` off it. The 1/2 is
+		// there to undo the double-counting of an off-diagonal pair, which appears at both
+		// (i,j) and (j,i) of the symmetric matrix; a diagonal entry is never mirrored, so
+		// nothing cancels its 1/2. HighsHessianValue doubles the diagonal on the way in and
+		// leaves the rest.
+		//
+		// Doubling every entry instead would not merely rescale the objective: it inflates
+		// the cross terms relative to the squares, which turns the PSD Q of a multi-variable
+		// POWER group into an indefinite one and puts the model outside what HiGHS solves.
+		idx_t num_nz = model.q_vals.size();
 
-        // Count entries per column
-        vector<HighsInt> col_count(total_vars, 0);
-        for (idx_t k = 0; k < num_nz; k++) {
-            col_count[model.q_cols[k]]++;
-        }
+		// Count entries per column
+		vector<HighsInt> col_count(total_vars, 0);
+		for (idx_t k = 0; k < num_nz; k++) {
+			col_count[model.q_cols[k]]++;
+		}
 
-        // Build column start array
-        vector<HighsInt> q_start(total_vars + 1, 0);
-        for (idx_t c = 0; c < total_vars; c++) {
-            q_start[c + 1] = q_start[c] + col_count[c];
-        }
+		// Build column start array
+		vector<HighsInt> q_start(total_vars + 1, 0);
+		for (idx_t c = 0; c < total_vars; c++) {
+			q_start[c + 1] = q_start[c] + col_count[c];
+		}
 
-        // Fill CSC arrays
-        vector<HighsInt> q_index(num_nz);
-        vector<double> q_value(num_nz);
-        vector<HighsInt> current_pos(q_start.begin(), q_start.begin() + total_vars);
+		// Fill CSC arrays
+		vector<HighsInt> q_index(num_nz);
+		vector<double> q_value(num_nz);
+		vector<HighsInt> current_pos(q_start.begin(), q_start.begin() + total_vars);
 
-        for (idx_t k = 0; k < num_nz; k++) {
-            int col = model.q_cols[k];
-            HighsInt pos = current_pos[col];
-            q_index[pos] = model.q_rows[k];
-            q_value[pos] = std::ldexp(HighsHessianValue(model, k, column_exponent), objective_exponent);
-            current_pos[col]++;
-        }
+		for (idx_t k = 0; k < num_nz; k++) {
+			int col = model.q_cols[k];
+			HighsInt pos = current_pos[col];
+			q_index[pos] = model.q_rows[k];
+			q_value[pos] = std::ldexp(HighsHessianValue(model, k, column_exponent), objective_exponent);
+			current_pos[col]++;
+		}
 
-        status = highs.passHessian((HighsInt)total_vars, (HighsInt)num_nz,
-                                   (HighsInt)HessianFormat::kTriangular,
-                                   q_start.data(), q_index.data(), q_value.data());
+		status = highs.passHessian((HighsInt)total_vars, (HighsInt)num_nz, (HighsInt)HessianFormat::kTriangular,
+		                           q_start.data(), q_index.data(), q_value.data());
 		// Same kWarning/kError split as `passModel` above: `assessHessian` drops
 		// sub-tolerance entries of the normalised Hessian and warns, which is a report
 		// rather than a failure, and an entry past HiGHS's ceiling is a kError, reported as
@@ -613,146 +613,144 @@ bool HighsSession::Load(const SolverModel &model, SolverResult &not_loaded) {
 			not_loaded.status = SolverStatus::OTHER;
 			return false;
 		}
-    }
-    return true;
+	}
+	return true;
 }
 
 SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
-    DecideProfileScope profile("highs.run_and_readback");
-    DecideProfileScope phase("highs.optimize");
-    //===--------------------------------------------------------------------===//
-    // 4. Solve
-    //===--------------------------------------------------------------------===//
+	DecideProfileScope profile("highs.run_and_readback");
+	DecideProfileScope phase("highs.optimize");
+	//===--------------------------------------------------------------------===//
+	// 4. Solve
+	//===--------------------------------------------------------------------===//
 
-    // Apply the per-chunk wall-clock cap. Setting it here (rather than at Load) is
-    // what lets a warm Continue() extend the budget without rebuilding: HiGHS
-    // resumes its MIP search on a repeat run() after a time-limit stop.
-    highs.setOptionValue("time_limit", time_limit_seconds);
+	// Apply the per-chunk wall-clock cap. Setting it here (rather than at Load) is
+	// what lets a warm Continue() extend the budget without rebuilding: HiGHS
+	// resumes its MIP search on a repeat run() after a time-limit stop.
+	highs.setOptionValue("time_limit", time_limit_seconds);
 
-    HighsStatus status = highs.run();
-    phase.Next("highs.status_and_readback");
-    if (DecideProfileScope::Enabled()) {
-        const auto &info = highs.getInfo();
-        DecideProfileScope::Counter("highs.simplex_iterations", info.simplex_iteration_count);
-        DecideProfileScope::Counter("highs.ipm_iterations", info.ipm_iteration_count);
-        DecideProfileScope::Counter("highs.qp_iterations", info.qp_iteration_count);
-        DecideProfileScope::Counter("highs.mip_nodes", info.mip_node_count);
-        if (std::isfinite(info.objective_function_value)) {
-            DecideProfileScope::Counter("highs.objective", info.objective_function_value);
-        }
-    }
-    // HiGHS returns kWarning (not kOk) at the time limit while still exposing a
-    // valid model status + incumbent, so kWarning falls through to the
-    // model-status switch below. A kError is a solve HiGHS could not finish (its
-    // QP solver can fail to converge on a large model), not a DeciDB fault: it is
-    // reported as OTHER, so the operator raises its ordinary solve-failed error,
-    // or DIAGNOSE takes it, instead of an INTERNAL error that ends the session.
-    if (status == HighsStatus::kError) {
-        SolverResult result;
+	HighsStatus status = highs.run();
+	phase.Next("highs.status_and_readback");
+	if (DecideProfileScope::Enabled()) {
+		const auto &info = highs.getInfo();
+		DecideProfileScope::Counter("highs.simplex_iterations", info.simplex_iteration_count);
+		DecideProfileScope::Counter("highs.ipm_iterations", info.ipm_iteration_count);
+		DecideProfileScope::Counter("highs.qp_iterations", info.qp_iteration_count);
+		DecideProfileScope::Counter("highs.mip_nodes", info.mip_node_count);
+		if (std::isfinite(info.objective_function_value)) {
+			DecideProfileScope::Counter("highs.objective", info.objective_function_value);
+		}
+	}
+	// HiGHS returns kWarning (not kOk) at the time limit while still exposing a
+	// valid model status + incumbent, so kWarning falls through to the
+	// model-status switch below. A kError is a solve HiGHS could not finish (its
+	// QP solver can fail to converge on a large model), not a DeciDB fault: it is
+	// reported as OTHER, so the operator raises its ordinary solve-failed error,
+	// or DIAGNOSE takes it, instead of an INTERNAL error that ends the session.
+	if (status == HighsStatus::kError) {
+		SolverResult result;
 		result.status_text = highs.modelStatusToString(highs.getModelStatus());
 		result.status = SolverStatus::OTHER;
-        return result;
-    }
+		return result;
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 5. Check status
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 5. Check status
+	//===--------------------------------------------------------------------===//
 
-    HighsModelStatus model_status = highs.getModelStatus();
-    if (model_status != HighsModelStatus::kOptimal) {
-        // Map the raw model status to a normalized SolverStatus and return it
-        // (no solution). The operator either surfaces the default error for an
-        // unprefixed statement or routes it to diagnosis under DIAGNOSE.
-        SolverResult result;
+	HighsModelStatus model_status = highs.getModelStatus();
+	if (model_status != HighsModelStatus::kOptimal) {
+		// Map the raw model status to a normalized SolverStatus and return it
+		// (no solution). The operator either surfaces the default error for an
+		// unprefixed statement or routes it to diagnosis under DIAGNOSE.
+		SolverResult result;
 		result.status_text = highs.modelStatusToString(model_status);
-        switch (model_status) {
-        case HighsModelStatus::kInfeasible:
-            result.status = SolverStatus::INFEASIBLE;
-            break;
-        case HighsModelStatus::kUnbounded:
-            result.status = SolverStatus::UNBOUNDED;
-            break;
-        case HighsModelStatus::kUnboundedOrInfeasible:
-            // HiGHS returns this on MILP-unbounded models; without an explicit
-            // branch it would fall into OTHER (the old generic catch-all). U1
-            // (obj=0 probe) later disambiguates it to UNBOUNDED / INFEASIBLE.
-            result.status = SolverStatus::INF_OR_UNBD;
-            break;
+		switch (model_status) {
+		case HighsModelStatus::kInfeasible:
+			result.status = SolverStatus::INFEASIBLE;
+			break;
+		case HighsModelStatus::kUnbounded:
+			result.status = SolverStatus::UNBOUNDED;
+			break;
+		case HighsModelStatus::kUnboundedOrInfeasible:
+			// HiGHS returns this on MILP-unbounded models; without an explicit
+			// branch it would fall into OTHER (the old generic catch-all). U1
+			// (obj=0 probe) later disambiguates it to UNBOUNDED / INFEASIBLE.
+			result.status = SolverStatus::INF_OR_UNBD;
+			break;
 		case HighsModelStatus::kInterrupt: // Ctrl-C: a stop-with-best-so-far like a time-limit stop, flagged as the
 		                                   // user's, the same mapping as Gurobi's GRB_INTERRUPTED.
 			result.user_interrupted = true;
 			// fall through
-        case HighsModelStatus::kTimeLimit: {
-            result.status = SolverStatus::TIME_LIMIT;
-            const HighsInfo& info = highs.getInfo();
-            // A proven bound only exists for MIP timeouts: on an LP/QP timeout
-            // `mip_dual_bound` still holds its 0 default, which would read back
-            // as a confident (and wrong) "best possible objective". Keep the NaN
-            // "unavailable" default there and for non-finite values.
-            if (is_mip && std::isfinite(info.mip_dual_bound) &&
-                std::fabs(info.mip_dual_bound) < DECIDE_EFFECTIVE_INFINITY) {
-                result.best_bound = UnscaleObjective(info.mip_dual_bound);
-            }
-            // Incumbent reads (objective / gap / solution vector) are only valid
-            // when HiGHS found a feasible solution; otherwise objective_function_value
-            // is inf, mip_gap is nan, and col_value is garbage — so gate on the
-            // primal-solution status. `mip_gap` additionally needs a MIP bound to
-            // be meaningful (an LP feasible-at-timeout would read back nan).
-            if (info.primal_solution_status == kSolutionStatusFeasible) {
-                result.has_solution = true;
-                result.objective_value = UnscaleObjective(info.objective_function_value);
-                if (is_mip && std::isfinite(info.mip_gap) && info.mip_gap < DECIDE_EFFECTIVE_INFINITY) {
-                    result.gap = info.mip_gap;
-                }
-                const HighsSolution& incumbent = highs.getSolution();
-                if (incumbent.col_value.size() >= total_vars) {
-                    result.solution = UnscaleColumns(incumbent.col_value);
-                }
-            }
-            break;
-        }
-        case HighsModelStatus::kIterationLimit:
-            result.status = SolverStatus::ITERATION_LIMIT;
-            break;
-        default:
-            result.status = SolverStatus::OTHER;
-            break;
-        }
-        return result;
-    }
+		case HighsModelStatus::kTimeLimit: {
+			result.status = SolverStatus::TIME_LIMIT;
+			const HighsInfo &info = highs.getInfo();
+			// A proven bound only exists for MIP timeouts: on an LP/QP timeout
+			// `mip_dual_bound` still holds its 0 default, which would read back
+			// as a confident (and wrong) "best possible objective". Keep the NaN
+			// "unavailable" default there and for non-finite values.
+			if (is_mip && std::isfinite(info.mip_dual_bound) &&
+			    std::fabs(info.mip_dual_bound) < DECIDE_EFFECTIVE_INFINITY) {
+				result.best_bound = UnscaleObjective(info.mip_dual_bound);
+			}
+			// Incumbent reads (objective / gap / solution vector) are only valid
+			// when HiGHS found a feasible solution; otherwise objective_function_value
+			// is inf, mip_gap is nan, and col_value is garbage — so gate on the
+			// primal-solution status. `mip_gap` additionally needs a MIP bound to
+			// be meaningful (an LP feasible-at-timeout would read back nan).
+			if (info.primal_solution_status == kSolutionStatusFeasible) {
+				result.has_solution = true;
+				result.objective_value = UnscaleObjective(info.objective_function_value);
+				if (is_mip && std::isfinite(info.mip_gap) && info.mip_gap < DECIDE_EFFECTIVE_INFINITY) {
+					result.gap = info.mip_gap;
+				}
+				const HighsSolution &incumbent = highs.getSolution();
+				if (incumbent.col_value.size() >= total_vars) {
+					result.solution = UnscaleColumns(incumbent.col_value);
+				}
+			}
+			break;
+		}
+		case HighsModelStatus::kIterationLimit:
+			result.status = SolverStatus::ITERATION_LIMIT;
+			break;
+		default:
+			result.status = SolverStatus::OTHER;
+			break;
+		}
+		return result;
+	}
 
-    //===--------------------------------------------------------------------===//
-    // 6. Extract solution
-    //===--------------------------------------------------------------------===//
+	//===--------------------------------------------------------------------===//
+	// 6. Extract solution
+	//===--------------------------------------------------------------------===//
 
-    const HighsSolution& solution = highs.getSolution();
+	const HighsSolution &solution = highs.getSolution();
 
-    if (solution.col_value.size() < total_vars) {
-        throw InternalException(
-            "HiGHS returned incomplete solution: expected %llu variables, got %llu",
-            total_vars, (idx_t)solution.col_value.size());
-    }
+	if (solution.col_value.size() < total_vars) {
+		throw InternalException("HiGHS returned incomplete solution: expected %llu variables, got %llu", total_vars,
+		                        (idx_t)solution.col_value.size());
+	}
 
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (!std::isfinite(solution.col_value[i])) {
-            throw InternalException(
-                "HiGHS returned invalid solution value (NaN or Infinity) for variable %llu", i);
-        }
-    }
+	for (idx_t i = 0; i < total_vars; i++) {
+		if (!std::isfinite(solution.col_value[i])) {
+			throw InternalException("HiGHS returned invalid solution value (NaN or Infinity) for variable %llu", i);
+		}
+	}
 
-    SolverResult solve_result;
-    solve_result.status = SolverStatus::OPTIMAL;
-    solve_result.solution = UnscaleColumns(solution.col_value);
-    // Objective value at the optimum, in the model's own sense (the diagnostics
-    // stage-2 re-solve reads this as the achievable objective).
-    solve_result.objective_value = UnscaleObjective(highs.getInfo().objective_function_value);
-    return solve_result;
+	SolverResult solve_result;
+	solve_result.status = SolverStatus::OPTIMAL;
+	solve_result.solution = UnscaleColumns(solution.col_value);
+	// Objective value at the optimum, in the model's own sense (the diagnostics
+	// stage-2 re-solve reads this as the achievable objective).
+	solve_result.objective_value = UnscaleObjective(highs.getInfo().objective_function_value);
+	return solve_result;
 }
 
 } // namespace
 
 unique_ptr<SolverSession> DeterministicNaive::CreateSession() {
-    return make_uniq<HighsSession>();
+	return make_uniq<HighsSession>();
 }
 
 } // namespace duckdb

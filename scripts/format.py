@@ -103,7 +103,7 @@ ignored_directories = [
     '.venv',
     '__pycache__',
     'dbgen',
-    os.path.join('tools', 'pythonpkg', 'duckdb'),
+    os.path.join('tools', 'pythonpkg', 'decidb'),
     os.path.join('tools', 'pythonpkg', 'build'),
     os.path.join('tools', 'rpkg', 'src', 'duckdb'),
     os.path.join('tools', 'rpkg', 'inst', 'include', 'cpp11'),

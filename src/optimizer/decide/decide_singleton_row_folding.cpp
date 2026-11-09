@@ -221,7 +221,7 @@ static void FoldKnownBound(ClientContext &context, ExpressionType type, const De
 }
 
 bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
-                                const BoundComparisonExpression &comparison, DecideSingletonRow &out) {
+                            const BoundComparisonExpression &comparison, DecideSingletonRow &out) {
 	auto type = comparison.type;
 	if (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN &&
 	    type != ExpressionType::COMPARE_LESSTHANOREQUALTO && type != ExpressionType::COMPARE_GREATERTHANOREQUALTO &&

@@ -141,9 +141,8 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 			        "query runs",
 			        "multiply the square by a constant, or use a linear objective"};
 		}
-		return {op.decide_sense == DecideSense::MAXIMIZE
-		            ? "the objective MAXIMIZEs squared decision terms"
-		            : "the objective MINIMIZEs negated squared decision terms",
+		return {op.decide_sense == DecideSense::MAXIMIZE ? "the objective MAXIMIZEs squared decision terms"
+		                                                 : "the objective MINIMIZEs negated squared decision terms",
 		        op.decide_sense == DecideSense::MAXIMIZE
 		            ? "MINIMIZE the squared terms instead, or use a linear objective"
 		            : "MINIMIZE the squared terms without negating them, or use a linear objective"};

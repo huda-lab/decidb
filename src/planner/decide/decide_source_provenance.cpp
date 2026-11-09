@@ -684,34 +684,31 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	ctx.decide_index = decide_index;
 	auto written_ctx = ctx;
 	written_ctx.written = true;
-	VisitSourceComparisons(mutable_constraints, ctx, DecideEnclosingScope(),
-	                       [&](BoundComparisonExpression &cmp, const string &) {
-		                       // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
-		                       idx_t source_id = DConstants::INVALID_INDEX;
-		                       TryParseSourceClauseTag(cmp.GetAlias(), source_id);
-		                       if (source_id >= sources.size()) {
-			                       throw InternalException(
-			                           "DECIDE: a comparison reached the clause registry without its clause tag; "
-			                           "InitializeConstraintSourceInfo tags every comparison of the tree");
-		                       }
-		                       auto &info = sources[source_id];
-		                       info.canonical_lhs = RenderSource(*cmp.left, written_ctx);
-		                       info.canonical_rhs = RenderSource(*cmp.right, written_ctx);
-		                       info.spelled_lhs = RenderSource(*cmp.left, ctx);
-		                       info.spelled_rhs = RenderSource(*cmp.right, ctx);
-		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		                       info.canonical_differs = info.rendered_lhs != info.spelled_lhs ||
-		                                                info.rendered_rhs != info.spelled_rhs ||
-		                                                info.written_cmp != info.canonical_cmp;
-		                       info.rendered_lhs.clear();
-		                       info.rendered_rhs.clear();
-		                       if (!IsQueryWideBoundTag(cmp.right->GetAlias()) &&
-		                           !ContainsSubquerySource(*cmp.right)) {
-			                       info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
-		                       } else {
-			                       info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
-		                       }
-	                       });
+	VisitSourceComparisons(
+	    mutable_constraints, ctx, DecideEnclosingScope(), [&](BoundComparisonExpression &cmp, const string &) {
+		    // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
+		    idx_t source_id = DConstants::INVALID_INDEX;
+		    TryParseSourceClauseTag(cmp.GetAlias(), source_id);
+		    if (source_id >= sources.size()) {
+			    throw InternalException("DECIDE: a comparison reached the clause registry without its clause tag; "
+			                            "InitializeConstraintSourceInfo tags every comparison of the tree");
+		    }
+		    auto &info = sources[source_id];
+		    info.canonical_lhs = RenderSource(*cmp.left, written_ctx);
+		    info.canonical_rhs = RenderSource(*cmp.right, written_ctx);
+		    info.spelled_lhs = RenderSource(*cmp.left, ctx);
+		    info.spelled_rhs = RenderSource(*cmp.right, ctx);
+		    info.canonical_cmp = DecideComparisonOperator(cmp.type);
+		    info.canonical_differs = info.rendered_lhs != info.spelled_lhs || info.rendered_rhs != info.spelled_rhs ||
+		                             info.written_cmp != info.canonical_cmp;
+		    info.rendered_lhs.clear();
+		    info.rendered_rhs.clear();
+		    if (!IsQueryWideBoundTag(cmp.right->GetAlias()) && !ContainsSubquerySource(*cmp.right)) {
+			    info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
+		    } else {
+			    info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
+		    }
+	    });
 }
 
 string RenderDecideSource(const Expression &expr, const DecideSourceText &text,
@@ -974,8 +971,7 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
 static constexpr const char *LAYER_REWRITTEN_PREFIX = "  \xE2\x86\xB3 ";
 static constexpr const char *LAYER_CANONICAL_PREFIX = "  \xE2\x89\xA1 ";
 
-string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
-                                const vector<string> &unattributed) {
+string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers, const vector<string> &unattributed) {
 	string result;
 	auto append_line = [&](const string &line) {
 		if (!result.empty()) {
@@ -1083,8 +1079,8 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 }
 
 string RenderDecideObjectiveLayers(const string &sense_prefix, const string &written, const string &canonical,
-                                   bool canonical_differs, const vector<string> &rewritten, const vector<string> &accounts,
-                                   const vector<string> &derived_rows) {
+                                   bool canonical_differs, const vector<string> &rewritten,
+                                   const vector<string> &accounts, const vector<string> &derived_rows) {
 	string result;
 	auto append_line = [&](const string &line) {
 		if (!result.empty()) {

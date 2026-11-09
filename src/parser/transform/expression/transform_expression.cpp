@@ -65,7 +65,7 @@ static int DecideBindingOf(const duckdb_libpgquery::PGNode &node) {
 				return NumericCast<int>(DecideBinding::MULTIPLICATIVE);
 			}
 			return name == "**" || name == "^" ? NumericCast<int>(DecideBinding::POWER)
-			                                    : NumericCast<int>(DecideBinding::LOOSE);
+			                                   : NumericCast<int>(DecideBinding::LOOSE);
 		}
 		// A call written as one, and DECIDE's markers for the scope and `by` of a reducer, are whole.
 		case PG_AEXPR_NULLIF:
@@ -88,7 +88,7 @@ static int DecideBindingOf(const duckdb_libpgquery::PGNode &node) {
 	case T_PGSubLink:
 		// `x IN (SELECT ..)` and `x = ANY (..)` have a test expression; a bare subquery is whole.
 		return reinterpret_cast<const PGSubLink &>(node).testexpr ? NumericCast<int>(DecideBinding::LOOSE)
-		                                                           : NumericCast<int>(DecideBinding::WHOLE);
+		                                                          : NumericCast<int>(DecideBinding::WHOLE);
 	default:
 		return NumericCast<int>(DecideBinding::WHOLE);
 	}
@@ -113,12 +113,11 @@ unique_ptr<ParsedExpression> Transformer::TransformExpressionInternal(duckdb_lib
 	switch (node.type) {
 	case duckdb_libpgquery::T_PGColumnRef:
 		return TransformColumnRef(PGCast<duckdb_libpgquery::PGColumnRef>(node));
-    case duckdb_libpgquery::T_PGTypeName:
-    {
-        auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
+	case duckdb_libpgquery::T_PGTypeName: {
+		auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
 		auto logical_type = TransformTypeName(type_name_node);
 		return make_uniq_base<ParsedExpression, ConstantExpression>(Value(logical_type.ToString()));
-    }
+	}
 	case duckdb_libpgquery::T_PGAConst:
 		return TransformConstant(PGCast<duckdb_libpgquery::PGAConst>(node));
 	case duckdb_libpgquery::T_PGAExpr:

@@ -77,9 +77,7 @@ def _assert_oracle_unbounded(oracle_solver, model_name, total_rows, uncapped_row
         objective[name] = float(i)
     oracle_solver.set_objective(objective, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
-    assert result.status == SolverStatus.UNBOUNDED, (
-        f"oracle status for {model_name}: {result.status}"
-    )
+    assert result.status == SolverStatus.UNBOUNDED, f"oracle status for {model_name}: {result.status}"
 
 
 # 100 rows: only the 20 channel='export' rows are uncapped, so exactly that slice
@@ -212,9 +210,7 @@ class TestEscapingInstances:
         exactly the zone='A' rows escape. `zone` never appears in WHEN/objective/decision,
         so it is not harvested from the clause — only its projection alias supplies the
         name. All 25 zone='A' rows escape, so the rule reads `25 of 25 rows where zone='A'`."""
-        _assert_oracle_unbounded(
-            oracle_solver, "diagnostic_select_only_column", 100, range(1, 26)
-        )
+        _assert_oracle_unbounded(oracle_solver, "diagnostic_select_only_column", 100, range(1, 26))
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, zone, buy FROM ("
@@ -249,9 +245,7 @@ class TestEscapingInstances:
             assert _escape(rows, "buy") == [(20, 20, "row", f"{named} = 'export'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_select_only_unaliased_computed_column_stays_suppressed(
-        self, request, cli_fixture, oracle_solver
-    ):
+    def test_select_only_unaliased_computed_column_stays_suppressed(self, request, cli_fixture, oracle_solver):
         """T2 negative: the back-fill only recovers user-written names. A computed
         projection expression with NO `AS` alias carries only a generated name (its
         ToString), which we must never surface — even when it perfectly characterizes the
@@ -260,9 +254,7 @@ class TestEscapingInstances:
 
         Structurally identical to the aliased case (rows 1-25 escape), but the CASE has no
         alias, so the report falls back to `25 of 100 rows`."""
-        _assert_oracle_unbounded(
-            oracle_solver, "diagnostic_select_only_column", 100, range(1, 26)
-        )
+        _assert_oracle_unbounded(oracle_solver, "diagnostic_select_only_column", 100, range(1, 26))
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT * FROM ("
@@ -301,9 +293,7 @@ class TestEscapingInstances:
     def test_categorical_ratio_pragma_changes_reporting(self, request, cli_fixture, oracle_solver):
         """A 25-value column is above the default 10% cap for 100 rows, then
         qualifies once the ratio cap is raised to 25%."""
-        _assert_oracle_unbounded(
-            oracle_solver, "diagnostic_categorical_ratio", 100, range(1, 5)
-        )
+        _assert_oracle_unbounded(oracle_solver, "diagnostic_categorical_ratio", 100, range(1, 5))
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, buy FROM ("
@@ -330,9 +320,7 @@ class TestEscapingInstances:
     def test_min_categories_pragma_changes_reporting(self, request, cli_fixture, oracle_solver):
         """A 15-value column qualifies under the default floor of 20, then falls
         back to the count once the absolute floor is lowered below its cardinality."""
-        _assert_oracle_unbounded(
-            oracle_solver, "diagnostic_min_categories", 120, range(1, 9)
-        )
+        _assert_oracle_unbounded(oracle_solver, "diagnostic_min_categories", 120, range(1, 9))
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, buy FROM ("
@@ -377,9 +365,7 @@ class TestEscapingInstances:
             ),
         ],
     )
-    def test_characterization_pragmas_validate_bounds(
-        self, request, cli_fixture, pragma, value, message
-    ):
+    def test_characterization_pragmas_validate_bounds(self, request, cli_fixture, pragma, value, message):
         """Invalid unbounded-characterization knobs fail at SET time."""
         cli = request.getfixturevalue(cli_fixture)
         result = cli.execute_raw(f"PRAGMA {pragma}={value};")
@@ -396,8 +382,7 @@ _SAME_ROWS_DECIDE = (
 
 
 _TABLE_SETUP = (
-    "CREATE TEMP TABLE items(region VARCHAR, id INTEGER, w INTEGER);\n"
-    f"INSERT INTO items VALUES {_SIX_ROWS};\n"
+    "CREATE TEMP TABLE items(region VARCHAR, id INTEGER, w INTEGER);\n" f"INSERT INTO items VALUES {_SIX_ROWS};\n"
 )
 
 
@@ -419,14 +404,10 @@ class TestEscapeColumnNaming:
         from_values = _rows(
             _diagnose(
                 cli,
-                _SAME_ROWS_DECIDE.format(
-                    source=f"(VALUES {_SIX_ROWS}) t(region, id, w)"
-                ),
+                _SAME_ROWS_DECIDE.format(source=f"(VALUES {_SIX_ROWS}) t(region, id, w)"),
             )
         )
-        from_table = _rows(
-            _diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP)
-        )
+        from_table = _rows(_diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP))
         assert _escape(from_values, "buy") == _escape(from_table, "buy")
         assert _remedy(from_values, "buy") == _remedy(from_table, "buy")
         # `region` is only ever in the SELECT list, yet it is the rule that explains the
@@ -440,9 +421,7 @@ class TestEscapeColumnNaming:
         rows = _rows(
             _diagnose(
                 cli,
-                _SAME_ROWS_DECIDE.format(
-                    source=f"(VALUES {_SIX_ROWS}) t(region, id, w)"
-                ),
+                _SAME_ROWS_DECIDE.format(source=f"(VALUES {_SIX_ROWS}) t(region, id, w)"),
             )
         )
         named = [slice_ for _, _, _, slice_ in _escape(rows, "buy") if slice_]
@@ -462,17 +441,9 @@ class TestEscapeColumnNaming:
         `test/common/test_decidb_plan_serialization.cpp`."""
         cli = request.getfixturevalue(cli_fixture)
         decide_sql = _SAME_ROWS_DECIDE.format(source="items")
-        script = (
-            ".mode csv\n"
-            f"{_TABLE_SETUP}"
-            f"PREPARE p AS DIAGNOSE {decide_sql};\n"
-            "EXECUTE p;\n"
-            "EXECUTE p;\n"
-        )
+        script = ".mode csv\n" f"{_TABLE_SETUP}" f"PREPARE p AS DIAGNOSE {decide_sql};\n" "EXECUTE p;\n" "EXECUTE p;\n"
         rows = _rows(cli.execute_script(script))
-        named = [
-            r["group"] for r in rows if r.get("group") not in (None, "", "NULL")
-        ]
+        named = [r["group"] for r in rows if r.get("group") not in (None, "", "NULL")]
         assert named, f"prepared replay lost every slice name: {rows}"
         assert "region = 'B'" in named, named
 
@@ -536,9 +507,7 @@ class TestScopedRemedy:
     def test_full_coverage_scopes_the_cap(self, request, cli_fixture):
         """One rule covering every escaper renders as a `WHEN`-scoped conjunct."""
         cli = request.getfixturevalue(cli_fixture)
-        rows = _rows(
-            _diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP)
-        )
+        rows = _rows(_diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP))
         assert _remedy(rows, "buy") == "when region = 'B': buy <= <cap>"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -582,9 +551,7 @@ class TestScopedRemedy:
         assert _remedy(rows, "buy") == "buy <= <cap>"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_scoped_remedy_pasted_back_bounds_the_query(
-        self, request, cli_fixture, oracle_solver
-    ):
+    def test_scoped_remedy_pasted_back_bounds_the_query(self, request, cli_fixture, oracle_solver):
         """The reported remedy, pasted in with a real cap, makes the query solvable —
         and only the escaping rows are capped."""
         cli = request.getfixturevalue(cli_fixture)
@@ -610,20 +577,14 @@ class TestScopedRemedy:
         for i in range(1, 7):
             name = f"buy_{i}"
             oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0)
-            oracle_solver.add_constraint(
-                {name: 1.0}, "<=", 100.0 if i <= 3 else 7.0, name=f"cap_{i}"
-            )
+            oracle_solver.add_constraint({name: 1.0}, "<=", 100.0 if i <= 3 else 7.0, name=f"cap_{i}")
             objective[name] = float(i)
         oracle_solver.set_objective(objective, ObjSense.MAXIMIZE)
         expected = oracle_solver.solve()
         assert expected.status == SolverStatus.OPTIMAL, expected.status
 
-        values = sorted(
-            float(r["buy"]) for r in csv.DictReader(io.StringIO(result.stdout))
-        )
-        assert values == sorted(
-            expected.variable_values[f"buy_{i}"] for i in range(1, 7)
-        )
+        values = sorted(float(r["buy"]) for r in csv.DictReader(io.StringIO(result.stdout)))
+        assert values == sorted(expected.variable_values[f"buy_{i}"] for i in range(1, 7))
 
 
 def _sliced_query(source, clause_condition):

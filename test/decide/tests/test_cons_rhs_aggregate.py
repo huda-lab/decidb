@@ -152,7 +152,8 @@ def test_rhs_avg_mixed_with_other_terms(decidb_cli):
     # bound is 3 and three items fit. Truncating AVG to 1 would give a bound of 2
     # and select only two -- the silently wrong answer the old guard was protecting
     # against.
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         WITH k(id, profit, b) AS (
             VALUES (1, 1.0, 1.0), (2, 2.0, 1.0), (3, 3.0, 1.0), (4, 4.0, 3.0)
         )
@@ -160,7 +161,8 @@ def test_rhs_avg_mixed_with_other_terms(decidb_cli):
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 * AVG(b)
         MAXIMIZE SUM(x * profit)
-    """)
+    """
+    )
     xi, ii = cols.index("x"), cols.index("id")
     picked = sorted(int(r[ii]) for r in rows if int(round(float(r[xi]))) == 1)
     assert picked == [2, 3, 4], f"expected 3 items (bound 2*1.5=3), got {picked}"

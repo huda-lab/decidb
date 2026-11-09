@@ -19,11 +19,11 @@ import run_benchmarks as bench
 
 # ---------------------------------------------------------------------------
 # Every constant of this experiment.
-DATABASE = "large"        # benchmark/decide/databases/{DATABASE}.db
+DATABASE = "large"  # benchmark/decide/databases/{DATABASE}.db
 BACKENDS = ["gurobi", "highs"]
 REPEATS = 3
-SOLVER_SECONDS = 300      # solver's own limit; reaching it is a result, not a failure
-PROCESS_SECONDS = 420     # hard stop so one query cannot hang the sweep
+SOLVER_SECONDS = 300  # solver's own limit; reaching it is a result, not a failure
+PROCESS_SECONDS = 420  # hard stop so one query cannot hang the sweep
 # ---------------------------------------------------------------------------
 
 HERE = Path(__file__).resolve().parent
@@ -38,14 +38,25 @@ STAGES = {
     "rewrite": ["optimizer.decide"],
     "plan": ["frontend.physical_decide"],
     "input": ["execution.assemble_input", "execution.sink_append", "execution.sink_combine"],
-    "extraction": ["execution.keyed_mapping", "execution.scope_checks", "execution.evaluate_constraints",
-                   "execution.evaluate_objective", "execution.evaluate_composed", "execution.evaluate_value_links",
-                   "execution.formulate"],
+    "extraction": [
+        "execution.keyed_mapping",
+        "execution.scope_checks",
+        "execution.evaluate_constraints",
+        "execution.evaluate_objective",
+        "execution.evaluate_composed",
+        "execution.evaluate_value_links",
+        "execution.formulate",
+    ],
     "model_build": ["solver.build_neutral_model"],
     "backend_load": ["gurobi.load", "highs.load"],
     "solve": ["gurobi.optimize", "highs.optimize"],
-    "readback": ["gurobi.status_and_readback", "highs.status_and_readback",
-                 "execution.output_readback", "solver.postsolve", "solver.cleanup"],
+    "readback": [
+        "gurobi.status_and_readback",
+        "highs.status_and_readback",
+        "execution.output_readback",
+        "solver.postsolve",
+        "solver.cleanup",
+    ],
 }
 
 # Gurobi and HiGHS spell these differently; take whichever the run emitted.
@@ -60,8 +71,12 @@ COUNTERS = {
     "mip_gap": ["MIPGap"],
 }
 
-COLUMNS = (["query", "backend", "repeat", "status", "rows", "query_s", "non_solver_ms"]
-           + [f"{stage}_ms" for stage in STAGES] + list(COUNTERS) + ["peak_rss_mib"])  # solve_ms comes from STAGES
+COLUMNS = (
+    ["query", "backend", "repeat", "status", "rows", "query_s", "non_solver_ms"]
+    + [f"{stage}_ms" for stage in STAGES]
+    + list(COUNTERS)
+    + ["peak_rss_mib"]
+)  # solve_ms comes from STAGES
 
 
 def discover() -> dict[str, Path]:
@@ -78,8 +93,11 @@ def parse_profile(stderr: str) -> dict:
     """Collapse the nested spans into inclusive totals per span name."""
     if "DECIDB_PROFILE_QUERY_BEGIN\n" in stderr:
         stderr = stderr.split("DECIDB_PROFILE_QUERY_BEGIN\n", 1)[1].split("DECIDB_PROFILE_QUERY_END\n", 1)[0]
-    events = [json.loads(line.split("DECIDB_PROFILE: ", 1)[1]) for line in stderr.splitlines()
-              if line.startswith("DECIDB_PROFILE: ")]
+    events = [
+        json.loads(line.split("DECIDB_PROFILE: ", 1)[1])
+        for line in stderr.splitlines()
+        if line.startswith("DECIDB_PROFILE: ")
+    ]
     spans = {event["id"]: event for event in events if event["event"] in ("begin", "end")}
 
     def inside_own_name(event: dict) -> bool:
@@ -120,22 +138,40 @@ def run_one(name: str, path: Path, backend: str, repeat: int) -> dict:
     output = RAW / f"{name}_{backend}_{repeat}"
     output.mkdir(parents=True, exist_ok=True)
     count_file = output / "rows.json"
-    script = "\n".join([
-        ".bail on", ".output /dev/null",
-        ".output stderr", ".print DECIDB_PROFILE_QUERY_BEGIN", ".output /dev/null",
-        ".timer on", f"CREATE TEMP TABLE result AS {sql.strip().rstrip(';')};", ".timer off",
-        ".output stderr", ".print DECIDB_PROFILE_QUERY_END", ".output /dev/null",
-        ".mode json", f".output {count_file}", "SELECT count(*) AS n FROM result;", "",
-    ])
+    script = "\n".join(
+        [
+            ".bail on",
+            ".output /dev/null",
+            ".output stderr",
+            ".print DECIDB_PROFILE_QUERY_BEGIN",
+            ".output /dev/null",
+            ".timer on",
+            f"CREATE TEMP TABLE result AS {sql.strip().rstrip(';')};",
+            ".timer off",
+            ".output stderr",
+            ".print DECIDB_PROFILE_QUERY_END",
+            ".output /dev/null",
+            ".mode json",
+            f".output {count_file}",
+            "SELECT count(*) AS n FROM result;",
+            "",
+        ]
+    )
     environment = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
-    environment.update(DECIDB_FORCE_SOLVER=backend, DECIDB_TIME_LIMIT=str(SOLVER_SECONDS),
-                       DECIDB_PROFILE="1", DECIDB_BENCH="1")
+    environment.update(
+        DECIDB_FORCE_SOLVER=backend, DECIDB_TIME_LIMIT=str(SOLVER_SECONDS), DECIDB_PROFILE="1", DECIDB_BENCH="1"
+    )
     database = str(bench.DATABASES_DIR / f"{DATABASE}.db")
     status = "ok"
     try:
-        done = subprocess.run(["/usr/bin/time", bench.get_time_flag(), str(bench.DECIDB_EXE), database, "-readonly"],
-                              input=script, capture_output=True, text=True,
-                              env=environment, timeout=PROCESS_SECONDS)
+        done = subprocess.run(
+            ["/usr/bin/time", bench.get_time_flag(), str(bench.DECIDB_EXE), database, "-readonly"],
+            input=script,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=PROCESS_SECONDS,
+        )
         stdout, stderr, code = done.stdout, done.stderr, done.returncode
     except subprocess.TimeoutExpired as expired:
         # Each stream decodes independently -- one can be real bytes while the other is the
@@ -161,9 +197,15 @@ def run_one(name: str, path: Path, backend: str, repeat: int) -> dict:
     resources = bench.parse_time_output(stderr)
     rows = json.loads(count_file.read_text())[0]["n"] if count_file.exists() and count_file.stat().st_size else None
 
-    row = {"query": name, "backend": backend, "repeat": repeat, "status": status, "rows": rows,
-           "query_s": float(timings[0]) if timings else None,
-           "peak_rss_mib": round(resources.get("peak_rss_kb", 0) / 1024, 1) or None}
+    row = {
+        "query": name,
+        "backend": backend,
+        "repeat": repeat,
+        "status": status,
+        "rows": rows,
+        "query_s": float(timings[0]) if timings else None,
+        "peak_rss_mib": round(resources.get("peak_rss_kb", 0) / 1024, 1) or None,
+    }
     for stage, spans in STAGES.items():
         total = sum(profile["phases"].get(span, 0.0) for span in spans)
         row[f"{stage}_ms"] = round(total, 3) if total else None

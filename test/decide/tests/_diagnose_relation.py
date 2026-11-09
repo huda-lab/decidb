@@ -24,16 +24,8 @@ def run(cli, decide_sql, *, setup="", pragmas="", scope=None, timeout=120, expec
     the infeasible slack-scope tuning pragma (query | expanded) when given. `expect_number_range`
     declares the number-range warning, as `DeciDBCli.execute` takes it.
     """
-    scope_pragma = (
-        f"PRAGMA diagnose_decide_infeasible_slack_scope='{scope}';\n" if scope else ""
-    )
-    script = (
-        ".mode csv\n"
-        f"{setup}"
-        f"{scope_pragma}"
-        f"{pragmas}"
-        f"DIAGNOSE {decide_sql};\n"
-    )
+    scope_pragma = f"PRAGMA diagnose_decide_infeasible_slack_scope='{scope}';\n" if scope else ""
+    script = ".mode csv\n" f"{setup}" f"{scope_pragma}" f"{pragmas}" f"DIAGNOSE {decide_sql};\n"
     return cli.execute_script(script, timeout=timeout, expect_number_range=expect_number_range)
 
 
@@ -111,9 +103,7 @@ def as_eav(flat_rows):
                     "clause",
                     clause,
                     "offset_scope",
-                    {"expanded_row": "row", "expanded_group": "group"}.get(
-                        source, "clause"
-                    ),
+                    {"expanded_row": "row", "expanded_group": "group"}.get(source, "clause"),
                 )
     return out
 

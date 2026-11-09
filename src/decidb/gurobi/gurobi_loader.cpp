@@ -200,29 +200,30 @@ static void *SearchDir(const std::string &dir, std::string &matched_name) {
 //! Resolve all required function pointers from the loaded library.
 //! Returns true only if ALL required symbols were found.
 static bool ResolveSymbols(void *handle, GurobiAPI &api) {
-	// Helper macro for cleaner symbol resolution
-	#define LOAD_SYM(field, sym_name)                                              \
-		api.field = reinterpret_cast<decltype(api.field)>(GetSym(handle, sym_name)); \
-		if (!api.field) return false;
+// Helper macro for cleaner symbol resolution
+#define LOAD_SYM(field, sym_name)                                                                                      \
+	api.field = reinterpret_cast<decltype(api.field)>(GetSym(handle, sym_name));                                       \
+	if (!api.field)                                                                                                    \
+		return false;
 
 	LOAD_SYM(emptyenv_internal, "GRBemptyenvinternal")
-	LOAD_SYM(startenv,          "GRBstartenv")
-	LOAD_SYM(freeenv,           "GRBfreeenv")
-	LOAD_SYM(setintparam,       "GRBsetintparam")
-	LOAD_SYM(setdblparam,       "GRBsetdblparam")
-	LOAD_SYM(getenv_model,      "GRBgetenv")
-	LOAD_SYM(newmodel,          "GRBnewmodel")
-	LOAD_SYM(freemodel,         "GRBfreemodel")
-	LOAD_SYM(setintattr,        "GRBsetintattr")
-	LOAD_SYM(addconstr,         "GRBaddconstr")
-	LOAD_SYM(addqpterms,       "GRBaddqpterms")
-	LOAD_SYM(optimize,          "GRBoptimize")
-	LOAD_SYM(getintattr,        "GRBgetintattr")
-	LOAD_SYM(getdblattr,        "GRBgetdblattr")
-	LOAD_SYM(getdblattrarray,   "GRBgetdblattrarray")
-	LOAD_SYM(geterrormsg,       "GRBgeterrormsg")
+	LOAD_SYM(startenv, "GRBstartenv")
+	LOAD_SYM(freeenv, "GRBfreeenv")
+	LOAD_SYM(setintparam, "GRBsetintparam")
+	LOAD_SYM(setdblparam, "GRBsetdblparam")
+	LOAD_SYM(getenv_model, "GRBgetenv")
+	LOAD_SYM(newmodel, "GRBnewmodel")
+	LOAD_SYM(freemodel, "GRBfreemodel")
+	LOAD_SYM(setintattr, "GRBsetintattr")
+	LOAD_SYM(addconstr, "GRBaddconstr")
+	LOAD_SYM(addqpterms, "GRBaddqpterms")
+	LOAD_SYM(optimize, "GRBoptimize")
+	LOAD_SYM(getintattr, "GRBgetintattr")
+	LOAD_SYM(getdblattr, "GRBgetdblattr")
+	LOAD_SYM(getdblattrarray, "GRBgetdblattrarray")
+	LOAD_SYM(geterrormsg, "GRBgeterrormsg")
 
-	#undef LOAD_SYM
+#undef LOAD_SYM
 
 	// Optional: GRBaddqconstr (quadratic constraints, available in Gurobi 5.0+)
 	api.addqconstr = reinterpret_cast<decltype(api.addqconstr)>(GetSym(handle, "GRBaddqconstr"));
@@ -231,14 +232,11 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	// Optional: GRBaddgenconstrAbs (native absolute value, Gurobi 8.0+). Loaded
 	// best-effort: a missing symbol turns off the `abs` capability flag, and stage 05
 	// lowers ABS into its Big-M envelope exactly as it always has.
-	api.addgenconstrAbs =
-	    reinterpret_cast<decltype(api.addgenconstrAbs)>(GetSym(handle, "GRBaddgenconstrAbs"));
-	api.addgenconstrMin =
-	    reinterpret_cast<decltype(api.addgenconstrMin)>(GetSym(handle, "GRBaddgenconstrMin"));
-	api.addgenconstrMax =
-	    reinterpret_cast<decltype(api.addgenconstrMax)>(GetSym(handle, "GRBaddgenconstrMax"));
-	api.addgenconstrIndicator = reinterpret_cast<decltype(api.addgenconstrIndicator)>(
-	    GetSym(handle, "GRBaddgenconstrIndicator"));
+	api.addgenconstrAbs = reinterpret_cast<decltype(api.addgenconstrAbs)>(GetSym(handle, "GRBaddgenconstrAbs"));
+	api.addgenconstrMin = reinterpret_cast<decltype(api.addgenconstrMin)>(GetSym(handle, "GRBaddgenconstrMin"));
+	api.addgenconstrMax = reinterpret_cast<decltype(api.addgenconstrMax)>(GetSym(handle, "GRBaddgenconstrMax"));
+	api.addgenconstrIndicator =
+	    reinterpret_cast<decltype(api.addgenconstrIndicator)>(GetSym(handle, "GRBaddgenconstrIndicator"));
 
 	// Optional: GRBterminate (mid-solve interrupt). Present in all modern Gurobi, but
 	// loaded best-effort so a missing symbol never breaks solving — the mid-chunk Ctrl-C
@@ -271,17 +269,23 @@ static void DoLoad() {
 	if (!handle) {
 		static const char *candidates[] = {
 #ifdef _WIN32
-			"gurobi130.dll", "gurobi120.dll", "gurobi110.dll",
-			"gurobi100.dll", "gurobi95.dll",
+		    "gurobi130.dll", "gurobi120.dll", "gurobi110.dll", "gurobi100.dll", "gurobi95.dll",
 #elif defined(__APPLE__)
-			"libgurobi130.dylib", "libgurobi120.dylib", "libgurobi110.dylib",
-			"libgurobi100.dylib", "libgurobi95.dylib",  "libgurobi.dylib",
+		    "libgurobi130.dylib",
+		    "libgurobi120.dylib",
+		    "libgurobi110.dylib",
+		    "libgurobi100.dylib",
+		    "libgurobi95.dylib",
+		    "libgurobi.dylib",
 #else
-			"libgurobi130.so", "libgurobi120.so", "libgurobi110.so",
-			"libgurobi100.so", "libgurobi95.so",  "libgurobi.so",
+		    "libgurobi130.so",
+		    "libgurobi120.so",
+		    "libgurobi110.so",
+		    "libgurobi100.so",
+		    "libgurobi95.so",
+		    "libgurobi.so",
 #endif
-			nullptr
-		};
+		    nullptr};
 		for (const char **c = candidates; *c; c++) {
 			handle = TryOpen(*c);
 			if (handle) {

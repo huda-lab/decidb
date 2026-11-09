@@ -38,13 +38,15 @@ def test_single_row(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_time = time.perf_counter() - t0
     assert len(decidb_result) == 1, f"Expected 1 row, got {len(decidb_result)}"
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey = 1 AND l_linenumber = 1
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("single_row")
@@ -54,7 +56,9 @@ def test_single_row(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -64,14 +68,24 @@ def test_single_row(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "single_row", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "single_row",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -96,13 +110,15 @@ def test_trivial_all_selected(decidb_cli, duckdb_conn, oracle_solver, perf_track
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("trivial_all")
@@ -112,7 +128,9 @@ def test_trivial_all_selected(decidb_cli, duckdb_conn, oracle_solver, perf_track
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 999999.0, name="capacity",
+        "<=",
+        999999.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -122,15 +140,25 @@ def test_trivial_all_selected(decidb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     assert all(v == 1.0 for v in cmp.decidb_vector), "Expected all x=1"
 
     perf_tracker.record(
-        "trivial_all_selected", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "trivial_all_selected",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -155,12 +183,14 @@ def test_rhs_zero_forces_all_zero(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("rhs_zero")
@@ -170,7 +200,9 @@ def test_rhs_zero_forces_all_zero(decidb_cli, duckdb_conn, oracle_solver, perf_t
 
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 0.0, name="zero_budget",
+        "<=",
+        0.0,
+        name="zero_budget",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -180,16 +212,26 @@ def test_rhs_zero_forces_all_zero(decidb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     assert all(v == 0.0 for v in cmp.decidb_vector), "Expected all x=0"
     assert cmp.decidb_objective == 0.0
 
     perf_tracker.record(
-        "rhs_zero", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "rhs_zero",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -214,11 +256,13 @@ def test_negative_objective_coefficients(decidb_cli, duckdb_conn, oracle_solver,
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c_custkey AS BIGINT),
                CAST(c_acctbal AS DOUBLE)
         FROM customer WHERE c_nationkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("neg_coeffs")
@@ -228,7 +272,9 @@ def test_negative_objective_coefficients(decidb_cli, duckdb_conn, oracle_solver,
 
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        ">=", 5.0, name="min_count",
+        ">=",
+        5.0,
+        name="min_count",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][1] for i in range(len(data))},
@@ -238,14 +284,24 @@ def test_negative_objective_coefficients(decidb_cli, duckdb_conn, oracle_solver,
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
 
     perf_tracker.record(
-        "neg_coeffs", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "neg_coeffs",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -272,9 +328,7 @@ def test_zero_rows_empty_input(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_maximize_sum_max_per_with_empty_when_group(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_maximize_sum_max_per_with_empty_when_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE when flag: sum(per grp: max(x*v) by (grp)) where one group
     has no ``flag`` rows — hard-case inner-MAX with an empty group.
 
@@ -325,7 +379,10 @@ def test_maximize_sum_max_per_with_empty_when_group(
     # per grp: sum(x) by (grp) >= 1 -- applied to every group.
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{g}",
+            {vnames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"sum_ge_{g}",
         )
 
     # Hard-case inner-MAX aux per non-empty WHEN group.
@@ -347,13 +404,16 @@ def test_maximize_sum_max_per_with_empty_when_group(
     result = oracle_solver.solve()
 
     from solver.types import SolverStatus
+
     assert result.status == SolverStatus.OPTIMAL, (
-        f"Oracle expected OPTIMAL; got {result.status}. "
-        f"DeciDB returned {len(decidb_rows)} rows."
+        f"Oracle expected OPTIMAL; got {result.status}. " f"DeciDB returned {len(decidb_rows)} rows."
     )
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("val"); fi = cs.index("flag"); gi = cs.index("grp")
+        xi = cs.index("x")
+        vi = cs.index("val")
+        fi = cs.index("flag")
+        gi = cs.index("grp")
         per_grp: dict = {}
         for r in rs:
             if not bool(r[fi]):
@@ -364,14 +424,25 @@ def test_maximize_sum_max_per_with_empty_when_group(
         return sum(max(vs) for vs in per_grp.values() if vs)
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "max_sum_max_per_empty_when_group", decidb_time, build_time,
-        result.solve_time_seconds, n, n + len(z_names), len(groups),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "max_sum_max_per_empty_when_group",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + len(z_names),
+        len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -407,16 +478,13 @@ def test_avg_per_constraint_with_empty_group(decidb_cli, duckdb_conn, oracle_sol
     # Group B keeps no row under `when flag` → no class → both B rows selected.
     b_rows = [r for r in rows if r[grp_idx] == 'B']
     assert all(int(r[x_idx]) == 1 for r in b_rows), (
-        f"Group B (empty after WHEN) should have no constraint; expected "
-        f"all x=1, got {[r[x_idx] for r in b_rows]}"
+        f"Group B (empty after WHEN) should have no constraint; expected " f"all x=1, got {[r[x_idx] for r in b_rows]}"
     )
 
     # Group A enforces AVG(x*val) <= 8, i.e. SUM(x*val over flag rows) <= 8 * 3 = 24.
     a_rows = [r for r in rows if r[grp_idx] == 'A']
     a_when_sum = sum(float(r[val_idx]) * int(r[x_idx]) for r in a_rows)
-    assert a_when_sum <= 24.0 + 1e-6, (
-        f"Group A AVG cap violated: SUM={a_when_sum} > 24"
-    )
+    assert a_when_sum <= 24.0 + 1e-6, f"Group A AVG cap violated: SUM={a_when_sum} > 24"
 
 
 @pytest.mark.edge_case
@@ -491,10 +559,12 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
-    data = duckdb_conn.execute(f"""
+    data = duckdb_conn.execute(
+        f"""
         SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(val AS DOUBLE)
         FROM ({data_sql})
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -504,23 +574,30 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         oracle_solver.add_variable(v, VarType.BINARY)
     # Per-group SUM(x) = 1 constraints.
     from collections import defaultdict
+
     groups: dict = defaultdict(list)
     for i, row in enumerate(data):
         groups[row[1]].append(i)
     for grp, idxs in groups.items():
         oracle_solver.add_constraint(
-            {vnames[i]: 1.0 for i in idxs}, "=", 1.0, name=f"pick_one_{grp}",
+            {vnames[i]: 1.0 for i in idxs},
+            "=",
+            1.0,
+            name=f"pick_one_{grp}",
         )
     # Global cap.
     oracle_solver.add_constraint(
         {vnames[i]: float(data[i][2]) for i in range(n)},
-        "<=", 35.0, name="budget",
+        "<=",
+        35.0,
+        name="budget",
     )
     # Feasibility: empty objective (zero vector) keeps the sense well-defined.
     oracle_solver.set_objective({}, ObjSense.MINIMIZE)
     build_time = time.perf_counter() - t_build
 
     from solver.types import SolverStatus
+
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle reports infeasible/error for feasibility+PER: status={result.status}. "
@@ -534,18 +611,20 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     for r in rows:
         by_grp[str(r[grp_idx])] += int(r[x_idx])
     for grp, total in by_grp.items():
-        assert total == 1, (
-            f"Group {grp} SUM(x)={total} but PER constraint requires exactly 1"
-        )
+        assert total == 1, f"Group {grp} SUM(x)={total} but PER constraint requires exactly 1"
     weighted = sum(int(r[x_idx]) * float(r[val_idx]) for r in rows)
-    assert weighted <= 35 + 1e-4, (
-        f"DeciDB violates global budget: SUM(x*val)={weighted} > 35"
-    )
+    assert weighted <= 35 + 1e-4, f"DeciDB violates global budget: SUM(x*val)={weighted} > 35"
 
     perf_tracker.record(
-        "feasibility_per", decidb_time, build_time, result.solve_time_seconds,
-        n, n, len(groups) + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "feasibility_per",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(groups) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -645,34 +724,41 @@ def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, ">=", 1.0, name="floor",
+        {vn: 1.0 for vn in vnames},
+        ">=",
+        1.0,
+        name="floor",
     )
     oracle_solver.set_objective(
-        {vn: 0.0 for vn in vnames}, ObjSense.MAXIMIZE,
+        {vn: 0.0 for vn in vnames},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     from solver.types import SolverStatus
+
     assert result.status == SolverStatus.OPTIMAL
-    assert abs(result.objective_value) <= 1e-9, (
-        f"Oracle objective should be 0, got {result.objective_value}"
-    )
+    assert abs(result.objective_value) <= 1e-9, f"Oracle objective should be 0, got {result.objective_value}"
 
     val_idx = decidb_cols.index("val")
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
-    assert abs(decidb_obj) <= 1e-9, (
-        f"DeciDB objective should be 0, got {decidb_obj}"
-    )
+    assert abs(decidb_obj) <= 1e-9, f"DeciDB objective should be 0, got {decidb_obj}"
     # Feasibility: at least one row picked (per SUM(x) >= 1).
     total_x = sum(int(r[x_idx]) for r in decidb_rows)
     assert total_x >= 1, f"SUM(x)={total_x} violates feasibility constraint"
 
     perf_tracker.record(
-        "all_zero_objective", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "all_zero_objective",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -684,14 +770,13 @@ def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
 # builder without relying on TPC-H shape.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.edge_case
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_many_terms_objective(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_many_terms_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """10-column linear combination in both constraint and objective.
 
     Stresses the symbolic normalizer / expression evaluator on a much wider
@@ -730,10 +815,7 @@ def test_many_terms_objective(
     # Precompute per-row constraint and objective coefficients from the 10 cols.
     cons_coeffs = [sum(data[i][1:11]) for i in range(n)]
     obj_weights = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2]
-    obj_coeffs = [
-        sum(data[i][1 + k] * w for k, w in enumerate(obj_weights))
-        for i in range(n)
-    ]
+    obj_coeffs = [sum(data[i][1 + k] * w for k, w in enumerate(obj_weights)) for i in range(n)]
 
     t_build = time.perf_counter()
     oracle_solver.create_model("many_terms_objective")
@@ -742,10 +824,13 @@ def test_many_terms_objective(
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[i]: cons_coeffs[i] for i in range(n)},
-        "<=", 40.0, name="wide_cap",
+        "<=",
+        40.0,
+        name="wide_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: obj_coeffs[i] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: obj_coeffs[i] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -753,20 +838,30 @@ def test_many_terms_objective(
     def _obj(row):
         # Per-row objective coefficient computed the same way the oracle did.
         cols = decidb_cols
-        idx = {c: cols.index(c) for c in
-               ("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10")}
+        idx = {c: cols.index(c) for c in ("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10")}
         c = [float(row[idx[f"c{k+1}"]]) for k in range(10)]
         return {"x": sum(c[k] * obj_weights[k] for k in range(10))}
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=_obj,
     )
     perf_tracker.record(
-        "many_terms_objective", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "many_terms_objective",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -778,9 +873,7 @@ def test_many_terms_objective(
 @pytest.mark.per_clause
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_five_plus_heterogeneous_constraints(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_five_plus_heterogeneous_constraints(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Six mixed constraints in one query: per-row, aggregate, `when`, `per`, NE, BETWEEN.
 
     Stresses the constraint-matrix builder with heterogeneous shapes in a
@@ -821,6 +914,7 @@ def test_five_plus_heterogeneous_constraints(
     n = len(data)
 
     from ._oracle_helpers import add_ne_indicator, group_indices
+
     t_build = time.perf_counter()
     oracle_solver.create_model("five_plus_heterogeneous")
     vnames = [f"x_{i}" for i in range(n)]
@@ -831,24 +925,33 @@ def test_five_plus_heterogeneous_constraints(
     # (2) aggregate quantity cap
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(n)},
-        "<=", 12.0, name="qty_cap",
+        "<=",
+        12.0,
+        name="qty_cap",
     )
     # (3) when flag = 'R': lower bound on count
     r_idx = [i for i in range(n) if data[i][3] == "R"]
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in r_idx},
-        ">=", 2.0, name="when_R_floor",
+        ">=",
+        2.0,
+        name="when_R_floor",
     )
     # (4) `per` category upper bound on count
     per_cat = group_indices(data, lambda r: r[4])
     for cat, idxs in per_cat.items():
         oracle_solver.add_constraint(
             {vnames[i]: 1.0 for i in idxs},
-            "<=", 2.0, name=f"per_cat_{cat}",
+            "<=",
+            2.0,
+            name=f"per_cat_{cat}",
         )
     # (5) NE: SUM(x) != 7 via native Gurobi indicator (no Big-M)
     add_ne_indicator(
-        oracle_solver, {v: 1.0 for v in vnames}, 7.0, name="sum_ne_7",
+        oracle_solver,
+        {v: 1.0 for v in vnames},
+        7.0,
+        name="sum_ne_7",
     )
     # (6) BETWEEN: SUM(x*price) >= 10 AND <= 60
     price_coeffs = {vnames[i]: data[i][2] for i in range(n)}
@@ -860,14 +963,25 @@ def test_five_plus_heterogeneous_constraints(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("price")])},
     )
     perf_tracker.record(
-        "five_plus_heterogeneous_constraints", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 6,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "five_plus_heterogeneous_constraints",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        6,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -877,9 +991,7 @@ def test_five_plus_heterogeneous_constraints(
 @pytest.mark.cons_comparison
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_large_coefficient_numeric_stability(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_large_coefficient_numeric_stability(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """1e9 coefficients combined with `<>` Big-M expansion.
 
     The NE Big-M rewrite `SUM(x*v) <> K` expands into a disjunction sized by
@@ -889,9 +1001,7 @@ def test_large_coefficient_numeric_stability(
     `ilp_model_builder.cpp`'s integer-step rewrite path, `<> 1` is valid
     because the LHS `SUM(x)` is integer-valued).
     """
-    data_sql = (
-        "SELECT * FROM (VALUES (1, 1000000000.0), (2, 1000000000.0)) t(id, val)"
-    )
+    data_sql = "SELECT * FROM (VALUES (1, 1000000000.0), (2, 1000000000.0)) t(id, val)"
     sql = f"""
         SELECT id, val, x FROM ({data_sql})
         DECIDE x(BOOL)
@@ -903,12 +1013,11 @@ def test_large_coefficient_numeric_stability(
     decidb_rows, decidb_cols = decidb_cli.execute(sql, expect_number_range=True)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute(
-        f"SELECT id, CAST(val AS DOUBLE) FROM ({data_sql})"
-    ).fetchall()
+    data = duckdb_conn.execute(f"SELECT id, CAST(val AS DOUBLE) FROM ({data_sql})").fetchall()
     n = len(data)
 
     from ._oracle_helpers import add_ne_indicator
+
     t_build = time.perf_counter()
     oracle_solver.create_model("large_coefficient_ne")
     vnames = [f"x_{i}" for i in range(n)]
@@ -916,28 +1025,45 @@ def test_large_coefficient_numeric_stability(
         oracle_solver.add_variable(v, VarType.BINARY)
     # Native indicator SUM != 1 (no Big-M selection by the oracle)
     add_ne_indicator(
-        oracle_solver, {v: 1.0 for v in vnames}, 1.0, name="sum_ne_1",
+        oracle_solver,
+        {v: 1.0 for v in vnames},
+        1.0,
+        name="sum_ne_1",
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(n)},
-        "<=", 2_000_000_000.0, name="big_cap",
+        "<=",
+        2_000_000_000.0,
+        name="big_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("val")])},
         tolerance=1.0,  # 1e9 coefficients → absolute tolerance scaled accordingly
     )
     perf_tracker.record(
-        "large_coefficient_numeric_stability", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "large_coefficient_numeric_stability",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -972,12 +1098,6 @@ def test_gurobi_highs_agree_on_objective(decidb_cli_highs, decidb_cli_gurobi):
 
     h_ci = {name: i for i, name in enumerate(highs_cols)}
     g_ci = {name: i for i, name in enumerate(gurobi_cols)}
-    highs_obj = sum(
-        float(r[h_ci["cost"]]) * int(r[h_ci["b"]]) for r in highs_rows
-    )
-    gurobi_obj = sum(
-        float(r[g_ci["cost"]]) * int(r[g_ci["b"]]) for r in gurobi_rows
-    )
-    assert abs(highs_obj - gurobi_obj) <= 1e-4, (
-        f"Solver disagreement: HiGHS={highs_obj}, Gurobi={gurobi_obj}"
-    )
+    highs_obj = sum(float(r[h_ci["cost"]]) * int(r[h_ci["b"]]) for r in highs_rows)
+    gurobi_obj = sum(float(r[g_ci["cost"]]) * int(r[g_ci["b"]]) for r in gurobi_rows)
+    assert abs(highs_obj - gurobi_obj) <= 1e-4, f"Solver disagreement: HiGHS={highs_obj}, Gurobi={gurobi_obj}"

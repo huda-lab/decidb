@@ -214,23 +214,23 @@ ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnB
 }
 
 vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
-    // Return all child columns plus ALL decide variables (including auxiliary).
-    // Auxiliary vars (e.g. from ABS linearization) must be visible for column binding
-    // resolution in constraint/objective expressions. The projection above prunes them.
-    auto result = children[0]->GetColumnBindings();
-    for (idx_t i = 0; i < decide_variables.size(); i++) {
-        result.emplace_back(decide_index, i);
-    }
-    return result;
+	// Return all child columns plus ALL decide variables (including auxiliary).
+	// Auxiliary vars (e.g. from ABS linearization) must be visible for column binding
+	// resolution in constraint/objective expressions. The projection above prunes them.
+	auto result = children[0]->GetColumnBindings();
+	for (idx_t i = 0; i < decide_variables.size(); i++) {
+		result.emplace_back(decide_index, i);
+	}
+	return result;
 }
 
 void LogicalDecide::ResolveTypes() {
-    types = children[0]->types;
-    // Include ALL decide variable types (user + auxiliary).
-    // Auxiliary vars are pruned by the projection operator above.
-    for (idx_t i = 0; i < decide_variables.size(); i++) {
-        types.push_back(decide_variables[i]->return_type);
-    }
+	types = children[0]->types;
+	// Include ALL decide variable types (user + auxiliary).
+	// Auxiliary vars are pruned by the projection operator above.
+	for (idx_t i = 0; i < decide_variables.size(); i++) {
+		types.push_back(decide_variables[i]->return_type);
+	}
 }
 
 vector<idx_t> LogicalDecide::GetTableIndex() const {

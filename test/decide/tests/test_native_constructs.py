@@ -62,16 +62,11 @@ _FIXTURE = "(VALUES (1, 3.0), (2, 7.0), (3, 5.0)) v(id, target)"
 # shapes that DO: a MAXIMIZE objective over ABS, and the hard-direction constraint
 # forms, which are the ones that get the sign indicator.
 _ABS_MAXIMIZE_SHAPES = [
-    ("maximize objective",
-     "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))"),
-    ("hard constraint >=",
-     "SUCH THAT x >= 0 AND x <= 10 AND ABS(x - target) >= 2 MINIMIZE SUM(x)"),
-    ("hard constraint =",
-     "SUCH THAT x >= 0 AND x <= 10 AND ABS(x - target) = 2 MINIMIZE SUM(x)"),
-    ("hard constraint BETWEEN",
-     "SUCH THAT x >= 0 AND x <= 10 AND ABS(x - target) BETWEEN 1 AND 4 MAXIMIZE SUM(x)"),
-    ("aggregate over ABS",
-     "SUCH THAT x >= 0 AND x <= 10 AND MAX(ABS(x - target)) >= 3 MINIMIZE SUM(x)"),
+    ("maximize objective", "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))"),
+    ("hard constraint >=", "SUCH THAT x >= 0 AND x <= 10 AND ABS(x - target) >= 2 MINIMIZE SUM(x)"),
+    ("hard constraint =", "SUCH THAT x >= 0 AND x <= 10 AND ABS(x - target) = 2 MINIMIZE SUM(x)"),
+    ("hard constraint BETWEEN", "SUCH THAT x >= 0 AND x <= 10 AND ABS(x - target) BETWEEN 1 AND 4 MAXIMIZE SUM(x)"),
+    ("aggregate over ABS", "SUCH THAT x >= 0 AND x <= 10 AND MAX(ABS(x - target)) >= 3 MINIMIZE SUM(x)"),
 ]
 
 
@@ -113,8 +108,7 @@ def test_native_replaces_rows_with_a_general_constraint(decidb_cli_gurobi):
     data row on the native arm, presolved away by the solver and therefore invisible
     to every test that reads answers.
     """
-    sql = (f"SELECT id, x FROM {_FIXTURE} DECIDE x(REAL) "
-           "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))")
+    sql = f"SELECT id, x FROM {_FIXTURE} DECIDE x(REAL) " "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))"
 
     def dump_of(env):
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,8 +164,7 @@ def test_highs_never_takes_the_native_path(decidb_cli_highs):
     HiGHS declares no construct native, so its model must carry no general
     constraint whatever Gurobi on the same host can do.
     """
-    sql = (f"SELECT id, x FROM {_FIXTURE} DECIDE x(REAL) "
-           "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))")
+    sql = f"SELECT id, x FROM {_FIXTURE} DECIDE x(REAL) " "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))"
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "model.dump")
         decidb_cli_highs.with_env({"DECIDB_DUMP_MODEL": path}).execute(sql)
@@ -250,8 +243,7 @@ def _solve_grouped(cli, clause, extra_env=None):
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-@pytest.mark.parametrize("name,clause,objective", _MINMAX_SHAPES,
-                         ids=[s[0] for s in _MINMAX_SHAPES])
+@pytest.mark.parametrize("name,clause,objective", _MINMAX_SHAPES, ids=[s[0] for s in _MINMAX_SHAPES])
 def test_minmax_native_and_lowered_agree(decidb_cli_gurobi, name, clause, objective):
     """`z = MAX(t..)` and the indicator family must reach the same optimum.
 
@@ -259,10 +251,8 @@ def test_minmax_native_and_lowered_agree(decidb_cli_gurobi, name, clause, object
     `per`-nested form and a composed form, each with its own hard branch — so the A/B
     runs over all of them rather than a representative.
     """
-    native = objective(_solve_grouped(decidb_cli_gurobi, clause,
-                                      {"DECIDB_NATIVE_CONSTRUCTS": "force"}))
-    lowered = objective(_solve_grouped(decidb_cli_gurobi, clause,
-                                       {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+    native = objective(_solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "force"}))
+    lowered = objective(_solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
     assert abs(native - lowered) <= 1e-6, f"{name}: native {native} != lowered {lowered}"
 
 
@@ -282,8 +272,7 @@ def test_minmax_prefers_the_lowering_when_a_big_m_exists(decidb_cli_gurobi):
     exists for, where no Big-M exists at all. Answers are identical either way, which
     is exactly why this has to be checked against the model rather than the result.
     """
-    sql = (f"SELECT id, g, c, x FROM {_GROUPED} DECIDE x(INT) "
-           "SUCH THAT x <= 9 AND MAX(x * c) >= 20 MINIMIZE SUM(x)")
+    sql = f"SELECT id, g, c, x FROM {_GROUPED} DECIDE x(INT) " "SUCH THAT x <= 9 AND MAX(x * c) >= 20 MINIMIZE SUM(x)"
 
     def dump_of(env):
         with tempfile.TemporaryDirectory() as tmp:
@@ -345,13 +334,11 @@ _NOT_EQUAL_SHAPES = [
 
 @pytest.mark.correctness
 @pytest.mark.cons_comparison
-@pytest.mark.parametrize("name,clause,objective", _NOT_EQUAL_SHAPES,
-                         ids=[s[0] for s in _NOT_EQUAL_SHAPES])
+@pytest.mark.parametrize("name,clause,objective", _NOT_EQUAL_SHAPES, ids=[s[0] for s in _NOT_EQUAL_SHAPES])
 def test_not_equal_native_and_lowered_agree(decidb_cli_gurobi, name, clause, objective):
     """`z==0 => LHS <= K-1` / `z==1 => LHS >= K+1` must mean the Big-M pair."""
     native = objective(_solve_grouped(decidb_cli_gurobi, clause))
-    lowered = objective(_solve_grouped(decidb_cli_gurobi, clause,
-                                       {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+    lowered = objective(_solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
     assert abs(native - lowered) <= 1e-6, f"{name}: native {native} != lowered {lowered}"
 
 

@@ -32,13 +32,9 @@ from solver.types import ObjSense, VarType
 
 # The inner problem: two integers capped at 4, maximized. The outer problem reads
 # its objective as a budget, and carries a WHEN-gated cap after the subquery.
-_INNER = (
-    "SELECT SUM(y) FROM (VALUES (1), (2)) u(uid) "
-    "DECIDE y(INT) SUCH THAT y >= 0 AND y <= 4 MAXIMIZE SUM(y)"
-)
+_INNER = "SELECT SUM(y) FROM (VALUES (1), (2)) u(uid) " "DECIDE y(INT) SUCH THAT y >= 0 AND y <= 4 MAXIMIZE SUM(y)"
 _INNER_SPLIT_ORDER = (
-    "SELECT SUM(y) DECIDE y(INT) FROM (VALUES (1), (2)) u(uid) "
-    "SUCH THAT y >= 0 AND y <= 4 MAXIMIZE SUM(y)"
+    "SELECT SUM(y) DECIDE y(INT) FROM (VALUES (1), (2)) u(uid) " "SUCH THAT y >= 0 AND y <= 4 MAXIMIZE SUM(y)"
 )
 
 
@@ -96,8 +92,7 @@ def test_nested_decide_then_outer_when_oracle(decidb_cli, oracle_solver):
     rows, _ = decidb_cli.execute(_outer(_INNER, trailing_when=True))
     assert len(rows) == 2
     expected = _oracle_objective(oracle_solver, trailing_when=True)
-    assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DeciDB={_objective(rows)}, Oracle={expected}"
+    assert abs(_objective(rows) - expected) < 1e-6, f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -112,8 +107,7 @@ def test_nested_split_order_inner_then_outer_when(decidb_cli, oracle_solver):
     rows, _ = decidb_cli.execute(_outer(_INNER_SPLIT_ORDER, trailing_when=True))
     assert len(rows) == 2
     expected = _oracle_objective(oracle_solver, trailing_when=True)
-    assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DeciDB={_objective(rows)}, Oracle={expected}"
+    assert abs(_objective(rows) - expected) < 1e-6, f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -123,8 +117,7 @@ def test_nested_decide_without_outer_when(decidb_cli, oracle_solver):
     rows, _ = decidb_cli.execute(_outer(_INNER, trailing_when=False))
     assert len(rows) == 2
     expected = _oracle_objective(oracle_solver, trailing_when=False)
-    assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DeciDB={_objective(rows)}, Oracle={expected}"
+    assert abs(_objective(rows) - expected) < 1e-6, f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.sql_subquery
@@ -185,15 +178,11 @@ def test_a_real_duplicate_decide_is_still_rejected(decidb_cli):
 _TWO_ROWS = "(VALUES (1), (2)) u(uid)"
 
 # Innermost of three DECIDE levels: two integers capped at 4 → 8.
-_LEVEL_3 = (
-    f"SELECT SUM(z) FROM {_TWO_ROWS} "
-    "DECIDE z(INT) SUCH THAT z >= 0 AND z <= 4 MAXIMIZE SUM(z)"
-)
+_LEVEL_3 = f"SELECT SUM(z) FROM {_TWO_ROWS} " "DECIDE z(INT) SUCH THAT z >= 0 AND z <= 4 MAXIMIZE SUM(z)"
 # Middle level: budgeted by level 3, then reduced in its own SELECT list so each
 # level reports a different number and a mix-up cannot pass unnoticed.
 _LEVEL_2 = (
-    f"SELECT SUM(y) - 3 FROM {_TWO_ROWS} "
-    f"DECIDE y(INT) SUCH THAT y >= 0 AND SUM(y) <= ({_LEVEL_3}) MAXIMIZE SUM(y)"
+    f"SELECT SUM(y) - 3 FROM {_TWO_ROWS} " f"DECIDE y(INT) SUCH THAT y >= 0 AND SUM(y) <= ({_LEVEL_3}) MAXIMIZE SUM(y)"
 )
 
 
@@ -235,8 +224,7 @@ def test_three_levels_of_decide_nesting(decidb_cli, oracle_solver):
         oracle_solver,
         [(4.0, None, -3.0), (1e6, "budget", 0.0), (9.0, "budget", 0.0)],
     )
-    assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DeciDB={_objective(rows)}, Oracle={expected}"
+    assert abs(_objective(rows) - expected) < 1e-6, f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -251,8 +239,7 @@ def test_plain_subquery_inside_a_nested_decide_constraint(decidb_cli, oracle_sol
     rows, _ = decidb_cli.execute(_outer(inner, trailing_when=False))
     assert len(rows) == 2
     expected = _oracle_chain(oracle_solver, [(1e6, 7.0, 0.0), (9.0, "budget", 0.0)])
-    assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DeciDB={_objective(rows)}, Oracle={expected}"
+    assert abs(_objective(rows) - expected) < 1e-6, f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -269,8 +256,7 @@ def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solv
     # Scaling a maximization by a positive constant does not move its argmax, so
     # the inner clause still reports 6 and budgets the outer one at 6.
     expected = _oracle_chain(oracle_solver, [(3.0, None, 0.0), (9.0, "budget", 0.0)])
-    assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DeciDB={_objective(rows)}, Oracle={expected}"
+    assert abs(_objective(rows) - expected) < 1e-6, f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 # A refusal of the inner clause used to reach the user as the outer query's error: DuckDB

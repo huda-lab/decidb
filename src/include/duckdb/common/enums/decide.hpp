@@ -19,37 +19,25 @@ namespace duckdb {
 class Serializer;
 class Deserializer;
 
-enum class DecideSense : uint8_t {
-    MAXIMIZE = 0,
-    MINIMIZE = 1,
-    FEASIBILITY = 2
-};
+enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1, FEASIBILITY = 2 };
 
-enum class DecideExpression : uint8_t {
-    INVALID = 0,
-    VARIABLE,
-    SUM
-};
+enum class DecideExpression : uint8_t { INVALID = 0, VARIABLE, SUM };
 
 //! How one DECIDE declaration maps onto solver columns.
 //!   ROW    — `x(INT)`, `per row: x(INT)` one column per result row
 //!   KEYED  — `per K: x(INT)`             one column per distinct value of the key
 //!   GLOBAL — `per (): x(INT)`            one column for the whole query
 //! The values are serialized, so a stored plan reads under any rename.
-enum class DecideVarScope : uint8_t {
-    ROW = 0,
-    KEYED = 1,
-    GLOBAL = 2
-};
+enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its keyed scope index.
 struct DecideVarScopeInfo {
-    DecideVarScope scope = DecideVarScope::ROW;
-    //! Index into keyed_scopes / keyed_mappings. Meaningful only when
-    //! scope == KEYED; INVALID_INDEX otherwise.
-    idx_t keyed_scope_idx = DConstants::INVALID_INDEX;
+	DecideVarScope scope = DecideVarScope::ROW;
+	//! Index into keyed_scopes / keyed_mappings. Meaningful only when
+	//! scope == KEYED; INVALID_INDEX otherwise.
+	idx_t keyed_scope_idx = DConstants::INVALID_INDEX;
 	//! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
 	//! can name the decision the way it was declared. Empty for every other spelling.
 	string declared_key;
@@ -60,8 +48,8 @@ struct DecideVarScopeInfo {
 	}
 
 	static DecideVarScopeInfo Row() {
-        return DecideVarScopeInfo();
-    }
+		return DecideVarScopeInfo();
+	}
 	//! One instance per class of the key of keyed_scopes[keyed_scope_idx_p]. `declared_key_p` is the key as written
 	//! for `per K: x(TYPE)`, and empty for a decision the optimizer adds.
 	static DecideVarScopeInfo Keyed(idx_t keyed_scope_idx_p, string declared_key_p = string()) {
@@ -121,10 +109,10 @@ enum class DecideKeyNullMode : uint8_t { NO_GROUP = 0, VALUE = 1 };
 
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
-    NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)
-    SUM,        //! SUM aggregate
-    MIN_AGG,    //! MIN aggregate (suffixed to avoid MIN/MAX macro collision)
-    MAX_AGG     //! MAX aggregate
+	NONE = 0, //! No MIN/MAX objective (pure SUM or no objective)
+	SUM,      //! SUM aggregate
+	MIN_AGG,  //! MIN aggregate (suffixed to avoid MIN/MAX macro collision)
+	MAX_AGG   //! MAX aggregate
 };
 
 //! Origin/relaxability role of an emitted DECIDE matrix row.

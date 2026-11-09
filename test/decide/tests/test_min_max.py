@@ -53,6 +53,7 @@ from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, Scop
 # Easy Constraint Cases
 # ============================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
@@ -117,12 +118,14 @@ def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Oracle: per-row x_i * qty_i <= threshold
     n = len(data)
@@ -135,10 +138,14 @@ def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {vnames[i]: qty}, "<=", threshold, name=f"max_row_{i}",
+            {vnames[i]: qty},
+            "<=",
+            threshold,
+            name=f"max_row_{i}",
         )
     oracle_solver.set_objective(
-        {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -147,14 +154,20 @@ def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     # Count selected items in DeciDB result
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_count = sum(1 for row in decidb_result if int(row[ci["x"]]) == 1)
-    assert abs(decidb_count - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB selected {decidb_count}, Oracle={result.objective_value:.0f}"
-    )
+    assert (
+        abs(decidb_count - result.objective_value) <= 0.5
+    ), f"Objective mismatch: DeciDB selected {decidb_count}, Oracle={result.objective_value:.0f}"
 
     perf_tracker.record(
-        "max_leq_expr", decidb_time, build_time,
-        result.solve_time_seconds, n, n, n,
-        result.objective_value, oracle_solver.solver_name(),
+        "max_leq_expr",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        n,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -162,6 +175,7 @@ def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
 # ============================================================================
 # Hard Constraint Cases
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.var_boolean
@@ -262,6 +276,7 @@ def test_min_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
 # Easy Objective Cases
 # ============================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
@@ -280,12 +295,14 @@ def test_minimize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Oracle: minimize z, z >= x_i * qty_i for all i, SUM(x) >= 2
     n = len(data)
@@ -298,13 +315,19 @@ def test_minimize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 
     # SUM(x) >= 2
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, ">=", 2.0, name="sum_ge_2",
+        {vn: 1.0 for vn in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
     # z >= x_i * qty_i for each row
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -qty}, ">=", 0.0, name=f"z_ge_{i}",
+            {"z": 1.0, vnames[i]: -qty},
+            ">=",
+            0.0,
+            name=f"z_ge_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MINIMIZE)
     build_time = time.perf_counter() - t_build
@@ -314,18 +337,21 @@ def test_minimize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 
     # Compute DeciDB's MAX(x * qty)
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_max = max(
-        int(row[ci["x"]]) * float(row[ci["l_quantity"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_max - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
-    )
+    decidb_max = max(int(row[ci["x"]]) * float(row[ci["l_quantity"]]) for row in decidb_result)
+    assert (
+        abs(decidb_max - result.objective_value) <= 0.5
+    ), f"Objective mismatch: DeciDB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
 
     perf_tracker.record(
-        "minimize_max", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "minimize_max",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -348,12 +374,14 @@ def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Oracle: maximize z, z <= x_i * qty_i for all i, SUM(x) >= 2
     n = len(data)
@@ -365,12 +393,18 @@ def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0)
 
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, ">=", 2.0, name="sum_ge_2",
+        {vn: 1.0 for vn in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -qty}, "<=", 0.0, name=f"z_le_{i}",
+            {"z": 1.0, vnames[i]: -qty},
+            "<=",
+            0.0,
+            name=f"z_le_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MAXIMIZE)
     build_time = time.perf_counter() - t_build
@@ -379,18 +413,21 @@ def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_min = min(
-        int(row[ci["x"]]) * float(row[ci["l_quantity"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_min - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB MIN={decidb_min:.2f}, Oracle={result.objective_value:.2f}"
-    )
+    decidb_min = min(int(row[ci["x"]]) * float(row[ci["l_quantity"]]) for row in decidb_result)
+    assert (
+        abs(decidb_min - result.objective_value) <= 0.5
+    ), f"Objective mismatch: DeciDB MIN={decidb_min:.2f}, Oracle={result.objective_value:.2f}"
 
     perf_tracker.record(
-        "maximize_min", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "maximize_min",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -398,6 +435,7 @@ def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 # ============================================================================
 # Hard Objective Cases
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.var_boolean
@@ -417,12 +455,14 @@ def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Oracle: maximize z, z <= x_i * price_i + M*(1-y_i), SUM(y)>=1, SUM(x)<=3
     # Or equivalently: just maximize the max selected price
@@ -440,16 +480,24 @@ def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0)
 
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, "<=", 3.0, name="sum_le_3",
+        {vn: 1.0 for vn in vnames},
+        "<=",
+        3.0,
+        name="sum_le_3",
     )
     oracle_solver.add_constraint(
-        {yn: 1.0 for yn in ynames}, ">=", 1.0, name="sum_y_ge_1",
+        {yn: 1.0 for yn in ynames},
+        ">=",
+        1.0,
+        name="sum_y_ge_1",
     )
     for i in range(n):
         price = data[i][2]
         # z <= x_i * price + M*(1-y_i) → z - price*x_i + M*y_i <= M
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -price, ynames[i]: M}, "<=", M,
+            {"z": 1.0, vnames[i]: -price, ynames[i]: M},
+            "<=",
+            M,
             name=f"link_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MAXIMIZE)
@@ -459,18 +507,21 @@ def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_max = max(
-        int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_max - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
-    )
+    decidb_max = max(int(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
+    assert (
+        abs(decidb_max - result.objective_value) <= 1.0
+    ), f"Objective mismatch: DeciDB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
 
     perf_tracker.record(
-        "maximize_max", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2 + 1, n + 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "maximize_max",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2 + 1,
+        n + 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -478,6 +529,7 @@ def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 # ============================================================================
 # WHEN Modifier
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.when_constraint
@@ -506,6 +558,7 @@ def test_max_constraint_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_t
 # ============================================================================
 # Error Cases
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
@@ -585,15 +638,24 @@ def _oracle_max_x_plus_c(oracle_solver, name, extra_obj):
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=110.0)
 
     oracle_solver.add_constraint(
-        {f"x_{i}": 1.0 for i in range(n)}, "<=", 10.0, name="budget",
+        {f"x_{i}": 1.0 for i in range(n)},
+        "<=",
+        10.0,
+        name="budget",
     )
     oracle_solver.add_constraint(
-        {f"y_{i}": 1.0 for i in range(n)}, ">=", 1.0, name="sum_y_ge_1",
+        {f"y_{i}": 1.0 for i in range(n)},
+        ">=",
+        1.0,
+        name="sum_y_ge_1",
     )
     for i, (_, c) in enumerate(_ROW_CONSTANT_DATA):
         # z <= x_i + c_i + M*(1 - y_i)  ->  z - x_i + M*y_i <= M + c_i
         oracle_solver.add_constraint(
-            {"z": 1.0, f"x_{i}": -1.0, f"y_{i}": M}, "<=", M + c, name=f"link_{i}",
+            {"z": 1.0, f"x_{i}": -1.0, f"y_{i}": M},
+            "<=",
+            M + c,
+            name=f"link_{i}",
         )
     obj = {"z": 1.0}
     for i in range(n):
@@ -620,9 +682,9 @@ def test_maximize_max_row_varying_constant(decidb_cli, oracle_solver):
     obj = max(float(r[ci["x"]]) + float(r[ci["c"]]) for r in rows)
 
     expected = _oracle_max_x_plus_c(oracle_solver, "max_row_constant", 0.0)
-    assert abs(obj - expected.objective_value) <= 1e-6, (
-        f"objective mismatch: DeciDB MAX(x+c)={obj}, oracle={expected.objective_value}"
-    )
+    assert (
+        abs(obj - expected.objective_value) <= 1e-6
+    ), f"objective mismatch: DeciDB MAX(x+c)={obj}, oracle={expected.objective_value}"
 
 
 @pytest.mark.min_max
@@ -635,17 +697,14 @@ def test_maximize_composed_max_row_varying_constant(decidb_cli, oracle_solver):
     too-small M contradicts the envelope outright and the query was reported
     infeasible rather than answered with the wrong number.
     """
-    rows, cols = decidb_cli.execute(
-        _ROW_CONSTANT_SQL_HEAD + "        MAXIMIZE MAX(x + c) + 0.001 * SUM(x)"
-    )
+    rows, cols = decidb_cli.execute(_ROW_CONSTANT_SQL_HEAD + "        MAXIMIZE MAX(x + c) + 0.001 * SUM(x)")
     ci = {name: i for i, name in enumerate(cols)}
-    obj = (max(float(r[ci["x"]]) + float(r[ci["c"]]) for r in rows)
-           + 0.001 * sum(float(r[ci["x"]]) for r in rows))
+    obj = max(float(r[ci["x"]]) + float(r[ci["c"]]) for r in rows) + 0.001 * sum(float(r[ci["x"]]) for r in rows)
 
     expected = _oracle_max_x_plus_c(oracle_solver, "composed_max_row_constant", 0.001)
-    assert abs(obj - expected.objective_value) <= 1e-6, (
-        f"objective mismatch: DeciDB={obj}, oracle={expected.objective_value}"
-    )
+    assert (
+        abs(obj - expected.objective_value) <= 1e-6
+    ), f"objective mismatch: DeciDB={obj}, oracle={expected.objective_value}"
 
 
 @pytest.mark.min_max
@@ -702,12 +761,14 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -718,19 +779,23 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 
     # SUM(x) >= 2 over all rows (WHEN applies only to the MIN objective).
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+        {v: 1.0 for v in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
 
     # MAXIMIZE MIN over WHEN-qualifying rows: easy case, global z with
     # z <= l_quantity_i * x_i for each i where l_quantity_i <= 30.
     qualifying_indices = [i for i, row in enumerate(data) if row[2] <= 30.0]
     assert qualifying_indices, "design-time: at least one row must qualify"
-    row_coeffs = [
-        {vnames[i]: float(data[i][2])} for i in qualifying_indices
-    ]
+    row_coeffs = [{vnames[i]: float(data[i][2])} for i in qualifying_indices]
     row_ub = max(float(data[i][2]) for i in qualifying_indices)
     z_name = emit_inner_min(
-        oracle_solver, "obj", row_coeffs, row_ub,
+        oracle_solver,
+        "obj",
+        row_coeffs,
+        row_ub,
     )
     oracle_solver.set_objective({z_name: 1.0}, ObjSense.MAXIMIZE)
 
@@ -742,23 +807,30 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     def _decidb_min(rows, cols):
         x_idx = cols.index("x")
         q_idx = cols.index("l_quantity")
-        vals = [
-            int(r[x_idx]) * float(r[q_idx])
-            for r in rows
-            if float(r[q_idx]) <= 30.0
-        ]
+        vals = [int(r[x_idx]) * float(r[q_idx]) for r in rows if float(r[q_idx]) <= 30.0]
         return float(min(vals)) if vals else 0.0
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 0.0},
         decidb_objective_fn=_decidb_min,
     )
     perf_tracker.record(
-        "min_objective_with_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "min_objective_with_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -788,12 +860,14 @@ def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -803,17 +877,21 @@ def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         oracle_solver.add_variable(v, VarType.BINARY)
 
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+        {v: 1.0 for v in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
 
     qualifying_indices = [i for i, row in enumerate(data) if row[2] <= 30.0]
     assert qualifying_indices, "design-time: at least one row must qualify"
-    row_coeffs = [
-        {vnames[i]: float(data[i][2])} for i in qualifying_indices
-    ]
+    row_coeffs = [{vnames[i]: float(data[i][2])} for i in qualifying_indices]
     row_ub = max(float(data[i][2]) for i in qualifying_indices)
     z_name = emit_inner_max(
-        oracle_solver, "obj", row_coeffs, row_ub,
+        oracle_solver,
+        "obj",
+        row_coeffs,
+        row_ub,
     )
     oracle_solver.set_objective({z_name: 1.0}, ObjSense.MINIMIZE)
 
@@ -824,29 +902,37 @@ def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     def _decidb_max(rows, cols):
         x_idx = cols.index("x")
         q_idx = cols.index("l_quantity")
-        vals = [
-            int(r[x_idx]) * float(r[q_idx])
-            for r in rows
-            if float(r[q_idx]) <= 30.0
-        ]
+        vals = [int(r[x_idx]) * float(r[q_idx]) for r in rows if float(r[q_idx]) <= 30.0]
         return float(max(vals)) if vals else 0.0
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 0.0},
         decidb_objective_fn=_decidb_max,
     )
     perf_tracker.record(
-        "max_objective_with_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "max_objective_with_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
 # ============================================================================
 # Hard Objective Cases (continued)
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.var_integer
@@ -868,11 +954,13 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Oracle: minimize z, z >= x_i - M*(1-y_i), SUM(y) >= 1, x_i in [1,5], SUM(x) >= 10
     n = len(data)
@@ -889,15 +977,23 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=1.0, ub=5.0)
 
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, ">=", 10.0, name="sum_ge_10",
+        {vn: 1.0 for vn in vnames},
+        ">=",
+        10.0,
+        name="sum_ge_10",
     )
     oracle_solver.add_constraint(
-        {yn: 1.0 for yn in ynames}, ">=", 1.0, name="sum_y_ge_1",
+        {yn: 1.0 for yn in ynames},
+        ">=",
+        1.0,
+        name="sum_y_ge_1",
     )
     for i in range(n):
         # z >= x_i - M*(1-y_i) → z - x_i - M*y_i >= -M
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -1.0, ynames[i]: -M}, ">=", -M,
+            {"z": 1.0, vnames[i]: -1.0, ynames[i]: -M},
+            ">=",
+            -M,
             name=f"link_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MINIMIZE)
@@ -908,14 +1004,20 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_min_val = min(int(row[ci["x"]]) for row in decidb_result)
-    assert abs(decidb_min_val - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB MIN={decidb_min_val}, Oracle={result.objective_value:.0f}"
-    )
+    assert (
+        abs(decidb_min_val - result.objective_value) <= 0.5
+    ), f"Objective mismatch: DeciDB MIN={decidb_min_val}, Oracle={result.objective_value:.0f}"
 
     perf_tracker.record(
-        "minimize_min", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2 + 1, n + 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "minimize_min",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2 + 1,
+        n + 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -923,6 +1025,7 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 # ============================================================================
 # `per` Modifier
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.per_clause
@@ -950,6 +1053,7 @@ def test_max_constraint_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 # ============================================================================
 # `when` + `per` Composition
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.when_constraint
@@ -980,6 +1084,7 @@ def test_min_max_when_per_composition(decidb_cli, duckdb_conn, oracle_solver, pe
 # ============================================================================
 # INTEGER Variable Tests
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.var_integer
@@ -1024,12 +1129,14 @@ def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_track
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Oracle: minimize z, z >= x_i for all i, SUM(x) >= 10, x_i <= 5
     n = len(data)
@@ -1041,11 +1148,17 @@ def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_track
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0)
 
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, ">=", 10.0, name="sum_ge_10",
+        {vn: 1.0 for vn in vnames},
+        ">=",
+        10.0,
+        name="sum_ge_10",
     )
     for i in range(n):
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -1.0}, ">=", 0.0, name=f"z_ge_{i}",
+            {"z": 1.0, vnames[i]: -1.0},
+            ">=",
+            0.0,
+            name=f"z_ge_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MINIMIZE)
     build_time = time.perf_counter() - t_build
@@ -1055,14 +1168,20 @@ def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_track
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_max = max(int(row[ci["x"]]) for row in decidb_result)
-    assert abs(decidb_max - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB MAX={decidb_max}, Oracle={result.objective_value:.0f}"
-    )
+    assert (
+        abs(decidb_max - result.objective_value) <= 0.5
+    ), f"Objective mismatch: DeciDB MAX={decidb_max}, Oracle={result.objective_value:.0f}"
 
     perf_tracker.record(
-        "minimize_max_int", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "minimize_max_int",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1070,6 +1189,7 @@ def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_track
 # ============================================================================
 # Combined MIN/MAX Tests
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.var_boolean
@@ -1126,26 +1246,28 @@ def test_minmax_constraint_and_objective(decidb_cli, duckdb_conn, oracle_solver,
         sel_price = float(selected[0][ci["l_extendedprice"]])
         all_prices = [float(row[ci["l_extendedprice"]]) for row in decidb_result]
         min_price = min(all_prices)
-        assert abs(sel_price - min_price) <= 0.01, (
-            f"Should select cheapest item: got {sel_price}, min is {min_price}"
-        )
+        assert abs(sel_price - min_price) <= 0.01, f"Should select cheapest item: got {sel_price}, min is {min_price}"
 
 
 # ============================================================================
 # Error Cases
 # ============================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_max_notequal_error(decidb_cli):
     """MAX(x) <> K should produce a binder error."""
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT l_quantity FROM lineitem
         DECIDE x(BOOL)
         SUCH THAT MAX(x) <> 0
         MAXIMIZE SUM(x) LIMIT 1
-    """, match=r"does not support <> comparison with MIN/MAX")
+    """,
+        match=r"does not support <> comparison with MIN/MAX",
+    )
 
 
 # ============================================================================
@@ -1193,7 +1315,10 @@ def test_sum_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
     for i, d in enumerate(data):
         if d[2]:
             oracle_solver.add_constraint(
-                {"z_max": 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"z_pin_{i}",
+                {"z_max": 1.0, vnames[i]: -d[1]},
+                ">=",
+                0.0,
+                name=f"z_pin_{i}",
             )
     # Outer: SUM(x*v) + z <= 12
     outer_coeffs = {vnames[i]: data[i][1] for i in range(n)}
@@ -1204,14 +1329,25 @@ def test_sum_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
     )
     perf_tracker.record(
-        "composed_sum_plus_max", decidb_time, build_time, result.solve_time_seconds,
-        n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "composed_sum_plus_max",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -1248,7 +1384,10 @@ def test_max_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
         for i, d in enumerate(data):
             if d[mask_col]:
                 oracle_solver.add_constraint(
-                    {name: 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"{name}_pin_{i}",
+                    {name: 1.0, vnames[i]: -d[1]},
+                    ">=",
+                    0.0,
+                    name=f"{name}_pin_{i}",
                 )
     oracle_solver.add_constraint({"z1": 1.0, "z2": 1.0}, "<=", 12.0, name="outer")
     oracle_solver.set_objective({vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE)
@@ -1256,14 +1395,25 @@ def test_max_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
     )
     perf_tracker.record(
-        "composed_max_plus_max", decidb_time, build_time, result.solve_time_seconds,
-        n, n + 2, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "composed_max_plus_max",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 2,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -1307,7 +1457,10 @@ def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
         for i, d in enumerate(data):
             if d[mask_col]:
                 oracle_solver.add_constraint(
-                    {name: 1.0, vnames[i]: -d[1]}, "<=", 0.0, name=f"{name}_pin_{i}",
+                    {name: 1.0, vnames[i]: -d[1]},
+                    "<=",
+                    0.0,
+                    name=f"{name}_pin_{i}",
                 )
     oracle_solver.add_constraint({"z1": 1.0, "z2": 1.0}, ">=", 15.0, name="outer")
     oracle_solver.set_objective({vnames[i]: data[i][1] for i in range(n)}, ObjSense.MINIMIZE)
@@ -1315,14 +1468,25 @@ def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
     )
     perf_tracker.record(
-        "composed_min_plus_min", decidb_time, build_time, result.solve_time_seconds,
-        n, n + 2, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "composed_min_plus_min",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 2,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -1337,12 +1501,14 @@ def test_composed_minmax_hard_max_constraint(decidb_cli):
     v=20 (40) and v=30 (60) are feasible alone, v=10 (20) is not; 0 rows gives
     0 < 40. MINIMIZE SUM(x) => exactly one row, satisfying the bound.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1,10.0),(2,20.0),(3,30.0)) t(id,v)
         DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) >= 40
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
     assert len(chosen) == 1, f"expected exactly 1 row, got {chosen}"
@@ -1423,12 +1589,14 @@ def test_composed_minmax_scalar_mult_hard_max(decidb_cli):
     dropped, MAX would be 10, row1 gives 20 < 25 and no single row works, forcing
     two rows. So the optimum count is 1 iff the scalar is correctly applied.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1,10.0),(2,5.0)) t(id,v)
         DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(2 * x * v) >= 25
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     chosen = [(float(r[ci["v"]]), int(r[ci["x"]])) for r in rows]
     n_sel = sum(xv for _, xv in chosen)
@@ -1608,9 +1776,7 @@ def test_composed_minmax_front_when_answers(decidb_cli, scope_solver):
 
 @pytest.mark.min_max
 @pytest.mark.correctness
-def test_composed_minmax_outer_equality_max(
-    decidb_cli, oracle_solver, perf_tracker
-):
+def test_composed_minmax_outer_equality_max(decidb_cli, oracle_solver, perf_tracker):
     """`SUM(x*v) + MAX(x*v) = K` solves, checked against an independently built
     oracle model.
 
@@ -1645,11 +1811,16 @@ def test_composed_minmax_outer_equality_max(
     for i, d in enumerate(data):
         # Envelope: z is no smaller than any member.
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"env_{i}",
+            {"z": 1.0, vnames[i]: -d[1]},
+            ">=",
+            0.0,
+            name=f"env_{i}",
         )
         # Closing: z is no larger than the member its indicator selects.
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -d[1], ynames[i]: big_m}, "<=", big_m,
+            {"z": 1.0, vnames[i]: -d[1], ynames[i]: big_m},
+            "<=",
+            big_m,
             name=f"close_{i}",
         )
     oracle_solver.add_constraint({y: 1.0 for y in ynames}, "=", 1.0, name="pick_one")
@@ -1657,23 +1828,37 @@ def test_composed_minmax_outer_equality_max(
     outer["z"] = 1.0
     oracle_solver.add_constraint(outer, "=", 19.0, name="composed_eq")
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("v")
+        xi = cs.index("x")
+        vi = cs.index("v")
         return sum(int(r[xi]) * float(r[vi]) for r in rs)
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "composed_minmax_equality_max", decidb_time, build_time,
-        result.solve_time_seconds, n, 2 * n + 1, 2 * n + 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "composed_minmax_equality_max",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        2 * n + 1,
+        2 * n + 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
     # The equality itself, restated on the returned rows.
@@ -1696,18 +1881,19 @@ def test_composed_minmax_outer_equality_min(decidb_cli):
     is a genuine 5 — an auxiliary pinned on only one side would let that float
     and admit other assignments.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 10.0), (2, 5.0), (3, 7.0)) t(id, v)
         DECIDE x(INT)
         SUCH THAT x >= 1 AND x <= 2 AND (SUM(x * v) + MIN(x * v)) = 37
         MAXIMIZE SUM(x * v)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     got = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     assert got == {1: 2, 2: 1, 3: 1}, f"expected x = (2, 1, 1), got {got}"
     total = sum(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows)
-    assert abs(total + min(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows)
-               - 37.0) < 1e-6
+    assert abs(total + min(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows) - 37.0) < 1e-6
 
 
 @pytest.mark.min_max
@@ -1720,12 +1906,15 @@ def test_composed_minmax_outer_not_equal_rejected(decidb_cli):
     being pinned. `=` is supported and appears in the message; `<>` is the
     remaining unsupported comparison.
     """
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v)) <> 12
         MAXIMIZE SUM(x * v)
-    """, match=r"supports only the <, <=, =, >, >= and BETWEEN comparisons")
+    """,
+        match=r"supports only the <, <=, =, >, >= and BETWEEN comparisons",
+    )
 
 
 @pytest.mark.min_max
@@ -1741,12 +1930,14 @@ def test_composed_minmax_between_is_supported(decidb_cli):
     {1,2} -> 25. Only `{2}` lands in [5, 12], so the optimum is v = 5 with
     x = (0, 1) — an interior choice, not the greedy `MAXIMIZE` pick.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v)) BETWEEN 5 AND 12
         MAXIMIZE SUM(x * v)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
     assert chosen == [5.0], f"expected only v=5 selected, got {chosen}"
@@ -1768,12 +1959,14 @@ def test_composed_minmax_equality_via_degenerate_between(decidb_cli):
     v = [10, 5, 7]; reachable `SUM + MAX` totals are 0, 20, 10, 14, 25, 27, 19,
     32. K = 19 is reached only by `{2, 3}`, so the answer is forced.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 10, true), (2, 5, true), (3, 7, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v)) BETWEEN 19 AND 19
         MAXIMIZE SUM(x * v)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     chosen = sorted(float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1)
     assert chosen == [5.0, 7.0], f"expected v in {{5, 7}}, got {chosen}"
@@ -1787,9 +1980,7 @@ def test_composed_minmax_equality_via_degenerate_between(decidb_cli):
 @pytest.mark.obj_minimize
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_minimize_sum_plus_max_composed_objective(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_minimize_sum_plus_max_composed_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE sum(x*v) + max(when w: x*v) — both terms pushed down (easy)."""
     sql = """
         SELECT id, v, w, x FROM (
@@ -1819,7 +2010,10 @@ def test_minimize_sum_plus_max_composed_objective(
     for i, d in enumerate(data):
         if d[2]:
             oracle_solver.add_constraint(
-                {"z": 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"z_pin_{i}",
+                {"z": 1.0, vnames[i]: -d[1]},
+                ">=",
+                0.0,
+                name=f"z_pin_{i}",
             )
     obj = {vnames[i]: data[i][1] for i in range(n)}
     obj["z"] = 1.0
@@ -1828,21 +2022,34 @@ def test_minimize_sum_plus_max_composed_objective(
     result = oracle_solver.solve()
 
     def decidb_obj_m(rs, cs):
-        xi = cs.index("x"); vi = cs.index("v"); wi = cs.index("w")
+        xi = cs.index("x")
+        vi = cs.index("v")
+        wi = cs.index("w")
         sum_part = sum(int(r[xi]) * float(r[vi]) for r in rs)
         max_vals = [float(r[vi]) * int(r[xi]) for r in rs if r[wi]]
         max_part = max(max_vals) if max_vals else 0.0
         return sum_part + max_part
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
         decidb_objective_fn=decidb_obj_m,
     )
     perf_tracker.record(
-        "min_sum_plus_max_obj", decidb_time, build_time, result.solve_time_seconds,
-        n, n + 1, 1 + sum(1 for d in data if d[2]),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "min_sum_plus_max_obj",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        1 + sum(1 for d in data if d[2]),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -1850,9 +2057,7 @@ def test_minimize_sum_plus_max_composed_objective(
 @pytest.mark.obj_maximize
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_maximize_min_plus_sum_composed_objective(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_maximize_min_plus_sum_composed_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE min(when w: x*v) + sum(x*v) — MIN pushed up (easy) + SUM pushed up."""
     sql = """
         SELECT id, v, w, x FROM (
@@ -1882,7 +2087,10 @@ def test_maximize_min_plus_sum_composed_objective(
     for i, d in enumerate(data):
         if d[2]:
             oracle_solver.add_constraint(
-                {"z": 1.0, vnames[i]: -d[1]}, "<=", 0.0, name=f"z_pin_{i}",
+                {"z": 1.0, vnames[i]: -d[1]},
+                "<=",
+                0.0,
+                name=f"z_pin_{i}",
             )
     obj = {vnames[i]: data[i][1] for i in range(n)}
     obj["z"] = 1.0
@@ -1891,21 +2099,34 @@ def test_maximize_min_plus_sum_composed_objective(
     result = oracle_solver.solve()
 
     def decidb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("v"); wi = cs.index("w")
+        xi = cs.index("x")
+        vi = cs.index("v")
+        wi = cs.index("w")
         sum_part = sum(int(r[xi]) * float(r[vi]) for r in rs)
         min_vals = [float(r[vi]) * int(r[xi]) for r in rs if r[wi]]
         min_part = min(min_vals) if min_vals else 0.0
         return sum_part + min_part
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
         decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "max_min_plus_sum_obj", decidb_time, build_time, result.solve_time_seconds,
-        n, n + 1, 1 + sum(1 for d in data if d[2]),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "max_min_plus_sum_obj",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        1 + sum(1 for d in data if d[2]),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -1947,12 +2168,14 @@ def test_composed_minmax_objective_hard_min(decidb_cli):
     unselected so MIN(x*v)=0; MINIMIZE then picks the two smallest, {3,5}, for
     objective SUM(x*v)=8 (MIN term 0). Row v=10 stays out.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1,10.0),(2,5.0),(3,3.0)) t(id,v)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MINIMIZE SUM(x * v) + MIN(x * v)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
     assert set(chosen) == {5.0, 3.0}, f"expected the two smallest, got {chosen}"
@@ -1961,6 +2184,7 @@ def test_composed_minmax_objective_hard_min(decidb_cli):
 # ============================================================================
 # Composed MIN/MAX with an entity-scoped variable — KNOWN DEFECT
 # ============================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.correctness
@@ -2021,5 +2245,5 @@ def test_composed_minmax_entity_scoped_multi_row(decidb_cli, perf_tracker):
                     best = total
 
     assert decidb_obj == best, (
-        f"composed MIN/MAX is suboptimal: DeciDB={decidb_obj} (chose {chosen}), "
-        f"optimal={best}")
+        f"composed MIN/MAX is suboptimal: DeciDB={decidb_obj} (chose {chosen}), " f"optimal={best}"
+    )

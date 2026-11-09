@@ -71,21 +71,22 @@ def test_nested_product_matches_expanded_spelling(decidb_cli):
     right. Before the fix the nested spelling reported the query infeasible while the
     expanded one returned {1, 3}.
     """
+
     def solve(body):
-        rows, cols = decidb_cli.execute(f"""
+        rows, cols = decidb_cli.execute(
+            f"""
             SELECT id, x FROM {_TABLE}
             DECIDE x(BOOL)
             SUCH THAT SUM({body}) <= {_CAP}
             MAXIMIZE SUM(x * q)
-        """)
+        """
+        )
         ci = {c: i for i, c in enumerate(cols)}
         return sorted(int(r[ci["id"]]) for r in rows if int(r[ci["x"]]) == 1)
 
     nested = solve("q * (price + x)")
     expanded = solve("q * price + q * x")
-    assert nested == expanded, (
-        f"same constraint, different answers: nested={nested}, expanded={expanded}"
-    )
+    assert nested == expanded, f"same constraint, different answers: nested={nested}, expanded={expanded}"
 
 
 @pytest.mark.cons_aggregate
@@ -99,12 +100,14 @@ def test_nested_product_oracle(decidb_cli, oracle_solver, perf_tracker):
     Oracle-verified because the wrong bound is still a number the solver accepts.
     """
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, q, x FROM {_TABLE}
         DECIDE x(BOOL)
         SUCH THAT SUM(q * (price + x)) <= {_CAP}
         MAXIMIZE SUM(x * q)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -115,31 +118,35 @@ def test_nested_product_oracle(decidb_cli, oracle_solver, perf_tracker):
     # SUM(q*price) is data: it moves to the bound.
     oracle_solver.add_constraint(
         {names[i]: q for i, (_, q, _) in enumerate(_ROWS)},
-        "<=", _CAP - _DATA_OFFSET, name="budget",
+        "<=",
+        _CAP - _DATA_OFFSET,
+        name="budget",
     )
-    oracle_solver.set_objective(
-        {names[i]: q for i, (_, q, _) in enumerate(_ROWS)}, ObjSense.MAXIMIZE
-    )
+    oracle_solver.set_objective({names[i]: q for i, (_, q, _) in enumerate(_ROWS)}, ObjSense.MAXIMIZE)
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["q"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     # And the constraint as the user wrote it actually holds.
-    lhs = sum(
-        float(r[ci["q"]]) * (price + int(r[ci["x"]]))
-        for r, (_, _, price) in zip(rows, _ROWS)
-    )
+    lhs = sum(float(r[ci["q"]]) * (price + int(r[ci["x"]])) for r, (_, _, price) in zip(rows, _ROWS))
     assert lhs <= _CAP + 1e-6, f"user-written constraint violated: {lhs} > {_CAP}"
 
     perf_tracker.record(
-        "nested_product_in_reducer", decidb_time, build_time, result.solve_time_seconds,
-        len(_ROWS), len(names), 1, result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "nested_product_in_reducer",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(_ROWS),
+        len(names),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -156,12 +163,14 @@ def test_nested_product_subtraction(decidb_cli, oracle_solver, perf_tracker):
     """
     bound = 11.0
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, q, x FROM {_TABLE}
         DECIDE x(BOOL)
         SUCH THAT SUM(q * (price - x)) >= {bound}
         MAXIMIZE SUM(x * q)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -172,30 +181,34 @@ def test_nested_product_subtraction(decidb_cli, oracle_solver, perf_tracker):
     # 14 - SUM(q*x) >= 11  <=>  SUM(q*x) <= 3
     oracle_solver.add_constraint(
         {names[i]: q for i, (_, q, _) in enumerate(_ROWS)},
-        "<=", _DATA_OFFSET - bound, name="budget",
+        "<=",
+        _DATA_OFFSET - bound,
+        name="budget",
     )
-    oracle_solver.set_objective(
-        {names[i]: q for i, (_, q, _) in enumerate(_ROWS)}, ObjSense.MAXIMIZE
-    )
+    oracle_solver.set_objective({names[i]: q for i, (_, q, _) in enumerate(_ROWS)}, ObjSense.MAXIMIZE)
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["q"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
-    lhs = sum(
-        float(r[ci["q"]]) * (price - int(r[ci["x"]]))
-        for r, (_, _, price) in zip(rows, _ROWS)
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
+    lhs = sum(float(r[ci["q"]]) * (price - int(r[ci["x"]])) for r, (_, _, price) in zip(rows, _ROWS))
     assert lhs >= bound - 1e-6, f"user-written constraint violated: {lhs} < {bound}"
 
     perf_tracker.record(
-        "nested_product_subtraction", decidb_time, build_time, result.solve_time_seconds,
-        len(_ROWS), len(names), 1, result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "nested_product_subtraction",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(_ROWS),
+        len(names),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -215,12 +228,14 @@ def test_nested_product_scaled_reducer(decidb_cli):
     ``2 * (14 + SUM(q*x)) <= 36`` is ``SUM(q*x) <= 4`` — the same model as
     ``test_nested_product_oracle``, so the same answer is expected.
     """
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, q, x FROM {_TABLE}
         DECIDE x(BOOL)
         SUCH THAT 2 * SUM(q * (price + x)) <= 36
         MAXIMIZE SUM(x * q)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     obj = sum(int(r[ci["x"]]) * float(r[ci["q"]]) for r in rows)
     assert abs(obj - 4.0) <= 1e-6, f"expected objective 4, got {obj}"
@@ -241,14 +256,16 @@ def test_nested_product_narrow_decimal_widths(decidb_cli, decl):
     Parametrizing pins the whole range, so a future rebuild that is correct for one
     width cannot quietly break another.
     """
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, q, x FROM (
             SELECT id, q::{decl} AS q, price::{decl} AS price FROM {_TABLE}
         ) s
         DECIDE x(BOOL)
         SUCH THAT SUM(q * (price + x)) <= {_CAP}
         MAXIMIZE SUM(x * q)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     obj = sum(int(r[ci["x"]]) * float(r[ci["q"]]) for r in rows)
     assert abs(obj - 4.0) <= 1e-6, f"{decl}: expected objective 4, got {obj}"

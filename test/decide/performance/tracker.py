@@ -27,6 +27,7 @@ def _git_commit() -> str:
 @dataclass
 class PerfRecord:
     """A single performance measurement."""
+
     test_name: str
     timestamp: str
     git_commit: str
@@ -48,9 +49,7 @@ class PerfTracker:
     """Collects performance records across a pytest session."""
 
     records: list[PerfRecord] = field(default_factory=list)
-    _results_dir: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parent.parent / "results"
-    )
+    _results_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent / "results")
 
     def record(
         self,
@@ -93,9 +92,7 @@ class PerfTracker:
         self._results_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = self._results_dir / f"perf_{ts}.json"
-        path.write_text(
-            json.dumps([asdict(r) for r in self.records], indent=2) + "\n"
-        )
+        path.write_text(json.dumps([asdict(r) for r in self.records], indent=2) + "\n")
         return path
 
     def worker_report(self) -> list[dict]:

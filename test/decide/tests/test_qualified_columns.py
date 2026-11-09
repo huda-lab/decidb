@@ -37,9 +37,7 @@ _ROWS_SQL = """
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_qualified_column_distinguishes_self_join_sides(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_qualified_column_distinguishes_self_join_sides(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Qualified coefficients bind, and each clause uses its own side of the join.
 
     The constraint reads `n2.n_nationkey` (constant 1, so it caps the count at 3)
@@ -70,7 +68,9 @@ def test_qualified_column_distinguishes_self_join_sides(
     # SUM(x * n2.n_nationkey) <= 3, with n2.n_nationkey == 1 on every row
     oracle_solver.add_constraint(
         {vnames[i]: float(data[i][1]) for i in range(len(data))},
-        "<=", 3.0, name="count_cap",
+        "<=",
+        3.0,
+        name="count_cap",
     )
     # MAXIMIZE SUM(x * n1.n_nationkey)
     oracle_solver.set_objective(
@@ -81,14 +81,24 @@ def test_qualified_column_distinguishes_self_join_sides(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("n_nationkey")])},
     )
 
     perf_tracker.record(
-        "qualified_column_self_join", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "qualified_column_self_join",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

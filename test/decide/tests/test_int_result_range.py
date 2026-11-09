@@ -131,12 +131,14 @@ def test_a_large_bound_with_a_small_answer_still_answers(decidb_cli, oracle_solv
     value, and `SUM(x) <= 10` decides that here. Rejecting `x <= 5000000000` on sight
     would refuse a query whose answer is 10.
     """
-    rows, _ = decidb_cli.execute(f"""
+    rows, _ = decidb_cli.execute(
+        f"""
         SELECT id, x FROM (VALUES (1)) t(id)
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= {_LIMIT} AND SUM(x) <= 10
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     oracle_solver.create_model("large_bound_small_answer")
     oracle_solver.add_variable("x", VarType.INTEGER, lb=0.0, ub=float(_LIMIT))
     oracle_solver.add_constraint({"x": 1.0}, "<=", 10.0, name="total")
@@ -172,10 +174,12 @@ def test_the_int32_boundary_reads_back_exactly(decidb_cli, oracle_solver):
 @pytest.mark.var_integer
 def test_an_int_decision_is_a_bigint_column(decidb_cli):
     """The widening as the user meets it: `DECIDE x(INT)` yields a BIGINT column."""
-    rows, _ = decidb_cli.execute("""
+    rows, _ = decidb_cli.execute(
+        """
         SELECT id, typeof(x) AS declared FROM (VALUES (1)) t(id)
         DECIDE x(INT) SUCH THAT x <= 3 MAXIMIZE SUM(x)
-    """)
+    """
+    )
 
     assert rows[0][1] == "BIGINT"
 
@@ -190,13 +194,15 @@ def test_a_bool_decision_is_unaffected(decidb_cli):
     in the same query, because the two sharing a query is what makes the mixed width
     observable at all.
     """
-    rows, _ = decidb_cli.execute("""
+    rows, _ = decidb_cli.execute(
+        """
         SELECT id, typeof(b) AS b_type, typeof(x) AS x_type, b, x
         FROM (VALUES (1)) t(id)
         DECIDE b(BOOL), x(INT)
         SUCH THAT b + x <= 5
         MAXIMIZE SUM(b + x)
-    """)
+    """
+    )
 
     assert rows[0][1] == "INTEGER"
     assert rows[0][2] == "BIGINT"
@@ -225,9 +231,15 @@ def test_a_value_past_exact_integer_range_is_refused_in_sql_terms(decidb_cli):
 
 @pytest.mark.edge_case
 @pytest.mark.var_integer
-@pytest.mark.parametrize("sql", [
-    _DECLARED_BOUND, _BOUND_FROM_DATA, _AGGREGATE_ROW,
-], ids=["declared-bound", "bound-from-data", "aggregate-row"])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        _DECLARED_BOUND,
+        _BOUND_FROM_DATA,
+        _AGGREGATE_ROW,
+    ],
+    ids=["declared-bound", "bound-from-data", "aggregate-row"],
+)
 def test_the_backends_agree_beyond_int32(decidb_cli_highs, decidb_cli_gurobi, sql):
     """Readback is backend-neutral, so neither solver may disagree about the value."""
     highs_rows, _ = decidb_cli_highs.execute(sql, expect_number_range=True)

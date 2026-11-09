@@ -476,8 +476,7 @@ private:
 	//! Moves a negated reducer's sign into its factor: `-1 * max(e)`, `-(2) * max(e)`.
 	void FoldNegationIntoFactor(Atom &atom) const;
 
-	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left,
-	                              unique_ptr<Expression> right) const;
+	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left, unique_ptr<Expression> right) const;
 	//! Unary form, for the leading negative term of a rebuilt spine.
 	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> operand) const;
 

@@ -25,6 +25,7 @@ from solver.types import VarType, ObjSense
 # Test 1: Scalar as a shared upper bound, oracle verified
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver):
     """One query-wide cap constrains every row's ship, and is penalised in the
@@ -44,12 +45,14 @@ def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver):
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
         ORDER BY c.c_custkey
-    """).fetchall()
+    """
+    ).fetchall()
     num_rows = len(data)
     assert num_rows > 0, "fixture produced no rows"
 
@@ -61,8 +64,7 @@ def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver):
         ship_names.append(name)
         oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0, ub=10.0)
         # ship_i - cap <= 0
-        oracle_solver.add_constraint({name: 1.0, "cap": -1.0}, "<=", 0.0,
-                                     name=f"ship_le_cap_{i}")
+        oracle_solver.add_constraint({name: 1.0, "cap": -1.0}, "<=", 0.0, name=f"ship_le_cap_{i}")
 
     obj = {name: 1.0 for name in ship_names}
     obj["cap"] = -20.0
@@ -74,13 +76,13 @@ def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver):
     cap_value = cap_values.pop()
 
     decidb_obj = sum(int(row[1]) for row in decidb_result) - 20.0 * cap_value
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
 # Test 2: The scalar's objective coefficient is applied once, not per row
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_scalar_objective_coefficient_applied_once(decidb_cli, oracle_solver):
@@ -111,8 +113,7 @@ def test_scalar_objective_coefficient_applied_once(decidb_cli, oracle_solver):
         name = f"x_{i}"
         x_names.append(name)
         oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0, ub=10.0)
-        oracle_solver.add_constraint({name: 1.0, "cap": -1.0}, "<=", 0.0,
-                                     name=f"x_le_cap_{i}")
+        oracle_solver.add_constraint({name: 1.0, "cap": -1.0}, "<=", 0.0, name=f"x_le_cap_{i}")
 
     obj = {name: -1.0 for name in x_names}
     obj["cap"] = 2.0
@@ -121,13 +122,13 @@ def test_scalar_objective_coefficient_applied_once(decidb_cli, oracle_solver):
 
     cap_value = int(decidb_result[0][2])
     decidb_obj = 2.0 * cap_value - sum(int(row[1]) for row in decidb_result)
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
 # Test 3: One column regardless of input cardinality
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_scalar_is_one_column_regardless_of_cardinality(decidb_cli):
@@ -152,20 +153,19 @@ def test_scalar_is_one_column_regardless_of_cardinality(decidb_cli):
     small_cap, small_rows = solve(50)
     large_cap, large_rows = solve(5000)
 
-    assert large_rows > small_rows * 5, \
-        f"sizes not distinct enough to be meaningful: {small_rows} vs {large_rows}"
+    assert large_rows > small_rows * 5, f"sizes not distinct enough to be meaningful: {small_rows} vs {large_rows}"
     # cap >= max(l_linenumber) over the selection; both selections reach 7.
-    assert small_cap == large_cap == 7, \
-        f"cap changed with cardinality: {small_cap} vs {large_cap}"
+    assert small_cap == large_cap == 7, f"cap changed with cardinality: {small_cap} vs {large_cap}"
 
 
 # ---------------------------------------------------------------------------
 # Test 4: The value is repeated on every output row (paper §3.1)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_scalar_value_repeated_on_every_row(decidb_cli):
-    """"A scalar assignment is repeated on every output row" (paper §3.1)."""
+    """ "A scalar assignment is repeated on every output row" (paper §3.1)."""
     sql = """
         SELECT l_orderkey, l_linenumber, cap
         FROM lineitem
@@ -183,6 +183,7 @@ def test_scalar_value_repeated_on_every_row(decidb_cli):
 # ---------------------------------------------------------------------------
 # Test 5: Reducers over a scalar are rejected
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.error
 class TestScalarReducerRejected:
@@ -244,6 +245,7 @@ class TestScalarReducerRejected:
 # scalar-times-vector reduction.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, duckdb_conn, oracle_solver):
     """`SUM(l_linenumber * cap) <= K` must use the coefficient `SUM(l_linenumber)`
@@ -263,12 +265,15 @@ def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, du
     assert len(cap_values) == 1, f"cap must be one value for the query, got {cap_values}"
     cap_value = cap_values.pop()
 
-    weight_sum, num_rows = duckdb_conn.execute("""
+    weight_sum, num_rows = duckdb_conn.execute(
+        """
         SELECT SUM(l_linenumber), COUNT(*) FROM lineitem WHERE l_orderkey <= 200
-    """).fetchone()
+    """
+    ).fetchone()
     weight_sum = float(weight_sum)
-    assert weight_sum != 1.0 and weight_sum != float(num_rows), \
-        "fixture must separate the correct weight from both wrong readings"
+    assert weight_sum != 1.0 and weight_sum != float(
+        num_rows
+    ), "fixture must separate the correct weight from both wrong readings"
 
     oracle_solver.create_model("scalar_times_data_in_reducer")
     oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0)
@@ -276,8 +281,7 @@ def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, du
     oracle_solver.set_objective({"cap": 1.0}, ObjSense.MAXIMIZE)
     oracle_cap = oracle_solver.solve().objective_value
 
-    assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
+    assert abs(cap_value - oracle_cap) < 1e-4, f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
 
 
 @pytest.mark.correctness
@@ -310,14 +314,17 @@ def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli):
 # Test 7: `scalar` is an ordinary identifier
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_scalar_still_usable_as_identifier(decidb_cli):
     """SCALAR is an unreserved keyword, so existing queries that use it as a
     column alias or CTE name keep working."""
-    rows, _ = decidb_cli.execute("""
+    rows, _ = decidb_cli.execute(
+        """
         WITH scalar AS (SELECT l_orderkey AS scalar FROM lineitem WHERE l_orderkey <= 3)
         SELECT scalar FROM scalar ORDER BY scalar LIMIT 3
-    """)
+    """
+    )
     assert len(rows) > 0, "SCALAR should still lex as an identifier"
 
 
@@ -343,6 +350,7 @@ def test_query_wide_decision_beside_a_column_named_scalar(decidb_cli):
 # ---------------------------------------------------------------------------
 # Test 8: Empty input
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_scalar_empty_input(decidb_cli):
@@ -371,6 +379,7 @@ def test_scalar_empty_input(decidb_cli):
 # `[row | entity | scalar | global auxiliary]` layout: the rewrites append
 # auxiliary variables to the global block, immediately above the scalar block.
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_scalar_with_abs_per_row_constraint(decidb_cli, oracle_solver):
@@ -401,10 +410,8 @@ def test_scalar_with_abs_per_row_constraint(decidb_cli, oracle_solver):
         oracle_solver.add_variable(xi, VarType.INTEGER, lb=0.0, ub=10.0)
         # d = |x - cap|, bounded by 2
         oracle_solver.add_variable(di, VarType.CONTINUOUS, lb=0.0, ub=2.0)
-        oracle_solver.add_constraint({xi: 1.0, "cap": -1.0, di: -1.0}, "<=", 0.0,
-                                     name=f"abs_pos_{i}")
-        oracle_solver.add_constraint({xi: -1.0, "cap": 1.0, di: -1.0}, "<=", 0.0,
-                                     name=f"abs_neg_{i}")
+        oracle_solver.add_constraint({xi: 1.0, "cap": -1.0, di: -1.0}, "<=", 0.0, name=f"abs_pos_{i}")
+        oracle_solver.add_constraint({xi: -1.0, "cap": 1.0, di: -1.0}, "<=", 0.0, name=f"abs_neg_{i}")
         obj[xi] = 1.0
     oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
     oracle_obj = oracle_solver.solve().objective_value
@@ -417,8 +424,7 @@ def test_scalar_with_abs_per_row_constraint(decidb_cli, oracle_solver):
         assert abs(int(r[x_idx]) - cap_value) <= 2, "ABS constraint violated"
 
     decidb_obj = sum(int(r[x_idx]) for r in rows) - 5.0 * cap_value
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.correctness
@@ -448,10 +454,8 @@ def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver):
         xi, di = f"x_{i}", f"d_{i}"
         oracle_solver.add_variable(xi, VarType.INTEGER, lb=0.0, ub=10.0)
         oracle_solver.add_variable(di, VarType.CONTINUOUS, lb=0.0, ub=2.0)
-        oracle_solver.add_constraint({xi: 1.0, "cap": -1.0, di: -1.0}, "<=", 0.0,
-                                     name=f"q_pos_{i}")
-        oracle_solver.add_constraint({xi: -1.0, "cap": 1.0, di: -1.0}, "<=", 0.0,
-                                     name=f"q_neg_{i}")
+        oracle_solver.add_constraint({xi: 1.0, "cap": -1.0, di: -1.0}, "<=", 0.0, name=f"q_pos_{i}")
+        oracle_solver.add_constraint({xi: -1.0, "cap": 1.0, di: -1.0}, "<=", 0.0, name=f"q_neg_{i}")
         obj[xi] = 1.0
     oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
     oracle_obj = oracle_solver.solve().objective_value
@@ -461,8 +465,7 @@ def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver):
     for r in rows:
         assert (int(r[x_idx]) - cap_value) ** 2 <= 4, "quadratic constraint violated"
     decidb_obj = sum(int(r[x_idx]) for r in rows) - 5.0 * cap_value
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.bilinear
@@ -498,8 +501,7 @@ def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver):
         oracle_solver.add_variable(pi, VarType.CONTINUOUS, lb=0.0, ub=6.0)
         oracle_solver.add_constraint({pi: 1.0, bi: -6.0}, "<=", 0.0, name=f"mc1_{i}")
         oracle_solver.add_constraint({pi: 1.0, "cap": -1.0}, "<=", 0.0, name=f"mc2_{i}")
-        oracle_solver.add_constraint({pi: -1.0, "cap": 1.0, bi: 6.0}, "<=", 6.0,
-                                     name=f"mc3_{i}")
+        oracle_solver.add_constraint({pi: -1.0, "cap": 1.0, bi: 6.0}, "<=", 6.0, name=f"mc3_{i}")
         oracle_solver.add_constraint({pi: 1.0}, "<=", 4.0, name=f"prod_cap_{i}")
         obj[bi] = 1.0
         budget[bi] = 1.0
@@ -512,8 +514,7 @@ def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver):
     for r in rows:
         assert int(r[b_idx]) * cap_value <= 4, "bilinear constraint violated"
     decidb_obj = sum(int(r[b_idx]) for r in rows) + cap_value
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.correctness
@@ -546,6 +547,7 @@ def test_scalar_with_not_equal(decidb_cli):
 # ---------------------------------------------------------------------------
 # Test 10: A scalar on the RHS of a reduced constraint (the canonicalization refactor)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
@@ -594,11 +596,11 @@ def test_scalar_as_aggregate_rhs(decidb_cli, oracle_solver):
     assert all(int(r[cap_idx]) == cap_value for r in rows), "cap is not query-wide"
     total_x = sum(int(r[x_idx]) for r in rows)
     assert total_x <= cap_value, f"SUM(x)={total_x} exceeds cap={cap_value}"
-    assert cap_value == 12 and total_x == 12, \
-        f"expected the interior optimum cap=12, SUM(x)=12; got cap={cap_value}, SUM(x)={total_x}"
+    assert (
+        cap_value == 12 and total_x == 12
+    ), f"expected the interior optimum cap=12, SUM(x)=12; got cap={cap_value}, SUM(x)={total_x}"
     decidb_obj = 3.0 * total_x - 2.0 * cap_value
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.cons_aggregate
@@ -624,9 +626,7 @@ def test_scalar_as_aggregate_rhs_with_per(decidb_cli, duckdb_conn, oracle_solver
     n = len(rows)
     assert n > 1
 
-    groups = [r[0] for r in duckdb_conn.execute(
-        "SELECT c_nationkey FROM customer WHERE c_custkey <= 40"
-    ).fetchall()]
+    groups = [r[0] for r in duckdb_conn.execute("SELECT c_nationkey FROM customer WHERE c_custkey <= 40").fetchall()]
     assert len(groups) == n
     assert len(set(groups)) > 1, "PER needs more than one partition to discriminate"
 
@@ -653,13 +653,13 @@ def test_scalar_as_aggregate_rhs_with_per(decidb_cli, duckdb_conn, oracle_solver
         assert total <= cap_value, f"group {g}: SUM(x)={total} exceeds cap={cap_value}"
     assert cap_value == 12, f"expected the interior optimum cap=12, got {cap_value}"
     decidb_obj = 3.0 * sum(int(r[x_idx]) for r in rows) - 2.0 * cap_value
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
 # Test 11: A scalar in the diagnostics relation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.query_diagnostics
 def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
@@ -680,10 +680,8 @@ def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
     assert rows and {r["state"] for r in rows} == {"unbounded"}
     assert [r["clause"] for r in rows] == ["cap"]
     assert rows[0]["edit_source"] == "runaway_+inf"
-    assert rows[0]["amount"] == "NULL", \
-        "a query-wide decision has no row subset to count"
-    assert rows[0]["group"] == "NULL", \
-        "a query-wide decision has no slice to name"
+    assert rows[0]["amount"] == "NULL", "a query-wide decision has no row subset to count"
+    assert rows[0]["group"] == "NULL", "a query-wide decision has no slice to name"
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +694,7 @@ def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
 # `SUM(data * cap)` path was verified to use in
 # `test_scalar_times_data_inside_reducer_is_weighted_by_row_data`. The desugaring
 # makes that plausible; these two tests make it checked.
+
 
 @pytest.mark.correctness
 def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn, oracle_solver):
@@ -724,9 +723,14 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn, oracle_
     assert len(cap_values) == 1, f"cap must be one value, got {cap_values}"
     cap_value = cap_values.pop()
 
-    data = [r[0] for r in duckdb_conn.execute("""
+    data = [
+        r[0]
+        for r in duckdb_conn.execute(
+            """
         SELECT CAST(l_linenumber AS BIGINT) FROM lineitem WHERE l_orderkey <= 20
-    """).fetchall()]
+    """
+        ).fetchall()
+    ]
     assert len(data) == len(rows), "oracle and DeciDB must see the same rows"
 
     oracle_solver.create_model("scalar_in_norm_l1")
@@ -736,10 +740,8 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn, oracle_
         ai = f"a_{i}"
         oracle_solver.add_variable(ai, VarType.CONTINUOUS, lb=0.0)
         # a_i >= +(d*cap - 3) and a_i >= -(d*cap - 3), i.e. a_i >= |d*cap - 3|.
-        oracle_solver.add_constraint({"cap": float(d), ai: -1.0}, "<=", 3.0,
-                                     name=f"abs_pos_{i}")
-        oracle_solver.add_constraint({"cap": -float(d), ai: -1.0}, "<=", -3.0,
-                                     name=f"abs_neg_{i}")
+        oracle_solver.add_constraint({"cap": float(d), ai: -1.0}, "<=", 3.0, name=f"abs_pos_{i}")
+        oracle_solver.add_constraint({"cap": -float(d), ai: -1.0}, "<=", -3.0, name=f"abs_neg_{i}")
         abs_sum[ai] = 1.0
     oracle_solver.add_constraint(abs_sum, "<=", 85.0, name="l1_norm")
     oracle_solver.set_objective({"cap": 1.0}, ObjSense.MAXIMIZE)
@@ -749,11 +751,11 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn, oracle_
     n, total = len(data), sum(data)
     collapsed = max(c for c in range(101) if abs(total * c - 3 * n) <= 85)
     unweighted = max(c for c in range(101) if n * abs(c - 3) <= 85)
-    assert oracle_cap != collapsed and oracle_cap != unweighted, \
-        "fixture no longer separates the correct weighting from the misreadings"
+    assert (
+        oracle_cap != collapsed and oracle_cap != unweighted
+    ), "fixture no longer separates the correct weighting from the misreadings"
 
-    assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
+    assert abs(cap_value - oracle_cap) < 1e-4, f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
     assert sum(abs(d * cap_value - 3) for d in data) <= 85, "L1 norm bound violated"
 
 
@@ -785,9 +787,14 @@ def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckd
     assert len(cap_values) == 1, f"cap must be one value, got {cap_values}"
     cap_value = cap_values.pop()
 
-    data = [r[0] for r in duckdb_conn.execute("""
+    data = [
+        r[0]
+        for r in duckdb_conn.execute(
+            """
         SELECT CAST(l_linenumber AS BIGINT) FROM lineitem WHERE l_orderkey <= 20
-    """).fetchall()]
+    """
+        ).fetchall()
+    ]
     assert len(data) == len(rows), "oracle and DeciDB must see the same rows"
 
     oracle_solver.create_model("scalar_in_quadratic_objective")
@@ -797,17 +804,15 @@ def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckd
         quad[("cap", "cap")] += float(d) * float(d)
         linear["cap"] += -8.0 * float(d)
         constant += 16.0
-    oracle_solver.set_quadratic_objective(linear, quad, ObjSense.MINIMIZE,
-                                          constant=constant)
+    oracle_solver.set_quadratic_objective(linear, quad, ObjSense.MINIMIZE, constant=constant)
     oracle_result = oracle_solver.solve()
 
-    assert abs(cap_value - 4.0) > 0.5, \
-        "cap landed on the row-count-weighted optimum; the data weight was lost"
+    assert abs(cap_value - 4.0) > 0.5, "cap landed on the row-count-weighted optimum; the data weight was lost"
 
     oracle_cap = oracle_result.variable_values["cap"]
-    assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
+    assert abs(cap_value - oracle_cap) < 1e-4, f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
 
     decidb_obj = sum((float(d) * cap_value - 4.0) ** 2 for d in data)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-3, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_result.objective_value}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-3
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_result.objective_value}"

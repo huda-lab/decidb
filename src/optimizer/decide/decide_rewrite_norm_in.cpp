@@ -45,81 +45,86 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 
 	std::function<void(unique_ptr<Expression> &, const string &, DecideEnclosingScope)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const string &source_alias, DecideEnclosingScope scope) {
-		if (!expr)
-			return;
-		auto clause_alias = DescendSourceAlias(*expr, source_alias);
-		scope = EnterDecideScope(*expr, scope);
-		string payload;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    ExtractDecideTagPayload(expr->GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
-			// The canonical text has been rendered; from here the clause is formulated, and every layer after this
-			// one shows the definition the solver receives rather than the norm it came from. Canonicalization
-			// replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the tag
-			// still renders the clause as written.
-			using Kind = LogicalDecide::RewriteAccount::Kind;
-			// A norm of data reads no decision, so it stands on a bound, which the right-hand-side window rewrite
-			// made a column before this pass; an L0 norm is desugared only there.
-			D_ASSERT(payload == "1" || payload == "2" || payload == "inf");
-			AddRewriteAccount(decide, clause_alias,
-			                  payload == "1" ? Kind::NORM_SUM_ABS
-			                                 : (payload == "2" ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
-			                  RenderForPlan(*expr, decide));
-			auto alias = expr->GetAlias();
-			RemoveDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + payload + "__");
-			expr->SetAlias(std::move(alias));
-		}
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
-		    !TryParseNormMarker(expr->GetAlias(), payload)) {
-			// A marker stands wherever a scalar may stand. Under a comparison, but just
-			// as much under `+`, `*` or a cast -- which is how a regularizer is normally
-			// written: `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. Descend through
-			// every container so no spelling is left holding an unlowered marker, which
-			// would read downstream as the plain SUM the marker is built on and silently
-			// drop the norm. A marker beneath another aggregate cannot occur: the binder
-			// rejects `SUM(norm(...))` before this pass runs.
-			ExpressionIterator::EnumerateChildren(
-			    *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias, scope); });
-			return;
-		}
-		auto &aggregate = expr->Cast<BoundAggregateExpression>();
-		if (aggregate.children.size() != 1) {
-			throw InternalException("DECIDE NORM marker must contain one bound expression");
-		}
-		// The orders left are the L0 counts: `0_auto`, and `0_<M>` for a written M.
-		bool auto_m = payload == "0_auto";
-		double m = auto_m ? 1.0 : std::stod(payload.substr(2));
-		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
-		// An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
-		// links one row per instance.
-		auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
-		auto z = MakeDecisionRef(decide,
-		                         AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
-		                                              "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)"));
-		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
-		                  RenderForPlan(aggregate, decide));
-		auto make_mz = [&]() {
-			auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
-			if (auto_m) {
-				bound->alias = L0_AUTO_BOUND_TAG; // a placeholder stage 06 fills from the box
-			}
-			return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
-		};
-		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
-			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                                                  std::move(lhs), std::move(rhs));
-			MarkFormulationConstraint(*link, clause_alias);
-			links.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(link), scope.Condition()), z_scope));
-		};
-		add_link(make_mz(), aggregate.children[0]->Copy());
-		add_link(make_mz(), optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
-		                                               aggregate.children[0]->Copy()));
-		add_link(optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()),
-		         optimizer.BindScalarFunction("*", make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))), z->Copy()));
-		auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
-		count->alias = aggregate.GetAlias();
-		RemoveDecideTag(count->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
-		expr = std::move(count);
-	};
+		    if (!expr)
+			    return;
+		    auto clause_alias = DescendSourceAlias(*expr, source_alias);
+		    scope = EnterDecideScope(*expr, scope);
+		    string payload;
+		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		        ExtractDecideTagPayload(expr->GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
+			    // The canonical text has been rendered; from here the clause is formulated, and every layer after this
+			    // one shows the definition the solver receives rather than the norm it came from. Canonicalization
+			    // replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the tag
+			    // still renders the clause as written.
+			    using Kind = LogicalDecide::RewriteAccount::Kind;
+			    // A norm of data reads no decision, so it stands on a bound, which the right-hand-side window rewrite
+			    // made a column before this pass; an L0 norm is desugared only there.
+			    D_ASSERT(payload == "1" || payload == "2" || payload == "inf");
+			    AddRewriteAccount(decide, clause_alias,
+			                      payload == "1" ? Kind::NORM_SUM_ABS
+			                                     : (payload == "2" ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
+			                      RenderForPlan(*expr, decide));
+			    auto alias = expr->GetAlias();
+			    RemoveDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + payload + "__");
+			    expr->SetAlias(std::move(alias));
+		    }
+		    if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
+		        !TryParseNormMarker(expr->GetAlias(), payload)) {
+			    // A marker stands wherever a scalar may stand. Under a comparison, but just
+			    // as much under `+`, `*` or a cast -- which is how a regularizer is normally
+			    // written: `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. Descend through
+			    // every container so no spelling is left holding an unlowered marker, which
+			    // would read downstream as the plain SUM the marker is built on and silently
+			    // drop the norm. A marker beneath another aggregate cannot occur: the binder
+			    // rejects `SUM(norm(...))` before this pass runs.
+			    ExpressionIterator::EnumerateChildren(
+			        *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias, scope); });
+			    return;
+		    }
+		    auto &aggregate = expr->Cast<BoundAggregateExpression>();
+		    if (aggregate.children.size() != 1) {
+			    throw InternalException("DECIDE NORM marker must contain one bound expression");
+		    }
+		    // The orders left are the L0 counts: `0_auto`, and `0_<M>` for a written M.
+		    bool auto_m = payload == "0_auto";
+		    double m = auto_m ? 1.0 : std::stod(payload.substr(2));
+		    string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
+		    // An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
+		    // links one row per instance.
+		    auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
+		    auto z = MakeDecisionRef(
+		        decide, AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
+		                                     "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)"));
+		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
+		                      RenderForPlan(aggregate, decide));
+		    auto make_mz = [&]() {
+			    auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
+			    if (auto_m) {
+				    bound->alias = L0_AUTO_BOUND_TAG; // a placeholder stage 06 fills from the box
+			    }
+			    return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
+		    };
+		    auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
+			    auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                     std::move(lhs), std::move(rhs));
+			    MarkFormulationConstraint(*link, clause_alias);
+			    links.push_back(
+			        ScopeRowPerInstance(decide, ScopeHelperRow(std::move(link), scope.Condition()), z_scope));
+		    };
+		    add_link(make_mz(), aggregate.children[0]->Copy());
+		    add_link(make_mz(),
+		             optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
+		                                          aggregate.children[0]->Copy()));
+		    add_link(optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()),
+		             optimizer.BindScalarFunction(
+		                 "*",
+		                 make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))),
+		                 z->Copy()));
+		    auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
+		    count->alias = aggregate.GetAlias();
+		    RemoveDecideTag(count->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+		    expr = std::move(count);
+	    };
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
 	// detached, lowered, and reinstalled through the canonicalizing boundary rather than left as it was edited.
@@ -147,80 +152,97 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	};
 	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const string &source_alias) {
-		auto clause_alias = DescendSourceAlias(*expr, source_alias);
-		scope = EnterDecideScope(*expr, scope);
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			for (idx_t i = 0; i < conj.children.size(); i++) {
-				if (IsConstraintChild(conj, i)) rewrite(conj.children[i], scope, clause_alias);
-			}
-			// A `when c:` goes with the clause it held: the placeholder stands in for both.
-			if (IsWhenFilterWrapper(conj) && conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT)
-				expr = MakeTrueExpression(conj.children[0]->GetAlias());
-			return;
-		}
-		auto when = scope.Condition();
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR)
-			return;
-		auto &in = expr->Cast<BoundOperatorExpression>();
-		if (in.children.size() < 2) throw InternalException("DECIDE IN marker has no domain values");
-		auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
-		if (!target) throw InternalException("DECIDE IN marker target is not a decision variable");
-		idx_t k = in.children.size() - 1;
-		scope_of_in = ScopeOf(decide, canonicalizer, *in.children[0]);
-		for (idx_t i = 1; i < in.children.size(); i++)
-			scope_of_in = JoinScopes(scope_of_in, ScopeOf(decide, canonicalizer, *in.children[i]));
-		if (decide.is_boolean_var[target->binding.column_index] && k == 2) {
-			double a, b;
-			if (TryEvaluateFoldableDouble(optimizer.context, *in.children[1], a, FOLD_CATCH_ALL) &&
-			    TryEvaluateFoldableDouble(optimizer.context, *in.children[2], b, FOLD_CATCH_ALL) &&
-			    ((a == 0.0 && b == 1.0) || (a == 1.0 && b == 0.0))) {
-				emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-				                                   in.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(0))), when, clause_alias);
-				expr = MakeTrueExpression(clause_alias);
-				return;
-			}
-		}
-		if (k == 1) {
-			emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, in.children[0]->Copy(), in.children[1]->Copy()), when, clause_alias);
-			expr = MakeTrueExpression(clause_alias);
-			return;
-		}
-		vector<unique_ptr<Expression>> indicators;
-		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
-		                  RenderForPlan(in, decide));
-		for (idx_t i = 0; i < k; i++) {
-			string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
-			// A plan names an indicator by the value it stands for.
-			string label =
-			    "(" + RenderForPlan(*in.children[0], decide) + " = " + RenderForPlan(*in.children[1 + i], decide) + ")";
-			auto indicator = AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, scope_of_in, label);
-			indicators.push_back(MakeDecisionRef(decide, indicator));
-		}
-		in_counter++;
-		auto cardinality = indicators[0]->Copy();
-		for (idx_t i = 1; i < k; i++) cardinality = optimizer.BindScalarFunction("+", std::move(cardinality), indicators[i]->Copy());
-		emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(cardinality),
-		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(1))), when, clause_alias);
-		auto linking = in.children[0]->Copy();
-		bool all_constant = true;
-		double min_value = 0.0;
-		for (idx_t i = 0; i < k; i++) {
-			double value;
-			if (!TryEvaluateFoldableDouble(optimizer.context, *in.children[i + 1], value, FOLD_CATCH_ALL))
-				all_constant = false;
-			else min_value = std::min(min_value, value);
-			auto negative = optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::INTEGER(0)), in.children[i + 1]->Copy());
-			linking = optimizer.BindScalarFunction("+", std::move(linking), optimizer.BindScalarFunction("*", std::move(negative), indicators[i]->Copy()));
-		}
-		emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(linking),
-		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(0))), when, clause_alias);
-		if (all_constant && min_value < 0.0) {
-			emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, in.children[0]->Copy(),
-			                                         make_uniq<BoundConstantExpression>(Value::DOUBLE(min_value))), when, clause_alias);
-		}
-		expr = MakeTrueExpression(clause_alias);
-	};
+		    auto clause_alias = DescendSourceAlias(*expr, source_alias);
+		    scope = EnterDecideScope(*expr, scope);
+		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			    auto &conj = expr->Cast<BoundConjunctionExpression>();
+			    for (idx_t i = 0; i < conj.children.size(); i++) {
+				    if (IsConstraintChild(conj, i))
+					    rewrite(conj.children[i], scope, clause_alias);
+			    }
+			    // A `when c:` goes with the clause it held: the placeholder stands in for both.
+			    if (IsWhenFilterWrapper(conj) &&
+			        conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT)
+				    expr = MakeTrueExpression(conj.children[0]->GetAlias());
+			    return;
+		    }
+		    auto when = scope.Condition();
+		    if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR)
+			    return;
+		    auto &in = expr->Cast<BoundOperatorExpression>();
+		    if (in.children.size() < 2)
+			    throw InternalException("DECIDE IN marker has no domain values");
+		    auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
+		    if (!target)
+			    throw InternalException("DECIDE IN marker target is not a decision variable");
+		    idx_t k = in.children.size() - 1;
+		    scope_of_in = ScopeOf(decide, canonicalizer, *in.children[0]);
+		    for (idx_t i = 1; i < in.children.size(); i++)
+			    scope_of_in = JoinScopes(scope_of_in, ScopeOf(decide, canonicalizer, *in.children[i]));
+		    if (decide.is_boolean_var[target->binding.column_index] && k == 2) {
+			    double a, b;
+			    if (TryEvaluateFoldableDouble(optimizer.context, *in.children[1], a, FOLD_CATCH_ALL) &&
+			        TryEvaluateFoldableDouble(optimizer.context, *in.children[2], b, FOLD_CATCH_ALL) &&
+			        ((a == 0.0 && b == 1.0) || (a == 1.0 && b == 0.0))) {
+				    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+				                                              in.children[0]->Copy(),
+				                                              make_uniq<BoundConstantExpression>(Value::INTEGER(0))),
+				         when, clause_alias);
+				    expr = MakeTrueExpression(clause_alias);
+				    return;
+			    }
+		    }
+		    if (k == 1) {
+			    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, in.children[0]->Copy(),
+			                                              in.children[1]->Copy()),
+			         when, clause_alias);
+			    expr = MakeTrueExpression(clause_alias);
+			    return;
+		    }
+		    vector<unique_ptr<Expression>> indicators;
+		    AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
+		                      RenderForPlan(in, decide));
+		    for (idx_t i = 0; i < k; i++) {
+			    string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
+			    // A plan names an indicator by the value it stands for.
+			    string label = "(" + RenderForPlan(*in.children[0], decide) + " = " +
+			                   RenderForPlan(*in.children[1 + i], decide) + ")";
+			    auto indicator = AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, scope_of_in, label);
+			    indicators.push_back(MakeDecisionRef(decide, indicator));
+		    }
+		    in_counter++;
+		    auto cardinality = indicators[0]->Copy();
+		    for (idx_t i = 1; i < k; i++)
+			    cardinality = optimizer.BindScalarFunction("+", std::move(cardinality), indicators[i]->Copy());
+		    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(cardinality),
+		                                              make_uniq<BoundConstantExpression>(Value::INTEGER(1))),
+		         when, clause_alias);
+		    auto linking = in.children[0]->Copy();
+		    bool all_constant = true;
+		    double min_value = 0.0;
+		    for (idx_t i = 0; i < k; i++) {
+			    double value;
+			    if (!TryEvaluateFoldableDouble(optimizer.context, *in.children[i + 1], value, FOLD_CATCH_ALL))
+				    all_constant = false;
+			    else
+				    min_value = std::min(min_value, value);
+			    auto negative = optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::INTEGER(0)),
+			                                                 in.children[i + 1]->Copy());
+			    linking = optimizer.BindScalarFunction(
+			        "+", std::move(linking),
+			        optimizer.BindScalarFunction("*", std::move(negative), indicators[i]->Copy()));
+		    }
+		    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(linking),
+		                                              make_uniq<BoundConstantExpression>(Value::INTEGER(0))),
+		         when, clause_alias);
+		    if (all_constant && min_value < 0.0) {
+			    emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                              in.children[0]->Copy(),
+			                                              make_uniq<BoundConstantExpression>(Value::DOUBLE(min_value))),
+			         when, clause_alias);
+		    }
+		    expr = MakeTrueExpression(clause_alias);
+	    };
 	rewrite(decide.decide_constraints, DecideEnclosingScope(), string());
 	for (auto &constraint : generated)
 		decide.AddConstraint(optimizer.context, std::move(constraint));

@@ -85,8 +85,7 @@ def test_norm_l0_count_constraint(decidb_cli):
     """norm(e, 0, M) <= K caps the number of changed rows at K."""
     # Target just above the baseline sum so it is reachable by changing one row,
     # keeping the <= 2 cap feasible (a target far from baseline would need many).
-    base_rows, _ = decidb_cli.execute(
-        "SELECT SUM(l_quantity) AS s FROM lineitem WHERE l_orderkey <= 3")
+    base_rows, _ = decidb_cli.execute("SELECT SUM(l_quantity) AS s FROM lineitem WHERE l_orderkey <= 3")
     target = float(base_rows[0][0]) + 5
     sql = f"""
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
@@ -156,6 +155,7 @@ def test_norm_shape_rejected(decidb_cli, clause, message):
 
 # --- compositions ---------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_norm_with_when_objective(decidb_cli):
     """when cond: norm(e,1)  ==  when cond: sum(abs(e)) (penalize one group only)."""
@@ -199,18 +199,17 @@ def test_norm_with_per_constraint(decidb_cli):
 
 # --- HiGHS backend (L2 is a QP, L0 is a MILP — confirm both backends agree) ---
 
+
 @pytest.mark.correctness
 def test_norm_on_highs(decidb_cli_highs):
     # L1
     r1, c1 = decidb_cli_highs.execute(_BASE.format(obj="norm(new_qty - l_quantity, 1)"))
     r2, c2 = decidb_cli_highs.execute(_BASE.format(obj="SUM(ABS(new_qty - l_quantity))"))
-    assert sum(abs(d) for d in _devs(r1, c1)) == pytest.approx(
-        sum(abs(d) for d in _devs(r2, c2)), abs=1e-3)
+    assert sum(abs(d) for d in _devs(r1, c1)) == pytest.approx(sum(abs(d) for d in _devs(r2, c2)), abs=1e-3)
     # L2 (QP on HiGHS)
     r3, c3 = decidb_cli_highs.execute(_BASE.format(obj="norm(new_qty - l_quantity, 2)"))
     r4, c4 = decidb_cli_highs.execute(_BASE.format(obj="SUM(POWER(new_qty - l_quantity, 2))"))
-    assert sum(d * d for d in _devs(r3, c3)) == pytest.approx(
-        sum(d * d for d in _devs(r4, c4)), abs=1e-3)
+    assert sum(d * d for d in _devs(r3, c3)) == pytest.approx(sum(d * d for d in _devs(r4, c4)), abs=1e-3)
     # L0 (MILP on HiGHS)
     r5, c5 = decidb_cli_highs.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0, 100)"))
     assert r5  # solved and returned rows
@@ -221,85 +220,105 @@ def test_norm_on_highs(decidb_cli_highs):
 # a spurious z=1 could satisfy a lower-bound / equality / maximize on the count even
 # when the true count was smaller. These pin that down.
 
+
 @pytest.mark.correctness
 @pytest.mark.error_infeasible
 def test_norm_l0_lower_bound_infeasible_explicit_m(decidb_cli):
     # All x pinned to 0 -> true L0 count is 0, so `>= 2` is unsatisfiable. The old
     # one-way link let phantom z=1 inflate the count and return a (wrong) solution.
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) >= 2
         MINIMIZE SUM(x)
-    """, match=r"(?i)infeasible")
+    """,
+        match=r"(?i)infeasible",
+    )
 
 
 @pytest.mark.correctness
 @pytest.mark.error_infeasible
 def test_norm_l0_lower_bound_infeasible_auto_m(decidb_cli):
     # Same, via the auto-M path (placeholder M refilled at execution).
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0) >= 2
         MINIMIZE SUM(x)
-    """, match=r"(?i)infeasible")
+    """,
+        match=r"(?i)infeasible",
+    )
 
 
 @pytest.mark.correctness
 @pytest.mark.error_infeasible
 def test_norm_l0_equality_infeasible(decidb_cli):
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) = 2
         MINIMIZE SUM(x)
-    """, match=r"(?i)infeasible")
+    """,
+        match=r"(?i)infeasible",
+    )
 
 
 @pytest.mark.correctness
 @pytest.mark.error_infeasible
 def test_norm_l0_lower_bound_infeasible_highs(decidb_cli_highs):
     # Solver-agnostic: the reverse link is in our model builder, so HiGHS enforces it too.
-    decidb_cli_highs.assert_error("""
+    decidb_cli_highs.assert_error(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) >= 2
         MINIMIZE SUM(x)
-    """, match=r"(?i)infeasible")
+    """,
+        match=r"(?i)infeasible",
+    )
 
 
 @pytest.mark.correctness
 def test_norm_l0_maximize_not_inflated(decidb_cli):
     # MAXIMIZE rewards z=1; with all x pinned to 0 the true max count is 0, so the
     # objective must not be inflated. The solve succeeds with x all 0 ...
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
         DECIDE x(REAL)
         SUCH THAT x = 0
         MAXIMIZE norm(x, 0, 100)
-    """)
+    """
+    )
     xi = cols.index("x")
     assert all(abs(float(r[xi])) < 1e-4 for r in rows)
     # ... and demanding even one nonzero is then infeasible (count cannot exceed 0).
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
         DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) >= 1
         MAXIMIZE norm(x, 0, 100)
-    """, match=r"(?i)infeasible")
+    """,
+        match=r"(?i)infeasible",
+    )
 
 
 @pytest.mark.correctness
 def test_norm_l0_lower_bound_feasible_is_honest(decidb_cli):
     # A genuinely feasible `>= 2`: the returned solution must have at least two
     # actually-nonzero rows (the constraint is met by real nonzeros, not phantom z).
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
         DECIDE x(REAL)
         SUCH THAT x <= 10 AND norm(x, 0, 100) >= 2 AND SUM(x) >= 4
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     xi = cols.index("x")
     nonzeros = sum(1 for r in rows if abs(float(r[xi])) >= 1e-4)
     assert nonzeros >= 2
@@ -322,8 +341,7 @@ def test_norm_l0_tolerance_pragma(decidb_cli):
     decidb_cli.assert_error("SET decide_l0_tolerance=2.0;\n" + sql, match=r"(?i)infeasible")
 
     # Below the floor is rejected up front.
-    decidb_cli.assert_error("SET decide_l0_tolerance=1e-9;",
-                            match=r"(?i)decide_l0_tolerance must be")
+    decidb_cli.assert_error("SET decide_l0_tolerance=1e-9;", match=r"(?i)decide_l0_tolerance must be")
 
 
 # --- norm() inside arithmetic ---------------------------------------------
@@ -370,7 +388,8 @@ def test_norm_l1_in_arithmetic_objective(decidb_cli):
         decidb_cli,
         "norm(new_qty - l_quantity, 1) + 0.5 * SUM(new_qty)",
         "SUM(ABS(new_qty - l_quantity)) + 0.5 * SUM(new_qty)",
-        _l1_plus_linear)
+        _l1_plus_linear,
+    )
 
 
 @pytest.mark.correctness
@@ -379,7 +398,8 @@ def test_norm_l2_in_arithmetic_objective(decidb_cli):
         decidb_cli,
         "norm(new_qty - l_quantity, 2) + 0.5 * SUM(new_qty)",
         "SUM(POWER(new_qty - l_quantity, 2)) + 0.5 * SUM(new_qty)",
-        lambda r, c: sum(d * d for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)))
+        lambda r, c: sum(d * d for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)),
+    )
 
 
 @pytest.mark.correctness
@@ -388,7 +408,8 @@ def test_norm_linf_in_arithmetic_objective(decidb_cli):
         decidb_cli,
         "norm(new_qty - l_quantity, 'inf') + 0.5 * SUM(new_qty)",
         "MAX(ABS(new_qty - l_quantity)) + 0.5 * SUM(new_qty)",
-        lambda r, c: max(abs(d) for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)))
+        lambda r, c: max(abs(d) for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)),
+    )
 
 
 @pytest.mark.correctness
@@ -398,7 +419,8 @@ def test_norm_scaled_objective(decidb_cli):
         decidb_cli,
         "2 * norm(new_qty - l_quantity, 1)",
         "2 * SUM(ABS(new_qty - l_quantity))",
-        lambda r, c: 2 * sum(abs(d) for d in _devs(r, c)))
+        lambda r, c: 2 * sum(abs(d) for d in _devs(r, c)),
+    )
 
 
 @pytest.mark.correctness
@@ -408,16 +430,15 @@ def test_norm_combined_l1_l2_objective(decidb_cli):
         decidb_cli,
         "norm(new_qty - l_quantity, 1) + 0.25 * norm(new_qty - l_quantity, 2)",
         "SUM(ABS(new_qty - l_quantity)) + 0.25 * SUM(POWER(new_qty - l_quantity, 2))",
-        lambda r, c: sum(abs(d) for d in _devs(r, c))
-                     + 0.25 * sum(d * d for d in _devs(r, c)))
+        lambda r, c: sum(abs(d) for d in _devs(r, c)) + 0.25 * sum(d * d for d in _devs(r, c)),
+    )
 
 
 @pytest.mark.correctness
 def test_norm_l0_in_arithmetic_objective(decidb_cli):
     """L0 under arithmetic. The reducer returns an integer count where the marker
     returned the deviation's DOUBLE, so this also pins the type change down."""
-    r1, c1 = decidb_cli.execute(_MIXED.format(
-        obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
+    r1, c1 = decidb_cli.execute(_MIXED.format(obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
     hand = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem WHERE l_orderkey <= 3
@@ -445,30 +466,28 @@ _CAPPED = """
 
 @pytest.mark.correctness
 def test_norm_scaled_constraint(decidb_cli):
-    rows, cols = decidb_cli.execute(
-        _CAPPED.format(cons="2 * norm(new_qty - l_quantity, 1) <= 100"))
+    rows, cols = decidb_cli.execute(_CAPPED.format(cons="2 * norm(new_qty - l_quantity, 1) <= 100"))
     assert 2 * sum(abs(d) for d in _devs(rows, cols)) <= 100 + 1e-4
-    hand, hc = decidb_cli.execute(
-        _CAPPED.format(cons="2 * SUM(ABS(new_qty - l_quantity)) <= 100"))
+    hand, hc = decidb_cli.execute(_CAPPED.format(cons="2 * SUM(ABS(new_qty - l_quantity)) <= 100"))
+
     def obj(r, c):
         nq, lq = c.index("new_qty"), c.index("l_quantity")
         return sum(float(x[nq]) * float(x[lq]) for x in r)
+
     assert obj(rows, cols) == pytest.approx(obj(hand, hc), abs=1e-3)
 
 
 @pytest.mark.correctness
 def test_norm_offset_constraint(decidb_cli):
     """A constant added to the norm on the left of the comparison."""
-    rows, cols = decidb_cli.execute(
-        _CAPPED.format(cons="norm(new_qty - l_quantity, 1) + 5 <= 100"))
+    rows, cols = decidb_cli.execute(_CAPPED.format(cons="norm(new_qty - l_quantity, 1) + 5 <= 100"))
     assert sum(abs(d) for d in _devs(rows, cols)) + 5 <= 100 + 1e-4
 
 
 @pytest.mark.correctness
 def test_norm_scaled_l0_constraint(decidb_cli):
     """A scaled L0 count cap: at most three rows may move."""
-    rows, cols = decidb_cli.execute(
-        _CAPPED.format(cons="2 * norm(new_qty - l_quantity, 0, 1000) <= 6"))
+    rows, cols = decidb_cli.execute(_CAPPED.format(cons="2 * norm(new_qty - l_quantity, 0, 1000) <= 6"))
     assert sum(1 for d in _devs(rows, cols) if abs(d) > 1e-4) <= 3
 
 
@@ -479,14 +498,17 @@ def test_norm_in_arithmetic_on_highs(decidb_cli_highs):
         decidb_cli_highs,
         "norm(new_qty - l_quantity, 1) + 0.5 * SUM(new_qty)",
         "SUM(ABS(new_qty - l_quantity)) + 0.5 * SUM(new_qty)",
-        _l1_plus_linear)
+        _l1_plus_linear,
+    )
     _assert_same_objective(
         decidb_cli_highs,
         "norm(new_qty - l_quantity, 2) + 0.5 * SUM(new_qty)",
         "SUM(POWER(new_qty - l_quantity, 2)) + 0.5 * SUM(new_qty)",
-        lambda r, c: sum(d * d for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)))
-    rows, cols = decidb_cli_highs.execute(_MIXED.format(
-        obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
+        lambda r, c: sum(d * d for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)),
+    )
+    rows, cols = decidb_cli_highs.execute(
+        _MIXED.format(obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)")
+    )
     assert rows  # solved and returned rows
 
 

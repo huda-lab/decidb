@@ -65,7 +65,8 @@ def test_aggregate_ne_zero_collapses_to_a_single_tight_row(decidb_cli, tmp_path)
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 MINIMIZE SUM(x)
         """,
-        tmp_path / "agg_ne_zero.dump")
+        tmp_path / "agg_ne_zero.dump",
+    )
 
     rows = _rows(dump)
     assert len(rows) == 1, f"expected one collapsed row, got {len(rows)}:\n{dump}"
@@ -82,7 +83,8 @@ def test_per_row_ne_zero_collapses(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
             DECIDE x(BOOL) SUCH THAT x <> 0 MINIMIZE SUM(x)
         """,
-        tmp_path / "perrow_ne_zero.dump")
+        tmp_path / "perrow_ne_zero.dump",
+    )
 
     rows = _rows(dump)
     assert len(rows) == 3, f"expected one row per data row, got {len(rows)}:\n{dump}"
@@ -103,7 +105,8 @@ def test_intrinsic_nonnegativity_is_enough_to_collapse(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x) <> 0 MINIMIZE SUM(x)
         """,
-        tmp_path / "intrinsic_floor.dump")
+        tmp_path / "intrinsic_floor.dump",
+    )
 
     rows = _rows(dump)
     assert len(rows) == 1, f"expected one collapsed row, got {len(rows)}:\n{dump}"
@@ -123,7 +126,8 @@ def test_interior_k_keeps_the_disjunction(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 2 MINIMIZE SUM(x)
         """,
-        tmp_path / "interior_k.dump")
+        tmp_path / "interior_k.dump",
+    )
 
     assert len(_rows(dump)) == 2, f"expected the two-row disjunction:\n{dump}"
     assert _has_bigm(dump), f"an interior K still needs its Big-M:\n{dump}"
@@ -147,7 +151,8 @@ def test_user_written_bound_does_not_license_a_collapse(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <> 0 MINIMIZE SUM(x)
         """,
-        tmp_path / "user_written_floor.dump")
+        tmp_path / "user_written_floor.dump",
+    )
 
     assert len(_rows(dump)) == 2, f"a loosenable floor must not collapse:\n{dump}"
     assert _has_bigm(dump), f"a loosenable floor must not collapse:\n{dump}"
@@ -161,14 +166,18 @@ def test_collapsed_and_disjunctive_forms_agree_on_the_optimum(decidb_cli):
     The pair above differ only in whether the floor was written out, which changes the
     encoding but must not change the answer.
     """
-    collapsed, _ = decidb_cli.execute("""
+    collapsed, _ = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
         DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x) <> 0 MINIMIZE SUM(x)
-    """)
-    disjunctive, _ = decidb_cli.execute("""
+    """
+    )
+    disjunctive, _ = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
         DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <> 0 MINIMIZE SUM(x)
-    """)
+    """
+    )
     x_of = lambda rows: sorted(r[-1] for r in rows)
     assert sum(x_of(collapsed)) == sum(x_of(disjunctive)) == 1
 
@@ -199,8 +208,9 @@ def test_collapsed_ne_is_still_removable_in_diagnosis(decidb_cli):
 
     assert "remove_only" in text, f"a collapsed `<>` should still be droppable:\n{text}"
     assert "x <> 0" in text, f"expected the reachable repair to be named:\n{text}"
-    assert "achievable_objective" in text and ",0.0," in text.replace(" ", ""), (
-        f"dropping `x <> 0` reaches objective 0, not 2:\n{text}")
+    assert "achievable_objective" in text and ",0.0," in text.replace(
+        " ", ""
+    ), f"dropping `x <> 0` reaches objective 0, not 2:\n{text}"
 
 
 @pytest.mark.cons_comparison
@@ -218,13 +228,11 @@ def test_bool_domain_reaches_the_bigm_derivation(decidb_cli, tmp_path):
     Asserted against the INT spelling rather than against a literal, so the test pins
     "the two agree" rather than one particular tight value.
     """
+
     def bigm(dump: str) -> float:
         """Largest indicator magnitude in the model — the Big-M the disjunction used."""
         magnitudes = [
-            abs(float(c))
-            for row in _rows(dump)
-            for c in re.findall(r"\d+:(-?[\d.e+]+)", row)
-            if abs(float(c)) > 1.0
+            abs(float(c)) for row in _rows(dump) for c in re.findall(r"\d+:(-?[\d.e+]+)", row) if abs(float(c)) > 1.0
         ]
         assert magnitudes, f"expected a Big-M coefficient:\n{dump}"
         return max(magnitudes)
@@ -234,17 +242,18 @@ def test_bool_domain_reaches_the_bigm_derivation(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 2 MINIMIZE SUM(x)
         """,
-        tmp_path / "bool_bigm.dump")
+        tmp_path / "bool_bigm.dump",
+    )
     as_int = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(INT) SUCH THAT x <= 1 AND SUM(x) <> 2 MINIMIZE SUM(x)
         """,
-        tmp_path / "int_bigm.dump")
+        tmp_path / "int_bigm.dump",
+    )
 
     assert bigm(as_bool) == bigm(as_int), (
-        f"BOOL and INT spellings of one feasible set disagree on M:\n"
-        f"BOOL:\n{as_bool}\nINT:\n{as_int}"
+        f"BOOL and INT spellings of one feasible set disagree on M:\n" f"BOOL:\n{as_bool}\nINT:\n{as_int}"
     )
     # And it is a tight constant. (There is no fixed Big-M in DeciDB any more:
     # an underivable range is refused, not given a constant. See test_unbounded_bigm.)
@@ -266,7 +275,8 @@ def test_bool_ceiling_licenses_an_unreachable_drop(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 9 MINIMIZE SUM(x)
         """,
-        tmp_path / "bool_unreachable.dump")
+        tmp_path / "bool_unreachable.dump",
+    )
     assert _rows(dump) == [], f"an unreachable `<>` should emit no rows:\n{dump}"
 
 
@@ -284,13 +294,13 @@ def test_collapse_still_fires_natively(decidb_cli, tmp_path):
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 MINIMIZE SUM(x)
         """,
-        tmp_path / "agg_ne_zero_native.dump")
+        tmp_path / "agg_ne_zero_native.dump",
+    )
 
     rows = _rows(dump)
     assert len(rows) == 1, f"expected one collapsed row, got {len(rows)}:\n{dump}"
     assert "sense=> rhs=1" in rows[0], f"expected `>= 1`, got: {rows[0]}"
-    assert "num_indconstrs: 0" in dump, \
-        f"a collapsed clause has no disjunction to state as implications:\n{dump}"
+    assert "num_indconstrs: 0" in dump, f"a collapsed clause has no disjunction to state as implications:\n{dump}"
 
 
 # A negative floor under a `when` lowers the decision's floor on the rows the `when` keeps. The decision's box then
@@ -388,12 +398,14 @@ def test_bigm_on_a_floor_every_row_keeps_is_sized_from_that_floor(decidb_cli, tm
             SELECT id, x FROM (VALUES (1, true), (2, true)) t(id, p)
             DECIDE x(INT) SUCH THAT when p: x >= 3 AND x <= 5 AND x <> 4 MINIMIZE SUM(x)
         """,
-        tmp_path / "shared_floor_conditional.dump")
+        tmp_path / "shared_floor_conditional.dump",
+    )
     unconditional = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1, true), (2, true)) t(id, p)
             DECIDE x(INT) SUCH THAT x >= 3 AND x <= 5 AND x <> 4 MINIMIZE SUM(x)
         """,
-        tmp_path / "shared_floor_unconditional.dump")
+        tmp_path / "shared_floor_unconditional.dump",
+    )
 
     assert bigm(conditional) == bigm(unconditional), f"CONDITIONAL:\n{conditional}\nUNCONDITIONAL:\n{unconditional}"

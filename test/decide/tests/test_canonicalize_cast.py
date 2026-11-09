@@ -51,18 +51,18 @@ def _solve_cast_lid_case(decidb_cli, duckdb_conn, value_sql, limit_sql):
     rows, cols = decidb_cli.execute(sql)
     actual = int(rows[0][cols.index("x")])
 
-    expected = duckdb_conn.execute(f"""
+    expected = duckdb_conn.execute(
+        f"""
         SELECT MAX(candidate)
         FROM range(0, 4) candidates(candidate),
              (VALUES ({value_sql}, {limit_sql})) t(value, lim)
         WHERE candidate + value <= lim
-    """).fetchone()[0]
+    """
+    ).fetchone()[0]
     return actual, int(expected)
 
 
-def _solve_cast_relation_case(
-    decidb_cli, duckdb_conn, value_sql, relation, limit_sql, lo=-6, hi=6
-):
+def _solve_cast_relation_case(decidb_cli, duckdb_conn, value_sql, relation, limit_sql, lo=-6, hi=6):
     sql = f"""
         SELECT id, value, lim, x
         FROM (VALUES (1, {value_sql}, {limit_sql})) t(id, value, lim)
@@ -72,12 +72,14 @@ def _solve_cast_relation_case(
     """
     rows, cols = decidb_cli.execute(sql)
     actual = int(rows[0][cols.index("x")])
-    expected = duckdb_conn.execute(f"""
+    expected = duckdb_conn.execute(
+        f"""
         SELECT MAX(candidate)
         FROM range({lo}, {hi + 1}) candidates(candidate),
              (VALUES ({value_sql}, {limit_sql})) t(value, lim)
         WHERE candidate + value {relation} lim
-    """).fetchone()[0]
+    """
+    ).fetchone()[0]
     assert expected is not None
     return actual, int(expected)
 
@@ -112,13 +114,17 @@ def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
-    bound = duckdb_conn.execute("""
+    """
+    ).fetchall()
+    bound = duckdb_conn.execute(
+        """
         SELECT CAST(MAX(l_quantity) AS DOUBLE) FROM lineitem WHERE l_orderkey = 1
-    """).fetchone()[0]
+    """
+    ).fetchone()[0]
     n = len(data)
     assert n > 0
     # The shape is only meaningful if the WHEN filter actually excludes rows.
@@ -141,21 +147,23 @@ def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_t
 
     ci = {c: i for i, c in enumerate(decidb_cols)}
     decidb_obj = sum(float(r[ci["x"]]) for r in decidb_rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     # The bound migrated across the relation, so check it holds as written.
-    filtered = sum(
-        float(r[ci["x"]]) for r in decidb_rows if float(r[ci["l_quantity"]]) > 25.0
-    )
-    assert filtered + bound <= 60.0 + 1e-4, (
-        f"constraint violated: {filtered} + {bound} > 60"
-    )
+    filtered = sum(float(r[ci["x"]]) for r in decidb_rows if float(r[ci["l_quantity"]]) > 25.0)
+    assert filtered + bound <= 60.0 + 1e-4, f"constraint violated: {filtered} + {bound} > 60"
 
     perf_tracker.record(
-        "cast_lid_mixed_placement", decidb_time, build_time,
-        result.solve_time_seconds, n, 1, n,
-        result.objective_value, oracle_solver.solver_name(),
+        "cast_lid_mixed_placement",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        1,
+        n,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -187,10 +195,12 @@ def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     assert n > 0
 
@@ -211,14 +221,20 @@ def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
 
     ci = {c: i for i, c in enumerate(decidb_cols)}
     decidb_obj = sum(float(r[ci["x"]]) for r in decidb_rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "cast_lid_negated_reducer", decidb_time, build_time,
-        result.solve_time_seconds, n, 1, n,
-        result.objective_value, oracle_solver.solver_name(),
+        "cast_lid_negated_reducer",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        1,
+        n,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -237,9 +253,7 @@ def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_bigint_to_double_cast_lid_preserves_sql_semantics(
-    decidb_cli, duckdb_conn, value_sql, limit_sql
-):
+def test_bigint_to_double_cast_lid_preserves_sql_semantics(decidb_cli, duckdb_conn, value_sql, limit_sql):
     """Implicit ``BIGINT -> DOUBLE`` must agree with SQL inside the model domain.
 
     DECIDE carries one numeric domain, DOUBLE (see ``language/guide.md`` ->
@@ -250,12 +264,9 @@ def test_bigint_to_double_cast_lid_preserves_sql_semantics(
     that boundary is pinned separately by
     ``test_magnitudes_beyond_double_domain_are_a_documented_limit``.
     """
-    actual, expected = _solve_cast_lid_case(
-        decidb_cli, duckdb_conn, value_sql, limit_sql
-    )
+    actual, expected = _solve_cast_lid_case(decidb_cli, duckdb_conn, value_sql, limit_sql)
     assert actual == expected, (
-        f"canonicalization changed SQL cast semantics: DeciDB={actual}, "
-        f"direct DuckDB={expected}"
+        f"canonicalization changed SQL cast semantics: DeciDB={actual}, " f"direct DuckDB={expected}"
     )
 
 
@@ -277,20 +288,15 @@ def test_bigint_to_double_cast_lid_preserves_sql_semantics(
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_decimal_mixed_types_match_sql_in_domain(
-    decidb_cli, duckdb_conn, value_sql, limit_sql
-):
+def test_decimal_mixed_types_match_sql_in_domain(decidb_cli, duckdb_conn, value_sql, limit_sql):
     """DECIMAL widening and DECIMAL -> DOUBLE both agree with SQL in-domain.
 
     The two cases share the same structural shape, so a divergence points at the
     cast policy rather than at additive placement.
     """
-    actual, expected = _solve_cast_lid_case(
-        decidb_cli, duckdb_conn, value_sql, limit_sql
-    )
+    actual, expected = _solve_cast_lid_case(decidb_cli, duckdb_conn, value_sql, limit_sql)
     assert actual == expected, (
-        f"canonicalization changed SQL cast semantics: DeciDB={actual}, "
-        f"direct DuckDB={expected}"
+        f"canonicalization changed SQL cast semantics: DeciDB={actual}, " f"direct DuckDB={expected}"
     )
 
 
@@ -300,32 +306,24 @@ def test_decimal_mixed_types_match_sql_in_domain(
     [
         pytest.param("1000000::BIGINT", "1000002::DOUBLE", id="positive"),
         pytest.param("-1000003::BIGINT", "-1000002::DOUBLE", id="negative"),
-        pytest.param(
-            "1000003.50::DECIMAL(20,2)", "1000005.50::DOUBLE", id="decimal_scale"
-        ),
+        pytest.param("1000003.50::DECIMAL(20,2)", "1000005.50::DOUBLE", id="decimal_scale"),
     ],
 )
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_cast_agrees_with_sql_for_every_relation(
-    decidb_cli, duckdb_conn, value_sql, limit_sql, relation
-):
+def test_cast_agrees_with_sql_for_every_relation(decidb_cli, duckdb_conn, value_sql, limit_sql, relation):
     """Every relation agrees after internal casts enter the DOUBLE model domain."""
-    actual, expected = _solve_cast_relation_case(
-        decidb_cli, duckdb_conn, value_sql, relation, limit_sql
-    )
-    assert actual == expected, (
-        f"wrong {relation} result for {value_sql}: "
-        f"DeciDB={actual}, direct DuckDB={expected}"
-    )
+    actual, expected = _solve_cast_relation_case(decidb_cli, duckdb_conn, value_sql, relation, limit_sql)
+    assert actual == expected, f"wrong {relation} result for {value_sql}: " f"DeciDB={actual}, direct DuckDB={expected}"
 
 
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
 def test_cast_row_varying_bounds(decidb_cli, duckdb_conn):
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, value, lim, x
         FROM (VALUES
             (1, 1000000::BIGINT, 1000002::DOUBLE),
@@ -334,10 +332,12 @@ def test_cast_row_varying_bounds(decidb_cli, duckdb_conn):
         DECIDE x(INT)
         SUCH THAT x >= -2 AND x <= 4 AND x + value <= lim
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {name: i for i, name in enumerate(cols)}
     actual = {int(row[ci["id"]]): int(row[ci["x"]]) for row in rows}
-    expected_rows = duckdb_conn.execute("""
+    expected_rows = duckdb_conn.execute(
+        """
         SELECT id, MAX(candidate)
         FROM range(-2, 5) c(candidate), (VALUES
             (1, 1000000::BIGINT, 1000002::DOUBLE),
@@ -345,7 +345,8 @@ def test_cast_row_varying_bounds(decidb_cli, duckdb_conn):
         ) t(id, value, lim)
         WHERE candidate + value <= lim
         GROUP BY id
-    """).fetchall()
+    """
+    ).fetchall()
     assert actual == dict(expected_rows)
 
 
@@ -397,7 +398,8 @@ def test_cast_aggregate_per_bounds(decidb_cli, duckdb_conn):
 @pytest.mark.correctness
 def test_explicit_decision_cast_is_rejected_before_model_build(decidb_cli):
     """A cast around any decision-bearing subtree is unsupported solver algebra."""
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, value, lim, x
         FROM (VALUES (1, 2147483646::BIGINT, 2147483647::INTEGER))
              t(id, value, lim)
@@ -405,7 +407,9 @@ def test_explicit_decision_cast_is_rejected_before_model_build(decidb_cli):
         SUCH THAT x >= 0 AND x <= 3
           AND CAST(x + value AS INTEGER) <= lim
         MAXIMIZE SUM(x)
-    """, match=r"Binder Error: DECIDE does not allow casts over decision expressions")
+    """,
+        match=r"Binder Error: DECIDE does not allow casts over decision expressions",
+    )
 
 
 @pytest.mark.var_integer
@@ -413,13 +417,15 @@ def test_explicit_decision_cast_is_rejected_before_model_build(decidb_cli):
 @pytest.mark.correctness
 def test_decision_free_lossy_cast_uses_duckdb_evaluation(decidb_cli, duckdb_conn):
     sql_bound = "CAST(1.6 AS INTEGER)"
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT x
         FROM (VALUES (1)) t(id)
         DECIDE x(INT)
         SUCH THAT x <= {sql_bound}
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     actual = int(rows[0][cols.index("x")])
     expected = int(duckdb_conn.execute(f"SELECT {sql_bound}").fetchone()[0])
     assert actual == expected == 2
@@ -430,9 +436,7 @@ def test_decision_free_lossy_cast_uses_duckdb_evaluation(decidb_cli, duckdb_conn
 @pytest.mark.cons_perrow
 @pytest.mark.query_diagnostics
 @pytest.mark.correctness
-def test_mixed_numeric_equality_keeps_one_diagnostic_clause(
-    request, cli_fixture
-):
+def test_mixed_numeric_equality_keeps_one_diagnostic_clause(request, cli_fixture):
     """A mixed-numeric equality remains one editable user clause."""
     cli = request.getfixturevalue(cli_fixture)
     result = cli.execute_script(
@@ -456,9 +460,7 @@ def test_mixed_numeric_equality_keeps_one_diagnostic_clause(
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_mixed_numeric_highs_and_gurobi_match(
-    decidb_cli_highs, decidb_cli_gurobi, duckdb_conn
-):
+def test_mixed_numeric_highs_and_gurobi_match(decidb_cli_highs, decidb_cli_gurobi, duckdb_conn):
     sql = """
         SELECT id, value, lim, x
         FROM (VALUES
@@ -476,7 +478,8 @@ def test_mixed_numeric_highs_and_gurobi_match(
         ci = {name: i for i, name in enumerate(cols)}
         return sorted((int(row[ci["id"]]), int(row[ci["x"]])) for row in rows)
 
-    expected = duckdb_conn.execute("""
+    expected = duckdb_conn.execute(
+        """
         SELECT id, MAX(candidate)
         FROM range(-2, 5) c(candidate), (VALUES
             (1, 1000000::BIGINT, 1000002::DOUBLE),
@@ -484,7 +487,8 @@ def test_mixed_numeric_highs_and_gurobi_match(
         ) t(id, value, lim)
         WHERE candidate + value <> lim
         GROUP BY id ORDER BY id
-    """).fetchall()
+    """
+    ).fetchall()
     assert decisions(highs_rows, highs_cols) == expected
     assert decisions(gurobi_rows, gurobi_cols) == expected
 
@@ -492,9 +496,7 @@ def test_mixed_numeric_highs_and_gurobi_match(
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_magnitudes_beyond_double_domain_are_a_documented_limit(
-    decidb_cli, duckdb_conn
-):
+def test_magnitudes_beyond_double_domain_are_a_documented_limit(decidb_cli, duckdb_conn):
     """Past 2^53 a DECIDE model and row-wise SQL may disagree, by design.
 
     A solver model is built in DOUBLE -- `solver_input.hpp` hands the backend
@@ -519,11 +521,13 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
     rows, cols = decidb_cli.execute(sql)
     decidb = int(rows[0][cols.index("x")])
 
-    row_wise_sql = duckdb_conn.execute("""
+    row_wise_sql = duckdb_conn.execute(
+        """
         SELECT MAX(candidate)
         FROM range(0, 7) c(candidate)
         WHERE candidate + 9007199254740990::BIGINT <= 9007199254740992::DOUBLE
-    """).fetchone()[0]
+    """
+    ).fetchone()[0]
 
     # Exact arithmetic on the folded bound: 9007199254740992 - 9007199254740990.
     assert decidb == 2, f"folded-bound answer changed: {decidb}"
@@ -550,18 +554,19 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
 @pytest.mark.var_integer
 @pytest.mark.error_binder
 @pytest.mark.error
-def test_all_explicit_decision_cast_syntax_is_rejected(
-    decidb_cli, cast_expression, location
-):
+def test_all_explicit_decision_cast_syntax_is_rejected(decidb_cli, cast_expression, location):
     constraint = f"{cast_expression} <= 4" if location == "constraint" else "x <= 4"
     objective = f"SUM({cast_expression})" if location == "objective" else "SUM(x)"
-    decidb_cli.assert_error(f"""
+    decidb_cli.assert_error(
+        f"""
         SELECT id, x
         FROM (VALUES (1)) t(id)
         DECIDE x(INT)
         SUCH THAT x >= 0 AND {constraint}
         MAXIMIZE {objective}
-    """, match=r"Binder Error: DECIDE does not allow casts over decision expressions")
+    """,
+        match=r"Binder Error: DECIDE does not allow casts over decision expressions",
+    )
 
 
 @pytest.mark.var_boolean
@@ -570,13 +575,15 @@ def test_all_explicit_decision_cast_syntax_is_rejected(
 @pytest.mark.correctness
 def test_data_cast_in_objective_is_evaluated_before_double_ingress(decidb_cli):
     """Erasing the INTEGER cast would choose id=2; preserving it chooses id=1."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, w, penalty, x
         FROM (VALUES (1, 1.6, 10.0), (2, 2.4, 8.0)) t(id, w, penalty)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * CAST(w AS INTEGER) * penalty)
-    """)
+    """
+    )
     ci = {name: i for i, name in enumerate(cols)}
     chosen = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     assert chosen == {1: 1, 2: 0}, chosen
@@ -588,13 +595,15 @@ def test_data_cast_in_objective_is_evaluated_before_double_ingress(decidb_cli):
 @pytest.mark.correctness
 def test_data_cast_in_constraint_coefficient_is_preserved(decidb_cli):
     """Erasing the INTEGER cast would admit both rows instead of only id=2."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, w, x
         FROM (VALUES (1, 1.6), (2, 1.4)) t(id, w)
         DECIDE x(BOOL)
         SUCH THAT x * CAST(w AS INTEGER) <= 1.8
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {name: i for i, name in enumerate(cols)}
     chosen = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     assert chosen == {1: 0, 2: 1}, chosen
@@ -605,13 +614,15 @@ def test_data_cast_in_constraint_coefficient_is_preserved(decidb_cli):
 @pytest.mark.correctness
 def test_select_projection_cast_over_solved_decision_is_allowed(decidb_cli):
     """SELECT is post-solve SQL and is intentionally outside the algebra rule."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, CAST(x AS INTEGER) AS rounded_x
         FROM (VALUES (1)) t(id)
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 1.5
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     assert cols == ["id", "rounded_x"]
     assert int(rows[0][1]) == 2
 

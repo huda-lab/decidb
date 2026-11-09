@@ -10,26 +10,26 @@ import pytest
 
 from solver.types import ObjSense, SolverStatus, VarType
 
+
 @pytest.mark.error_infeasible
 @pytest.mark.error
 class TestInfeasibleModels:
     """DeciDB should raise InvalidInputException for infeasible problems,
     and the oracle should independently report INFEASIBLE."""
 
-    def test_contradictory_per_row_bounds(
-        self, decidb_cli, duckdb_conn, oracle_solver
-    ):
+    def test_contradictory_per_row_bounds(self, decidb_cli, duckdb_conn, oracle_solver):
         """Per-row bounds ``x >= 10 AND x <= 5`` contradict each other."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 10
             DECIDE x(INT)
             SUCH THAT x >= 10 AND x <= 5
             MAXIMIZE SUM(x * l_quantity)
-        """, match=r"(?i)infeasible")
+        """,
+            match=r"(?i)infeasible",
+        )
 
-        data = duckdb_conn.execute(
-            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey < 10"
-        ).fetchall()
+        data = duckdb_conn.execute("SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey < 10").fetchall()
         oracle_solver.create_model("infeas_contradictory_bounds")
         for i in range(len(data)):
             # lb=10 conflicts with ub=5 — Gurobi flags this immediately.
@@ -40,26 +40,28 @@ class TestInfeasibleModels:
         )
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
-    def test_impossible_sum_constraint(
-        self, decidb_cli, duckdb_conn, oracle_solver
-    ):
+    def test_impossible_sum_constraint(self, decidb_cli, duckdb_conn, oracle_solver):
         """``SUM(x) >= 999999`` with BOOLEAN x caps at ``N <= 999999`` rows."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey = 1
             DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 999999
             MAXIMIZE SUM(x * l_quantity)
-        """, match=r"(?i)infeasible")
+        """,
+            match=r"(?i)infeasible",
+        )
 
-        data = duckdb_conn.execute(
-            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey = 1"
-        ).fetchall()
+        data = duckdb_conn.execute("SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey = 1").fetchall()
         oracle_solver.create_model("infeas_impossible_sum")
         vnames = [f"x_{i}" for i in range(len(data))]
         for v in vnames:
             oracle_solver.add_variable(v, VarType.BINARY)
         oracle_solver.add_constraint(
-            {v: 1.0 for v in vnames}, ">=", 999999.0, name="impossible_lb",
+            {v: 1.0 for v in vnames},
+            ">=",
+            999999.0,
+            name="impossible_lb",
         )
         oracle_solver.set_objective(
             {vnames[i]: data[i][0] for i in range(len(data))},
@@ -67,39 +69,42 @@ class TestInfeasibleModels:
         )
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
-    def test_negative_sum_upper_bound(
-        self, decidb_cli, duckdb_conn, oracle_solver
-    ):
+    def test_negative_sum_upper_bound(self, decidb_cli, duckdb_conn, oracle_solver):
         """Non-negative ``x`` cannot have a negative weighted SUM."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 5
             DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 1 AND SUM(x * l_quantity) <= -1
             MAXIMIZE SUM(x)
-        """, match=r"(?i)infeasible")
+        """,
+            match=r"(?i)infeasible",
+        )
 
-        data = duckdb_conn.execute(
-            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey < 5"
-        ).fetchall()
+        data = duckdb_conn.execute("SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey < 5").fetchall()
         oracle_solver.create_model("infeas_negative_ub")
         vnames = [f"x_{i}" for i in range(len(data))]
         for v in vnames:
             oracle_solver.add_variable(v, VarType.BINARY)
         oracle_solver.add_constraint(
-            {v: 1.0 for v in vnames}, ">=", 1.0, name="sum_ge_1",
+            {v: 1.0 for v in vnames},
+            ">=",
+            1.0,
+            name="sum_ge_1",
         )
         oracle_solver.add_constraint(
             {vnames[i]: data[i][0] for i in range(len(data))},
-            "<=", -1.0, name="sum_qty_le_neg1",
+            "<=",
+            -1.0,
+            name="sum_qty_le_neg1",
         )
         oracle_solver.set_objective(
-            {v: 1.0 for v in vnames}, ObjSense.MAXIMIZE,
+            {v: 1.0 for v in vnames},
+            ObjSense.MAXIMIZE,
         )
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
-    def test_infeasible_when_forces_all_zero(
-        self, decidb_cli, duckdb_conn, oracle_solver
-    ):
+    def test_infeasible_when_forces_all_zero(self, decidb_cli, duckdb_conn, oracle_solver):
         """WHEN forces ``x=0`` for every qualifying row; aggregate still demands SUM(x)>=1."""
         decidb_cli.assert_error(
             """
@@ -113,10 +118,12 @@ class TestInfeasibleModels:
             match=r"(?i)(infeasible|WHEN conditions)",
         )
 
-        data = duckdb_conn.execute("""
+        data = duckdb_conn.execute(
+            """
             SELECT CAST(l_quantity AS DOUBLE)
             FROM lineitem WHERE l_orderkey < 10
-        """).fetchall()
+        """
+        ).fetchall()
         oracle_solver.create_model("infeas_when_forces_zero")
         vnames = [f"x_{i}" for i in range(len(data))]
         for i, v in enumerate(vnames):
@@ -126,7 +133,10 @@ class TestInfeasibleModels:
             ub = 0.0 if data[i][0] > 0 else 1.0
             oracle_solver.add_variable(v, VarType.BINARY, lb=0.0, ub=ub)
         oracle_solver.add_constraint(
-            {v: 1.0 for v in vnames}, ">=", 1.0, name="sum_ge_1",
+            {v: 1.0 for v in vnames},
+            ">=",
+            1.0,
+            name="sum_ge_1",
         )
         oracle_solver.set_objective(
             {vnames[i]: data[i][0] for i in range(len(data))},
@@ -134,16 +144,13 @@ class TestInfeasibleModels:
         )
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
-    def test_real_upper_below_nonnegativity_is_rejected(
-        self, decidb_cli, oracle_solver
-    ):
+    def test_real_upper_below_nonnegativity_is_rejected(self, decidb_cli, oracle_solver):
         """Bug 1 / Part C: a user upper bound below the non-negative REAL floor
         (`x <= -1`, default lower 0) is a type-domain conflict — loosening can never
         help, only the type can. It is rejected with a precise static error naming the
         domain, BEFORE the elastic engine, rather than reaching diagnosis."""
         decidb_cli.assert_error(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= -1 MAXIMIZE SUM(x)",
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= -1 MAXIMIZE SUM(x)",
             match=r"(?i)x <= -1 cannot hold.*non-negative",
         )
         oracle_solver.create_model("infeas_real_upper_below_zero")
@@ -151,9 +158,7 @@ class TestInfeasibleModels:
         oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
-    def test_boolean_lower_above_domain_is_rejected(
-        self, decidb_cli, oracle_solver
-    ):
+    def test_boolean_lower_above_domain_is_rejected(self, decidb_cli, oracle_solver):
         """A user lower bound above the BOOLEAN 0/1 ceiling (`x >= 2`) is Boolean
         arithmetic that cannot hold, so the query is infeasible, and the error names the
         bound before any model is built. The 0/1 box is intrinsic and never loosened."""
@@ -173,8 +178,7 @@ class TestInfeasibleModels:
         message says `x < 0`. A strict BOOLEAN bound outside 0 and 1 (`x > 1`, `x > 1.5`) is quoted
         the same way."""
         decidb_cli.assert_error(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(INT) SUCH THAT x < 0 MAXIMIZE SUM(x)",
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(INT) SUCH THAT x < 0 MAXIMIZE SUM(x)",
             match=r"(?i)x < 0 cannot hold.*non-negative",
         )
         decidb_cli.assert_error(
@@ -191,13 +195,11 @@ class TestInfeasibleModels:
         `BOOL x > 0.5` is the pin x = 1 and `INT x < 0.5` is x <= 0; neither is a domain
         conflict."""
         rows, _ = decidb_cli.execute(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT x > 0.5 MINIMIZE SUM(x)"
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x > 0.5 MINIMIZE SUM(x)"
         )
         assert [tuple(r) for r in rows] == [(1,)]
         rows, _ = decidb_cli.execute(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(INT) SUCH THAT x < 0.5 MAXIMIZE SUM(x)"
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(INT) SUCH THAT x < 0.5 MAXIMIZE SUM(x)"
         )
         assert [tuple(r) for r in rows] == [(0,)]
 
@@ -240,8 +242,7 @@ class TestInfeasibleModels:
         the box [-5, -1] is feasible and must NOT trip the non-negativity rejection —
         the maximum is -1."""
         rows, _ = decidb_cli.execute(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= -1 AND x >= -5 MAXIMIZE SUM(x)"
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= -1 AND x >= -5 MAXIMIZE SUM(x)"
         )
         assert rows and rows[0][0] == pytest.approx(-1.0)
 
@@ -279,8 +280,7 @@ class TestDegenerateConstraintRows:
     def test_degenerate_row_reports_infeasible(self, decidb_cli, clause):
         """Each spelling is reported as infeasible and names its own clause."""
         decidb_cli.assert_error(
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)",
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) " f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)",
             match=r"(?i)infeasible",
         )
 
@@ -305,9 +305,9 @@ class TestDegenerateConstraintRows:
         )
         assert "invalidated" not in result.stderr.lower(), result.stderr
         assert "INTERNAL Error" not in result.stderr, result.stderr
-        assert "survived\n42" in result.stdout, (
-            f"connection did not survive the failure:\n{result.stdout}\n{result.stderr}"
-        )
+        assert (
+            "survived\n42" in result.stdout
+        ), f"connection did not survive the failure:\n{result.stdout}\n{result.stderr}"
 
     def test_oracle_agrees_the_model_is_infeasible(self, oracle_solver):
         """Independent confirmation that `0 * x <= -1` really is infeasible, so the
@@ -319,7 +319,8 @@ class TestDegenerateConstraintRows:
         for i, v in enumerate(vnames):
             oracle_solver.add_constraint({v: 0.0}, "<=", -1.0, name=f"zero_row_{i}")
         oracle_solver.set_objective(
-            {v: 1.0 for v in vnames}, ObjSense.MAXIMIZE,
+            {v: 1.0 for v in vnames},
+            ObjSense.MAXIMIZE,
         )
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
@@ -333,55 +334,53 @@ class TestUnboundedModels:
     zero-objective probe, the oracle by a DualReductions=0 re-solve), so exact
     statuses are asserted here."""
 
-    def test_unbounded_integer_maximize(
-        self, decidb_cli, duckdb_conn, oracle_solver
-    ):
+    def test_unbounded_integer_maximize(self, decidb_cli, duckdb_conn, oracle_solver):
         """Integer x >= 1 with no upper bound — unbounded when maximising SUM(x)."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
             DECIDE x(INT)
             SUCH THAT x >= 1
             MAXIMIZE SUM(x)
-        """, match=r"(?i)unbounded")
+        """,
+            match=r"(?i)unbounded",
+        )
 
-        data = duckdb_conn.execute(
-            "SELECT 1 FROM lineitem WHERE l_orderkey <= 5"
-        ).fetchall()
+        data = duckdb_conn.execute("SELECT 1 FROM lineitem WHERE l_orderkey <= 5").fetchall()
         oracle_solver.create_model("unbounded_int_max")
         n = len(data)
         for i in range(n):
             oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=1.0)
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
 
-    def test_unbounded_real_maximize(
-        self, decidb_cli, duckdb_conn, oracle_solver
-    ):
+    def test_unbounded_real_maximize(self, decidb_cli, duckdb_conn, oracle_solver):
         """REAL x >= 0 with no upper bound — unbounded when maximising SUM(x)."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
             DECIDE x(REAL)
             SUCH THAT x >= 0
             MAXIMIZE SUM(x)
-        """, match=r"(?i)unbounded")
+        """,
+            match=r"(?i)unbounded",
+        )
 
-        data = duckdb_conn.execute(
-            "SELECT 1 FROM lineitem WHERE l_orderkey <= 5"
-        ).fetchall()
+        data = duckdb_conn.execute("SELECT 1 FROM lineitem WHERE l_orderkey <= 5").fetchall()
         oracle_solver.create_model("unbounded_real_max")
         n = len(data)
         for i in range(n):
             oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0)
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
 
-    def test_mixed_unbounded_integer_var(
-        self, decidb_cli, oracle_solver
-    ):
+    def test_mixed_unbounded_integer_var(self, decidb_cli, oracle_solver):
         """Mixed problem where one variable is unconstrained.
 
         BOOLEAN ``x`` is bounded by ``SUM(x) <= 5``; INTEGER ``y`` appears
@@ -390,14 +389,17 @@ class TestUnboundedModels:
         model as bounded because *some* variable is constrained would miss
         this — hence the separate test from the lone-integer case.
         """
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT id, val, x, y FROM (
                 VALUES (1, 10.0), (2, 20.0), (3, 30.0)
             ) t(id, val)
             DECIDE x(BOOL), y(INT)
             SUCH THAT SUM(x) <= 5
             MAXIMIZE SUM(x * val + y)
-        """, match=r"(?i)unbounded")
+        """,
+            match=r"(?i)unbounded",
+        )
 
         data = [(1, 10.0), (2, 20.0), (3, 30.0)]
         n = len(data)
@@ -407,7 +409,10 @@ class TestUnboundedModels:
             # INTEGER y with no upper bound mirrors DeciDB's default.
             oracle_solver.add_variable(f"y_{i}", VarType.INTEGER, lb=0.0)
         oracle_solver.add_constraint(
-            {f"x_{i}": 1.0 for i in range(n)}, "<=", 5.0, name="sum_x_cap",
+            {f"x_{i}": 1.0 for i in range(n)},
+            "<=",
+            5.0,
+            name="sum_x_cap",
         )
         obj: dict = {}
         for i in range(n):
@@ -422,9 +427,12 @@ class TestUnboundedModels:
         probe, so this user-facing path still reports an unbounded solve instead
         of leaking the raw backend status.
         """
-        decidb_cli_highs.assert_error("""
+        decidb_cli_highs.assert_error(
+            """
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
             DECIDE x(INT)
             SUCH THAT x >= 1
             MAXIMIZE SUM(x)
-        """, match=r"(?i)unbounded")
+        """,
+            match=r"(?i)unbounded",
+        )

@@ -63,10 +63,12 @@ def compute_decidb_objective(
 # Full solution comparison
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ComparisonResult:
     """Result of comparing DeciDB output against the oracle solution."""
-    status: str                  # "identical" or "optimal"
+
+    status: str  # "identical" or "optimal"
     decidb_objective: float
     oracle_objective: float
     decidb_vector: list[float]
@@ -106,21 +108,15 @@ def compare_solutions(
     Raises:
         AssertionError: If objectives differ beyond tolerance.
     """
-    assert oracle_result.status == SolverStatus.OPTIMAL, (
-        f"Oracle did not find optimal solution: {oracle_result.status}"
-    )
+    assert oracle_result.status == SolverStatus.OPTIMAL, f"Oracle did not find optimal solution: {oracle_result.status}"
     assert oracle_result.objective_value is not None
 
     if decidb_objective_fn is not None:
         decidb_obj = decidb_objective_fn(decidb_rows, decidb_cols)
     else:
         if coeff_fn is None:
-            raise ValueError(
-                "compare_solutions: pass either coeff_fn (linear) or decidb_objective_fn"
-            )
-        decidb_obj = compute_decidb_objective(
-            decidb_rows, decidb_cols, decide_var_names, coeff_fn
-        )
+            raise ValueError("compare_solutions: pass either coeff_fn (linear) or decidb_objective_fn")
+        decidb_obj = compute_decidb_objective(decidb_rows, decidb_cols, decide_var_names, coeff_fn)
     oracle_obj = oracle_result.objective_value
 
     obj_diff = abs(decidb_obj - oracle_obj)
@@ -144,11 +140,7 @@ def compare_solutions(
         key=lambda pair: tuple(_sortable(v) for v in pair[1]),
     )
 
-    decidb_vector = [
-        float(row[vi])
-        for _, row in decidb_sorted
-        for vi in var_indices
-    ]
+    decidb_vector = [float(row[vi]) for _, row in decidb_sorted for vi in var_indices]
 
     oracle_vector = [
         float(oracle_result.variable_values.get(f"{vname}_{orig_idx}", 0.0))
@@ -156,12 +148,8 @@ def compare_solutions(
         for vname in decide_var_names
     ]
 
-    vectors_match = (
-        len(decidb_vector) == len(oracle_vector)
-        and all(
-            abs(p - o) <= tolerance
-            for p, o in zip(decidb_vector, oracle_vector)
-        )
+    vectors_match = len(decidb_vector) == len(oracle_vector) and all(
+        abs(p - o) <= tolerance for p, o in zip(decidb_vector, oracle_vector)
     )
 
     status = "identical" if vectors_match else "optimal"
@@ -179,6 +167,7 @@ def compare_solutions(
 # Backward-compatible wrapper (objective-only, no vector comparison)
 # ---------------------------------------------------------------------------
 
+
 def assert_optimal_match(
     decidb_rows: list[tuple],
     decidb_cols: list[str],
@@ -192,14 +181,10 @@ def assert_optimal_match(
     Objective-only comparison — kept for backward compatibility.
     Prefer compare_solutions() for new tests.
     """
-    assert oracle_result.status == SolverStatus.OPTIMAL, (
-        f"Oracle did not find optimal solution: {oracle_result.status}"
-    )
+    assert oracle_result.status == SolverStatus.OPTIMAL, f"Oracle did not find optimal solution: {oracle_result.status}"
     assert oracle_result.objective_value is not None
 
-    decidb_obj = compute_decidb_objective(
-        decidb_rows, decidb_cols, decide_var_names, coeff_fn
-    )
+    decidb_obj = compute_decidb_objective(decidb_rows, decidb_cols, decide_var_names, coeff_fn)
     oracle_obj = oracle_result.objective_value
 
     diff = abs(decidb_obj - oracle_obj)

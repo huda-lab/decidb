@@ -54,12 +54,14 @@ def test_hard_minmax_over_unbounded_variable_is_refused(decidb_cli):
     """``MAX(x) >= 5`` lowered needs an indicator, and an indicator needs a finite M."""
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     with pytest.raises(DeciDBCliError) as excinfo:
-        lowering.execute(f"""
+        lowering.execute(
+            f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL)
             SUCH THAT MAX(x) >= 5
             MINIMIZE SUM(x)
-        """)
+        """
+        )
     message = excinfo.value.message
     assert re.search(r"finite bound on 'x'", message), message
     # The remedy has to be an edit the user can actually type.
@@ -77,12 +79,14 @@ def test_not_equal_over_unbounded_variable_is_refused(decidb_cli, constraint):
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     with pytest.raises(DeciDBCliError) as excinfo:
-        lowering.execute(f"""
+        lowering.execute(
+            f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)
             SUCH THAT {constraint}
             MAXIMIZE SUM(x)
-        """)
+        """
+        )
     assert re.search(r"finite bound on 'x'", excinfo.value.message), excinfo.value.message
 
 
@@ -98,12 +102,14 @@ def test_composed_minmax_over_unbounded_variable_is_refused(decidb_cli):
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     with pytest.raises(DeciDBCliError) as excinfo:
-        lowering.execute(f"""
+        lowering.execute(
+            f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL)
             SUCH THAT x >= -100 AND SUM(x) + MAX(x) >= -10
             MINIMIZE SUM(x)
-        """)
+        """
+        )
     assert re.search(r"finite bound on 'x'", excinfo.value.message), excinfo.value.message
 
 
@@ -146,22 +152,26 @@ def test_derived_bound_still_answers(decidb_cli):
     and refuse a query whose bound was there to be computed.
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    rows, cols = lowering.execute(f"""
+    rows, cols = lowering.execute(
+        f"""
         SELECT id, x FROM {_ROWS}
         DECIDE x(REAL)
         SUCH THAT SUM(x) <= 10 AND MAX(x) >= 5
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [float(r[ci["x"]]) for r in rows]
     assert abs(max(xs) - 5.0) <= 1e-4, f"expected max(x)=5, got {xs}"
 
-    rows, cols = lowering.execute(f"""
+    rows, cols = lowering.execute(
+        f"""
         SELECT id, x FROM {_ROWS}
         DECIDE x(REAL)
         SUCH THAT x >= 4 AND x <= 20 AND MAX(ABS(x - 5)) >= 3
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [float(r[ci["x"]]) for r in rows]
     assert abs(sum(xs) - 16.0) <= 1e-3, f"expected SUM=16, got {xs}"
@@ -192,9 +202,7 @@ def test_abs_auxiliary_box_is_derived(decidb_cli):
     """
     with tempfile.TemporaryDirectory() as tmp:
         dump_path = os.path.join(tmp, "model.dump")
-        cli = decidb_cli.with_env(
-            {"DECIDB_DUMP_MODEL": dump_path, "DECIDB_NATIVE_CONSTRUCTS": "off"}
-        )
+        cli = decidb_cli.with_env({"DECIDB_DUMP_MODEL": dump_path, "DECIDB_NATIVE_CONSTRUCTS": "off"})
         cli.execute(sql)
         with open(dump_path) as f:
             dump = f.read()
@@ -202,9 +210,7 @@ def test_abs_auxiliary_box_is_derived(decidb_cli):
     assert "num_genconstrs: 0" in dump, f"expected the lowering path:\n{dump}"
     uppers = [float(m) for m in re.findall(r"^col \d+: lb=\S+ ub=(\S+)", dump, re.MULTILINE)]
     assert uppers, f"no columns in dump:\n{dump}"
-    assert all(ub < 1e20 for ub in uppers), (
-        f"an unbounded column survived; every box should be derived:\n{dump}"
-    )
+    assert all(ub < 1e20 for ub in uppers), f"an unbounded column survived; every box should be derived:\n{dump}"
 
 
 @pytest.mark.cons_comparison
@@ -229,12 +235,14 @@ def test_native_path_reports_unbounded_rather_than_the_integer_ceiling(decidb_cl
     """
     native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
     with pytest.raises(DeciDBCliError) as excinfo:
-        native.execute(f"""
+        native.execute(
+            f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)
             SUCH THAT x >= 0 AND SUM(x) <> 500
             MAXIMIZE SUM(x)
-        """)
+        """
+        )
     message = excinfo.value.message
     assert "unbounded" in message.lower(), message
     # Naming the variable is the whole point: the ray fallback cannot derive it
@@ -253,12 +261,14 @@ def test_native_path_still_answers_a_bounded_query(decidb_cli_gurobi):
     than on the box being open. Gurobi-pinned for the same reason as above.
     """
     native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
-    rows, cols = native.execute(f"""
+    rows, cols = native.execute(
+        f"""
         SELECT id, x FROM {_ROWS}
         DECIDE x(INT)
         SUCH THAT x >= 0 AND SUM(x) <> 500
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     assert [int(r[ci["x"]]) for r in rows] == [0, 0, 0], rows
 
@@ -270,11 +280,13 @@ def test_a_large_user_written_bound_is_not_mistaken_for_the_ceiling(decidb_cli):
     The ceiling check only fires on a column the query left open. One bounded at
     2e9 is a real optimum at 2e9, not a solver artefact.
     """
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli.execute(
+        f"""
         SELECT id, x FROM {_ROWS}
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 2000000000
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     assert [int(r[ci["x"]]) for r in rows] == [2000000000] * 3, rows

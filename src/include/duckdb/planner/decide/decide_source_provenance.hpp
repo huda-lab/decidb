@@ -68,19 +68,19 @@ bool DecideIsGuarded(const Expression &expr);
 //! What a message about a clause renders with: the query's text and the registries above. A column reads as the user
 //! wrote it (`D.depotID`): its bound reference is located.
 struct DecideSourceNames {
-    const DecideSourceText &text;
-    const vector<KeyedScopeInfo> &keyed_scopes;
+	const DecideSourceText &text;
+	const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
-    //! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
-    //! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
-    //! `sum(e) by (g)`), which print as that expression rather than by their internal
-    //! name; `decide_index` tells a decision column apart. Null prints the name.
-    idx_t decide_index = DConstants::INVALID_INDEX;
-    const vector<pair<idx_t, string>> *aux_labels = nullptr;
-    //! True quotes every located node as the user wrote it, as a message does. False (a plan's layers) quotes the
-    //! located nodes that read no decision and reprints the decision structure, which canonicalization and the
-    //! rewrites reshape. DecidePlanNames makes the second kind.
-    bool written = true;
+	//! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
+	//! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
+	//! `sum(e) by (g)`), which print as that expression rather than by their internal
+	//! name; `decide_index` tells a decision column apart. Null prints the name.
+	idx_t decide_index = DConstants::INVALID_INDEX;
+	const vector<pair<idx_t, string>> *aux_labels = nullptr;
+	//! True quotes every located node as the user wrote it, as a message does. False (a plan's layers) quotes the
+	//! located nodes that read no decision and reprints the decision structure, which canonicalization and the
+	//! rewrites reshape. DecidePlanNames makes the second kind.
+	bool written = true;
 };
 
 //! The names a plan and the rewrites render with: the clause registries and the auxiliary labels. They render as a
@@ -187,8 +187,7 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constrain
 string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account);
 
 //! Format clause layers as the indented block EXPLAIN prints, one clause per group.
-string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
-                                const vector<string> &unattributed);
+string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers, const vector<string> &unattributed);
 
 //! Format the objective's layers the same way. `written`, `canonical` and `canonical_differs` come from
 //! LogicalDecide's two objective snapshots; `accounts` are what its rewrites made of it;

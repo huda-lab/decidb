@@ -38,8 +38,10 @@ namespace duckdb {
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
-	if (name == "sum") return ObjectiveAggregateType::SUM;
-	if (name == "min") return ObjectiveAggregateType::MIN_AGG;
+	if (name == "sum")
+		return ObjectiveAggregateType::SUM;
+	if (name == "min")
+		return ObjectiveAggregateType::MIN_AGG;
 	if (name != "max") {
 		throw InternalException("DECIDE: aggregate '%s' reached the objective rewrite; the binder promises sum, min or "
 		                        "max there",
@@ -216,9 +218,10 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 	decide.num_auxiliary_vars++;
 	decide.is_boolean_var.push_back(is_boolean);
 	if (decide.variable_scopes.size() != var_idx) {
-		throw InternalException("DECIDE: %llu scopes for %llu decisions; the binder promises one scope per decision and "
-		                        "every rewrite adds a scope with its decision",
-		                        decide.variable_scopes.size(), var_idx);
+		throw InternalException(
+		    "DECIDE: %llu scopes for %llu decisions; the binder promises one scope per decision and "
+		    "every rewrite adds a scope with its decision",
+		    decide.variable_scopes.size(), var_idx);
 	}
 	decide.variable_scopes.push_back(scope);
 	if (scope.IsKeyed()) {
@@ -249,7 +252,8 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 	if (canonicalizer.IsQueryWideConstant(expr)) {
 		return DecideVarScopeInfo::Global();
 	}
-	// A reducer is one value per group of its own `by`, which no declared scope names (ClassifyScoped reads it as a reducer term).
+	// A reducer is one value per group of its own `by`, which no declared scope names (ClassifyScoped reads it as a
+	// reducer term).
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
 	    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return DecideVarScopeInfo::Row();
@@ -307,8 +311,7 @@ void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, const string &clau
 //! a row emitted deep inside a clause still name the clause it came from.
 string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &inherited) {
 	idx_t provenance_id;
-	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) ||
-	               HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
+	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) || HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
 	           ? expr.GetAlias()
 	           : inherited;
 }

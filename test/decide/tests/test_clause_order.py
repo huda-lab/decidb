@@ -27,19 +27,21 @@ from solver.types import VarType, ObjSense
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_plan(text: str) -> str:
     """Strip the echoed query and box-drawing padding from EXPLAIN output.
 
     Leaves only the operator/attribute words, so two plans that differ solely
     in how the source text wrapped still compare equal.
     """
-    body = text[text.find("Physical Plan"):] if "Physical Plan" in text else text
+    body = text[text.find("Physical Plan") :] if "Physical Plan" in text else text
     return " ".join(re.findall(r"[A-Za-z_][A-Za-z_0-9.]*|[<>=+*/-]|\d+", body))
 
 
 # ---------------------------------------------------------------------------
 # Test 1: The split order solves correctly, oracle verified
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_split_order_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
@@ -61,12 +63,14 @@ def test_split_order_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     """
     decidb_result, _ = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT), CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 300
         ORDER BY c.c_custkey
-    """).fetchall()
+    """
+    ).fetchall()
     assert len(data) > 20, "fixture must exceed the cardinality cap to bind"
 
     oracle_solver.create_model("split_clause_order")
@@ -83,13 +87,13 @@ def test_split_order_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 
     acctbal_by_key = {int(k): float(v) for k, v in data}
     decidb_obj = sum(acctbal_by_key[int(row[0])] * int(row[1]) for row in decidb_result)
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
 # Test 2: The two orders agree, row for row
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_orders_return_the_same_rows(decidb_cli, perf_tracker):
@@ -127,6 +131,7 @@ def test_orders_return_the_same_rows(decidb_cli, perf_tracker):
 # Test 3: The two orders produce the same physical plan
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.explain
 def test_orders_produce_the_same_plan(decidb_cli):
     """Nothing downstream of the parser distinguishes the orders, so the plans
@@ -158,6 +163,7 @@ def test_orders_produce_the_same_plan(decidb_cli):
 # ---------------------------------------------------------------------------
 # Test 4: All three declaration scopes are accepted in the split slot
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_scalar_declaration_in_split_slot(decidb_cli, perf_tracker):
@@ -207,6 +213,7 @@ def test_keyed_declaration_in_split_slot(decidb_cli, perf_tracker):
 # Test 5: The lexer flag is cleared between the two slots
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_case_when_in_join_on_between_slots(decidb_cli, perf_tracker):
     """``CASE WHEN`` in a ``JOIN ... ON`` that sits between the two slots must
@@ -216,7 +223,8 @@ def test_case_when_in_join_on_between_slots(decidb_cli, perf_tracker):
     DECIDE lexer context, and everything between it and ``SUCH THAT`` is
     plain SQL that must not see it.
     """
-    rows, _ = decidb_cli.execute("""
+    rows, _ = decidb_cli.execute(
+        """
         SELECT c.c_custkey, x
         DECIDE x(BOOL)
         FROM customer c
@@ -225,7 +233,8 @@ def test_case_when_in_join_on_between_slots(decidb_cli, perf_tracker):
         WHERE c.c_custkey <= 100
         SUCH THAT SUM(x) <= 3
         MAXIMIZE SUM(x * c.c_acctbal)
-    """)
+    """
+    )
     assert len(rows) > 0
     assert sum(row[1] for row in rows) <= 3
 
@@ -233,14 +242,16 @@ def test_case_when_in_join_on_between_slots(decidb_cli, perf_tracker):
 @pytest.mark.correctness
 def test_case_when_in_where_between_slots(decidb_cli, perf_tracker):
     """Same hazard, in a ``WHERE`` between the two slots."""
-    rows, _ = decidb_cli.execute("""
+    rows, _ = decidb_cli.execute(
+        """
         SELECT c_custkey, x
         DECIDE x(BOOL)
         FROM customer
         WHERE (CASE WHEN c_acctbal > 0 THEN 1 ELSE 0 END) = 1 AND c_custkey <= 100
         SUCH THAT SUM(x) <= 3
         MAXIMIZE SUM(x * c_acctbal)
-    """)
+    """
+    )
     assert len(rows) > 0
     assert sum(row[1] for row in rows) <= 3
 
@@ -248,6 +259,7 @@ def test_case_when_in_where_between_slots(decidb_cli, perf_tracker):
 # ---------------------------------------------------------------------------
 # Test 6: Malformed splits are parser errors
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.error_parser
 @pytest.mark.error
@@ -261,36 +273,46 @@ class TestClauseOrderErrors:
         either the pre-FROM or the trailing slot. This test pins the rejection;
         the parser unit test pins the exact message.
         """
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
                 SELECT c_custkey, x
                 DECIDE x(BOOL)
                 FROM customer
                 DECIDE x(BOOL)
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE SUM(x * c_acctbal)
-            """, match=r"(?i)parser error")
+            """,
+            match=r"(?i)parser error",
+        )
 
     def test_split_declaration_without_such_that_rejected(self, decidb_cli):
         """A pre-FROM declaration with no constraints names the fix."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
                 SELECT c_custkey, x
                 DECIDE x(BOOL)
                 FROM customer WHERE c_custkey <= 10
-            """, match=r"DECIDE requires a SUCH THAT clause")
+            """,
+            match=r"DECIDE requires a SUCH THAT clause",
+        )
 
     def test_such_that_without_declaration_rejected(self, decidb_cli):
         """Constraints with nothing declared name the fix."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
                 SELECT c_custkey
                 FROM customer WHERE c_custkey <= 10
                 SUCH THAT SUM(c_acctbal) <= 3
                 MAXIMIZE SUM(c_acctbal)
-            """, match=r"SUCH THAT requires a DECIDE clause")
+            """,
+            match=r"SUCH THAT requires a DECIDE clause",
+        )
 
 
 # ---------------------------------------------------------------------------
 # Test 7: The split order over the remaining source shapes
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_split_order_over_subquery_source(decidb_cli, perf_tracker):
@@ -318,22 +340,23 @@ def test_split_order_over_subquery_source(decidb_cli, perf_tracker):
 @pytest.mark.correctness
 def test_split_order_over_cte_source(decidb_cli, perf_tracker):
     """Same shape via a `WITH` CTE, where the declaration also precedes its source."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         WITH cust AS (SELECT c_custkey, c_acctbal FROM customer WHERE c_custkey <= 60)
         SELECT cust.c_custkey, x
         DECIDE x(BOOL)
         FROM cust
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(cust.c_acctbal * x)
-    """)
+    """
+    )
     assert len(rows) == 60
     x_idx = cols.index("x")
     assert sum(int(r[x_idx]) for r in rows) == 5
 
 
 @pytest.mark.correctness
-def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn,
-                                             oracle_solver, perf_tracker):
+def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """A three-table fan-out join with the declaration before the whole join list,
     oracle-verified.
 
@@ -352,7 +375,8 @@ def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn,
     """
     rows, cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(o.o_orderkey AS BIGINT), CAST(l.l_linenumber AS BIGINT),
                CAST(l.l_quantity AS DOUBLE), CAST(l.l_extendedprice AS DOUBLE)
         FROM customer c
@@ -360,9 +384,9 @@ def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn,
         JOIN lineitem l ON o.o_orderkey = l.l_orderkey
         WHERE o.o_orderkey < 200
         ORDER BY o.o_orderkey, l.l_linenumber
-    """).fetchall()
-    assert len(rows) == len(data), \
-        f"DeciDB saw {len(rows)} join rows, DuckDB {len(data)}"
+    """
+    ).fetchall()
+    assert len(rows) == len(data), f"DeciDB saw {len(rows)} join rows, DuckDB {len(data)}"
 
     oracle_solver.create_model("split_three_table")
     obj, budget = {}, {}
@@ -378,13 +402,13 @@ def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn,
     price_by_key = {(int(o), int(ln)): p for o, ln, _, p in data}
     ok, ln_i, x_i = cols.index("o_orderkey"), cols.index("l_linenumber"), cols.index("x")
     decidb_obj = sum(price_by_key[(int(r[ok]), int(r[ln_i]))] * int(r[x_i]) for r in rows)
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
 # Test 8: The split order composed with `when` and `per`
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_split_order_with_when(decidb_cli, perf_tracker):
@@ -474,6 +498,7 @@ def test_split_order_with_nested_per_objective(decidb_cli, perf_tracker):
 # Test 9: There are exactly two slots — not three
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.error_parser
 @pytest.mark.error
 def test_declaration_between_from_and_where_rejected(decidb_cli):
@@ -483,11 +508,14 @@ def test_declaration_between_from_and_where_rejected(decidb_cli):
     between them is not a third one. Worth pinning because the split order makes
     "somewhere in the middle" a plausible guess.
     """
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
             SELECT c_custkey, x
             FROM customer
             DECIDE x(BOOL)
             WHERE c_custkey <= 20
             SUCH THAT SUM(x) <= 3
             MAXIMIZE SUM(x * c_acctbal)
-        """, match=r"(?i)parser error")
+        """,
+        match=r"(?i)parser error",
+    )

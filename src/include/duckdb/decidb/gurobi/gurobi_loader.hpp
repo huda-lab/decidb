@@ -70,17 +70,15 @@ struct GurobiAPI {
 	void *(*getenv_model)(void *model);
 
 	// Model management
-	int (*newmodel)(void *env, void **modelP, const char *name, int numvars,
-	                double *obj, double *lb, double *ub, char *vtype, char **varnames);
+	int (*newmodel)(void *env, void **modelP, const char *name, int numvars, double *obj, double *lb, double *ub,
+	                char *vtype, char **varnames);
 	int (*freemodel)(void *model);
 
 	// Model building
 	int (*setintattr)(void *model, const char *attrname, int newvalue);
-	int (*addconstr)(void *model, int numnz, int *cind, double *cval,
-	                 char sense, double rhs, const char *constrname);
+	int (*addconstr)(void *model, int numnz, int *cind, double *cval, char sense, double rhs, const char *constrname);
 	int (*addqpterms)(void *model, int numqnz, int *qrow, int *qcol, double *qval);
-	int (*addqconstr)(void *model, int numlnz, int *lind, double *lval,
-	                  int numqnz, int *qrow, int *qcol, double *qval,
+	int (*addqconstr)(void *model, int numlnz, int *lind, double *lval, int numqnz, int *qrow, int *qcol, double *qval,
 	                  char sense, double rhs, const char *name);
 	// General constraints. Optional (loaded best-effort): a capability is partly a
 	// RUNTIME fact, because a loaded library may simply not export the symbol a
@@ -92,14 +90,11 @@ struct GurobiAPI {
 	//! resvar = min(vars..., constant) / max(vars..., constant). Gurobi 8.0+. DeciDB
 	//! passes GRB_INFINITY / -GRB_INFINITY as the constant so the extremum is taken
 	//! over the listed variables alone.
-	int (*addgenconstrMin)(void *model, const char *name, int resvar, int nvars,
-	                       const int *vars, double constant);
-	int (*addgenconstrMax)(void *model, const char *name, int resvar, int nvars,
-	                       const int *vars, double constant);
+	int (*addgenconstrMin)(void *model, const char *name, int resvar, int nvars, const int *vars, double constant);
+	int (*addgenconstrMax)(void *model, const char *name, int resvar, int nvars, const int *vars, double constant);
 	//! `binvar == binval` implies the linear row. Gurobi 7.0+.
-	int (*addgenconstrIndicator)(void *model, const char *name, int binvar, int binval,
-	                             int nvars, const int *ind, const double *val, char sense,
-	                             double rhs);
+	int (*addgenconstrIndicator)(void *model, const char *name, int binvar, int binval, int nvars, const int *ind,
+	                             const double *val, char sense, double rhs);
 
 	// Solve and query
 	int (*optimize)(void *model);

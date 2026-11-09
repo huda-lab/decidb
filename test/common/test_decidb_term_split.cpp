@@ -60,7 +60,8 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 		const char *objective;
 		const char *reducer;
 	};
-	for (auto &test : {Case {"norm(x - t, 1)", "sum"}, Case {"norm(x - t, 2)", "sum"}, Case {"norm(x, 'inf')", "max"}}) {
+	for (auto &test :
+	     {Case {"norm(x - t, 1)", "sum"}, Case {"norm(x - t, 2)", "sum"}, Case {"norm(x, 'inf')", "max"}}) {
 		CanonicalObjective objective(con, test.objective);
 		auto atoms = ReadCanonicalAtoms(*objective.decide->decide_objective, objective.decide->decide_index);
 		REQUIRE(atoms.size() == 1);

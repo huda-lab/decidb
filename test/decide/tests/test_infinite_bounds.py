@@ -88,20 +88,16 @@ def test_infinite_bound_survives_the_rebuilt_rhs(decidb_cli, duckdb_conn, oracle
         SUCH THAT x <= 6 AND {bound}
         MAXIMIZE SUM(x)
     """
-    bare, bare_cols = decidb_cli.execute(
-        common.format(bound="x <= 1e1000::DOUBLE"))
-    rebuilt, rebuilt_cols = decidb_cli.execute(
-        common.format(bound="x + l_linenumber <= 1e1000::DOUBLE"))
+    bare, bare_cols = decidb_cli.execute(common.format(bound="x <= 1e1000::DOUBLE"))
+    rebuilt, rebuilt_cols = decidb_cli.execute(common.format(bound="x + l_linenumber <= 1e1000::DOUBLE"))
 
     assert bare_cols == rebuilt_cols
     xi = bare_cols.index("x")
     bare_obj = sum(int(r[xi]) for r in bare)
     rebuilt_obj = sum(int(r[xi]) for r in rebuilt)
-    assert bare_obj == rebuilt_obj, \
-        f"rebuilt bound disagrees with the bare one: {rebuilt_obj} vs {bare_obj}"
+    assert bare_obj == rebuilt_obj, f"rebuilt bound disagrees with the bare one: {rebuilt_obj} vs {bare_obj}"
 
-    n = duckdb_conn.execute(
-        "SELECT COUNT(*) FROM lineitem WHERE l_orderkey <= 3").fetchone()[0]
+    n = duckdb_conn.execute("SELECT COUNT(*) FROM lineitem WHERE l_orderkey <= 3").fetchone()[0]
     assert n > 1 and len(rebuilt) == n
 
     oracle_solver.create_model("infinite_bound_is_no_bound")
@@ -112,8 +108,9 @@ def test_infinite_bound_survives_the_rebuilt_rhs(decidb_cli, duckdb_conn, oracle
     oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
-    assert abs(rebuilt_obj - result.objective_value) < 1e-6, \
-        f"Objective mismatch: DeciDB={rebuilt_obj}, Oracle={result.objective_value}"
+    assert (
+        abs(rebuilt_obj - result.objective_value) < 1e-6
+    ), f"Objective mismatch: DeciDB={rebuilt_obj}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_perrow
@@ -129,13 +126,16 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
     infeasible before any backend reads it, as the rebuilt spelling's is.
     """
     for bound in ("x + l_linenumber >= 1e1000::DOUBLE", "x >= 1e1000::DOUBLE"):
-        decidb_cli.assert_error(f"""
+        decidb_cli.assert_error(
+            f"""
             SELECT l_orderkey, x
             FROM lineitem WHERE l_orderkey <= 3
             DECIDE x(INT)
             SUCH THAT x <= 6 AND {bound}
             MAXIMIZE SUM(x)
-        """, match=_UNREACHABLE)
+        """,
+            match=_UNREACHABLE,
+        )
 
 
 @pytest.mark.cons_perrow
@@ -158,12 +158,10 @@ def test_infinite_bound_is_a_tautology_for_ne(decidb_cli):
         SUCH THAT x <= 6 AND {constraint}
         MAXIMIZE SUM(x)
     """
-    for constraint in ("x + l_linenumber <> 1e1000::DOUBLE",
-                       "SUM(x) <> 1e1000::DOUBLE"):
+    for constraint in ("x + l_linenumber <> 1e1000::DOUBLE", "SUM(x) <> 1e1000::DOUBLE"):
         rows, cols = decidb_cli.execute(common.format(constraint=constraint))
         xi = cols.index("x")
-        assert all(int(r[xi]) == 6 for r in rows), \
-            f"a vacuous <> bound restricted the model: {constraint}"
+        assert all(int(r[xi]) == 6 for r in rows), f"a vacuous <> bound restricted the model: {constraint}"
 
 
 @pytest.mark.min_max
@@ -203,8 +201,7 @@ def test_vacuous_minmax_bound_drops(decidb_cli, oracle_solver):
         " AND MAX(x) >= -1e1000",
         " AND per l_orderkey: min(x) by (l_orderkey) <= 1e1000::DOUBLE",
     ):
-        assert solve(extra) == (unconstrained, n), \
-            f"a vacuous bound restricted the model: {extra}"
+        assert solve(extra) == (unconstrained, n), f"a vacuous bound restricted the model: {extra}"
 
     oracle_solver.create_model("vacuous_minmax_bound")
     obj = {}
@@ -214,8 +211,9 @@ def test_vacuous_minmax_bound_drops(decidb_cli, oracle_solver):
     oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
-    assert abs(unconstrained - result.objective_value) < 1e-6, \
-        f"Objective mismatch: DeciDB={unconstrained}, Oracle={result.objective_value}"
+    assert (
+        abs(unconstrained - result.objective_value) < 1e-6
+    ), f"Objective mismatch: DeciDB={unconstrained}, Oracle={result.objective_value}"
 
 
 @pytest.mark.min_max
@@ -230,16 +228,17 @@ def test_unreachable_minmax_bound_is_infeasible(decidb_cli):
     gives. ``MAX(x) = +inf`` is included because equality splits into a per-row easy
     half and this hard half, and the easy half is satisfiable on its own.
     """
-    for constraint in ("MAX(x) >= 1e1000::DOUBLE",
-                       "MIN(x) <= -1e1000",
-                       "MAX(x) = 1e1000::DOUBLE"):
-        decidb_cli.assert_error(f"""
+    for constraint in ("MAX(x) >= 1e1000::DOUBLE", "MIN(x) <= -1e1000", "MAX(x) = 1e1000::DOUBLE"):
+        decidb_cli.assert_error(
+            f"""
             SELECT l_orderkey, x
             FROM lineitem WHERE l_orderkey <= 3
             DECIDE x(INT)
             SUCH THAT x >= 0 AND x <= 6 AND {constraint}
             MAXIMIZE SUM(x)
-        """, match=_UNREACHABLE)
+        """,
+            match=_UNREACHABLE,
+        )
 
 
 @pytest.mark.cons_perrow
@@ -251,7 +250,8 @@ def test_nan_bound_is_still_rejected(decidb_cli):
     Relaxing the guard to admit infinities must not admit NaN with them: the
     solver has no reading for it, and it usually means the arithmetic went wrong.
     """
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         WITH data AS (
             SELECT 1 AS id, 1e1000::DOUBLE AS big UNION ALL
             SELECT 2, 1e1000::DOUBLE
@@ -260,7 +260,9 @@ def test_nan_bound_is_still_rejected(decidb_cli):
         DECIDE x(REAL)
         SUCH THAT x <= 5 AND x + big <= big
         MAXIMIZE SUM(x)
-    """, match=r"NaN")
+    """,
+        match=r"NaN",
+    )
 
 
 @pytest.mark.cons_perrow
@@ -273,7 +275,8 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
     expression's range; infinity has no such constant. The user never wrote an
     ``M``, so the message names the value as written, where the ``ABS`` is read.
     """
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         WITH data AS (
             SELECT 1 AS id, 1e1000::DOUBLE AS big UNION ALL
             SELECT 2, 1e1000::DOUBLE
@@ -282,7 +285,9 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
         DECIDE x(REAL)
         SUCH THAT x <= 5
         MAXIMIZE SUM(ABS(x - big))
-    """, match=r"DECIDE: big is NaN or infinite on some rows\. Skip those rows with 'when isfinite\(big\):'\.")
+    """,
+        match=r"DECIDE: big is NaN or infinite on some rows\. Skip those rows with 'when isfinite\(big\):'\.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -346,8 +351,7 @@ def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
     """
     reduced = _by_group(*decidb_cli.execute(data.format(bound="max(cap) by (g)")))
     literal = _by_group(*decidb_cli.execute(data.format(bound="1e1000::DOUBLE")))
-    assert reduced == literal, \
-        f"data reducer and literal disagree: {reduced} vs {literal}"
+    assert reduced == literal, f"data reducer and literal disagree: {reduced} vs {literal}"
     # Both vacuous, so nothing but `x <= 6` is left holding x down.
     assert reduced == {0: [6, 6], 1: [6, 6]}
 
@@ -372,10 +376,8 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
 
     # g=0 reduces to MAX(inf, 2.0) = +inf: vacuous, so it matches the model with
     # the constraint absent. g=1 reduces to MAX(3.0, 1.0) = 3.0 and still binds.
-    assert mixed[0] == unconstrained[0] == [6, 6], \
-        f"the vacuous group was constrained anyway: {mixed[0]}"
-    assert mixed[1] == [3, 6], \
-        f"the finite group's disjunction did not bind: {mixed[1]}"
+    assert mixed[0] == unconstrained[0] == [6, 6], f"the vacuous group was constrained anyway: {mixed[0]}"
+    assert mixed[1] == [3, 6], f"the finite group's disjunction did not bind: {mixed[1]}"
 
     oracle_solver.create_model("data_reducer_mixed_groups")
     obj = {}
@@ -387,16 +389,16 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
     for i in (2, 3):
         y = f"y_{i}"
         oracle_solver.add_variable(y, VarType.BINARY)
-        oracle_solver.add_indicator_constraint(
-            y, 1, {f"x_{i}": 1.0}, "<=", 3.0, name=f"binds_{i}")
+        oracle_solver.add_indicator_constraint(y, 1, {f"x_{i}": 1.0}, "<=", 3.0, name=f"binds_{i}")
         ys.append(y)
     oracle_solver.add_constraint({y: 1.0 for y in ys}, ">=", 1.0, name="some_row")
     oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
     total = sum(sum(v) for v in mixed.values())
-    assert abs(total - result.objective_value) < 1e-6, \
-        f"Objective mismatch: DeciDB={total}, Oracle={result.objective_value}"
+    assert (
+        abs(total - result.objective_value) < 1e-6
+    ), f"Objective mismatch: DeciDB={total}, Oracle={result.objective_value}"
 
 
 @pytest.mark.min_max
@@ -530,12 +532,14 @@ def test_highs_still_solves_a_vacuous_infinity(decidb_cli_highs):
     vacuous spelling never reaches it — the same rule the rewrite applies upstream. A
     guard that refused every infinite bound would break a query that constrains nothing.
     """
-    rows, cols = decidb_cli_highs.execute("""
+    rows, cols = decidb_cli_highs.execute(
+        """
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 1e1000::DOUBLE AND SUM(x) <= 7
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     xi = cols.index("x")
     assert sum(int(r[xi]) for r in rows) == 7
 

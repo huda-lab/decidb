@@ -38,11 +38,7 @@ _rows = _diagnose_relation.eav_rows
 
 
 def _attrs(rows, subject):
-    return {
-        r["attribute"]: r["value"]
-        for r in rows
-        if r["subject_kind"] == "variable" and r["subject"] == subject
-    }
+    return {r["attribute"]: r["value"] for r in rows if r["subject_kind"] == "variable" and r["subject"] == subject}
 
 
 @pytest.mark.query_diagnostics
@@ -51,10 +47,7 @@ class TestUnboundedVariableDiagnostics:
     def test_unbounded_real_var_named(self, request, cli_fixture):
         """A single escaping REAL user variable is named in the relation."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
         # DIAGNOSE returns the finding; it does not raise.
@@ -72,10 +65,7 @@ class TestUnboundedVariableDiagnostics:
         path that the zero-objective probe disambiguates — and is still named
         correctly."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, n FROM (VALUES (1), (2)) t(id) "
-            "DECIDE n(INT) SUCH THAT n >= 0 MAXIMIZE SUM(n)"
-        )
+        sql = "SELECT id, n FROM (VALUES (1), (2)) t(id) " "DECIDE n(INT) SUCH THAT n >= 0 MAXIMIZE SUM(n)"
         result = _diagnose(cli, sql)
         rows = _rows(result)
         assert _attrs(rows, "n")["grows_toward"] == "+inf"
@@ -97,23 +87,17 @@ class TestUnboundedVariableDiagnostics:
         # categorical slice is named.
         assert _attrs(rows, "x")["escaping_instances"] == "2"
         assert _attrs(rows, "y")["escaping_instances"] == "2"
-        assert {
-            r["subject"]
-            for r in rows
-            if r["subject_kind"] == "variable" and r["attribute"] == "grows_toward"
-        } == {"x", "y"}
+        assert {r["subject"] for r in rows if r["subject_kind"] == "variable" and r["attribute"] == "grows_toward"} == {
+            "x",
+            "y",
+        }
         assert {r["state"] for r in rows} == {"unbounded"}
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_minimize_unbounded_var_named_from_improving_direction(
-        self, request, cli_fixture
-    ):
+    def test_minimize_unbounded_var_named_from_improving_direction(self, request, cli_fixture):
         """A MINIMIZE objective that improves toward -inf still names x escaping +inf."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 MINIMIZE SUM(x * -1)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 MINIMIZE SUM(x * -1)"
         result = _diagnose(cli, sql)
         rows = _rows(result)
         assert _attrs(rows, "x")["grows_toward"] == "+inf"
@@ -141,10 +125,7 @@ class TestUnboundedVariableDiagnostics:
         """The unprefixed query reports its state and stops: no variable, no remedy,
         and no second solve to work either out."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         result = cli.execute_script(f".mode csv\n{sql};\n")
         err = result.stderr.lower()
         assert "decide optimization is unbounded" in err

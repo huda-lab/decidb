@@ -167,11 +167,11 @@ DirectQuadraticColumns DirectLayoutQuadraticPart(Optimizer &optimizer, const Exp
 	return columns;
 }
 
-vector<DirectBoundColumns> DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc,
-                                                    DirectProjectionStage &p1, const vector<DirectBoundClause> &clauses,
-                                                    const vector<ColumnBinding> &source_bindings,
-                                                    const std::function<unique_ptr<Expression>(const Expression &)> &over,
-                                                    vector<unique_ptr<Expression>> &checks) {
+vector<DirectBoundColumns>
+DirectLayoutBoundClauses(Optimizer &optimizer, const ExpressionBuilder &calc, DirectProjectionStage &p1,
+                         const vector<DirectBoundClause> &clauses, const vector<ColumnBinding> &source_bindings,
+                         const std::function<unique_ptr<Expression>(const Expression &)> &over,
+                         vector<unique_ptr<Expression>> &checks) {
 	auto into = [&](const Expression &value) {
 		return calc.Wrap(over ? over(value) : value.Copy());
 	};

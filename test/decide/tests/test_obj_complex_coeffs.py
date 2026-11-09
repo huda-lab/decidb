@@ -31,19 +31,19 @@ def test_q03_complex_coeffs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_discount AS DOUBLE),
                CAST(l_tax AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 50
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Compute the effective coefficient per row:
     # coeff_i = price_i * (1 - discount_i) * (1 + tax_i)
-    coefficients = [
-        row[1] * (1.0 - row[2]) * (1.0 + row[3]) for row in data
-    ]
+    coefficients = [row[1] * (1.0 - row[2]) * (1.0 + row[3]) for row in data]
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q03_complex")
@@ -54,7 +54,9 @@ def test_q03_complex_coeffs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     # SUM(x_i * coeff_i) <= 50000
     oracle_solver.add_constraint(
         {vnames[i]: coefficients[i] for i in range(len(data))},
-        "<=", 50000.0, name="budget",
+        "<=",
+        50000.0,
+        name="budget",
     )
     # MAXIMIZE SUM(x)  (just count)
     oracle_solver.set_objective(
@@ -66,14 +68,24 @@ def test_q03_complex_coeffs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 
     # Objective is SUM(x), so coefficient per row is 1.0
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q03_complex_coeffs", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "q03_complex_coeffs",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -89,11 +101,10 @@ def test_q03_complex_coeffs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 # "DECIDE objective contains a non-aggregate term" before the objective
 # normalizer learned to peel/fold.
 
+
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_objective_with_constant_offset(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_objective_with_constant_offset(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`MAXIMIZE SUM(x * cost) + 100` — additive constant peeled away."""
     sql = """
         SELECT c_custkey, c_acctbal, x FROM customer
@@ -106,10 +117,12 @@ def test_objective_with_constant_offset(
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c_custkey AS BIGINT), CAST(c_acctbal AS DOUBLE)
         FROM customer WHERE c_nationkey = 1
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("obj_const_offset")
@@ -118,22 +131,35 @@ def test_objective_with_constant_offset(
         oracle_solver.add_variable(vn, VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 5.0, name="count_limit",
+        "<=",
+        5.0,
+        name="count_limit",
     )
     # The +100 is ignored by argmax; oracle maximizes just SUM(x * c_acctbal).
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][1] for i in range(len(data))},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
     perf_tracker.record(
-        "obj_const_offset", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "obj_const_offset",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -141,9 +167,7 @@ def test_objective_with_constant_offset(
 
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_objective_with_scalar_multiplier(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_objective_with_scalar_multiplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`MAXIMIZE 2 * SUM(x * cost)` — constant multiplier folded into the
     SUM body. Doesn't change argmax (2 > 0) but must not throw."""
     sql = """
@@ -157,10 +181,12 @@ def test_objective_with_scalar_multiplier(
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c_custkey AS BIGINT), CAST(c_acctbal AS DOUBLE)
         FROM customer WHERE c_nationkey = 1
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("obj_scalar_mult")
@@ -169,22 +195,35 @@ def test_objective_with_scalar_multiplier(
         oracle_solver.add_variable(vn, VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 5.0, name="count_limit",
+        "<=",
+        5.0,
+        name="count_limit",
     )
     # Fold turns `2 * SUM(x * c_acctbal)` into `SUM(2 * x * c_acctbal)`.
     oracle_solver.set_objective(
-        {vnames[i]: 2.0 * data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
+        {vnames[i]: 2.0 * data[i][1] for i in range(len(data))},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 2.0 * float(row[decidb_cols.index("c_acctbal")])},
     )
     perf_tracker.record(
-        "obj_scalar_mult", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "obj_scalar_mult",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

@@ -23,24 +23,22 @@ namespace duckdb {
 static void EscapeRateSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v > 0.0 && v <= 1.0)) {
-		throw InvalidInputException(
-		    "diagnose_decide_escape_rate must be in (0, 1]; got " + parameter.ToString() + ".");
+		throw InvalidInputException("diagnose_decide_escape_rate must be in (0, 1]; got " + parameter.ToString() + ".");
 	}
 }
 
 static void CategoricalRatioSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v > 0.0 && v <= 1.0)) {
-		throw InvalidInputException(
-		    "diagnose_decide_categorical_ratio must be in (0, 1]; got " + parameter.ToString() + ".");
+		throw InvalidInputException("diagnose_decide_categorical_ratio must be in (0, 1]; got " + parameter.ToString() +
+		                            ".");
 	}
 }
 
 static void MinCategoriesSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	int64_t v = parameter.GetValue<int64_t>();
 	if (v < 1) {
-		throw InvalidInputException(
-		    "diagnose_decide_min_categories must be >= 1; got " + parameter.ToString() + ".");
+		throw InvalidInputException("diagnose_decide_min_categories must be >= 1; got " + parameter.ToString() + ".");
 	}
 }
 
@@ -51,9 +49,8 @@ static bool IsValidSlackScope(const string &scope) {
 static void SlackScopeSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	string mode = StringUtil::Lower(parameter.ToString());
 	if (!IsValidSlackScope(mode)) {
-		throw InvalidInputException(
-		    "Invalid diagnose_decide_infeasible_slack_scope '" + parameter.ToString() +
-		    "'. Valid scopes: query, expanded.");
+		throw InvalidInputException("Invalid diagnose_decide_infeasible_slack_scope '" + parameter.ToString() +
+		                            "'. Valid scopes: query, expanded.");
 	}
 	parameter = Value(mode); // normalize to lowercase
 }
@@ -69,9 +66,9 @@ static constexpr double DECIDE_L0_TOLERANCE_FLOOR = 1e-5;
 static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v >= DECIDE_L0_TOLERANCE_FLOOR)) {
-		throw InvalidInputException(
-		    "decide_l0_tolerance must be >= 1e-5 (it must exceed the solver feasibility "
-		    "tolerance ~1e-6 to be enforced); got " + parameter.ToString() + ".");
+		throw InvalidInputException("decide_l0_tolerance must be >= 1e-5 (it must exceed the solver feasibility "
+		                            "tolerance ~1e-6 to be enforced); got " +
+		                            parameter.ToString() + ".");
 	}
 }
 
@@ -85,39 +82,34 @@ static void MipGapSetCallback(ClientContext &context, SetScope scope, Value &par
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	// Unbounded characterization knobs: they shape the `group` / `amount` columns a
 	// runaway variable reports under DIAGNOSE.
-	config.AddExtensionOption(
-	    "diagnose_decide_escape_rate",
-	    "Unbounded diagnosis: report a categorical group when its within-group escape rate "
-	    "(escaping/total instances) is at least this value. Range (0, 1]. Default 0.8.",
-	    LogicalType::DOUBLE, Value::DOUBLE(0.8), EscapeRateSetCallback);
-	config.AddExtensionOption(
-	    "diagnose_decide_categorical_ratio",
-	    "Unbounded diagnosis: a column is treated as categorical for characterization when its "
-	    "distinct-value count is at most ratio × num_rows (subject to the min-categories floor). "
-	    "Range (0, 1]. Default 0.1.",
-	    LogicalType::DOUBLE, Value::DOUBLE(0.1), CategoricalRatioSetCallback);
-	config.AddExtensionOption(
-	    "diagnose_decide_min_categories",
-	    "Unbounded diagnosis: absolute floor on the categorical distinct-value cap, so small "
-	    "tables still qualify when ratio × num_rows rounds below a few. Default 20.",
-	    LogicalType::BIGINT, Value::BIGINT(20), MinCategoriesSetCallback);
-	config.AddExtensionOption(
-	    "diagnose_decide_infeasible_slack_scope",
-	    "Infeasible diagnosis: slack granularity. query (default): one edit per SQL-level knob "
-	    "— a data-backed RHS (`x <= col`) reports a virtual query offset (`x <= col + delta`) "
-	    "plus a conflict profile. expanded: one edit per emitted relaxable row/group — a "
-	    "diagnostic profile of which generated constraints are tight, not a directly pasteable "
-	    "SQL edit.",
-	    LogicalType::VARCHAR, Value("query"), SlackScopeSetCallback);
+	config.AddExtensionOption("diagnose_decide_escape_rate",
+	                          "Unbounded diagnosis: report a categorical group when its within-group escape rate "
+	                          "(escaping/total instances) is at least this value. Range (0, 1]. Default 0.8.",
+	                          LogicalType::DOUBLE, Value::DOUBLE(0.8), EscapeRateSetCallback);
+	config.AddExtensionOption("diagnose_decide_categorical_ratio",
+	                          "Unbounded diagnosis: a column is treated as categorical for characterization when its "
+	                          "distinct-value count is at most ratio × num_rows (subject to the min-categories floor). "
+	                          "Range (0, 1]. Default 0.1.",
+	                          LogicalType::DOUBLE, Value::DOUBLE(0.1), CategoricalRatioSetCallback);
+	config.AddExtensionOption("diagnose_decide_min_categories",
+	                          "Unbounded diagnosis: absolute floor on the categorical distinct-value cap, so small "
+	                          "tables still qualify when ratio × num_rows rounds below a few. Default 20.",
+	                          LogicalType::BIGINT, Value::BIGINT(20), MinCategoriesSetCallback);
+	config.AddExtensionOption("diagnose_decide_infeasible_slack_scope",
+	                          "Infeasible diagnosis: slack granularity. query (default): one edit per SQL-level knob "
+	                          "— a data-backed RHS (`x <= col`) reports a virtual query offset (`x <= col + delta`) "
+	                          "plus a conflict profile. expanded: one edit per emitted relaxable row/group — a "
+	                          "diagnostic profile of which generated constraints are tight, not a directly pasteable "
+	                          "SQL edit.",
+	                          LogicalType::VARCHAR, Value("query"), SlackScopeSetCallback);
 	// L0 nonzero threshold (expressivity knob, registered here with the other DECIDE
 	// session options). norm(e, 0) counts a row as nonzero when |e| >= this value.
-	config.AddExtensionOption(
-	    "decide_l0_tolerance",
-	    "norm(expr, 0) (L0 count of nonzeros): a row counts as nonzero when |expr| is at "
-	    "least this value. Must exceed the solver feasibility tolerance (~1e-6) to be "
-	    "enforced, so >= 1e-5. Default 1e-4. Lower it toward the floor for small-magnitude "
-	    "data; raise it to treat larger residuals as zero.",
-	    LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
+	config.AddExtensionOption("decide_l0_tolerance",
+	                          "norm(expr, 0) (L0 count of nonzeros): a row counts as nonzero when |expr| is at "
+	                          "least this value. Must exceed the solver feasibility tolerance (~1e-6) to be "
+	                          "enforced, so >= 1e-5. Default 1e-4. Lower it toward the floor for small-magnitude "
+	                          "data; raise it to treat larger residuals as zero.",
+	                          LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
 	config.AddExtensionOption(
 	    "decide_mip_gap",
 	    "Relative gap at which a DECIDE solve may stop with a near-optimal answer. Default 0: the answer is the "
@@ -370,8 +362,7 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 		DiagnosticFinding base;
 		base.clause = ve.name;
 		base.suggested_change = PrescribeCap(ve);
-		base.edit_source =
-		    ve.direction == EscapeDirection::NEGATIVE ? "runaway_-inf" : "runaway_+inf";
+		base.edit_source = ve.direction == EscapeDirection::NEGATIVE ? "runaway_-inf" : "runaway_+inf";
 
 		// An aux/linearization column, or a variable with a single instance, has no
 		// slice to break out: one finding, no count worth reporting.
@@ -413,8 +404,7 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	return diag;
 }
 
-DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
-                                           const string &achievable_objective,
+DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits, const string &achievable_objective,
                                            bool unbounded_after_fix) {
 	// Precondition: at least one edit. The engine returns an invalid diagnosis (so the
 	// caller emits an `undiagnosed` finding) when nothing is loosenable or every slack
@@ -519,8 +509,7 @@ DecideDiagnostic BuildFeasibleDiagnostic() {
 	return diag;
 }
 
-string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool ray_empty,
-                                                bool has_nonlinear_terms) {
+string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool ray_empty, bool has_nonlinear_terms) {
 	if (diagnostic_timed_out) {
 		return "diagnosis ran out of time before it could identify the runaway variable.";
 	}
@@ -534,16 +523,16 @@ string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool 
 }
 
 void GetDecideDiagnoseSchema(vector<string> &names, vector<LogicalType> &types) {
-	names = {"state", "clause", "suggested_change", "amount", "total",
-	         "scope", "edit_source", "group", "row"};
-	types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::DOUBLE,
-	         LogicalType::BIGINT,  LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
-	         LogicalType::BIGINT};
+	names = {"state", "clause", "suggested_change", "amount", "total", "scope", "edit_source", "group", "row"};
+	types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::DOUBLE, LogicalType::BIGINT,
+	         LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT};
 }
 
 void RenderDecideDiagnostic(const DecideDiagnostic &diag, idx_t &offset, DataChunk &output) {
 	idx_t count = 0;
-	auto text = [](const string &v) { return v.empty() ? Value() : Value(v); };
+	auto text = [](const string &v) {
+		return v.empty() ? Value() : Value(v);
+	};
 	while (offset < diag.findings.size() && count < STANDARD_VECTOR_SIZE) {
 		const auto &f = diag.findings[offset++];
 		idx_t col = 0;
@@ -562,8 +551,7 @@ void RenderDecideDiagnostic(const DecideDiagnostic &diag, idx_t &offset, DataChu
 }
 
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {
-	auto state =
-	    context.registered_state->GetOrCreate<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
+	auto state = context.registered_state->GetOrCreate<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
 	state->latest = std::move(diag);
 }
 

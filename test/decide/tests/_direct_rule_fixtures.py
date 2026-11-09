@@ -9,6 +9,7 @@ suite checks all of it. Adding a rule means adding one `RuleFixture` to `RULE_FI
 
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class RuleFixture:
     #: The rule name EXPLAIN and `require` messages print.

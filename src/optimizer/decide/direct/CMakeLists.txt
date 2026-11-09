@@ -19,4 +19,6 @@ add_library_unity(
   n1_euclidean_ball_rule.cpp
   r1_continuous_knapsack_rule.cpp
   s1_uniform_matroid_rule.cpp)
-set(ALL_OBJECT_FILES ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide_direct> PARENT_SCOPE)
+set(ALL_OBJECT_FILES
+    ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide_direct>
+    PARENT_SCOPE)

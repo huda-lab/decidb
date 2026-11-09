@@ -979,7 +979,7 @@ def test_a_refusal_with_no_gurobi_quotes_the_quadratic_clause(decidb_exe_path, t
         "DECIDE x(REAL) SUCH THAT SUM(x) <= 50 AND SUM(POWER(x, 2)) <= 25 MAXIMIZE SUM(s * x)) ORDER BY id"
     )
     refused = without_gurobi(decidb_exe_path, tmp_path)(query)
-    assert "the SUCH THAT clause `SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables" in refused.stderr, (
-        refused.stderr
-    )
+    assert (
+        "the SUCH THAT clause `SUM(POWER(x, 2)) <= 25` squares or multiplies decision variables" in refused.stderr
+    ), refused.stderr
     assert "SUM(x) <= 50" not in refused.stderr, refused.stderr

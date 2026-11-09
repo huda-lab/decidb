@@ -48,9 +48,7 @@ def _refused(cli, sql, message):
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
-def test_product_of_two_forms_that_each_carry_a_constant(
-    decidb_cli_gurobi, oracle_solver
-):
+def test_product_of_two_forms_that_each_carry_a_constant(decidb_cli_gurobi, oracle_solver):
     """`(x + 1) * (y + 2)`: AddProductRow moves the cross terms of both constants (`right.constant != 0`) to the
     linear part."""
     weights = [2.0, 1.0, 4.0]
@@ -67,29 +65,20 @@ def test_product_of_two_forms_that_each_carry_a_constant(
     linear, quadratic = {}, {}
     for i, w in enumerate(weights):
         for name in ("x", "y"):
-            oracle_solver.add_variable(
-                f"{name}_{i}", VarType.CONTINUOUS, lb=0.0, ub=4.0
-            )
+            oracle_solver.add_variable(f"{name}_{i}", VarType.CONTINUOUS, lb=0.0, ub=4.0)
         quadratic[(f"x_{i}", f"y_{i}")] = 1.0
         linear[f"x_{i}"] = 2.0 - w  # (x + 1)(y + 2) = xy + 2x + y + 2
         linear[f"y_{i}"] = 1.0 - w
-    oracle_solver.set_quadratic_objective(
-        linear, quadratic, ObjSense.MINIMIZE, constant=2.0 * len(weights)
-    )
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE, constant=2.0 * len(weights))
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
-    actual = sum(
-        (r["x"] + 1) * (r["y"] + 2) - w * r["x"] - w * r["y"]
-        for r, w in zip(rows, weights)
-    )
+    actual = sum((r["x"] + 1) * (r["y"] + 2) - w * r["x"] - w * r["y"] for r, w in zip(rows, weights))
     assert actual == pytest.approx(result.objective_value, rel=1e-4, abs=1e-4)
 
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
-def test_strict_greater_than_over_a_quadratic_clause(
-    decidb_cli_gurobi, decidb_cli_highs, oracle_solver
-):
+def test_strict_greater_than_over_a_quadratic_clause(decidb_cli_gurobi, decidb_cli_highs, oracle_solver):
     """`SUM(x * x) > 20` over whole numbers: BuildQuadraticConstraint steps `> K` to `>= K + 1` (the
     COMPARE_GREATERTHAN case). HiGHS refuses a quadratic clause."""
     sql = """
@@ -102,9 +91,7 @@ def test_strict_greater_than_over_a_quadratic_clause(
     names = [f"x_{i}" for i in range(3)]
     for name in names:
         oracle_solver.add_variable(name, VarType.INTEGER, lb=0.0, ub=5.0)
-    oracle_solver.add_quadratic_constraint(
-        {}, {(n, n): 1.0 for n in names}, ">=", 21.0, name="strict"
-    )
+    oracle_solver.add_quadratic_constraint({}, {(n, n): 1.0 for n in names}, ">=", 21.0, name="strict")
     oracle_solver.set_objective({n: 1.0 for n in names}, ObjSense.MINIMIZE)
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
@@ -119,9 +106,7 @@ def test_strict_greater_than_over_a_quadratic_clause(
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
-def test_quadratic_clause_whose_linear_terms_cancel_across_rows(
-    decidb_cli_gurobi, oracle_solver
-):
+def test_quadratic_clause_whose_linear_terms_cancel_across_rows(decidb_cli_gurobi, oracle_solver):
     """`SUM(c * z + z * z)` with `c` summing to 0 over the rows: the linear coefficient of the one query-wide `z` is
     0 after the sum, and BuildQuadraticConstraint leaves it out (`pair.second != 0.0`).
     """
@@ -136,9 +121,7 @@ def test_quadratic_clause_whose_linear_terms_cancel_across_rows(
     )
     oracle_solver.create_model("quadratic_linear_terms_cancel")
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=5.0)
-    oracle_solver.add_quadratic_constraint(
-        {"z": float(sum(cs))}, {("z", "z"): float(len(cs))}, "<=", 10.0
-    )
+    oracle_solver.add_quadratic_constraint({"z": float(sum(cs))}, {("z", "z"): float(len(cs))}, "<=", 10.0)
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MAXIMIZE)
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
@@ -147,9 +130,7 @@ def test_quadratic_clause_whose_linear_terms_cancel_across_rows(
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
-def test_quadratic_clause_whose_square_terms_cancel_across_rows(
-    decidb_cli_gurobi, oracle_solver
-):
+def test_quadratic_clause_whose_square_terms_cancel_across_rows(decidb_cli_gurobi, oracle_solver):
     """`SUM(c * z * z)` with `c` summing to 0: the Q entry of `z * z` is 0 after the sum, and
     BuildQuadraticConstraint leaves it out (`entry.second != 0.0`), so the clause holds for every `z`.
     """
@@ -172,9 +153,7 @@ def test_quadratic_clause_whose_square_terms_cancel_across_rows(
 
 
 @pytest.mark.correctness
-def test_aggregate_over_a_query_wide_decision_and_a_data_term(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_aggregate_over_a_query_wide_decision_and_a_data_term(decidb_cli_gurobi, decidb_cli_highs):
     """`SUM(x + c)` over a query-wide `x`: the clause's columns are shared, so its folded terms are read
     (`clause_folded_terms`), and the data-only term has no decision to fold (`v == INVALID_INDEX`).
     """
@@ -227,9 +206,7 @@ def test_aggregate_over_more_columns_than_the_dense_accumulator_holds(
 # ---------------------------------------------------------------------------
 
 
-def test_not_equal_over_two_keyed_decisions_finds_each_columns_owner(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_not_equal_over_two_keyed_decisions_finds_each_columns_owner(decidb_cli_gurobi, decidb_cli_highs):
     """`SUM(a) + SUM(b) <> 24` with `a` and `b` each keyed: the Big-M of the lowered clause asks which decision owns
     each keyed column (`VarIndexer::OwnerOf`), and a column of `a` is below the base of `b`.
     """
@@ -251,14 +228,10 @@ def test_not_equal_over_two_keyed_decisions_finds_each_columns_owner(
         for row in rows:
             assert by_key.setdefault(row["k"], row) == row
         assignment = {f"{n}{k}": by_key[k][n] for n in "ab" for k in keys}
-        assert judge(assignment, lambda v: total(v) != 24, total) == optimum(
-            domains, lambda v: total(v) != 24, total
-        )
+        assert judge(assignment, lambda v: total(v) != 24, total) == optimum(domains, lambda v: total(v) != 24, total)
 
 
-def test_not_equal_beside_a_product_of_other_decisions(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_not_equal_beside_a_product_of_other_decisions(decidb_cli_gurobi, decidb_cli_highs):
     """`y <> 7` beside `SUM(b * x)`: the Big-M of `y` looks for a bilinear link whose auxiliary is `y`
     (`BilinearLinkOf`) and passes the product's link, which is not."""
     sql = """
@@ -279,16 +252,12 @@ def test_not_equal_beside_a_product_of_other_decisions(
         judge_rows(
             _answer(_lowered(cli), sql),
             {k: v for k, v in domains.items()},
-            lambda a: a["y0"] != 7
-            and a["y1"] != 7
-            and a["b0"] * a["x0"] + a["b1"] * a["x1"] <= 7,
+            lambda a: a["y0"] != 7 and a["y1"] != 7 and a["b0"] * a["x0"] + a["b1"] * a["x1"] <= 7,
             lambda a: a["x0"] + a["x1"] + a["b0"] + a["b1"] - a["y0"] - a["y1"],
         )
 
 
-def test_not_equal_over_a_decision_open_below_is_refused(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_not_equal_over_a_decision_open_below_is_refused(decidb_cli_gurobi, decidb_cli_highs):
     """`x <> 3` with `x` open below and bounded above: the `z == 1 => x >= 4` half is slackened by a Big-M that
     reads `x`'s lower end, which is open (FlatRowReach, `DecideIsOpenBelow`)."""
     sql = """
@@ -303,9 +272,7 @@ def test_not_equal_over_a_decision_open_below_is_refused(
         )
 
 
-def test_not_equal_over_a_product_open_below_names_its_factor(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_not_equal_over_a_product_open_below_names_its_factor(decidb_cli_gurobi, decidb_cli_highs):
     """`b * x <> 3` with `x` open below: the product's auxiliary is open because `x` is, and the refusal names
     `x`, the factor the user can bound (`BilinearLinkOf` finds the link; its other variable is blamed).
     """
@@ -321,9 +288,7 @@ def test_not_equal_over_a_product_open_below_names_its_factor(
         )
 
 
-def test_not_equal_over_a_coefficient_that_is_zero_on_a_row(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_not_equal_over_a_coefficient_that_is_zero_on_a_row(decidb_cli_gurobi, decidb_cli_highs):
     """`c * x <> 3` with `c = 0` on one row: that row's term is left out of the clause, its row verdict (`0 <> 3`
     always holds) differs from the other rows', so the clause keeps its Big-M pair (ClassifyNEConstraint).
     """
@@ -344,9 +309,7 @@ def test_not_equal_over_a_coefficient_that_is_zero_on_a_row(
 
 
 @pytest.mark.parametrize("bound", ["x <> 2.5e0", f"x <> {_INFINITY}"])
-def test_not_equal_to_a_value_no_whole_number_takes_is_a_tautology(
-    decidb_cli_gurobi, tmp_path, bound
-):
+def test_not_equal_to_a_value_no_whole_number_takes_is_a_tautology(decidb_cli_gurobi, tmp_path, bound):
     """`x <> 2.5` over a whole-numbered `x` excludes nothing, nor does an infinite bound (`!NEIsIntegerValuedRhs`
     on a uniform bound): the clause emits no row."""
     sql = f"""
@@ -355,9 +318,7 @@ def test_not_equal_to_a_value_no_whole_number_takes_is_a_tautology(
         MAXIMIZE SUM(x)
         ORDER BY id"""
     cli = _lowered(decidb_cli_gurobi)
-    assert not re.findall(
-        r"^row \d+:", cli.dump_model(sql, tmp_path / "model.dump"), re.M
-    )
+    assert not re.findall(r"^row \d+:", cli.dump_model(sql, tmp_path / "model.dump"), re.M)
     judge_rows(
         _answer(cli, sql),
         {"x0": range(6), "x1": range(6)},
@@ -366,9 +327,7 @@ def test_not_equal_to_a_value_no_whole_number_takes_is_a_tautology(
     )
 
 
-def test_aggregate_not_equal_below_the_reachable_range_is_a_tautology(
-    decidb_cli_gurobi, tmp_path
-):
+def test_aggregate_not_equal_below_the_reachable_range_is_a_tautology(decidb_cli_gurobi, tmp_path):
     """`SUM(x) <> -1` over `x >= 0`: the group's range lies above the excluded value (`grp_lo > rhs + 0.5`), so the
     group emits no row."""
     sql = """
@@ -377,9 +336,7 @@ def test_aggregate_not_equal_below_the_reachable_range_is_a_tautology(
         MINIMIZE SUM(x)
         ORDER BY id"""
     cli = _lowered(decidb_cli_gurobi)
-    assert not re.findall(
-        r"^row \d+:", cli.dump_model(sql, tmp_path / "model.dump"), re.M
-    )
+    assert not re.findall(r"^row \d+:", cli.dump_model(sql, tmp_path / "model.dump"), re.M)
     judge_rows(
         _answer(cli, sql),
         {"x0": range(6), "x1": range(6)},
@@ -395,9 +352,7 @@ def test_aggregate_not_equal_below_the_reachable_range_is_a_tautology(
 
 
 @pytest.mark.parametrize("excluded_by", ["Infinity", "-Infinity"])
-def test_hard_max_under_when_with_an_infinite_bound(
-    decidb_cli_gurobi, decidb_cli_highs, excluded_by
-):
+def test_hard_max_under_when_with_an_infinite_bound(decidb_cli_gurobi, decidb_cli_highs, excluded_by):
     """`when id > 1: max(x) >= +/-inf`: ClassifyMinMaxGroups reads the bound's direction, and the row the `when`
     leaves out (group INVALID_INDEX) is skipped, both in the unsatisfiable group's plain rows and in the groups it
     drops. `+inf` is out of reach (infeasible); `-inf` holds for every assignment."""
@@ -420,9 +375,7 @@ def test_hard_max_under_when_with_an_infinite_bound(
             )
 
 
-def test_hard_max_over_a_coefficient_that_is_zero_on_a_row(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_hard_max_over_a_coefficient_that_is_zero_on_a_row(decidb_cli_gurobi, decidb_cli_highs):
     """`max(c * x) >= 4` with `c = 0` on a row: that row's member has no decision term (FillLink skips it)."""
     cs = [0, 2, 1]
     values = ", ".join(f"({i + 1}, {c})" for i, c in enumerate(cs))
@@ -461,9 +414,7 @@ def test_native_max_over_an_expression_whose_other_term_is_negligible(
     )
 
 
-def test_min_out_of_reach_is_infeasible_natively_and_lowered(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_min_out_of_reach_is_infeasible_natively_and_lowered(decidb_cli_gurobi, decidb_cli_highs):
     """`min(x) <= -3` over `x >= 0`: the bound lies outside the family's reach, and a native MIN opens the demanded
     low end of its extremum column (`open_demanded_end` for MIN); the query is infeasible on either arm.
     """
@@ -476,9 +427,7 @@ def test_min_out_of_reach_is_infeasible_natively_and_lowered(
     _refused(decidb_cli_highs, sql, _INFEASIBLE)
 
 
-def test_objective_group_sums_over_two_open_decisions_name_the_first(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_objective_group_sums_over_two_open_decisions_name_the_first(decidb_cli_gurobi, decidb_cli_highs):
     """`MAXIMIZE max(per g: sum(x + y) by (g))` with `x` and `y` open: each row's range is open below by two
     decisions, and the first one met is the one named (SavedRowRange keeps the first `unbounded_var`).
     """
@@ -523,29 +472,22 @@ def test_composed_clause_with_an_avg_term(decidb_cli_gurobi, decidb_cli_highs):
             cli,
             "avg(x) + max(y) <= 4",
             _XY,
-            lambda a: (a["x0"] + a["x1"] + a["x2"]) / 3 + max(a["y0"], a["y1"], a["y2"])
-            <= 4 + 1e-9,
+            lambda a: (a["x0"] + a["x1"] + a["x2"]) / 3 + max(a["y0"], a["y1"], a["y2"]) <= 4 + 1e-9,
         )
 
 
-def test_composed_clause_with_a_data_term_in_its_sum(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_composed_clause_with_a_data_term_in_its_sum(decidb_cli_gurobi, decidb_cli_highs):
     """`sum(x + id) + max(y) <= 14`: the `id` term has no decision; its sum moves to the bound side."""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         _composed(
             cli,
             "sum(x + id) + max(y) <= 14",
             _XY,
-            lambda a: sum(a[f"x{i}"] + i + 1 for i in range(3))
-            + max(a["y0"], a["y1"], a["y2"])
-            <= 14,
+            lambda a: sum(a[f"x{i}"] + i + 1 for i in range(3)) + max(a["y0"], a["y1"], a["y2"]) <= 14,
         )
 
 
-def test_composed_clause_whose_extremum_has_a_negative_coefficient(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_composed_clause_whose_extremum_has_a_negative_coefficient(decidb_cli_gurobi, decidb_cli_highs):
     """`sum(x) + max(0 - y) >= -3`: the extremum's argument has a negative coefficient, so its range takes the
     low end of `y` for the high end of the argument (ComposedTermRange, `c > 0.0` false).
     """
@@ -554,15 +496,11 @@ def test_composed_clause_whose_extremum_has_a_negative_coefficient(
             cli,
             "sum(x) + max(0 - y) >= -3",
             _XY,
-            lambda a: sum(a[f"x{i}"] for i in range(3))
-            + max(-a["y0"], -a["y1"], -a["y2"])
-            >= -3,
+            lambda a: sum(a[f"x{i}"] for i in range(3)) + max(-a["y0"], -a["y1"], -a["y2"]) >= -3,
         )
 
 
-def test_composed_clause_over_a_decision_open_below(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_composed_clause_over_a_decision_open_below(decidb_cli_gurobi, decidb_cli_highs):
     """`sum(x) + max(y) <= 9` with `y` open below: the extremum's range is open below (`DecideIsOpenBelow`), and
     the easy direction needs no Big-M, so the query answers."""
     sql = """
@@ -611,9 +549,7 @@ def _abs_query(
     ],
     ids=["strict greater", "equal"],
 )
-def test_hard_abs_clause_demands_its_auxiliary_by_comparison(
-    decidb_cli_gurobi, decidb_cli_highs, clause, holds
-):
+def test_hard_abs_clause_demands_its_auxiliary_by_comparison(decidb_cli_gurobi, decidb_cli_highs, clause, holds):
     """A hard ABS clause sizes the auxiliary's ceiling from what the clause demands of it, whichever way the
     comparison pushes (`>` pushes up; `=` pushes both ways: DemandedAuxReach)."""
     ws = (3, 7)
@@ -627,9 +563,7 @@ def test_hard_abs_clause_demands_its_auxiliary_by_comparison(
         )
 
 
-def test_hard_abs_beside_a_negative_coefficient_under_strict_less_than(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_hard_abs_beside_a_negative_coefficient_under_strict_less_than(decidb_cli_gurobi, decidb_cli_highs):
     """`SUM(y) - SUM(ABS(x - id)) < 3`: the auxiliary's coefficient is negative, so the strict `<` pushes it up
     (`a < 0 && pushes_down`, with COMPARE_LESSTHAN among the downward comparisons)."""
     sql = """
@@ -647,9 +581,7 @@ def test_hard_abs_beside_a_negative_coefficient_under_strict_less_than(
         )
 
 
-def test_hard_abs_clause_with_a_zero_weight_on_a_row(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_hard_abs_clause_with_a_zero_weight_on_a_row(decidb_cli_gurobi, decidb_cli_highs):
     """`SUM(c * ABS(x - w)) >= 4` with `c = 0` on one row: that row does not demand anything of its auxiliary."""
     sql = """
         SELECT id, x FROM (VALUES (1, 3, 0), (2, 7, 2)) t(id, w, c) DECIDE x(INT)
@@ -666,9 +598,7 @@ def test_hard_abs_clause_with_a_zero_weight_on_a_row(
         )
 
 
-def test_hard_abs_clause_beside_a_decision_open_below(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_hard_abs_clause_beside_a_decision_open_below(decidb_cli_gurobi, decidb_cli_highs):
     """`SUM(ABS(x - w)) + SUM(y) >= 4` with `y` open below: the other terms' low end is open, so the demand on
     the auxiliary cannot be read from it (`std::isfinite(lo)`), and the query still answers.
     """
@@ -693,9 +623,7 @@ def test_hard_abs_clause_beside_a_decision_open_below(
         )
 
 
-def test_hard_abs_clause_with_an_infinite_bound_is_infeasible(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_hard_abs_clause_with_an_infinite_bound_is_infeasible(decidb_cli_gurobi, decidb_cli_highs):
     """`SUM(ABS(x - w)) >= inf`: DemandedAuxReach cannot read an infinite bound and leaves the demand alone; the
     clause cannot be met."""
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
@@ -725,9 +653,7 @@ def test_native_abs_over_a_coefficient_that_is_zero_on_a_row(decidb_cli_gurobi):
     )
 
 
-def test_a_product_with_two_reducer_helpers_names_the_unbounded_member(
-    decidb_cli_gurobi, decidb_cli_highs
-):
+def test_a_product_with_two_reducer_helpers_names_the_unbounded_member(decidb_cli_gurobi, decidb_cli_highs):
     """`b * SUM(x) by (g) <= 3 AND b * SUM(y) by (g) <= 4` with `y` unbounded: each reducer is a helper decision, and
     the refusal of the second one's product names the member `y` (the loop over helpers passes the first).
     """
@@ -800,9 +726,7 @@ def test_reducer_helper_with_an_open_closing_side(
     ["x >= -1e30", "x >= -1e30 AND x <= 20"],
     ids=["open both ends", "open below"],
 )
-def test_l0_norm_over_an_unbounded_decision_names_the_norm(
-    decidb_cli_gurobi, decidb_cli_highs, bounds
-):
+def test_l0_norm_over_an_unbounded_decision_names_the_norm(decidb_cli_gurobi, decidb_cli_highs, bounds):
     """`norm(x - w, 0)` links a 0/1 indicator to `x - w` with a Big-M, which needs a finite box on `x`. The refusal
     names the construct that asked, the norm, and the variable to bound (it said MIN/MAX before).
     """

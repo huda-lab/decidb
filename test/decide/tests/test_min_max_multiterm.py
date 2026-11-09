@@ -49,12 +49,14 @@ LINEITEM_FILTER = "l_orderkey <= 10"
 
 def _fetch_lineitem(conn):
     """Rows of (orderkey, linenumber, quantity) in query order."""
-    return conn.execute(f"""
+    return conn.execute(
+        f"""
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE {LINEITEM_FILTER}
-    """).fetchall()
+    """
+    ).fetchall()
 
 
 def _row_max(rows, cols, value_fn):
@@ -68,13 +70,15 @@ def _row_min(rows, cols, value_fn):
 
 def _fetch_lineitem_with_flag(conn):
     """Rows of (orderkey, linenumber, quantity, returnflag) in query order."""
-    return conn.execute(f"""
+    return conn.execute(
+        f"""
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE {LINEITEM_FILTER}
-    """).fetchall()
+    """
+    ).fetchall()
 
 
 def _per_group_extreme(rows, cols, pick):
@@ -84,9 +88,7 @@ def _per_group_extreme(rows, cols, pick):
     x_i = cols.index("x")
     per_group = {}
     for row in rows:
-        per_group.setdefault(row[flag_i], []).append(
-            (float(row[qty_i]) + 1.0) * int(row[x_i])
-        )
+        per_group.setdefault(row[flag_i], []).append((float(row[qty_i]) + 1.0) * int(row[x_i]))
     return sum(pick(vals) for vals in per_group.values())
 
 
@@ -94,13 +96,12 @@ def _per_group_extreme(rows, cols, pick):
 # Flat MIN/MAX objective — easy direction
 # ===========================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_flat_min_max_additive_coefficient(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_flat_min_max_additive_coefficient(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX((l_quantity + 1) * x) — coefficient distributes into two terms.
 
     Minimizing the worst selected row drives the choice onto the two smallest
@@ -128,12 +129,17 @@ def test_flat_min_max_additive_coefficient(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+        {v: 1.0 for v in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=ub)
     for i in range(n):
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -(data[i][2] + 1.0)}, ">=", 0.0,
+            {"z": 1.0, vnames[i]: -(data[i][2] + 1.0)},
+            ">=",
+            0.0,
             name=f"z_ge_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MINIMIZE)
@@ -142,18 +148,31 @@ def test_flat_min_max_additive_coefficient(
 
     def decidb_obj(rs, cs):
         return _row_max(
-            rs, cs,
+            rs,
+            cs,
             lambda r, c: (float(r[c.index("l_quantity")]) + 1.0) * int(r[c.index("x")]),
         )
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "flat_max_additive_coeff", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "flat_max_additive_coeff",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -161,9 +180,7 @@ def test_flat_min_max_additive_coefficient(
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_flat_min_max_repeated_variable(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_flat_min_max_repeated_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX(l_quantity * x + x) — the same variable in two written terms.
 
     Algebraically identical to `MAX((l_quantity + 1) * x)`; written out so the
@@ -190,12 +207,17 @@ def test_flat_min_max_repeated_variable(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+        {v: 1.0 for v in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=ub)
     for i in range(n):
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -(data[i][2] + 1.0)}, ">=", 0.0,
+            {"z": 1.0, vnames[i]: -(data[i][2] + 1.0)},
+            ">=",
+            0.0,
             name=f"z_ge_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MINIMIZE)
@@ -204,19 +226,31 @@ def test_flat_min_max_repeated_variable(
 
     def decidb_obj(rs, cs):
         return _row_max(
-            rs, cs,
-            lambda r, c: float(r[c.index("l_quantity")]) * int(r[c.index("x")])
-            + int(r[c.index("x")]),
+            rs,
+            cs,
+            lambda r, c: float(r[c.index("l_quantity")]) * int(r[c.index("x")]) + int(r[c.index("x")]),
         )
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "flat_max_repeated_var", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "flat_max_repeated_var",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -224,9 +258,7 @@ def test_flat_min_max_repeated_variable(
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_flat_min_max_constant_term(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_flat_min_max_constant_term(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX(l_quantity * x + 5) — a bare constant inside the aggregate.
 
     The constant carries no solver column; it belongs on the linking row's
@@ -254,13 +286,19 @@ def test_flat_min_max_constant_term(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+        {v: 1.0 for v in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=ub)
     for i in range(n):
         # z >= qty_i * x_i + 5
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -data[i][2]}, ">=", 5.0, name=f"z_ge_{i}",
+            {"z": 1.0, vnames[i]: -data[i][2]},
+            ">=",
+            5.0,
+            name=f"z_ge_{i}",
         )
     oracle_solver.set_objective({"z": 1.0}, ObjSense.MINIMIZE)
     build_time = time.perf_counter() - t_build
@@ -268,18 +306,31 @@ def test_flat_min_max_constant_term(
 
     def decidb_obj(rs, cs):
         return _row_max(
-            rs, cs,
+            rs,
+            cs,
             lambda r, c: float(r[c.index("l_quantity")]) * int(r[c.index("x")]) + 5.0,
         )
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "flat_max_constant_term", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "flat_max_constant_term",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -287,13 +338,12 @@ def test_flat_min_max_constant_term(
 # Flat MIN/MAX objective — hard direction (indicator + Big-M path)
 # ===========================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_flat_max_additive_coefficient_hard(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_flat_max_additive_coefficient_hard(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE MAX((l_quantity + 1) * x) — hard direction, multi-term row expr.
 
     The hard direction routes through the one-hot indicator encoding, a
@@ -320,10 +370,14 @@ def test_flat_max_additive_coefficient_hard(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, "<=", 2.0, name="sum_le_2",
+        {v: 1.0 for v in vnames},
+        "<=",
+        2.0,
+        name="sum_le_2",
     )
     z = emit_hard_inner_max(
-        oracle_solver, "obj",
+        oracle_solver,
+        "obj",
         [{vnames[i]: data[i][2] + 1.0} for i in range(n)],
         ub,
     )
@@ -333,18 +387,31 @@ def test_flat_max_additive_coefficient_hard(
 
     def decidb_obj(rs, cs):
         return _row_max(
-            rs, cs,
+            rs,
+            cs,
             lambda r, c: (float(r[c.index("l_quantity")]) + 1.0) * int(r[c.index("x")]),
         )
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "flat_max_additive_hard", decidb_time, build_time,
-        result.solve_time_seconds, n, 2 * n + 1, 2 * n + 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "flat_max_additive_hard",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        2 * n + 1,
+        2 * n + 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -352,9 +419,7 @@ def test_flat_max_additive_coefficient_hard(
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_flat_min_additive_coefficient_hard(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_flat_min_additive_coefficient_hard(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MIN((l_quantity + 1) * x) — the other hard direction.
 
     Forcing every row on (`SUM(x) >= n`) keeps the MIN off the trivial zero
@@ -381,10 +446,14 @@ def test_flat_min_additive_coefficient_hard(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", float(n), name="sum_ge_all",
+        {v: 1.0 for v in vnames},
+        ">=",
+        float(n),
+        name="sum_ge_all",
     )
     z = emit_hard_inner_min(
-        oracle_solver, "obj",
+        oracle_solver,
+        "obj",
         [{vnames[i]: data[i][2] + 1.0} for i in range(n)],
         ub,
     )
@@ -394,18 +463,31 @@ def test_flat_min_additive_coefficient_hard(
 
     def decidb_obj(rs, cs):
         return _row_min(
-            rs, cs,
+            rs,
+            cs,
             lambda r, c: (float(r[c.index("l_quantity")]) + 1.0) * int(r[c.index("x")]),
         )
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "flat_min_additive_hard", decidb_time, build_time,
-        result.solve_time_seconds, n, 2 * n + 1, 2 * n + 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "flat_min_additive_hard",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        2 * n + 1,
+        2 * n + 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -413,13 +495,12 @@ def test_flat_min_additive_coefficient_hard(
 # Composed MIN/MAX objective — MIN/MAX term added to a SUM term
 # ===========================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_composed_min_max_additive_coefficient(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_composed_min_max_additive_coefficient(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX((l_quantity + 1) * x) + SUM(x) — composed additive objective.
 
     The composed path allocates its own z per MIN/MAX term and pins it from a
@@ -446,12 +527,17 @@ def test_composed_min_max_additive_coefficient(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
-        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+        {v: 1.0 for v in vnames},
+        ">=",
+        2.0,
+        name="sum_ge_2",
     )
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=ub)
     for i in range(n):
         oracle_solver.add_constraint(
-            {"z": 1.0, vnames[i]: -(data[i][2] + 1.0)}, ">=", 0.0,
+            {"z": 1.0, vnames[i]: -(data[i][2] + 1.0)},
+            ">=",
+            0.0,
             name=f"z_ge_{i}",
         )
     obj = {v: 1.0 for v in vnames}
@@ -462,25 +548,39 @@ def test_composed_min_max_additive_coefficient(
 
     def decidb_obj(rs, cs):
         worst = _row_max(
-            rs, cs,
+            rs,
+            cs,
             lambda r, c: (float(r[c.index("l_quantity")]) + 1.0) * int(r[c.index("x")]),
         )
         return worst + sum(int(r[cs.index("x")]) for r in rs)
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "composed_max_additive_coeff", decidb_time, build_time,
-        result.solve_time_seconds, n, n + 1, n + 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "composed_max_additive_coeff",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n + 1,
+        n + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
 # ===========================================================================
 # Two-level objective, outer MIN over group sums, entity-scoped variable
 # ===========================================================================
+
 
 @pytest.mark.min_max
 @pytest.mark.per_clause
@@ -506,13 +606,15 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
     rows, cols = decidb_cli.execute(sql)
     assert len(rows) > 0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE),
                CAST(c.c_mktsegment AS VARCHAR)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
 
     nations = sorted({int(r[0]) for r in data})
     segments = sorted({r[2] for r in data})
@@ -527,7 +629,9 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
     counts = {nk: sum(1 for r in data if int(r[0]) == nk) for nk in nations}
     oracle_solver.add_constraint(
         {vnames[nk]: float(counts[nk]) for nk in nations},
-        "<=", 150.0, name="sum_le_150",
+        "<=",
+        150.0,
+        name="sum_le_150",
     )
 
     # w <= per-segment sum, for every segment; maximize w (easy outer MIN).
@@ -554,9 +658,7 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
     for row in rows:
         nk = int(row[nkey_i])
         keep = int(row[keep_i])
-        assert per_nation.setdefault(nk, keep) == keep, (
-            f"Nation {nk} has inconsistent keepN across join rows"
-        )
+        assert per_nation.setdefault(nk, keep) == keep, f"Nation {nk} has inconsistent keepN across join rows"
 
     group_sums = {}
     for row in rows:
@@ -565,8 +667,7 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
     decidb_obj = min(group_sums.values())
 
     assert abs(decidb_obj - result.objective_value) < 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, "
-        f"Oracle={result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, " f"Oracle={result.objective_value:.4f}"
     )
 
 
@@ -583,14 +684,13 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
 # forms were unaffected; only outer SUM + multi-term inner MIN/MAX hit it.
 # ===========================================================================
 
+
 @pytest.mark.min_max
 @pytest.mark.per_clause
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_sum_outer_min_inner_additive_coefficient(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_per_sum_outer_min_inner_additive_coefficient(decidb_cli, duckdb_conn, oracle_solver):
     """MAXIMIZE sum(per l_returnflag: min((l_quantity + 1) * x) by (l_returnflag)).
 
     Outer SUM over groups, inner MIN over a two-term row expression — the
@@ -622,7 +722,10 @@ def test_per_sum_outer_min_inner_additive_coefficient(
         oracle_solver.add_variable(v, VarType.BINARY)
     for flag, idxs in groups.items():
         oracle_solver.add_constraint(
-            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_1_{flag}",
+            {vnames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"sum_ge_1_{flag}",
         )
     z_names = []
     for flag, idxs in groups.items():
@@ -635,7 +738,12 @@ def test_per_sum_outer_min_inner_additive_coefficient(
         return _per_group_extreme(rs, cs, min)
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     assert cmp.status in ("identical", "optimal")
 
@@ -645,9 +753,7 @@ def test_per_sum_outer_min_inner_additive_coefficient(
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_sum_outer_min_inner_repeated_variable(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_per_sum_outer_min_inner_repeated_variable(decidb_cli, duckdb_conn, oracle_solver):
     """MAXIMIZE sum(per l_returnflag: min(l_quantity * x + x) by (l_returnflag)).
 
     Algebraically identical to `sum(per l_returnflag: min((l_quantity + 1) * x)
@@ -677,7 +783,10 @@ def test_per_sum_outer_min_inner_repeated_variable(
         oracle_solver.add_variable(v, VarType.BINARY)
     for flag, idxs in groups.items():
         oracle_solver.add_constraint(
-            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_1_{flag}",
+            {vnames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"sum_ge_1_{flag}",
         )
     z_names = []
     for flag, idxs in groups.items():
@@ -690,7 +799,12 @@ def test_per_sum_outer_min_inner_repeated_variable(
         return _per_group_extreme(rs, cs, min)
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     assert cmp.status in ("identical", "optimal")
 
@@ -700,9 +814,7 @@ def test_per_sum_outer_min_inner_repeated_variable(
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_per_sum_outer_max_inner_additive_coefficient(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_per_sum_outer_max_inner_additive_coefficient(decidb_cli, duckdb_conn, oracle_solver):
     """MINIMIZE sum(per l_returnflag: max((l_quantity + 1) * x) by (l_returnflag)).
 
     The other direction named in the bug report: outer SUM, inner MAX, sense
@@ -732,7 +844,10 @@ def test_per_sum_outer_max_inner_additive_coefficient(
         oracle_solver.add_variable(v, VarType.BINARY)
     for flag, idxs in groups.items():
         oracle_solver.add_constraint(
-            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_1_{flag}",
+            {vnames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"sum_ge_1_{flag}",
         )
     z_names = []
     for flag, idxs in groups.items():
@@ -745,7 +860,12 @@ def test_per_sum_outer_max_inner_additive_coefficient(
         return _per_group_extreme(rs, cs, max)
 
     cmp = compare_solutions(
-        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+        rows,
+        cols,
+        result,
+        data,
+        ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     assert cmp.status in ("identical", "optimal")
 

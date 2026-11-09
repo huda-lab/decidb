@@ -56,9 +56,19 @@ _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
 #: Words a renderer may emit that are its own vocabulary, not the user's data.
 #: Kept small on purpose: every entry is a place the check cannot see a leak, so
 #: a name earns its way in only by being SQL the renderer must be able to write.
-_RENDERER_VOCABULARY = frozenset({
-    "and", "or", "not", "between", "in", "is", "null", "true", "false",
-})
+_RENDERER_VOCABULARY = frozenset(
+    {
+        "and",
+        "or",
+        "not",
+        "between",
+        "in",
+        "is",
+        "null",
+        "true",
+        "false",
+    }
+)
 
 #: An internal column stands in for a term the user never named (`col3`), and every
 #: pipeline tag opens and closes with `__` (see `AddDecideTag`). Either one in a
@@ -195,8 +205,10 @@ def assert_backends_agree(results_by_backend: dict[str, dict], context: str) -> 
         ref_obj, cur_obj = ref["achievable_objective"], cur["achievable_objective"]
         if ref_obj is None and cur_obj is None:
             continue
-        assert ref_obj is not None and cur_obj is not None and (
-            abs(float(ref_obj) - float(cur_obj)) <= 1e-6 * max(1.0, abs(float(ref_obj)))
+        assert (
+            ref_obj is not None
+            and cur_obj is not None
+            and (abs(float(ref_obj) - float(cur_obj)) <= 1e-6 * max(1.0, abs(float(ref_obj))))
         ), (
             f"{reference} and {other} promise a different payoff for repairing the "
             f"same query — {context}. The tie must break on achievable objective, so "

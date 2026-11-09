@@ -47,32 +47,56 @@ DEFAULT_ITERATIONS = 3
 
 COEFFICIENTS: dict[str, dict[str, int]] = {
     "medium": {
-        "Q1_QTY_CAP": 3829286, "Q1_R_QTY_CAP": 1260000, "Q1_GRP_CAP": 62500,
+        "Q1_QTY_CAP": 3829286,
+        "Q1_R_QTY_CAP": 1260000,
+        "Q1_GRP_CAP": 62500,
         "Q1_LOCAL_CAP": 5420000000,
-        "Q2_NE_SUM": 127500, "Q2_PRICE_CAP": 9070000000, "Q2_MOD_CAP": 1147500,
-        "Q3_ROW_LIMIT": 60000, "Q3_ABS_CAP": 450000,
+        "Q2_NE_SUM": 127500,
+        "Q2_PRICE_CAP": 9070000000,
+        "Q2_MOD_CAP": 1147500,
+        "Q3_ROW_LIMIT": 60000,
+        "Q3_ABS_CAP": 450000,
         "Q4_QTY_CAP": 2500000,
-        "Q5_ROW_LIMIT": 50000, "Q5_SSE_CAP": 38700000,
-        "Q6_ROW_LIMIT": 127500, "Q6_PICK_CAP": 63750, "Q6_BILIN_CAP": 3187500,
+        "Q5_ROW_LIMIT": 50000,
+        "Q5_SSE_CAP": 38700000,
+        "Q6_ROW_LIMIT": 127500,
+        "Q6_PICK_CAP": 63750,
+        "Q6_BILIN_CAP": 3187500,
         "Q6_GRP_CAP": 1245117,
-        "Q7_ROW_LIMIT": 127500, "Q7_BILIN_CAP": 5100000, "Q7_PICK_CAP": 63750,
+        "Q7_ROW_LIMIT": 127500,
+        "Q7_BILIN_CAP": 5100000,
+        "Q7_PICK_CAP": 63750,
         "Q9_ROW_LIMIT": 7500,
-        "Q10_ROW_LIMIT": 500000, "Q10_SUM_CAP": 7500000, "Q10_ABS_FLOOR": 1250000,
+        "Q10_ROW_LIMIT": 500000,
+        "Q10_SUM_CAP": 7500000,
+        "Q10_ABS_FLOOR": 1250000,
         "Q11_BUDGET": 51000000000,
         "P3_BUDGET": 5000000,
     },
     "large": {
-        "Q1_QTY_CAP": 7660945, "Q1_R_QTY_CAP": 2520000, "Q1_GRP_CAP": 125000,
+        "Q1_QTY_CAP": 7660945,
+        "Q1_R_QTY_CAP": 2520000,
+        "Q1_GRP_CAP": 125000,
         "Q1_LOCAL_CAP": 10900000000,
-        "Q2_NE_SUM": 255000, "Q2_PRICE_CAP": 18200000000, "Q2_MOD_CAP": 2295000,
-        "Q3_ROW_LIMIT": 120000, "Q3_ABS_CAP": 900000,
+        "Q2_NE_SUM": 255000,
+        "Q2_PRICE_CAP": 18200000000,
+        "Q2_MOD_CAP": 2295000,
+        "Q3_ROW_LIMIT": 120000,
+        "Q3_ABS_CAP": 900000,
         "Q4_QTY_CAP": 5000000,
-        "Q5_ROW_LIMIT": 100000, "Q5_SSE_CAP": 77400000,
-        "Q6_ROW_LIMIT": 255000, "Q6_PICK_CAP": 127500, "Q6_BILIN_CAP": 6375000,
+        "Q5_ROW_LIMIT": 100000,
+        "Q5_SSE_CAP": 77400000,
+        "Q6_ROW_LIMIT": 255000,
+        "Q6_PICK_CAP": 127500,
+        "Q6_BILIN_CAP": 6375000,
         "Q6_GRP_CAP": 2490234,
-        "Q7_ROW_LIMIT": 255000, "Q7_BILIN_CAP": 10200000, "Q7_PICK_CAP": 127500,
+        "Q7_ROW_LIMIT": 255000,
+        "Q7_BILIN_CAP": 10200000,
+        "Q7_PICK_CAP": 127500,
         "Q9_ROW_LIMIT": 15000,
-        "Q10_ROW_LIMIT": 1000000, "Q10_SUM_CAP": 15000000, "Q10_ABS_FLOOR": 2500000,
+        "Q10_ROW_LIMIT": 1000000,
+        "Q10_SUM_CAP": 15000000,
+        "Q10_ABS_FLOOR": 2500000,
         "Q11_BUDGET": 102000000000,
         "P3_BUDGET": 10000000,
     },
@@ -90,7 +114,9 @@ def get_git_commit() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
         )
         return result.stdout.strip() if result.returncode == 0 else "unknown"
     except FileNotFoundError:
@@ -121,7 +147,9 @@ def is_dirty() -> bool:
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
         )
         return bool(result.stdout.strip())
     except FileNotFoundError:
@@ -157,10 +185,7 @@ def resolve_query_sql(sql: str, size: str) -> tuple[str, dict[str, int]]:
     """
     coefficients = COEFFICIENTS.get(size)
     if coefficients is None:
-        raise ValueError(
-            f"no coefficient map configured for size '{size}'. "
-            f"Available sizes: {', '.join(DB_SIZES)}"
-        )
+        raise ValueError(f"no coefficient map configured for size '{size}'. " f"Available sizes: {', '.join(DB_SIZES)}")
 
     used: dict[str, int] = {}
 
@@ -184,7 +209,9 @@ def find_previous_result(current_commit: str) -> Path | None:
     try:
         result = subprocess.run(
             ["git", "log", "--format=%h", "-n", "50"],
-            capture_output=True, text=True, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
         )
         if result.returncode != 0:
             return None
@@ -254,8 +281,7 @@ def parse_time_output(stderr: str) -> dict:
     else:
         # GNU format: "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.45"
         m = re.search(
-            r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*"
-            r"(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)",
+            r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*" r"(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)",
             stderr,
         )
         if m:
@@ -299,9 +325,13 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
         # This harness tracks the solver pipeline's stage timers. Direct solve is on by default and would
         # take S1-shaped queries (p4) off that pipeline, so pin the solver path here.
         cmd = [
-            "/usr/bin/time", time_flag,
-            str(DECIDB_EXE), str(db_path), "-readonly",
-            "-cmd", "SET decide_direct_solve='off'",
+            "/usr/bin/time",
+            time_flag,
+            str(DECIDB_EXE),
+            str(db_path),
+            "-readonly",
+            "-cmd",
+            "SET decide_direct_solve='off'",
         ]
 
         with open(sql_path) as sql_file:
@@ -333,7 +363,8 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
                 posix_time_line_re = re.compile(r"^(real|user|sys)\s+[\d.]+")
                 resource_line_re = re.compile(r"^\s+\d+\s+\w")
                 error_lines = [
-                    line for line in result.stderr.splitlines()
+                    line
+                    for line in result.stderr.splitlines()
                     if line.strip()
                     and not time_line_re.match(line)
                     and not posix_time_line_re.match(line.strip())
@@ -341,11 +372,29 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
                 ]
             else:
                 error_lines = [
-                    line for line in result.stderr.splitlines()
-                    if not line.strip().startswith(("Command", "Elapsed", "Maximum",
-                        "Average", "Major", "Minor", "Voluntary", "Involuntary",
-                        "Swaps", "File", "Socket", "Signals", "Page", "Exit",
-                        "Percent", "System", "User"))
+                    line
+                    for line in result.stderr.splitlines()
+                    if not line.strip().startswith(
+                        (
+                            "Command",
+                            "Elapsed",
+                            "Maximum",
+                            "Average",
+                            "Major",
+                            "Minor",
+                            "Voluntary",
+                            "Involuntary",
+                            "Swaps",
+                            "File",
+                            "Socket",
+                            "Signals",
+                            "Page",
+                            "Exit",
+                            "Percent",
+                            "System",
+                            "User",
+                        )
+                    )
                     and line.strip()
                 ]
             if error_lines:
@@ -387,8 +436,7 @@ def compute_stats(runs: list[dict]) -> dict:
     if stage_keys:
         stats["stages"] = {}
         for key in sorted(stage_keys):
-            values = [r["stages"][key] for r in successful
-                      if "stages" in r and key in r["stages"]]
+            values = [r["stages"][key] for r in successful if "stages" in r and key in r["stages"]]
             if values:
                 if isinstance(values[0], float):
                     stats["stages"][key] = round(statistics.median(values), 2)
@@ -413,8 +461,7 @@ def print_comparison(current: list[dict], previous: dict) -> None:
     print()
     print(f"Comparison: {previous.get('commit', '?')} -> current")
     print("=" * 90)
-    header = (f"{'Query':<25} {'Size':>8} {'Prev(s)':>9} {'Curr(s)':>9} "
-              f"{'Delta':>8} {'%':>7} {'RSS Delta':>10}")
+    header = f"{'Query':<25} {'Size':>8} {'Prev(s)':>9} {'Curr(s)':>9} " f"{'Delta':>8} {'%':>7} {'RSS Delta':>10}"
     print(header)
     print("-" * 90)
 
@@ -448,8 +495,7 @@ def print_comparison(current: list[dict], previous: dict) -> None:
             rss_delta_mb = (curr_rss - prev_rss) / 1024
             rss_delta_str = f"{rss_delta_mb:+.1f}MB"
 
-        print(f"{name:<25} {size:>8} {prev_str:>9} {curr_str:>9} "
-              f"{delta_str:>8} {pct_str:>7} {rss_delta_str:>10}")
+        print(f"{name:<25} {size:>8} {prev_str:>9} {curr_str:>9} " f"{delta_str:>8} {pct_str:>7} {rss_delta_str:>10}")
 
     print("=" * 90)
     print()
@@ -463,27 +509,39 @@ def print_comparison(current: list[dict], previous: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="DeciDB DECIDE benchmark runner")
     parser.add_argument(
-        "--queries", type=str, default=None,
+        "--queries",
+        type=str,
+        default=None,
         help="Comma-separated list of queries to run (e.g., Q1,Q3). Default: all",
     )
     parser.add_argument(
-        "--sizes", type=str, default=None,
+        "--sizes",
+        type=str,
+        default=None,
         help="Comma-separated DB sizes (e.g., medium,large). Default: all",
     )
     parser.add_argument(
-        "--iterations", type=int, default=DEFAULT_ITERATIONS,
+        "--iterations",
+        type=int,
+        default=DEFAULT_ITERATIONS,
         help=f"Number of iterations per query/size (default: {DEFAULT_ITERATIONS})",
     )
     parser.add_argument(
-        "--manual", action="store_true",
+        "--manual",
+        action="store_true",
         help="Run queries/manual.sql instead of standard queries",
     )
     parser.add_argument(
-        "--compare", nargs="?", const="auto", default=None,
+        "--compare",
+        nargs="?",
+        const="auto",
+        default=None,
         help="Compare with previous results. No arg = auto-find, or specify commit hash",
     )
     parser.add_argument(
-        "--timeout", type=int, default=600,
+        "--timeout",
+        type=int,
+        default=600,
         help="Timeout per query execution in seconds (default: 600)",
     )
     args = parser.parse_args()
@@ -498,8 +556,7 @@ def main() -> None:
     sizes = [s.strip() for s in args.sizes.split(",")] if args.sizes else DB_SIZES
     for s in sizes:
         if s not in DB_SIZES:
-            print(f"ERROR: Unknown size '{s}'. Available: {', '.join(DB_SIZES)}",
-                  file=sys.stderr)
+            print(f"ERROR: Unknown size '{s}'. Available: {', '.join(DB_SIZES)}", file=sys.stderr)
             sys.exit(1)
         db_path = DATABASES_DIR / f"{s}.db"
         if not db_path.exists():
@@ -516,8 +573,7 @@ def main() -> None:
         manual_path = QUERIES_DIR / "manual.sql"
         if not manual_path.exists():
             print(f"ERROR: {manual_path} not found.", file=sys.stderr)
-            print(f"Copy {QUERIES_DIR / 'manual.sql.example'} to manual.sql and edit.",
-                  file=sys.stderr)
+            print(f"Copy {QUERIES_DIR / 'manual.sql.example'} to manual.sql and edit.", file=sys.stderr)
             sys.exit(1)
 
         sql = manual_path.read_text()
@@ -581,9 +637,10 @@ def main() -> None:
         query_names = [q.strip().upper() for q in args.queries.split(",")]
         for q in query_names:
             if q not in available_queries:
-                print(f"ERROR: Unknown query '{q}'. "
-                      f"Available: {', '.join(sorted(available_queries))}",
-                      file=sys.stderr)
+                print(
+                    f"ERROR: Unknown query '{q}'. " f"Available: {', '.join(sorted(available_queries))}",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
     else:
         query_names = sorted(available_queries.keys())
@@ -614,8 +671,7 @@ def main() -> None:
                 sys.exit(1)
 
             db_path = DATABASES_DIR / f"{size}.db"
-            print(f"[{combo_idx}/{total_combos}] {query_name}_{desc} (size={size})",
-                  end="", flush=True)
+            print(f"[{combo_idx}/{total_combos}] {query_name}_{desc} (size={size})", end="", flush=True)
 
             runs: list[dict] = []
             for i in range(args.iterations):

@@ -143,6 +143,7 @@ def test_negative_scale_on_min_objective(decidb_cli, scope_solver):
 # Shapes that used to be rejected outright.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
@@ -155,12 +156,14 @@ def test_scaled_max_constraint(decidb_cli, oracle_solver, perf_tracker):
     """
     data = [(1, 2.0), (2, 3.0), (3, 5.0)]
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 2.0), (2, 3.0), (3, 5.0)) t(id, v)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND 2 * MAX(x * v) <= 10
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -178,17 +181,24 @@ def test_scaled_max_constraint(decidb_cli, oracle_solver, perf_tracker):
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     # And the constraint the user wrote actually holds.
     for r in rows:
         assert 2.0 * int(r[ci["x"]]) * float(r[ci["v"]]) <= 10.0 + 1e-6
 
     perf_tracker.record(
-        "scaled_max_constraint", decidb_time, build_time, result.solve_time_seconds,
-        len(data), len(names), len(data), result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "scaled_max_constraint",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(names),
+        len(data),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
@@ -206,12 +216,14 @@ def test_scaled_max_in_composed_constraint(decidb_cli, oracle_solver, perf_track
     """
     data = [(1, 2.0), (2, 3.0)]
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, v)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND SUM(x) + 2 * MAX(x * v) <= 12
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -233,18 +245,25 @@ def test_scaled_max_in_composed_constraint(decidb_cli, oracle_solver, perf_track
 
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) for r in rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     xs = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     vs = dict(data)
     lhs = sum(xs.values()) + 2.0 * max(xs[i] * vs[i] for i in xs)
     assert lhs <= 12.0 + 1e-6, f"constraint violated: {lhs} > 12"
 
     perf_tracker.record(
-        "scaled_max_composed", decidb_time, build_time, result.solve_time_seconds,
-        len(data), len(names) + 1, len(data) + 1, result.objective_value,
-        oracle_solver.solver_name(), comparison_status="optimal",
+        "scaled_max_composed",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(names) + 1,
+        len(data) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 

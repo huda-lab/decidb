@@ -38,11 +38,13 @@ def test_q10_logic_dependency(decidb_cli, duckdb_conn, oracle_solver, perf_track
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q10_logic")
@@ -54,7 +56,9 @@ def test_q10_logic_dependency(decidb_cli, duckdb_conn, oracle_solver, perf_track
     # SUM(x * l_extendedprice) <= 10000
     oracle_solver.add_constraint(
         {vnames[i]: data[i][1] for i in range(len(data))},
-        "<=", 10000.0, name="price_limit",
+        "<=",
+        10000.0,
+        name="price_limit",
     )
     # MAXIMIZE SUM(x)
     oracle_solver.set_objective(
@@ -65,14 +69,24 @@ def test_q10_logic_dependency(decidb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q10_logic_dependency", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "q10_logic_dependency",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -83,9 +97,7 @@ def test_q10_logic_dependency(decidb_cli, duckdb_conn, oracle_solver, perf_track
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_aggregate_between_standalone(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_aggregate_between_standalone(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Standalone aggregate BETWEEN: ``SUM(x * weight) BETWEEN lo AND hi``.
 
     The only existing aggregate BETWEEN coverage lives nested inside
@@ -115,8 +127,7 @@ def test_aggregate_between_standalone(
     decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
-        f"SELECT CAST(id AS BIGINT), CAST(weight AS DOUBLE), CAST(value AS DOUBLE) "
-        f"FROM ({data_sql})"
+        f"SELECT CAST(id AS BIGINT), CAST(weight AS DOUBLE), CAST(value AS DOUBLE) " f"FROM ({data_sql})"
     ).fetchall()
     n = len(data)
 
@@ -138,14 +149,24 @@ def test_aggregate_between_standalone(
 
     value_idx = decidb_cols.index("value")
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[value_idx])},
     )
 
     perf_tracker.record(
-        "aggregate_between_standalone", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "aggregate_between_standalone",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -176,12 +197,14 @@ def test_real_between_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -190,23 +213,37 @@ def test_real_between_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.25, ub=3.75)
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, "<=", 40.0, name="sum_cap",
+        {vnames[i]: 1.0 for i in range(n)},
+        "<=",
+        40.0,
+        name="sum_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_between_oracle", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_between_oracle",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

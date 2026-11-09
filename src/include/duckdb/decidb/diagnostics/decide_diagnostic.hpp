@@ -101,7 +101,7 @@ struct EscapeRule {
 //! A categorical column's grouping over a variable's instances, fed to
 //! CharacterizeEscape. Pure data (no DuckDB execution types) so the core unit-tests.
 struct ColumnGrouping {
-	string column;                  //!< column name (for the rule)
+	string column;                   //!< column name (for the rule)
 	vector<idx_t> instance_to_group; //!< size = total_instances; group id per
 	                                 //!< instance (INVALID_INDEX = excluded)
 	vector<string> group_value;      //!< size = num_groups; value label per group
@@ -120,13 +120,13 @@ enum class EscapeDirection : uint8_t { POSITIVE, NEGATIVE };
 //! Per-variable escape characterization, assembled by the operator and formatted
 //! by BuildUnboundedDiagnostic into its findings.
 struct VarEscape {
-	string name;             //!< user variable name (USER) or source expr (AUX)
+	string name; //!< user variable name (USER) or source expr (AUX)
 	EscapeDirection direction = EscapeDirection::POSITIVE;
-	idx_t escaping = 0;      //!< number of escaping instances of this variable
-	idx_t total = 0;        //!< total instances of this variable
-	bool all_escape = false; //!< escaping == total
-	bool is_aux = false;     //!< aux/linearization column (name-only, no rules)
-	bool is_keyed = false;   //!< true => instances are classes, not rows (noun)
+	idx_t escaping = 0;       //!< number of escaping instances of this variable
+	idx_t total = 0;          //!< total instances of this variable
+	bool all_escape = false;  //!< escaping == total
+	bool is_aux = false;      //!< aux/linearization column (name-only, no rules)
+	bool is_keyed = false;    //!< true => instances are classes, not rows (noun)
 	vector<EscapeRule> rules; //!< categorical rules (empty => count fallback)
 };
 
@@ -134,7 +134,7 @@ struct VarEscape {
 struct DecideDiagParams {
 	double escape_rate = 0.8;       //!< report groups with rate ≥ this
 	double categorical_ratio = 0.1; //!< column is categorical if distinct ≤ ratio×N
-	idx_t min_categories = 20;       //!< …or ≤ this absolute floor (small tables)
+	idx_t min_categories = 20;      //!< …or ≤ this absolute floor (small tables)
 	//! Infeasible slack-scope policy (T3). "query" (default): one slack per SQL-level
 	//! knob — a data-backed RHS (`x <= col`) reports a virtual query offset
 	//! (`x <= col + delta`) plus a conflict profile row. "expanded": one slack per emitted
@@ -210,8 +210,8 @@ struct ClauseEdit {
 		string bound;                                       //!< the end's bound after the move
 	};
 	ClauseEditKind kind = ClauseEditKind::LOOSEN;
-	string label;      //!< the constraint as the user wrote it
-	string suggestion; //!< the constraint after the minimal loosening (LOOSEN only)
+	string label;            //!< the constraint as the user wrote it
+	string suggestion;       //!< the constraint after the minimal loosening (LOOSEN only)
 	bool has_amount = false; //!< LOOSEN only; false => the `amount` column is NULL
 	double amount = 0.0;     //!< magnitude of the loosening, in the user's own units
 	string group;            //!< printable `per` key of this edit's group (empty if ungrouped),
@@ -239,8 +239,7 @@ struct ClauseEdit {
 //! `unbounded_after_fix` finding: the relaxed problem has no finite optimum. Both
 //! default off (used by the unchanged data-RHS-only path).
 //! Precondition: `edits` non-empty (the caller emits an `undiagnosed` finding otherwise).
-DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
-                                           const string &achievable_objective = "",
+DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits, const string &achievable_objective = "",
                                            bool unbounded_after_fix = false);
 
 //! Build the diagnosis for the case where the elastic program itself is infeasible:
@@ -253,8 +252,8 @@ DecideDiagnostic BuildElasticInfeasibleDiagnostic();
 //! finding, so there is no slack to read and no edit to suggest — only the clause to
 //! name. `group` carries the printable `per` key when the clause is grouped.
 struct UnreachableClause {
-	string label; //!< the constraint as the user wrote it
-	string group; //!< printable `per` key of this clause's group (empty if ungrouped)
+	string label;                          //!< the constraint as the user wrote it
+	string group;                          //!< printable `per` key of this clause's group (empty if ungrouped)
 	idx_t row = DConstants::INVALID_INDEX; //!< the kept row this finding stands for (D28), or none
 	bool too_low = false;                  //!< the bound is -inf, so it has to be raised; +inf, lowered
 };
@@ -272,8 +271,7 @@ DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause>
 //! retained solve state; this helper keeps the precedence unit-testable:
 //! timeout first, then non-linear empty-ray limitation, then neutral empty-ray,
 //! then internal-helper escape.
-string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool ray_empty,
-                                                bool has_nonlinear_terms);
+string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool ray_empty, bool has_nonlinear_terms);
 
 //! Build the one-finding diagnosis for a failure whose state is known but whose cause
 //! no engine could name: a quadratic model with no ray, a ray that escaped only through

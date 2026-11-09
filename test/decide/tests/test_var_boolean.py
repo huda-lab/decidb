@@ -32,13 +32,15 @@ def test_q01_knapsack_binary(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_time = time.perf_counter() - t0
 
     # Oracle data
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     # Build oracle model
     t_build = time.perf_counter()
@@ -49,7 +51,9 @@ def test_q01_knapsack_binary(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
+        "<=",
+        100.0,
+        name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -60,14 +64,24 @@ def test_q01_knapsack_binary(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 
     # Compare objectives
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "q01_knapsack_binary", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "q01_knapsack_binary",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )

@@ -53,25 +53,19 @@ class TestNoGlobalGrammarPollution:
             "SELECT my_udf(a, b) FROM (VALUES (1, 2)) v(a, b)",
         ],
     )
-    def test_unregistered_function_reaches_binder_not_parser(
-        self, decidb_cli, call_sql
-    ):
+    def test_unregistered_function_reaches_binder_not_parser(self, decidb_cli, call_sql):
         """An unknown function name must PARSE (then fail at bind), not error at
         parse time. The bug produced a `syntax error`; the correct behavior is a
         Catalog/binder error proving the call parsed."""
         with pytest.raises(DeciDBCliError) as excinfo:
             decidb_cli.execute(call_sql)
         msg = str(excinfo.value).lower()
-        assert "syntax error" not in msg, (
-            f"Unregistered function call regressed to a parse error: {msg}"
-        )
+        assert "syntax error" not in msg, f"Unregistered function call regressed to a parse error: {msg}"
 
     def test_simple_case_with_function_operand_parses(self, decidb_cli):
         """`CASE func() WHEN val THEN ...` (simple CASE, function operand) — the
         exact shape that exposed the bug in DuckDB's catalog view bodies."""
-        rows, _ = decidb_cli.execute(
-            "SELECT CASE length('hi') WHEN 2 THEN 'a' ELSE 'b' END AS r"
-        )
+        rows, _ = decidb_cli.execute("SELECT CASE length('hi') WHEN 2 THEN 'a' ELSE 'b' END AS r")
         assert rows == [("a",)]
 
     def test_case_when_after_decide_clause_still_parses(self, decidb_cli):
@@ -86,6 +80,6 @@ class TestNoGlobalGrammarPollution:
                 "HAVING max(l_quantity) > CASE WHEN l_orderkey > 0 THEN 0 ELSE 1 END"
             )
         except DeciDBCliError as e:
-            assert "syntax error" not in str(e).lower(), (
-                f"CASE WHEN after DECIDE clause regressed to a parse error: {e}"
-            )
+            assert (
+                "syntax error" not in str(e).lower()
+            ), f"CASE WHEN after DECIDE clause regressed to a parse error: {e}"

@@ -219,12 +219,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		};
 
 		UnboundedDiagnosisInput diag_input {
-		    result,
-		    indexer,
-		    labels,
-		    is_aux,
-		    params,
-		    get_candidates,
+		    result, indexer, labels, is_aux, params, get_candidates,
 		};
 		DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
 
@@ -257,12 +252,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		duckdb::vector<bool> is_aux {false};
 		DecideDiagParams params;
 		UnboundedDiagnosisInput diag_input {
-		    result,
-		    indexer,
-		    labels,
-		    is_aux,
-		    params,
-		    [](idx_t) { return duckdb::vector<ColumnGrouping>(); },
+		    result, indexer, labels, is_aux, params, [](idx_t) { return duckdb::vector<ColumnGrouping>(); },
 		};
 		DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
 
@@ -289,12 +279,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagParams params;
 
 		UnboundedDiagnosisInput diag_input {
-		    result,
-		    indexer,
-		    labels,
-		    is_aux,
-		    params,
-		    [](idx_t) { return duckdb::vector<ColumnGrouping>(); },
+		    result, indexer, labels, is_aux, params, [](idx_t) { return duckdb::vector<ColumnGrouping>(); },
 		};
 		CHECK(!DiagnoseUnbounded(diag_input).valid);
 	}
@@ -454,9 +439,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// coefficients. The end-to-end "loosen the budget, not the floor" flip is pinned by
 		// the Python TPC-H degenerate-edit test on real multi-variable data.
 		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '>', 30.0, ConstraintKind::USER_PARAMETER},
-		    {1, 1000.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
-		});
+		                                     {0, 1.0, '>', 30.0, ConstraintKind::USER_PARAMETER},
+		                                     {1, 1000.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
+		                                 });
 		ElasticModel elastic = BuildElasticModel(model);
 
 		REQUIRE(elastic.slacks.size() == 2);
@@ -481,12 +466,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// I2.a structure: three rows of one repair group, tagged SHARED_SCALAR,
 		// must collapse to a single shared slack column wired into all three rows — not
 		// three independent slacks. A second clause stays its own block.
-		SolverModel model = MakeModel(4, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {3, 1.0, '<', 9.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_SCALAR},
-		});
+		SolverModel model =
+		    MakeModel(4, {
+		                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {3, 1.0, '<', 9.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_SCALAR},
+		                 });
 		ElasticModel elastic = BuildElasticModel(model);
 
 		// 4 user vars + 1 shared slack (clause 0) + 1 slack (clause 1) = 6 columns.
@@ -520,12 +506,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		VarIndexer row_indexer = VarIndexer::Build(row_input);
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
-		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
-		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
-		});
+		SolverModel model =
+		    MakeModel(2, {
+		                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		                     {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
+		                 });
 		InfeasibleDiagnosisInput diag_input {model,           row_indexer, row_labels, row_aux,
 		                                     kNoGlobalLabels, params,      solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
@@ -542,12 +529,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// T3: a grouped clause fans into N_g rows per group, all SHARED_SCALAR with the same
 		// repair_group_id but distinct group_key. query mode is the single SQL literal the user
 		// edits → ONE slack across every group; expanded mode breaks it out per group.
-		SolverModel model = MakeModel(4, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
-		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 1},
-		    {3, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 1},
-		});
+		SolverModel model =
+		    MakeModel(4, {
+		                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
+		                     {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
+		                     {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 1},
+		                     {3, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 1},
+		                 });
 		// query (default): one slack spans all four rows (both groups). 4 vars + 1 slack.
 		ElasticModel q = BuildElasticModel(model);
 		CHECK(q.model.num_vars == 5);
@@ -568,10 +556,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// T3: a data RHS (PER_ROW_DATA, `x <= col`) folds into ONE shared slack (the single
 		// virtual offset) in query mode; in expanded mode its rows stay independent so each
 		// row's overshoot surfaces as its own profile entry.
-		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 0},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 1},
-		});
+		SolverModel model =
+		    MakeModel(2, {
+		                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 0},
+		                     {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 1},
+		                 });
 		// query (default): one shared slack across both data rows.
 		ElasticModel q = BuildElasticModel(model);
 		REQUIRE(q.slacks.size() == 1);
@@ -604,11 +593,12 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// I2.c: an editable cap (SHARED_SCALAR) and a data floor (PER_ROW_DATA) both
 		// conflict with a rigid pin; the lexicographic data tier is frozen at zero before
 		// editable loosening, so the solver loosens the editable cap and leaves data alone.
-		SolverModel model = MakeModel(1, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
-		    {0, 1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
-		});
+		SolverModel model =
+		    MakeModel(1, {
+		                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
+		                     {0, 1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		                 });
 		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -627,13 +617,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
 		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA,
-		     DConstants::INVALID_INDEX, "cap"},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA,
-		     DConstants::INVALID_INDEX, "cap"},
-		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
-		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
-		});
+		                                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0,
+		                                      ElasticShape::PER_ROW_DATA, DConstants::INVALID_INDEX, "cap"},
+		                                     {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0,
+		                                      ElasticShape::PER_ROW_DATA, DConstants::INVALID_INDEX, "cap"},
+		                                     {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		                                     {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
+		                                 });
 		InfeasibleDiagnosisInput diag_input {model,           row_indexer, row_labels, row_aux,
 		                                     kNoGlobalLabels, params,      solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
@@ -655,12 +645,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		VarIndexer row_indexer = VarIndexer::Build(row_input);
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
-		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA},
-		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
-		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
-		});
+		SolverModel model =
+		    MakeModel(2, {
+		                     {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA},
+		                     {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA},
+		                     {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		                     {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
+		                 });
 		DecideDiagParams expanded_params = params;
 		expanded_params.slack_scope = "expanded";
 		InfeasibleDiagnosisInput diag_input {model,           row_indexer,     row_labels, row_aux,
@@ -864,10 +855,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// Total loosening S* = 10 with MANY minimizers (loosen x, loosen y, or split).
 		// Freezing arbitrary stage-1 amounts could loosen y (giving objective 0);
 		// stage 2 maximizes x, so it must loosen x's cap to 10 and report objective 10.
-		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {1, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_SCALAR},
-		});
+		SolverModel model =
+		    MakeModel(2, {
+		                     {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {1, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_SCALAR},
+		                 });
 		ModelConstraint floor; // rigid x + y >= 10
 		floor.indices = {0, 1};
 		floor.coefficients = {1.0, 1.0};
@@ -896,10 +888,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// x <= 0 (editable) conflicts with the rigid x >= 5: the unique fix loosens the
 		// cap to 5. But y is free above and absent from every constraint, so MAXIMIZE y
 		// has no finite optimum once feasible; the table reports that model-level fact.
-		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
-		    {0, 1.0, '>', 5.0, ConstraintKind::STRUCTURAL},
-		});
+		SolverModel model =
+		    MakeModel(2, {
+		                     {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		                     {0, 1.0, '>', 5.0, ConstraintKind::STRUCTURAL},
+		                 });
 		model.obj_coeffs = {0.0, 1.0}; // MAXIMIZE y (unbounded)
 		model.maximize = true;
 
@@ -1207,7 +1200,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		SolverModel model = MakeNotEqualModel(); // col 1 = disjunction binary, indicator_col = 1
 		model.constraint_sources[0].canonical_lhs = "SUM(x)";
 		model.constraint_sources[0].written_lhs = "SUM(x)";
-		for (char sense : {'<', '>'}) {          // pin x == 3 (the forbidden value)
+		for (char sense : {'<', '>'}) { // pin x == 3 (the forbidden value)
 			ModelConstraint pin;
 			pin.indices = {0};
 			pin.coefficients = {1.0};

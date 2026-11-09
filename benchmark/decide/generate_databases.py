@@ -25,8 +25,9 @@ DB_SIZES: dict[str, tuple[float, int]] = {
 GENERATE_TIMEOUT_SECONDS = 1_200
 
 
-def run_decidb(db_path: Path, sql: str, *, readonly: bool = False,
-               timeout: int = GENERATE_TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:
+def run_decidb(
+    db_path: Path, sql: str, *, readonly: bool = False, timeout: int = GENERATE_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
     cmd = [str(DECIDB_EXE), str(db_path)]
     if readonly:
         cmd.append("-readonly")
@@ -85,8 +86,7 @@ DROP TABLE lineitem;
 ALTER TABLE lineitem_trimmed RENAME TO lineitem;
 CHECKPOINT;
 """
-    print(f"  Generating {name}.db (sf={sf}, lineitem_rows={lineitem_rows})...",
-          end="", flush=True)
+    print(f"  Generating {name}.db (sf={sf}, lineitem_rows={lineitem_rows})...", end="", flush=True)
     result = run_decidb(db_path, sql)
     if result.returncode != 0:
         print(" FAILED")
@@ -119,10 +119,7 @@ def main() -> None:
             if actual_count == lineitem_rows:
                 print(f"  {name}.db already exists with {lineitem_rows} lineitem rows, skipping")
                 continue
-            print(
-                f"  {name}.db has {actual_count} lineitem rows; "
-                f"expected {lineitem_rows}, regenerating"
-            )
+            print(f"  {name}.db has {actual_count} lineitem rows; " f"expected {lineitem_rows}, regenerating")
             remove_database(db_path)
 
         generate_database(name, sf, lineitem_rows, db_path)

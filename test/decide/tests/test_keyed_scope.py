@@ -28,6 +28,7 @@ from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, Scop
 # Test 1: Basic entity-scoped with oracle verification
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable on nation table: pick nations to maximize customer acctbal.
@@ -51,18 +52,19 @@ def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         keep = int(row[3])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
     # Build oracle model: one variable per nation in region 0
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT), CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
 
     nation_ids = sorted(set(int(row[1]) for row in data))
 
@@ -83,7 +85,9 @@ def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver):
     # SUM(keepN) <= 100 counts join rows, so each nation contributes its row count
     oracle_solver.add_constraint(
         {vnames[nkey]: float(nation_count[nkey]) for nkey in nation_ids},
-        "<=", 100.0, name="nation_limit",
+        "<=",
+        100.0,
+        name="nation_limit",
     )
 
     oracle_solver.set_objective(
@@ -101,13 +105,13 @@ def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver):
         acctbal = float(row[2])
         decidb_obj += nation_values.get(nkey, 0) * acctbal
 
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
 # Test 2: Entity consistency with tight constraint
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver):
@@ -129,18 +133,19 @@ def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         keep = int(row[2])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Inconsistent keepN for nation {nkey}: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Inconsistent keepN for nation {nkey}: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
     # Verify constraint holds (SUM counts join rows)
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), COUNT(*) as cnt
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         GROUP BY n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
 
     total_selected_rows = 0
     for nkey_row in data:
@@ -148,18 +153,19 @@ def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver):
         cnt = int(nkey_row[1])
         if nation_values.get(nkey, 0) == 1:
             total_selected_rows += cnt
-    assert total_selected_rows <= 5, \
-        f"Constraint violated: SUM(keepN) = {total_selected_rows} > 5"
+    assert total_selected_rows <= 5, f"Constraint violated: SUM(keepN) = {total_selected_rows} > 5"
 
     # Oracle: verify objective optimality
     nation_ids = sorted(nation_values.keys())
     nation_count_map = {int(r[0]): int(r[1]) for r in data}
     nation_acctbal = {}
-    for row in duckdb_conn.execute("""
+    for row in duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall():
+    """
+    ).fetchall():
         nkey = int(row[0])
         nation_acctbal[nkey] = nation_acctbal.get(nkey, 0.0) + float(row[1])
 
@@ -169,24 +175,25 @@ def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[nkey]: float(nation_count_map[nkey]) for nkey in nation_ids},
-        "<=", 5.0, name="nation_limit",
+        "<=",
+        5.0,
+        name="nation_limit",
     )
     oracle_solver.set_objective(
         {vnames[nkey]: nation_acctbal.get(nkey, 0.0) for nkey in nation_ids},
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    decidb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0) for nkey in nation_ids)
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 3: INT entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver):
@@ -208,8 +215,7 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         q = int(row[2])
         if nkey in nation_values:
-            assert nation_values[nkey] == q, \
-                f"Nation {nkey} has inconsistent qty: {nation_values[nkey]} vs {q}"
+            assert nation_values[nkey] == q, f"Nation {nkey} has inconsistent qty: {nation_values[nkey]} vs {q}"
         else:
             nation_values[nkey] = q
 
@@ -218,12 +224,14 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver):
         assert q <= 3, f"Nation {nkey} has qty={q} > 3"
 
     # Oracle: INTEGER vars per nation, bounded by 3, aggregate SUM(qty*cnt) <= 10
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND n.n_nationkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     nation_ids = sorted(set(int(row[0]) for row in data))
     nation_count = {}
@@ -240,7 +248,9 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver):
     # SUM(qty) <= 10 counts join rows: SUM_n(qty_n * cnt_n) <= 10
     oracle_solver.add_constraint(
         {vnames[nkey]: float(nation_count[nkey]) for nkey in nation_ids},
-        "<=", 10.0, name="sum_qty_limit",
+        "<=",
+        10.0,
+        name="sum_qty_limit",
     )
     oracle_solver.set_objective(
         {vnames[nkey]: nation_acctbal[nkey] for nkey in nation_ids},
@@ -249,17 +259,14 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
     oracle_obj = oracle_result.objective_value
 
-    decidb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
+    decidb_obj = sum(nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0) for nkey in nation_ids)
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 4: Mixed row-scoped + entity-scoped (VarIndexer three-block layout)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver):
@@ -284,14 +291,14 @@ def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver):
         x_val = int(row[2])
         keep_val = int(row[3])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep_val, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep_val}"
+            assert (
+                nation_values[nkey] == keep_val
+            ), f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep_val}"
         else:
             nation_values[nkey] = keep_val
 
         # Verify per-row constraint: x <= keepN
-        assert x_val <= keep_val, \
-            f"Per-row constraint violated: x={x_val} > keepN={keep_val} for custkey={row[0]}"
+        assert x_val <= keep_val, f"Per-row constraint violated: x={x_val} > keepN={keep_val} for custkey={row[0]}"
 
     # Verify SUM(x) <= 10
     total_x = sum(int(row[2]) for row in decidb_result)
@@ -302,17 +309,18 @@ def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         x_val = int(row[2])
         if nation_values[nkey] == 0:
-            assert x_val == 0, \
-                f"Nation {nkey} has keepN=0 but customer {row[0]} has x={x_val}"
+            assert x_val == 0, f"Nation {nkey} has keepN=0 but customer {row[0]} has x={x_val}"
 
     # Oracle: binary vars per nation + per customer; x_c <= keepN_{nation(c)}, SUM(x) <= 10
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT),
                CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_acctbal > 0
-    """).fetchall()
+    """
+    ).fetchall()
     customers = [(int(r[0]), int(r[1]), float(r[2])) for r in raw]
     cust_acctbal = {ckey: acctbal for ckey, _, acctbal in customers}
     oracle_nation_ids = sorted(set(nkey for _, nkey, _ in customers))
@@ -327,26 +335,31 @@ def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver):
     for ckey, nkey, _ in customers:
         oracle_solver.add_constraint(
             {x_cvars[ckey]: 1.0, kn_vars[nkey]: -1.0},
-            "<=", 0.0, name=f"link_{ckey}",
+            "<=",
+            0.0,
+            name=f"link_{ckey}",
         )
     oracle_solver.add_constraint(
         {x_cvars[ckey]: 1.0 for ckey, _, _ in customers},
-        "<=", 10.0, name="sum_x",
+        "<=",
+        10.0,
+        name="sum_x",
     )
     oracle_solver.set_objective(
         {x_cvars[ckey]: acctbal for ckey, _, acctbal in customers},
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    decidb_obj = sum(int(row[2]) * cust_acctbal.get(int(row[0]), 0.0)
-                     for row in decidb_result)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(int(row[2]) * cust_acctbal.get(int(row[0]), 0.0) for row in decidb_result)
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 5: Entity-scoped with WHEN condition
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver):
@@ -367,24 +380,26 @@ def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         keep = int(row[2])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Nation {nkey} inconsistent keepN: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
     # Oracle: WHEN filters which rows contribute to constraint;
     # objective is SUM(keepN) counting all join rows
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(set(int(r[0]) for r in raw))
     nation_count = {}
     nation_acctbal_pos = {}
     for r in raw:
-        nkey = int(r[0]); acctbal = float(r[1])
+        nkey = int(r[0])
+        acctbal = float(r[1])
         nation_count[nkey] = nation_count.get(nkey, 0) + 1
         if acctbal > 0:
             nation_acctbal_pos[nkey] = nation_acctbal_pos.get(nkey, 0.0) + acctbal
@@ -395,7 +410,9 @@ def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[nkey]: nation_acctbal_pos.get(nkey, 0.0) for nkey in nation_ids},
-        "<=", 50000.0, name="when_constraint",
+        "<=",
+        50000.0,
+        name="when_constraint",
     )
     oracle_solver.set_objective(
         {vnames[nkey]: float(nation_count[nkey]) for nkey in nation_ids},
@@ -403,13 +420,15 @@ def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result = oracle_solver.solve()
     decidb_obj = float(sum(int(row[2]) for row in decidb_result))
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 6: Error — nonexistent table
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_keyed_nonexistent_table(decidb_cli):
@@ -428,6 +447,7 @@ def test_keyed_nonexistent_table(decidb_cli):
 # ---------------------------------------------------------------------------
 # Test 7: Entity-scoped with `per` grouping constraint
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
@@ -460,8 +480,7 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keep_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
@@ -473,18 +492,19 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver):
         region_sums[region] = region_sums.get(region, 0) + keep
 
     for region, total in region_sums.items():
-        assert total <= 100, \
-            f"PER constraint violated: SUM(keepN) = {total} > 100 for region '{region}'"
+        assert total <= 100, f"PER constraint violated: SUM(keepN) = {total} > 100 for region '{region}'"
 
     # Oracle: one BINARY var per nation, `per` constraint per region
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(r.r_name AS VARCHAR),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-    """).fetchall()
+    """
+    ).fetchall()
 
     nation_ids = sorted(set(int(row[0]) for row in data))
     nation_region = {}
@@ -504,9 +524,10 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver):
     # per r_name: sum(keepN) by (r_name) <= 100: per region, sum of (keepN_n * cnt_n) <= 100
     for r in set(nation_region.values()):
         oracle_solver.add_constraint(
-            {vnames[nkey]: float(nation_count[nkey])
-             for nkey in nation_ids if nation_region[nkey] == r},
-            "<=", 100.0, name=f"per_region_{r.replace(' ', '_')}",
+            {vnames[nkey]: float(nation_count[nkey]) for nkey in nation_ids if nation_region[nkey] == r},
+            "<=",
+            100.0,
+            name=f"per_region_{r.replace(' ', '_')}",
         )
     oracle_solver.set_objective(
         {vnames[nkey]: nation_acctbal[nkey] for nkey in nation_ids},
@@ -515,17 +536,14 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
     oracle_obj = oracle_result.objective_value
 
-    decidb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
+    decidb_obj = sum(nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0) for nkey in nation_ids)
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 8: Entity-scoped with MAX constraint (easy case)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.min_max
@@ -553,8 +571,7 @@ def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         keep = int(row[3])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
@@ -563,19 +580,20 @@ def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver):
         keep = int(row[3])
         acctbal = float(row[2])
         if keep == 1:
-            assert acctbal <= 8000 + 1e-4, \
-                f"MAX constraint violated: keepN=1 and c_acctbal={acctbal} > 8000"
+            assert acctbal <= 8000 + 1e-4, f"MAX constraint violated: keepN=1 and c_acctbal={acctbal} > 8000"
 
     # Oracle: MAX easy case → if any customer in nation n has acctbal > 8000,
     # then keepN_n must be 0. Maximize SUM_n keepN_n * cnt_n.
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                MAX(c.c_acctbal) as max_acctbal,
                COUNT(*) as cnt
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         GROUP BY n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_max_acctbal = {int(r[0]): float(r[1]) for r in raw}
     nation_cnt9 = {int(r[0]): int(r[2]) for r in raw}
     nation_ids9 = sorted(nation_max_acctbal.keys())
@@ -592,13 +610,15 @@ def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result9 = oracle_solver.solve()
     decidb_obj9 = float(sum(int(row[3]) for row in decidb_result))
-    assert abs(decidb_obj9 - oracle_result9.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj9:.4f}, Oracle={oracle_result9.objective_value:.4f}"
+    assert (
+        abs(decidb_obj9 - oracle_result9.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj9:.4f}, Oracle={oracle_result9.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 10: Entity-scoped with AVG constraint
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.avg_rewrite
@@ -626,27 +646,24 @@ def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[1])
         keep = int(row[2])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
     # Verify AVG constraint: SUM(keepN * acctbal) / N <= 3000
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
 
     n_total = len(data)
-    weighted_sum = sum(
-        nation_values.get(int(row[0]), 0) * float(row[1])
-        for row in data
-    )
+    weighted_sum = sum(nation_values.get(int(row[0]), 0) * float(row[1]) for row in data)
     avg_val = weighted_sum / n_total
-    assert avg_val <= 3000 + 1e-4, \
-        f"AVG constraint violated: AVG(keepN * c_acctbal) = {avg_val:.2f} > 3000"
+    assert avg_val <= 3000 + 1e-4, f"AVG constraint violated: AVG(keepN * c_acctbal) = {avg_val:.2f} > 3000"
 
     # Oracle: AVG rewrite → SUM(keepN * acctbal) <= 3000 * n_total
     oracle_solver.create_model("keyed_with_avg")
@@ -665,7 +682,9 @@ def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[nkey]: nation_acctbal2.get(nkey, 0.0) for nkey in nation_ids},
-        "<=", 3000.0 * n_total, name="avg_limit",
+        "<=",
+        3000.0 * n_total,
+        name="avg_limit",
     )
     oracle_solver.set_objective(
         {vnames[nkey]: float(nation_count2.get(nkey, 0)) for nkey in nation_ids},
@@ -673,13 +692,15 @@ def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result = oracle_solver.solve()
     decidb_obj = float(sum(int(row[2]) for row in decidb_result))
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 11: Triple interaction — entity_scope + `when` + `per`
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
@@ -714,8 +735,7 @@ def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keep_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
         else:
             nation_values[nkey] = keep
 
@@ -729,18 +749,19 @@ def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver):
             region_sums[region] = region_sums.get(region, 0.0) + keep * acctbal
 
     for region, total in region_sums.items():
-        assert total <= 50000 + 1e-4, \
-            f"WHEN+PER constraint violated: region '{region}' sum={total:.2f} > 50000"
+        assert total <= 50000 + 1e-4, f"WHEN+PER constraint violated: region '{region}' sum={total:.2f} > 50000"
 
     # Oracle: BINARY var per nation; constraint uses only high-balance rows (WHEN filter)
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(r.r_name AS VARCHAR),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-    """).fetchall()
+    """
+    ).fetchall()
 
     nation_ids = sorted(set(int(row[0]) for row in data))
     nation_region = {}
@@ -761,10 +782,8 @@ def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
     # `when`+`per`: per region, sum of high-balance acctbal weighted by keepN <= 50000
     for r in set(nation_region.values()):
-        coeff = {vnames[nkey]: nation_acctbal_high.get(nkey, 0.0)
-                 for nkey in nation_ids if nation_region[nkey] == r}
-        oracle_solver.add_constraint(coeff, "<=", 50000.0,
-                                     name=f"when_per_{r.replace(' ', '_')}")
+        coeff = {vnames[nkey]: nation_acctbal_high.get(nkey, 0.0) for nkey in nation_ids if nation_region[nkey] == r}
+        oracle_solver.add_constraint(coeff, "<=", 50000.0, name=f"when_per_{r.replace(' ', '_')}")
     oracle_solver.set_objective(
         {vnames[nkey]: nation_acctbal_all[nkey] for nkey in nation_ids},
         ObjSense.MAXIMIZE,
@@ -772,17 +791,14 @@ def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
     oracle_obj = oracle_result.objective_value
 
-    decidb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal_all.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
+    decidb_obj = sum(nation_values.get(nkey, 0) * nation_acctbal_all.get(nkey, 0.0) for nkey in nation_ids)
+    assert abs(decidb_obj - oracle_obj) < 1e-4, f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 12: NE (<>) constraint with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.cons_comparison
@@ -804,10 +820,12 @@ def test_keyed_ne_constraint(decidb_cli, duckdb_conn, oracle_solver):
     result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT)
         FROM nation n WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
 
     oracle_solver.create_model("keyed_ne_constraint")
@@ -823,14 +841,15 @@ def test_keyed_ne_constraint(decidb_cli, duckdb_conn, oracle_solver):
 
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
 # Test 14: MAX hard case (MAX >= K, Big-M) with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.min_max
@@ -861,19 +880,20 @@ def test_keyed_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
         (float(row[acctbal_idx]) for row in result if int(row[keepN_idx]) == 1),
         default=0.0,
     )
-    assert max_selected >= 5000 - 1e-4, \
-        f"MAX >= 5000 constraint violated: max selected acctbal = {max_selected:.2f}"
+    assert max_selected >= 5000 - 1e-4, f"MAX >= 5000 constraint violated: max selected acctbal = {max_selected:.2f}"
 
     # Oracle: MAX hard case → at least one nation with max_acctbal >= 5000 selected.
     # SUM(keepN) <= 50 counts join rows. Maximize SUM_n keepN_n * cnt_n.
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                MAX(c.c_acctbal) as max_acctbal,
                COUNT(*) as cnt
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         GROUP BY n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_max14 = {int(r[0]): float(r[1]) for r in raw}
     nation_cnt14 = {int(r[0]): int(r[2]) for r in raw}
     nation_ids14 = sorted(nation_max14.keys())
@@ -885,14 +905,18 @@ def test_keyed_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
     # SUM(keepN) <= 50 in join rows
     oracle_solver.add_constraint(
         {vnames14[nkey]: float(nation_cnt14[nkey]) for nkey in nation_ids14},
-        "<=", 50.0, name="sum_limit",
+        "<=",
+        50.0,
+        name="sum_limit",
     )
     # MAX >= 5000: at least one qualifying nation must be selected
     qualifying = [nkey for nkey in nation_ids14 if nation_max14[nkey] >= 5000]
     if qualifying:
         oracle_solver.add_constraint(
             {vnames14[nkey]: 1.0 for nkey in qualifying},
-            ">=", 1.0, name="max_hard_lb",
+            ">=",
+            1.0,
+            name="max_hard_lb",
         )
     oracle_solver.set_objective(
         {vnames14[nkey]: float(nation_cnt14[nkey]) for nkey in nation_ids14},
@@ -900,19 +924,23 @@ def test_keyed_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result14 = oracle_solver.solve()
     decidb_obj14 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(decidb_obj14 - oracle_result14.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj14:.4f}, Oracle={oracle_result14.objective_value:.4f}"
+    assert (
+        abs(decidb_obj14 - oracle_result14.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj14:.4f}, Oracle={oracle_result14.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 15: Mixed row-scoped + entity-scoped + `when` + `per` (all-four interaction)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 def test_keyed_mixed_when_per(
-    decidb_cli, duckdb_conn, oracle_solver,
+    decidb_cli,
+    duckdb_conn,
+    oracle_solver,
 ):
     """All-four interaction: entity-scoped keepN + row-scoped x + `when` + `per`
     — oracle-compared. Customer-level MIP (~1500 binaries) is trivial for
@@ -944,7 +972,8 @@ def test_keyed_mixed_when_per(
     # binary keepN_n per nation, linked by x_i <= keepN_{n(i)}. `per` grouping
     # partitions WHEN-filtered rows by region; the objective sums over all
     # rows (the optimizer will naturally set x_i=0 for negative acctbal).
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT),
                CAST(n.n_nationkey AS BIGINT),
                CAST(r.r_name AS VARCHAR),
@@ -952,7 +981,8 @@ def test_keyed_mixed_when_per(
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted({int(row[1]) for row in data})
 
     oracle_solver.create_model("keyed_mixed_when_per")
@@ -966,7 +996,9 @@ def test_keyed_mixed_when_per(
     for i, row in enumerate(data):
         nk = int(row[1])
         oracle_solver.add_constraint(
-            {xnames[i]: 1.0, knames[nk]: -1.0}, "<=", 0.0,
+            {xnames[i]: 1.0, knames[nk]: -1.0},
+            "<=",
+            0.0,
             name=f"link_{i}",
         )
 
@@ -978,7 +1010,9 @@ def test_keyed_mixed_when_per(
     for rname, idxs in region_rows.items():
         oracle_solver.add_constraint(
             {xnames[i]: float(data[i][3]) for i in idxs},
-            "<=", 15000.0, name=f"per_{rname.replace(' ', '_')[:8]}",
+            "<=",
+            15000.0,
+            name=f"per_{rname.replace(' ', '_')[:8]}",
         )
 
     oracle_solver.set_objective(
@@ -988,15 +1022,12 @@ def test_keyed_mixed_when_per(
     res = oracle_solver.solve(time_limit=120.0)
     assert res.status == SolverStatus.OPTIMAL
 
-    decidb_obj = sum(
-        int(row[x_idx]) * float(row[acctbal_idx]) for row in result
-    )
+    decidb_obj = sum(int(row[x_idx]) * float(row[acctbal_idx]) for row in result)
     # Both solvers stop at Gurobi's default MIPGap (1e-4) from the true
     # optimum, so the two incumbents can differ by up to ~2*MIPGap of obj.
     tol = max(1e-3, 2e-4 * abs(res.objective_value))
     assert abs(decidb_obj - res.objective_value) <= tol, (
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, "
-        f"Oracle={res.objective_value:.4f}, tol={tol:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, " f"Oracle={res.objective_value:.4f}, tol={tol:.4f}"
     )
 
     # Invariants: entity consistency + per-row x<=keepN + `when`+`per` group cap.
@@ -1016,17 +1047,15 @@ def test_keyed_mixed_when_per(
         ab = float(row[acctbal_idx])
         if ab > 0:
             region = str(row[region_idx])
-            region_sums[region] = (
-                region_sums.get(region, 0.0) + int(row[x_idx]) * ab
-            )
+            region_sums[region] = region_sums.get(region, 0.0) + int(row[x_idx]) * ab
     for region, total in region_sums.items():
-        assert total <= 15000 + 1e-4, \
-            f"WHEN+PER violated for region '{region}': {total:.2f} > 15000"
+        assert total <= 15000 + 1e-4, f"WHEN+PER violated for region '{region}': {total:.2f} > 15000"
 
 
 # ---------------------------------------------------------------------------
 # Test 16: WHEN modifier on objective with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.when_objective
@@ -1058,8 +1087,7 @@ def test_keyed_when_on_objective(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN"
         else:
             nation_values[nkey] = keep
 
@@ -1068,15 +1096,19 @@ def test_keyed_when_on_objective(decidb_cli, duckdb_conn, oracle_solver):
     assert total_rows <= 10, f"SUM(keepN) <= 10 violated: {total_rows}"
 
     # Oracle: WHEN filters objective; constraint counts all rows
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(set(int(r[0]) for r in raw))
-    nation_count = {}; nation_acctbal_pos = {}
+    nation_count = {}
+    nation_acctbal_pos = {}
     for r in raw:
-        nkey = int(r[0]); acctbal = float(r[1])
+        nkey = int(r[0])
+        acctbal = float(r[1])
         nation_count[nkey] = nation_count.get(nkey, 0) + 1
         if acctbal > 0:
             nation_acctbal_pos[nkey] = nation_acctbal_pos.get(nkey, 0.0) + acctbal
@@ -1087,24 +1119,25 @@ def test_keyed_when_on_objective(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[nkey]: float(nation_count[nkey]) for nkey in nation_ids},
-        "<=", 10.0, name="nation_limit",
+        "<=",
+        10.0,
+        name="nation_limit",
     )
     oracle_solver.set_objective(
         {vnames[nkey]: nation_acctbal_pos.get(nkey, 0.0) for nkey in nation_ids},
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    decidb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal_pos.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(nation_values.get(nkey, 0) * nation_acctbal_pos.get(nkey, 0.0) for nkey in nation_ids)
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 17: Multi-column `per` with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
@@ -1137,8 +1170,7 @@ def test_keyed_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN"
         else:
             nation_values[nkey] = keep
 
@@ -1148,22 +1180,28 @@ def test_keyed_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
         key = (int(row[rkey_idx]), str(row[seg_idx]))
         group_sums[key] = group_sums.get(key, 0) + int(row[keepN_idx])
     for key, total in group_sums.items():
-        assert total <= 30, \
-            f"Multi-column PER violated for group {key}: SUM={total} > 30"
+        assert total <= 30, f"Multi-column PER violated for group {key}: SUM={total} > 30"
 
     # Oracle: per (region, segment) group, SUM_n keepN_n * cnt_{n,seg} <= 30
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                CAST(n.n_regionkey AS BIGINT),
                CAST(c.c_mktsegment AS VARCHAR),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey < 3
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(set(int(r[0]) for r in raw))
-    nation_region = {}; nation_acctbal = {}; nation_seg_count = {}
+    nation_region = {}
+    nation_acctbal = {}
+    nation_seg_count = {}
     for r in raw:
-        nkey = int(r[0]); rkey = int(r[1]); seg = str(r[2]); acctbal = float(r[3])
+        nkey = int(r[0])
+        rkey = int(r[1])
+        seg = str(r[2])
+        acctbal = float(r[3])
         nation_region[nkey] = rkey
         nation_acctbal[nkey] = nation_acctbal.get(nkey, 0.0) + acctbal
         nation_seg_count[(nkey, seg)] = nation_seg_count.get((nkey, seg), 0) + 1
@@ -1173,28 +1211,32 @@ def test_keyed_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
-    for (rkey, seg) in groups:
+    for rkey, seg in groups:
         oracle_solver.add_constraint(
-            {vnames[nkey]: float(nation_seg_count.get((nkey, seg), 0))
-             for nkey in nation_ids if nation_region.get(nkey) == rkey},
-            "<=", 30.0, name=f"per_{rkey}_{seg[:4]}",
+            {
+                vnames[nkey]: float(nation_seg_count.get((nkey, seg), 0))
+                for nkey in nation_ids
+                if nation_region.get(nkey) == rkey
+            },
+            "<=",
+            30.0,
+            name=f"per_{rkey}_{seg[:4]}",
         )
     oracle_solver.set_objective(
         {vnames[nkey]: nation_acctbal[nkey] for nkey in nation_ids},
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    decidb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0) for nkey in nation_ids)
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 18 (bonus): MIN easy case (MIN >= K) with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.min_max
@@ -1227,27 +1269,27 @@ def test_keyed_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN"
         else:
             nation_values[nkey] = keep
 
     # Verify MIN constraint: all rows with keepN=1 have acctbal >= 0
     for row in result:
         if int(row[keepN_idx]) == 1:
-            assert float(row[acctbal_idx]) >= -1e-4, \
-                f"MIN >= 0 violated: keepN=1 but acctbal={row[acctbal_idx]}"
+            assert float(row[acctbal_idx]) >= -1e-4, f"MIN >= 0 violated: keepN=1 but acctbal={row[acctbal_idx]}"
 
     # Oracle: MIN easy case → nations where any customer has acctbal < 0 are blocked.
     # Maximize SUM_n keepN_n * cnt_n subject to SUM_n keepN_n * cnt_n <= 20.
-    raw19 = duckdb_conn.execute("""
+    raw19 = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT),
                MIN(c.c_acctbal) as min_acctbal,
                COUNT(*) as cnt
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         GROUP BY n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_min19 = {int(r[0]): float(r[1]) for r in raw19}
     nation_cnt19 = {int(r[0]): int(r[2]) for r in raw19}
     nation_ids19 = sorted(nation_min19.keys())
@@ -1259,7 +1301,9 @@ def test_keyed_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames19[nkey], VarType.BINARY, ub=ub19)
     oracle_solver.add_constraint(
         {vnames19[nkey]: float(nation_cnt19[nkey]) for nkey in nation_ids19},
-        "<=", 20.0, name="sum_limit",
+        "<=",
+        20.0,
+        name="sum_limit",
     )
     oracle_solver.set_objective(
         {vnames19[nkey]: float(nation_cnt19[nkey]) for nkey in nation_ids19},
@@ -1267,13 +1311,15 @@ def test_keyed_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result19 = oracle_solver.solve()
     decidb_obj19 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(decidb_obj19 - oracle_result19.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj19:.4f}, Oracle={oracle_result19.objective_value:.4f}"
+    assert (
+        abs(decidb_obj19 - oracle_result19.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj19:.4f}, Oracle={oracle_result19.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 19: AVG + `per` with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
@@ -1305,19 +1351,20 @@ def test_keyed_avg_per(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN"
         else:
             nation_values[nkey] = keep
 
     # Oracle: per r_name: avg(...) → per region: SUM_n keepN_n * acctbal_sum_n <= 2000 * n_rows_in_region
-    raw20 = duckdb_conn.execute("""
+    raw20 = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(r.r_name AS VARCHAR),
                SUM(c.c_acctbal) as acctbal_sum, COUNT(*) as cnt
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
         GROUP BY n.n_nationkey, r.r_name
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids20 = sorted(set(int(r[0]) for r in raw20))
     nation_region20 = {int(r[0]): str(r[1]) for r in raw20}
     nation_acctbal20 = {int(r[0]): float(r[2]) for r in raw20}
@@ -1332,10 +1379,11 @@ def test_keyed_avg_per(decidb_cli, duckdb_conn, oracle_solver):
     for nkey in nation_ids20:
         oracle_solver.add_variable(vnames20[nkey], VarType.BINARY)
     for rname in set(nation_region20.values()):
-        coeff20 = {vnames20[nkey]: nation_acctbal20[nkey]
-                   for nkey in nation_ids20 if nation_region20[nkey] == rname}
+        coeff20 = {vnames20[nkey]: nation_acctbal20[nkey] for nkey in nation_ids20 if nation_region20[nkey] == rname}
         oracle_solver.add_constraint(
-            coeff20, "<=", 2000.0 * region_row_count20[rname],
+            coeff20,
+            "<=",
+            2000.0 * region_row_count20[rname],
             name=f"avg_per_{rname.replace(' ', '_')[:8]}",
         )
     oracle_solver.set_objective(
@@ -1344,13 +1392,15 @@ def test_keyed_avg_per(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result20 = oracle_solver.solve()
     decidb_obj20 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(decidb_obj20 - oracle_result20.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj20:.4f}, Oracle={oracle_result20.objective_value:.4f}"
+    assert (
+        abs(decidb_obj20 - oracle_result20.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj20:.4f}, Oracle={oracle_result20.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 20: NE + `per` with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
@@ -1372,10 +1422,12 @@ def test_keyed_ne_per(decidb_cli, duckdb_conn, oracle_solver):
     result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(n.n_regionkey AS BIGINT)
         FROM nation n
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
     nation_region = {int(r[0]): int(r[1]) for r in raw}
     regions = sorted(set(nation_region.values()))
@@ -1385,29 +1437,32 @@ def test_keyed_ne_per(decidb_cli, duckdb_conn, oracle_solver):
     for nk in nation_ids:
         oracle_solver.add_variable(vnames[nk], VarType.BINARY)
     for rk in regions:
-        region_coeffs = {
-            vnames[nk]: 1.0 for nk in nation_ids if nation_region[nk] == rk
-        }
+        region_coeffs = {vnames[nk]: 1.0 for nk in nation_ids if nation_region[nk] == rk}
         add_ne_indicator(oracle_solver, region_coeffs, 2.0, name=f"ne_r{rk}")
     oracle_solver.add_constraint(
-        {vnames[nk]: 1.0 for nk in nation_ids}, "<=", 20.0, name="sum_le",
+        {vnames[nk]: 1.0 for nk in nation_ids},
+        "<=",
+        20.0,
+        name="sum_le",
     )
     oracle_solver.set_objective(
-        {vnames[nk]: 1.0 for nk in nation_ids}, ObjSense.MAXIMIZE,
+        {vnames[nk]: 1.0 for nk in nation_ids},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
 # Test 21: BETWEEN constraint with entity-scoped variable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 @pytest.mark.cons_between
@@ -1426,10 +1481,12 @@ def test_keyed_between_constraint(decidb_cli, duckdb_conn, oracle_solver):
     result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT)
         FROM nation n WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
 
     oracle_solver.create_model("keyed_between")
@@ -1445,14 +1502,15 @@ def test_keyed_between_constraint(decidb_cli, duckdb_conn, oracle_solver):
 
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
 # Test 22: Two entity-scoped variables from different tables
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.correctness
 def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
@@ -1485,8 +1543,7 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
+            assert nation_values[nkey] == keep, f"Nation {nkey} has inconsistent keepN"
         else:
             nation_values[nkey] = keep
 
@@ -1496,27 +1553,26 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
         rkey = int(row[rkey_idx])
         keep = int(row[keepR_idx])
         if rkey in region_values:
-            assert region_values[rkey] == keep, \
-                f"Region {rkey} has inconsistent keepR"
+            assert region_values[rkey] == keep, f"Region {rkey} has inconsistent keepR"
         else:
             region_values[rkey] = keep
 
     # Verify per-row: keepN <= keepR
     for row in result:
-        assert int(row[keepN_idx]) <= int(row[keepR_idx]), \
-            f"keepN <= keepR violated for nation {row[nkey_idx]}"
+        assert int(row[keepN_idx]) <= int(row[keepR_idx]), f"keepN <= keepR violated for nation {row[nkey_idx]}"
 
     # Verify SUM(keepR) <= 10 (counts join rows; 5 nations per region → at most 2 regions)
     total_keepR_rows = sum(int(row[keepR_idx]) for row in result)
-    assert total_keepR_rows <= 10, \
-        f"SUM(keepR) <= 10 violated: {total_keepR_rows}"
+    assert total_keepR_rows <= 10, f"SUM(keepR) <= 10 violated: {total_keepR_rows}"
 
     # Oracle: binary per nation + binary per region; keepN_n <= keepR_{r(n)};
     # SUM_r keepR_r * 5 <= 10 → at most 2 regions; maximize SUM_n keepN_n.
-    raw22 = duckdb_conn.execute("""
+    raw22 = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(n.n_regionkey AS BIGINT)
         FROM nation n JOIN region r ON n.n_regionkey = r.r_regionkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids22 = sorted(set(int(r[0]) for r in raw22))
     nation_to_region22 = {int(r[0]): int(r[1]) for r in raw22}
     region_ids22 = sorted(set(nation_to_region22.values()))
@@ -1536,13 +1592,17 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
     for nkey in nation_ids22:
         rkey = nation_to_region22[nkey]
         oracle_solver.add_constraint(
-            {kn22[nkey]: 1.0, kr22[rkey]: -1.0}, "<=", 0.0,
+            {kn22[nkey]: 1.0, kr22[rkey]: -1.0},
+            "<=",
+            0.0,
             name=f"link_n{nkey}",
         )
     # SUM(keepR) <= 10 in join rows: SUM_r keepR_r * nations_per_region_r <= 10
     oracle_solver.add_constraint(
         {kr22[rkey]: float(nations_per_region22[rkey]) for rkey in region_ids22},
-        "<=", 10.0, name="sum_keepR",
+        "<=",
+        10.0,
+        name="sum_keepR",
     )
     oracle_solver.set_objective(
         {kn22[nkey]: 1.0 for nkey in nation_ids22},
@@ -1550,13 +1610,15 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result22 = oracle_solver.solve()
     decidb_obj22 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(decidb_obj22 - oracle_result22.objective_value) < 1e-4, \
-        f"Objective mismatch: DeciDB={decidb_obj22:.4f}, Oracle={oracle_result22.objective_value:.4f}"
+    assert (
+        abs(decidb_obj22 - oracle_result22.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj22:.4f}, Oracle={oracle_result22.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # Test 23: Error — entity-scoped variable referenced in WHEN condition
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.error_binder
 def test_keyed_var_in_when_condition_error(decidb_cli):
@@ -1582,9 +1644,12 @@ def test_keyed_var_in_when_condition_error(decidb_cli):
 # Test 25: Equality (=) constraint with entity-scoped variable
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 def test_keyed_equality_constraint(
-    decidb_cli, duckdb_conn, oracle_solver,
+    decidb_cli,
+    duckdb_conn,
+    oracle_solver,
 ):
     """SUM(keepN) = K with entity-scoped variable — oracle-compared."""
     sql = """
@@ -1598,10 +1663,12 @@ def test_keyed_equality_constraint(
     result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
-    raw = duckdb_conn.execute("""
+    raw = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT)
         FROM nation n WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
 
     oracle_solver.create_model("keyed_equality")
@@ -1616,9 +1683,9 @@ def test_keyed_equality_constraint(
 
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - res.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -1665,11 +1732,13 @@ def test_keyed_is_real(decidb_cli, duckdb_conn, oracle_solver):
     assert sum(budgets) <= 5000.0 + 1e-4
 
     # Oracle: one continuous var per nation in region<=2, ub=1000, SUM<=5000
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n_nationkey AS BIGINT)
         FROM nation WHERE n_regionkey <= 2
         ORDER BY n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = [int(r[0]) for r in data]
 
     oracle_solver.create_model("keyed_is_real")
@@ -1678,7 +1747,9 @@ def test_keyed_is_real(decidb_cli, duckdb_conn, oracle_solver):
         oracle_solver.add_variable(vnames[n], VarType.CONTINUOUS, lb=0.0, ub=1000.0)
     oracle_solver.add_constraint(
         {vnames[n]: 1.0 for n in nation_ids},
-        "<=", 5000.0, name="sum_budget",
+        "<=",
+        5000.0,
+        name="sum_budget",
     )
     oracle_solver.set_objective(
         {vnames[n]: float(n) for n in nation_ids},
@@ -1687,8 +1758,9 @@ def test_keyed_is_real(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
 
     decidb_obj = sum(float(row[nkey_idx]) * float(row[budget_idx]) for row in result)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-3, \
-        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-3
+    ), f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1724,17 +1796,18 @@ def test_keyed_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
             per_nation[k] = q
 
     # MIN<=3 means at least one nation has qty<=3
-    assert any(q <= 3 for q in per_nation.values()), \
-        f"MIN(qty)<=3 violated: per-nation qty = {per_nation}"
+    assert any(q <= 3 for q in per_nation.values()), f"MIN(qty)<=3 violated: per-nation qty = {per_nation}"
 
     # Oracle: per-nation INTEGER var [0, 10], SUM over join rows >= 60,
     # at least one nation with qty<=3 (Big-M indicator y_n: qty_n <= 3 + M*(1-y_n), SUM(y_n)>=1).
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), COUNT(*) AS cnt
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 100
         GROUP BY n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_cnt = {int(r[0]): int(r[1]) for r in data}
     nation_ids = sorted(nation_cnt.keys())
 
@@ -1748,18 +1821,24 @@ def test_keyed_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
     # SUM over join rows: each nation contributes qty_n * cnt_n
     oracle_solver.add_constraint(
         {qvars[n]: float(nation_cnt[n]) for n in nation_ids},
-        ">=", 60.0, name="sum_min",
+        ">=",
+        60.0,
+        name="sum_min",
     )
     # Big-M: qty_n - M*(1-y_n) <= 3  ⇒  qty_n + M*y_n <= 3 + M
     for n in nation_ids:
         oracle_solver.add_constraint(
             {qvars[n]: 1.0, yvars[n]: BIG_M},
-            "<=", 3.0 + BIG_M, name=f"bigm_min_{n}",
+            "<=",
+            3.0 + BIG_M,
+            name=f"bigm_min_{n}",
         )
     # at least one indicator on
     oracle_solver.add_constraint(
         {yvars[n]: 1.0 for n in nation_ids},
-        ">=", 1.0, name="one_indicator",
+        ">=",
+        1.0,
+        name="one_indicator",
     )
     oracle_solver.set_objective(
         {qvars[n]: float(nation_cnt[n]) for n in nation_ids},
@@ -1768,8 +1847,9 @@ def test_keyed_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
 
     decidb_obj = sum(int(row[qty_idx]) for row in result)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1809,13 +1889,15 @@ def test_keyed_abs(decidb_cli, duckdb_conn, oracle_solver):
     assert abs_sum <= 50000.0 + 1e-3
 
     # Oracle: one keepN_n per nation; per-row aux_i >= |acctbal_i*keepN_{n(i)} - 3000|
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT), CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 80
         ORDER BY c.c_custkey
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(set(int(r[1]) for r in data))
 
     oracle_solver.create_model("keyed_abs")
@@ -1832,16 +1914,22 @@ def test_keyed_abs(decidb_cli, duckdb_conn, oracle_solver):
         # aux >= acctbal*keepN - 3000
         oracle_solver.add_constraint(
             {aux: 1.0, keep_v[nkey]: -float(acctbal)},
-            ">=", -3000.0, name=f"abs_pos_{idx}",
+            ">=",
+            -3000.0,
+            name=f"abs_pos_{idx}",
         )
         # aux >= -(acctbal*keepN - 3000) = 3000 - acctbal*keepN
         oracle_solver.add_constraint(
             {aux: 1.0, keep_v[nkey]: float(acctbal)},
-            ">=", 3000.0, name=f"abs_neg_{idx}",
+            ">=",
+            3000.0,
+            name=f"abs_neg_{idx}",
         )
     oracle_solver.add_constraint(
         {a: 1.0 for a in aux_vars},
-        "<=", 50000.0, name="abs_sum",
+        "<=",
+        50000.0,
+        name="abs_sum",
     )
     # Objective SUM(keepN) over join rows
     nation_cnt = {}
@@ -1854,8 +1942,9 @@ def test_keyed_abs(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
 
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1884,24 +1973,28 @@ def test_keyed_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):
     acctbal_idx = cols.index("c_acctbal")
 
     # Sanity: at least one row with acctbal>2000, keepN=1, acctbal>=5000 (Big-M satisfied)
-    qualifying = [row for row in result
-                  if float(row[acctbal_idx]) > 2000.0
-                  and int(row[keepN_idx]) == 1
-                  and float(row[acctbal_idx]) >= 5000.0]
+    qualifying = [
+        row
+        for row in result
+        if float(row[acctbal_idx]) > 2000.0 and int(row[keepN_idx]) == 1 and float(row[acctbal_idx]) >= 5000.0
+    ]
     assert qualifying, "No row satisfies MAX >= 5000 WHEN c_acctbal>2000"
 
     # Oracle: the WHEN-filtered rows are candidates for the MAX. To satisfy
     # MAX >= 5000 among those rows, at least one (nation, row) with acctbal>2000
     # and acctbal>=5000 must have keepN=1. MAXIMIZE SUM(keepN) over join rows.
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 80
-    """).fetchall()
+    """
+    ).fetchall()
     nation_cnt = {}
     qualifying_nations = set()
     for nkey, acctbal in data:
-        nkey = int(nkey); acctbal = float(acctbal)
+        nkey = int(nkey)
+        acctbal = float(acctbal)
         nation_cnt[nkey] = nation_cnt.get(nkey, 0) + 1
         if acctbal > 2000.0 and acctbal >= 5000.0:
             qualifying_nations.add(nkey)
@@ -1915,7 +2008,9 @@ def test_keyed_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):
     if qualifying_nations:
         oracle_solver.add_constraint(
             {kv[n]: 1.0 for n in sorted(qualifying_nations)},
-            ">=", 1.0, name="max_when",
+            ">=",
+            1.0,
+            name="max_when",
         )
     oracle_solver.set_objective(
         {kv[n]: float(nation_cnt[n]) for n in nation_ids},
@@ -1924,8 +2019,9 @@ def test_keyed_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
 
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1960,10 +2056,12 @@ def test_keyed_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
     # Oracle: qty_n ∈ {8, 9}. Maximize SUM(qty_n * n). Optimum qty_n=9 for
     # every nation with n>0; for n=0 the coefficient is 0, so 8 or 9 both
     # optimal there. Implement NE via Big-M disjunction (for code-path parity).
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n_nationkey AS BIGINT)
         FROM nation WHERE n_regionkey <= 2
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(int(r[0]) for r in data)
 
     oracle_solver.create_model("keyed_ne")
@@ -1976,12 +2074,16 @@ def test_keyed_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
         # qty - M*z <= 9 (z=0 → qty<=9; z=1 → qty<=9+M trivially)
         oracle_solver.add_constraint(
             {qv[n]: 1.0, zv[n]: -BIG_M},
-            "<=", 9.0, name=f"ne_le_{n}",
+            "<=",
+            9.0,
+            name=f"ne_le_{n}",
         )
         # qty - M*z >= 11 - M  (z=1 → qty>=11; z=0 → qty>=11-M trivially)
         oracle_solver.add_constraint(
             {qv[n]: 1.0, zv[n]: -BIG_M},
-            ">=", 11.0 - BIG_M, name=f"ne_ge_{n}",
+            ">=",
+            11.0 - BIG_M,
+            name=f"ne_ge_{n}",
         )
     oracle_solver.set_objective(
         {qv[n]: float(n) for n in nation_ids},
@@ -1990,8 +2092,9 @@ def test_keyed_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result = oracle_solver.solve()
 
     decidb_obj = sum(int(row[nkey_idx]) * int(row[qty_idx]) for row in result)
-    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert (
+        abs(decidb_obj - oracle_result.objective_value) < 1e-4
+    ), f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -2000,11 +2103,10 @@ def test_keyed_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
 # so duplicates from the fan-out share no state.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 @pytest.mark.sql_joins
-def test_row_scoped_vars_on_fanout_join(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_row_scoped_vars_on_fanout_join(decidb_cli, duckdb_conn, oracle_solver):
     """Row-scoped `x(BOOL)` on a 1-to-many orders×lineitem JOIN.
 
     Each duplicated join row gets its own solver variable — the aggregate
@@ -2022,14 +2124,16 @@ def test_row_scoped_vars_on_fanout_join(
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(o.o_orderkey AS BIGINT),
                CAST(l.l_linenumber AS BIGINT),
                CAST(l.l_quantity AS DOUBLE),
                CAST(l.l_extendedprice AS DOUBLE)
         FROM orders o JOIN lineitem l ON o.o_orderkey = l.l_orderkey
         WHERE o.o_orderkey <= 10
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     oracle_solver.create_model("row_scoped_fanout_join")
@@ -2038,17 +2142,25 @@ def test_row_scoped_vars_on_fanout_join(
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(n)},
-        "<=", 50.0, name="qty_cap",
+        "<=",
+        50.0,
+        name="qty_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
     from comparison.compare import compare_solutions
+
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, res, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        res,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     assert cmp.status in ("identical", "optimal")
@@ -2059,12 +2171,11 @@ def test_row_scoped_vars_on_fanout_join(
 # entity-scoped variable + `per` grouping.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
 @pytest.mark.cons_subquery
 @pytest.mark.per_clause
-def test_keyed_subquery_per_three_way(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_keyed_subquery_per_three_way(decidb_cli, duckdb_conn, oracle_solver):
     """Uncorrelated scalar subquery RHS shared across `per` groups on an
     entity-scoped variable.
 
@@ -2083,14 +2194,14 @@ def test_keyed_subquery_per_three_way(
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
-    rhs_val = duckdb_conn.execute(
-        "SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation"
-    ).fetchone()[0]
+    rhs_val = duckdb_conn.execute("SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation").fetchone()[0]
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(n.n_nationkey AS BIGINT), CAST(n.n_regionkey AS BIGINT)
         FROM nation n WHERE n.n_regionkey IN (0, 1)
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(int(r[0]) for r in data)
     nation_region = {int(r[0]): int(r[1]) for r in data}
 
@@ -2106,11 +2217,14 @@ def test_keyed_subquery_per_three_way(
     for region, nks in regions.items():
         oracle_solver.add_constraint(
             {vnames[nk]: 1.0 for nk in nks},
-            "<=", float(rhs_val), name=f"per_region_{region}",
+            "<=",
+            float(rhs_val),
+            name=f"per_region_{region}",
         )
 
     oracle_solver.set_objective(
-        {vnames[nk]: 1.0 for nk in nation_ids}, ObjSense.MAXIMIZE,
+        {vnames[nk]: 1.0 for nk in nation_ids},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
@@ -2123,14 +2237,11 @@ def test_keyed_subquery_per_three_way(
         nkey = int(row[nkey_idx])
         k = int(row[keep_idx])
         if nkey in nation_to_keep:
-            assert nation_to_keep[nkey] == k, \
-                f"Nation {nkey} inconsistent keepN: {nation_to_keep[nkey]} vs {k}"
+            assert nation_to_keep[nkey] == k, f"Nation {nkey} inconsistent keepN: {nation_to_keep[nkey]} vs {k}"
         else:
             nation_to_keep[nkey] = k
     decidb_obj = sum(nation_to_keep.values())
-    assert abs(decidb_obj - res.objective_value) < 1e-6, (
-        f"DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    assert abs(decidb_obj - res.objective_value) < 1e-6, f"DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -2139,10 +2250,9 @@ def test_keyed_subquery_per_three_way(
 # skip it. The oracle states only the classes that exist.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
-def test_keyed_null_key(
-    decidb_cli, oracle_solver
-):
+def test_keyed_null_key(decidb_cli, oracle_solver):
     """NULL-keyed rows have no decision.
 
     The table has two NULL-key rows and one non-NULL row. The NULL rows are in no
@@ -2181,19 +2291,18 @@ def test_keyed_null_key(
     null_vals = [row[keep_idx] for row in decidb_rows if row[nk_idx] is None]
     assert null_vals == [None, None], f"NULL-keyed rows should have no decision, got keep values: {null_vals}"
     decidb_obj = sum(float(row[val_idx]) * int(row[keep_idx]) for row in decidb_rows if row[nk_idx] is not None)
-    assert decidb_obj == pytest.approx(res.objective_value), (
-        f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
-    )
+    assert decidb_obj == pytest.approx(
+        res.objective_value
+    ), f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
 # Three-table fan-out (customer × nation × region) with `per` on the outer table
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.correctness
-def test_keyed_three_way_join_per_region(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_keyed_three_way_join_per_region(decidb_cli, duckdb_conn, oracle_solver):
     """Three-table fan-out with entity variable on the middle table and
     `per` on the outer table.
 
@@ -2226,14 +2335,12 @@ def test_keyed_three_way_join_per_region(
         nk = int(row[nk_idx])
         kv = int(row[keep_idx])
         if nk in nation_keep:
-            assert nation_keep[nk] == kv, (
-                f"nation {nk} has inconsistent keepN: "
-                f"{nation_keep[nk]} vs {kv}"
-            )
+            assert nation_keep[nk] == kv, f"nation {nk} has inconsistent keepN: " f"{nation_keep[nk]} vs {kv}"
         else:
             nation_keep[nk] = kv
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT),
                CAST(n.n_nationkey AS BIGINT),
                CAST(n.n_regionkey AS BIGINT),
@@ -2242,7 +2349,8 @@ def test_keyed_three_way_join_per_region(
           JOIN nation n ON c.c_nationkey = n.n_nationkey
           JOIN region r ON n.n_regionkey = r.r_regionkey
         WHERE c.c_custkey <= 300 AND n.n_regionkey IN (0, 1)
-    """).fetchall()
+    """
+    ).fetchall()
 
     # One variable per nation; aggregate join-row coefficients per nation.
     nation_ids = sorted({int(row[1]) for row in data})
@@ -2265,12 +2373,10 @@ def test_keyed_three_way_join_per_region(
     regions = sorted({nation_region[nk] for nk in nation_ids})
     for rk in regions:
         oracle_solver.add_constraint(
-            {
-                vnames[nk]: float(nation_count[nk])
-                for nk in nation_ids
-                if nation_region[nk] == rk
-            },
-            "<=", 25.0, name=f"region_{rk}_cap",
+            {vnames[nk]: float(nation_count[nk]) for nk in nation_ids if nation_region[nk] == rk},
+            "<=",
+            25.0,
+            name=f"region_{rk}_cap",
         )
 
     oracle_solver.set_objective(
@@ -2282,12 +2388,10 @@ def test_keyed_three_way_join_per_region(
 
     # DeciDB objective from actual row values.
     ac_idx = decidb_cols.index("c_acctbal")
-    decidb_obj = sum(
-        int(row[keep_idx]) * float(row[ac_idx]) for row in decidb_rows
-    )
-    assert abs(decidb_obj - res.objective_value) < 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
-    )
+    decidb_obj = sum(int(row[keep_idx]) * float(row[ac_idx]) for row in decidb_rows)
+    assert (
+        abs(decidb_obj - res.objective_value) < 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -2302,9 +2406,7 @@ def test_keyed_three_way_join_per_region(
 
 
 @pytest.mark.correctness
-def test_keyed_over_subquery_of_base_table(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_keyed_over_subquery_of_base_table(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable sourced from a subquery that wraps a base table.
 
     Regression for a bug where `FROM (SELECT ... FROM base) t DECIDE per t: x ...`
@@ -2322,9 +2424,7 @@ def test_keyed_over_subquery_of_base_table(
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute(
-        "SELECT CAST(n_nationkey AS BIGINT), CAST(n_nationkey AS DOUBLE) FROM nation"
-    ).fetchall()
+    data = duckdb_conn.execute("SELECT CAST(n_nationkey AS BIGINT), CAST(n_nationkey AS DOUBLE) FROM nation").fetchall()
     rks = sorted({int(row[0]) for row in data})
 
     oracle_solver.create_model("entity_scope_subquery_of_base")
@@ -2332,10 +2432,14 @@ def test_keyed_over_subquery_of_base_table(
     for rk in rks:
         oracle_solver.add_variable(vnames[rk], VarType.BINARY)
     oracle_solver.add_constraint(
-        {vnames[rk]: 1.0 for rk in rks}, "<=", 5.0, name="sum_cap",
+        {vnames[rk]: 1.0 for rk in rks},
+        "<=",
+        5.0,
+        name="sum_cap",
     )
     oracle_solver.set_objective(
-        {vnames[rk]: float(rk) for rk in rks}, ObjSense.MAXIMIZE,
+        {vnames[rk]: float(rk) for rk in rks},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
@@ -2343,12 +2447,10 @@ def test_keyed_over_subquery_of_base_table(
     keep_idx = decidb_cols.index("keep")
     val_idx = decidb_cols.index("val")
     rk_idx = decidb_cols.index("rk")
-    decidb_obj = sum(
-        int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows
-    )
-    assert decidb_obj == pytest.approx(res.objective_value), (
-        f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
-    )
+    decidb_obj = sum(int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows)
+    assert decidb_obj == pytest.approx(
+        res.objective_value
+    ), f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
     # Entity consistency: rows with the same rk share the same keep value.
     per_rk = {}
     for row in decidb_rows:
@@ -2361,9 +2463,7 @@ def test_keyed_over_subquery_of_base_table(
 
 
 @pytest.mark.correctness
-def test_keyed_over_cte_of_base_table(
-    decidb_cli, duckdb_conn, oracle_solver
-):
+def test_keyed_over_cte_of_base_table(decidb_cli, duckdb_conn, oracle_solver):
     """Same regression shape as the subquery form, but via a WITH-CTE."""
     sql = """
         WITH t(rk, val) AS (
@@ -2377,9 +2477,7 @@ def test_keyed_over_cte_of_base_table(
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
-    data = duckdb_conn.execute(
-        "SELECT CAST(n_nationkey AS BIGINT) FROM nation"
-    ).fetchall()
+    data = duckdb_conn.execute("SELECT CAST(n_nationkey AS BIGINT) FROM nation").fetchall()
     rks = sorted({int(row[0]) for row in data})
 
     oracle_solver.create_model("entity_scope_cte_of_base")
@@ -2387,22 +2485,24 @@ def test_keyed_over_cte_of_base_table(
     for rk in rks:
         oracle_solver.add_variable(vnames[rk], VarType.BINARY)
     oracle_solver.add_constraint(
-        {vnames[rk]: 1.0 for rk in rks}, "<=", 5.0, name="sum_cap",
+        {vnames[rk]: 1.0 for rk in rks},
+        "<=",
+        5.0,
+        name="sum_cap",
     )
     oracle_solver.set_objective(
-        {vnames[rk]: float(rk) for rk in rks}, ObjSense.MAXIMIZE,
+        {vnames[rk]: float(rk) for rk in rks},
+        ObjSense.MAXIMIZE,
     )
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
     keep_idx = decidb_cols.index("keep")
     val_idx = decidb_cols.index("val")
-    decidb_obj = sum(
-        int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows
-    )
-    assert decidb_obj == pytest.approx(res.objective_value), (
-        f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
-    )
+    decidb_obj = sum(int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows)
+    assert decidb_obj == pytest.approx(
+        res.objective_value
+    ), f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -2443,11 +2543,13 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
     )
     rows_entity, cols_entity = decidb_cli.execute(sql_entity)
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT NULLIF(n_regionkey, 0),
                CAST(n_nationkey AS DOUBLE)
         FROM nation
-    """).fetchall()
+    """
+    ).fetchall()
     # A NULL rk is no entity.
     entities = {}
     counts = {}
@@ -2465,10 +2567,14 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
     for k in keys:
         oracle_solver.add_variable(vnames[k], VarType.BINARY)
     oracle_solver.add_constraint(
-        {vnames[k]: float(counts[k]) for k in keys}, "<=", 5.0, name="cap",
+        {vnames[k]: float(counts[k]) for k in keys},
+        "<=",
+        5.0,
+        name="cap",
     )
     oracle_solver.set_objective(
-        {vnames[k]: coeffs[k] for k in keys}, ObjSense.MAXIMIZE,
+        {vnames[k]: coeffs[k] for k in keys},
+        ObjSense.MAXIMIZE,
     )
     res_a = oracle_solver.solve()
     assert res_a.status == SolverStatus.OPTIMAL
@@ -2477,9 +2583,9 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
     val_idx = cols_entity.index("val")
     rk_idx = cols_entity.index("rk")
     obj_a = sum(int(r[keep_idx]) * float(r[val_idx]) for r in rows_entity if r[rk_idx] is not None)
-    assert obj_a == pytest.approx(res_a.objective_value), (
-        f"(A) entity-scope: DeciDB obj={obj_a}, oracle={res_a.objective_value}"
-    )
+    assert obj_a == pytest.approx(
+        res_a.objective_value
+    ), f"(A) entity-scope: DeciDB obj={obj_a}, oracle={res_a.objective_value}"
     # NULL rows have no decision.
     null_keeps = [r[keep_idx] for r in rows_entity if r[rk_idx] is None]
     assert null_keeps and set(null_keeps) == {None}, f"(A) NULL-keyed rows should have no decision, got: {null_keeps}"
@@ -2532,6 +2638,7 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
 # entries or per-row coefficient accumulation errors when multiple rows
 # share the same underlying var.
 
+
 @pytest.mark.correctness
 def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped var with per-row `x + 3 <= 10`. Each entity gets constrained
@@ -2554,18 +2661,18 @@ def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver):
         keep = int(row[2])
         assert 0 <= keep <= 7, f"Nation {nkey} keepN={keep} violates entity-scoped x+3<=10 bound"
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, (
-                f"Nation {nkey} entity inconsistency: {nation_values[nkey]} vs {keep}"
-            )
+            assert nation_values[nkey] == keep, f"Nation {nkey} entity inconsistency: {nation_values[nkey]} vs {keep}"
         nation_values[nkey] = keep
 
     # Oracle comparison: one var per nation with ub=7.
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c.c_custkey AS BIGINT), CAST(n.n_nationkey AS BIGINT),
                CAST(c.c_acctbal AS DOUBLE)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-    """).fetchall()
+    """
+    ).fetchall()
     nation_ids = sorted(set(int(r[1]) for r in data))
     nation_acctbal = {}
     for r in data:
@@ -2585,6 +2692,6 @@ def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver):
     decidb_obj = 0.0
     for r in data:
         decidb_obj += nation_values.get(int(r[1]), 0) * float(r[2])
-    assert abs(decidb_obj - result.objective_value) < 1e-4, (
-        f"Entity-scoped per-row linear LHS: DeciDB={decidb_obj}, oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) < 1e-4
+    ), f"Entity-scoped per-row linear LHS: DeciDB={decidb_obj}, oracle={result.objective_value}"

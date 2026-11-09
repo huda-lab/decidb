@@ -632,8 +632,7 @@ TEST_CASE("A1 accepts a separable box-constrained problem and declines anything 
 	string condition;
 
 	// What it accepts.
-	REQUIRE(
-	    RuleApplies(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", &condition));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", &condition));
 	REQUIRE(condition == "min/max SUM(c*x), l <= x <= u, each row independent");
 	REQUIRE(RuleApplies(*a1, con, "x(INT)", "x <= cap AND x >= 0", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(RuleApplies(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)"));

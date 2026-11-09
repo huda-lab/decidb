@@ -92,7 +92,8 @@ void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
 // True if the expression (after unwrapping casts) is a BOUND_FUNCTION named `name`. `-` is both binary and unary.
 static bool IsFunctionNode(const Expression &e, idx_t decide_index, const char *name) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
-	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION)
+		return false;
 	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == name;
 }
 
@@ -328,8 +329,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	// them anyway, plus a redundant second envelope.
 	bool exact_pin = (cmp_type == ExpressionType::COMPARE_EQUAL);
 	if (!exact_pin && cmp_type != ExpressionType::COMPARE_LESSTHAN &&
-	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
-	    cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
+	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO && cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
 	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 		// BETWEEN never reaches here — it is already a pair of directional
 		// comparisons by this point — so the message must not claim otherwise.
@@ -583,8 +583,8 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 
 		// Easy part: per-row bound. A negative factor reverses it, for the same reason
 		// it reverses the classification above.
-		auto easy_cmp_type = is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO
-		                            : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+		auto easy_cmp_type =
+		    is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 		if (scale_sign < 0) {
 			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
 		}
@@ -606,8 +606,8 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			easy = std::move(per_wrapper);
 		}
 		new_constraints.push_back(std::move(easy));
-		auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
-		                            : ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		auto hard_cmp_type =
+		    is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : ExpressionType::COMPARE_LESSTHANOREQUALTO;
 		if (scale_sign < 0) {
 			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
 		}
@@ -699,7 +699,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		return;
 	}
 	auto &outer_agg = scaled_obj_agg ? const_cast<BoundAggregateExpression &>(*scaled_obj_agg)
-	                                : obj_expr->Cast<BoundAggregateExpression>();
+	                                 : obj_expr->Cast<BoundAggregateExpression>();
 	auto outer_name = StringUtil::Lower(outer_agg.function.name);
 
 	// The objective's sense pushes every term the same way: MINIMIZE down, MAXIMIZE up.

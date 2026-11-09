@@ -29,10 +29,7 @@ from ._diagnostic_invariants import assert_backends_agree, assert_edits_are_user
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
-_UNBOUNDED_SQL = (
-    "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-    "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
-)
+_UNBOUNDED_SQL = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
 
 _EXPECTED_SCHEMA = [
     "state",
@@ -59,18 +56,11 @@ _flat = _diagnose_relation.rows
 
 def _errors(result):
     """stderr lines that are real errors — DIAGNOSE reports findings, it does not raise."""
-    return [
-        line for line in result.stderr.strip().splitlines()
-        if line and not line.startswith("Warning:")
-    ]
+    return [line for line in result.stderr.strip().splitlines() if line and not line.startswith("Warning:")]
 
 
 def _attrs(rows, subject_kind, subject):
-    return {
-        r["attribute"]: r["value"]
-        for r in rows
-        if r["subject_kind"] == subject_kind and r["subject"] == subject
-    }
+    return {r["attribute"]: r["value"] for r in rows if r["subject_kind"] == subject_kind and r["subject"] == subject}
 
 
 def _resolve_objective(cli, sql, drop_sqls, columns):
@@ -85,8 +75,7 @@ def _resolve_objective(cli, sql, drop_sqls, columns):
             if f"{clause} AND " in fixed_sql
             else fixed_sql.replace(f" AND {clause}", "")
         )
-    fixed = list(csv.DictReader(io.StringIO(
-        cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+    fixed = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
     return sum(sum(float(r[c]) for c in columns) for r in fixed)
 
 
@@ -146,16 +135,9 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_number_range
     if callable(expect_number_range):
         expect_number_range = expect_number_range(fixed_sql)
     result = cli.execute_script(".mode csv\n" + fixed_sql + ";\n", expect_number_range=expect_number_range)
-    errors = [
-        line for line in result.stderr.strip().splitlines()
-        if line and not line.startswith("Warning:")
-    ]
-    assert not errors, (
-        f"edited query still fails:\n{fixed_sql}\n" + "\n".join(errors)
-    )
-    assert list(csv.DictReader(io.StringIO(result.stdout))), (
-        f"edited query returned no rows:\n{fixed_sql}"
-    )
+    errors = [line for line in result.stderr.strip().splitlines() if line and not line.startswith("Warning:")]
+    assert not errors, f"edited query still fails:\n{fixed_sql}\n" + "\n".join(errors)
+    assert list(csv.DictReader(io.StringIO(result.stdout))), f"edited query returned no rows:\n{fixed_sql}"
     return fixed_sql
 
 
@@ -201,8 +183,7 @@ class TestDiagnoseRelationShape:
         """No separate output path for a query that worked: one row, state = feasible."""
         cli = request.getfixturevalue(cli_fixture)
         bounded_sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, bounded_sql)
         assert not _errors(result), result.stderr
@@ -215,14 +196,9 @@ class TestDiagnoseRelationShape:
     def test_the_relation_composes(self, request, cli_fixture):
         """It is a relation, not a printed report: it can be selected from and filtered."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         result = cli.execute_script(
-            ".mode csv\n"
-            f"SELECT clause, amount FROM (DIAGNOSE {sql}) "
-            "WHERE clause IS NOT NULL AND amount > 1;\n"
+            ".mode csv\n" f"SELECT clause, amount FROM (DIAGNOSE {sql}) " "WHERE clause IS NOT NULL AND amount > 1;\n"
         )
         rows = list(csv.DictReader(io.StringIO(result.stdout)))
         assert rows == [{"clause": "x <= 5", "amount": "10.0"}], result.stdout
@@ -247,14 +223,9 @@ class TestDiagnoseRelationShape:
         previous one's."""
         cli = request.getfixturevalue(cli_fixture)
         bounded_sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
         )
-        result = cli.execute_script(
-            ".mode csv\n"
-            f"DIAGNOSE {_UNBOUNDED_SQL};\n"
-            f"DIAGNOSE {bounded_sql};\n"
-        )
+        result = cli.execute_script(".mode csv\n" f"DIAGNOSE {_UNBOUNDED_SQL};\n" f"DIAGNOSE {bounded_sql};\n")
         # Two relations back to back: the unbounded one, then a clean `feasible`.
         assert "unbounded" in result.stdout
         assert "feasible" in result.stdout
@@ -274,8 +245,7 @@ class TestDiagnoseRelationShape:
         rejects the non-convex QP in pre-solve)."""
         cli = request.getfixturevalue(cli_fixture)
         qp_sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
         )
         result = _diagnose(cli, qp_sql)
         if "gurobi" in cli_fixture:
@@ -303,19 +273,12 @@ class TestDiagnosticsRelation:
         between the two bounds (each loosens by 4), so assert on whichever the backend
         picks rather than a fixed direction."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
         assert not _errors(result), result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        edits = {
-            r["subject"]: r["value"]
-            for r in rows
-            if r["attribute"] == "suggested_change"
-        }
+        edits = {r["subject"]: r["value"] for r in rows if r["attribute"] == "suggested_change"}
         # Exactly one of the two contradictory bounds is loosened to meet the other.
         assert edits in ({"x >= 5": "x >= 1"}, {"x <= 1": "x <= 5"}), edits
         _apply_reported_fix(cli, sql, rows)
@@ -331,10 +294,7 @@ class TestDiagnosticsRelation:
         with the row `2*x >= 30` (x >= 15); loosening the cap to 15 is the unique fix.
         Proves the operator re-emits the singleton-row bound as a slackable row."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
         assert not _errors(result), result.stderr
@@ -346,9 +306,7 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_entity_scoped_label_drops_accumulated_coefficient(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_entity_scoped_label_drops_accumulated_coefficient(self, request, cli_fixture):
         """An entity-scoped variable maps every joined row of an entity onto ONE solver
         column, so the builder accumulates rather than fanning out. Here each region owns
         exactly 5 nation rows, so `sum(keepR)` reaches the matrix as `5*keepR` — one index,
@@ -368,18 +326,17 @@ class TestDiagnosticsRelation:
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         subject = "per r.r_name: sum(keepR) by (r.r_name) >= 6"
-        assert any(r["subject"] == subject for r in rows), (
-            "clause label must quote the written coefficient, not the accumulated one:\n"
-            + "\n".join(sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"}))
+        assert any(
+            r["subject"] == subject for r in rows
+        ), "clause label must quote the written coefficient, not the accumulated one:\n" + "\n".join(
+            sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"})
         )
         attrs = _attrs(rows, "clause", subject)
         assert attrs["suggested_change"] == "per r.r_name: sum(keepR) by (r.r_name) >= 5"
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_entity_scoped_label_survives_mixed_multiplicity(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_entity_scoped_label_survives_mixed_multiplicity(self, request, cli_fixture):
         """Same fold, harder shape: one `per` group holding several entities with *different*
         join multiplicities (nations per region own 50-72 customers each), so the accumulated
         coefficients differ across columns of the same variable. The reconstruction reads
@@ -400,16 +357,15 @@ class TestDiagnosticsRelation:
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         subject = "per r.r_name: sum(keepN) by (r.r_name) >= 1000"
-        assert any(r["subject"] == subject for r in rows), (
-            "mixed-multiplicity group must not render as a data-varying weight:\n"
-            + "\n".join(sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"}))
+        assert any(
+            r["subject"] == subject for r in rows
+        ), "mixed-multiplicity group must not render as a data-varying weight:\n" + "\n".join(
+            sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"})
         )
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_row_scoped_label_unaffected_by_fold_rendering(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_row_scoped_label_unaffected_by_fold_rendering(self, request, cli_fixture):
         """Guard on the two tests above: a row-scoped variable genuinely fans out over its
         rows, so it never takes the accumulating build path and must keep rendering through
         the existing fan-out fold. Pins that the entity-scoped fix did not reroute the
@@ -457,15 +413,12 @@ class TestDiagnosticsRelation:
         # Differential: apply the reported edit, re-solve the now-feasible query, and
         # confirm its objective matches what the diagnosis promised.
         fixed_sql = sql.replace("x <= 0", x_cap["suggested_change"])
-        fixed = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        fixed = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
         objective = sum(float(r["x"]) for r in fixed)
         assert float(reported) == pytest.approx(objective)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_no_objective_loosen_tie_is_solver_agnostic(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_no_objective_loosen_tie_is_solver_agnostic(self, request, cli_fixture):
         """A5 tie-break on loosen edits — the same cap/floor tie as the stage-2 test but
         WITHOUT an objective, so stage 2 cannot arbitrate: any split of the 10 units of
         loosening across `x <= 0`, `y <= 0`, and `x + y >= 10` is an equally-minimal
@@ -478,8 +431,7 @@ class TestDiagnosticsRelation:
         SAME clause on both backends is the solver-agnosticism guarantee."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT x, y FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL), y(REAL) SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10"
+            "SELECT x, y FROM (VALUES (1)) t(id) " "DECIDE x(REAL), y(REAL) SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10"
         )
         result = _diagnose(cli, sql)
 
@@ -646,8 +598,7 @@ class TestDiagnosticsRelation:
         bound instead of losing it behind the rigid column box."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
-            "DECIDE x(REAL) SUCH THAT 5 >= x AND x >= lo MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1,12)) t(id, lo) " "DECIDE x(REAL) SUCH THAT 5 >= x AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
 
@@ -753,9 +704,7 @@ class TestDiagnosticsRelation:
         assert by_group["b"]["amount"] == "2"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_per_group_expanded_mode_preserves_empty_string_group(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_per_group_expanded_mode_preserves_empty_string_group(self, request, cli_fixture):
         """B4: an empty-string per key is a real group value, not the ungrouped case."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -829,10 +778,7 @@ class TestDiagnosticsRelation:
         `SUM(x) >= 3` over two BOOLEAN x (max achievable 2) is infeasible; the only
         honest fix is loosening the SUM target, NOT widening the 0/1 box to `x <= 2`."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
@@ -887,8 +833,7 @@ class TestDiagnosticsRelation:
         fixed_sql = _apply_reported_fix(cli, sql, rows)
         # Oracle: the promised objective is achievable on the edited query.
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
-        fixed = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        fixed = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
         assert float(reported) == pytest.approx(sum(float(r["y"]) for r in fixed))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -966,10 +911,7 @@ class TestDiagnosticsRelation:
         suggested_change that widens past 1, since the domain was never emitted as a
         slackable row to begin with. The only honest edit loosens the SUM floor itself."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) " "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
@@ -990,10 +932,7 @@ class TestDiagnosticsRelation:
         overshoot) tagged edit_source='virtual_offset', not a dead-end conflict. The RHS
         column name `hi` is carried through so the suggestion names it."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) "
-            "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) " "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
@@ -1013,10 +952,7 @@ class TestDiagnosticsRelation:
         separate expanded_row profile entry (a debug view of which generated rows are tight),
         not a single virtual offset. Here two rows with distinct caps (5, 7) each surface."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT id, x FROM (VALUES (1,5),(2,7)) t(id, hi) "
-            "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT id, x FROM (VALUES (1,5),(2,7)) t(id, hi) " "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql, scope="expanded")
 
         rows = _rows(result)
@@ -1027,9 +963,7 @@ class TestDiagnosticsRelation:
         scopes = {r["value"] for r in rows if r["attribute"] == "offset_scope"}
         assert scopes == {"row"}
         # Both distinct floors appear as separate subjects.
-        loosen_subjects = {
-            r["subject"] for r in rows if r["attribute"] == "edit_kind" and r["value"] == "loosen"
-        }
+        loosen_subjects = {r["subject"] for r in rows if r["attribute"] == "edit_kind" and r["value"] == "loosen"}
         assert loosen_subjects == {"x >= 5", "x >= 7"}
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -1039,8 +973,7 @@ class TestDiagnosticsRelation:
         solver loosens the editable cap and leaves the data row alone."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
-            "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1,12)) t(id, lo) " "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
 
@@ -1120,9 +1053,7 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows, {"x <= 5": "x <= (SELECT 5)"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_reversed_uncorrelated_subquery_cap_is_editable(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_reversed_uncorrelated_subquery_cap_is_editable(self, request, cli_fixture):
         """The reversed spelling ``(SELECT 5) >= x`` has the same provenance.
 
         Canonicalization swaps the complete sides, but provenance is semantic,
@@ -1151,9 +1082,7 @@ class TestDiagnosticsRelation:
         "constraint",
         ("x + 2 <= (SELECT 7)", "(SELECT 7) >= x + 2"),
     )
-    def test_infeasible_rebuilt_query_wide_subquery_bound_is_editable(
-        self, request, cli_fixture, constraint
-    ):
+    def test_infeasible_rebuilt_query_wide_subquery_bound_is_editable(self, request, cli_fixture, constraint):
         """Classification belongs to the complete canonical bound, not one source node.
 
         Moving the data-only ``2`` across the relation rebuilds the bound as the
@@ -1176,9 +1105,7 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows, {"x <= 5": constraint})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_multiple_query_wide_subqueries_form_one_shared_bound(
-        self, request, cli_fixture
-    ):
+    def test_multiple_query_wide_subqueries_form_one_shared_bound(self, request, cli_fixture):
         """Arithmetic composed entirely from query-wide values remains one knob."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -1200,9 +1127,7 @@ class TestDiagnosticsRelation:
         "constraint",
         ("x <= lo + (SELECT 1)", "lo + (SELECT 1) >= x"),
     )
-    def test_mixed_subquery_and_row_data_bound_stays_data_backed(
-        self, request, cli_fixture, constraint
-    ):
+    def test_mixed_subquery_and_row_data_bound_stays_data_backed(self, request, cli_fixture, constraint):
         """One query-wide component must not promote a row-varying rebuilt bound.
 
         The data-backed cap remains non-editable, so diagnosis loosens the explicit
@@ -1221,7 +1146,8 @@ class TestDiagnosticsRelation:
         assert floor["suggested_change"] == "x >= 5"
         assert floor["amount"] == "95"
         assert not [
-            r for r in rows
+            r
+            for r in rows
             if r["subject_kind"] == "clause"
             and r["subject"].startswith("x <=")
             and r["attribute"] == "suggested_change"
@@ -1251,7 +1177,8 @@ class TestDiagnosticsRelation:
         assert floor["suggested_change"] == "x >= 5"
         # The correlated subquery cap never gets a scalar loosening suggestion.
         assert not [
-            r for r in rows
+            r
+            for r in rows
             if r["subject_kind"] == "clause"
             and r["subject"].startswith("x <=")
             and r["attribute"] == "suggested_change"
@@ -1267,10 +1194,7 @@ class TestDiagnosticsRelation:
         variable, so the cap loosens 4 → 15 (amount 11). The `2*x` coefficient breaks the
         L1 tie, so the edit is deterministic."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= 4 AND 2 * x >= 30 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= 4 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
@@ -1433,9 +1357,7 @@ class TestDiagnosticsRelation:
             ("SUM(POWER(x - 5, 2)) < 3", "SUM(POWER(x - 5, 2)) < 3"),
         ],
     )
-    def test_infeasible_quadratic_with_constant_echoes_written_bound(
-        self, request, cli_fixture, clause, written_op
-    ):
+    def test_infeasible_quadratic_with_constant_echoes_written_bound(self, request, cli_fixture, clause, written_op):
         """A quadratic clause whose body has a constant (`(x - 5)^2` expands to `x^2 - 10x + 25`)
         is built with that constant moved into its bound. The echo and the suggested change
         quote the bound the user typed, not the moved one, so pasting the suggestion back
@@ -1524,14 +1446,19 @@ class TestDiagnosticsRelation:
         assert cap["amount"] == "10000000"
         assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
         _apply_reported_fix(
-            cli, sql, rows,
+            cli,
+            sql,
+            rows,
             {"10000000 * x <= 50000000": "10000000*x <= 50000000"},
         )
 
-    @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
-        ("MINIMIZE SUM(x)", "x <> 0", "x <> 0", "0"),
-        ("MAXIMIZE SUM(x)", "x <> 1", "x <> 1", "1"),
-    ])
+    @pytest.mark.parametrize(
+        "objective, expected_drop, drop_sql, expected_objective",
+        [
+            ("MINIMIZE SUM(x)", "x <> 0", "x <> 0", "0"),
+            ("MAXIMIZE SUM(x)", "x <> 1", "x <> 1", "1"),
+        ],
+    )
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_ne_must_drop_reports_objective_best_drop(
         self, request, cli_fixture, objective, expected_drop, drop_sql, expected_objective
@@ -1542,10 +1469,7 @@ class TestDiagnosticsRelation:
         MAXIMIZE (pins x=1). The reported objective is both the expected literal AND
         differential-checked against an independent re-solve of the fixed query."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            f"DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 {objective}"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " f"DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 {objective}"
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
@@ -1557,8 +1481,7 @@ class TestDiagnosticsRelation:
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == expected_objective
         # Oracle: re-solve the query with the dropped `<>` removed and confirm the match.
-        assert float(reported) == pytest.approx(
-            _resolve_objective(cli, sql, [drop_sql], ["x"]))
+        assert float(reported) == pytest.approx(_resolve_objective(cli, sql, [drop_sql], ["x"]))
 
     @pytest.mark.parametrize(
         "objective, expected_drop, drop_sql, expected_objective",
@@ -1579,10 +1502,7 @@ class TestDiagnosticsRelation:
         block, so the DROP must stay *named* while stage 2 chooses the objective-best
         minimum-cardinality aggregate DROP set. Objective is differential-checked."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            f"DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 {objective}"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " f"DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 {objective}"
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
@@ -1596,13 +1516,10 @@ class TestDiagnosticsRelation:
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == expected_objective
         # Oracle: re-solve with the dropped aggregate `<>` removed and confirm the match.
-        assert float(reported) == pytest.approx(
-            _resolve_objective(cli, sql, [drop_sql], ["x"]))
+        assert float(reported) == pytest.approx(_resolve_objective(cli, sql, [drop_sql], ["x"]))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_objective_indifferent_drop_tie_is_solver_agnostic(
-        self, request, cli_fixture
-    ):
+    def test_infeasible_objective_indifferent_drop_tie_is_solver_agnostic(self, request, cli_fixture):
         """T4 tie-break — solver-agnostic determinism when the objective is *indifferent*
         between two equally-minimal DROP sets. The conflict is on `x` (`x <> 0 AND x <> 1`
         on a BOOLEAN), but the objective only involves the free `y`, so stage 2 has no
@@ -1630,13 +1547,15 @@ class TestDiagnosticsRelation:
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == "5"  # objective is unaffected by which `<>` is dropped
         # Oracle: dropping either `<>` yields the same objective; check the reported one.
-        assert float(reported) == pytest.approx(
-            _resolve_objective(cli, sql, ["x <> 0"], ["y"]))
+        assert float(reported) == pytest.approx(_resolve_objective(cli, sql, ["x <> 0"], ["y"]))
 
-    @pytest.mark.parametrize("objective, expected_drops, expected_objective", [
-        ("MINIMIZE SUM(x) + SUM(y)", ["x <> 0", "y <> 0"], "0"),
-        ("MAXIMIZE SUM(x) + SUM(y)", ["x <> 1", "y <> 1"], "2"),
-    ])
+    @pytest.mark.parametrize(
+        "objective, expected_drops, expected_objective",
+        [
+            ("MINIMIZE SUM(x) + SUM(y)", ["x <> 0", "y <> 0"], "0"),
+            ("MAXIMIZE SUM(x) + SUM(y)", ["x <> 1", "y <> 1"], "2"),
+        ],
+    )
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_must_drop_multiple_reports_objective_best_set(
         self, request, cli_fixture, objective, expected_drops, expected_objective
@@ -1656,31 +1575,24 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        drops = sorted(
-            r["subject"] for r in rows
-            if r["attribute"] == "edit_kind" and r["value"] == "drop"
-        )
+        drops = sorted(r["subject"] for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop")
         assert drops == sorted(expected_drops), rows  # exactly two, objective-best per var
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == expected_objective
         # Oracle: re-solve with both dropped `<>` removed and confirm the match.
-        assert float(reported) == pytest.approx(
-            _resolve_objective(cli, sql, expected_drops, ["x", "y"]))
+        assert float(reported) == pytest.approx(_resolve_objective(cli, sql, expected_drops, ["x", "y"]))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize("domain", ["(2)", "(2, 3)"])
     @pytest.mark.parametrize("when", ["", "when id = 1: "])
-    def test_infeasible_in_formulation_is_one_atomic_drop(
-        self, request, cli_fixture, domain, when
-    ):
+    def test_infeasible_in_formulation_is_one_atomic_drop(self, request, cli_fixture, domain, when):
         """Singleton, multi-value, negative, and when-scoped IN formulations are
         source-level remove-only groups. Cardinality/linking/folded-floor rows never
         surface separately and always disappear together."""
         cli = request.getfixturevalue(cli_fixture)
         clause = f"{when}b IN {domain}"
         sql = (
-            "SELECT id, b FROM (VALUES (1)) t(id) DECIDE b(BOOL) "
-            f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
+            "SELECT id, b FROM (VALUES (1)) t(id) DECIDE b(BOOL) " f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
         )
         result = _diagnose(cli, sql)
         assert not _errors(result), result.stderr
@@ -1698,10 +1610,7 @@ class TestDiagnosticsRelation:
         Against a disjoint positive IN, MAXIMIZE selects dropping the negative clause."""
         cli = request.getfixturevalue(cli_fixture)
         negative = "x IN (-2, -3)"
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) DECIDE x(INT) "
-            f"SUCH THAT {negative} AND x IN (1, 2) MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) DECIDE x(INT) " f"SUCH THAT {negative} AND x IN (1, 2) MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
         assert not _errors(result), result.stderr
         rows = _rows(result)
@@ -1717,16 +1626,11 @@ class TestDiagnosticsRelation:
             "norm(b, 0, 10) <= -1",
         ],
     )
-    def test_infeasible_l0_formulation_is_one_atomic_drop(
-        self, request, cli_fixture, clause
-    ):
+    def test_infeasible_l0_formulation_is_one_atomic_drop(self, request, cli_fixture, clause):
         """Explicit/auto L0 and <=/>=/= outer comparisons drop the source clause,
         never one indicator/link/envelope row and never a LOOSEN amount."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT b FROM (VALUES (1)) t(id) DECIDE b(BOOL) "
-            f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
-        )
+        sql = "SELECT b FROM (VALUES (1)) t(id) DECIDE b(BOOL) " f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
         result = _diagnose(cli, sql)
         assert not _errors(result), result.stderr
         rows = _rows(result)
@@ -1754,10 +1658,7 @@ class TestDiagnosticsRelation:
         extraction replaces the source tree with an execution-time auxiliary block."""
         cli = request.getfixturevalue(cli_fixture)
         clause = "norm(b, 0, 10) + MAX(x) >= 3"
-        sql = (
-            "SELECT b, x FROM (VALUES (1)) t(id) DECIDE b(BOOL), x(BOOL) "
-            f"SUCH THAT {clause} MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT b, x FROM (VALUES (1)) t(id) DECIDE b(BOOL), x(BOOL) " f"SUCH THAT {clause} MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
         assert not _errors(result), result.stderr
         rows = _rows(result)
@@ -1768,9 +1669,7 @@ class TestDiagnosticsRelation:
         assert "MAX" in edits[0]["subject"].upper()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_prepared_l0_bilinear_removal_metadata_survives_replay(
-        self, request, cli_fixture
-    ):
+    def test_prepared_l0_bilinear_removal_metadata_survives_replay(self, request, cli_fixture):
         """The serialized BilinearLink keeps source/removal provenance for the
         execution-time McCormick descendants inside an L0 group."""
         cli = request.getfixturevalue(cli_fixture)
@@ -1779,10 +1678,7 @@ class TestDiagnosticsRelation:
             "SUCH THAT x <= 1 AND norm(b * x, 0, 10) >= 2 MAXIMIZE SUM(x)"
         )
         out = cli.execute_script(
-            ".mode csv\n"
-            f"PREPARE atomic_drop AS DIAGNOSE {sql};\n"
-            "EXECUTE atomic_drop;\n"
-            "EXECUTE atomic_drop;\n"
+            ".mode csv\n" f"PREPARE atomic_drop AS DIAGNOSE {sql};\n" "EXECUTE atomic_drop;\n" "EXECUTE atomic_drop;\n"
         )
         assert not _errors(out), out.stderr
         assert out.stdout.count("remove this clause") == 2, out.stdout
@@ -1807,9 +1703,7 @@ class TestDiagnosticsRelation:
         )
         assert "expanded" in ok.stdout
         # An unknown value is rejected at SET time.
-        bad = cli.execute_script(
-            "PRAGMA diagnose_decide_infeasible_slack_scope='bogus';\nSELECT 1;\n"
-        )
+        bad = cli.execute_script("PRAGMA diagnose_decide_infeasible_slack_scope='bogus';\nSELECT 1;\n")
         assert "slack_scope" in bad.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
@@ -1838,16 +1732,12 @@ class TestDiagnosticsRelation:
         """The same infeasible query, unprefixed: the plain state, no clause, no repair,
         and no second solve to find one."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         result = cli.execute_script(f".mode csv\n{sql};\n")
         err = result.stderr.lower()
         assert "decide optimization is infeasible" in err
         assert "x <= 15" not in err
         assert not list(csv.DictReader(io.StringIO(result.stdout)))
-
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize(
@@ -1884,8 +1774,7 @@ class TestInfeasibleHeadlineAndRendering:
         """A unique loosen fix names exactly the clause it applies to."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
-            "DECIDE x(INT) SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) " "DECIDE x(INT) SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql))
         # One clause is named, and it is the one the user can edit.
@@ -1897,8 +1786,7 @@ class TestInfeasibleHeadlineAndRendering:
         and its suggested change — never the row-expanded `x + x + x`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 999999 MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) " "DECIDE x(BOOL) SUCH THAT SUM(x) >= 999999 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1957,10 +1845,7 @@ class TestInfeasibleHeadlineAndRendering:
         """A dropped `<>` reads `x <> 1` — the binder's implicit CAST and the wrapping
         parens are stripped — in the finding's clause."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
-        )
+        sql = "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
         result = _diagnose(cli, sql)
         rows = _rows(result)
         dropped = [r["subject"] for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
@@ -1982,11 +1867,11 @@ class TestInfeasibleHeadlineAndRendering:
         result = _diagnose(cli, sql)
         rows = _rows(result)
         # All three problem clauses are named, none implied sufficient on its own.
-        assert sorted(e["subject"] for e in _clause_edits(rows)) == [
-            "x <= 1", "y <= 1", "z <= 1"
-        ], rows
+        assert sorted(e["subject"] for e in _clause_edits(rows)) == ["x <= 1", "y <= 1", "z <= 1"], rows
         _apply_reported_fix(
-            cli, sql, _rows(result),
+            cli,
+            sql,
+            _rows(result),
             {"x <= 1": "x<=1", "y <= 1": "y<=1", "z <= 1": "z<=1"},
         )
 
@@ -1996,8 +1881,7 @@ class TestInfeasibleHeadlineAndRendering:
         mangle `x <= 1234567890` into `x <= 1234570001`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT id,x FROM (VALUES (1)) t(id) "
-            "DECIDE x(REAL) SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
+            "SELECT id,x FROM (VALUES (1)) t(id) " "DECIDE x(REAL) SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
         )
         # The bound 1234567890 is under the threshold for a bound; the repair model's own coefficients are not.
         result = _diagnose(cli, sql, expect_number_range=True)
@@ -2028,8 +1912,7 @@ class TestInfeasibleHeadlineAndRendering:
         in both the finding's clause and its suggested change."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT x FROM (VALUES (1),(2),(3)) t(id) "
-            "DECIDE x(INT) SUCH THAT MAX(x) + SUM(x) <= -1 MAXIMIZE SUM(x)"
+            "SELECT x FROM (VALUES (1),(2),(3)) t(id) " "DECIDE x(INT) SUCH THAT MAX(x) + SUM(x) <= -1 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -2077,10 +1960,8 @@ class TestInfeasibleHeadlineAndRendering:
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         fixed_sql = _apply_reported_fix(cli, sql, rows)
         # Oracle: the promised payoff is what the repaired query actually returns.
-        solved = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        assert float(reported) == pytest.approx(
-            sum(float(r["contrib"]) for r in solved))
+        solved = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(sum(float(r["contrib"]) for r in solved))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_composed_minmax_repair_is_in_the_users_units(self, request, cli_fixture):
@@ -2105,14 +1986,10 @@ class TestInfeasibleHeadlineAndRendering:
 
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         fixed_sql = _apply_reported_fix(cli, sql, rows)
-        solved = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        assert float(reported) == pytest.approx(
-            sum(float(r["contrib"]) for r in solved))
+        solved = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(sum(float(r["contrib"]) for r in solved))
 
-    def test_composed_minmax_advice_does_not_depend_on_the_backend(
-        self, request, decidb_cli_highs, decidb_cli_gurobi
-    ):
+    def test_composed_minmax_advice_does_not_depend_on_the_backend(self, request, decidb_cli_highs, decidb_cli_gurobi):
         """Invariant 2 in its observable form. The two backends state MIN/MAX differently
         (native vs lowered), so they hand the elastic engine different row sets; any repair
         choice not fixed by a stated rule falls out differently and a user moving hosts is
@@ -2123,8 +2000,7 @@ class TestInfeasibleHeadlineAndRendering:
             rows = _rows(_diagnose(cli, sql))
             by_backend[name] = {
                 "edits": _clause_edits(rows),
-                "achievable_objective": _attrs(rows, "model", "NULL").get(
-                    "achievable_objective"),
+                "achievable_objective": _attrs(rows, "model", "NULL").get("achievable_objective"),
             }
         assert_backends_agree(by_backend, "composed MIN/MAX over a data column")
 
@@ -2176,13 +2052,10 @@ class TestDegenerateCoefficientFreeRow:
             ("0*x >= 1", "0*x >= 1", "0*x >= 0"),
         ],
     )
-    def test_degenerate_row_is_named_and_loosened(
-        self, request, cli_fixture, clause, subject, fixed
-    ):
+    def test_degenerate_row_is_named_and_loosened(self, request, cli_fixture, clause, subject, fixed):
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)"
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) " f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
 
@@ -2265,8 +2138,7 @@ class TestUnreachableBound:
         assert advice == [f"{verb} this bound — no assignment can reach it"], advice
         # No edit is offered: there is no finite bound to suggest, and the old behavior
         # (suggesting the user's own text back) is what made this misleading.
-        assert not [r for r in rows if r["attribute"] in
-                    ("edit_kind", "suggested_change", "amount")], rows
+        assert not [r for r in rows if r["attribute"] in ("edit_kind", "suggested_change", "amount")], rows
         # The generic "a fixed part of the query" fallback is wrong here — the conflict
         # is in a SUCH THAT clause — and must no longer be reached.
         assert not [r for r in rows if r["attribute"] == "elastic_infeasible"], rows
@@ -2317,8 +2189,7 @@ class TestUnreachableBound:
         first would send the user back for a second failure after fixing it."""
         cli = request.getfixturevalue(cli_fixture)
         sql = self._ROWS + (
-            "DECIDE x(INT) SUCH THAT x <= 6 AND x >= 1e1000::DOUBLE "
-            "AND SUM(x) >= 1e1000::DOUBLE MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT x <= 6 AND x >= 1e1000::DOUBLE " "AND SUM(x) >= 1e1000::DOUBLE MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql))
         named = {r["subject"] for r in rows if r["attribute"] == "unreachable_bound"}
@@ -2345,10 +2216,7 @@ class TestUnreachableBound:
         solve. A bound that is merely far out of reach is still repairable by loosening,
         and must keep its suggested change."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = self._ROWS + (
-            "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND SUM(x) >= 1000000000 "
-            "MAXIMIZE SUM(x)"
-        )
+        sql = self._ROWS + ("DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND SUM(x) >= 1000000000 " "MAXIMIZE SUM(x)")
         rows = _rows(_diagnose(cli, sql))
         assert not [r for r in rows if r["attribute"] == "unreachable_bound"], rows
         # Which clause the engine picks to loosen is its own policy; what matters here
@@ -2409,16 +2277,12 @@ class TestNativeConstructDiagnosis:
     @classmethod
     def _sql(cls, decls, construct, x_bound=""):
         return (
-            cls._ROWS + f"DECIDE {decls} SUCH THAT y <= 2{x_bound} AND {construct} "
-            "AND SUM(y) >= 100 MINIMIZE SUM(y)"
+            cls._ROWS + f"DECIDE {decls} SUCH THAT y <= 2{x_bound} AND {construct} " "AND SUM(y) >= 100 MINIMIZE SUM(y)"
         )
 
     @pytest.mark.parametrize("cli_fixture", _NATIVE_BACKENDS)
-    @pytest.mark.parametrize("name, decls, construct", _SHAPES,
-                             ids=[s[0] for s in _SHAPES])
-    def test_repair_over_a_native_construct_actually_repairs(
-        self, request, cli_fixture, name, decls, construct
-    ):
+    @pytest.mark.parametrize("name, decls, construct", _SHAPES, ids=[s[0] for s in _SHAPES])
+    def test_repair_over_a_native_construct_actually_repairs(self, request, cli_fixture, name, decls, construct):
         """The whole promise, on the shape that broke it: apply the reported edit and
         the query must solve. `x` is left unbounded above, which is the class that only
         reaches a model at all because the construct is stated natively — a Big-M
@@ -2438,17 +2302,12 @@ class TestNativeConstructDiagnosis:
         # Oracle: the objective the diagnosis promised is the one the repaired query
         # actually reaches. Re-solved, never computed here.
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
-        repaired = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        assert float(reported) == pytest.approx(
-            sum(float(r["y"]) for r in repaired))
+        repaired = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(sum(float(r["y"]) for r in repaired))
 
     @pytest.mark.parametrize("cli_fixture", _NATIVE_BACKENDS)
-    @pytest.mark.parametrize("name, decls, construct", _SHAPES,
-                             ids=[s[0] for s in _SHAPES])
-    def test_native_and_lowered_report_the_same_repair(
-        self, request, cli_fixture, name, decls, construct
-    ):
+    @pytest.mark.parametrize("name, decls, construct", _SHAPES, ids=[s[0] for s in _SHAPES])
+    def test_native_and_lowered_report_the_same_repair(self, request, cli_fixture, name, decls, construct):
         """The A/B. Which arm ran is a fact about the host's solver, so it must not
         change a word of what the user is told. `x` is bounded here only so the lowered
         arm has a finite Big-M and both arms exist to compare.
@@ -2464,9 +2323,7 @@ class TestNativeConstructDiagnosis:
         native = diagnosis(cli)
         lowered = diagnosis(cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}))
         assert "infeasible" in native.lower(), native
-        assert native == lowered, (
-            f"the two arms disagree on {construct!r}:\n{native}\n---\n{lowered}"
-        )
+        assert native == lowered, f"the two arms disagree on {construct!r}:\n{native}\n---\n{lowered}"
 
     @pytest.mark.parametrize("cli_fixture", _NATIVE_BACKENDS)
     def test_a_per_clause_reports_one_edit_not_one_per_group(self, request, cli_fixture):
@@ -2492,10 +2349,8 @@ class TestNativeConstructDiagnosis:
 
         fixed_sql = _apply_reported_fix(cli, sql, rows)
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
-        repaired = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        assert float(reported) == pytest.approx(
-            sum(float(r["x"]) for r in repaired))
+        repaired = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(sum(float(r["x"]) for r in repaired))
 
     #: `x` carries a fractional weight inside the MAX on purpose. Both this clause and
     #: the column bound `x <= 9` can repair the query, and with a weight of 1 they cost
@@ -2510,9 +2365,7 @@ class TestNativeConstructDiagnosis:
         "MAXIMIZE SUM(x)"
     )
 
-    def test_hard_minmax_names_the_users_clause_on_every_backend(
-        self, decidb_cli_gurobi, decidb_cli_highs
-    ):
+    def test_hard_minmax_names_the_users_clause_on_every_backend(self, decidb_cli_gurobi, decidb_cli_highs):
         """A hard MIN/MAX clause is repaired by loosening the clause, everywhere.
 
         Gurobi states the MAX itself and keeps a row for it; HiGHS lowers it to a Big-M
@@ -2526,8 +2379,7 @@ class TestNativeConstructDiagnosis:
         script = f".mode csv\nDIAGNOSE {self._MINMAX_SQL};\n"
         arms = {
             "gurobi (native)": decidb_cli_gurobi,
-            "gurobi (lowered)": decidb_cli_gurobi.with_env(
-                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "gurobi (lowered)": decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}),
             "highs": decidb_cli_highs,
         }
         seen = {}
@@ -2541,14 +2393,10 @@ class TestNativeConstructDiagnosis:
             _apply_reported_fix(runner, self._MINMAX_SQL, rows)
 
         distinct = set(seen.values())
-        assert len(distinct) == 1, (
-            "the arms disagree:\n" + "\n---\n".join(f"{k}:\n{v}" for k, v in seen.items())
-        )
+        assert len(distinct) == 1, "the arms disagree:\n" + "\n---\n".join(f"{k}:\n{v}" for k, v in seen.items())
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_a_constant_on_the_left_is_not_subtracted_from_the_quoted_bound(
-        self, request, cli_fixture
-    ):
+    def test_a_constant_on_the_left_is_not_subtracted_from_the_quoted_bound(self, request, cli_fixture):
         """The clause is quoted as written, constant and all.
 
         `SUM(x + c) >= 100` is emitted as `SUM(x) >= 100 - SUM(c)`, because a constant
@@ -2635,25 +2483,21 @@ class TestRepairsTheModelCanReach:
         "MAXIMIZE SUM(x * 6)"
     )
 
-    def test_abs_advice_does_not_depend_on_the_backend(
-        self, decidb_cli_gurobi, decidb_cli_highs
-    ):
+    def test_abs_advice_does_not_depend_on_the_backend(self, decidb_cli_gurobi, decidb_cli_highs):
         """Invariant 2 in its observable form, for ABS — `assert_backends_agree`'s
         intended caller. The lowered arm is exercised on Gurobi too, so the check is of
         the two FORMULATIONS and not of two solvers that happen to differ."""
         by_backend = {}
         arms = {
             "gurobi (native)": decidb_cli_gurobi,
-            "gurobi (lowered)": decidb_cli_gurobi.with_env(
-                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "gurobi (lowered)": decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}),
             "highs": decidb_cli_highs,
         }
         for label, runner in arms.items():
             rows = _rows(_diagnose(runner, self._ABS_SQL))
             by_backend[label] = {
                 "edits": _clause_edits(rows),
-                "achievable_objective": _attrs(rows, "model", "NULL").get(
-                    "achievable_objective"),
+                "achievable_objective": _attrs(rows, "model", "NULL").get("achievable_objective"),
             }
         assert_backends_agree(by_backend, "ABS over a boxed decision")
 
@@ -2674,35 +2518,42 @@ class TestRepairsTheModelCanReach:
         "control, one box width": (
             "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
             "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 30 "
-            "MAXIMIZE SUM(x)", {}, ("x <= 5", "x <= 10"),
+            "MAXIMIZE SUM(x)",
+            {},
+            ("x <= 5", "x <= 10"),
         ),
         "control, three box widths": (
             "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
             "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 60 "
-            "MAXIMIZE SUM(x)", {}, ("x <= 5", "x <= 20"),
+            "MAXIMIZE SUM(x)",
+            {},
+            ("x <= 5", "x <= 20"),
         ),
         "through a <> disjunction": (
             "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
             "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND x <> 3 AND SUM(x) >= 60 "
-            "MAXIMIZE SUM(x)", {}, ("x <= 5", "x <= 20"),
+            "MAXIMIZE SUM(x)",
+            {},
+            ("x <= 5", "x <= 20"),
         ),
         "through an L0 norm": (
             "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
             "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND norm(x, 0) <= 2 "
             "AND SUM(x) >= 30 MAXIMIZE SUM(x)",
-            {"NORM(x, 0) <= 2": "norm(x, 0) <= 2"}, ("x <= 5", "x <= 15"),
+            {"NORM(x, 0) <= 2": "norm(x, 0) <= 2"},
+            ("x <= 5", "x <= 15"),
         ),
         "through a McCormick envelope": (
             "SELECT id, c * b * x AS contrib FROM (VALUES (1,1.0),(2,1.0),(3,1.0)) t(id,c) "
             "DECIDE b(BOOL), x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(b * x) >= 30 "
-            "MAXIMIZE SUM(c * b * x)", {}, ("x <= 5", "x <= 10"),
+            "MAXIMIZE SUM(c * b * x)",
+            {},
+            ("x <= 5", "x <= 10"),
         ),
     }
 
     @pytest.mark.parametrize("case", sorted(_WIDENING_CASES))
-    def test_widening_advice_does_not_depend_on_the_backend(
-        self, request, case, decidb_cli_gurobi, decidb_cli_highs
-    ):
+    def test_widening_advice_does_not_depend_on_the_backend(self, request, case, decidb_cli_gurobi, decidb_cli_highs):
         """The sharpest available oracle for a stale constant: whether the two hosts
         agree. A constant baked at the unrepaired box caps the repair, and the two
         backends do not bake the same ones — Gurobi states `<>` natively and derives no
@@ -2712,8 +2563,7 @@ class TestRepairsTheModelCanReach:
         sql, _, _ = self._WIDENING_CASES[case]
         arms = {
             "gurobi (native)": decidb_cli_gurobi,
-            "gurobi (lowered)": decidb_cli_gurobi.with_env(
-                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "gurobi (lowered)": decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}),
             "highs": decidb_cli_highs,
         }
         by_backend = {}
@@ -2721,8 +2571,7 @@ class TestRepairsTheModelCanReach:
             rows = _rows(_diagnose(runner, sql))
             by_backend[label] = {
                 "edits": _clause_edits(rows),
-                "achievable_objective": _attrs(rows, "model", "NULL").get(
-                    "achievable_objective"),
+                "achievable_objective": _attrs(rows, "model", "NULL").get("achievable_objective"),
             }
         assert_backends_agree(by_backend, f"a repair that widens the box — {case}")
 
@@ -2741,11 +2590,10 @@ class TestRepairsTheModelCanReach:
         rows = _rows(_diagnose(cli, sql))
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         fixed_sql = _apply_reported_fix(cli, sql, rows, subject_to_sql)
-        solved = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        solved = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
         assert float(reported) == pytest.approx(
-            sum(float(r["contrib"]) for r in solved)), (
-            f"promised {reported} for:\n{fixed_sql}\n{solved}")
+            sum(float(r["contrib"]) for r in solved)
+        ), f"promised {reported} for:\n{fixed_sql}\n{solved}"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize("case", sorted(_WIDENING_CASES))
@@ -2767,15 +2615,16 @@ class TestRepairsTheModelCanReach:
         witness = cli.execute_script(".mode csv\n" + witness_sql + ";\n")
         witness_rows = list(csv.DictReader(io.StringIO(witness.stdout)))
         assert witness_rows, (
-            f"the witness repair does not solve, so it cannot bound anything:\n"
-            f"{witness_sql}\n{witness.stderr}")
+            f"the witness repair does not solve, so it cannot bound anything:\n" f"{witness_sql}\n{witness.stderr}"
+        )
         witness_objective = sum(float(r["contrib"]) for r in witness_rows)
 
         rows = _rows(_diagnose(cli, sql))
         reported = float(_attrs(rows, "model", "NULL")["achievable_objective"])
         assert reported >= witness_objective - 1e-6 * max(1.0, abs(witness_objective)), (
             f"the diagnosis promises {reported}, but `{before}` → `{after}` alone reaches "
-            f"{witness_objective}:\n{sql}\n{rows}")
+            f"{witness_objective}:\n{sql}\n{rows}"
+        )
 
     #: One large-coefficient row beside a small repairable one. The repair is `x <= 7`,
     #: an edit of 2, while the model's own scale is ~1e8 — so any noise floor taken from
@@ -2815,9 +2664,7 @@ class TestRepairsTheModelCanReach:
     )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_a_repair_spanning_four_orders_of_magnitude_keeps_both_halves(
-        self, request, cli_fixture
-    ):
+    def test_a_repair_spanning_four_orders_of_magnitude_keeps_both_halves(self, request, cli_fixture):
         """The noise floor that separates a real edit from a backend's rounding has to be
         absolute. Measured against the largest edit in the same repair, the `x <= 0.001`
         half of this one is five orders of magnitude down and gets read as noise — and the
@@ -2842,10 +2689,8 @@ class TestRepairsTheModelCanReach:
 
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         fixed_sql = _apply_reported_fix(cli, self._ABS_SQL, rows)
-        solved = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        assert float(reported) == pytest.approx(
-            sum(float(r["contrib"]) for r in solved))
+        solved = list(csv.DictReader(io.StringIO(cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(sum(float(r["contrib"]) for r in solved))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_the_abs_clause_wins_when_it_is_the_smaller_edit(self, request, cli_fixture):
@@ -2869,9 +2714,7 @@ class TestRepairsTheModelCanReach:
         assert float(edits[0]["amount"]) == pytest.approx(4.5), rows
         _apply_reported_fix(cli, sql, rows)
 
-    def test_a_minmax_tie_goes_to_the_repair_worth_more(
-        self, decidb_cli_gurobi, decidb_cli_highs
-    ):
+    def test_a_minmax_tie_goes_to_the_repair_worth_more(self, decidb_cli_gurobi, decidb_cli_highs):
         """The same blind spot on MIN/MAX, where it never showed as a disagreement.
 
         `per g: max(x + c) by (g) >= 25` over `x` in [0, 9] boxes the extremum column at the
@@ -2892,10 +2735,8 @@ class TestRepairsTheModelCanReach:
         # hold whatever the members reach rather than just the bound — and it kept
         # reporting an objective of 89 after the lowered arms already read 92.
         arms = {
-            "gurobi (lowered)": decidb_cli_gurobi.with_env(
-                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
-            "gurobi (native)": decidb_cli_gurobi.with_env(
-                {"DECIDB_NATIVE_CONSTRUCTS": "force"}),
+            "gurobi (lowered)": decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "gurobi (native)": decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"}),
             "highs": decidb_cli_highs,
         }
         for label, runner in arms.items():
@@ -2906,10 +2747,8 @@ class TestRepairsTheModelCanReach:
 
             reported = _attrs(rows, "model", "NULL")["achievable_objective"]
             fixed_sql = _apply_reported_fix(runner, sql, rows)
-            solved = list(csv.DictReader(io.StringIO(
-                runner.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-            assert float(reported) == pytest.approx(
-                sum(float(r["x"]) for r in solved)), label
+            solved = list(csv.DictReader(io.StringIO(runner.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+            assert float(reported) == pytest.approx(sum(float(r["x"]) for r in solved)), label
 
 
 @pytest.mark.query_diagnostics

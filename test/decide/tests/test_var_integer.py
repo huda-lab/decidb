@@ -24,10 +24,13 @@ def test_simple_test(decidb_cli):
     used to default to an integer variable; now the type is mandatory, so the
     behaviour worth pinning is the rejection and that it names the fix.
     """
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
             SELECT x, l_orderkey FROM LINEITEM
             WHERE l_orderkey <= 5
             DECIDE x
             SUCH THAT SUM(x * l_extendedprice) <= 10000
             MAXIMIZE SUM(x * l_extendedprice)
-        """, match=r'DECIDE variable "x" needs a type')
+        """,
+        match=r'DECIDE variable "x" needs a type',
+    )

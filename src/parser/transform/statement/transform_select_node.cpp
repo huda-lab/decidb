@@ -101,63 +101,64 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 				result.from_table = TransformFrom(stmt.fromClause);
 			}
 		}
-        // DeciDB's decide
-        if (stmt.decideClause) {
-            auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
+		// DeciDB's decide
+		if (stmt.decideClause) {
+			auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
 			if (!decide_clause.constraints) {
 				throw ParserException::SyntaxError(*RootTransformer().parsed_query, DECIDE_NO_CONSTRAINTS_MESSAGE,
 				                                   NumericCast<idx_t>(decide_clause.location));
 			}
-            if (decide_clause.spans) {
-                RootTransformer().IndexDecideExpressions(*decide_clause.spans);
-            }
-            TransformExpressionList(*decide_clause.variables, result.decide_variables);
-            result.decide_constraints = TransformExpression(decide_clause.constraints);
-            if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {
-                result.decide_sense = DecideSense::MAXIMIZE;
-            } else if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MINIMIZE) {
-                result.decide_sense = DecideSense::MINIMIZE;
-            } else {
-                result.decide_sense = DecideSense::FEASIBILITY;
-            }
-            if (decide_clause.objective) {
-                result.decide_objective = TransformExpression(decide_clause.objective);
-            }
-            // The text the user wrote for the tail, with where the parser found each construct in it.
-            auto &query = RootTransformer().parsed_query;
-            if (query && decide_clause.tail_start >= 0 && decide_clause.tail_end <= NumericCast<int>(query->size())) {
-                auto &text = result.decide_text;
-                text.tail_start = NumericCast<idx_t>(decide_clause.tail_start);
-                text.tail = query->substr(text.tail_start, NumericCast<idx_t>(decide_clause.tail_end) - text.tail_start);
-                for (auto cell = decide_clause.spans ? decide_clause.spans->head : nullptr; cell; cell = cell->next) {
-                    auto &span = *reinterpret_cast<duckdb_libpgquery::PGDecideSpan *>(cell->data.ptr_value);
-                    if (span.anchor < decide_clause.tail_start || span.end > decide_clause.tail_end) {
-                        continue;
-                    }
-                    for (auto value : {span.anchor, static_cast<int>(span.role), span.start, span.end, 0}) {
-                        text.spans.push_back(NumericCast<idx_t>(value));
-                    }
-                    for (idx_t i : {0, 2, 3}) {
-                        text.spans[text.spans.size() - 5 + i] -= text.tail_start;
-                    }
-                }
-                // Every expression of the tail, anchored at the location its parsed expression took.
-                for (auto &entry : RootTransformer().decide_expr_spans) {
-                    auto &span = entry.second;
-                    if (span.start < decide_clause.tail_start || span.end > decide_clause.tail_end) {
-                        continue;
-                    }
-                    for (auto value : {NumericCast<idx_t>(entry.first), static_cast<idx_t>(DecideSpanRole::EXPR),
-                                       NumericCast<idx_t>(span.start), NumericCast<idx_t>(span.end),
-                                       NumericCast<idx_t>(span.binding)}) {
-                        text.spans.push_back(value);
-                    }
-                    for (idx_t i : {0, 2, 3}) {
-                        text.spans[text.spans.size() - 5 + i] -= text.tail_start;
-                    }
-                }
-            }
-        }
+			if (decide_clause.spans) {
+				RootTransformer().IndexDecideExpressions(*decide_clause.spans);
+			}
+			TransformExpressionList(*decide_clause.variables, result.decide_variables);
+			result.decide_constraints = TransformExpression(decide_clause.constraints);
+			if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {
+				result.decide_sense = DecideSense::MAXIMIZE;
+			} else if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MINIMIZE) {
+				result.decide_sense = DecideSense::MINIMIZE;
+			} else {
+				result.decide_sense = DecideSense::FEASIBILITY;
+			}
+			if (decide_clause.objective) {
+				result.decide_objective = TransformExpression(decide_clause.objective);
+			}
+			// The text the user wrote for the tail, with where the parser found each construct in it.
+			auto &query = RootTransformer().parsed_query;
+			if (query && decide_clause.tail_start >= 0 && decide_clause.tail_end <= NumericCast<int>(query->size())) {
+				auto &text = result.decide_text;
+				text.tail_start = NumericCast<idx_t>(decide_clause.tail_start);
+				text.tail =
+				    query->substr(text.tail_start, NumericCast<idx_t>(decide_clause.tail_end) - text.tail_start);
+				for (auto cell = decide_clause.spans ? decide_clause.spans->head : nullptr; cell; cell = cell->next) {
+					auto &span = *reinterpret_cast<duckdb_libpgquery::PGDecideSpan *>(cell->data.ptr_value);
+					if (span.anchor < decide_clause.tail_start || span.end > decide_clause.tail_end) {
+						continue;
+					}
+					for (auto value : {span.anchor, static_cast<int>(span.role), span.start, span.end, 0}) {
+						text.spans.push_back(NumericCast<idx_t>(value));
+					}
+					for (idx_t i : {0, 2, 3}) {
+						text.spans[text.spans.size() - 5 + i] -= text.tail_start;
+					}
+				}
+				// Every expression of the tail, anchored at the location its parsed expression took.
+				for (auto &entry : RootTransformer().decide_expr_spans) {
+					auto &span = entry.second;
+					if (span.start < decide_clause.tail_start || span.end > decide_clause.tail_end) {
+						continue;
+					}
+					for (auto value : {NumericCast<idx_t>(entry.first), static_cast<idx_t>(DecideSpanRole::EXPR),
+					                   NumericCast<idx_t>(span.start), NumericCast<idx_t>(span.end),
+					                   NumericCast<idx_t>(span.binding)}) {
+						text.spans.push_back(value);
+					}
+					for (idx_t i : {0, 2, 3}) {
+						text.spans[text.spans.size() - 5 + i] -= text.tail_start;
+					}
+				}
+			}
+		}
 		// where
 		result.where_clause = TransformExpression(stmt.whereClause);
 		// group by

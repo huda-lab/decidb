@@ -27,9 +27,7 @@ from ._oracle_helpers import group_indices
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_single_qualified_column_in_constraint(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_per_single_qualified_column_in_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`per s.s_nationkey:` in a JOIN-based SUCH THAT constraint.
 
     Joins supplier × nation and groups by the supplier-side nationkey via
@@ -48,12 +46,14 @@ def test_per_single_qualified_column_in_constraint(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(s.s_suppkey AS BIGINT),
                CAST(s.s_acctbal AS DOUBLE),
                CAST(s.s_nationkey AS BIGINT)
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -62,31 +62,44 @@ def test_per_single_qualified_column_in_constraint(
         oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
     for key, idxs in group_indices(data, lambda r: r[2]).items():
         oracle_solver.add_constraint(
-            {f"x_{i}": 1.0 for i in idxs}, "<=", 3.0, name=f"per_{key}",
+            {f"x_{i}": 1.0 for i in idxs},
+            "<=",
+            3.0,
+            name=f"per_{key}",
         )
     oracle_solver.set_objective(
-        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        {f"x_{i}": data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("s_acctbal")])},
     )
     perf_tracker.record(
-        "per_qualified_constraint", decidb_time, build_time, result.solve_time_seconds,
-        n, n, len(set(r[2] for r in data)),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "per_qualified_constraint",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(set(r[2] for r in data)),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_multi_column_all_qualified(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_per_multi_column_all_qualified(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`per s.s_nationkey, n.n_regionkey:` — qualified composite key.
 
     A key of several qualified columns must parse and bind like a key of
@@ -103,13 +116,15 @@ def test_per_multi_column_all_qualified(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(s.s_suppkey AS BIGINT),
                CAST(s.s_acctbal AS DOUBLE),
                CAST(s.s_nationkey AS BIGINT),
                CAST(n.n_regionkey AS BIGINT)
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -118,24 +133,38 @@ def test_per_multi_column_all_qualified(
         oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
     for key, idxs in group_indices(data, lambda r: (r[2], r[3])).items():
         oracle_solver.add_constraint(
-            {f"x_{i}": 1.0 for i in idxs}, "<=", 2.0,
+            {f"x_{i}": 1.0 for i in idxs},
+            "<=",
+            2.0,
             name=f"per_{key[0]}_{key[1]}",
         )
     oracle_solver.set_objective(
-        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        {f"x_{i}": data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_rows,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("s_acctbal")])},
     )
     perf_tracker.record(
-        "per_qualified_multi", decidb_time, build_time, result.solve_time_seconds,
-        n, n, len(set((r[2], r[3]) for r in data)),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "per_qualified_multi",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(set((r[2], r[3]) for r in data)),
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -176,16 +205,13 @@ def test_per_multi_column_mixed_qualified_and_bare(decidb_cli):
     # multiple optima may exist).
     def obj_value(rows):
         # Reconstruct objective from the decision vector and the source data.
-        return sum(
-            float(r[1]) for r in rows if r[-1] == 1
-        )
+        return sum(float(r[1]) for r in rows if r[-1] == 1)
 
-    assert abs(obj_value(bare_rows) - obj_value(mixed1_rows)) < 1e-6, (
-        "Mixed-qualifier PER produced a different objective than bare PER"
-    )
+    assert (
+        abs(obj_value(bare_rows) - obj_value(mixed1_rows)) < 1e-6
+    ), "Mixed-qualifier PER produced a different objective than bare PER"
     assert abs(obj_value(bare_rows) - obj_value(mixed2_rows)) < 1e-6, (
-        "Mixed-qualifier PER (other order) produced a different objective "
-        "than bare PER"
+        "Mixed-qualifier PER (other order) produced a different objective " "than bare PER"
     )
 
 
@@ -213,8 +239,7 @@ def test_per_qualified_equivalent_to_unqualified(decidb_cli):
     obj_bare = sum(float(r[1]) for r in bare_rows if r[-1] == 1)
     obj_qual = sum(float(r[1]) for r in qual_rows if r[-1] == 1)
     assert abs(obj_bare - obj_qual) < 1e-6, (
-        f"Qualified PER changed the objective: bare={obj_bare}, "
-        f"qualified={obj_qual}"
+        f"Qualified PER changed the objective: bare={obj_bare}, " f"qualified={obj_qual}"
     )
 
 
@@ -300,6 +325,4 @@ def test_per_unknown_qualifier_gives_clean_error(decidb_cli):
     # Must produce some error (not parse error since the grammar now accepts
     # the form), but not crash. Accept either a binder error or a clean
     # "not found" / "does not exist" / "no column" wording.
-    decidb_cli.assert_error(
-        sql, match=r"(?i)(unknown_table|not found|does not exist|no column)"
-    )
+    decidb_cli.assert_error(sql, match=r"(?i)(unknown_table|not found|does not exist|no column)")

@@ -36,6 +36,7 @@ from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, Scop
 # 1.1a — `per` + hard MAX(>=K) constraint
 # ============================================================================
 
+
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.var_boolean
@@ -58,7 +59,8 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
@@ -66,7 +68,8 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
                CAST(l_returnflag AS VARCHAR)
         FROM lineitem WHERE l_orderkey <= 10
         ORDER BY l_orderkey, l_linenumber
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     K = 30.0
 
@@ -84,7 +87,10 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {xnames[i]: qty, ynames[i]: -K}, ">=", 0.0, name=f"link_{i}",
+            {xnames[i]: qty, ynames[i]: -K},
+            ">=",
+            0.0,
+            name=f"link_{i}",
         )
 
     # Per-group: SUM(y_i) >= 1
@@ -93,11 +99,15 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         groups.setdefault(row[4], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {ynames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"grp_{g}",
+            {ynames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"grp_{g}",
         )
 
     oracle_solver.set_objective(
-        {xnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+        {xnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -105,31 +115,31 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
+    decidb_obj = sum(int(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB={decidb_obj:.2f}, "
-        f"Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, " f"Oracle={result.objective_value:.2f}"
     )
 
     # Sanity: each group has at least one row with x=1 AND qty>=30
     by_grp: dict[str, list[tuple[int, float]]] = {}
     for row in decidb_result:
         flag = str(row[ci["l_returnflag"]])
-        by_grp.setdefault(flag, []).append(
-            (int(row[ci["x"]]), float(row[ci["l_quantity"]]))
-        )
+        by_grp.setdefault(flag, []).append((int(row[ci["x"]]), float(row[ci["l_quantity"]])))
     for g, rows in by_grp.items():
-        assert any(x == 1 and qty >= K for x, qty in rows), (
-            f"Group {g} has no x=1 row with qty>={K} — per-group MAX>=K violated"
-        )
+        assert any(
+            x == 1 and qty >= K for x, qty in rows
+        ), f"Group {g} has no x=1 row with qty>={K} — per-group MAX>=K violated"
 
     perf_tracker.record(
-        "per_max_geq", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, n + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "per_max_geq",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        n + len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -137,6 +147,7 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 # ============================================================================
 # 1.1b — `per` + hard MIN(<=K) constraint
 # ============================================================================
+
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
@@ -162,7 +173,8 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
@@ -170,7 +182,8 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
                CAST(l_returnflag AS VARCHAR)
         FROM lineitem WHERE l_orderkey <= 10
         ORDER BY l_orderkey, l_linenumber
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     K = 20.0
     X_LB, X_UB = 1, 5
@@ -192,7 +205,10 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {xnames[i]: qty, ynames[i]: M}, "<=", K + M, name=f"link_{i}",
+            {xnames[i]: qty, ynames[i]: M},
+            "<=",
+            K + M,
+            name=f"link_{i}",
         )
 
     # Per-group: SUM(y_i) >= 1
@@ -201,11 +217,15 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         groups.setdefault(row[4], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {ynames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"grp_{g}",
+            {ynames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"grp_{g}",
         )
 
     oracle_solver.set_objective(
-        {xnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {xnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -213,13 +233,9 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
+    decidb_obj = sum(int(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB={decidb_obj:.2f}, "
-        f"Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, " f"Oracle={result.objective_value:.2f}"
     )
 
     # Sanity: each group has at least one row with x*qty <= K
@@ -230,14 +246,18 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         qty = float(row[ci["l_quantity"]])
         by_grp.setdefault(flag, []).append(x_val * qty)
     for g, vals in by_grp.items():
-        assert min(vals) <= K + 1e-6, (
-            f"Group {g} MIN(x*qty)={min(vals)} > {K} — per-group MIN<=K violated"
-        )
+        assert min(vals) <= K + 1e-6, f"Group {g} MIN(x*qty)={min(vals)} > {K} — per-group MIN<=K violated"
 
     perf_tracker.record(
-        "per_min_leq", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, n + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "per_min_leq",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        n + len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -245,6 +265,7 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 # ============================================================================
 # 1.1c — `per` + equality MAX(=K) constraint (easy + hard combined)
 # ============================================================================
+
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
@@ -272,7 +293,8 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
@@ -280,7 +302,8 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
                CAST(l_returnflag AS VARCHAR)
         FROM lineitem WHERE l_orderkey <= 100
         ORDER BY l_orderkey, l_linenumber
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     K = 30.0
     X_LB, X_UB = 0, 5
@@ -298,7 +321,10 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {xnames[i]: qty}, "<=", K, name=f"easy_{i}",
+            {xnames[i]: qty},
+            "<=",
+            K,
+            name=f"easy_{i}",
         )
 
     # Hard direction (per group): exists i with qty_i*x_i >= K
@@ -306,7 +332,10 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {xnames[i]: qty, ynames[i]: -K}, ">=", 0.0, name=f"hard_{i}",
+            {xnames[i]: qty, ynames[i]: -K},
+            ">=",
+            0.0,
+            name=f"hard_{i}",
         )
 
     groups: dict[str, list[int]] = {}
@@ -314,11 +343,15 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         groups.setdefault(row[4], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {ynames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"grp_{g}",
+            {ynames[i]: 1.0 for i in idxs},
+            ">=",
+            1.0,
+            name=f"grp_{g}",
         )
 
     oracle_solver.set_objective(
-        {xnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {xnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -326,13 +359,9 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
+    decidb_obj = sum(int(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DeciDB={decidb_obj:.2f}, "
-        f"Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, " f"Oracle={result.objective_value:.2f}"
     )
 
     # Sanity: each group has MAX(x*qty) == K
@@ -343,14 +372,18 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         qty = float(row[ci["l_quantity"]])
         by_grp.setdefault(flag, []).append(x_val * qty)
     for g, vals in by_grp.items():
-        assert abs(max(vals) - K) <= 1e-6, (
-            f"Group {g} MAX(x*qty)={max(vals)} != {K} — per-group MAX=K violated"
-        )
+        assert abs(max(vals) - K) <= 1e-6, f"Group {g} MAX(x*qty)={max(vals)} != {K} — per-group MAX=K violated"
 
     perf_tracker.record(
-        "per_max_eq", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, n * 2 + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "per_max_eq",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        n * 2 + len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -358,6 +391,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 # ============================================================================
 # 1.2 — `per` + ABS in aggregate constraint
 # ============================================================================
+
 
 @pytest.mark.per_clause
 @pytest.mark.var_real
@@ -410,10 +444,16 @@ def test_per_abs_aggregate(decidb_cli, oracle_solver, perf_tracker):
     for i in range(n):
         target = data[i][2]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: -1.0}, ">=", -target, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, xnames[i]: -1.0},
+            ">=",
+            -target,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: 1.0}, ">=", target, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, xnames[i]: 1.0},
+            ">=",
+            target,
+            name=f"abs_neg_{i}",
         )
 
     # Per-group: SUM(d_i) <= K
@@ -422,11 +462,15 @@ def test_per_abs_aggregate(decidb_cli, oracle_solver, perf_tracker):
         groups.setdefault(row[1], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0 for i in idxs}, "<=", K, name=f"grp_{g}",
+            {dnames[i]: 1.0 for i in idxs},
+            "<=",
+            K,
+            name=f"grp_{g}",
         )
 
     oracle_solver.set_objective(
-        {xnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {xnames[i]: 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -436,8 +480,7 @@ def test_per_abs_aggregate(decidb_cli, oracle_solver, perf_tracker):
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}"
     )
 
     # Sanity: per-group SUM(|x - target|) <= K
@@ -448,14 +491,18 @@ def test_per_abs_aggregate(decidb_cli, oracle_solver, perf_tracker):
         target = float(row[ci["target"]])
         by_grp[g] = by_grp.get(g, 0.0) + abs(x_val - target)
     for g, total in by_grp.items():
-        assert total <= K + 1e-4, (
-            f"Group {g} SUM|x-target|={total:.6f} > {K} — per-group constraint violated"
-        )
+        assert total <= K + 1e-4, f"Group {g} SUM|x-target|={total:.6f} > {K} — per-group constraint violated"
 
     perf_tracker.record(
-        "per_abs_aggregate", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, n * 2 + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "per_abs_aggregate",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        n * 2 + len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -463,6 +510,7 @@ def test_per_abs_aggregate(decidb_cli, oracle_solver, perf_tracker):
 # ============================================================================
 # 1.3 — Multi-variable + `per`
 # ============================================================================
+
 
 @pytest.mark.per_clause
 @pytest.mark.var_multi
@@ -519,12 +567,18 @@ def test_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
         groups.setdefault(row[1], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {xnames[i]: data[i][2] for i in idxs}, "<=", 12.0, name=f"grp_{g}",
+            {xnames[i]: data[i][2] for i in idxs},
+            "<=",
+            12.0,
+            name=f"grp_{g}",
         )
 
     # Global: SUM(y_i) <= 8
     oracle_solver.add_constraint(
-        {ynames[i]: 1.0 for i in range(n)}, "<=", 8.0, name="sum_y",
+        {ynames[i]: 1.0 for i in range(n)},
+        "<=",
+        8.0,
+        name="sum_y",
     )
 
     # MAXIMIZE SUM(x_i * w_i + y_i)
@@ -539,13 +593,9 @@ def test_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]])
-        for row in decidb_result
-    )
+    decidb_obj = sum(int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB={decidb_obj}, "
-        f"Oracle={result.objective_value:.0f}"
+        f"Objective mismatch: DeciDB={decidb_obj}, " f"Oracle={result.objective_value:.0f}"
     )
 
     # Sanity: per-group SUM(x*w) <= 12 and global SUM(y) <= 8
@@ -561,9 +611,15 @@ def test_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
     assert sum_y <= 8, f"SUM(y)={sum_y} > 8 — global constraint violated"
 
     perf_tracker.record(
-        "per_multi_var", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, len(groups) + 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "per_multi_var",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        len(groups) + 1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -571,6 +627,7 @@ def test_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
 # ============================================================================
 # 1.4 — `when` + `per` + multi-variable
 # ============================================================================
+
 
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
@@ -613,10 +670,10 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
 
     # Inline CTE data: (id, grp, active, w, v)
     data = [
-        (1, 'A', True,  10, 5),
-        (2, 'A', False,  6, 3),
-        (3, 'B', True,   8, 4),
-        (4, 'B', True,   7, 2),
+        (1, 'A', True, 10, 5),
+        (2, 'A', False, 6, 3),
+        (3, 'B', True, 8, 4),
+        (4, 'B', True, 7, 2),
     ]
     n = len(data)
 
@@ -655,12 +712,10 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
 
     ci = {name: j for j, name in enumerate(decidb_cols)}
     decidb_obj = sum(
-        int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]]) * int(row[ci["v"]])
-        for row in decidb_result
+        int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]]) * int(row[ci["v"]]) for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DeciDB={decidb_obj}, "
-        f"Oracle={result.objective_value:.0f}"
+        f"Objective mismatch: DeciDB={decidb_obj}, " f"Oracle={result.objective_value:.0f}"
     )
 
     # Sanity: per-group WHEN-filtered sum <= 18
@@ -672,14 +727,18 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
             contrib = int(row[ci["x"]]) * w + int(row[ci["y"]]) * v
             by_grp_active[grp] = by_grp_active.get(grp, 0.0) + contrib
     for g, total in by_grp_active.items():
-        assert total <= 18 + 1e-9, (
-            f"Group {g} WHEN-filtered SUM(x*w+y*v)={total} > 18 — constraint violated"
-        )
+        assert total <= 18 + 1e-9, f"Group {g} WHEN-filtered SUM(x*w+y*v)={total} > 18 — constraint violated"
 
     perf_tracker.record(
-        "when_per_multi_var", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, len(groups_active),
-        result.objective_value, oracle_solver.solver_name(),
+        "when_per_multi_var",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        len(groups_active),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -688,6 +747,7 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
 # 1.5 — QP objective + `per` constraint
 # ============================================================================
 
+
 @pytest.mark.per_clause
 @pytest.mark.quadratic
 @pytest.mark.var_real
@@ -695,7 +755,9 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_objective_per_constraint(
-    decidb_cli, oracle_solver, perf_tracker,
+    decidb_cli,
+    oracle_solver,
+    perf_tracker,
 ):
     """QP objective (MINIMIZE SUM(POWER(x - target, 2))) with a linear `per`
     constraint (per grp: sum(x) by (grp) >= 5).
@@ -727,7 +789,10 @@ def test_qp_objective_per_constraint(
     # objective does the same), leaving linear = -2*t_i * x_i and
     # quadratic = x_i^2.
     data = [
-        (1, "A", 0.5), (2, "A", 0.5), (3, "B", 0.5), (4, "B", 0.5),
+        (1, "A", 0.5),
+        (2, "A", 0.5),
+        (3, "B", 0.5),
+        (4, "B", 0.5),
     ]
     n = len(data)
     t_build = time.perf_counter()
@@ -741,7 +806,10 @@ def test_qp_objective_per_constraint(
         groups.setdefault(row[1], []).append(i)
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
-            {xnames[i]: 1.0 for i in idxs}, ">=", 5.0, name=f"per_{g}",
+            {xnames[i]: 1.0 for i in idxs},
+            ">=",
+            5.0,
+            name=f"per_{g}",
         )
 
     linear = {xnames[i]: -2.0 * float(data[i][2]) for i in range(n)}
@@ -755,13 +823,10 @@ def test_qp_objective_per_constraint(
     # Decidb-side objective: strip the constant t_i^2 term to match the
     # oracle's constant-free formulation.
     decidb_obj = sum(
-        (float(row[ci["x"]]) - float(row[ci["target"]])) ** 2
-        - float(row[ci["target"]]) ** 2
-        for row in decidb_result
+        (float(row[ci["x"]]) - float(row[ci["target"]])) ** 2 - float(row[ci["target"]]) ** 2 for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"QP+PER objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}"
+        f"QP+PER objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}"
     )
 
     # Invariant: `per` constraint must hold per group.
@@ -770,14 +835,18 @@ def test_qp_objective_per_constraint(
         g = str(row[ci["grp"]])
         by_grp[g] = by_grp.get(g, 0.0) + float(row[ci["x"]])
     for g, total in by_grp.items():
-        assert total >= 5 - 1e-6, (
-            f"Group {g} SUM(x)={total:.4f} < 5 — PER constraint violated"
-        )
+        assert total >= 5 - 1e-6, f"Group {g} SUM(x)={total:.4f} < 5 — PER constraint violated"
 
     perf_tracker.record(
-        "qp_objective_per", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 2 + n,
-        result.objective_value, oracle_solver.solver_name(),
+        "qp_objective_per",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        2 + n,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -785,6 +854,7 @@ def test_qp_objective_per_constraint(
 # ============================================================================
 # Sanity: `per` with degenerate group shapes
 # ============================================================================
+
 
 @pytest.mark.per_clause
 @pytest.mark.var_boolean
@@ -826,10 +896,13 @@ def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
     for g, idxs in groups.items():
         oracle_solver.add_constraint(
             {vnames[i]: data[i][2] for i in idxs},
-            "<=", 60.0, name=f"per_budget_{g}",
+            "<=",
+            60.0,
+            name=f"per_budget_{g}",
         )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -838,14 +911,20 @@ def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
     val_idx = decidb_cols.index("val")
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
 
     perf_tracker.record(
-        "per_single_row_groups", decidb_time, build_time,
-        result.solve_time_seconds, n, n, len(groups),
-        result.objective_value, oracle_solver.solver_name(),
+        "per_single_row_groups",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        len(groups),
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -899,10 +978,14 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
         # behaves identically either way).
         if any(abs(c) > 0.0 for c in coeffs.values()):
             oracle_solver.add_constraint(
-                coeffs, "<=", 8.0, name=f"per_{g}",
+                coeffs,
+                "<=",
+                8.0,
+                name=f"per_{g}",
             )
     oracle_solver.set_objective(
-        {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -910,14 +993,20 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
 
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) for r in decidb_rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
 
     perf_tracker.record(
-        "per_zero_coefficient_group", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "per_zero_coefficient_group",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 

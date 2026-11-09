@@ -45,6 +45,7 @@ def _expect_gurobi(func, _retries=3):
     reworded once already, which silently disabled this retry and turned the file
     into an intermittent failure.
     """
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         last_suboptimal = None
@@ -55,12 +56,15 @@ def _expect_gurobi(func, _retries=3):
                 if e.status == "SUBOPTIMAL":
                     last_suboptimal = str(e)
                     continue  # Gurobi nondeterminism — retry for a proven optimum
-                assert re.search(r"[Qq]uadratic|[Gg]urobi", str(e)), \
-                    f"Unexpected error (expected quadratic/Gurobi rejection): {e}"
+                assert re.search(
+                    r"[Qq]uadratic|[Gg]urobi", str(e)
+                ), f"Unexpected error (expected quadratic/Gurobi rejection): {e}"
                 return
         pytest.skip(
             "Gurobi returned SUBOPTIMAL on this non-convex QCQP on every attempt "
-            f"— nondeterministic, not a correctness failure: {last_suboptimal}")
+            f"— nondeterministic, not a correctness failure: {last_suboptimal}"
+        )
+
     return wrapper
 
 
@@ -76,13 +80,10 @@ def _assert_oracle_obj(oracle_solver, decidb_obj, tol=5e-2):
     accommodating legitimate solver noise.
     """
     result = oracle_solver.solve()
-    assert result.status == SolverStatus.OPTIMAL, (
-        f"Oracle failed to solve: status={result.status}"
-    )
+    assert result.status == SolverStatus.OPTIMAL, f"Oracle failed to solve: status={result.status}"
     diff = abs(decidb_obj - result.objective_value)
     assert diff <= tol, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result
 
@@ -109,7 +110,8 @@ def _aggregate_sq_dev(data, target_idx, rhs, weight_idx=None):
 @_expect_gurobi
 def test_aggregate_quadratic_constraint_data_only_offset(decidb_cli):
     """Quadratic aggregate constraints subtract fixed LHS offsets from RHS."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, ROUND(x, 4) AS x, target, cost
         FROM (
             VALUES (1, 1.0, 1.0), (2, 2.0, 2.0)
@@ -118,7 +120,8 @@ def test_aggregate_quadratic_constraint_data_only_offset(decidb_cli):
         SUCH THAT x >= 0 AND x <= 10
             AND SUM(POWER(x - target, 2) + cost) <= 3
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     id_idx = cols.index("id")
     x_idx = cols.index("x")
     expected = {1: 1.0, 2: 2.0}
@@ -130,15 +133,14 @@ def test_aggregate_quadratic_constraint_data_only_offset(decidb_cli):
 # Category 1: Core Correctness
 # ===================================================================
 
+
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestQuadraticConstraintCorrectness:
     """Core correctness — each QCQP is independently formulated in gurobipy."""
 
     @_expect_gurobi
-    def test_zero_budget_forces_exact_match(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_zero_budget_forces_exact_match(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """``POWER(x - target, 2) <= 0`` per-row forces ``x = target`` exactly."""
         data_sql = """
             SELECT 1 AS id, 10.0 AS target UNION ALL
@@ -156,9 +158,7 @@ class TestQuadraticConstraintCorrectness:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute(
-            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
-        ).fetchall()
+        data = duckdb_conn.execute(f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})").fetchall()
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcp_zero_budget")
@@ -170,11 +170,13 @@ class TestQuadraticConstraintCorrectness:
             oracle_solver.add_quadratic_constraint(
                 linear={f"x_{i}": -2.0 * t},
                 quadratic={(f"x_{i}", f"x_{i}"): 1.0},
-                sense="<=", rhs=-t * t,
+                sense="<=",
+                rhs=-t * t,
                 name=f"tight_{i}",
             )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -182,16 +184,20 @@ class TestQuadraticConstraintCorrectness:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_zero_budget", decidb_time, build_time,
-            result.solve_time_seconds, n, n, n,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_zero_budget",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            n,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_aggregate_budget_with_linear_objective(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_aggregate_budget_with_linear_objective(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """MAXIMIZE SUM(x) SUBJECT TO SUM(POWER(x - t, 2)) <= budget.
 
         Compares two budgets (tight + loose) and oracle-verifies both.
@@ -209,9 +215,7 @@ class TestQuadraticConstraintCorrectness:
                 AND SUM(POWER(x - target, 2)) <= {{budget}}
             MAXIMIZE SUM(x)
         """
-        data = duckdb_conn.execute(
-            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
-        ).fetchall()
+        data = duckdb_conn.execute(f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})").fetchall()
         n = len(data)
 
         for budget in (3.0, 75.0):
@@ -223,15 +227,22 @@ class TestQuadraticConstraintCorrectness:
             oracle_solver.create_model(f"qcp_agg_budget_{int(budget)}")
             for i in range(n):
                 oracle_solver.add_variable(
-                    f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                    f"x_{i}",
+                    VarType.CONTINUOUS,
+                    lb=0.0,
+                    ub=100.0,
                 )
             linear, quadratic, adj_rhs = _aggregate_sq_dev(data, 1, budget)
             oracle_solver.add_quadratic_constraint(
-                linear=linear, quadratic=quadratic,
-                sense="<=", rhs=adj_rhs, name="agg_budget",
+                linear=linear,
+                quadratic=quadratic,
+                sense="<=",
+                rhs=adj_rhs,
+                name="agg_budget",
             )
             oracle_solver.set_objective(
-                {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+                {f"x_{i}": 1.0 for i in range(n)},
+                ObjSense.MAXIMIZE,
             )
             build_time = time.perf_counter() - t_build
 
@@ -239,16 +250,20 @@ class TestQuadraticConstraintCorrectness:
             decidb_obj = sum(float(r[x_col]) for r in rows)
             result = _assert_oracle_obj(oracle_solver, decidb_obj)
             perf_tracker.record(
-                f"qcp_agg_budget_{int(budget)}", decidb_time, build_time,
-                result.solve_time_seconds, n, n, 1,
-                result.objective_value, oracle_solver.solver_name(),
+                f"qcp_agg_budget_{int(budget)}",
+                decidb_time,
+                build_time,
+                result.solve_time_seconds,
+                n,
+                n,
+                1,
+                result.objective_value,
+                oracle_solver.solver_name(),
                 comparison_status="optimal",
             )
 
     @_expect_gurobi
-    def test_multi_variable_inner_expression(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_multi_variable_inner_expression(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """POWER(2·x + y - c, 2) ≤ 0 forces ``2x + y = c`` exactly (off-diagonal Q).
 
         Expansion: (2x + y - c)^2 = 4x^2 + 4xy + y^2 - 4cx - 2cy + c^2.
@@ -275,7 +290,8 @@ class TestQuadraticConstraintCorrectness:
         oracle_solver.add_quadratic_constraint(
             linear={"x": -4.0 * c, "y": -2.0 * c},
             quadratic={("x", "x"): 4.0, ("x", "y"): 4.0, ("y", "y"): 1.0},
-            sense="<=", rhs=-c * c,
+            sense="<=",
+            rhs=-c * c,
             name="hyperplane",
         )
         oracle_solver.set_objective({"x": 1.0, "y": 1.0}, ObjSense.MAXIMIZE)
@@ -286,15 +302,20 @@ class TestQuadraticConstraintCorrectness:
         decidb_obj = xv + yv
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_cross_terms", decidb_time, build_time, result.solve_time_seconds,
-            1, 2, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_cross_terms",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            1,
+            2,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_negated_power(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_negated_power(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """SUM(-POWER(x - t, 2)) >= -50 ⇔ SUM(POWER(x - t, 2)) <= 50.
 
         Oracle checks objective for the (equivalent) negated form directly.
@@ -321,16 +342,23 @@ class TestQuadraticConstraintCorrectness:
         oracle_solver.create_model("qcp_negated")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         # -(x_i - t_i)^2 >= -K  ⇔  (x_i - t_i)^2 <= K across all rows.
         linear, quadratic, adj_rhs = _aggregate_sq_dev(data, 1, 50.0)
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic, sense="<=", rhs=adj_rhs,
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=adj_rhs,
             name="neg_power",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -338,15 +366,20 @@ class TestQuadraticConstraintCorrectness:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_negated_power", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_negated_power",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_scaled_power(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_scaled_power(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """SUM(2·POWER(x - t, 2)) <= 100  ⇔  SUM(POWER(x - t, 2)) <= 50."""
         sql = """
             WITH data AS (
@@ -370,7 +403,10 @@ class TestQuadraticConstraintCorrectness:
         oracle_solver.create_model("qcp_scaled")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         # 2·(x-t)^2 ≤ 100 scales both linear and quadratic parts by 2.
         base_lin, base_quad, base_rhs = _aggregate_sq_dev(data, 1, 50.0)
@@ -378,11 +414,15 @@ class TestQuadraticConstraintCorrectness:
         quadratic = {k: 2.0 * v for k, v in base_quad.items()}
         # The constant Σ t^2 gets scaled too: rhs_adj = 100 - 2·Σt^2 = 2·(50 - Σt^2).
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic, sense="<=",
-            rhs=2.0 * base_rhs, name="scaled",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=2.0 * base_rhs,
+            name="scaled",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -390,15 +430,20 @@ class TestQuadraticConstraintCorrectness:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_scaled_power", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_scaled_power",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_query_wide_subquery_scales_squared_reducer(
-        self, decidb_cli, oracle_solver
-    ):
+    def test_query_wide_subquery_scales_squared_reducer(self, decidb_cli, oracle_solver):
         """A flattened scalar subquery factor is evaluated once before Q construction.
 
         The factor is deliberately outside SUM, which is the canonical scaled-reducer
@@ -418,24 +463,28 @@ class TestQuadraticConstraintCorrectness:
         oracle_solver.create_model("qcp_query_wide_scale")
         for i in range(2):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         oracle_solver.add_quadratic_constraint(
             linear={},
             quadratic={(f"x_{i}", f"x_{i}"): 3.0 for i in range(2)},
-            sense="<=", rhs=75.0, name="query_wide_scale",
+            sense="<=",
+            rhs=75.0,
+            name="query_wide_scale",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(2)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(2)},
+            ObjSense.MAXIMIZE,
         )
 
         x_col = cols.index("x")
         _assert_oracle_obj(oracle_solver, sum(float(r[x_col]) for r in rows))
 
     @_expect_gurobi
-    def test_data_dependent_coefficients(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_data_dependent_coefficients(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """POWER(w·x - t, 2) ≤ 0 forces ``x = t/w`` per row."""
         sql = """
             WITH data AS (
@@ -452,30 +501,42 @@ class TestQuadraticConstraintCorrectness:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute("""
+        data = duckdb_conn.execute(
+            """
             SELECT CAST(id AS BIGINT), CAST(weight AS DOUBLE), CAST(target AS DOUBLE) FROM (
                 SELECT 1 AS id, 2.0 AS weight, 10.0 AS target UNION ALL
                 SELECT 2, 1.0, 5.0 UNION ALL
                 SELECT 3, 3.0, 15.0
             )
-        """).fetchall()
+        """
+        ).fetchall()
         n = len(data)
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcp_data_dep_coef")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         linear, quadratic, adj_rhs = _aggregate_sq_dev(
-            data, target_idx=2, rhs=0.0, weight_idx=1,
+            data,
+            target_idx=2,
+            rhs=0.0,
+            weight_idx=1,
         )
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=adj_rhs, name="weighted",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=adj_rhs,
+            name="weighted",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -483,8 +544,15 @@ class TestQuadraticConstraintCorrectness:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_data_dep_coef", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_data_dep_coef",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -503,8 +571,12 @@ _SYNTAX_TARGETS = [(1, 10.0), (2, 20.0), (3, 30.0)]
 
 
 def _run_syntax_variant(
-    decidb_cli, oracle_solver, perf_tracker,
-    *, test_id, constraint_expr,
+    decidb_cli,
+    oracle_solver,
+    perf_tracker,
+    *,
+    test_id,
+    constraint_expr,
 ):
     """Build the same budgeted SUM-of-squared-deviation QCP with different
     constraint syntax and oracle-verify the objective."""
@@ -525,15 +597,22 @@ def _run_syntax_variant(
     n = len(_SYNTAX_TARGETS)
     for i in range(n):
         oracle_solver.add_variable(
-            f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+            f"x_{i}",
+            VarType.CONTINUOUS,
+            lb=0.0,
+            ub=100.0,
         )
     linear, quadratic, adj_rhs = _aggregate_sq_dev(_SYNTAX_TARGETS, 1, 50.0)
     oracle_solver.add_quadratic_constraint(
-        linear=linear, quadratic=quadratic,
-        sense="<=", rhs=adj_rhs, name="budget",
+        linear=linear,
+        quadratic=quadratic,
+        sense="<=",
+        rhs=adj_rhs,
+        name="budget",
     )
     oracle_solver.set_objective(
-        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {f"x_{i}": 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
 
@@ -541,8 +620,15 @@ def _run_syntax_variant(
     decidb_obj = sum(float(r[x_col]) for r in rows)
     result = _assert_oracle_obj(oracle_solver, decidb_obj)
     perf_tracker.record(
-        test_id, decidb_time, build_time, result.solve_time_seconds,
-        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        test_id,
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -557,15 +643,15 @@ class TestQuadraticConstraintSyntax:
     @_expect_gurobi
     def test_power_form(self, decidb_cli, oracle_solver, perf_tracker):
         _run_syntax_variant(
-            decidb_cli, oracle_solver, perf_tracker,
+            decidb_cli,
+            oracle_solver,
+            perf_tracker,
             test_id="qcp_syntax_power",
             constraint_expr="POWER(x - target, 2)",
         )
 
     @_expect_gurobi
-    def test_bare_self_product(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_bare_self_product(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """SUM(x * x) <= 75 — 3 rows, maximize SUM(x)."""
         sql = """
             WITH data AS (
@@ -585,14 +671,21 @@ class TestQuadraticConstraintSyntax:
         oracle_solver.create_model("qcp_bare_self_product")
         for i in range(3):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         oracle_solver.add_quadratic_constraint(
-            linear={}, quadratic={(f"x_{i}", f"x_{i}"): 1.0 for i in range(3)},
-            sense="<=", rhs=75.0, name="sum_sq",
+            linear={},
+            quadratic={(f"x_{i}", f"x_{i}"): 1.0 for i in range(3)},
+            sense="<=",
+            rhs=75.0,
+            name="sum_sq",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(3)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(3)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -600,16 +693,20 @@ class TestQuadraticConstraintSyntax:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_bare_self_product", decidb_time, build_time,
-            result.solve_time_seconds, 3, 3, 1,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_bare_self_product",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            3,
+            3,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_mixed_self_product_and_bilinear(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_mixed_self_product_and_bilinear(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """SUM(x·x + x·y + y·y) <= 12 — self-products + bilinear term."""
         sql = """
             WITH data AS (SELECT 1 AS id)
@@ -631,7 +728,9 @@ class TestQuadraticConstraintSyntax:
         oracle_solver.add_quadratic_constraint(
             linear={},
             quadratic={("x", "x"): 1.0, ("x", "y"): 1.0, ("y", "y"): 1.0},
-            sense="<=", rhs=12.0, name="quad_form",
+            sense="<=",
+            rhs=12.0,
+            name="quad_form",
         )
         oracle_solver.set_objective({"x": 1.0, "y": 1.0}, ObjSense.MAXIMIZE)
         build_time = time.perf_counter() - t_build
@@ -640,16 +739,20 @@ class TestQuadraticConstraintSyntax:
         yv = float(rows[0][cols.index("y")])
         result = _assert_oracle_obj(oracle_solver, xv + yv)
         perf_tracker.record(
-            "qcp_mixed_self_bilinear", decidb_time, build_time,
-            result.solve_time_seconds, 1, 2, 1,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_mixed_self_bilinear",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            1,
+            2,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_constant_scaled_power(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_constant_scaled_power(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """SUM(3 · POWER(x, 2)) <= 75 — constant-scaled self-product."""
         sql = """
             WITH data AS (
@@ -669,15 +772,21 @@ class TestQuadraticConstraintSyntax:
         oracle_solver.create_model("qcp_const_scaled")
         for i in range(2):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         oracle_solver.add_quadratic_constraint(
             linear={},
             quadratic={(f"x_{i}", f"x_{i}"): 3.0 for i in range(2)},
-            sense="<=", rhs=75.0, name="scaled_sum_sq",
+            sense="<=",
+            rhs=75.0,
+            name="scaled_sum_sq",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(2)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(2)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -685,9 +794,15 @@ class TestQuadraticConstraintSyntax:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_constant_scaled_power", decidb_time, build_time,
-            result.solve_time_seconds, 2, 2, 1,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_constant_scaled_power",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            2,
+            2,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -696,15 +811,14 @@ class TestQuadraticConstraintSyntax:
 # Category 3: Feature Interactions
 # ===================================================================
 
+
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestQuadraticConstraintInteractions:
     """Quadratic constraints composed with `when`, `per`, and linear constraints."""
 
     @_expect_gurobi
-    def test_when_filtering(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_when_filtering(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """when active=1: sum(power(x - t, 2)) <= 2 — inactive rows free."""
         sql = """
             WITH data AS (
@@ -721,39 +835,45 @@ class TestQuadraticConstraintInteractions:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute("""
+        data = duckdb_conn.execute(
+            """
             SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(active AS BIGINT) FROM (
                 SELECT 1 AS id, 10.0 AS target, 1 AS active UNION ALL
                 SELECT 2, 20.0, 1 UNION ALL
                 SELECT 3, 30.0, 0
             )
-        """).fetchall()
+        """
+        ).fetchall()
         n = len(data)
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcp_when")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         # Build sum-of-squared-dev over active rows only.
         active_idx = [i for i in range(n) if data[i][2] == 1]
         active_data = [(data[i][0], data[i][1]) for i in active_idx]
         linear, quadratic, adj_rhs = _aggregate_sq_dev(active_data, 1, 2.0)
         # Rename keys to match actual x_i indices
-        linear = {f"x_{active_idx[k]}": v for k, (_, v) in enumerate(
-            zip(active_idx, linear.values())
-        )}
+        linear = {f"x_{active_idx[k]}": v for k, (_, v) in enumerate(zip(active_idx, linear.values()))}
         quadratic = {
-            (f"x_{active_idx[k]}", f"x_{active_idx[k]}"): list(quadratic.values())[k]
-            for k in range(len(active_idx))
+            (f"x_{active_idx[k]}", f"x_{active_idx[k]}"): list(quadratic.values())[k] for k in range(len(active_idx))
         }
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=adj_rhs, name="when_active",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=adj_rhs,
+            name="when_active",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -761,15 +881,20 @@ class TestQuadraticConstraintInteractions:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_when_filter", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_when_filter",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_per_group_quadratic_constraint(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_per_group_quadratic_constraint(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """per grp: sum(power(x - t, 2)) by (grp) <= 10 — one quadratic constraint per group."""
         sql = """
             WITH data AS (
@@ -787,23 +912,29 @@ class TestQuadraticConstraintInteractions:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute("""
+        data = duckdb_conn.execute(
+            """
             SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE) FROM (
                 SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
                 SELECT 2, 'A', 15.0 UNION ALL
                 SELECT 3, 'B', 30.0 UNION ALL
                 SELECT 4, 'B', 35.0
             )
-        """).fetchall()
+        """
+        ).fetchall()
         n = len(data)
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcp_per_group")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         from collections import defaultdict
+
         groups: dict = defaultdict(list)
         for i, row in enumerate(data):
             groups[row[1]].append(i)
@@ -812,11 +943,15 @@ class TestQuadraticConstraintInteractions:
             linear = {f"x_{i}": -2.0 * float(data[i][2]) for i in idxs}
             quadratic = {(f"x_{i}", f"x_{i}"): 1.0 for i in idxs}
             oracle_solver.add_quadratic_constraint(
-                linear=linear, quadratic=quadratic,
-                sense="<=", rhs=10.0 - constant, name=f"per_{grp}",
+                linear=linear,
+                quadratic=quadratic,
+                sense="<=",
+                rhs=10.0 - constant,
+                name=f"per_{grp}",
             )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -824,9 +959,15 @@ class TestQuadraticConstraintInteractions:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_per_group", decidb_time, build_time, result.solve_time_seconds,
-            n, n, len(groups),
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_per_group",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            len(groups),
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -837,31 +978,36 @@ class TestQuadraticConstraintInteractions:
         this model. Not ``@_expect_gurobi``, which would accept that error as a pass.
         """
         rows, groups = 2000, 100
-        result_rows, _ = decidb_cli_gurobi.execute(f"""
+        result_rows, _ = decidb_cli_gurobi.execute(
+            f"""
             SELECT SUM(c * x) FROM (
                 SELECT c, x FROM (
                     SELECT ((i * 7919) % 1000) / 10.0 - 20 AS c, i % {groups} AS k FROM range({rows}) t(i))
                 DECIDE x(REAL)
                 SUCH THAT per k: SUM(POWER(x, 2)) by (k) <= 25
                 MAXIMIZE SUM(c * x))
-        """)
+        """
+        )
         oracle_solver.create_model("qcp_many_groups")
         for i in range(rows):
             oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0)
         for k in range(groups):
             members = [f"x_{i}" for i in range(k, rows, groups)]
             oracle_solver.add_quadratic_constraint(
-                linear={}, quadratic={(x, x): 1.0 for x in members}, sense="<=", rhs=25.0, name=f"per_{k}",
+                linear={},
+                quadratic={(x, x): 1.0 for x in members},
+                sense="<=",
+                rhs=25.0,
+                name=f"per_{k}",
             )
         oracle_solver.set_objective(
-            {f"x_{i}": ((i * 7919) % 1000) / 10.0 - 20 for i in range(rows)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": ((i * 7919) % 1000) / 10.0 - 20 for i in range(rows)},
+            ObjSense.MAXIMIZE,
         )
         _assert_oracle_obj(oracle_solver, float(result_rows[0][0]))
 
     @_expect_gurobi
-    def test_when_per_quadratic_constraint(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_when_per_quadratic_constraint(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """when active=1 per grp: sum(power(x - t, 2)) by (grp) <= K.
 
         `when` filters out inactive rows; `per` then partitions the surviving rows
@@ -889,21 +1035,27 @@ class TestQuadraticConstraintInteractions:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute(f"""
+        data = duckdb_conn.execute(
+            f"""
             SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR),
                    CAST(active AS BIGINT), CAST(target AS DOUBLE)
             FROM ({data_sql})
-        """).fetchall()
+        """
+        ).fetchall()
         n = len(data)
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcp_when_per")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         # Build one quadratic constraint per group, using only active rows.
         from collections import defaultdict
+
         active_by_grp: dict = defaultdict(list)
         for i, row in enumerate(data):
             if int(row[2]) == 1:
@@ -913,11 +1065,15 @@ class TestQuadraticConstraintInteractions:
             linear = {f"x_{i}": -2.0 * float(data[i][3]) for i in idxs}
             quadratic = {(f"x_{i}", f"x_{i}"): 1.0 for i in idxs}
             oracle_solver.add_quadratic_constraint(
-                linear=linear, quadratic=quadratic,
-                sense="<=", rhs=5.0 - constant, name=f"when_per_{grp}",
+                linear=linear,
+                quadratic=quadratic,
+                sense="<=",
+                rhs=5.0 - constant,
+                name=f"when_per_{grp}",
             )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -935,16 +1091,20 @@ class TestQuadraticConstraintInteractions:
                 )
 
         perf_tracker.record(
-            "qcp_when_per", decidb_time, build_time, result.solve_time_seconds,
-            n, n, len(active_by_grp),
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_when_per",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            len(active_by_grp),
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_multiple_quadratic_constraints(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_multiple_quadratic_constraints(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """Two quadratic constraints simultaneously."""
         sql = """
             WITH data AS (
@@ -970,16 +1130,23 @@ class TestQuadraticConstraintInteractions:
         oracle_solver.create_model("qcp_two_constraints")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         for tag, tgts in (("t1", targets1), ("t2", targets2)):
             linear, quadratic, adj_rhs = _aggregate_sq_dev(tgts, 1, 50.0)
             oracle_solver.add_quadratic_constraint(
-                linear=linear, quadratic=quadratic,
-                sense="<=", rhs=adj_rhs, name=f"budget_{tag}",
+                linear=linear,
+                quadratic=quadratic,
+                sense="<=",
+                rhs=adj_rhs,
+                name=f"budget_{tag}",
             )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -987,16 +1154,20 @@ class TestQuadraticConstraintInteractions:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_multi_constraint", decidb_time, build_time,
-            result.solve_time_seconds, n, n, 2,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_multi_constraint",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            2,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_qcqp_quadratic_objective_and_constraint(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_qcqp_quadratic_objective_and_constraint(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """Full QCQP: quadratic in both objective and constraint.
 
         MINIMIZE SUM(POWER(x - preferred, 2))
@@ -1017,52 +1188,65 @@ class TestQuadraticConstraintInteractions:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute("""
+        data = duckdb_conn.execute(
+            """
             SELECT CAST(id AS BIGINT), CAST(preferred AS DOUBLE), CAST(required AS DOUBLE) FROM (
                 SELECT 1 AS id, 10.0 AS preferred, 20.0 AS required UNION ALL
                 SELECT 2, 50.0, 30.0 UNION ALL
                 SELECT 3, 30.0, 25.0
             )
-        """).fetchall()
+        """
+        ).fetchall()
         n = len(data)
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcqp")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         req_targets = [(data[i][0], data[i][2]) for i in range(n)]
         linear, quadratic, adj_rhs = _aggregate_sq_dev(req_targets, 1, 50.0)
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=adj_rhs, name="required_budget",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=adj_rhs,
+            name="required_budget",
         )
         # Objective: minimize SUM(POWER(x_i - preferred_i, 2)), dropping
         # constant Σ preferred_i^2 to match DeciDB's reported objective.
         obj_linear = {f"x_{i}": -2.0 * data[i][1] for i in range(n)}
         obj_quadratic = {(f"x_{i}", f"x_{i}"): 1.0 for i in range(n)}
         oracle_solver.set_quadratic_objective(
-            obj_linear, obj_quadratic, ObjSense.MINIMIZE,
+            obj_linear,
+            obj_quadratic,
+            ObjSense.MINIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
-        x_col = cols.index("x"); pref_col = cols.index("preferred")
-        decidb_obj = sum(
-            (float(r[x_col]) - float(r[pref_col])) ** 2 - float(r[pref_col]) ** 2
-            for r in rows
-        )
+        x_col = cols.index("x")
+        pref_col = cols.index("preferred")
+        decidb_obj = sum((float(r[x_col]) - float(r[pref_col])) ** 2 - float(r[pref_col]) ** 2 for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcqp_both", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcqp_both",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_mixed_linear_and_quadratic_constraints(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_mixed_linear_and_quadratic_constraints(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """SUM(x) >= 50 AND SUM(POWER(x - t, 2)) <= 25 — mixed constraint set."""
         sql = """
             WITH data AS (
@@ -1087,33 +1271,48 @@ class TestQuadraticConstraintInteractions:
         oracle_solver.create_model("qcp_mixed_lin_quad")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         oracle_solver.add_constraint(
-            {f"x_{i}": 1.0 for i in range(n)}, ">=", 50.0, name="lin",
+            {f"x_{i}": 1.0 for i in range(n)},
+            ">=",
+            50.0,
+            name="lin",
         )
         linear, quadratic, adj_rhs = _aggregate_sq_dev(data, 1, 25.0)
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=adj_rhs, name="quad_budget",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=adj_rhs,
+            name="quad_budget",
         )
         obj_linear = {f"x_{i}": -2.0 * data[i][1] for i in range(n)}
         obj_quadratic = {(f"x_{i}", f"x_{i}"): 1.0 for i in range(n)}
         oracle_solver.set_quadratic_objective(
-            obj_linear, obj_quadratic, ObjSense.MINIMIZE,
+            obj_linear,
+            obj_quadratic,
+            ObjSense.MINIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
-        x_col = cols.index("x"); target_col = cols.index("target")
-        decidb_obj = sum(
-            (float(r[x_col]) - float(r[target_col])) ** 2 - float(r[target_col]) ** 2
-            for r in rows
-        )
+        x_col = cols.index("x")
+        target_col = cols.index("target")
+        decidb_obj = sum((float(r[x_col]) - float(r[target_col])) ** 2 - float(r[target_col]) ** 2 for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_mixed_lin_quad", decidb_time, build_time,
-            result.solve_time_seconds, n, n, 2,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_mixed_lin_quad",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            2,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -1122,14 +1321,13 @@ class TestQuadraticConstraintInteractions:
 # Category 4: Variable Types
 # ===================================================================
 
+
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestQuadraticConstraintVarTypes:
 
     @_expect_gurobi
-    def test_integer_variables(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_integer_variables(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """MIQP with quadratic constraint."""
         sql = """
             WITH data AS (
@@ -1153,15 +1351,22 @@ class TestQuadraticConstraintVarTypes:
         oracle_solver.create_model("qcp_integer_vars")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.INTEGER, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.INTEGER,
+                lb=0.0,
+                ub=100.0,
             )
         linear, quadratic, adj_rhs = _aggregate_sq_dev(data, 1, 6.0)
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=adj_rhs, name="budget_int",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=adj_rhs,
+            name="budget_int",
         )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -1169,15 +1374,20 @@ class TestQuadraticConstraintVarTypes:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_integer", decidb_time, build_time, result.solve_time_seconds,
-            n, n, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_integer",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_table_scoped_variables(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_table_scoped_variables(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """x declared per items.item with a quadratic constraint.
 
         Each distinct ``item`` value yields one x variable; all rows of the
@@ -1200,41 +1410,52 @@ class TestQuadraticConstraintVarTypes:
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
         decidb_time = time.perf_counter() - t0
-        data = duckdb_conn.execute("""
+        data = duckdb_conn.execute(
+            """
             SELECT CAST(item AS VARCHAR), CAST(target AS DOUBLE) FROM (
                 SELECT 'A' AS item, 10.0 AS target UNION ALL
                 SELECT 'A', 12.0 UNION ALL
                 SELECT 'B', 20.0 UNION ALL
                 SELECT 'B', 22.0
             )
-        """).fetchall()
+        """
+        ).fetchall()
 
         t_build = time.perf_counter()
         oracle_solver.create_model("qcp_table_scoped")
         items = sorted({r[0] for r in data})
         for it in items:
             oracle_solver.add_variable(
-                f"x_{it}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{it}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
         # Inner SUM: for each row, coefficient maps to the per-item variable.
         linear: dict = {}
         quadratic: dict = {}
         constant = 0.0
         for row in data:
-            it = row[0]; t = float(row[1])
+            it = row[0]
+            t = float(row[1])
             key = f"x_{it}"
             linear[key] = linear.get(key, 0.0) - 2.0 * t
             quadratic[(key, key)] = quadratic.get((key, key), 0.0) + 1.0
             constant += t * t
         oracle_solver.add_quadratic_constraint(
-            linear=linear, quadratic=quadratic,
-            sense="<=", rhs=20.0 - constant, name="agg_budget",
+            linear=linear,
+            quadratic=quadratic,
+            sense="<=",
+            rhs=20.0 - constant,
+            name="agg_budget",
         )
         # Objective: SUM(x) over rows = (rows per item) * x_item.
         from collections import Counter
+
         cnt = Counter(r[0] for r in data)
         oracle_solver.set_objective(
-            {f"x_{it}": float(cnt[it]) for it in items}, ObjSense.MAXIMIZE,
+            {f"x_{it}": float(cnt[it]) for it in items},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -1242,9 +1463,15 @@ class TestQuadraticConstraintVarTypes:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_table_scoped", decidb_time, build_time, result.solve_time_seconds,
-            len(data), len(items), 1,
-            result.objective_value, oracle_solver.solver_name(),
+            "qcp_table_scoped",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            len(data),
+            len(items),
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
@@ -1253,13 +1480,12 @@ class TestQuadraticConstraintVarTypes:
 # Category 5: Edge Cases
 # ===================================================================
 
+
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestQuadraticConstraintEdgeCases:
 
-    def test_infeasible_negative_budget(
-        self, decidb_cli_gurobi, duckdb_conn, oracle_solver
-    ):
+    def test_infeasible_negative_budget(self, decidb_cli_gurobi, duckdb_conn, oracle_solver):
         """POWER(x, 2) <= -1 is unsatisfiable. Oracle should also report INFEASIBLE.
 
         Gurobi-only: reaching the infeasibility verdict at all needs a backend that can
@@ -1279,16 +1505,17 @@ class TestQuadraticConstraintEdgeCases:
         oracle_solver.create_model("qcp_infeasible")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)
         oracle_solver.add_quadratic_constraint(
-            linear={}, quadratic={("x", "x"): 1.0},
-            sense="<=", rhs=-1.0, name="infeasible",
+            linear={},
+            quadratic={("x", "x"): 1.0},
+            sense="<=",
+            rhs=-1.0,
+            name="infeasible",
         )
         oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
     @_expect_gurobi
-    def test_single_row(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_single_row(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """Single-row POWER(x - target, 2) <= 4 degenerates to x ∈ [3, 7]."""
         sql = """
             WITH data AS (SELECT 1 AS id, 5.0 AS target)
@@ -1306,8 +1533,11 @@ class TestQuadraticConstraintEdgeCases:
         oracle_solver.create_model("qcp_single_row")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=100.0)
         oracle_solver.add_quadratic_constraint(
-            linear={"x": -10.0}, quadratic={("x", "x"): 1.0},
-            sense="<=", rhs=4.0 - 25.0, name="bound",
+            linear={"x": -10.0},
+            quadratic={("x", "x"): 1.0},
+            sense="<=",
+            rhs=4.0 - 25.0,
+            name="bound",
         )
         oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
         build_time = time.perf_counter() - t_build
@@ -1315,15 +1545,20 @@ class TestQuadraticConstraintEdgeCases:
         xv = float(rows[0][cols.index("x")])
         result = _assert_oracle_obj(oracle_solver, xv)
         perf_tracker.record(
-            "qcp_single_row", decidb_time, build_time, result.solve_time_seconds,
-            1, 1, 1, result.objective_value, oracle_solver.solver_name(),
+            "qcp_single_row",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            1,
+            1,
+            1,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     @_expect_gurobi
-    def test_per_row_constraint(
-        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-    ):
+    def test_per_row_constraint(self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         """POWER(x - target, 2) <= 9 per row — each row independent."""
         sql = """
             WITH data AS (
@@ -1347,16 +1582,22 @@ class TestQuadraticConstraintEdgeCases:
         oracle_solver.create_model("qcp_per_row")
         for i in range(n):
             oracle_solver.add_variable(
-                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+                f"x_{i}",
+                VarType.CONTINUOUS,
+                lb=0.0,
+                ub=100.0,
             )
             t = float(data[i][1])
             oracle_solver.add_quadratic_constraint(
                 linear={f"x_{i}": -2.0 * t},
                 quadratic={(f"x_{i}", f"x_{i}"): 1.0},
-                sense="<=", rhs=9.0 - t * t, name=f"row_{i}",
+                sense="<=",
+                rhs=9.0 - t * t,
+                name=f"row_{i}",
             )
         oracle_solver.set_objective(
-            {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+            {f"x_{i}": 1.0 for i in range(n)},
+            ObjSense.MAXIMIZE,
         )
         build_time = time.perf_counter() - t_build
 
@@ -1364,7 +1605,14 @@ class TestQuadraticConstraintEdgeCases:
         decidb_obj = sum(float(r[x_col]) for r in rows)
         result = _assert_oracle_obj(oracle_solver, decidb_obj)
         perf_tracker.record(
-            "qcp_per_row", decidb_time, build_time, result.solve_time_seconds,
-            n, n, n, result.objective_value, oracle_solver.solver_name(),
+            "qcp_per_row",
+            decidb_time,
+            build_time,
+            result.solve_time_seconds,
+            n,
+            n,
+            n,
+            result.objective_value,
+            oracle_solver.solver_name(),
             comparison_status="optimal",
         )

@@ -140,9 +140,7 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
     oracle_solver.add_constraint({"ship_T3": 1.0, "open_D2": -300.0}, "<=", 0.0, name="cap_t3")
 
     # SUM(ship) <= stock, per depot.
-    oracle_solver.add_constraint(
-        {"ship_T1": 1.0, "ship_T2": 1.0}, "<=", 800.0, name="stock_d1"
-    )
+    oracle_solver.add_constraint({"ship_T1": 1.0, "ship_T2": 1.0}, "<=", 800.0, name="stock_d1")
     oracle_solver.add_constraint({"ship_T3": 1.0}, "<=", 500.0, name="stock_d2")
 
     # SUM(ship) >= demand, per region, only where priority = 'critical' (R1 only).
@@ -150,8 +148,11 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
 
     oracle_solver.set_objective(
         {
-            "ship_T1": 6.0, "ship_T2": 6.0, "ship_T3": 3.0,
-            "open_D1": 12000.0, "open_D2": 8000.0,
+            "ship_T1": 6.0,
+            "ship_T2": 6.0,
+            "ship_T3": 3.0,
+            "open_D1": 12000.0,
+            "open_D2": 8000.0,
         },
         ObjSense.MINIMIZE,
     )

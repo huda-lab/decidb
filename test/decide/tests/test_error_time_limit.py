@@ -193,9 +193,7 @@ class TestTimeLimit:
         )
         # Some output (a result row or solver-license preamble) must be
         # present — empty stdout would indicate the query never ran.
-        assert result.stdout.strip(), (
-            f"No stdout from cheap query; stderr was:\n{result.stderr[:400]}"
-        )
+        assert result.stdout.strip(), f"No stdout from cheap query; stderr was:\n{result.stderr[:400]}"
 
     def test_highs_limit_bounds_clique_partition(self, decidb_cli_highs):
         """HiGHS stops its objective clique partition at DECIDB_TIME_LIMIT.
@@ -360,8 +358,7 @@ class TestTimeLimit:
             f"  stderr: {result.stderr[:400]}"
         )
         assert result.stdout.strip(), (
-            f"No stdout from cheap query with env={garbage!r}; stderr was:\n"
-            f"{result.stderr[:400]}"
+            f"No stdout from cheap query with env={garbage!r}; stderr was:\n" f"{result.stderr[:400]}"
         )
 
     def test_sub_second_value_kills_pathological_query(self, decidb_cli_gurobi):

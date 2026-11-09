@@ -74,10 +74,7 @@ def _market_split_sql():
     M, N = 6, 60
     A = [[rng.randint(0, 99) for _ in range(N)] for _ in range(M)]
     rhs = [sum(row) // 2 for row in A]
-    rows = ", ".join(
-        "(" + ",".join([str(j)] + [str(A[k][j]) for k in range(M)]) + ")"
-        for j in range(N)
-    )
+    rows = ", ".join("(" + ",".join([str(j)] + [str(A[k][j]) for k in range(M)]) + ")" for j in range(N))
     cols = "id," + ",".join(f"c{k}" for k in range(M))
     inner = f"SELECT * FROM (VALUES {rows}) t({cols})"
     cons = " AND ".join(f"SUM(c{k}*x) = {rhs[k]}" for k in range(M))
@@ -267,9 +264,7 @@ class TestSlowContinuation:
         assert "time limit" in combined, combined[:800]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_interrupt_delivers_the_incumbent_without_a_terminal(
-        self, request, cli_fixture
-    ):
+    def test_interrupt_delivers_the_incumbent_without_a_terminal(self, request, cli_fixture):
         """Ctrl-C is not a question. The user has already said stop, so the best-so-far
         comes back with its caveat — no prompt, no terminal needed, no error."""
         # Both backends cut the solve short mid-search; the short chunk only bounds the run.
@@ -325,9 +320,7 @@ class TestSlowFirstSolveInterrupt:
         # Mid-first-solve terminate returns fast; a boundary-only stop would sit out ~19s.
         assert latency < 5.0, f"interrupt took {latency:.2f}s — expected a mid-solve stop"
 
-    def test_first_solve_interrupt_without_an_incumbent_errors_gurobi(
-        self, decidb_cli_gurobi
-    ):
+    def test_first_solve_interrupt_without_an_incumbent_errors_gurobi(self, decidb_cli_gurobi):
         """Interrupting a solve that has found nothing yet has no best-so-far to hand
         back, so it fails with one message that says it was stopped, not timed out."""
         cli = _slow_cli(decidb_cli_gurobi, 20)

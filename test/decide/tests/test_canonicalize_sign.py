@@ -38,10 +38,16 @@ def _add_exact_abs(oracle, d_name, x_name, offset, big_m, tag):
     oracle.add_constraint({d_name: 1.0, x_name: -1.0}, ">=", -offset, name=f"{tag}_lo1")
     oracle.add_constraint({d_name: 1.0, x_name: 1.0}, ">=", offset, name=f"{tag}_lo2")
     oracle.add_constraint(
-        {d_name: 1.0, x_name: -1.0, y: two_m}, "<=", -offset + two_m, name=f"{tag}_hi1",
+        {d_name: 1.0, x_name: -1.0, y: two_m},
+        "<=",
+        -offset + two_m,
+        name=f"{tag}_hi1",
     )
     oracle.add_constraint(
-        {d_name: 1.0, x_name: 1.0, y: -two_m}, "<=", offset, name=f"{tag}_hi2",
+        {d_name: 1.0, x_name: 1.0, y: -two_m},
+        "<=",
+        offset,
+        name=f"{tag}_hi2",
     )
 
 
@@ -70,10 +76,12 @@ def test_abs_negated_term_needs_bigm(decidb_cli, duckdb_conn, oracle_solver, per
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     assert n > 0
 
@@ -87,7 +95,10 @@ def test_abs_negated_term_needs_bigm(decidb_cli, duckdb_conn, oracle_solver, per
         _add_exact_abs(oracle_solver, f"da_{i}", f"a_{i}", 3.0, big_m, f"da{i}")
         _add_exact_abs(oracle_solver, f"db_{i}", f"b_{i}", qty, big_m, f"db{i}")
         oracle_solver.add_constraint(
-            {f"da_{i}": 1.0, f"db_{i}": -1.0}, "<=", 0.0, name=f"row_{i}",
+            {f"da_{i}": 1.0, f"db_{i}": -1.0},
+            "<=",
+            0.0,
+            name=f"row_{i}",
         )
     obj = {}
     for i in range(n):
@@ -99,24 +110,26 @@ def test_abs_negated_term_needs_bigm(decidb_cli, duckdb_conn, oracle_solver, per
     assert result.status == SolverStatus.OPTIMAL
 
     ci = {c: i for i, c in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        float(r[ci["a"]]) + float(r[ci["b"]]) for r in decidb_rows
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    decidb_obj = sum(float(r[ci["a"]]) + float(r[ci["b"]]) for r in decidb_rows)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     # The sign-blind formulation is feasible-but-wrong rather than an error, so
     # assert the constraint actually holds row by row.
     for r in decidb_rows:
         av, bv, qv = float(r[ci["a"]]), float(r[ci["b"]]), float(r[ci["l_quantity"]])
-        assert abs(av - 3.0) <= abs(bv - qv) + 1e-4, (
-            f"constraint violated: |{av}-3| > |{bv}-{qv}|"
-        )
+        assert abs(av - 3.0) <= abs(bv - qv) + 1e-4, f"constraint violated: |{av}-3| > |{bv}-{qv}|"
 
     perf_tracker.record(
-        "abs_negated_term_needs_bigm", decidb_time, build_time,
-        result.solve_time_seconds, n * 2, n * 4, n * 5,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_negated_term_needs_bigm",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n * 2,
+        n * 4,
+        n * 5,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -146,9 +159,7 @@ def test_composed_minmax_negated_reducer(decidb_cli, duckdb_conn, oracle_solver,
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    n = duckdb_conn.execute(
-        "SELECT COUNT(*) FROM lineitem WHERE l_orderkey <= 3"
-    ).fetchone()[0]
+    n = duckdb_conn.execute("SELECT COUNT(*) FROM lineitem WHERE l_orderkey <= 3").fetchone()[0]
     assert n > 0
 
     t_build = time.perf_counter()
@@ -157,13 +168,17 @@ def test_composed_minmax_negated_reducer(decidb_cli, duckdb_conn, oracle_solver,
         oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=5.0)
         oracle_solver.add_variable(f"y_{i}", VarType.CONTINUOUS, lb=0.0, ub=7.0)
     z = emit_hard_inner_max(
-        oracle_solver, "maxy", [{f"y_{i}": 1.0} for i in range(n)], row_ub=7.0,
+        oracle_solver,
+        "maxy",
+        [{f"y_{i}": 1.0} for i in range(n)],
+        row_ub=7.0,
     )
     outer = {f"x_{i}": 1.0 for i in range(n)}
     outer[z] = -1.0
     oracle_solver.add_constraint(outer, "<=", 0.0, name="outer")
     oracle_solver.set_objective(
-        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {f"x_{i}": 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -172,15 +187,21 @@ def test_composed_minmax_negated_reducer(decidb_cli, duckdb_conn, oracle_solver,
     ci = {c: i for i, c in enumerate(decidb_cols)}
     sum_x = sum(float(r[ci["x"]]) for r in decidb_rows)
     max_y = max(float(r[ci["y"]]) for r in decidb_rows)
-    assert abs(sum_x - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(sum_x - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
     assert sum_x <= max_y + 1e-4, f"constraint violated: SUM(x)={sum_x} > MAX(y)={max_y}"
 
     perf_tracker.record(
-        "composed_minmax_negated_reducer", decidb_time, build_time,
-        result.solve_time_seconds, n * 2, n, 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "composed_minmax_negated_reducer",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n * 2,
+        n,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -209,9 +230,7 @@ def test_leading_negative_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    n = duckdb_conn.execute(
-        "SELECT COUNT(*) FROM lineitem WHERE l_orderkey <= 3"
-    ).fetchone()[0]
+    n = duckdb_conn.execute("SELECT COUNT(*) FROM lineitem WHERE l_orderkey <= 3").fetchone()[0]
     assert n > 0
 
     t_build = time.perf_counter()
@@ -219,11 +238,15 @@ def test_leading_negative_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
     for i in range(n):
         oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=9.0)
     z = emit_hard_inner_max(
-        oracle_solver, "maxx", [{f"x_{i}": 1.0} for i in range(n)], row_ub=9.0,
+        oracle_solver,
+        "maxx",
+        [{f"x_{i}": 1.0} for i in range(n)],
+        row_ub=9.0,
     )
     oracle_solver.add_constraint({z: -1.0}, "<=", -3.0, name="outer")
     oracle_solver.set_objective(
-        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {f"x_{i}": 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -232,15 +255,21 @@ def test_leading_negative_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
     ci = {c: i for i, c in enumerate(decidb_cols)}
     sum_x = sum(float(r[ci["x"]]) for r in decidb_rows)
     max_x = max(float(r[ci["x"]]) for r in decidb_rows)
-    assert abs(sum_x - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(sum_x - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
     assert max_x >= 3.0 - 1e-4, f"constraint violated: MAX(x)={max_x} < 3"
 
     perf_tracker.record(
-        "leading_negative_reducer", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "leading_negative_reducer",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -263,12 +292,14 @@ def test_composed_minmax_objective_subtraction(decidb_cli, oracle_solver, perf_t
     """
     vals = [10.0, 12.0]
     t0 = time.perf_counter()
-    decidb_rows, decidb_cols = decidb_cli.execute("""
+    decidb_rows, decidb_cols = decidb_cli.execute(
+        """
         SELECT id, v, x FROM (VALUES (1, 10.0), (2, 12.0)) t(id, v)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE MAX(x * v) - MIN(x * v)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     n = len(vals)
@@ -280,7 +311,10 @@ def test_composed_minmax_objective_subtraction(decidb_cli, oracle_solver, perf_t
     zmax = emit_hard_inner_max(oracle_solver, "spreadmax", rows, row_ub=max(vals))
     zmin = emit_hard_inner_min(oracle_solver, "spreadmin", rows, row_ub=max(vals))
     oracle_solver.add_constraint(
-        {f"x_{i}": 1.0 for i in range(n)}, "<=", 2.0, name="card",
+        {f"x_{i}": 1.0 for i in range(n)},
+        "<=",
+        2.0,
+        name="card",
     )
     oracle_solver.set_objective({zmax: 1.0, zmin: -1.0}, ObjSense.MAXIMIZE)
     build_time = time.perf_counter() - t_build
@@ -290,13 +324,19 @@ def test_composed_minmax_objective_subtraction(decidb_cli, oracle_solver, perf_t
     ci = {c: i for i, c in enumerate(decidb_cols)}
     picked = [float(r[ci["v"]]) * int(r[ci["x"]]) for r in decidb_rows]
     decidb_obj = max(picked) - min(picked)
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "composed_minmax_objective_subtraction", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "composed_minmax_objective_subtraction",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )

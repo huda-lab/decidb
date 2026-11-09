@@ -35,11 +35,13 @@ def test_q07_row_wise_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("q07_row_wise")
@@ -51,7 +53,9 @@ def test_q07_row_wise_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     # Global constraint: SUM(x) <= 100
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 100.0, name="total_limit",
+        "<=",
+        100.0,
+        name="total_limit",
     )
     # Objective: MAXIMIZE SUM(x * ps_availqty)
     oracle_solver.set_objective(
@@ -62,14 +66,24 @@ def test_q07_row_wise_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
 
     perf_tracker.record(
-        "q07_row_wise_bounds", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "q07_row_wise_bounds",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -95,12 +109,14 @@ def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_suppkey AS BIGINT),
                CAST(ps_supplycost AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_lb")
@@ -110,7 +126,9 @@ def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 
     oracle_solver.add_constraint(
         {vnames[i]: data[i][2] for i in range(len(data))},
-        "<=", 50000.0, name="budget",
+        "<=",
+        50000.0,
+        name="budget",
     )
     oracle_solver.set_objective(
         {vnames[i]: 1.0 for i in range(len(data))},
@@ -120,14 +138,24 @@ def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "perrow_lb", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "perrow_lb",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -143,7 +171,8 @@ def test_reversed_bound_comparisons_are_normalized(decidb_cli, oracle_solver):
     bind as the canonical DECIDE-LHS forms. The bounds must hold per row, and the
     objective must equal the oracle's, which states each comparison in its canonical
     direction (`x <= 5`, `x >= 2`, `SUM(x) <= 6`)."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x
         FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
@@ -151,7 +180,8 @@ def test_reversed_bound_comparisons_are_normalized(decidb_cli, oracle_solver):
             AND 2 <= x
             AND 6 >= SUM(x)
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     x_idx = cols.index("x")
     xs = [int(row[x_idx]) for row in rows]
     assert all(2 <= x <= 5 for x in xs)
@@ -212,11 +242,13 @@ def test_perrow_linear_lhs_upper_bound(
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model(f"perrow_linear_{lhs_sql.replace(' ', '')}")
@@ -232,13 +264,23 @@ def test_perrow_linear_lhs_upper_bound(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        f"perrow_linear_{lhs_sql.replace(' ', '')}", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        f"perrow_linear_{lhs_sql.replace(' ', '')}",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -262,11 +304,13 @@ def test_perrow_unary_minus_lower_bound(decidb_cli, duckdb_conn, oracle_solver, 
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_supplycost AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_unary_minus")
@@ -282,13 +326,23 @@ def test_perrow_unary_minus_lower_bound(decidb_cli, duckdb_conn, oracle_solver, 
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "perrow_unary_minus", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "perrow_unary_minus",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -312,11 +366,13 @@ def test_perrow_data_column_in_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT),
                CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_data_column")
@@ -333,13 +389,23 @@ def test_perrow_data_column_in_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "perrow_data_column", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "perrow_data_column",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -348,6 +414,7 @@ def test_perrow_data_column_in_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_
 # --- Edge cases around per-row linear LHS (defensive lock-ins) ---
 # Each of these was probed manually and produces the right answer; these tests
 # pin the behavior so regressions surface at CI time.
+
 
 @pytest.mark.var_real
 @pytest.mark.cons_perrow
@@ -368,10 +435,12 @@ def test_perrow_negative_constant_divisor(decidb_cli, duckdb_conn, oracle_solver
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_neg_divisor")
@@ -381,19 +450,31 @@ def test_perrow_negative_constant_divisor(decidb_cli, duckdb_conn, oracle_solver
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
         oracle_solver.add_constraint({vn: -0.5}, "<=", 1.0)
     oracle_solver.set_objective(
-        {vnames[i]: 1.0 for i in range(len(data))}, ObjSense.MAXIMIZE,
+        {vnames[i]: 1.0 for i in range(len(data))},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "perrow_neg_divisor", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "perrow_neg_divisor",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -447,10 +528,12 @@ def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_sol
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_int_fractional_coef")
@@ -459,19 +542,31 @@ def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_sol
         oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0)
         oracle_solver.add_constraint({vn: 1.0 / 3.0}, "<=", 1.0)
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][1] for i in range(len(data))},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "perrow_int_fractional_coef", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "perrow_int_fractional_coef",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -494,10 +589,12 @@ def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, per
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
         FROM partsupp WHERE ps_partkey < 10
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("perrow_when_linear")
@@ -508,19 +605,31 @@ def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, per
         if int(data[i][0]) % 2 == 0:
             oracle_solver.add_constraint({vn: 1.0}, "<=", 10.0 - 3.0)
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][1] for i in range(len(data))},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "perrow_when_linear", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+        "perrow_when_linear",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -530,7 +639,8 @@ def test_perrow_division_by_zero_column_errors_cleanly(decidb_cli):
     """When a coefficient expression evaluates to NaN/Infinity at some row
     (e.g., `x / col` with a zero in the column), the NaN guard must fire
     instead of silently feeding garbage to the solver."""
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         WITH data AS (
             SELECT 1 AS id, 2.0 AS w UNION ALL
             SELECT 2, 0.0 UNION ALL
@@ -541,4 +651,6 @@ def test_perrow_division_by_zero_column_errors_cleanly(decidb_cli):
         SUCH THAT x / w <= 1
             AND x <= 5
         MAXIMIZE SUM(x)
-    """, match=r"NaN|Infinity|Division by zero")
+    """,
+        match=r"NaN|Infinity|Division by zero",
+    )

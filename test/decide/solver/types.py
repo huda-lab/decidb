@@ -8,6 +8,7 @@ from enum import Enum, auto
 
 class SolverStatus(Enum):
     """Status returned by a solver after optimization."""
+
     OPTIMAL = auto()
     INFEASIBLE = auto()
     UNBOUNDED = auto()
@@ -18,6 +19,7 @@ class SolverStatus(Enum):
 
 class VarType(Enum):
     """Decision variable type."""
+
     BINARY = auto()
     INTEGER = auto()
     CONTINUOUS = auto()
@@ -25,6 +27,7 @@ class VarType(Enum):
 
 class ObjSense(Enum):
     """Objective sense."""
+
     MAXIMIZE = auto()
     MINIMIZE = auto()
 
@@ -32,6 +35,7 @@ class ObjSense(Enum):
 @dataclass
 class SolverResult:
     """Result from an oracle solver."""
+
     status: SolverStatus
     objective_value: float | None = None
     variable_values: dict[str, float] = field(default_factory=dict)

@@ -36,14 +36,16 @@ def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, 
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_agg_str_eq")
@@ -54,7 +56,9 @@ def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, 
     # WHEN filter: only 'R' rows contribute to the capacity constraint
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] == 'R'},
-        "<=", 100.0, name="capacity_R",
+        "<=",
+        100.0,
+        name="capacity_R",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -64,14 +68,24 @@ def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, 
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_agg_str_eq", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_agg_str_eq",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -99,14 +113,16 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_multi_cat")
@@ -117,11 +133,15 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
     # Two separate WHEN-filtered constraints
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] == 'R'},
-        "<=", 50.0, name="capacity_R",
+        "<=",
+        50.0,
+        name="capacity_R",
     )
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] == 'A'},
-        "<=", 80.0, name="capacity_A",
+        "<=",
+        80.0,
+        name="capacity_A",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -131,14 +151,24 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_multi_cat", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_multi_cat",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -163,13 +193,15 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_all_match")
@@ -180,7 +212,9 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     # All l_quantity > 0 in TPC-H, so this includes all rows
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][3] > 0},
-        "<=", 100.0, name="capacity_all",
+        "<=",
+        100.0,
+        name="capacity_all",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -190,14 +224,24 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_all_match", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_all_match",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -225,14 +269,16 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_mixed")
@@ -243,12 +289,16 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
     # Conditional: capacity on R rows only
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] == 'R'},
-        "<=", 50.0, name="capacity_R",
+        "<=",
+        50.0,
+        name="capacity_R",
     )
     # Unconditional: at most 20 items total
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 20.0, name="count_limit",
+        "<=",
+        20.0,
+        name="count_limit",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -258,14 +308,24 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_mixed", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_mixed",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -290,12 +350,14 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(c_custkey AS BIGINT),
                CAST(c_acctbal AS DOUBLE),
                c_mktsegment
         FROM customer WHERE c_nationkey = 1
-    """).fetchall()
+    """
+    ).fetchall()
 
     t_build = time.perf_counter()
     oracle_solver.create_model("when_const_coeff")
@@ -306,7 +368,9 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
     # Constant coeff=10 only for AUTOMOBILE customers
     oracle_solver.add_constraint(
         {vnames[i]: 10.0 for i in range(len(data)) if data[i][2] == 'AUTOMOBILE'},
-        "<=", 200.0, name="budget_auto",
+        "<=",
+        200.0,
+        name="budget_auto",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][1] for i in range(len(data))},
@@ -316,14 +380,24 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
+        decidb_result,
+        decidb_cols,
+        result,
+        data,
+        ["x"],
         coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
 
     perf_tracker.record(
-        "when_const_coeff", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_const_coeff",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(data),
+        len(vnames),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
@@ -377,13 +451,9 @@ def test_when_constraint_ordering_invariance(decidb_cli):
     for rb, ra in zip(sorted_before, sorted_after):
         for i in range(len(rb)):
             try:
-                assert abs(float(rb[i]) - float(ra[i])) < 1e-6, (
-                    f"Ordering changed results: before={rb} vs after={ra}"
-                )
+                assert abs(float(rb[i]) - float(ra[i])) < 1e-6, f"Ordering changed results: before={rb} vs after={ra}"
             except (ValueError, TypeError):
-                assert rb[i] == ra[i], (
-                    f"Ordering changed results: before={rb} vs after={ra}"
-                )
+                assert rb[i] == ra[i], f"Ordering changed results: before={rb} vs after={ra}"
 
 
 @pytest.mark.when_constraint
@@ -427,8 +497,7 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
 
     # Verify NULL rows still appear in result (not dropped entirely)
     null_rows = [row for row in result if row[flag_idx] is None]
-    assert len(null_rows) == 2, \
-        f"Expected 2 NULL-flag rows in result, got {len(null_rows)}"
+    assert len(null_rows) == 2, f"Expected 2 NULL-flag rows in result, got {len(null_rows)}"
 
 
 @pytest.mark.when_constraint
@@ -473,35 +542,47 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
         oracle_solver.add_variable(vn, VarType.BINARY)
 
     # when note IS NOT NULL: rows 1, 3 contribute to the aggregate.
-    not_null_coeffs = {
-        vnames[i]: data[i][1] for i in range(n) if data[i][2] is not None
-    }
+    not_null_coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2] is not None}
     oracle_solver.add_constraint(
-        not_null_coeffs, "<=", 15.0, name="when_not_null_budget",
+        not_null_coeffs,
+        "<=",
+        15.0,
+        name="when_not_null_budget",
     )
     # Unconditional cap on total selections.
     oracle_solver.add_constraint(
-        {vn: 1.0 for vn in vnames}, "<=", 3.0, name="sum_x_cap",
+        {vn: 1.0 for vn in vnames},
+        "<=",
+        3.0,
+        name="sum_x_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     from solver.types import SolverStatus
+
     assert result.status == SolverStatus.OPTIMAL
 
     val_idx = decidb_cols.index("val")
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-6
+    ), f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
 
     perf_tracker.record(
-        "when_is_not_null_predicate", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "when_is_not_null_predicate",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n,
+        2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )

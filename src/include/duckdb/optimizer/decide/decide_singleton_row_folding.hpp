@@ -83,7 +83,7 @@ unique_ptr<Expression> DecideBindAdmittedInputs(const Expression &end, const Exp
 //! one decision over coefficients that hold no decision (nor an easy `min`/`max` over such terms), or the decision
 //! is not numeric. The caller owns the `when` question: a clause that carries one bounds only the rows it keeps.
 bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
-                                const BoundComparisonExpression &comparison, DecideSingletonRow &out);
+                            const BoundComparisonExpression &comparison, DecideSingletonRow &out);
 
 //! The bounds on one decision as written (`DecideSingletonRow::written_k`, not the values they admit), and the
 //! check the solver makes on them before it reads any row, so on an empty table too. Stage 08 raises the error this

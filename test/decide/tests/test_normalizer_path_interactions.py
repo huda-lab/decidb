@@ -36,13 +36,16 @@ def _expect_gurobi(func):
     in the error) as passing. Mirrors the pattern in
     `test_quadratic_constraints.py` so the suite runs against either
     backend without spurious failures."""
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except DeciDBCliError as e:
-            assert re.search(r"[Qq]uadratic|[Gg]urobi|McCormick|bilinear|non-convex", str(e)), \
-                f"Unexpected error (expected QP/bilinear backend rejection): {e}"
+            assert re.search(
+                r"[Qq]uadratic|[Gg]urobi|McCormick|bilinear|non-convex", str(e)
+            ), f"Unexpected error (expected QP/bilinear backend rejection): {e}"
+
     return wrapper
 
 
@@ -52,13 +55,10 @@ def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
     on the solver's feasibility boundary and can drift by ~1e-6 in
     constraint slack, which propagates into the objective."""
     result = oracle_solver.solve()
-    assert result.status == SolverStatus.OPTIMAL, (
-        f"Oracle failed to solve: status={result.status}"
-    )
+    assert result.status == SolverStatus.OPTIMAL, f"Oracle failed to solve: status={result.status}"
     diff = abs(decidb_obj - result.objective_value)
     assert diff <= tol, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result
 
@@ -72,6 +72,7 @@ def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
 # and the rebuilt LHS is identical to the original. The QP detector downstream
 # still recognizes the WHEN-tagged-quadratic-SUM shape and emits the right Q
 # matrix.
+
 
 @pytest.mark.quadratic
 @pytest.mark.when
@@ -104,10 +105,12 @@ def test_quadratic_objective_with_when(decidb_cli, oracle_solver):
             quadratic[(xnames[i], xnames[i])] = 1.0
     oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
 
-    xi = cols.index("x"); ti = cols.index("t")
+    xi = cols.index("x")
+    ti = cols.index("t")
     decidb_obj = sum(
         ((float(r[xi]) - float(r[ti])) ** 2 - float(r[ti]) ** 2)
-        for r in rows if r[cols.index("id")] in (1, 3)  # only w-true rows
+        for r in rows
+        if r[cols.index("id")] in (1, 3)  # only w-true rows
     )
     _solve_and_compare(oracle_solver, decidb_obj)
 
@@ -160,6 +163,7 @@ def test_quadratic_constraint_with_when_and_constant_offset(decidb_cli, oracle_s
 # bilinear pipeline downstream still recognises the McCormick-linearizable
 # `Bool * Real` shape inside the WHEN-tagged SUM.
 
+
 @pytest.mark.bilinear
 @pytest.mark.when
 @pytest.mark.when_constraint
@@ -195,22 +199,22 @@ def test_bilinear_constraint_with_when(decidb_cli, oracle_solver):
     # McCormick envelope for z_i = x_i * y_i with x∈{0,1}, y∈[0,5]:
     #   z_i <= 5 * x_i,  z_i <= y_i,  z_i >= y_i - 5*(1 - x_i)
     for i in range(n):
-        oracle_solver.add_constraint({pnames[i]: 1.0, xnames[i]: -5.0}, "<=", 0.0,
-                                      name=f"mc_a_{i}")
-        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0}, "<=", 0.0,
-                                      name=f"mc_b_{i}")
-        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0, xnames[i]: -5.0},
-                                      ">=", -5.0, name=f"mc_c_{i}")
+        oracle_solver.add_constraint({pnames[i]: 1.0, xnames[i]: -5.0}, "<=", 0.0, name=f"mc_a_{i}")
+        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0}, "<=", 0.0, name=f"mc_b_{i}")
+        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0, xnames[i]: -5.0}, ">=", -5.0, name=f"mc_c_{i}")
     # WHEN-filtered: SUM_{w-true}(z_i) <= 8.
     oracle_solver.add_constraint(
         {pnames[i]: 1.0 for i in range(n) if data[i][1]},
-        "<=", 8.0, name="bilinear_cap",
+        "<=",
+        8.0,
+        name="bilinear_cap",
     )
     # Objective: MAXIMIZE SUM(z_i) — all rows contribute (the WHEN is
     # only on the constraint, not the objective).
     oracle_solver.set_objective({pn: 1.0 for pn in pnames}, ObjSense.MAXIMIZE)
 
-    xi = cols.index("x"); yi = cols.index("y")
+    xi = cols.index("x")
+    yi = cols.index("y")
     decidb_obj = sum(float(r[xi]) * float(r[yi]) for r in rows)
     _solve_and_compare(oracle_solver, decidb_obj, tol=1e-3)
 
@@ -250,19 +254,19 @@ def test_bilinear_constraint_with_when_and_constant_offset(decidb_cli, oracle_so
     for pn in pnames:
         oracle_solver.add_variable(pn, VarType.CONTINUOUS, lb=0.0, ub=5.0)
     for i in range(n):
-        oracle_solver.add_constraint({pnames[i]: 1.0, xnames[i]: -5.0}, "<=", 0.0,
-                                      name=f"mc_a_{i}")
-        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0}, "<=", 0.0,
-                                      name=f"mc_b_{i}")
-        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0, xnames[i]: -5.0},
-                                      ">=", -5.0, name=f"mc_c_{i}")
+        oracle_solver.add_constraint({pnames[i]: 1.0, xnames[i]: -5.0}, "<=", 0.0, name=f"mc_a_{i}")
+        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0}, "<=", 0.0, name=f"mc_b_{i}")
+        oracle_solver.add_constraint({pnames[i]: 1.0, ynames[i]: -1.0, xnames[i]: -5.0}, ">=", -5.0, name=f"mc_c_{i}")
     oracle_solver.add_constraint(
         {pnames[i]: 1.0 for i in range(n) if data[i][1]},
-        "<=", 8.0, name="bilinear_cap_after_peel",
+        "<=",
+        8.0,
+        name="bilinear_cap_after_peel",
     )
     oracle_solver.set_objective({pn: 1.0 for pn in pnames}, ObjSense.MAXIMIZE)
 
-    xi = cols.index("x"); yi = cols.index("y")
+    xi = cols.index("x")
+    yi = cols.index("y")
     decidb_obj = sum(float(r[xi]) * float(r[yi]) for r in rows)
     _solve_and_compare(oracle_solver, decidb_obj, tol=1e-3)
 
@@ -278,6 +282,7 @@ def test_bilinear_constraint_with_when_and_constant_offset(decidb_cli, oracle_so
 # opaque, so the rebuilt LHS is structurally identical to the original.
 # The downstream optimizer pass (`RewriteComposedMinMaxInConstraint`)
 # then runs as usual on the (effectively unchanged) expression.
+
 
 @pytest.mark.min_max
 @pytest.mark.when
@@ -319,7 +324,10 @@ def test_composed_sum_plus_min_with_when(decidb_cli, oracle_solver):
     for i, row in enumerate(data):
         if row[2]:
             oracle_solver.add_constraint(
-                {"z": 1.0, xnames[i]: -row[1]}, "<=", 0.0, name=f"min_link_{i}",
+                {"z": 1.0, xnames[i]: -row[1]},
+                "<=",
+                0.0,
+                name=f"min_link_{i}",
             )
     # Composed: SUM_{all rows}(x_i * v_i) + z >= 5
     cstr = {xnames[i]: data[i][1] for i in range(n)}
@@ -327,7 +335,8 @@ def test_composed_sum_plus_min_with_when(decidb_cli, oracle_solver):
     oracle_solver.add_constraint(cstr, ">=", 5.0, name="composed_lower")
     # Objective: MAXIMIZE SUM(x*v)
     oracle_solver.set_objective(
-        {xnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        {xnames[i]: data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
 
     xi = cols.index("x")

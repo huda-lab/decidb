@@ -17,16 +17,10 @@ import pytest
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
 # Cleanly UNBOUNDED LP on both backends: a free REAL var maximized with no upper cap.
-_UNBOUNDED_SQL = (
-    "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-    "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
-)
+_UNBOUNDED_SQL = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
 
 # Infeasible: SUM of two booleans cannot reach 3.
-_INFEASIBLE_SQL = (
-    "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-    "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
-)
+_INFEASIBLE_SQL = "SELECT id, x FROM (VALUES (1), (2)) t(id) " "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
 
 
 def _combined(result) -> str:
@@ -41,9 +35,7 @@ class TestDiagnoseIsTheOnlyTrigger:
         "sql,state",
         [(_UNBOUNDED_SQL, "unbounded"), (_INFEASIBLE_SQL, "infeasible")],
     )
-    def test_a_bare_failure_reports_its_state_and_stops(
-        self, request, cli_fixture, sql, state
-    ):
+    def test_a_bare_failure_reports_its_state_and_stops(self, request, cli_fixture, sql, state):
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(cli.execute_raw(sql))
         assert f"decide optimization is {state}" in out
@@ -58,9 +50,7 @@ class TestDiagnoseIsTheOnlyTrigger:
         "sql,state",
         [(_UNBOUNDED_SQL, "unbounded"), (_INFEASIBLE_SQL, "infeasible")],
     )
-    def test_the_prefix_returns_the_diagnosis_instead_of_raising(
-        self, request, cli_fixture, sql, state
-    ):
+    def test_the_prefix_returns_the_diagnosis_instead_of_raising(self, request, cli_fixture, sql, state):
         cli = request.getfixturevalue(cli_fixture)
         result = cli.execute_raw(f"DIAGNOSE {sql}")
         assert not result.stderr.strip(), result.stderr
@@ -151,9 +141,7 @@ class TestDiagnoseReportsOnOneOptimization:
             (_SIBLING_SECOND_FAILS, "sibling, second fails"),
         ],
     )
-    def test_the_prefix_is_refused_on_more_than_one_decide(
-        self, request, cli_fixture, sql, shape
-    ):
+    def test_the_prefix_is_refused_on_more_than_one_decide(self, request, cli_fixture, sql, shape):
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(cli.execute_raw(f"DIAGNOSE {sql};"))
         assert "one optimization at a time" in out, shape
@@ -167,23 +155,18 @@ class TestDiagnoseReportsOnOneOptimization:
         "sql,shape",
         [(_NESTED_SQL, "nested"), (_SIBLING_SECOND_FAILS, "sibling")],
     )
-    def test_isolating_the_failing_decide_diagnoses_it(
-        self, request, cli_fixture, sql, shape
-    ):
+    def test_isolating_the_failing_decide_diagnoses_it(self, request, cli_fixture, sql, shape):
         """The refusal is actionable: the inner query on its own does diagnose."""
         cli = request.getfixturevalue(cli_fixture)
         isolated = (
-            "SELECT SUM(y) FROM (VALUES (1), (2)) u(uid) "
-            "DECIDE y(INT) SUCH THAT y >= 5 AND y <= 1 MAXIMIZE SUM(y)"
+            "SELECT SUM(y) FROM (VALUES (1), (2)) u(uid) " "DECIDE y(INT) SUCH THAT y >= 5 AND y <= 1 MAXIMIZE SUM(y)"
         )
         result = cli.execute_raw(f"DIAGNOSE {isolated};")
         assert not result.stderr.strip(), result.stderr
         assert "infeasible" in result.stdout.lower(), shape
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_several_decide_clauses_still_solve_without_the_prefix(
-        self, request, cli_fixture
-    ):
+    def test_several_decide_clauses_still_solve_without_the_prefix(self, request, cli_fixture):
         """Only the diagnosis is refused. A query composing several optimizations
         runs exactly as before."""
         cli = request.getfixturevalue(cli_fixture)
@@ -256,9 +239,7 @@ class TestASiblingFailureIsNotACancellation:
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(cli.execute_raw(f"{_LIVE_SIBLING_WHEN_OTHER_FAILS};"))
         assert "infeasible" in out, out[:600]
-        assert "at your request" not in out, (
-            f"A sibling's failure was reported as a cancellation:\n{out[:600]}"
-        )
+        assert "at your request" not in out, f"A sibling's failure was reported as a cancellation:\n{out[:600]}"
         # The elapsed/memory tail belongs to that report and describes a solve that
         # was never the problem, so it must be gone too.
         assert "peak memory" not in out, out[:600]

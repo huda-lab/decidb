@@ -6,7 +6,8 @@
 
 namespace duckdb {
 
-DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context,
+                                             const case_insensitive_map_t<idx_t> &variables,
                                              const case_insensitive_set_t &scalar_variables,
                                              optional_ptr<DecideQualifierContext> qualifier_context)
     : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
@@ -133,12 +134,11 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	return BindResult(std::move(wrapper));
 }
 
-BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                                 bool root_expression) {
 	auto location = expr_ptr->GetQueryLocation();
-	return ThrowClauseError(
-	    PreserveQueryLocation(location,
-	                          BindExpressionInternal(expr_ptr, depth, root_expression)),
-	    root_expression);
+	return ThrowClauseError(PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression)),
+	                        root_expression);
 }
 
 BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -155,9 +155,9 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	if (!is_top_expression && IsDataOperand(expr)) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
-    string error_msg;
+	string error_msg;
 	switch (expr.GetExpressionClass()) {
-    case ExpressionClass::COLUMN_REF: {
+	case ExpressionClass::COLUMN_REF: {
 		// A decision is a complete objective on its own: a query-wide one has a single
 		// solver column, and any other must have one instance over the kept rows, which
 		// a scope check decides.
@@ -167,7 +167,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		break;
 	}
 	case ExpressionClass::FUNCTION: {
-	    auto &func = expr.Cast<FunctionExpression>();
+		auto &func = expr.Cast<FunctionExpression>();
 		if (is_top_expression && func.is_operator &&
 		    (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
 			return BindScopedObjective(expr_ptr, depth);
@@ -181,8 +181,8 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		is_top_expression = false;
 		return BindFunction(expr_ptr, depth);
 	}
-    case ExpressionClass::SUBQUERY:
-        return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+	case ExpressionClass::SUBQUERY:
+		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
 	case ExpressionClass::CASE:
 		// A CASE below the top binds as SQL; DecideShapeCheck refuses one over a decision.
 		if (!is_top_expression) {
@@ -199,15 +199,17 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		}
 		break;
 	default:
-        break;
+		break;
 	}
 	auto clause = decide_sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE";
 	if (!ExpressionContainsDecideVariable(expr, variables)) {
 		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format("%s %s has no decision to optimize", clause, DecideWrittenSql(expr, qualifier_context->source_text))));
+		    expr, StringUtil::Format("%s %s has no decision to optimize", clause,
+		                             DecideWrittenSql(expr, qualifier_context->source_text))));
 	}
 	return BindResult(
-	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, DecideWrittenSql(expr, qualifier_context->source_text))));
+	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause,
+	                                                          DecideWrittenSql(expr, qualifier_context->source_text))));
 }
 
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string &error_msg) {

@@ -31,10 +31,8 @@ TEST_CASE("DeciDB query-diagnostics router", "[decidb][query_diagnostics][router
 	SECTION("without the prefix every failed state is UNDIAGNOSED") {
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::UNBOUNDED), false) == DiagnosisTerminal::UNDIAGNOSED);
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::INFEASIBLE), false) == DiagnosisTerminal::UNDIAGNOSED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), false) ==
-		      DiagnosisTerminal::UNDIAGNOSED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), false) ==
-		      DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), false) == DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), false) == DiagnosisTerminal::UNDIAGNOSED);
 	}
 
 	SECTION("a successful solve routes to SOLVED with or without the prefix") {
@@ -42,10 +40,8 @@ TEST_CASE("DeciDB query-diagnostics router", "[decidb][query_diagnostics][router
 	}
 
 	SECTION("residual INF_OR_UNBD routes by ray signal under DIAGNOSE") {
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), true) ==
-		      DiagnosisTerminal::UNBOUNDED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), true) ==
-		      DiagnosisTerminal::INFEASIBLE);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), true) == DiagnosisTerminal::UNBOUNDED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), true) == DiagnosisTerminal::INFEASIBLE);
 	}
 
 	SECTION("a time limit is never a diagnosis terminal") {

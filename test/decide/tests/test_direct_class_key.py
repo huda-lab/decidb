@@ -101,9 +101,7 @@ def test_the_join_of_a_bound_compares_each_key_column_by_what_a_null_means(decid
     # The side table is built and joined by the source reader, which the solver path uses as well (its plan prints the
     # DECIDE operator's internal columns, so the comparisons are read from a direct plan). The bound's reducer has a key
     # of its own, so it is not the clause's group: the table is joined once for the bound and once for its check.
-    sql = (
-        f"SELECT id, x FROM {source} DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(v) by ({key}) / 8 MAXIMIZE SUM(v * x)"
-    )
+    sql = f"SELECT id, x FROM {source} DECIDE x(BOOL) SUCH THAT SUM(x) <= SUM(v) by ({key}) / 8 MAXIMIZE SUM(v * x)"
     assert _single_join_conditions(decidb_cli, sql) == expected, name
 
 

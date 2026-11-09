@@ -59,13 +59,15 @@ def test_query_wide_decision_beside_per_data_reducer(decidb_cli):
 @pytest.mark.correctness
 def test_row_scoped_decision_inside_reducer_remains_legal(decidb_cli):
     """Row scope is legal when the reducer owns the row-to-one collapse."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, p, x
         FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
         DECIDE x(INT)
         SUCH THAT SUM(p * x) <= 6 AND x <= 3
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     xi = cols.index("x")
     assert sum(int(r[xi]) * int(r[cols.index("p")]) for r in rows) <= 6
 

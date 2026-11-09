@@ -85,7 +85,7 @@ def _extract_status(stderr: str) -> str | None:
     """Return the terminal named by a DECIDB_STATUS marker line, if stderr has one."""
     for line in stderr.splitlines():
         if line.startswith(_STATUS_MARKER_PREFIX):
-            return line[len(_STATUS_MARKER_PREFIX):].strip()
+            return line[len(_STATUS_MARKER_PREFIX) :].strip()
     return None
 
 
@@ -101,6 +101,7 @@ _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 
 _MODEL_DUMP_BEGIN = "=== DECIDB MODEL DUMP ==="
 _MODEL_DUMP_END = "=== END MODEL DUMP ==="
+
 
 def _verify_serializer_args() -> list[str]:
     """CLI arguments that enable ``PRAGMA verify_serializer`` without output.
@@ -118,9 +119,12 @@ def _verify_serializer_args() -> list[str]:
     exception; DuckDB's materializing verifier cannot pause to read terminal input.
     """
     return [
-        "-cmd", ".output /dev/null",
-        "-cmd", "PRAGMA verify_serializer;",
-        "-cmd", ".output stdout",
+        "-cmd",
+        ".output /dev/null",
+        "-cmd",
+        "PRAGMA verify_serializer;",
+        "-cmd",
+        ".output stdout",
     ]
 
 
@@ -355,9 +359,7 @@ class DeciDBCli:
         self.env = env
         #: ``None`` means "follow the environment"; a bool pins it for this wrapper.
         self.verify_serializer = (
-            os.environ.get(_VERIFY_SERIALIZER_ENV) == "1"
-            if verify_serializer is None
-            else verify_serializer
+            os.environ.get(_VERIFY_SERIALIZER_ENV) == "1" if verify_serializer is None else verify_serializer
         )
 
     def with_env(self, extra: dict[str, str]) -> "DeciDBCli":
@@ -366,8 +368,7 @@ class DeciDBCli:
         Lets a test add a one-off variable (e.g. ``DECIDB_DUMP_MODEL``) to a
         session-scoped fixture without mutating the fixture other tests share.
         """
-        return DeciDBCli(self.exe, self.db, env={**(self.env or {}), **extra},
-                         verify_serializer=self.verify_serializer)
+        return DeciDBCli(self.exe, self.db, env={**(self.env or {}), **extra}, verify_serializer=self.verify_serializer)
 
     def with_verify_serializer(self) -> "DeciDBCli":
         """A copy of this wrapper that round-trips every bound plan through
@@ -458,9 +459,9 @@ class DeciDBCli:
         if stderr:
             status = _extract_status(stderr)
             error_lines = [
-                line for line in stderr.splitlines()
-                if not line.startswith("Warning:")
-                and not line.startswith(_STATUS_MARKER_PREFIX)
+                line
+                for line in stderr.splitlines()
+                if not line.startswith("Warning:") and not line.startswith(_STATUS_MARKER_PREFIX)
             ]
             if error_lines:
                 raise DeciDBCliError("\n".join(error_lines), status=status)
@@ -547,9 +548,7 @@ class DeciDBCli:
         proc = _run(self._argv(), sql, input=sql, timeout=timeout, env=self._subprocess_env())
         return self._settled(proc, expect_number_range)
 
-    def execute_interactive(
-        self, sql: str, responses: str, *, timeout: float = 60
-    ) -> subprocess.CompletedProcess:
+    def execute_interactive(self, sql: str, responses: str, *, timeout: float = 60) -> subprocess.CompletedProcess:
         """Run *sql* with a pseudo-terminal as stdin, feeding *responses*.
 
         Slow-solve continuation only prompts when stdin is a terminal (``isatty``);
@@ -672,10 +671,7 @@ class DeciDBCli:
         """
         result = self.execute_raw(sql, timeout=timeout, expect_number_range=expect_number_range)
         stderr = result.stderr.strip()
-        assert stderr, (
-            f"Expected error but stderr was empty.\n"
-            f"stdout: {result.stdout[:500]}"
-        )
+        assert stderr, f"Expected error but stderr was empty.\n" f"stdout: {result.stdout[:500]}"
         if match:
             combined = result.stderr + result.stdout
             assert re.search(match, combined), (

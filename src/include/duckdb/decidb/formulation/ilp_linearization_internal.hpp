@@ -20,8 +20,8 @@ namespace duckdb {
 namespace decide_linearize {
 
 //! Append a continuous auxiliary to the flat global block and return its index.
-idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexer, const AuxRange &range,
-                             double obj_coeff, const string &label = string());
+idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexer, const AuxRange &range, double obj_coeff,
+                             const string &label = string());
 
 //! Append a binary auxiliary to the flat global block and return its index.
 idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer, double obj_coeff,
@@ -29,8 +29,8 @@ idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer, double o
 
 //! The constant part of one row's LHS: the terms whose variable index is fixed. `written` names the clause when the
 //! sum grows past a DOUBLE (AddCoefficient).
-double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
-                               const vector<CoefficientColumn> &row_coefficients, idx_t row, const string &written);
+double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices, const vector<CoefficientColumn> &row_coefficients,
+                               idx_t row, const string &written);
 
 //! One row's RHS with its fixed LHS offset already moved across.
 double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const string &written);
@@ -76,9 +76,9 @@ idx_t FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<doubl
 //! contributes the floor it does have. `first_row` is the row the group reads its
 //! bound off: group-constant by construction.
 struct MinMaxGroup {
-    vector<idx_t> rows;
-    AuxRange family;
-    idx_t first_row = DConstants::INVALID_INDEX;
+	vector<idx_t> rows;
+	AuxRange family;
+	idx_t first_row = DConstants::INVALID_INDEX;
 };
 
 //! Split one grouped row into its groups' families. An ungrouped row is the single
@@ -91,22 +91,22 @@ vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const EvaluatedC
 //! of a row sum in one accumulator the members share; `ec` and `written` outlive this.
 class MinMaxRowMembers {
 public:
-    MinMaxRowMembers(const SolverInput &input, const VarIndexer &indexer, const EvaluatedConstraint &ec,
-                     const string &written);
+	MinMaxRowMembers(const SolverInput &input, const VarIndexer &indexer, const EvaluatedConstraint &ec,
+	                 const string &written);
 
-    //! Writes `row`'s member into `link`, which is empty.
-    void FillLink(idx_t row, MinMaxLinkRow &link);
-    //! The reach of `row`'s expression, its constant part included.
-    AuxRange Range(idx_t row) const;
-    //! The members of `group`, in row order.
-    ExtremumMemberSource Source(const MinMaxGroup &group);
+	//! Writes `row`'s member into `link`, which is empty.
+	void FillLink(idx_t row, MinMaxLinkRow &link);
+	//! The reach of `row`'s expression, its constant part included.
+	AuxRange Range(idx_t row) const;
+	//! The members of `group`, in row order.
+	ExtremumMemberSource Source(const MinMaxGroup &group);
 
 private:
-    const SolverInput &input;
-    const VarIndexer &indexer;
-    const EvaluatedConstraint &ec;
-    const string &written;
-    SparseCoeffAccumulator row_terms;
+	const SolverInput &input;
+	const VarIndexer &indexer;
+	const EvaluatedConstraint &ec;
+	const string &written;
+	SparseCoeffAccumulator row_terms;
 };
 
 } // namespace decide_linearize

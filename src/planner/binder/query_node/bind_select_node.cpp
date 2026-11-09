@@ -444,7 +444,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 	result->groupings_index = GenerateTableIndex();
 	result->window_index = GenerateTableIndex();
 	result->prune_index = GenerateTableIndex();
-    result->decide_index = GenerateTableIndex();
+	result->decide_index = GenerateTableIndex();
 
 	result->from_table = std::move(from_table);
 	// bind the sample clause
@@ -452,11 +452,11 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 		result->sample_options = std::move(statement.sample);
 	}
 
-    // Bind DECIDE clause before ExpandStarExpression
-    if (statement.HasDecideClause()) {
-        DecideDeclarationsBinder decide_declarations_binder(*this, context);
-        decide_declarations_binder.BindDeclarations(statement, *result);
-    }
+	// Bind DECIDE clause before ExpandStarExpression
+	if (statement.HasDecideClause()) {
+		DecideDeclarationsBinder decide_declarations_binder(*this, context);
+		decide_declarations_binder.BindDeclarations(statement, *result);
+	}
 
 	// visit the select list and expand any "*" statements
 	vector<unique_ptr<ParsedExpression>> new_select_list;

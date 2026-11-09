@@ -41,7 +41,8 @@ MemorySnapshot ReadMemory() {
 #if defined(__APPLE__)
 	mach_task_basic_info_data_t info;
 	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) ==
+	    KERN_SUCCESS) {
 		snapshot.resident_bytes = info.resident_size;
 	}
 #endif
@@ -98,13 +99,13 @@ int main(int argc, char **argv) {
 		    (delivery != "materialized" && delivery != "stream") ||
 		    (cardinality != "upper" && cardinality != "lower" && cardinality != "exact" && cardinality != "interval") ||
 		    (scope != "global" && scope != "grouped" && scope != "grouped_local_when") ||
-		    (scope != "global" && rows < 100) ||
-		    (pins != "free" && pins != "fixed") ||
+		    (scope != "global" && rows < 100) || (pins != "free" && pins != "fixed") ||
 		    (bound_kind != "constant" && bound_kind != "source" && bound_kind != "source_double" &&
 		     bound_kind != "source_pair" && bound_kind != "source_coalesce") ||
 		    (bound_kind != "constant" && cardinality != "interval") ||
 		    (objective_kind != "single" && objective_kind != "additive")) {
-			throw std::invalid_argument("Invalid rows, source kind, mode, output kind, delivery, cardinality, scope, or pins");
+			throw std::invalid_argument(
+			    "Invalid rows, source kind, mode, output kind, delivery, cardinality, scope, or pins");
 		}
 		// With S1_DB set, the source lives in a database file built once by a "prepare" run. A measured run
 		// then opens the file in a fresh process, so its peak memory covers only the query (plus the open).
@@ -139,10 +140,9 @@ int main(int argc, char **argv) {
 				                std::to_string(lower ? lower - 1 : 0) + " END)::INTEGER AS lower_cap";
 			}
 		}
-		std::string fixed_columns = pins == "fixed"
-		                                ? ", (i % 10000 < 100) AS fixed_one, "
-		                                  "(i % 10000 BETWEEN 100 AND 199) AS fixed_zero"
-		                                : "";
+		std::string fixed_columns = pins == "fixed" ? ", (i % 10000 < 100) AS fixed_one, "
+		                                              "(i % 10000 BETWEEN 100 AND 199) AS fixed_zero"
+		                                            : "";
 		auto open_memory = ReadMemory();
 		auto setup_start = Clock::now();
 		auto create = stored_file ? "CREATE TABLE source AS SELECT i, " : "CREATE TEMP TABLE source AS SELECT i, ";
@@ -155,15 +155,15 @@ int main(int argc, char **argv) {
 		if (source_kind == "stored_join") {
 			if (!stored_file || prepare) {
 				Run(connection, std::string(stored_file ? "CREATE TABLE weights AS SELECT k, "
-				                                         : "CREATE TEMP TABLE weights AS SELECT k, ") +
+				                                        : "CREATE TEMP TABLE weights AS SELECT k, ") +
 				                    "1.0 + (k % 5)::DOUBLE / 20.0 AS weight FROM range(97) t(k)");
 			}
 			relation = "(SELECT s.i, s.score * w.weight AS score" + std::string(width ? ", s.payload" : "") +
-		           std::string(grouped ? ", s.dept" : "") + std::string(local_when ? ", s.active" : "") +
-		           std::string(bound_kind != "constant" ? ", s.cap" : "") +
-		           std::string(bound_kind == "source_pair" ? ", s.lower_cap" : "") +
-		           std::string(pins == "fixed" ? ", s.fixed_one, s.fixed_zero" : "") +
-		           " FROM source s JOIN weights w ON s.i % 97 = w.k) j";
+			           std::string(grouped ? ", s.dept" : "") + std::string(local_when ? ", s.active" : "") +
+			           std::string(bound_kind != "constant" ? ", s.cap" : "") +
+			           std::string(bound_kind == "source_pair" ? ", s.lower_cap" : "") +
+			           std::string(pins == "fixed" ? ", s.fixed_one, s.fixed_zero" : "") +
+			           " FROM source s JOIN weights w ON s.i % 97 = w.k) j";
 		}
 		if (prepare) {
 			Run(connection, "CHECKPOINT");
@@ -173,8 +173,8 @@ int main(int argc, char **argv) {
 		}
 		auto setup_end = Clock::now();
 		auto setup_memory = ReadMemory();
-		std::string columns = std::string(width ? "i, score, payload" : "i, score") +
-		                      (grouped ? ", dept" : "") + (local_when ? ", active" : "") + ", x";
+		std::string columns = std::string(width ? "i, score, payload" : "i, score") + (grouped ? ", dept" : "") +
+		                      (local_when ? ", active" : "") + ", x";
 		std::string constraint;
 		if (cardinality == "upper") {
 			constraint = "SUM(x)<=" + std::to_string(group_size / 10);
@@ -187,23 +187,23 @@ int main(int argc, char **argv) {
 		}
 		if (grouped) {
 			if (cardinality == "interval") {
-				constraint = local_when ? "SUM(x) WHEN active >=" + std::to_string(lower) +
-				                              " PER dept AND SUM(x) WHEN active <=" + std::to_string(upper) + " PER dept"
-				                        : "SUM(x)>=" + std::to_string(lower) + " PER dept AND SUM(x)<=" +
-				                              std::to_string(upper) + " PER dept";
+				constraint = local_when
+				                 ? "SUM(x) WHEN active >=" + std::to_string(lower) +
+				                       " PER dept AND SUM(x) WHEN active <=" + std::to_string(upper) + " PER dept"
+				                 : "SUM(x)>=" + std::to_string(lower) +
+				                       " PER dept AND SUM(x)<=" + std::to_string(upper) + " PER dept";
 			} else {
 				constraint += " PER dept";
 			}
 		}
 		if (bound_kind != "constant") {
 			auto lower_bound = bound_kind == "source_pair" ? "lower_cap" : std::to_string(lower);
-			auto upper_bound = bound_kind == "source_coalesce" ? "COALESCE(cap," + std::to_string(upper + 1) + ")"
-			                                                    : "cap";
-			constraint = local_when ? "SUM(x) WHEN active >=" + lower_bound + " PER dept AND SUM(x) WHEN active <=" +
-			                              upper_bound + " PER dept"
-			                        : grouped ? "SUM(x)>=" + lower_bound + " PER dept AND SUM(x)<=" + upper_bound +
-			                                        " PER dept"
-			                                  : "SUM(x)>=" + lower_bound + " AND SUM(x)<=" + upper_bound;
+			auto upper_bound =
+			    bound_kind == "source_coalesce" ? "COALESCE(cap," + std::to_string(upper + 1) + ")" : "cap";
+			constraint = local_when ? "SUM(x) WHEN active >=" + lower_bound +
+			                              " PER dept AND SUM(x) WHEN active <=" + upper_bound + " PER dept"
+			             : grouped ? "SUM(x)>=" + lower_bound + " PER dept AND SUM(x)<=" + upper_bound + " PER dept"
+			                       : "SUM(x)>=" + lower_bound + " AND SUM(x)<=" + upper_bound;
 		}
 		if (pins == "fixed") {
 			constraint = "x=1 WHEN fixed_one AND x=0 WHEN fixed_zero AND " + constraint;
@@ -220,12 +220,11 @@ int main(int argc, char **argv) {
 		                     // time estimates the cost of collecting the result.
 		                     std::string(output_kind == "consume" ? ", SUM(i)::BIGINT" : "") +
 		                     std::string(output_kind == "consume" && width ? ", SUM(length(payload))::BIGINT" : "") +
-		                     std::string(output_kind == "consume" && grouped ? ", SUM(dept)::BIGINT" : "") +
-		                     " FROM (" + decide + ") q";
+		                     std::string(output_kind == "consume" && grouped ? ", SUM(dept)::BIGINT" : "") + " FROM (" +
+		                     decide + ") q";
 		std::cerr << "DECIDB_PROFILE_QUERY_BEGIN\n" << std::flush;
 		auto query_start = Clock::now();
-		unique_ptr<QueryResult> result =
-		    delivery == "stream" ? connection.SendQuery(sql) : connection.Query(sql);
+		unique_ptr<QueryResult> result = delivery == "stream" ? connection.SendQuery(sql) : connection.Query(sql);
 		auto query_end = Clock::now();
 		auto post_submit_memory = ReadMemory();
 		if (delivery == "materialized") {
@@ -251,7 +250,8 @@ int main(int argc, char **argv) {
 					result_rows = static_cast<idx_t>(chunk->GetValue(0, row).GetValue<int64_t>());
 					chosen = static_cast<idx_t>(chunk->GetValue(1, row).GetValue<int64_t>());
 					objective = chunk->GetValue(2, row).GetValue<double>();
-					active_chosen = local_when ? static_cast<idx_t>(chunk->GetValue(3, row).GetValue<int64_t>()) : chosen;
+					active_chosen =
+					    local_when ? static_cast<idx_t>(chunk->GetValue(3, row).GetValue<int64_t>()) : chosen;
 					continue;
 				}
 				auto item_id = chunk->GetValue(0, row).GetValue<int64_t>();
@@ -266,7 +266,8 @@ int main(int argc, char **argv) {
 					active_chosen += static_cast<idx_t>(x);
 				}
 				objective += (static_cast<long double>(score) +
-				              (objective_kind == "additive" ? static_cast<long double>(item_id) : 0.0L)) * x;
+				              (objective_kind == "additive" ? static_cast<long double>(item_id) : 0.0L)) *
+				             x;
 				result_rows++;
 			}
 		}
@@ -283,16 +284,15 @@ int main(int argc, char **argv) {
 		                         : cardinality == "interval"
 		                             ? active_chosen >= lower * group_count && active_chosen <= upper * group_count
 		                         : cardinality == "exact" ? active_chosen == lower * group_count
-		                                                    : active_chosen >= lower * group_count;
+		                                                  : active_chosen >= lower * group_count;
 		if (result_rows != rows || !valid_cardinality || output_rows != (output_kind == "full" ? rows : 1)) {
 			throw std::runtime_error("Unexpected row count or infeasible assignment");
 		}
-		std::cout << std::setprecision(12) << "{\"rows\":" << rows << ",\"width\":" << width
-		          << ",\"source_kind\":\"" << source_kind << "\",\"mode\":\"" << mode
-		          << "\",\"output_kind\":\"" << output_kind << "\",\"delivery\":\"" << delivery
-		          << "\",\"cardinality\":\"" << cardinality
-		          << "\",\"scope\":\"" << scope << "\",\"pins\":\"" << pins
-		          << "\",\"bound_kind\":\"" << bound_kind << "\",\"objective_kind\":\"" << objective_kind
+		std::cout << std::setprecision(12) << "{\"rows\":" << rows << ",\"width\":" << width << ",\"source_kind\":\""
+		          << source_kind << "\",\"mode\":\"" << mode << "\",\"output_kind\":\"" << output_kind
+		          << "\",\"delivery\":\"" << delivery << "\",\"cardinality\":\"" << cardinality << "\",\"scope\":\""
+		          << scope << "\",\"pins\":\"" << pins << "\",\"bound_kind\":\"" << bound_kind
+		          << "\",\"objective_kind\":\"" << objective_kind
 		          << "\",\"setup_s\":" << Seconds(setup_start, setup_end)
 		          << ",\"submit_s\":" << Seconds(query_start, query_end)
 		          << ",\"fetch_s\":" << Seconds(readback_start, readback_end)
@@ -314,12 +314,10 @@ int main(int argc, char **argv) {
 			std::cout << ",\"query_collect_s\":null,\"api_readback_s\":null,"
 			             "\"process_peak_through_query_mib\":null,\"post_query_rss_mib\":null";
 		}
-		std::cout
-		          << ",\"result_rows\":" << result_rows << ",\"output_rows\":" << output_rows
-		          << ",\"chosen\":" << chosen
-		          << ",\"active_chosen\":" << active_chosen
-		          << ",\"objective\":" << static_cast<double>(objective)
-		          << ",\"payload_bytes\":" << payload_bytes << "}\n";
+		std::cout << ",\"result_rows\":" << result_rows << ",\"output_rows\":" << output_rows
+		          << ",\"chosen\":" << chosen << ",\"active_chosen\":" << active_chosen
+		          << ",\"objective\":" << static_cast<double>(objective) << ",\"payload_bytes\":" << payload_bytes
+		          << "}\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

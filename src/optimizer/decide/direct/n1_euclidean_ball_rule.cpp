@@ -692,8 +692,8 @@ private:
 	// P5: the answer
 	//===------------------------------------------------------------------===//
 
-	//! The ball's radius is sqrt(B / q), computed as sqrt(B) / sqrt(q): B / q passes a DOUBLE where B does not when q is
-	//! below 1. B is negative only on a row that P4 has raised for, so no square root is taken of a negative number.
+	//! The ball's radius is sqrt(B / q), computed as sqrt(B) / sqrt(q): B / q passes a DOUBLE where B does not when q
+	//! is below 1. B is negative only on a row that P4 has raised for, so no square root is taken of a negative number.
 	ExprPtr Radius(const ExprPtr &limit) const {
 		return calc.Div(calc.Fn("sqrt", limit), calc.Num(std::sqrt(condition.square_factor)));
 	}

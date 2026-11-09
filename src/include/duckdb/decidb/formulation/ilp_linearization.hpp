@@ -38,10 +38,8 @@ namespace duckdb {
 //! is omitted — the caller must then REFUSE, not substitute a constant. There is no
 //! fixed Big-M anywhere in DeciDB: a constant the true range exceeds does not fail,
 //! it silently cuts the feasible region and returns a confidently wrong answer.
-double DecideRowTermRange(const vector<idx_t> &variable_indices,
-                          const vector<CoefficientColumn> &row_coefficients,
-                          idx_t row, const vector<double> &lower_bounds,
-                          const vector<double> &upper_bounds,
+double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<CoefficientColumn> &row_coefficients,
+                          idx_t row, const vector<double> &lower_bounds, const vector<double> &upper_bounds,
                           bool &has_unbounded, const InstanceBox &instances);
 
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
@@ -74,8 +72,8 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
 //! instance's is its tightest kept bound, an instance no bound keeps has 0), so it stays a valid floor of every
 //! column, and `instance_lower_bounds[v]` holds 0 on an instance the default floor still holds on and -infinity on one
 //! that follows the decision's box. The exact floor (-5, or -3 where two bounds keep a row) still comes from the
-//! clause's own row, which the model builder folds into the column, and which a diagnosis can loosen. The rigid floor of
-//! a lowered decision is re-opened, as for a folded user bound. Runs after the rigid box is captured and before
+//! clause's own row, which the model builder folds into the column, and which a diagnosis can loosen. The rigid floor
+//! of a lowered decision is re-opened, as for a folded user bound. Runs after the rigid box is captured and before
 //! implied bounds are derived, and needs the VarIndexer for the row to instance map.
 void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const vector<DecideBoundBox> &boxes);
 
@@ -121,15 +119,17 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 //! Big-M at all, which is the case it was built to answer and the only one where the
 //! lowering must refuse the query.
 struct NativeConstructPolicy {
-    //! The backend declares this construct (stage 05, read off its capabilities).
-    bool available = false;
-    //! Test-only `DECIDB_NATIVE_CONSTRUCTS=force`: state it natively wherever it is
-    //! declared, so the A/B equivalence tests still have two arms to compare.
-    bool forced = false;
+	//! The backend declares this construct (stage 05, read off its capabilities).
+	bool available = false;
+	//! Test-only `DECIDB_NATIVE_CONSTRUCTS=force`: state it natively wherever it is
+	//! declared, so the A/B equivalence tests still have two arms to compare.
+	bool forced = false;
 
-    //! The rule. `big_m_underivable` is this SITE's question, not the query's: one
-    //! clause can have a derivable range while another in the same query does not.
-    bool Use(bool big_m_underivable) const { return available && (forced || big_m_underivable); }
+	//! The rule. `big_m_underivable` is this SITE's question, not the query's: one
+	//! clause can have a derivable range while another in the same query does not.
+	bool Use(bool big_m_underivable) const {
+		return available && (forced || big_m_underivable);
+	}
 };
 
 //! Encode every MIN/MAX *constraint* stage 05 tagged, routing each clause between the
@@ -145,8 +145,8 @@ struct NativeConstructPolicy {
 //!     so no contributing variable needs a finite bound.
 //!
 //! Untagged constraints pass through unchanged.
-void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
-                                const vector<string> &var_names, NativeConstructPolicy policy);
+void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
+                                NativeConstructPolicy policy);
 
 //! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunction it
 //! is: `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, a pair of CONDITIONAL ROWS.
@@ -167,8 +167,7 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
 //! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
-void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
-                       const vector<string> &var_names);
+void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names);
 
 //! The one place a construct is lowered, and the last pass of stage 06.
 //!
@@ -189,10 +188,8 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
 //! about the query.
 //! `box` is the box the emitted Big-Ms are valid for — the same explicit-box contract
 //! `DecideTightPerRowBigM` carries, in the flat column coordinates this pass works in.
-void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
-                           const FormulationBox &box,
-                           const vector<string> &var_names,
-                           const SolverConstructSupport &constructs);
+void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box,
+                           const vector<string> &var_names, const SolverConstructSupport &constructs);
 
 //! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
 //! corner is implied by `w`'s own non-negative bound and the upper corner collapses
@@ -215,8 +212,8 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 //! finite ceiling is refused, unless `refuse_when_unbounded` is false: a helper decision of the value rewrite
 //! (`SolverInput::reducer_value_links`) is boxed after this runs, so the run that settles the helpers' boxes
 //! leaves such an auxiliary open and a final refusing run decides.
-void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box,
-                                   const vector<string> &var_names, bool refuse_when_unbounded = true);
+void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box, const vector<string> &var_names,
+                                   bool refuse_when_unbounded = true);
 
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
 //! linearizer. For each `abs_maximize_links` entry it derives the signed interval of the
@@ -295,125 +292,131 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 //! A family that covers no row at all stays [0, 0], which is what the sites that pin an
 //! empty auxiliary to exactly 0 rely on.
 struct AuxRange {
-    double lo = 0.0;
-    double hi = 0.0;
-    //! Whether `lo` / `hi` hold a covered value yet, as opposed to the empty family's 0.
-    bool lo_seeded = false;
-    bool hi_seeded = false;
-    //! The two ends are tracked separately because they fail separately. A decision
-    //! variable declared `x >= 0` with no ceiling leaves `hi` underivable and `lo`
-    //! perfectly well known, and a box keeping the closed side is strictly better than
-    //! one discarding both — the root simplex gets half a region to start from instead
-    //! of none. `lo`/`hi` are meaningful iff the matching flag is false.
-    bool lo_unbounded = false;
-    bool hi_unbounded = false;
-    //! The first variable that opened either end, kept so a refusal can name a column
-    //! the user can bound rather than say only that something was unbounded.
-    //! Meaningful iff `Unbounded()`.
-    idx_t unbounded_var = DConstants::INVALID_INDEX;
+	double lo = 0.0;
+	double hi = 0.0;
+	//! Whether `lo` / `hi` hold a covered value yet, as opposed to the empty family's 0.
+	bool lo_seeded = false;
+	bool hi_seeded = false;
+	//! The two ends are tracked separately because they fail separately. A decision
+	//! variable declared `x >= 0` with no ceiling leaves `hi` underivable and `lo`
+	//! perfectly well known, and a box keeping the closed side is strictly better than
+	//! one discarding both — the root simplex gets half a region to start from instead
+	//! of none. `lo`/`hi` are meaningful iff the matching flag is false.
+	bool lo_unbounded = false;
+	bool hi_unbounded = false;
+	//! The first variable that opened either end, kept so a refusal can name a column
+	//! the user can bound rather than say only that something was unbounded.
+	//! Meaningful iff `Unbounded()`.
+	idx_t unbounded_var = DConstants::INVALID_INDEX;
 
-    //! True when EITHER end is open. This is the test for everything that needs both
-    //! ends finite — every Big-M, which has to dominate the whole span. Boxing a
-    //! column is the one caller entitled to read the per-side flags instead, because a
-    //! half-open box is still a valid box.
-    bool Unbounded() const { return lo_unbounded || hi_unbounded; }
+	//! True when EITHER end is open. This is the test for everything that needs both
+	//! ends finite — every Big-M, which has to dominate the whole span. Boxing a
+	//! column is the one caller entitled to read the per-side flags instead, because a
+	//! half-open box is still a valid box.
+	bool Unbounded() const {
+		return lo_unbounded || hi_unbounded;
+	}
 
-    //! The full reach of this family, constants INCLUDED — and the only Big-M any
-    //! extremum link may use. Defined ONLY when `!Unbounded()`: no constant dominates a
-    //! range open at either end, so a caller must check `Unbounded()` and refuse before
-    //! asking. There is no fallback value to return — that is the point. A half-open
-    //! range is enough to box a column but not to scale a row, which is why boxing reads
-    //! the per-side flags and this does not.
-    //!
-    //! Why constants are included: a link row deactivated on row r must stay slack up
-    //! to `hi - exprmin_r`, and `hi` is whichever row in the family reaches highest — so
-    //! row r's constant is measured against a DIFFERENT row's and does not cancel. It
-    //! cancels only within one row's own `(aux - expr)`. Scaling off a constant-free
-    //! reach instead, which is what this did until 2026-08-23, hands back a Big-M too
-    //! small to be valid wherever rows carry different constants (`MAX(x + c)` with `c`
-    //! a data column) — and a too-small Big-M cuts off legal answers rather than merely
-    //! loosening the relaxation.
-    double Span() const {
-        D_ASSERT(!Unbounded());
-        return hi - lo;
-    }
+	//! The full reach of this family, constants INCLUDED — and the only Big-M any
+	//! extremum link may use. Defined ONLY when `!Unbounded()`: no constant dominates a
+	//! range open at either end, so a caller must check `Unbounded()` and refuse before
+	//! asking. There is no fallback value to return — that is the point. A half-open
+	//! range is enough to box a column but not to scale a row, which is why boxing reads
+	//! the per-side flags and this does not.
+	//!
+	//! Why constants are included: a link row deactivated on row r must stay slack up
+	//! to `hi - exprmin_r`, and `hi` is whichever row in the family reaches highest — so
+	//! row r's constant is measured against a DIFFERENT row's and does not cancel. It
+	//! cancels only within one row's own `(aux - expr)`. Scaling off a constant-free
+	//! reach instead, which is what this did until 2026-08-23, hands back a Big-M too
+	//! small to be valid wherever rows carry different constants (`MAX(x + c)` with `c`
+	//! a data column) — and a too-small Big-M cuts off legal answers rather than merely
+	//! loosening the relaxation.
+	double Span() const {
+		D_ASSERT(!Unbounded());
+		return hi - lo;
+	}
 
-    //! Record an unbounded contributor. Keeps the FIRST one seen, so the message a
-    //! query produces does not depend on row order.
-    void MarkUnbounded(idx_t var) {
-        MarkLoUnbounded(var);
-        MarkHiUnbounded(var);
-    }
+	//! Record an unbounded contributor. Keeps the FIRST one seen, so the message a
+	//! query produces does not depend on row order.
+	void MarkUnbounded(idx_t var) {
+		MarkLoUnbounded(var);
+		MarkHiUnbounded(var);
+	}
 
-    //! Record that one end alone is underivable, keeping whatever the other end holds.
-    void MarkLoUnbounded(idx_t var) {
-        if (!Unbounded()) {
-            unbounded_var = var;
-        }
-        lo_unbounded = true;
-    }
-    void MarkHiUnbounded(idx_t var) {
-        if (!Unbounded()) {
-            unbounded_var = var;
-        }
-        hi_unbounded = true;
-    }
+	//! Record that one end alone is underivable, keeping whatever the other end holds.
+	void MarkLoUnbounded(idx_t var) {
+		if (!Unbounded()) {
+			unbounded_var = var;
+		}
+		lo_unbounded = true;
+	}
+	void MarkHiUnbounded(idx_t var) {
+		if (!Unbounded()) {
+			unbounded_var = var;
+		}
+		hi_unbounded = true;
+	}
 
-    //! Widen to also cover `other` — an extremum taken over several families.
-    void Cover(const AuxRange &other) {
-        if (other.lo_seeded) {
-            FoldLo(other.lo);
-        }
-        if (other.hi_seeded) {
-            FoldHi(other.hi);
-        }
-        // The blame travels with the openness. Merging the flags without the variable
-        // leaves a range that reports `Unbounded()` but has no column to name, so a
-        // refusal over the merged family degrades to the generic "one of them is
-        // unbounded" message. Same rule as the `Mark*` helpers: keep the FIRST open end
-        // seen, so the message does not depend on the order families were merged in.
-        if (!Unbounded() && other.Unbounded()) {
-            unbounded_var = other.unbounded_var;
-        }
-        lo_unbounded = lo_unbounded || other.lo_unbounded;
-        hi_unbounded = hi_unbounded || other.hi_unbounded;
-    }
+	//! Widen to also cover `other` — an extremum taken over several families.
+	void Cover(const AuxRange &other) {
+		if (other.lo_seeded) {
+			FoldLo(other.lo);
+		}
+		if (other.hi_seeded) {
+			FoldHi(other.hi);
+		}
+		// The blame travels with the openness. Merging the flags without the variable
+		// leaves a range that reports `Unbounded()` but has no column to name, so a
+		// refusal over the merged family degrades to the generic "one of them is
+		// unbounded" message. Same rule as the `Mark*` helpers: keep the FIRST open end
+		// seen, so the message does not depend on the order families were merged in.
+		if (!Unbounded() && other.Unbounded()) {
+			unbounded_var = other.unbounded_var;
+		}
+		lo_unbounded = lo_unbounded || other.lo_unbounded;
+		hi_unbounded = hi_unbounded || other.hi_unbounded;
+	}
 
-    //! Extend by one more row expression bracketed by [`row_lo`, `row_hi`].
-    void CoverRow(double row_lo, double row_hi) {
-        D_ASSERT(!std::isinf(row_lo) && !std::isinf(row_hi));
-        FoldLo(row_lo);
-        FoldHi(row_hi);
-    }
+	//! Extend by one more row expression bracketed by [`row_lo`, `row_hi`].
+	void CoverRow(double row_lo, double row_hi) {
+		D_ASSERT(!std::isinf(row_lo) && !std::isinf(row_hi));
+		FoldLo(row_lo);
+		FoldHi(row_hi);
+	}
 
-    //! `CoverRow` for a bracket that may be infinite on either end, as the signed walk
-    //! over a row's terms returns. Each end is folded in or marked open on its own, so
-    //! a row open on one side still contributes its closed side to the box. `var`
-    //! names the variable to blame if a Big-M is later asked for over this family.
-    void CoverRowSided(double row_lo, double row_hi, idx_t var) {
-        if (std::isinf(row_lo)) {
-            MarkLoUnbounded(var);
-        } else {
-            FoldLo(row_lo);
-        }
-        if (std::isinf(row_hi)) {
-            MarkHiUnbounded(var);
-        } else {
-            FoldHi(row_hi);
-        }
-    }
+	//! `CoverRow` for a bracket that may be infinite on either end, as the signed walk
+	//! over a row's terms returns. Each end is folded in or marked open on its own, so
+	//! a row open on one side still contributes its closed side to the box. `var`
+	//! names the variable to blame if a Big-M is later asked for over this family.
+	void CoverRowSided(double row_lo, double row_hi, idx_t var) {
+		if (std::isinf(row_lo)) {
+			MarkLoUnbounded(var);
+		} else {
+			FoldLo(row_lo);
+		}
+		if (std::isinf(row_hi)) {
+			MarkHiUnbounded(var);
+		} else {
+			FoldHi(row_hi);
+		}
+	}
 
 private:
-    void FoldLo(double value) {
-        lo = lo_seeded ? MinOf(lo, value) : value;
-        lo_seeded = true;
-    }
-    void FoldHi(double value) {
-        hi = hi_seeded ? MaxOf(hi, value) : value;
-        hi_seeded = true;
-    }
-    static double MinOf(double a, double b) { return a < b ? a : b; }
-    static double MaxOf(double a, double b) { return a > b ? a : b; }
+	void FoldLo(double value) {
+		lo = lo_seeded ? MinOf(lo, value) : value;
+		lo_seeded = true;
+	}
+	void FoldHi(double value) {
+		hi = hi_seeded ? MaxOf(hi, value) : value;
+		hi_seeded = true;
+	}
+	static double MinOf(double a, double b) {
+		return a < b ? a : b;
+	}
+	static double MaxOf(double a, double b) {
+		return a > b ? a : b;
+	}
 };
 
 //! The row of a MIN/MAX link (`z - expr op bound`), once its terms are summed per column.
@@ -433,31 +436,31 @@ private:
 //!
 //! The constant grows through AddCoefficient: `written` names the clause (or the objective) the row comes from.
 struct MinMaxLinkRow {
-    vector<int> indices;
-    vector<double> coefficients;
-    double constant = 0.0;
+	vector<int> indices;
+	vector<double> coefficients;
+	double constant = 0.0;
 
-    void AddConstant(double value, const string &written) {
-        AddCoefficient(constant, value, written);
-    }
+	void AddConstant(double value, const string &written) {
+		AddCoefficient(constant, value, written);
+	}
 
-    //! The left-hand side `1 * column + (this row)` of a solver row, sized for `extra` more columns so that nothing
-    //! reallocates as the caller adds them.
-    SolverInput::RawConstraint LeftHandSide(int column, idx_t extra = 0) const {
-        SolverInput::RawConstraint rc;
-        rc.indices.reserve(1 + indices.size() + extra);
-        rc.coefficients.reserve(1 + indices.size() + extra);
-        rc.indices.push_back(column);
-        rc.coefficients.push_back(1.0);
-        for (idx_t i = 0; i < indices.size(); i++) {
-            if (std::abs(coefficients[i]) < 1e-15) {
-                continue;
-            }
-            rc.indices.push_back(indices[i]);
-            rc.coefficients.push_back(coefficients[i]);
-        }
-        return rc;
-    }
+	//! The left-hand side `1 * column + (this row)` of a solver row, sized for `extra` more columns so that nothing
+	//! reallocates as the caller adds them.
+	SolverInput::RawConstraint LeftHandSide(int column, idx_t extra = 0) const {
+		SolverInput::RawConstraint rc;
+		rc.indices.reserve(1 + indices.size() + extra);
+		rc.coefficients.reserve(1 + indices.size() + extra);
+		rc.indices.push_back(column);
+		rc.coefficients.push_back(1.0);
+		for (idx_t i = 0; i < indices.size(); i++) {
+			if (std::abs(coefficients[i]) < 1e-15) {
+				continue;
+			}
+			rc.indices.push_back(indices[i]);
+			rc.coefficients.push_back(coefficients[i]);
+		}
+		return rc;
+	}
 };
 
 //! The members of an extremum family, produced one at a time (late materialization). A member is `(result - expr)` as
@@ -466,10 +469,10 @@ struct MinMaxLinkRow {
 //! row of storage rather than n. `range` is the reach of `expr` on its own, which is the box a column pinned to it
 //! deserves; it is asked only by the arm that pins one, so no other arm pays for it.
 struct ExtremumMemberSource {
-    idx_t count = 0;
-    //! Fills `link`, which is empty, with member `i` of `count`. Called once per member and pass over the family.
-    std::function<void(idx_t, MinMaxLinkRow &)> fill_link;
-    std::function<AuxRange(idx_t)> range;
+	idx_t count = 0;
+	//! Fills `link`, which is empty, with member `i` of `count`. Called once per member and pass over the family.
+	std::function<void(idx_t, MinMaxLinkRow &)> fill_link;
+	std::function<AuxRange(idx_t)> range;
 };
 
 //! `result = MIN/MAX(members)`, in flat columns. Every MIN/MAX auxiliary in the model is
@@ -489,30 +492,30 @@ struct ExtremumMemberSource {
 //! classification stage 05 makes. A composed link sits in a *constraint*, where no
 //! optimization pressure exists at all, so its hard direction needs both.
 struct ExtremumLinkSpec {
-    idx_t result_column = DConstants::INVALID_INDEX;
-    bool is_max = false;
-    bool need_envelope = false;
-    bool need_closing = false;
-    //! The closing Big-M, and whether one exists at all. Resolved by the CALLER, because
-    //! the family a link reduces over is not always the family of its own members: an
-    //! outer MIN/MAX over group SUMS spans the per-row reach times a group's row count,
-    //! not the per-row reach. `blame_var` names the variable that left it open, INVALID_INDEX
-    //! when none did: the reach overflowed a DOUBLE, and the refusal names `written`, the
-    //! clause (or objective, or reducer) the link belongs to (ThrowUnboundedBigMNaming).
-    double closing_big_m = 0.0;
-    bool closing_underivable = false;
-    idx_t blame_var = DConstants::INVALID_INDEX;
-    string written;
-    //! Names every column and binary this emits, through the global label channel, so a
-    //! diagnosis renders `MAX(x)` rather than an internal column.
-    string label;
-    //! The two sides can carry different provenance. A composed clause's closing rows
-    //! ARE the user's clause and are loosenable; its envelope is mechanism, and an
-    //! objective's linking rows are structural throughout.
-    ConstraintKind envelope_kind = ConstraintKind::STRUCTURAL;
-    ConstraintKind closing_kind = ConstraintKind::STRUCTURAL;
-    idx_t source_clause_id = DConstants::INVALID_INDEX;
-    idx_t removal_group_id = DConstants::INVALID_INDEX;
+	idx_t result_column = DConstants::INVALID_INDEX;
+	bool is_max = false;
+	bool need_envelope = false;
+	bool need_closing = false;
+	//! The closing Big-M, and whether one exists at all. Resolved by the CALLER, because
+	//! the family a link reduces over is not always the family of its own members: an
+	//! outer MIN/MAX over group SUMS spans the per-row reach times a group's row count,
+	//! not the per-row reach. `blame_var` names the variable that left it open, INVALID_INDEX
+	//! when none did: the reach overflowed a DOUBLE, and the refusal names `written`, the
+	//! clause (or objective, or reducer) the link belongs to (ThrowUnboundedBigMNaming).
+	double closing_big_m = 0.0;
+	bool closing_underivable = false;
+	idx_t blame_var = DConstants::INVALID_INDEX;
+	string written;
+	//! Names every column and binary this emits, through the global label channel, so a
+	//! diagnosis renders `MAX(x)` rather than an internal column.
+	string label;
+	//! The two sides can carry different provenance. A composed clause's closing rows
+	//! ARE the user's clause and are loosenable; its envelope is mechanism, and an
+	//! objective's linking rows are structural throughout.
+	ConstraintKind envelope_kind = ConstraintKind::STRUCTURAL;
+	ConstraintKind closing_kind = ConstraintKind::STRUCTURAL;
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
 //! Emit one extremum link, in whichever form the policy and the spec call for. This is
@@ -536,18 +539,18 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 //! MAXIMIZE+MIN) and one envelope row per row suffices; the hard direction additionally
 //! needs the per-row indicator layer.
 struct MinMaxObjectiveSpec {
-    ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
-    bool flat_is_easy = false;
-    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-    bool per_inner_is_easy = false;
-    bool per_outer_is_easy = false;
-    //! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
-    bool per_inner_was_avg = false;
-    //! Exactly the rows the objective's reducer reads (its terms' filters, the
-    //! objective's `when` folded in), each a member whatever its coefficients. Sized
-    //! to the input's rows.
-    vector<bool> member_rows;
+	ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
+	bool flat_is_easy = false;
+	ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
+	ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
+	bool per_inner_is_easy = false;
+	bool per_outer_is_easy = false;
+	//! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
+	bool per_inner_was_avg = false;
+	//! Exactly the rows the objective's reducer reads (its terms' filters, the
+	//! objective's `when` folded in), each a member whatever its coefficients. Sized
+	//! to the input's rows.
+	vector<bool> member_rows;
 };
 
 //! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxConstraints`, which
@@ -559,9 +562,8 @@ struct MinMaxObjectiveSpec {
 //! Runs after the flat column space exists, so it emits into `input.global_constraints`
 //! and appends its auxiliaries to the global block. Untouched when the objective carries
 //! no MIN/MAX aggregate: `input.objective_coefficients` is then left as it arrived.
-void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names,
-                              NativeConstructPolicy native_min_max);
+void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer, const MinMaxObjectiveSpec &spec,
+                              const vector<string> &var_names, NativeConstructPolicy native_min_max);
 
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
@@ -569,30 +571,30 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
 //! operator's `ComposedMinMaxTerm`, prepared at stage 05, and `per_term_coefs[t][row]`
 //! is that term's evaluated coefficient. `z_idx` is filled in by the linearizer.
 struct ComposedMinMaxTermData {
-    //! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
-    bool is_minmax = false;
-    //! Lowercase reducer name: "min", "max", "sum" or "avg".
-    string agg_name;
-    //! Sign this term carries in the additive composition.
-    int sign = 1;
-    //! Factor the canonicalizer peeled off this reducer, already evaluated. It stays
-    //! outside the aggregate all the way to here, which is what makes its sign
-    //! irrelevant to correctness.
-    double scale = 1.0;
-    //! True when the optimization/comparison direction already drives the auxiliary to
-    //! the extremum, so the one-sided envelope pin suffices and no indicators are needed.
-    bool is_easy = true;
-    //! Rows this term reduces over: the term's `WHEN` mask, folded with the relation
-    //! qualifier's de-duplication mask. Sized `SolverInput::num_rows`.
-    vector<bool> filter_mask;
-    //! Non-owning; the flattened inner terms live on the logical operator.
-    const vector<DecideTerm> *inner_terms = nullptr;
-    //! Evaluated per-row coefficient of each inner term, already scaled by its sign.
-    vector<vector<double>> per_term_coefs;
-    //! Flat column of this term's global auxiliary; assigned by the linearizer.
-    idx_t z_idx = DConstants::INVALID_INDEX;
-    //! User source text (`MAX(x)`) naming this term's global auxiliary in diagnostics.
-    string label;
+	//! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
+	bool is_minmax = false;
+	//! Lowercase reducer name: "min", "max", "sum" or "avg".
+	string agg_name;
+	//! Sign this term carries in the additive composition.
+	int sign = 1;
+	//! Factor the canonicalizer peeled off this reducer, already evaluated. It stays
+	//! outside the aggregate all the way to here, which is what makes its sign
+	//! irrelevant to correctness.
+	double scale = 1.0;
+	//! True when the optimization/comparison direction already drives the auxiliary to
+	//! the extremum, so the one-sided envelope pin suffices and no indicators are needed.
+	bool is_easy = true;
+	//! Rows this term reduces over: the term's `WHEN` mask, folded with the relation
+	//! qualifier's de-duplication mask. Sized `SolverInput::num_rows`.
+	vector<bool> filter_mask;
+	//! Non-owning; the flattened inner terms live on the logical operator.
+	const vector<DecideTerm> *inner_terms = nullptr;
+	//! Evaluated per-row coefficient of each inner term, already scaled by its sign.
+	vector<vector<double>> per_term_coefs;
+	//! Flat column of this term's global auxiliary; assigned by the linearizer.
+	idx_t z_idx = DConstants::INVALID_INDEX;
+	//! User source text (`MAX(x)`) naming this term's global auxiliary in diagnostics.
+	string label;
 };
 
 //! Encode one composed MIN/MAX *constraint*: a global auxiliary and its pinning rows per
@@ -611,7 +613,7 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, and a coefficient on each
 //! auxiliary's column beside the objective the other terms already built.
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                                      vector<ComposedMinMaxTermData> &terms,
-                                      const vector<string> &var_names, NativeConstructPolicy native_min_max);
+                                      vector<ComposedMinMaxTermData> &terms, const vector<string> &var_names,
+                                      NativeConstructPolicy native_min_max);
 
 } // namespace duckdb

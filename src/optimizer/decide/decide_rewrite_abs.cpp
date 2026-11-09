@@ -203,8 +203,7 @@ static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx
 			int pinning_sign;
 			if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
 				pinning_sign = 1; // E bounded above: a positive term is pushed down
-			} else if (t == ExpressionType::COMPARE_GREATERTHAN ||
-			           t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+			} else if (t == ExpressionType::COMPARE_GREATERTHAN || t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 				pinning_sign = -1; // E bounded below: a negative term is pushed down
 			} else {
 				pinning_sign = 0; // equality, <>: pin nothing, exactly as before
@@ -304,21 +303,15 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		auto &aux_var = decide.decide_variables[pair.aux_idx];
 		auto &aux_ref = aux_var->Cast<BoundColumnRefExpression>();
 
-		auto aux_ref1 = make_uniq<BoundColumnRefExpression>(
-		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
-		auto c1 = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-		    std::move(aux_ref1), pair.inner_expr->Copy());
+		auto aux_ref1 = make_uniq<BoundColumnRefExpression>(aux_ref.alias, aux_ref.return_type, aux_ref.binding);
+		auto c1 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+		                                               std::move(aux_ref1), pair.inner_expr->Copy());
 
-		auto aux_ref2 = make_uniq<BoundColumnRefExpression>(
-		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
-		auto neg_expr = optimizer.BindScalarFunction(
-		    "-",
-		    make_uniq<BoundConstantExpression>(Value::INTEGER(0)),
-		    pair.inner_expr->Copy());
-		auto c2 = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-		    std::move(aux_ref2), std::move(neg_expr));
+		auto aux_ref2 = make_uniq<BoundColumnRefExpression>(aux_ref.alias, aux_ref.return_type, aux_ref.binding);
+		auto neg_expr = optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::INTEGER(0)),
+		                                             pair.inner_expr->Copy());
+		auto c2 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+		                                               std::move(aux_ref2), std::move(neg_expr));
 
 		const bool needs_bigm = pair.needs_bigm;
 		// The account says how the auxiliary is pinned: on the sound direction solver

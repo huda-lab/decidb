@@ -329,7 +329,8 @@ private:
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			raw.source.push_back(p1.Add(calc.Out(calc.Col(source_types[i], source_bindings[i]))));
 		}
-		raw.clauses = DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, nullptr, checks);
+		raw.clauses =
+		    DirectLayoutBoundClauses(optimizer, calc, p1, condition.clauses, source_bindings, nullptr, checks);
 		for (auto &part : condition.parts) {
 			raw.parts.push_back(DirectLayoutQuadraticPart(optimizer, calc, p1, part, condition.decisions.size(),
 			                                              source_bindings, nullptr, checks));

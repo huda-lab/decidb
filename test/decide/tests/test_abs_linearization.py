@@ -31,10 +31,7 @@ from ._scope_cases import answer, dump_counts, error_of
 def _compute_abs_objective(decidb_rows, decidb_cols, var_name, ref_col):
     """Compute SUM(ABS(var - ref_col)) from DeciDB output."""
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    return sum(
-        abs(float(row[ci[var_name]]) - float(row[ci[ref_col]]))
-        for row in decidb_rows
-    )
+    return sum(abs(float(row[ci[var_name]]) - float(row[ci[ref_col]])) for row in decidb_rows)
 
 
 @pytest.mark.var_real
@@ -55,12 +52,14 @@ def test_abs_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -74,33 +73,49 @@ def test_abs_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 
     # SUM(new_qty) = 100
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, "=", 100.0, name="sum_eq",
+        {vnames[i]: 1.0 for i in range(n)},
+        "=",
+        100.0,
+        name="sum_eq",
     )
     # ABS linearization: d_i >= new_qty_i - qty_i, d_i >= -(new_qty_i - qty_i)
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
     oracle_solver.set_objective(
-        {dnames[i]: 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {dnames[i]: 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "new_qty", "l_quantity")
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_objective_basic", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, 1 + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_objective_basic",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        1 + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -123,13 +138,15 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -142,16 +159,25 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
 
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(n)}, "=", 100.0, name="sum_eq",
+        {vnames[i]: 1.0 for i in range(n)},
+        "=",
+        100.0,
+        name="sum_eq",
     )
     # ABS linearization for ALL rows (constraints are unconditional)
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
     # Objective only on rows where l_returnflag = 'R'
     obj = {dnames[i]: 1.0 for i in range(n) if data[i][3] == 'R'}
@@ -169,14 +195,20 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         for row in decidb_result
         if row[ci["l_returnflag"]] == 'R'
     )
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_objective_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, 1 + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_objective_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        1 + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -199,12 +231,14 @@ def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     groups = {}
     for i, row in enumerate(data):
@@ -223,34 +257,49 @@ def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     # per l_orderkey: SUM(new_qty) = 20 per group
     for orderkey, row_indices in groups.items():
         oracle_solver.add_constraint(
-            {vnames[i]: 1.0 for i in row_indices}, "=", 20.0,
+            {vnames[i]: 1.0 for i in row_indices},
+            "=",
+            20.0,
             name=f"per_{orderkey}",
         )
     # ABS linearization
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
     oracle_solver.set_objective(
-        {dnames[i]: 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {dnames[i]: 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "new_qty", "l_quantity")
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_objective_per", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, len(groups) + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_objective_per",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        len(groups) + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -273,13 +322,15 @@ def test_abs_constraint_per_row(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -295,17 +346,27 @@ def test_abs_constraint_per_row(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         qty = data[i][2]
         # ABS linearization: d_i >= new_qty_i - qty, d_i >= qty - new_qty_i
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
         # d_i <= 5
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0}, "<=", 5.0, name=f"abs_bound_{i}",
+            {dnames[i]: 1.0},
+            "<=",
+            5.0,
+            name=f"abs_bound_{i}",
         )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -318,18 +379,21 @@ def test_abs_constraint_per_row(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         assert deviation <= 5.0 + 1e-6, f"ABS constraint violated: deviation={deviation}"
 
     # Compare objectives
-    decidb_obj = sum(
-        float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    decidb_obj = sum(float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-2
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_constraint_perrow", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, n * 3,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_constraint_perrow",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        n * 3,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -352,13 +416,15 @@ def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_t
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -374,17 +440,27 @@ def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_t
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
     # SUM(d_i) <= 50
     oracle_solver.add_constraint(
-        {dnames[i]: 1.0 for i in range(n)}, "<=", 50.0, name="total_abs",
+        {dnames[i]: 1.0 for i in range(n)},
+        "<=",
+        50.0,
+        name="total_abs",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -392,24 +468,24 @@ def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_t
     assert result.status == SolverStatus.OPTIMAL
     ci = {name: i for i, name in enumerate(decidb_cols)}
     # Verify aggregate ABS constraint
-    total_dev = sum(
-        abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
-        for row in decidb_result
-    )
+    total_dev = sum(abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]])) for row in decidb_result)
     assert total_dev <= 50.0 + 1e-4, f"Aggregate ABS constraint violated: {total_dev}"
 
-    decidb_obj = sum(
-        float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    decidb_obj = sum(float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-2
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_constraint_agg", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, 1 + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_constraint_agg",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        1 + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -442,14 +518,16 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
                CAST(l_extendedprice AS DOUBLE),
                l_returnflag
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -465,10 +543,16 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
     for i in range(n):
         qty = data[i][2]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
 
     # Aggregate upper bound only over WHEN-matching (R) rows
@@ -477,7 +561,8 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
         oracle_solver.add_constraint(r_rows, "<=", 30.0, name="when_abs_sum")
 
     oracle_solver.set_objective(
-        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -491,22 +576,23 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
         for row in decidb_result
         if row[ci["l_returnflag"]] == 'R'
     )
-    assert r_total_dev <= 30.0 + 1e-4, (
-        f"WHEN-filtered ABS sum exceeded 30: {r_total_dev}"
-    )
+    assert r_total_dev <= 30.0 + 1e-4, f"WHEN-filtered ABS sum exceeded 30: {r_total_dev}"
 
-    decidb_obj = sum(
-        float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
-        for row in decidb_result
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    decidb_obj = sum(float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_result)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-2
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_constraint_agg_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, 1 + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_constraint_agg_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        1 + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -530,13 +616,15 @@ def test_abs_multiple_terms(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -555,26 +643,44 @@ def test_abs_multiple_terms(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
 
     oracle_solver.add_constraint(
-        {xnames[i]: 1.0 for i in range(n)}, "=", 50.0, name="sum_x",
+        {xnames[i]: 1.0 for i in range(n)},
+        "=",
+        50.0,
+        name="sum_x",
     )
     oracle_solver.add_constraint(
-        {ynames[i]: 1.0 for i in range(n)}, "=", 10000.0, name="sum_y",
+        {ynames[i]: 1.0 for i in range(n)},
+        "=",
+        10000.0,
+        name="sum_y",
     )
     for i in range(n):
         qty, price = data[i][2], data[i][3]
         # dx_i >= x_i - qty, dx_i >= qty - x_i
         oracle_solver.add_constraint(
-            {dx_names[i]: 1.0, xnames[i]: -1.0}, ">=", -qty, name=f"absx_pos_{i}",
+            {dx_names[i]: 1.0, xnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"absx_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dx_names[i]: 1.0, xnames[i]: 1.0}, ">=", qty, name=f"absx_neg_{i}",
+            {dx_names[i]: 1.0, xnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"absx_neg_{i}",
         )
         # dy_i >= y_i - price, dy_i >= price - y_i
         oracle_solver.add_constraint(
-            {dy_names[i]: 1.0, ynames[i]: -1.0}, ">=", -price, name=f"absy_pos_{i}",
+            {dy_names[i]: 1.0, ynames[i]: -1.0},
+            ">=",
+            -price,
+            name=f"absy_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dy_names[i]: 1.0, ynames[i]: 1.0}, ">=", price, name=f"absy_neg_{i}",
+            {dy_names[i]: 1.0, ynames[i]: 1.0},
+            ">=",
+            price,
+            name=f"absy_neg_{i}",
         )
     obj = {}
     for i in range(n):
@@ -591,14 +697,20 @@ def test_abs_multiple_terms(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         + abs(float(row[ci["y"]]) - float(row[ci["l_extendedprice"]]))
         for row in decidb_result
     )
-    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-2
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_multiple", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 4, 2 + n * 4,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_multiple",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 4,
+        2 + n * 4,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -613,11 +725,13 @@ def test_abs_no_decide_var(decidb_cli, duckdb_conn):
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    expected = duckdb_conn.execute("""
+    expected = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                ABS(l_quantity - 25) AS deviation
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
 
     assert len(decidb_result) == len(expected)
     for pr, er in zip(
@@ -647,13 +761,15 @@ def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 5
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     t_build = time.perf_counter()
@@ -669,42 +785,58 @@ def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
 
     oracle_solver.add_constraint(
-        {snames[i]: 1.0 for i in range(n)}, ">=", 5.0, name="min_selected",
+        {snames[i]: 1.0 for i in range(n)},
+        ">=",
+        5.0,
+        name="min_selected",
     )
     oracle_solver.add_constraint(
-        {wnames[i]: 1.0 for i in range(n)}, "=", 100.0, name="sum_w",
+        {wnames[i]: 1.0 for i in range(n)},
+        "=",
+        100.0,
+        name="sum_w",
     )
     for i in range(n):
         qty = data[i][3]
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, wnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, wnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, wnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, wnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
     oracle_solver.set_objective(
-        {dnames[i]: 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {dnames[i]: 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    decidb_obj = sum(
-        abs(float(row[ci["w"]]) - float(row[ci["l_quantity"]]))
-        for row in decidb_result
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    decidb_obj = sum(abs(float(row[ci["w"]]) - float(row[ci["l_quantity"]])) for row in decidb_result)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-4
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     # Check boolean constraint
     s_sum = sum(1 for row in decidb_result if float(row[ci["s"]]) >= 0.5)
     assert s_sum >= 5, f"Boolean constraint violated: SUM(s) = {s_sum}"
 
     perf_tracker.record(
-        "abs_mixed", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, 2 + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_mixed",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        2 + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -713,9 +845,7 @@ def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_abs_fractional_target_oracle(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
+def test_real_abs_fractional_target_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """``SUM(ABS(x - 2.5)) <= K`` with(REAL) and a non-integer target constant.
 
     Regression test for the integer-step rewrite sweep. ABS linearization uses
@@ -737,12 +867,14 @@ def test_real_abs_fractional_target_oracle(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE)
         FROM lineitem WHERE l_orderkey < 20
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
 
     t_build = time.perf_counter()
@@ -756,16 +888,26 @@ def test_real_abs_fractional_target_oracle(
     # d_i >= x_i - 2.5 ; d_i >= -(x_i - 2.5)
     for i in range(n):
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -2.5, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, vnames[i]: -1.0},
+            ">=",
+            -2.5,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", 2.5, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, vnames[i]: 1.0},
+            ">=",
+            2.5,
+            name=f"abs_neg_{i}",
         )
     oracle_solver.add_constraint(
-        {dnames[i]: 1.0 for i in range(n)}, "<=", 10.0, name="abs_cap",
+        {dnames[i]: 1.0 for i in range(n)},
+        "<=",
+        10.0,
+        name="abs_cap",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+        {vnames[i]: data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -775,17 +917,21 @@ def test_real_abs_fractional_target_oracle(
     total_dev = sum(abs(float(row[ci["x"]]) - 2.5) for row in decidb_rows)
     assert total_dev <= 10.0 + 1e-4, f"ABS cap violated: {total_dev}"
 
-    decidb_obj = sum(
-        float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_rows
-    )
-    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    decidb_obj = sum(float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_rows)
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-2
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "real_abs_fractional_target", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 2, 1 + n * 2,
-        result.objective_value, oracle_solver.solver_name(),
+        "real_abs_fractional_target",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 2,
+        1 + n * 2,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -814,12 +960,14 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
     decidb_result, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
 
     n = len(data)
     max_qty = max(row[2] for row in data)
@@ -839,7 +987,10 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
 
     # SUM(x) = 100
     oracle_solver.add_constraint(
-        {xnames[i]: 1.0 for i in range(n)}, "=", 100.0, name="sum_eq",
+        {xnames[i]: 1.0 for i in range(n)},
+        "=",
+        100.0,
+        name="sum_eq",
     )
     # ABS Big-M formulation: all four constraints per row
     for i in range(n):
@@ -847,38 +998,55 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
         two_M = 2.0 * M
         # Lower bounds (same as MINIMIZE)
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, xnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, xnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
         # Upper bounds (new for MAXIMIZE): pin d_i = |x_i - qty_i|
         # d_i <= (x_i - qty_i) + 2M*(1-y_i)  =>  d_i - x_i + 2M*y_i <= -qty_i + 2M
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: -1.0, ynames[i]: two_M}, "<=",
-            -qty + two_M, name=f"abs_ub1_{i}",
+            {dnames[i]: 1.0, xnames[i]: -1.0, ynames[i]: two_M},
+            "<=",
+            -qty + two_M,
+            name=f"abs_ub1_{i}",
         )
         # d_i <= -(x_i - qty_i) + 2M*y_i  =>  d_i + x_i - 2M*y_i <= qty_i
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: 1.0, ynames[i]: -two_M}, "<=",
-            qty, name=f"abs_ub2_{i}",
+            {dnames[i]: 1.0, xnames[i]: 1.0, ynames[i]: -two_M},
+            "<=",
+            qty,
+            name=f"abs_ub2_{i}",
         )
     oracle_solver.set_objective(
-        {dnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        {dnames[i]: 1.0 for i in range(n)},
+        ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "x", "l_quantity")
-    assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-3
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_maximize_basic", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, 1 + n * 4,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_maximize_basic",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        1 + n * 4,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -910,9 +1078,7 @@ def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn, oracle_so
 
     qtys = [
         r[0]
-        for r in duckdb_conn.execute(
-            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
-        ).fetchall()
+        for r in duckdb_conn.execute("SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3").fetchall()
     ]
     n = len(qtys)
 
@@ -963,9 +1129,7 @@ def test_abs_constraint_per_row_hard_ge(decidb_cli, duckdb_conn):
     """
     qtys = [
         r[0]
-        for r in duckdb_conn.execute(
-            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
-        ).fetchall()
+        for r in duckdb_conn.execute("SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3").fetchall()
     ]
     k = max(qtys) + 10.0
     ub = 2.0 * max(qtys) + k + 10.0
@@ -981,9 +1145,7 @@ def test_abs_constraint_per_row_hard_ge(decidb_cli, duckdb_conn):
     for row in rows:
         qty = float(row[ci["l_quantity"]])
         x = float(row[ci["x"]])
-        assert abs(x - (qty + k)) <= 1e-4, (
-            f"expected x={qty + k:.4f}, got {x:.4f} (qty={qty})"
-        )
+        assert abs(x - (qty + k)) <= 1e-4, f"expected x={qty + k:.4f}, got {x:.4f} (qty={qty})"
         assert abs(x - qty) >= k - 1e-4, f"hard ABS constraint violated: |{x}-{qty}| < {k}"
 
 
@@ -1003,9 +1165,7 @@ def test_abs_constraint_per_row_hard_eq(decidb_cli, duckdb_conn):
     k = 5.0
     qtys = [
         r[0]
-        for r in duckdb_conn.execute(
-            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
-        ).fetchall()
+        for r in duckdb_conn.execute("SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3").fetchall()
     ]
     ub = max(qtys) + k + 10.0
     sql = f"""
@@ -1021,9 +1181,7 @@ def test_abs_constraint_per_row_hard_eq(decidb_cli, duckdb_conn):
         qty = float(row[ci["l_quantity"]])
         x = float(row[ci["x"]])
         expected = qty - k if qty - k >= 0.0 else qty + k
-        assert abs(x - expected) <= 1e-4, (
-            f"expected x={expected:.4f}, got {x:.4f} (qty={qty})"
-        )
+        assert abs(x - expected) <= 1e-4, f"expected x={expected:.4f}, got {x:.4f} (qty={qty})"
         assert abs(abs(x - qty) - k) <= 1e-4, f"ABS equality violated: ||{x}-{qty}| - {k}|"
 
 
@@ -1041,10 +1199,12 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
     must push some ``x_i`` away from their quantities. Oracle mirrors the pinned
     Big-M model from ``test_abs_maximize_objective_basic``.
     """
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
     qtys = [r[0] for r in data]
     n = len(qtys)
     ub = 500.0
@@ -1079,26 +1239,40 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
         qty = qtys[i]
         # Lower envelope: d_i >= |x_i - qty_i|
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+            {dnames[i]: 1.0, xnames[i]: -1.0},
+            ">=",
+            -qty,
+            name=f"abs_pos_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+            {dnames[i]: 1.0, xnames[i]: 1.0},
+            ">=",
+            qty,
+            name=f"abs_neg_{i}",
         )
         # Upper envelope (sign indicator): pin d_i = |x_i - qty_i|
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: -1.0, ynames[i]: two_m}, "<=",
-            -qty + two_m, name=f"abs_ub1_{i}",
+            {dnames[i]: 1.0, xnames[i]: -1.0, ynames[i]: two_m},
+            "<=",
+            -qty + two_m,
+            name=f"abs_ub1_{i}",
         )
         oracle_solver.add_constraint(
-            {dnames[i]: 1.0, xnames[i]: 1.0, ynames[i]: -two_m}, "<=",
-            qty, name=f"abs_ub2_{i}",
+            {dnames[i]: 1.0, xnames[i]: 1.0, ynames[i]: -two_m},
+            "<=",
+            qty,
+            name=f"abs_ub2_{i}",
         )
     # SUM(d_i) >= K
     oracle_solver.add_constraint(
-        {dnames[i]: 1.0 for i in range(n)}, ">=", k, name="agg_hard",
+        {dnames[i]: 1.0 for i in range(n)},
+        ">=",
+        k,
+        name="agg_hard",
     )
     oracle_solver.set_objective(
-        {xnames[i]: 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {xnames[i]: 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -1106,20 +1280,24 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
     assert result.status == SolverStatus.OPTIMAL
     ci = {name: i for i, name in enumerate(decidb_cols)}
     # DeciDB must respect the aggregate hard bound
-    total_dev = sum(
-        abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]])) for row in decidb_rows
-    )
+    total_dev = sum(abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]])) for row in decidb_rows)
     assert total_dev >= k - 1e-3, f"aggregate ABS lower bound violated: {total_dev} < {k}"
 
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
-    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
-    )
+    assert (
+        abs(decidb_obj - result.objective_value) <= 1e-2
+    ), f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
 
     perf_tracker.record(
-        "abs_constraint_agg_hard_ge", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, 1 + n * 4,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_constraint_agg_hard_ge",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        1 + n * 4,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1136,12 +1314,14 @@ def test_abs_min_geq_per_row_hard(decidb_cli):
     MINIMIZE SUM(x) pins every ``x`` at exactly 8 (``|8 - 5| = 3``). Exercises the
     MIN-strip → per-row Big-M sign-indicator path over ABS auxiliaries.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1),(2),(3)) t(id)
         DECIDE x(REAL)
         SUCH THAT x >= 4 AND x <= 20 AND MIN(ABS(x - 5)) >= 3
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [float(r[ci["x"]]) for r in rows]
     assert xs, "no rows returned"
@@ -1163,12 +1343,14 @@ def test_abs_max_geq_aggregate_hard(decidb_cli):
     row must reach ``x = 8`` (``|.| = 3``); MINIMIZE SUM(x) keeps the other two at
     4, so SUM = 8 + 4 + 4 = 16 and exactly one row satisfies ``|x - 5| >= 3``.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1),(2),(3)) t(id)
         DECIDE x(REAL)
         SUCH THAT x >= 4 AND x <= 20 AND MAX(ABS(x - 5)) >= 3
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [float(r[ci["x"]]) for r in rows]
     assert abs(sum(xs) - 16.0) <= 1e-3, f"expected SUM=16, got {xs}"
@@ -1189,12 +1371,14 @@ def test_abs_between_both_bounds(decidb_cli):
     ``x in [-3, 3] U [7, 13]``; with ``x <= 20`` and non-negativity, MAXIMIZE
     SUM(x) pins every ``x`` at the top of the upper band, ``x = 13``.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1),(2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x <= 20 AND ABS(x - 5) BETWEEN 2 AND 8
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [float(r[ci["x"]]) for r in rows]
     assert xs, "no rows returned"
@@ -1215,12 +1399,14 @@ def test_abs_on_both_sides(decidb_cli):
     midpoint). MAXIMIZE SUM(x) with ``x <= 20`` pins ``x = 6``
     (``|6 - 3| = |6 - 9| = 3``).
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1),(2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x <= 20 AND ABS(x - 3) <= ABS(x - 9)
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     xs = [float(r[ci["x"]]) for r in rows]
     assert xs, "no rows returned"
@@ -1247,12 +1433,14 @@ def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
     entirely by letting the auxiliary float, without moving x at all.
     """
     rows_data = [(-1.0, 3.0), (2.0, 1.0)]  # (w, t) per row
-    decidb_rows, cols = decidb_cli.execute("""
+    decidb_rows, cols = decidb_cli.execute(
+        """
         SELECT id, x FROM (VALUES (1, -1, 3), (2, 2, 1)) t(id, w, tgt)
         DECIDE x(REAL)
         SUCH THAT SUM(w * ABS(x - tgt)) <= -5 AND x <= 10 AND x >= 0
         MINIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {name: i for i, name in enumerate(cols)}
     decidb_obj = sum(float(r[ci["x"]]) for r in decidb_rows)
 
@@ -1267,28 +1455,20 @@ def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
     # d_i = |x_i - t_i| exactly: two lower bounds, plus two indicator-selected
     # upper bounds so the auxiliary cannot drift upward.
     for i, (_, t) in enumerate(rows_data):
+        oracle_solver.add_constraint({f"d_{i}": 1.0, f"x_{i}": -1.0}, ">=", -t, name=f"lo_pos_{i}")
+        oracle_solver.add_constraint({f"d_{i}": 1.0, f"x_{i}": 1.0}, ">=", t, name=f"lo_neg_{i}")
         oracle_solver.add_constraint(
-            {f"d_{i}": 1.0, f"x_{i}": -1.0}, ">=", -t, name=f"lo_pos_{i}")
-        oracle_solver.add_constraint(
-            {f"d_{i}": 1.0, f"x_{i}": 1.0}, ">=", t, name=f"lo_neg_{i}")
-        oracle_solver.add_constraint(
-            {f"d_{i}": 1.0, f"x_{i}": -1.0, f"y_{i}": big_m}, "<=", -t + big_m,
-            name=f"up_pos_{i}")
-        oracle_solver.add_constraint(
-            {f"d_{i}": 1.0, f"x_{i}": 1.0, f"y_{i}": -big_m}, "<=", t,
-            name=f"up_neg_{i}")
+            {f"d_{i}": 1.0, f"x_{i}": -1.0, f"y_{i}": big_m}, "<=", -t + big_m, name=f"up_pos_{i}"
+        )
+        oracle_solver.add_constraint({f"d_{i}": 1.0, f"x_{i}": 1.0, f"y_{i}": -big_m}, "<=", t, name=f"up_neg_{i}")
 
-    oracle_solver.add_constraint(
-        {f"d_{i}": rows_data[i][0] for i in range(n)}, "<=", -5.0,
-        name="weighted_abs")
-    oracle_solver.set_objective(
-        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE)
+    oracle_solver.add_constraint({f"d_{i}": rows_data[i][0] for i in range(n)}, "<=", -5.0, name="weighted_abs")
+    oracle_solver.set_objective({f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE)
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}"
     )
 
 
@@ -1309,17 +1489,27 @@ def _pin_abs_aux(oracle_solver, xname, dname, yname, target, two_m, tag):
     oracle_solver.add_variable(dname, VarType.CONTINUOUS, lb=0.0)
     oracle_solver.add_variable(yname, VarType.BINARY)
     oracle_solver.add_constraint(
-        {dname: 1.0, xname: -1.0}, ">=", -target, name=f"abs_pos_{tag}",
+        {dname: 1.0, xname: -1.0},
+        ">=",
+        -target,
+        name=f"abs_pos_{tag}",
     )
     oracle_solver.add_constraint(
-        {dname: 1.0, xname: 1.0}, ">=", target, name=f"abs_neg_{tag}",
+        {dname: 1.0, xname: 1.0},
+        ">=",
+        target,
+        name=f"abs_neg_{tag}",
     )
     oracle_solver.add_constraint(
-        {dname: 1.0, xname: -1.0, yname: two_m}, "<=", -target + two_m,
+        {dname: 1.0, xname: -1.0, yname: two_m},
+        "<=",
+        -target + two_m,
         name=f"abs_ub1_{tag}",
     )
     oracle_solver.add_constraint(
-        {dname: 1.0, xname: 1.0, yname: -two_m}, "<=", target,
+        {dname: 1.0, xname: 1.0, yname: -two_m},
+        "<=",
+        target,
         name=f"abs_ub2_{tag}",
     )
 
@@ -1329,8 +1519,7 @@ def _pin_abs_aux(oracle_solver, xname, dname, yname, target, two_m, tag):
 @pytest.mark.when_constraint
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
-                                                    oracle_solver, perf_tracker):
+def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`when l_linenumber <= 2: sum(abs(x - l_quantity)) >= K`.
 
     The hard direction needs each `d_i` pinned by the sign-indicator Big-M, and
@@ -1340,16 +1529,17 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
     would add — so an implementation that summed every `d_i` would find the
     constraint already satisfied and leave every `x` at 0.
     """
-    data = duckdb_conn.execute("""
+    data = duckdb_conn.execute(
+        """
         SELECT CAST(l_linenumber AS BIGINT), CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey <= 3
-    """).fetchall()
+    """
+    ).fetchall()
     n = len(data)
     masked = [i for i in range(n) if data[i][0] <= 2]
     ub = 500.0
     k = sum(data[i][1] for i in masked) + 100.0
-    assert k < sum(row[1] for row in data), \
-        "K must sit below the all-rows dispersion, or the mask would not matter"
+    assert k < sum(row[1] for row in data), "K must sit below the all-rows dispersion, or the mask would not matter"
     m = ub + max(row[1] for row in data)
 
     sql = f"""
@@ -1369,13 +1559,16 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
     oracle_solver.create_model("abs_agg_hard_ge_when")
     for i in range(n):
         oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=ub)
-        _pin_abs_aux(oracle_solver, f"x_{i}", f"d_{i}", f"y_{i}",
-                     data[i][1], 2.0 * m, str(i))
+        _pin_abs_aux(oracle_solver, f"x_{i}", f"d_{i}", f"y_{i}", data[i][1], 2.0 * m, str(i))
     oracle_solver.add_constraint(
-        {f"d_{i}": 1.0 for i in masked}, ">=", k, name="agg_hard_masked",
+        {f"d_{i}": 1.0 for i in masked},
+        ">=",
+        k,
+        name="agg_hard_masked",
     )
     oracle_solver.set_objective(
-        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {f"x_{i}": 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -1384,23 +1577,27 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
     ci = {name: i for i, name in enumerate(decidb_cols)}
     masked_dev = sum(
         abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]]))
-        for row in decidb_rows if int(row[ci["l_linenumber"]]) <= 2
+        for row in decidb_rows
+        if int(row[ci["l_linenumber"]]) <= 2
     )
-    assert masked_dev >= k - 1e-3, \
-        f"masked aggregate ABS lower bound violated: {masked_dev} < {k}"
+    assert masked_dev >= k - 1e-3, f"masked aggregate ABS lower bound violated: {masked_dev} < {k}"
 
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
-    assert decidb_obj > 1e-3, \
-        "every x stayed at 0 — the aggregate summed the unmasked auxiliaries too"
+    assert decidb_obj > 1e-3, "every x stayed at 0 — the aggregate summed the unmasked auxiliaries too"
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_agg_hard_ge_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, 1 + n * 4,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_agg_hard_ge_when",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        1 + n * 4,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 
@@ -1410,8 +1607,7 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
-                                                   perf_tracker):
+def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver, perf_tracker):
     """`per grp: sum(abs(x - target)) by (grp) >= 50`.
 
     Each group carries its own hard lower bound over its own pinned auxiliaries.
@@ -1448,20 +1644,21 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
     oracle_solver.create_model("abs_agg_hard_ge_per")
     for i in range(n):
         oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=ub)
-        _pin_abs_aux(oracle_solver, f"x_{i}", f"d_{i}", f"y_{i}",
-                     data[i][2], 2.0 * m, str(i))
+        _pin_abs_aux(oracle_solver, f"x_{i}", f"d_{i}", f"y_{i}", data[i][2], 2.0 * m, str(i))
     for g in ("A", "B"):
         members = [i for i in range(n) if data[i][1] == g]
         # Every group must clear K on its own; pooling them would not.
-        assert sum(data[i][2] for i in members) < k, \
-            f"group {g} must not already clear K at x = 0"
+        assert sum(data[i][2] for i in members) < k, f"group {g} must not already clear K at x = 0"
         oracle_solver.add_constraint(
-            {f"d_{i}": 1.0 for i in members}, ">=", k, name=f"agg_hard_{g}",
+            {f"d_{i}": 1.0 for i in members},
+            ">=",
+            k,
+            name=f"agg_hard_{g}",
         )
-    assert sum(row[2] for row in data) >= k, \
-        "the pooled dispersion must clear K, or the bug would not be visible"
+    assert sum(row[2] for row in data) >= k, "the pooled dispersion must clear K, or the bug would not be visible"
     oracle_solver.set_objective(
-        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+        {f"x_{i}": 1.0 for i in range(n)},
+        ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
@@ -1474,19 +1671,23 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
         dev = abs(float(row[ci["x"]]) - float(row[ci["target"]]))
         per_group[g] = per_group.get(g, 0.0) + dev
     for g, dev in per_group.items():
-        assert dev >= k - 1e-3, \
-            f"group {g}: dispersion {dev} below the per-group bound {k}"
+        assert dev >= k - 1e-3, f"group {g}: dispersion {dev} below the per-group bound {k}"
 
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
-        f"Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, " f"Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_agg_hard_ge_per", decidb_time, build_time,
-        result.solve_time_seconds, n, n * 3, 2 + n * 4,
-        result.objective_value, oracle_solver.solver_name(),
+        "abs_agg_hard_ge_per",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        n,
+        n * 3,
+        2 + n * 4,
+        result.objective_value,
+        oracle_solver.solver_name(),
         comparison_status="optimal",
     )
 

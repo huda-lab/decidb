@@ -48,10 +48,8 @@ def test_repeated_variable_bound_uses_the_combined_coefficient(decidb_cli, tmp_p
     # A distinct dump path per query: DECIDB_DUMP_MODEL appends, so reusing one
     # file would leave the second parse reading both models.
     for i, lhs in enumerate(("2 * ship + 3 * ship", "3 * ship + 2 * ship")):
-        dump = decidb_cli.dump_model(
-            sql.format(lhs=lhs), tmp_path / f"repeated_{i}.dump")
-        assert _column_upper_bounds(dump) == [2.0], \
-            f"`{lhs} <= 10` did not combine its coefficients:\n{dump}"
+        dump = decidb_cli.dump_model(sql.format(lhs=lhs), tmp_path / f"repeated_{i}.dump")
+        assert _column_upper_bounds(dump) == [2.0], f"`{lhs} <= 10` did not combine its coefficients:\n{dump}"
 
 
 @pytest.mark.correctness
@@ -77,7 +75,8 @@ def test_single_term_bounds_are_unchanged(decidb_cli, tmp_path):
             DECIDE ship(INT), hold(INT)
             SUCH THAT 2 * ship + 5 * hold <= 10 MAXIMIZE SUM(ship + hold)
         """,
-        tmp_path / "two_vars.dump")
+        tmp_path / "two_vars.dump",
+    )
     assert _column_upper_bounds(two_vars) == pytest.approx([5.0, 2.0])
 
 

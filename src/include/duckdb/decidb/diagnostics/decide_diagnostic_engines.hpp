@@ -54,10 +54,7 @@ struct InfeasibleDiagnosisInput {
 	std::function<SolverResult(const SolverModel &model)> solve_model;
 };
 
-enum class ElasticRepairTier {
-	DATA_OFFSET,
-	EDITABLE_LOOSEN
-};
+enum class ElasticRepairTier { DATA_OFFSET, EDITABLE_LOOSEN };
 
 //! A slack wired into one or more relaxable rows of the elastic program. A block
 //! may span N matrix rows that share ONE editable user knob (SHARED_SCALAR shapes:
@@ -68,10 +65,10 @@ enum class ElasticRepairTier {
 //! stage-1 repair objective: data offsets use raw slack, editable loosening uses
 //! the T1 scale-normalized weight.
 struct BlockSlackRef {
-	vector<idx_t> rows;                      //!< Row indices this slack spans (≥1).
-	idx_t pos_col;                           //!< Positive slack column in the elastic model.
+	vector<idx_t> rows;                        //!< Row indices this slack spans (≥1).
+	idx_t pos_col;                             //!< Positive slack column in the elastic model.
 	idx_t neg_col = DConstants::INVALID_INDEX; //!< Negative slack column (`=` rows only).
-	char sense;                              //!< '<', '>', or '=' (uniform across the block).
+	char sense;                                //!< '<', '>', or '=' (uniform across the block).
 	ElasticRepairTier tier = ElasticRepairTier::EDITABLE_LOOSEN;
 	double weight = 1.0;
 	//! When true, `rows` index `model.quadratic_constraints` (slack on the linear
