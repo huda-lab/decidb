@@ -75,9 +75,51 @@ solver path answers those queries, so none of them is wrong, only slower.
   key only where it can be false, and join the class answers in a form DuckDB runs as a perfect hash join where the key
   allows one, keeping the class plan the build side. Each piece names the standard technique it follows (constant
   folding after lowering, as a compiler's back end does).
+- **Design (architect review, 2026-11-09).** Measured at `sf=1` in one process: the class join takes 20.8 ms of CPU as
+  built, 15.2 ms as a LEFT join on `=` and 2.1 ms as DuckDB's perfect hash join; the rewriter alone saves about 10% of
+  the row-side projections, since DuckDB's arithmetic rules match integer types only. Commits, in order:
+  1. **Cheap checks.** `DirectRaiseMessage` gates on the BOOLEAN `number IS NULL OR isfinite(number)` and builds the
+     message only in its error arm (today it builds the VARCHAR on every row and tests it for NULL).
+  2. **Type-derived finiteness** (abstract interpretation over magnitudes, seeded by types; `overview.md`'s "Prove,
+     don't guess"): one `DirectMagnitudeBound(expr)` (a constant's |c|; an exact numeric type's largest magnitude; FLOAT
+     and DOUBLE infinite). `DirectIsFiniteWhereKept` asks "Σ bound × scale < DBL_MAX", so `DirectCheckNumber`, S1 and
+     R1 drop checks no value can fail; `DirectRowBoundMessage` drops `isfinite`/`isnan` on exact types. FLOAT/DOUBLE
+     inputs and every too-large check of a product a rule computes stay.
+  3. **Canonicalization after lowering** (MLIR's canonicalize, LLVM's InstCombine), one post-pass in the driver over the
+     rule-built operators, stopping at the source as `StripTagsAbove` does: constant-column propagation (a reference to
+     a projection column holding a constant becomes the constant, except across the NULL-padded side of an outer
+     join), then `optimizer.rewriter` with the rule set `Optimizer` builds, and sums built without a `0.0` seed
+     (`DirectFoldQuadratic`). The IEEE-exact identities `x * 1.0`, `x / 1.0`, `x - 0.0` (not `x + 0.0`, inexact at
+     -0.0; A2's final `+ 0.0` turns -0.0 into +0.0 and stays) go into DuckDB's `ArithmeticSimplificationRule` for
+     floating types.
+  4. **`CaseSimplificationRule` evaluates a constant WHEN with `TryEvaluateScalar`** and leaves the CASE alone when
+     evaluation fails, as `ConstantFoldingRule` does: today it calls the throwing `EvaluateScalar`, so a WHEN whose
+     evaluation throws raises at plan time, even over no rows.
+  5. **Perfect hash join for the probe-outer joins** (SINGLE, LEFT) in DuckDB's `PerfectHashJoinExecutor`, with one
+     all-NULL sentinel slot past the build range that an unmatched or NULL probe key points at. The SINGLE join stays
+     (its build side is structural); duplicate build keys keep falling back, so its more-than-one-row error stays.
+     sqllogictests: gaps, a NULL probe key, a key out of range, duplicate build keys, an empty build.
+  6. **`IS NOT DISTINCT FROM` → `=` in statistics propagation** (`propagate_join.cpp`) when neither side's statistics
+     can hold a NULL.
+  7. **The class key without the flag** (NULL as the absent-group marker, SQL's outer-join semantics): an element whose
+     NULL puts a row in no class is compared with `=`, and is `CASE WHEN eligible THEN key END` where a `when` or an
+     instance condition can drop the row; an element where NULL is a value is compared with `IS NOT DISTINCT FROM`;
+     only a key with no `no_group` element whose eligibility can be false gets one integer marker,
+     `CASE WHEN eligible THEN 0::UTINYINT END`. `DirectProjectScope`/`DirectCarried`, `DirectJoinGroupRow`,
+     `DirectJoinClassAnswers`, A2's `ClassKey`, N1, S1 (class key and window partition), R1, and the bound side
+     tables, which the solver path shares.
+  8. S1's and R1's remaining gap, profiled after 1–7 and closed the same way, then the H-48 sweep.
+- **Ruling (owner, 2026-11-09, delegated).** (1) No exact aggregation of exact-typed values (`sum(CAST(x AS DOUBLE))` →
+  `CAST(sum(x) AS DOUBLE)`): a DECIMAL sum can overflow where the DOUBLE sum does not, a new error the solver path
+  never raises; the bar is DuckDB's hand-written plan doing the same DOUBLE arithmetic. (2) The core edits are taken
+  (perfect hash join for SINGLE/LEFT, NOT DISTINCT FROM → `=`, the float identities in DuckDB's rule, the CASE
+  rule's fix): each is generic and helps every query. (3) The solver path's side tables take the per-element
+  comparison, so one key form exists. (4) The `0.0` seeds go; a message that would print `-0` is a stop. (5) No
+  interval propagation through products: no measured payoff. (6) The CASE rule is fixed at its cause (commit 4).
 - **Done when.** Each query of `benchmark/decide/direct_solve/run.py` runs within 1.3 times DuckDB's hand-written plan
-  for the same answer at `sf=1`, measured in one process (`PRAGMA enable_profiling`), and on all threads no slower than
-  on one at every size; answers, errors and goldens unchanged, and the matrix passes.
+  that computes the same answer with the same DOUBLE arithmetic, at `sf=1`, measured in one process (`PRAGMA
+  enable_profiling`), and on all threads no slower than on one at every size; answers, error texts and the first
+  error to raise unchanged, goldens unchanged, and the matrix passes.
 
 ## TEST-2 — Direct-solve arms no test reaches
 
