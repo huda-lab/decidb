@@ -710,6 +710,61 @@ private:
 
 } // namespace
 
+namespace {
+
+//! A rule that applies to nothing and records how many row checks the bound-side rewrite handed it.
+class RowCheckCountRule final : public DirectSolveRule {
+public:
+	explicit RowCheckCountRule(std::shared_ptr<idx_t> count_p) : count(std::move(count_p)) {
+	}
+	const char *Name() const override {
+		return "STUB_ROW_CHECK_COUNT";
+	}
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	                                                                ClientContext &) const override {
+		*count = ir.row_checks.size();
+		return nullptr;
+	}
+	string Summary() const override {
+		return "stub";
+	}
+	DirectSubstitute Apply(DirectSourceReader &, Optimizer &, const DirectApplicabilityCondition &,
+	                       const DirectStateErrors &) const override {
+		throw InternalException("never applies");
+	}
+
+private:
+	std::shared_ptr<idx_t> count;
+};
+
+} // namespace
+
+// A bound that reads reducers has each reducer's argument checked for NaN on every row, and a check that two reducers
+// share (the same argument in the same clause) is made once.
+TEST_CASE("The bound-side rewrite makes the check of a shared reducer argument once", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto count = std::make_shared<idx_t>(0);
+	InstallRules(con, [&] {
+		RuleList rules;
+		rules.push_back(make_uniq<RowCheckCountRule>(count));
+		return rules;
+	});
+	auto checks = [&](const string &bound) {
+		string query = "SELECT id, x FROM (FROM (VALUES (1,3.0::DOUBLE,2.0::DOUBLE),(2,1.0::DOUBLE,5.0::DOUBLE)) "
+		               "t(id,cap,w) DECIDE x(REAL) SUCH THAT x <= " +
+		               bound + " MAXIMIZE SUM(x)) q";
+		INFO(query);
+		*count = 0;
+		ExplainText(con, query);
+		return *count;
+	};
+	auto two_sums_of_one_column = checks("SUM(cap) + SUM(cap)");
+	auto two_sums_of_two_columns = checks("SUM(cap) + SUM(w)");
+	REQUIRE(two_sums_of_one_column > 0);
+	REQUIRE(two_sums_of_one_column + 1 == two_sums_of_two_columns);
+}
+
 // The bound-side rewrite leaves a bound to the rule as the aggregates of its group: the reducers it is a function of,
 // when each reads exactly the clause's group and the bound reads no data but through them, else the MIN and/or MAX of
 // its raw value. A bound with one value per group already is a column, as is a bound whose sum has a `when` of its own

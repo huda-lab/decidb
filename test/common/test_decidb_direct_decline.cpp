@@ -25,7 +25,7 @@
 // calls the rule under test on it and records whether it applied. The query is planned (EXPLAIN), never run, and
 // the probe declines, so the solver path stays in place.
 //
-// The edit is for the shapes the front end never produces from SQL (a nested reducer, an expression of the wrong
+// The edit is for the shapes the front end never produces from SQL (an expression of the wrong
 // type, a column outside the source) and for grouping keys. Every case names the branch it
 // targets, and reaches an arm of the rule's decision code that no other case of the rule reaches (the per-arm
 // check is `make decide-coverage`). Each rule also has forms that apply, so a decline is about the one thing a
@@ -259,8 +259,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	    S1("a count whose part has a negative sign", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).sign = -1; }));
 	shapes.push_back(S1("an average where a count is", "AVG(x) <= 1"));
 	shapes.push_back(S1("a qualified count", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).qualifier = 0; }));
-	shapes.push_back(
-	    S1("a nested count", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(S1("a sum of two aggregates", "SUM(x) + SUM(x) <= 2"));
 	shapes.push_back(S1("a later bound that is not a plain count", "SUM(x) >= 1 AND 2 * SUM(x) <= 4"));
 	shapes.push_back(S1("a later bound with another aggregate WHEN and clause WHEN", "SUM(x) >= 1 AND SUM(x) <= 2",
@@ -342,8 +340,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
 	shapes.push_back(S1("an objective part WHEN that reads more than the source", "SUM(x) <= 2", nullptr,
 	                    "MAXIMIZE SUM(when txid_current() >= 0: w*x)"));
-	shapes.push_back(S1("a nested objective part", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(
 	    S1("a qualified objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(S1("an objective constant", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x + 1)"));
@@ -413,8 +409,6 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	// CheckCondition: the objective.
 	shapes.push_back(A1("an objective with a by key", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
 	shapes.push_back(A1("an average objective", "x <= cap", nullptr, "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(A1("a nested objective part", "x <= cap",
-	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(
 	    A1("a qualified objective part", "x <= cap", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(A1("an objective term that is an absolute value", "x <= cap", nullptr, "MAXIMIZE SUM(ABS(x))"));
@@ -646,9 +640,10 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a negated budget", "x <= cap AND 0 - SUM(cap*x) >= -5"));
 	shapes.push_back(R1("a budget of two sums", "x <= cap AND SUM(cap*x) + SUM(w*x) <= 5"));
 	shapes.push_back(R1("an average budget", "x <= cap AND AVG(cap*x) <= 5"));
-	shapes.push_back(R1("a nested budget", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { LeftPart(ir, 1).inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(R1("a budget with a constant term", "x <= cap AND SUM(cap*x + 1) <= 5"));
+	// DirectProveSharedScope: the budgets must share their classes.
+	shapes.push_back(R1("one budget whose bounds are per class of two different columns",
+	                    "x <= cap AND per flag: SUM(cap*x) >= 1 AND per name: SUM(cap*x) <= 5"));
 	shapes.push_back(R1("a squared budget", "x <= cap AND SUM(POWER(x, 2)) <= 5"));
 	shapes.push_back(
 	    R1("a budget with a weight fixed only within the query", "x <= cap AND SUM(txid_current()*x) <= 5"));
@@ -690,8 +685,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("an objective part WHEN that reads more than the source", "x <= cap AND SUM(cap*x) <= 5",
 	                    nullptr, "MAXIMIZE SUM(when txid_current() >= 0: w*x)"));
 	shapes.push_back(R1("an average objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(R1("a nested objective part", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(R1("a qualified objective part", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	// A term that multiplies two decisions is not a value per decision (OnlyLinearTerms).
@@ -904,6 +897,11 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a limit of minus 1e20", "SUM(POWER(x, 2)) <= -1e20"));
 	shapes.push_back(N1("an infinite limit", "SUM(POWER(x, 2)) <= 'inf'::DOUBLE"));
 	shapes.push_back(N1("a limit fixed only within the query", "SUM(POWER(x, 2)) <= txid_current()"));
+	// DirectGroupBoundIsReadable: a reducer of the limit reads its argument and its WHEN on the row, from the source.
+	shapes.push_back(
+	    N1("a limit reducer over a value fixed only within the query", "SUM(POWER(x, 2)) <= SUM(txid_current())"));
+	shapes.push_back(N1("a limit reducer with a WHEN fixed only within the query",
+	                    "SUM(POWER(x, 2)) <= SUM(when txid_current() > 0: w)"));
 	shapes.push_back(
 	    N1("a limit left as an aggregate that is not a number", "SUM(POWER(x, 2)) <= 0.5 * SUM(w)",
 	       [](DirectIR &ir) { ir.constraints[0].group_bound->upper->return_type = LogicalType::BOOLEAN; }));
@@ -922,8 +920,6 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	// ProveObjective: the part.
 	shapes.push_back(N1Objective("an average objective", "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(N1Objective("an objective with a by key", "MAXIMIZE SUM(w*x) by (flag)"));
-	shapes.push_back(N1Objective("a nested objective part", N1_OBJECTIVE,
-	                             [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
 	shapes.push_back(N1Objective("a qualified objective part", N1_OBJECTIVE,
 	                             [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(
@@ -1116,6 +1112,16 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	shapes.push_back(A2("a minimum of absolute values", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE MIN(ABS(c - w))"));
 	shapes.push_back(A2("an absolute value fixed only within the query", "c BETWEEN 0 AND 10", nullptr,
 	                    "MINIMIZE SUM(ABS(c - w * txid_current()))"));
+	// The slope is a sum of terms, the first of which is a constant.
+	shapes.push_back(A2("an absolute value with a slope partly fixed only within the query", "c BETWEEN 0 AND 10",
+	                    nullptr, "MINIMIZE SUM(ABS(c + txid_current() * c - w))"));
+	shapes.push_back(A2("an absolute value with a slope partly read from the data", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE SUM(ABS(c + cap * c - w))"));
+	shapes.push_back(A2("a maximum absolute value whose factor and weight together pass a DOUBLE", "c BETWEEN 0 AND 10",
+	                    nullptr, "MINIMIZE 1e200 * MAX(1e200 * ABS(c - w))"));
+	// A divisor is read as the factor it divides by: this one leaves a weight below the normal range.
+	shapes.push_back(A2("an absolute value divided into the subnormal range", "c BETWEEN 0 AND 10", nullptr,
+	                    "MINIMIZE SUM(ABS(c - w)) / 1e308"));
 	shapes.push_back(A2(
 	    "an absolute value of slope zero", "c BETWEEN 0 AND 10",
 	    [](DirectIR &ir) {
@@ -1136,9 +1142,6 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	shapes.push_back(A2(
 	    "a qualified absolute value", "c BETWEEN 0 AND 10", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; },
 	    "MINIMIZE SUM(ABS(c - w))"));
-	shapes.push_back(A2(
-	    "a nested maximum absolute value", "c BETWEEN 0 AND 10",
-	    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }, "MINIMIZE MAX(ABS(c - w))"));
 	shapes.push_back(A2(
 	    "a qualified maximum absolute value", "c BETWEEN 0 AND 10",
 	    [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }, "MINIMIZE MAX(ABS(c - w))"));

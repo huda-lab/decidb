@@ -192,7 +192,8 @@ static bool SquareIsConvex(ClientContext &context, const DirectIR &ir, const Dir
 }
 
 //! K is one constant on every row with a linear term. A `when`, or a NULL a guard skips, leaves a row with no square,
-//! so a square on some rows must share its part with every linear term.
+//! so a square on some rows must share its part with every linear term. Every part reads the decision (the binder
+//! refuses one that does not), so a part beside it has a linear term, or is the square's part.
 //!
 //! The NULL guard of a nullable `t` in `(w*x + t)^2` wraps every coefficient of the term (GuardCoefficients), `w` among
 //! them, so a guarded `w` is how the square's absence on a row shows here. This reads that reach: a guard that spared
@@ -205,10 +206,8 @@ static bool SquareCoversEveryLinearTerm(const vector<DirectQuadraticPart> &parts
 				on_some_rows = on_some_rows || DecideIsGuarded(*inner.expr);
 			}
 		}
-		for (auto &other : parts) {
-			if (on_some_rows && &other != &square && !other.linear.terms.empty()) {
-				return false;
-			}
+		if (on_some_rows && parts.size() > 1) {
+			return false;
 		}
 	}
 	return true;

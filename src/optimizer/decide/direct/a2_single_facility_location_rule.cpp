@@ -49,16 +49,15 @@ public:
 	    : aggregate(aggregate_p), optimizer(optimizer_p), calc(calc_p) {
 	}
 
-	//! The aggregate `function` of a column over the class, on the rows where `reads` holds (null: every row).
-	ColumnBinding Add(const char *function, ColumnBinding column, const LogicalType &type,
-	                  const ExprPtr &reads = nullptr) const {
-		return aggregate.Add(DirectHashAggregate(optimizer, calc, function, calc.Col(type, column), reads));
+	//! The aggregate `function` of a column over the class.
+	ColumnBinding Add(const char *function, ColumnBinding column, const LogicalType &type) const {
+		return aggregate.Add(DirectHashAggregate(optimizer, calc, function, calc.Col(type, column)));
 	}
 
 	//! The discrete median of a DOUBLE `value` over the class: the `ceil(n/2)`-th least of its `n` non-NULL values,
 	//! NULL when there is none (`quantile_disc` at one half).
 	ColumnBinding AddLowerMedian(const ExprPtr &value) const {
-		return aggregate.Add(DirectHashAggregate(optimizer, calc, "quantile_disc", value, nullptr, calc.Num(0.5)));
+		return aggregate.Add(DirectHashAggregate(optimizer, calc, "quantile_disc", value, calc.Num(0.5)));
 	}
 
 private:
@@ -548,8 +547,8 @@ static unique_ptr<Loss> ProveAbsolute(const DirectIR &ir, ClientContext &context
 static unique_ptr<Loss> ProveMaxAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir) {
 	DirectQuadraticPart part;
 	double weight, slope;
-	// The reducer is a MAX (ProveObjective): a plain one is not nested, qualified by a keyed scope or grouped by a key.
-	bool plain = !part_ir.inner && part_ir.qualifier == DConstants::INVALID_INDEX && part_ir.by.empty();
+	// The reducer is a MAX (ProveObjective): a plain one is not qualified by a keyed scope or grouped by a key.
+	bool plain = part_ir.qualifier == DConstants::INVALID_INDEX && part_ir.by.empty();
 	if (!plain || ir.objective.sense != DecideSense::MINIMIZE ||
 	    !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
 		return nullptr;

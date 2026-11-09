@@ -150,6 +150,8 @@ OBJECTIVES = {
     "sq_computed": Objective("MINIMIZE SUM(POWER(c - (v + 1), 2))", False, _term(1.0, 1.0, lambda v: -(v + 1.0))),
     "sq_offset": Objective("MINIMIZE SUM(POWER(c - v, 2)) + 5", False, _term(1.0, 1.0, _minus)),
     "sq_scaled": Objective("MINIMIZE 3*SUM(POWER(c - v, 2))/2", False, _term(1.5, 1.0, _minus)),
+    # A factor that divides the part (`/ 2`) is read apart from one that multiplies it.
+    "sq_divided": Objective("MINIMIZE SUM(POWER(c - v, 2)) / 2", False, _term(0.5, 1.0, _minus)),
     "sq_inside": Objective("MINIMIZE SUM(2*POWER(c - v, 2))", False, _term(2.0, 1.0, _minus)),
     "sq_slope": Objective("MINIMIZE SUM(POWER(2*c - v, 2))", False, _term(1.0, 2.0, _minus)),
     "sq_slope_negative": Objective("MINIMIZE SUM(POWER(v - 2*c, 2))", False, _term(1.0, -2.0, _plain)),

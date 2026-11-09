@@ -87,9 +87,8 @@ void DirectReplaceColumns(unique_ptr<Expression> &expr, const vector<ColumnBindi
 	D_ASSERT(columns.size() == values.size());
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto found = std::find(columns.begin(), columns.end(), expr->Cast<BoundColumnRefExpression>().binding);
-		if (found != columns.end()) {
-			expr = values[NumericCast<idx_t>(found - columns.begin())]->Copy();
-		}
+		D_ASSERT(found != columns.end());
+		expr = values[NumericCast<idx_t>(found - columns.begin())]->Copy();
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(

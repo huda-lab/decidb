@@ -38,7 +38,8 @@ void DirectStripTags(Expression &expr);
 bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &source_bindings,
                                  idx_t projection_index);
 
-//! Replaces every reference to `columns[i]` in `expr` by a copy of `values[i]`.
+//! Replaces every reference to `columns[i]` in `expr` by a copy of `values[i]`. Every column `expr` references is one
+//! of `columns`.
 void DirectReplaceColumns(unique_ptr<Expression> &expr, const vector<ColumnBinding> &columns,
                           const vector<unique_ptr<Expression>> &values);
 

@@ -34,7 +34,7 @@ bool DirectContradictsDomain(const DirectIR &ir) {
 	// and never the bounds its lowering adds (AddLowered).
 	vector<DecideWrittenBox> written(ir.decisions.size());
 	for (auto &ir_node : ir.constraints) {
-		if (ir_node.variable_bound && ir_node.singleton_row) {
+		if (ir_node.variable_bound) {
 			written[ir_node.bound.var_idx].Add(ir_node.bound.sense, ir_node.bound.written_k);
 		} else if (ir_node.scope.when && ir_node.singleton_row && ir_node.bound.LiftsDefaultFloor()) {
 			// A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
@@ -184,6 +184,7 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 
 bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled, double scale,
                              bool divides) {
+	D_ASSERT(!values.empty()); // every caller checks a number it computed from at least one value
 	ExpressionBuilder calc(optimizer.context);
 	ExprPtr total;
 	for (auto &value : values) {
@@ -192,7 +193,7 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 		total = total ? calc.Add(total, term) : term;
 	}
 	double constant;
-	return total && TryEvaluateFoldableDouble(optimizer.context, *calc.Out(total), constant, DIRECT_CONSTANT) &&
+	return TryEvaluateFoldableDouble(optimizer.context, *calc.Out(total), constant, DIRECT_CONSTANT) &&
 	       std::isfinite(constant);
 }
 
@@ -302,7 +303,8 @@ bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const
 }
 
 bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out) {
-	return term.IsAbs() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
+	D_ASSERT(term.IsAbs()); // the caller has found the ABS
+	return DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
 	       DirectReadLinearForm(ir, term.inner, clause, out.inner);
 }
 

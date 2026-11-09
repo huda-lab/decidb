@@ -2312,8 +2312,10 @@ def test_r1_plan_materializes_a_source_that_is_not_a_table_scan(decidb_cli):
 # Sources the plan reads four times
 # ---------------------------------------------------------------------------
 
-# A source is re-read when it is a chain of projections and filters over one table scan, and materialized otherwise.
-# `FROM r1_wide` stores 2000 rows; each source below keeps some of them in a different way.
+# R1 reads its source four times, so a source that fits the memory is materialized once and read from the copy
+# (DirectSourceCopyIsCheaper); re-scanning a chain of projections and filters is A1's two-read plan
+# (test_direct_a1_separable_box.py). `FROM r1_wide` stores 2000 rows; each source below keeps some of them in a
+# different way.
 STORED_SOURCES = {
     # A comparison on a column: filter pushdown turns it into a filter of the scan itself, which every read must carry.
     "scan_filter": "SELECT * FROM r1_wide WHERE g > 0",

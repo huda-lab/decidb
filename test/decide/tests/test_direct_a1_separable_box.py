@@ -387,6 +387,19 @@ add(
     [clause("when f: x >= -3", ge, const(-3.0), when=col("f"), replaces=True), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
+# A written lower bound already replaces the default floor, so a negative floor under a `when` beside it lifts nothing.
+add(
+    "real_floor_under_when_beside_a_written_lower_bound",
+    "REAL",
+    [
+        clause("x >= 1", ge, const(1.0), replaces=True),
+        clause("when f: x >= -3", ge, const(-3.0), when=col("f"), replaces=True),
+        clause("x <= 9", le, const(9.0)),
+    ],
+    "lin_min",
+)
+# An upper bound read from the rows: COUNT(*) has no argument to record.
+add("real_upper_is_the_row_count", "REAL", [clause("x <= COUNT(*)", le, const(float(len(ROWS))))], "lin_max")
 add(
     "real_column_negative_lower_intersects",
     "REAL",
@@ -1192,6 +1205,35 @@ def test_a1_streamed_from_a_copy_reads_the_stored_strings_back_by_row_id(decidb_
     assert plan.stdout.count("SEQ_SCAN") == 2, plan.stdout
     answer = f"{setup} SELECT COUNT(*), ROUND(SUM(x), 6), SUM(length(pad)) FROM ({query})"
     assert _run(decidb_cli, answer, "require") == _run(decidb_cli, answer, "off")
+
+
+# A source that is a chain of projections and filters over one stored table is read twice by re-scanning the chain: A1
+# reads the source twice, below the three reads at which a copy of the source pays (DirectSourceCopyIsCheaper).
+A1_CHAIN_SETUP = (
+    "CREATE OR REPLACE TEMP TABLE a1_chain AS SELECT i AS id, ((i * 7) % 5 + 1)::DOUBLE AS w, "
+    "((i * 3) % 7 + 1)::DOUBLE AS v, (i % 4)::DOUBLE AS cap, i % 3 AS g FROM range(60) r(i);"
+)
+A1_CHAIN_SOURCES = {
+    # A filter operator above the scan, which the copy must keep (a filter of the scan itself needs no operator).
+    "filter": "SELECT * FROM a1_chain WHERE w * v > g + 3",
+    # A projection that computes the columns the problem reads, over two filters.
+    "projection_over_filter": "SELECT id, w * 2 AS w, v + g AS v, cap, g FROM a1_chain WHERE g > 0 AND w * v > 4",
+}
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(A1_CHAIN_SOURCES))
+def test_a1_a_chain_over_a_stored_table_is_scanned_again_for_each_read(decidb_cli, name):
+    # DirectSourceReader::CopyOfChain rebuilds each operator of the chain over a fresh scan: a filter or a projection
+    # left out would change the rows or their values, and the answers differ from the solver's.
+    query = f"FROM ({A1_CHAIN_SOURCES[name]}) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(v*x)"
+    plan = decidb_cli.execute_raw(
+        f"SET decide_direct_solve='require'; {A1_CHAIN_SETUP} EXPLAIN SELECT id, x FROM ({query})"
+    ).stdout
+    assert "A1_SEPARABLE_BOX" in plan and plan.count("SEQ_SCAN") == 2 and "direct_source" not in plan, plan
+    answer = f"{A1_CHAIN_SETUP} SELECT id, x FROM ({query}) ORDER BY id"
+    direct = _run(decidb_cli, answer, "require")[0]
+    assert len(direct) > 0 and direct == _run(decidb_cli, answer, "off")[0]
 
 
 @pytest.mark.error

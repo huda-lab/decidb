@@ -846,7 +846,9 @@ private:
 		};
 		vector<ExprPtr> candidates;
 		for (idx_t p = 0; p < part_scores.size(); p++) {
-			if (part_scores[p] && !PartIsFiniteConstant(p)) {
+			// Every part has a term (PartIsFiniteConstant finds it).
+			D_ASSERT(part_scores[p]);
+			if (!PartIsFiniteConstant(p)) {
 				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_names[p], into_score));
 			}
 		}

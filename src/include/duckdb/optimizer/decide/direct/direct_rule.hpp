@@ -119,15 +119,13 @@ struct DirectPart {
 	unique_ptr<Expression> filter;
 	//! Keyed scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
-	//! The body's terms. Empty when `inner` holds a nested reducer (the two-level objective
-	//! `outer(per k: inner(e) by (k))`, which the front end declines today).
+	//! The body's terms.
 	vector<DecideSplitTerm> terms;
-	unique_ptr<DirectPart> inner;
 
-	//! Whether the part is a plain `SUM(...)`: the SUM reducer, not nested, not qualified by a keyed scope, with no
-	//! `by` key. Its sign, factor and filter are the rule's to read.
+	//! Whether the part is a plain `SUM(...)`: the SUM reducer, not qualified by a keyed scope, with no `by` key. Its
+	//! sign, factor and filter are the rule's to read.
 	bool IsPlainSum() const {
-		return reducer == DirectReducer::SUM && !inner && qualifier == DConstants::INVALID_INDEX && by.empty();
+		return reducer == DirectReducer::SUM && qualifier == DConstants::INVALID_INDEX && by.empty();
 	}
 };
 

@@ -216,7 +216,7 @@ bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const
 
 //! Reads an absolute value of a part, `ABS(inner)` under a coefficient, into the same form a square is read into.
 //! DirectReadQuadraticPart does not call it, so a rule that does not take an absolute loss declines one without a check
-//! of its own. False when the term is not an `ABS`, or its form or coefficient cannot be read.
+//! of its own. `term` is an `ABS`. False when its form or coefficient cannot be read.
 bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out);
 
 //! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient

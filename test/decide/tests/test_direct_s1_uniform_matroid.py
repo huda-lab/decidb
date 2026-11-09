@@ -203,6 +203,8 @@ BOUND_EXPRS = {
     "2 * COUNT(*) / 3 + 1": lambda r, n: Fraction(2 * n, 3) + 1,
     "-COUNT(*) + 6": lambda r, n: -n + 6,
     "COUNT(*) / 4 * 3": lambda r, n: Fraction(n, 4) * 3,
+    # A function of the group key alone: one value in each group, so the bound stays an expression of the row.
+    "LENGTH(g) + 1": lambda r, n: len(r["g"]) + 1,
 }
 
 
@@ -1369,6 +1371,9 @@ S1_REDUCER_CASES.update(
             "when": "local",
         },
         "reducer_with_source_bound": {"bounds": [("<=", "MIN(cap)"), ("<=", "cap")], "per": True},
+        # A bound of the key alone is one value per group already, so it is read from the row beside the bound that is
+        # a reducer of the group.
+        "reducer_beside_a_bound_of_the_key": {"bounds": [(">=", "COUNT(*) - 1"), ("<=", "LENGTH(g) + 1")], "per": True},
         "reducer_with_count_star": {"bounds": [("<=", "MAX(cap)"), ("<=", "COUNT(*) - 1")], "per": True},
         "reducer_with_coalesce_bound": {
             "bounds": [(">=", "COALESCE(nlo, 1.0)"), ("<=", "MAX(cap)")],
@@ -1913,6 +1918,39 @@ def test_s1_a_clause_per_class_has_no_instance_without_a_class(decidb_cli, rows)
     direct = _outcome(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _outcome(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_s1_a_relation_in_a_class_key_keeps_a_row_whose_column_is_null(decidb_cli):
+    # Every row has a NULL `cap`, and a NULL in a column a relation stands for is a value (D5): each row is in a class,
+    # so the clause has an instance and bounds the total. Only a NULL in a column the user wrote (`g`) leaves a row in
+    # no class.
+    rows = "(1, 'a', 9.0, NULL::INTEGER), (2, 'a', 8.0, NULL::INTEGER), (3, 'b', 7.0, NULL::INTEGER)"
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT per g, t: SUM(x) <= 1 MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct == _outcome(decidb_cli, sql, "off")
+    assert direct[0] == "ok" and sum(row[1] for row in direct[1]) == 1, direct
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_s1_a_prepared_parameter_bound_answers_as_the_solver_does(decidb_cli):
+    # A parameter is no constant before it is bound and holds no reducer of the group, so it is not a bound of the
+    # group's own reducers (IsGroupBound): the bound-side rewrite leaves it to the solver.
+    prepared = (
+        f"PREPARE s1_parameter AS SELECT id, x FROM (FROM (VALUES {_PER_CLASS_ROWS}) t(id, g, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= $1 MAXIMIZE SUM(score*x)) q ORDER BY id; EXECUTE s1_parameter(2);"
+    )
+    answer = _outcome(decidb_cli, prepared, "auto")
+    assert answer[0] == "ok" and sum(row[1] for row in answer[1]) == 2
+    assert answer == _outcome(decidb_cli, prepared, "off")
+    assert _outcome(decidb_cli, prepared, "require") == ("error", "direct_not_applied")
 
 
 @pytest.mark.var_boolean

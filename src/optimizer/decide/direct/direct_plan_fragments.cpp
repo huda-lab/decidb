@@ -391,10 +391,11 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 static unique_ptr<BoundWindowExpression>
 DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument, unique_ptr<Expression> reads) {
 	auto &aggregate = function.Cast<BoundAggregateExpression>();
+	// The reducers of a DECIDE clause (SUM, AVG, MIN, MAX, COUNT) bind no data.
+	D_ASSERT(!aggregate.bind_info);
 	// Hand-built, as in DirectWindowExtremum.
 	auto result = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
-	                                               make_uniq<AggregateFunction>(aggregate.function),
-	                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
+	                                               make_uniq<AggregateFunction>(aggregate.function), nullptr);
 	if (argument) {
 		result->children.push_back(std::move(argument));
 	}
@@ -433,7 +434,7 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 }
 
 unique_ptr<Expression> DirectHashAggregate(Optimizer &optimizer, const ExpressionBuilder &calc, const char *name,
-                                           const ExprPtr &argument, const ExprPtr &reads, const ExprPtr &parameter) {
+                                           const ExprPtr &argument, const ExprPtr &parameter) {
 	vector<unique_ptr<Expression>> children;
 	if (argument) {
 		children.push_back(calc.Out(argument));
@@ -441,11 +442,7 @@ unique_ptr<Expression> DirectHashAggregate(Optimizer &optimizer, const Expressio
 	if (parameter) {
 		children.push_back(calc.Out(parameter));
 	}
-	auto bound = optimizer.BindAggregateFunction(name, std::move(children));
-	if (reads) {
-		bound->Cast<BoundAggregateExpression>().filter = calc.Out(reads);
-	}
-	return bound;
+	return optimizer.BindAggregateFunction(name, std::move(children));
 }
 
 unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const ExpressionBuilder &calc,
@@ -484,17 +481,15 @@ bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConst
 		}
 		scope.when = std::move(first_when);
 	}
-	auto copy_key = [&](const vector<DirectKeyElement> &from, vector<DirectKeyElement> &to) {
-		for (auto &key : from) {
-			if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
-				return false;
-			}
-			to.push_back(key.Copy());
+	// A `by` key holds expressions, which can be volatile. A `per` key holds columns and relations only.
+	for (auto &key : first.PlainSum()->by) {
+		if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
+			return false;
 		}
-		return true;
-	};
-	if (!copy_key(first.PlainSum()->by, scope.keys) || !copy_key(first.classes, scope.classes)) {
-		return false;
+		scope.keys.push_back(key.Copy());
+	}
+	for (auto &key : first.classes) {
+		scope.classes.push_back(key.Copy());
 	}
 	for (auto &key : scope.classes) {
 		scope.gated = scope.gated || key.no_group;

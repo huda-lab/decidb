@@ -101,7 +101,6 @@ private:
 		if (part.reducer == DirectReducer::MIN || part.reducer == DirectReducer::MAX) {
 			return;
 		}
-		// A nested reducer (`inner`) is a two-level objective, which the IR declines; it is not read.
 		sign *= part.sign * ScaleSignAtPlanTime(context, part.scale.get(), part.scale_divides);
 		for (auto &term : part.terms) {
 			if (term.IsSquare() || term.IsProduct()) {
@@ -304,9 +303,7 @@ private:
 			term.coefficient = guard(*calc.Num(1));
 		}
 		for (auto &inner : term.inner) {
-			if (inner.coefficient) {
-				inner.coefficient = guard(*inner.coefficient);
-			}
+			inner.coefficient = guard(*inner.coefficient);
 		}
 	}
 
@@ -356,15 +353,6 @@ private:
 			part.filter = aggregate.filter->Copy();
 		}
 		TryParseQualifiedReducerTag(aggregate.GetAlias(), part.qualifier);
-		auto body = UnwrapDecideCasts(*aggregate.children[0], decide.decide_index);
-		if (body->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			part.inner = make_uniq<DirectPart>();
-			ReadReducer(body->Cast<BoundAggregateExpression>(), *part.inner);
-			if (part.inner->status == DirectAnalysisStatus::NOT_PROVED) {
-				MarkNotProved(part.status);
-			}
-			return;
-		}
 		splitter.Split(*aggregate.children[0], 1, part.terms);
 		// A SUM skips a row whose data is NULL by reading its terms as 0 there, which every rule reads as it reads any
 		// coefficient; the written `when` stays the reducer's.
@@ -580,7 +568,7 @@ const DirectPart *DirectIRConstraint::PlainSum() const {
 	}
 	auto &part = lhs[0];
 	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
-	    part.qualifier != DConstants::INVALID_INDEX || part.inner) {
+	    part.qualifier != DConstants::INVALID_INDEX) {
 		return nullptr;
 	}
 	return &part;

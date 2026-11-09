@@ -196,6 +196,8 @@ BALLS = {
     # A limit that is an aggregate of the group's rows, or of all rows, which the plan computes beside the ball's group.
     "sum_by": Ball("SUM(POWER(x, 2)) by (k) <= SUM(l) by (k)", group=by_k, limit=sum_of_group),
     "half_sum": Ball("SUM(POWER(x, 2)) <= 0.5 * SUM(l)", limit=half_of_all),
+    # COUNT(*) is a limit input with no argument.
+    "count_all": Ball("SUM(POWER(x, 2)) <= COUNT(*)", limit=lambda members, rows: float(len(rows))),
     # An aggregate over a sum with its own `when` is computed before the rule and read as a column.
     "aggregate_sum_when": Ball(
         "SUM(when f: POWER(x, 2)) <= 0.25 * SUM(l)",
@@ -381,6 +383,8 @@ add("aggregate_limit_of_a_group_of_nulls_is_no_limit", NULL_LIMITS, "sum_by", "s
 add("aggregate_limit_negative_in_one_group", NEGATIVE_IN_ONE_GROUP, "sum_by", "max")
 add("aggregate_limit_null_key_square", NULL_KEY_IMPROVING, "sum_by", "square")
 add("aggregate_limit_of_all_rows", MIXED, "half_sum", "max")
+# A limit input with no argument (COUNT(*)): the plan lays out no argument column, in P1 and in P2.
+add("aggregate_limit_count_star_has_no_argument", MIXED, "count_all", "max")
 
 
 def _sql_body(case_):

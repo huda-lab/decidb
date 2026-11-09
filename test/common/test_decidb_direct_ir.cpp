@@ -454,6 +454,10 @@ TEST_CASE("Direct-solve IR models products and squares, and declines a two-level
 	REQUIRE(constraints[0].lhs[0].terms[0].IsProduct());
 	REQUIRE(constraints[1].lhs[0].terms[0].IsSquare());
 
+	// A product inside an absolute value is not algebra any rule reads.
+	QueryIR product_in_abs(con, IRQuery("x(INT), y(INT)", "x <= 3", "MINIMIZE SUM(ABS(x*y - 1))"));
+	REQUIRE(product_in_abs.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
+
 	// No rule models `outer(per k: inner(e) by (k))` yet.
 	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
 	REQUIRE(nested.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
