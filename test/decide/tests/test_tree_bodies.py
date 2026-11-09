@@ -276,6 +276,17 @@ PROGRAMS = {
         decide(NULL_ROWS, "x(REAL)", "x <= 9 AND sum(t.c * x) <= 5"),
         r"program \d+ TEST expr=\(#0 IS NOT NULL\) written=\(c IS NOT NULL\) stage=0 group=0 position=0 owner=-1",
     ),
+    # A member test ranks in its reducer's filter, by the first term its node holds: w's linear term (0), not its
+    # squared terms (2 and 3), which follow every linear term (DecideProgramCompiler::AddTests).
+    "a-member-test-ranks-with-its-first-term": (
+        decide(
+            NULL_ROWS,
+            "x(REAL), y(REAL)",
+            "x <= 9 AND y <= 9",
+            "MINIMIZE sum(power(x - t.c, 2) + t.w * x) + sum(t.c * y)",
+        ),
+        r"program \d+ TEST expr=\(#1 IS NOT NULL\) written=\(w IS NOT NULL\) stage=0 group=0 position=1 ",
+    ),
     # A member test that reads a child result has no program yet.
     "a-member-test-reads-a-child": (
         decide(ROWS, "x(REAL)", "x <= 9 AND sum(t.w * x * max(t.c) by (t.g)) <= 9"),

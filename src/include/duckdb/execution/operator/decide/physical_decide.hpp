@@ -405,7 +405,8 @@ private:
     //! (into `descent`, which the group names read), each node's programs over its entries, and the model emitter,
     //! filling what Evaluate fills. It prints only when not `silent`.
     void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                      unique_ptr<DecideDescent> &descent, vector<KeyedMapping> &keyed_mappings, bool silent) const;
+                      unique_ptr<DecideDescent> &descent, vector<KeyedMapping> &keyed_mappings,
+                      EvaluatedClauses &evaluated, bool silent) const;
     //! The interim tree formulator, which a query with no arm in the model emitter takes until every shape has
     //! one: its descent, per-entry evaluation and formulation, then the solve.
     SinkFinalizeType FinalizeWithTreeFormulator(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -425,6 +426,14 @@ private:
     EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                        ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                        const vector<KeyedMapping> &keyed_mappings) const;
+    //! The tail of the objective's evaluation, so what it hands stage 06 and what verify compares are its columns as
+    //! stage 06 reads them (language/guide.md §5.1): a relation-qualified term reads one row per class of its
+    //! qualifier, the first it reads, as the constraint side does over the objective's one group, folded into its
+    //! filter and its column before AVG reads the rows left.
+    static void ApplyObjectiveQualifiers(DecideGlobalSinkState &gstate, idx_t num_rows,
+                                         const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated);
+    //! Then each AVG term is divided by the rows it reads, or by those of its own group (D81): both evaluators'.
+    static void ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated);
 
     //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
     //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
@@ -448,14 +457,10 @@ private:
 	                       ReducerValueMembers &out) const;
 
 	//! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
-    //! types and the column box, implied-bound propagation, the objective transfer with
-    //! its qualifier de-duplication and AVG scaling, and the flat column space. Runs
-    //! once per query: it moves the evaluated data off `gstate`, and the box it settles
-    //! is the one the formulation pass below is then handed.
-    //! `evaluated` is taken mutably because this is where the objective's per-term
-    //! filter masks are *finalized*: the relation qualifier's de-duplication is folded
-    //! into them before AVG scaling reads the surviving-row counts. The formulation pass
-    //! below does not read those masks, so a second formulation is unaffected.
+    //! types and the column box, implied-bound propagation, the objective transfer, and
+    //! the flat column space. Runs once per query: it moves the evaluated data off
+    //! `gstate`, and the box it settles is the one the formulation pass below is then
+    //! handed.
     SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<KeyedMapping> keyed_mappings,
                                  vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
                                  VarIndexer &out_var_indexer) const;

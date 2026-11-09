@@ -14,6 +14,8 @@ from ._verify_known import allow_setting, stale_markers
 
 ROWS = "(VALUES (1, 'a', 3.0::DOUBLE), (2, 'a', 4.0::DOUBLE), (3, 'b', 5.0::DOUBLE)) t(id, g, c)"
 PLAIN = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c MAXIMIZE sum(x)"
+#: A clause in the aggregate shape, which the tree has no arm for yet.
+NO_ARM = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c AND sum(x) by (t.g) <= 5 MAXIMIZE sum(x)"
 
 #: One query per compared group, each holding a field of it.
 GROUPS = {
@@ -74,11 +76,14 @@ def test_an_injected_quadratic_difference_is_caught(decidb_cli_gurobi, group):
 def _assert_two_runs_agree(cli, sql):
     result = _verify(cli, sql)
     assert "differ" not in result.stderr, result.stderr
-    assert_no_internal_leak(result, "two runs of the flat evaluator")
+    assert_no_internal_leak(result, "the two runs")
 
 
 @pytest.mark.parametrize("sql", list(dict.fromkeys(GROUPS.values())))
-def test_two_runs_of_one_evaluator_agree(decidb_cli, sql):
+def test_the_two_runs_agree(decidb_cli, sql):
+    """Each group's query with nothing injected. The second run is the tree's where it has an arm for every shape:
+    PLAIN, whose objective term has no filter, so the record holds its every row; and the mappings' query. It is
+    flat's again for the others."""
     _assert_two_runs_agree(decidb_cli, sql)
 
 
@@ -93,8 +98,8 @@ def test_a_difference_of_one_ulp_is_no_difference(decidb_cli):
     assert "differ" not in result.stderr, result.stderr
 
 
-#: A clause whose every instance is skipped, which warns once, not once per run. The second run is flat's under an
-#: objective, which has no arm, and the tree's with none, which reports in silence too.
+#: A clause whose every instance is skipped, which warns once, not once per run. The second run is flat's for a clause
+#: in the aggregate shape, which has no arm, and the tree's for clauses per row, which reports in silence too.
 SKIPPED_EVERYWHERE = {
     "flat-again": f"""SELECT id, x FROM {ROWS} DECIDE x(REAL)
         SUCH THAT x <= 9 AND sum(when t.c > 100: x) <= 5 MAXIMIZE sum(x)""",
@@ -124,9 +129,9 @@ KEYED_ONLY = f"SELECT id, y FROM {ROWS} DECIDE per t.g: y(REAL) SUCH THAT y <= t
 
 
 def test_verify_walks_no_descent_for_a_query_with_no_arm(decidb_cli):
-    """The objective has no arm, so the second run is flat's, and flat walks a descent only for a dump it prints. A
-    descent would refuse this chunk size."""
-    result = _verify(decidb_cli, PLAIN, DECIDB_DESCENT_CHUNK="0")
+    """The aggregate shape has no arm, so the second run is flat's, and flat walks a descent only for a dump it prints.
+    A descent would refuse this chunk size."""
+    result = _verify(decidb_cli, NO_ARM, DECIDB_DESCENT_CHUNK="0")
     assert result.returncode == 0 and "DECIDB_DESCENT_CHUNK" not in result.stderr, result.stderr
 
 
@@ -156,16 +161,25 @@ def test_verify_builds_the_tree(decidb_cli):
 
 
 def test_a_query_with_no_arm_is_evaluated_by_flat_twice(decidb_cli):
-    result = _verify(decidb_cli, PLAIN, DECIDB_PROFILE="1")
+    result = _verify(decidb_cli, NO_ARM, DECIDB_PROFILE="1")
     assert result.stderr.count('"name":"verify.no_arm"') == 1, result.stderr
     assert "differ" not in result.stderr, result.stderr
 
 
 #: A clause whose `when` keeps some rows: its rows' groups are compared.
 WHEN_ONLY = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= 9 AND when t.c > 3: x + 1 <= t.c"
+#: y, outside every reducer, is read on the two rows the objective keeps, its filter's rows, each compared.
+OUTSIDE = f"""SELECT id, x, y FROM {ROWS} DECIDE x(REAL), per (): y(REAL)
+    SUCH THAT x <= 9 AND y <= 4 MAXIMIZE when t.c > 3: sum(x) + y"""
+#: flat reads y once per class of t.g by keeping its first row there, as the tree reads its operand's one entry.
+QUALIFIED = f"SELECT id, y FROM {ROWS} DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: y)"
 
 
-@pytest.mark.parametrize("sql", [ROWS_ONLY, KEYED_ONLY, WHEN_ONLY], ids=["rows", "keyed", "a-when"])
+@pytest.mark.parametrize(
+    "sql",
+    [ROWS_ONLY, KEYED_ONLY, WHEN_ONLY, OUTSIDE, QUALIFIED],
+    ids=["rows", "keyed", "a-when", "a-term-outside-every-reducer", "a-qualified-reducer"],
+)
 def test_the_tree_and_flat_agree(decidb_cli, sql):
     _assert_two_runs_agree(decidb_cli, sql)
 
@@ -176,7 +190,7 @@ def test_a_folded_bound_is_evaluated_only_under_diagnose(decidb_cli):
     _assert_two_runs_agree(decidb_cli, sql)
 
 
-@pytest.mark.parametrize("sql", [PLAIN, ROWS_ONLY], ids=["flat-again", "the-tree"])
+@pytest.mark.parametrize("sql", [NO_ARM, ROWS_ONLY], ids=["flat-again", "the-tree"])
 def test_only_the_first_run_prints_its_dumps(decidb_cli, sql):
     """The second run, flat's or the tree's, prints no dump, and flat walks a descent for one only where it prints.
     Flat computes no bottom-up values, so neither run dumps them."""
@@ -193,7 +207,7 @@ def test_only_the_first_run_prints_its_dumps(decidb_cli, sql):
 
 def test_flats_second_run_walks_no_descent_for_a_dump(decidb_cli):
     """Only the run that prints a dump walks a descent for it: the first run refuses the chunk size, the second not."""
-    result = _verify_raising(decidb_cli, PLAIN, DECIDB_DUMP_TREE="1", DECIDB_DESCENT_CHUNK="0")
+    result = _verify_raising(decidb_cli, NO_ARM, DECIDB_DUMP_TREE="1", DECIDB_DESCENT_CHUNK="0")
     assert "DECIDE evaluators differ in what they raised" in result.stderr, result.stderr
 
 

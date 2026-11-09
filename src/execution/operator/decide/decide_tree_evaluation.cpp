@@ -6,6 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
@@ -51,77 +52,6 @@ static DecideTreeValuePtr ErrorValue(const LogicalType &type, const ErrorData &e
 //! An expression's ordinal in its node's rank: what routes the node's rows (the descent's reads, a member test) counts
 //! from 0, and what the node computes once they are routed from AFTER_ROUTING.
 static constexpr idx_t AFTER_ROUTING = 1000000;
-
-//! Why an objective has more than one instance over its kept rows (D72): the first field of its sigma that differs
-//! between them, with the least and the greatest value it takes.
-static string ObjectiveDifference(const DecideTree &tree, const DecideNode &node, const DecideNodeContainer &container,
-                                  const vector<idx_t> &surviving) {
-	idx_t offset = 0;
-	string reason = "the kept rows have more than one variant";
-	auto varies = [&](idx_t column, string &values) {
-		const Value *least = nullptr, *greatest = nullptr;
-		auto before = [](const Value &left, const Value &right) {
-			return !left.IsNull() && (right.IsNull() || left < right);
-		};
-		for (auto entry : surviving) {
-			if (column >= container.entries[entry].signature.size()) {
-				return false;
-			}
-			auto &value = container.entries[entry].signature[column];
-			if (!least || before(value, *least)) {
-				least = &value;
-			}
-			if (!greatest || before(*greatest, value)) {
-				greatest = &value;
-			}
-		}
-		if (!least || Value::NotDistinctFrom(*least, *greatest)) {
-			return false;
-		}
-		values = DecideSqlLiteral(*least) + ", " + DecideSqlLiteral(*greatest);
-		return true;
-	};
-	bool found = false;
-	for (auto &field : node.signature) {
-		string values;
-		if (field.kind == DecideSignatureFieldKind::VALUE) {
-			if (varies(offset, values)) {
-				reason =
-				    StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text, values);
-				found = true;
-			}
-			offset++;
-		} else if (field.kind == DecideSignatureFieldKind::DECISION) {
-			if (varies(offset + 1, values)) {
-				auto &scope = tree.variable_scopes[field.decision];
-				reason = StringUtil::Format(
-				    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
-				    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
-				found = true;
-			}
-			offset += 2;
-		} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
-			for (auto &element : DecideKeyElements(tree.keys, field.key)) {
-				if (!found && varies(offset, values)) {
-					reason = StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
-					                            element.name, field.text, values);
-					found = true;
-				}
-				offset++;
-			}
-		} else {
-			reason = StringUtil::Format("'%s' has more than one variant over the kept rows", field.text);
-			found = true;
-		}
-		if (found) {
-			break;
-		}
-	}
-	return StringUtil::Format(
-	    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or fix it "
-	    "with when.",
-	    reason);
-}
 
 static bool StopsEvaluation(const ErrorData &error) {
 	auto type = error.Type();
@@ -1266,8 +1196,8 @@ void DecideTreeEvaluation::RequireSupported() const {
 			// The objective is produced once (D72, language/guide.md §7.3): a scope check, run once the frames and
 			// the keyed decisions' classes are known and before any clause is read.
 			errors.Add(DecideErrorRank {DecideErrorPhase::SCOPE_CHECK},
-			           ErrorData(InvalidInputException(
-			               ObjectiveDifference(tree, node, descent.Containers()[root], result.instance_entries))));
+			           ErrorData(InvalidInputException(DecideObjectiveDifference(tree, node, descent.Containers()[root],
+			                                                                     result.instance_entries))));
 		}
 		for (idx_t entry = 0; entry < result.entries.size(); entry++) {
 			auto &value = result.entries[entry];

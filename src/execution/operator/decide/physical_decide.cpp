@@ -2535,7 +2535,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	default:
 		// Every evaluator but flat requests the tree (DecideTreeRequested).
 		D_ASSERT(tree);
-		EvaluateTree(context, gstate, num_rows, gstate.descent, keyed_mappings, false);
+		EvaluateTree(context, gstate, num_rows, gstate.descent, keyed_mappings, evaluated, false);
 		break;
 	}
 
@@ -2584,7 +2584,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
 void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                   unique_ptr<DecideDescent> &descent, vector<KeyedMapping> &keyed_mappings,
-                                  bool silent) const {
+                                  EvaluatedClauses &evaluated, bool silent) const {
 	// Top-down: the descent reads the buffered input in Finalize's one scan of it, so the sink stays parallel and a
 	// row is the position the buffer gives it, the one every later phase reads.
 	DecideProfileScope phase("execution.tree_descent");
@@ -2620,10 +2620,14 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	const auto names = Names();
 	DecideTreeColumns columns(
 	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
-	DecideModelEmitter emitter(*this, *tree, *descent, columns, gstate, names, num_rows);
+	DecideModelEmitter emitter(*this, *tree, *descent, columns, gstate, names, num_rows, errors);
 	keyed_mappings = emitter.KeyedMappings();
 	emitter.Constraints();
-	// Flat reports what the data left of each clause once its clauses are read, unless one raised.
+	// A relation-qualified reducer's operand holds one entry per class, its first row the reducer reads, so the
+	// objective's columns are qualified as they are read (ApplyObjectiveQualifiers).
+	evaluated.linear_filters = emitter.Objective();
+	ScaleObjectiveAvg(gstate, num_rows, evaluated);
+	// Flat reports what the data left of each clause once its clauses and its objective are read, unless one raised.
 	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
 		ReportSkippedInstances(gstate, silent);
 	}
@@ -3025,9 +3029,11 @@ DecideEvaluationRecord PhysicalDecide::RecordEvaluation(DecideGlobalSinkState &g
 		record.Add("clauses", "bilinear term", to_string(term.var_a) + " " + to_string(term.var_b),
 		           Everywhere(term.row_coefficients));
 	}
+	// What stage 06 reads of a term's filter, its rows: those it keeps, every row with none.
 	for (auto *filters : {&evaluated.linear_filters, &evaluated.quadratic_filters, &evaluated.bilinear_filters}) {
 		for (auto &filter : *filters) {
-			record.Add("clauses", "objective filter", filter.has_filter ? "filtered" : "every row", Mask(filter.mask));
+			record.Add("clauses", "objective filter", string(),
+			           Mask(filter.has_filter ? filter.mask : vector<bool>(num_rows, true)));
 		}
 	}
 	for (idx_t c = 0; c < evaluated.composed_constraints.size(); c++) {
@@ -3124,7 +3130,7 @@ void PhysicalDecide::VerifyEvaluation(ClientContext &context, DecideGlobalSinkSt
 	unique_ptr<DecideDescent> second_descent;
 	try {
 		if (reason.empty()) {
-			EvaluateTree(context, gstate, num_rows, second_descent, second_mappings, true);
+			EvaluateTree(context, gstate, num_rows, second_descent, second_mappings, second_evaluated, true);
 		} else {
 			Evaluate(context, gstate, num_rows, second_store, second_chunk_exprs, second_groups, second_mappings,
 			         second_evaluated, true);
@@ -3251,10 +3257,10 @@ static string DescribeFrameDifference(const DecideSignatureField &field, const v
 	return string();
 }
 
-//! What makes the rows of `ids` (a signature's numbering over the kept rows `rows`, null for every row) more than one
-//! variant, as a message says it: the first field that takes two values or instances over them, with its least and
-//! greatest value as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in; a
-//! frame's two positions read first and last in its own order.
+//! The scope check's message for the rows of `ids` (a signature's numbering over the kept rows `rows`, null for every
+//! row), more than one variant (DecideObjectiveTwiceMessage), its fields read from the rows: a value's least and
+//! greatest as ORDER BY places them (NULL last), so the message does not depend on the order rows arrive in, and a
+//! frame's two positions first and last in its own order.
 static string DescribeVariantDifference(const DecideSignature &signature, const vector<DecideKey> &keys,
                                         const vector<DecideVarScopeInfo> &variable_scopes,
                                         const vector<KeyedMapping> &keyed_mappings, const SignatureFrames &frames,
@@ -3263,75 +3269,37 @@ static string DescribeVariantDifference(const DecideSignature &signature, const 
 	// The least and greatest value of `expr` over the kept rows, when it takes two.
 	auto varies = [&](const Expression &expr, string &values) {
 		auto at = ReadRowValues(expr, chunk_expr_cache, context, rows);
-		auto before = [](const Value &a, const Value &b) {
-			return !a.IsNull() && (b.IsNull() || a < b);
-		};
-		const Value *least = nullptr;
-		const Value *greatest = nullptr;
+		DecideValueRange range;
 		for (idx_t row = 0; row < ids.size(); row++) {
+			if (ids[row] != DConstants::INVALID_INDEX) {
+				range.Add(at[row]);
+			}
+		}
+		return range.Spans(values);
+	};
+	DecideVariantReader read;
+	read.values = [&](idx_t, idx_t, const Expression &value, string &values) {
+		return varies(value, values);
+	};
+	read.instances = [&](idx_t field) {
+		auto &scope = variable_scopes[signature.fields[field].decision];
+		idx_t instance = DConstants::INVALID_INDEX;
+		bool split = false;
+		for (idx_t row = 0; row < ids.size() && !split; row++) {
 			if (ids[row] == DConstants::INVALID_INDEX) {
 				continue;
 			}
-			if (!least || before(at[row], *least)) {
-				least = &at[row];
-			}
-			if (!greatest || before(*greatest, at[row])) {
-				greatest = &at[row];
-			}
+			auto at = scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[row] : row;
+			split = instance != DConstants::INVALID_INDEX && at != instance;
+			instance = at;
 		}
-		if (!least || Value::NotDistinctFrom(*least, *greatest)) {
-			return false;
-		}
-		values = DecideSqlLiteral(*least) + ", " + DecideSqlLiteral(*greatest);
-		return true;
+		return split;
 	};
-	for (auto &field : signature.fields) {
-		string values;
-		switch (field.kind) {
-		case DecideSignatureFieldKind::VALUE:
-			if (varies(*field.value, values)) {
-				return StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text,
-				                          values);
-			}
-			break;
-		case DecideSignatureFieldKind::BY_KEY:
-			for (auto &element : DecideKeyElements(keys, field.key)) {
-				if (varies(*element.expression, values)) {
-					return StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
-					                          element.name, field.text, values);
-				}
-			}
-			break;
-		case DecideSignatureFieldKind::DECISION: {
-			auto &scope = variable_scopes[field.decision];
-			idx_t instance = DConstants::INVALID_INDEX;
-			bool split = false;
-			for (idx_t row = 0; row < ids.size() && !split; row++) {
-				if (ids[row] == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				auto at = scope.IsKeyed() ? keyed_mappings[scope.keyed_scope_idx].row_to_class[row] : row;
-				split = instance != DConstants::INVALID_INDEX && at != instance;
-				instance = at;
-			}
-			if (split) {
-				return StringUtil::Format(
-				    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
-				    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
-			}
-			break;
-		}
-		case DecideSignatureFieldKind::FRAME: {
-			auto why = DescribeFrameDifference(field, keys, variable_scopes, keyed_mappings, frames, ids,
-			                                   chunk_expr_cache, context, rows, varies);
-			if (!why.empty()) {
-				return why;
-			}
-			break;
-		}
-		}
-	}
-	throw InternalException("DECIDE: two variants of a signature agree on every field");
+	read.frame = [&](idx_t field) {
+		return DescribeFrameDifference(signature.fields[field], keys, variable_scopes, keyed_mappings, frames, ids,
+		                               chunk_expr_cache, context, rows, varies);
+	};
+	return DecideObjectiveTwiceMessage(signature.fields, keys, variable_scopes, read);
 }
 
 void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -3353,11 +3321,9 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 	BuildSignatureIds(signature, keys, variable_scopes, keyed_mappings, signature_frames, chunk_expr_cache, context,
 	                  num_rows, signature.rows ? &rows : nullptr, ids, count);
 	if (count > 1) {
-		throw InvalidInputException(
-		    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or "
-		    "fix it with when.",
-		    DescribeVariantDifference(signature, keys, variable_scopes, keyed_mappings, signature_frames, ids,
-		                              chunk_expr_cache, context, signature.rows ? &rows : nullptr));
+		throw InvalidInputException(DescribeVariantDifference(signature, keys, variable_scopes, keyed_mappings,
+		                                                      signature_frames, ids, chunk_expr_cache, context,
+		                                                      signature.rows ? &rows : nullptr));
 	}
 }
 
@@ -4320,6 +4286,79 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 	}
 }
 
+void PhysicalDecide::ApplyObjectiveQualifiers(DecideGlobalSinkState &gstate, idx_t num_rows,
+                                              const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) {
+	if (!gstate.objective) {
+		return;
+	}
+	const vector<idx_t> objective_row_group_ids;
+	for (idx_t term_idx = 0; term_idx < gstate.objective->terms.size() && term_idx < evaluated.linear_filters.size();
+	     term_idx++) {
+		idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
+		if (scope_idx == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		ApplyQualifierToFilter(keyed_mappings, scope_idx, objective_row_group_ids, num_rows,
+		                       evaluated.linear_filters[term_idx]);
+		MaskCoefficientColumn(gstate.evaluated_objective_coefficients[term_idx],
+		                      evaluated.linear_filters[term_idx].mask);
+	}
+	for (idx_t term_idx = 0;
+	     term_idx < gstate.objective->squared_terms.size() && term_idx < evaluated.quadratic_filters.size();
+	     term_idx++) {
+		idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
+		if (scope_idx == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		ApplyQualifierToFilter(keyed_mappings, scope_idx, objective_row_group_ids, num_rows,
+		                       evaluated.quadratic_filters[term_idx]);
+		MaskCoefficientColumn(gstate.evaluated_quadratic_coefficients[term_idx],
+		                      evaluated.quadratic_filters[term_idx].mask);
+	}
+	for (idx_t term_idx = 0;
+	     term_idx < gstate.objective->bilinear_terms.size() && term_idx < evaluated.bilinear_filters.size();
+	     term_idx++) {
+		idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
+		if (scope_idx == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		ApplyQualifierToFilter(keyed_mappings, scope_idx, objective_row_group_ids, num_rows,
+		                       evaluated.bilinear_filters[term_idx]);
+		MaskCoefficientColumn(gstate.evaluated_bilinear_terms[term_idx].row_coefficients,
+		                      evaluated.bilinear_filters[term_idx].mask);
+	}
+}
+
+void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated) {
+	for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
+		if (!evaluated.linear_filters[term_idx].avg_scale) {
+			continue;
+		}
+		ScaleAvgRows(gstate.evaluated_objective_coefficients[term_idx], evaluated.linear_filters[term_idx].has_filter,
+		             evaluated.linear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+		             evaluated.linear_filters[term_idx].avg_group_ids,
+		             evaluated.linear_filters[term_idx].avg_num_groups);
+	}
+	for (idx_t term_idx = 0; term_idx < evaluated.quadratic_filters.size(); term_idx++) {
+		if (!evaluated.quadratic_filters[term_idx].avg_scale) {
+			continue;
+		}
+		ScaleAvgRows(gstate.evaluated_quadratic_coefficients[term_idx],
+		             evaluated.quadratic_filters[term_idx].has_filter, evaluated.quadratic_filters[term_idx].mask,
+		             /*quadratic_inner=*/true, num_rows, evaluated.quadratic_filters[term_idx].avg_group_ids,
+		             evaluated.quadratic_filters[term_idx].avg_num_groups);
+	}
+	for (idx_t term_idx = 0; term_idx < evaluated.bilinear_filters.size(); term_idx++) {
+		if (!evaluated.bilinear_filters[term_idx].avg_scale) {
+			continue;
+		}
+		ScaleAvgRows(gstate.evaluated_bilinear_terms[term_idx].row_coefficients,
+		             evaluated.bilinear_filters[term_idx].has_filter, evaluated.bilinear_filters[term_idx].mask,
+		             /*quadratic_inner=*/false, num_rows, evaluated.bilinear_filters[term_idx].avg_group_ids,
+		             evaluated.bilinear_filters[term_idx].avg_num_groups);
+	}
+}
+
 PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext &context,
                                                                    DecideGlobalSinkState &gstate,
                                                                    idx_t num_rows,
@@ -4580,6 +4619,9 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 	result.linear_filters = std::move(obj_linear_term_filters);
     result.quadratic_filters = std::move(obj_quadratic_term_filters);
     result.bilinear_filters = std::move(obj_bilinear_filters);
+	// Its columns as stage 06 reads them, qualified and averaged, which a second evaluator's are compared with.
+	ApplyObjectiveQualifiers(gstate, num_rows, keyed_mappings, result);
+	ScaleObjectiveAvg(gstate, num_rows, result);
 
 	return result;
 }
@@ -5177,73 +5219,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             solver_input.bilinear_objective_terms.push_back(std::move(bot));
         }
     }
-    // Relation-qualified reducers in the objective: same de-duplication as on the
-    // constraint side, over the objective's one group, applied before AVG scaling reads the
-    // surviving-row counts.
-    const vector<idx_t> objective_row_group_ids;
-    if (gstate.objective) {
-        for (idx_t term_idx = 0;
-             term_idx < gstate.objective->terms.size() && term_idx < evaluated.linear_filters.size(); term_idx++) {
-            idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
-                                   objective_row_group_ids, num_rows,
-                                   evaluated.linear_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
-                                  evaluated.linear_filters[term_idx].mask);
-		}
-		for (idx_t term_idx = 0; term_idx < gstate.objective->squared_terms.size() &&
-                                 term_idx < evaluated.quadratic_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
-                                   objective_row_group_ids, num_rows,
-                                   evaluated.quadratic_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
-                                  evaluated.quadratic_filters[term_idx].mask);
-        }
-        for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size() &&
-                                 term_idx < evaluated.bilinear_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
-                                   objective_row_group_ids, num_rows,
-                                   evaluated.bilinear_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-                                  evaluated.bilinear_filters[term_idx].mask);
-        }
-	}
-
-	for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
-		if (!evaluated.linear_filters[term_idx].avg_scale) {
-            continue;
-        }
-		ScaleAvgRows(solver_input.objective_coefficients[term_idx], evaluated.linear_filters[term_idx].has_filter,
-		             evaluated.linear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-		             evaluated.linear_filters[term_idx].avg_group_ids,
-		             evaluated.linear_filters[term_idx].avg_num_groups);
-	}
-	for (idx_t term_idx = 0; term_idx < evaluated.quadratic_filters.size(); term_idx++) {
-		if (!evaluated.quadratic_filters[term_idx].avg_scale) {
-            continue;
-        }
-		ScaleAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
-		             evaluated.quadratic_filters[term_idx].has_filter, evaluated.quadratic_filters[term_idx].mask,
-		             /*quadratic_inner=*/true, num_rows, evaluated.quadratic_filters[term_idx].avg_group_ids,
-		             evaluated.quadratic_filters[term_idx].avg_num_groups);
-	}
-
-	for (idx_t term_idx = 0; term_idx < evaluated.bilinear_filters.size(); term_idx++) {
-		if (!evaluated.bilinear_filters[term_idx].avg_scale) {
-            continue;
-        }
-		ScaleAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-		             evaluated.bilinear_filters[term_idx].has_filter, evaluated.bilinear_filters[term_idx].mask,
-		             /*quadratic_inner=*/false, num_rows, evaluated.bilinear_filters[term_idx].avg_group_ids,
-		             evaluated.bilinear_filters[term_idx].avg_num_groups);
-	}
 
 	// The helpers written where they are read own no column (stage 06, D89): decided here, on the assembled rows and
 	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision

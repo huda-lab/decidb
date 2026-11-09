@@ -17,7 +17,7 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 //! The shapes stage 06 accepts, by what it reads of the evaluated clauses and the query (EvaluatedConstraint,
-//! SolverInput): each has one arm, which calls flat's own blocks. The first three have theirs; a query with any other
+//! SolverInput): each has one arm, which calls flat's own blocks. The first four have theirs; a query with any other
 //! has none yet (DecideModelEmitter::Uncovered).
 enum class DecideModelShape : uint8_t {
 	//! A clause with one model row per kept row.
@@ -26,6 +26,8 @@ enum class DecideModelShape : uint8_t {
 	REPAIR_ROWS,
 	//! A declared decision's classes (KeyedScopeInfo).
 	KEYED_DECLARED,
+	//! An objective's linear terms, each a column over the rows it reads (SolverInput::objective_coefficients).
+	OBJECTIVE_LINEAR,
 	PRODUCT_TERMS,
 	SQUARE_TERMS,
 	TIGHTEST_BOUND,
@@ -35,11 +37,16 @@ enum class DecideModelShape : uint8_t {
 	MEMBER_ROWS,
 	GROUP_ROWS,
 	CLASS_ROWS,
-	OBJECTIVE,
+	OBJECTIVE_SQUARES,
+	OBJECTIVE_PRODUCTS,
+	OBJECTIVE_EXTREMUM,
+	OBJECTIVE_COMPOSED,
 	COMPOSED,
 	VALUE_LINKS,
 	FRAME_READS,
-	PRODUCT_LINKS
+	PRODUCT_LINKS,
+	//! A relation-qualified reducer's classes, split by the values its body reads (KeyedScopeInfo::signature).
+	KEYED_SIGNATURE
 };
 
 //! Writes what PhysicalDecide::Evaluate writes for the model, from the tree's containers: gstate's evaluated clauses
@@ -48,7 +55,7 @@ class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, const DecideTree &tree, const DecideDescent &descent,
 	                   DecideTreeColumns &columns, DecideGlobalSinkState &gstate, const DecideSourceNames &names,
-	                   idx_t num_rows);
+	                   idx_t num_rows, DecideErrorLedger &errors);
 
 	//! The query's first shape with no arm, empty when every shape it has has one. Such a query takes the interim
 	//! formulator, or verify's flat second run, until every shape has one; so does one with a node the tree computes
@@ -59,6 +66,9 @@ public:
 	vector<KeyedMapping> KeyedMappings();
 	//! Every clause in flat's order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
+	//! The objective's linear terms, each on the rows it reads, and each term's filter of those rows, which the
+	//! qualifiers and AVG then read (PhysicalDecide::EvaluateObjective); none without an objective.
+	vector<TermFilterState> Objective();
 
 private:
 	const PhysicalDecide &op;
@@ -68,6 +78,7 @@ private:
 	DecideGlobalSinkState &gstate;
 	const DecideSourceNames &names;
 	idx_t num_rows;
+	DecideErrorLedger &errors;
 
 	//! A clause in the per-row shape: one model row per kept row of its root.
 	EvaluatedConstraint Rows(idx_t root, bool counted);
@@ -76,5 +87,11 @@ private:
 //! The declared keyed scopes' mappings from the descent's classes, numbered by value, with the rows in no class in one
 //! of their own (KeyedMapping::absent_class).
 vector<KeyedMapping> DecideDeclaredMappings(const DecideDescent &descent);
+
+//! The scope check's message for an objective with more than one instance over its kept rows (D72,
+//! DecideObjectiveTwiceMessage): `node`'s sigma read on the entries of `container` that `surviving` names, an instance
+//! each.
+string DecideObjectiveDifference(const DecideTree &tree, const DecideNode &node, const DecideNodeContainer &container,
+                                 const vector<idx_t> &surviving);
 
 } // namespace duckdb

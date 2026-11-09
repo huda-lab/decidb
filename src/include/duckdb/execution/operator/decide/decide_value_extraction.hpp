@@ -158,4 +158,34 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const Dec
                    const vector<string> &source_fragments, const vector<KeyedScopeInfo> &keyed_scopes,
                    const vector<DecideKey> &keys, EvaluatedConstraint &evaluated);
 
+//! The least and the greatest of the values added, as ORDER BY places them (NULL last), so a message naming them does
+//! not depend on the order rows arrive in. It holds the values' addresses, which must outlive it.
+class DecideValueRange {
+public:
+	void Add(const Value &value);
+	//! The two as SQL literals, `least, greatest`; false when every value added is one value.
+	bool Spans(string &values) const;
+
+private:
+	const Value *least = nullptr;
+	const Value *greatest = nullptr;
+};
+
+//! How an evaluator reads the fields of the objective's signature over its kept rows, for the scope check's message:
+//! flat from the rows, the tree from its root's entries.
+struct DecideVariantReader {
+	//! The least and the greatest of `value`, field `field`'s own or element `element` of its `by` key, over the kept
+	//! rows (DecideValueRange::Spans).
+	std::function<bool(idx_t field, idx_t element, const Expression &value, string &values)> values;
+	//! Whether field `field`'s decision has more than one instance over the kept rows.
+	std::function<bool(idx_t field)> instances;
+	//! Why field `field`'s frame reads more than one value over the kept rows; empty when it reads one.
+	std::function<string(idx_t field)> frame;
+};
+
+//! The error for an objective whose kept rows are more than one variant of `fields`, so it would be produced more than
+//! once (D72, language/guide.md §7.3): the first field `read` finds two values or instances of, and the edit.
+string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
+                                   const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read);
+
 } // namespace duckdb

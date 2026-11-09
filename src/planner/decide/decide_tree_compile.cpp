@@ -307,7 +307,7 @@ static void CopyLinks(const LogicalDecide &op, DecideTree &tree, const vector<id
 class DecideProgramCompiler {
 public:
 	DecideProgramCompiler(ClientContext &context, const LogicalDecide &op, DecideTree &tree)
-	    : context(context), op(op), tree(tree) {
+	    : context(context), op(op), tree(tree), first_terms(tree.nodes.size(), DConstants::INVALID_INDEX) {
 	}
 
 	//! A program on `site` computing `expression`, ranked with `owner`'s body; returns its index on the site.
@@ -333,6 +333,7 @@ public:
 		site.program =
 		    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, stage, group, position, term.sign);
 		AddInputs(term.inputs, site, owner, stage, group, position);
+		first_terms[site.node] = MinValue(first_terms[site.node], position);
 	}
 
 	//! A product's coefficient, none when stage 05 left it out (1), and its inputs.
@@ -349,7 +350,9 @@ public:
 		return tree.nodes[node]->programs;
 	}
 
-	//! A node's member tests, over its own carried columns.
+	//! A node's member tests, over its own carried columns, once every term is compiled. Flat reads them in their
+	//! reducer's filter, which it reads for each of its owner's terms in their order, window by window, before any
+	//! coefficient: so a test's group is the first term its node holds, and its position its place among the tests.
 	void AddTests(idx_t index) {
 		auto &node = *tree.nodes[index];
 		for (idx_t i = 0; i < node.member_tests.size(); i++) {
@@ -357,6 +360,7 @@ public:
 			program.role = DecideProgramRole::TEST;
 			program.expression = TranslateTest(index, *node.member_tests[i]);
 			program.written = node.member_tests[i]->Copy();
+			program.group = first_terms[index];
 			program.position = i;
 			node.tests.push_back(node.programs.size());
 			node.programs.push_back(std::move(program));
@@ -367,6 +371,8 @@ private:
 	ClientContext &context;
 	const LogicalDecide &op;
 	DecideTree &tree;
+	//! Per node, the place among its owner's terms of the first term it holds; INVALID while it holds none.
+	vector<idx_t> first_terms;
 
 	void AddInputs(const vector<unique_ptr<Expression>> &inputs, DecideTermSite &site, idx_t owner, idx_t stage,
 	               idx_t group, idx_t position) {
@@ -539,6 +545,8 @@ static void CompilePrograms(ClientContext &context, const LogicalDecide &op, Dec
 		} else {
 			CompileMembers(compiler, i, body);
 		}
+	}
+	for (idx_t i = 0; i < tree.nodes.size(); i++) {
 		compiler.AddTests(i);
 	}
 }

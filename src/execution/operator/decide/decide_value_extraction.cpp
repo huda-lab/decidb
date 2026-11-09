@@ -463,4 +463,74 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const Dec
 	return true;
 }
 
+void DecideValueRange::Add(const Value &value) {
+	auto before = [](const Value &left, const Value &right) {
+		return !left.IsNull() && (right.IsNull() || left < right);
+	};
+	if (!least || before(value, *least)) {
+		least = &value;
+	}
+	if (!greatest || before(*greatest, value)) {
+		greatest = &value;
+	}
+}
+
+bool DecideValueRange::Spans(string &values) const {
+	if (!least || Value::NotDistinctFrom(*least, *greatest)) {
+		return false;
+	}
+	values = DecideSqlLiteral(*least) + ", " + DecideSqlLiteral(*greatest);
+	return true;
+}
+
+//! Why the kept rows are more than one variant: the first field that takes two values or instances over them.
+static string VariantDifference(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
+                                const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read) {
+	for (idx_t f = 0; f < fields.size(); f++) {
+		auto &field = fields[f];
+		string values;
+		switch (field.kind) {
+		case DecideSignatureFieldKind::VALUE:
+			if (read.values(f, 0, *field.value, values)) {
+				return StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text, values);
+			}
+			break;
+		case DecideSignatureFieldKind::BY_KEY: {
+			auto &elements = DecideKeyElements(keys, field.key);
+			for (idx_t e = 0; e < elements.size(); e++) {
+				if (read.values(f, e, *elements[e].expression, values)) {
+					return StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)",
+					                          elements[e].name, field.text, values);
+				}
+			}
+			break;
+		}
+		case DecideSignatureFieldKind::DECISION:
+			if (read.instances(f)) {
+				auto &scope = scopes[field.decision];
+				return StringUtil::Format(
+				    "the decision '%s' (declared per %s) has more than one instance over the kept rows", field.text,
+				    scope.HasDeclaredKey() ? scope.declared_key : string("row"));
+			}
+			break;
+		case DecideSignatureFieldKind::FRAME: {
+			auto why = read.frame(f);
+			if (!why.empty()) {
+				return why;
+			}
+			break;
+		}
+		}
+	}
+	throw InternalException("DECIDE: two variants of a signature agree on every field");
+}
+
+string DecideObjectiveTwiceMessage(const vector<DecideSignatureField> &fields, const vector<DecideKey> &keys,
+                                   const vector<DecideVarScopeInfo> &scopes, const DecideVariantReader &read) {
+	return StringUtil::Format(
+	    "DECIDE objective: %s, so the objective would be produced more than once; move it inside a reducer or fix it "
+	    "with when.",
+	    VariantDifference(fields, keys, scopes, read));
+}
+
 } // namespace duckdb

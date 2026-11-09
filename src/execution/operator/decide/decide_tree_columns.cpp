@@ -26,6 +26,7 @@ struct DecideTreeColumns::ProgramColumn {
 
 struct DecideTreeColumns::NodeColumns {
 	vector<ProgramColumn> programs;
+	vector<bool> tested;
 };
 
 DecideTreeColumns::DecideTreeColumns(const DecideTree &tree, const DecideDescent &descent, ClientContext &context,
@@ -42,6 +43,7 @@ DecideTreeColumns::NodeColumns &DecideTreeColumns::Computed(idx_t node) {
 	if (!nodes[node]) {
 		nodes[node] = make_uniq<NodeColumns>();
 		ComputeNode(node, *nodes[node]);
+		ReadTests(node, *nodes[node]);
 	}
 	return *nodes[node];
 }
@@ -116,34 +118,73 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns) {
 	}
 }
 
-//! Flat's order inside its owner's evaluation (PhysicalDecide::EvaluateConstraints), under the owner's rank: a block
-//! runs over every window of the input's rows before the next, a window executes every expression of its block before
-//! it checks any value, and then the program's group and its order in the block. The descent's reads of the owner's
-//! rows (its `when`) number below every block. A window's number stays below 2^54 for any row, under the block's bits.
+void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
+	const idx_t count = descent.Containers()[index].entries.size();
+	// An entry whose member test is false is no member: flat's reducer reads no term on its row. A test that raises
+	// where an entry was reached raises, as flat's raises reading the reducer's filter. A test is `X IS NOT NULL`, so
+	// it is NULL only where it raised: that entry is no member either, so its undefined value is never read, and its
+	// error ranks before every read of the node's other programs.
+	columns.tested.assign(count, true);
+	for (auto p : tree.nodes[index]->tests) {
+		auto &column = columns.programs[p];
+		for (auto &error : column.errors) {
+			errors.Add(Rank(index, p, error.first, false), error.second);
+		}
+		UnifiedVectorFormat format;
+		column.values->ToUnifiedFormat(count, format);
+		auto truth = UnifiedVectorFormat::GetData<bool>(format);
+		for (idx_t e = 0; e < count; e++) {
+			const auto i = format.sel->get_index(e);
+			columns.tested[e] = columns.tested[e] && format.validity.RowIsValid(i) && truth[i];
+		}
+	}
+}
+
+//! Flat's order inside its owner's evaluation (PhysicalDecide::EvaluateConstraints, EvaluateObjective), under the
+//! owner's rank: a block runs over every window of the input's rows before the next, a window executes every
+//! expression of its block before it checks any value, and then the program's group and its order in the block. The
+//! descent's reads of the owner's rows (a `when`, a key) number in order of reading from 0, below every block, so a
+//! block's bits are one above its stage (DecideProgram::stage). A window's number stays below 2^54 for any row, under
+//! the block's bits. A member test ranks under its own node, whose terms' owner reaches it.
 DecideErrorRank DecideTreeColumns::Rank(idx_t node, idx_t p, idx_t entry, bool value) const {
 	auto &program = tree.nodes[node]->programs[p];
-	auto rank = tree.nodes[program.owner]->value_rank;
+	auto rank = tree.nodes[program.owner == DConstants::INVALID_INDEX ? node : program.owner]->value_rank;
 	const auto row = descent.Containers()[node].entries[entry].row;
-	rank.expression = (program.stage << 56) | ((row / STANDARD_VECTOR_SIZE) << 1) | idx_t(value);
+	rank.expression = ((program.stage + 1) << 56) | ((row / STANDARD_VECTOR_SIZE) << 1) | idx_t(value);
 	rank.group = program.group;
 	rank.position = program.position;
 	rank.row = row;
 	return rank;
 }
 
-void DecideTreeColumns::Report(idx_t node, idx_t program) {
+void DecideTreeColumns::Report(idx_t node, idx_t program, const vector<bool> &reads) {
 	for (auto &error : Computed(node).programs[program].errors) {
-		errors.Add(Rank(node, program, error.first, false), error.second);
+		if (reads[error.first]) {
+			errors.Add(Rank(node, program, error.first, false), error.second);
+		}
 	}
 }
 
-vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, vector<bool> &nulls, const DecideTermSite *site,
-                                          const vector<unique_ptr<Expression>> *inputs) {
+const vector<bool> &DecideTreeColumns::Tested(idx_t node) {
+	return Computed(node).tested;
+}
+
+vector<bool> DecideTreeColumns::ReadEntries(idx_t node, idx_t variable) {
+	auto reads = Tested(node);
+	const auto absent = Absent(node, variable);
+	for (idx_t e = 0; e < reads.size(); e++) {
+		reads[e] = reads[e] && !absent[e];
+	}
+	return reads;
+}
+
+vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, const vector<bool> &reads, vector<bool> *nulls,
+                                          const DecideTermSite *site, const vector<unique_ptr<Expression>> *inputs) {
 	auto &program = tree.nodes[node]->programs[p];
-	Report(node, p);
+	Report(node, p, reads);
 	auto &column = *Computed(node).programs[p].values;
 	const idx_t count = descent.Containers()[node].entries.size();
-	D_ASSERT(nulls.size() == count);
+	D_ASSERT(reads.size() == count && (!nulls || nulls->size() == count));
 	// The entry a message reads an input on: the window's first, then the one entry a retry reads.
 	idx_t base = 0;
 	static const vector<unique_ptr<Expression>> no_inputs;
@@ -171,7 +212,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, vector<bool> &nul
 		VectorOperations::Copy(column, window, start + size, start, 0);
 		try {
 			base = start;
-			ExtractDoubleColumn(window, size, program.sign, out, source, &nulls, nullptr, start);
+			ExtractDoubleColumn(window, size, program.sign, out, source, nulls, &reads, start);
 		} catch (std::exception &) {
 			// The entry that fails, which flat's window raises first: each entry of the window alone. The ledger
 			// raises at once what stops the query wherever it is raised.
@@ -180,7 +221,7 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, vector<bool> &nul
 				VectorOperations::Copy(window, one, i + 1, i, 0);
 				try {
 					base = start + i;
-					ExtractDoubleColumn(one, 1, program.sign, out, source, &nulls, nullptr, start + i);
+					ExtractDoubleColumn(one, 1, program.sign, out, source, nulls, &reads, start + i);
 				} catch (std::exception &entry_ex) {
 					errors.Add(Rank(node, p, start + i, true), ErrorData(entry_ex));
 					// Entries are in row order, so no later window's value ranks before it.
@@ -198,8 +239,8 @@ vector<double> DecideTreeColumns::Numbers(idx_t node, idx_t p, vector<bool> &nul
 vector<bool> DecideTreeColumns::Absent(idx_t node, idx_t variable) const {
 	auto &entries = descent.Containers()[node].entries;
 	vector<bool> absent(entries.size(), false);
-	D_ASSERT(variable < tree.variable_scopes.size());
-	if (!tree.variable_scopes[variable].IsKeyed()) {
+	// A term of no decision, a constant term of the objective, reads none.
+	if (variable == DConstants::INVALID_INDEX || !tree.variable_scopes[variable].IsKeyed()) {
 		return absent;
 	}
 	auto &rows = descent.DecisionRows()[tree.variable_scopes[variable].keyed_scope_idx];

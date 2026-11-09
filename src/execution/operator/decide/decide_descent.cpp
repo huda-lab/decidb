@@ -454,10 +454,12 @@ void DecideDescent::Insert(idx_t node, DecideDescentEntry entry, bool distinct) 
 			auto &existing = container.entries[copy];
 			if (existing.slot == entry.slot && DescentEqual(existing.signature, entry.signature) &&
 			    DescentEqual(existing.columns, entry.columns) && existing.reads == entry.reads) {
+				container.routed.emplace_back(entry.row, copy);
 				return;
 			}
 		}
 		copies.push_back(container.entries.size());
+		container.routed.emplace_back(entry.row, container.entries.size());
 		entry.instance = FindInstance(node, variant, entry);
 	} else {
 		entry.instance = container.instance_entries.size();

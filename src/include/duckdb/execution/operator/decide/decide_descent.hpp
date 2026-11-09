@@ -72,6 +72,11 @@ struct DecideDescentTimeline {
 struct DecideNodeContainer {
 	vector<DecideDescentEntry> entries;
 	vector<idx_t> instance_entries;
+	//! A set E keeps one entry per distinct slot, signature, carried columns and reads, at least one per variant and
+	//! fewer than its rows (DecideDescent::Insert): each row it keeps, with the entry standing for it, a pair per row
+	//! for every set E, though only the objective's root reads them yet. Empty for a node per row, whose entries are
+	//! its rows.
+	vector<pair<idx_t, idx_t>> routed;
 	vector<DecideDescentGroup> groups;
 	vector<DecideDescentTimeline> timelines;
 	idx_t rows_in = 0;

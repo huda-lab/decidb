@@ -57,8 +57,9 @@ struct DecideProgram {
 	int sign = 1;
 	//! The node whose rank its errors take (the holder of its term or bound); INVALID for the node's own.
 	idx_t owner = DConstants::INVALID_INDEX;
-	//! Its place among flat's evaluations of its owner: the block (0 the member tests, 1 the terms, 2 the bound and
-	//! admitted ends, 3 the products, 4 the squares), a square's group, and its order in the block.
+	//! Its place among flat's evaluations of its owner, after the descent's reads of the owner's rows: the block (0 the
+	//! member tests, 1 the terms, 2 the bound and admitted ends, 3 the products, 4 the squares), a square's group or a
+	//! member test's first term, and its order in the block.
 	idx_t stage = 0;
 	idx_t group = 0;
 	idx_t position = 0;
