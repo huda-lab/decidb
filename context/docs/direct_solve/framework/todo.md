@@ -120,3 +120,71 @@ solver path answers those queries, so none of them is wrong, only slower.
   that computes the same answer with the same DOUBLE arithmetic, at `sf=1`, measured in one process (`PRAGMA
   enable_profiling`), and on all threads no slower than on one at every size; answers, error texts and the first
   error to raise unchanged, goldens unchanged, and the matrix passes.
+
+## H-51 — A direct plan does per-row work that belongs to a group, a constant or one read
+
+- **Problem.** After H-50's expression work, the queries of `benchmark/decide/direct_solve/run.py` at `sf=1` stand at
+  a1 4.6×, n1 3.2×, n1_groups 2.7×, r1 4.5× DuckDB's hand-written plans, and a2 1.6× in latency. The architect's
+  profile (build `8805a87e35`, 8 threads, `PRAGMA enable_profiling`) finds four causes, none of them the plan's shape
+  for A1, N1 and A2:
+  - **Constants the statistics prove are never folded.** Statistics propagation turns `x IS NULL` over a NOT NULL
+    column into `false`, but its CASE handler (`propagate_case.cpp`) only merges statistics, so `CASE WHEN false ...`
+    runs per row in every rule's first projection (a1, n1, a2, a2_keyed, r1). Its conjunction and comparison handlers
+    do fold what they prove.
+  - **A clamp against an infinite end.** `DirectRowBox` (`direct_bound_reader.cpp`) writes `greatest(0.0, -inf)` and
+    `least(inf, x)` when the static end is infinite (A1's P2, 10 ms per read; R1 shares the box).
+  - **Group values computed per row.** N1's answer projection computes `COALESCE(h)`, `sqrt`, `= 0`, `isfinite(h)`,
+    `abs(h) < DBL_MIN` and h's raise on every row (21 ms against 3.5 ms by hand); each depends on the class alone.
+  - **R1 computes its item algebra on each of four reads** (about 340 ms of its 900 ms CPU), and its aggregates build
+    VARCHAR messages per row for three `min(VARCHAR)` (51.7 ms).
+  - A1's two reads (verify-then-stream, `architecture/result_adapter.md`) and N1's and A2's aggregate-then-join are the
+    floor: reading once means holding every row until the verdict, which the architecture refuses. A2's latency gap
+    is CPU in the aggregate's input projection and 0.85 ms of DECIDE planning, not an extra pipeline.
+  - The hand-written comparators of a1, n1, n1_groups and r1 compute less than the rules: no verdict gate, no clamp
+    (n1), and R1's `ROWS` frame breaks the 14 tied (partkey, cost) groups at `sf=1` arbitrarily, where R1 shares a tie
+    in proportion so its answer is the same on every run. Fair versions with the gate measure a1 at 6.64 ms / 33 ms CPU
+    (against 4.4 / 19) and n1 at 5.09 / 26.
+- **Change** (commits in this order; re-profile after each):
+  1. **CASE folding in statistics propagation** (core; DuckDB folds in each statistics handler and never reruns the
+     rewriter). `CaseSimplificationRule::Apply`'s body (the TryEvaluateScalar version) becomes one shared static
+     helper, called from `propagate_case.cpp` after the children are propagated, so a nested CASE folds bottom-up.
+     sqllogictests with EXPLAIN: a WHEN proved false is erased; one proved true becomes the result; all erased gives
+     the ELSE; a WHEN whose evaluation throws keeps the CASE. A direct EXPLAIN test: P1 over a NOT NULL column has no
+     CASE.
+  2. **`DirectRowBox` leaves an infinite static end out of LEAST/GREATEST.** +inf is LEAST's identity and -inf
+     GREATEST's for every value but NaN, and a NaN raises before the box is read, so the answer is exact. Tests: a
+     finite static end keeps its clamp, an infinite one has none (EXPLAIN), a NaN bound raises with the same text.
+  3. **N1's class values on the class side** (loop-invariant code motion, as A2 builds its answer on the class side):
+     `BuildClasses` ends in a projection over the aggregate computing `total`, `length = sqrt(total)`, `still`, the
+     below-normal flag and h's too-large raise; the per-row projection keeps today's `Scale` rounding order. h's
+     too-large error then raises when the class is built, as the solver path does, also under `LIMIT` where a streamed
+     row may never read it today ("every row is read"). Tests: h past a DOUBLE under `LIMIT 1` raises; overflow in one
+     group of several; the below-normal warning prints only when a row with a value reads the scale.
+  4. **R1's row stage computed once** (a common subplan materialized at its highest shared point: a spool, DuckDB's
+     `LogicalMaterializedCTE`). `DirectSourceReader` takes the rule's row stage (`SetRowStage(builder)`); when the
+     existing copy rule (`COPY_READ_COST`: three or more reads, a copy that fits in an eighth of memory) copies, the
+     CTE is the stage over the gated source read and every read is a CTE reference narrowed by CTE column pruning;
+     otherwise each read builds the stage, as today. Tests: the item stage is computed once; a stage over the memory
+     guard is recomputed; the row checks' verdict is in front of the stage.
+  5. **Aggregated messages dictionary-encoded** (late materialization of strings): every text `DirectNumberMessage`
+     and `NotFiniteMessage` produce is a plan-time constant, so an aggregate takes `min(code)`, the codes ordered as the
+     texts are so the least message is still chosen, and the text is decoded on the group row where it raises. Tests:
+     two different messages in one group raise the least; a NaN and an infinity in one group.
+  6. **The fair comparators in the repository**: one hand-written query per `run.py` query under
+     `benchmark/decide/direct_solve/hand/`, each carrying the rule's obligations (its verdict gate, clamps and checks,
+     R1's proportional ties), with a `run.py` mode that reports both sides' summed operator CPU and latency, DECIDE
+     planning (`optimizer.direct.*` spans) reported apart.
+- **Ruling (owner, 2026-11-09, delegated).** (1) The comparator is a hand-written plan that carries the rule's
+  obligations; one that skips the gate, a clamp or a check measures the obligation, not the plan. (2) The measure is
+  summed operator CPU; latency is reported with DECIDE planning apart. (3) R1 keeps proportional tie sharing (the same
+  answer on every run); the one-window shape that breaks ties by row id is not taken. Totals as full-partition window
+  aggregates inside R1's window are measured after commit 4 and taken only if they win. (4) Ruling (5) of H-50 stands:
+  no interval propagation. Statistics for `least`/`greatest` in core come in only if A1 misses after commits 1 and 2
+  and its profile shows the empty-box test as the gap. (5) Commit 3 is the rule-side hoist, not a core
+  ProjectJoinTransposeRule. (6) Commit 3's earlier raise under `LIMIT` is taken: it matches the solver path and the
+  "every row is read" rule.
+- **Done when.** Each `run.py` query at `sf=1`, one process, best of 5, is within 1.3× of its fair comparator in summed
+  operator CPU; on all threads it is no slower than on one at every size, or no further from that than its comparator
+  is (DuckDB's own floor for 2–8 ms queries); answers, error texts, warnings and the first error to raise are
+  unchanged except commit 3's raise under `LIMIT`; goldens unchanged; the matrix passes. A query that misses is
+  reported with its profile and the cause.
