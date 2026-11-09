@@ -23,4 +23,12 @@ Language-surface work is owned by `../../language/` (the scopes:
   same path the reducer case takes; no per-marker list.
 - **Done when.** Each form above (and `per` with an outer key) raises the outer-query refusal naming the column, as
   tests; no internal name reaches a message.
+- **Ruling (owner, 2026-11-09, delegated).** The forms reach the outer binder by three paths (a marker left intact for
+  the retry, a tree the DECIDE binder took apart before the failing bind, and the per-key resolver with no retry), all
+  from one cause: an outer column is discovered only when DuckDB's retry rebinds an expression in a binder that knows
+  nothing of DECIDE. So the refusal moves to the column: where a column in a DECIDE clause fails to resolve against the
+  query's own bind context and resolves in an outer query's binder, one helper raises the outer-query refusal naming
+  it, before any retry; the per-key resolver calls the same helper. `BindSelectNode`'s end check stays as the backstop.
+  No DECIDE predicate goes into DuckDB's function binding. The message names the column everywhere, a reducer
+  included (it no longer quotes the reducer).
 
