@@ -39,16 +39,12 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
 	}
-	idx_t when_text = qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN);
 	auto wrap = [&](unique_ptr<Expression> objective) -> unique_ptr<Expression> {
 		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		wrapper->children.push_back(std::move(objective));
 		wrapper->children.push_back(BoundCastExpression::AddCastToType(
 		    context, std::move(BoundExpression::GetExpression(*when->children[1])), LogicalType::BOOLEAN));
 		wrapper->alias = WHEN_FILTER_TAG;
-		if (when_text != DConstants::INVALID_INDEX) {
-			AddDecideTag(wrapper->alias, MakeSourceFragmentTag(when_text));
-		}
 		return std::move(wrapper);
 	};
 	// The two-level form's PER wrapper stays outermost, as the nested objective's rewrite
@@ -123,13 +119,6 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 		                                 "yet",
 		                                 form)));
 	}
-	// The key as written, read before the move below destroys the marker that holds it (`per`, `inner_by` and `inner`
-	// with it). The plan prints it rather than the key's columns (RenderDecidePerKey).
-	auto key_fragment = qualifier_context->WrittenFragment(per, DecideSpanRole::PER);
-	if (key_fragment == DConstants::INVALID_INDEX) {
-		key_fragment = qualifier_context->source_fragments->size();
-		qualifier_context->source_fragments->push_back(key_text);
-	}
 	// The bound form: `outer(inner(e))` under a PER wrapper naming the key.
 	outer.children[0] = std::move(inner_by.children[0]);
 	auto result = BindExpression(*outer_slot, depth);
@@ -141,7 +130,6 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	wrapper->alias = TWO_LEVEL_OBJECTIVE_TAG;
 	// The per key lists at least one name, and every relation stores a column.
 	AddDecideTag(wrapper->alias, MakePerKeyTag(key));
-	AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
 	return BindResult(std::move(wrapper));
 }
 
@@ -149,7 +137,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	auto location = expr_ptr->GetQueryLocation();
 	return ThrowClauseError(
 	    PreserveQueryLocation(location,
-	                          TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression))),
+	                          BindExpressionInternal(expr_ptr, depth, root_expression)),
 	    root_expression);
 }
 
@@ -216,10 +204,10 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	auto clause = decide_sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE";
 	if (!ExpressionContainsDecideVariable(expr, variables)) {
 		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format("%s %s has no decision to optimize", clause, DecideWrittenSql(expr))));
+		    expr, StringUtil::Format("%s %s has no decision to optimize", clause, DecideWrittenSql(expr, qualifier_context->source_text))));
 	}
 	return BindResult(
-	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, DecideWrittenSql(expr))));
+	    BinderException::Unsupported(expr, StringUtil::Format("%s does not support '%s'", clause, DecideWrittenSql(expr, qualifier_context->source_text))));
 }
 
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string &error_msg) {

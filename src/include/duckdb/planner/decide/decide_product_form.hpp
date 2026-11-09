@@ -27,12 +27,9 @@
 // form squared. Every other node (EXP(x), POWER(x, 0.5), x / y, CASE, ABS, a reducer, a
 // subquery) is a factor that is never opened, so the rule is total.
 //
-// QUOTING. A respelled node is tagged with its text as written (WRITTEN_TERM_TAG_PREFIX), cut from the query at its
-// source location (the parser's TERM span, the Clang SourceRange idea), so a message or a diagnosis quotes what the
-// user wrote while a plan's canonical layer shows the spelling.
-//
 // IDENTITY. Each rebuilt node is equal to the node it replaces for every input: it is
-// cast back to that node's type and keeps its alias and source location. The tree is
+// cast back to that node's type and keeps its alias and source location, so a message or a diagnosis quotes what the
+// user wrote (the location rule, language/errors.md) while a plan's canonical layer shows the spelling. The tree is
 // rebuilt from the factor list in first-seen order, as a left-deep chain, so a second
 // pass is a fixed point.
 //
@@ -47,14 +44,6 @@
 namespace duckdb {
 
 class ClientContext;
-struct DecideSourceText;
-
-//! Where a respelled term's written text comes from and goes: the query's text, and the source fragments it is cut
-//! into.
-struct DecideWrittenTerms {
-	const DecideSourceText &text;
-	vector<string> &fragments;
-};
 
 //! One factor of a product: `base` raised to `power` (at least 1). `base` is borrowed and has no binder cast on top.
 struct DecideProductFactor {
@@ -121,12 +110,9 @@ unique_ptr<Expression> BuildDecideProductCoefficient(ClientContext &context, con
 //! under a unary minus for a negative sign, plus `0 * t` for each of its zero terms.
 unique_ptr<Expression> BuildDecideProductForm(ClientContext &context, const DecideProductForm &form);
 
-//! A copy of `expr` with every decision-bearing product written in the one spelling. With `written`, each respelled
-//! node is tagged with its text as written.
-unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr,
-                                         optional_ptr<DecideWrittenTerms> written = nullptr);
-void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr,
-                              optional_ptr<DecideWrittenTerms> written = nullptr);
+//! A copy of `expr` with every decision-bearing product written in the one spelling.
+unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr);
+void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr);
 
 //! The product `left * right` in the one spelling: the builder every pass that multiplies a decision-bearing term
 //! uses, so what it builds is already canonical.

@@ -17,7 +17,9 @@ BoundColumnRefExpression::BoundColumnRefExpression(LogicalType type, ColumnBindi
 }
 
 unique_ptr<Expression> BoundColumnRefExpression::Copy() const {
-	return make_uniq<BoundColumnRefExpression>(alias, return_type, binding, depth);
+	auto copy = make_uniq<BoundColumnRefExpression>(alias, return_type, binding, depth);
+	copy->SetQueryLocation(GetQueryLocation());
+	return std::move(copy);
 }
 
 hash_t BoundColumnRefExpression::Hash() const {
@@ -41,8 +43,7 @@ string BoundColumnRefExpression::GetName() const {
 		return binding.ToString();
 	}
 #endif
-	auto name = StripSourceFragmentTags(alias);
-	return name.empty() ? ToString() : name;
+	return alias.empty() ? ToString() : alias;
 }
 
 string BoundColumnRefExpression::ToString() const {
@@ -51,9 +52,8 @@ string BoundColumnRefExpression::ToString() const {
 		return binding.ToString();
 	}
 #endif
-	auto name = StripSourceFragmentTags(alias);
-	if (!name.empty()) {
-		return name;
+	if (!alias.empty()) {
+		return alias;
 	}
 	return binding.ToString();
 }

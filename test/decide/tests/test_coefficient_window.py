@@ -519,7 +519,7 @@ def test_a_repair_model_highs_refuses_is_reported_as_such(decidb_cli_highs):
             SUCH THAT x >= 1e29 AND y BETWEEN 0 AND 5 AND SUM(x + w*y) >= 0
             MINIMIZE SUM(x)
             """,
-            r"Constraint `sum\(x \+ w \* y\) >= 0`",
+            r"Constraint `SUM\(x \+ w\*y\) >= 0`",
             id="row",
         ),
         pytest.param(

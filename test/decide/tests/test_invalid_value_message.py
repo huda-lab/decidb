@@ -15,8 +15,8 @@ from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fi
 NAN = "'NaN'::DOUBLE"
 INFINITY = "'Infinity'::DOUBLE"
 
-# DuckDB prints a subquery's table function quoted.
-SUBQUERY = '(SELECT max(v) FROM "range"(2) AS r(v))'
+# A subquery is named as it is written in the query below.
+SUBQUERY = "(SELECT max(v) FROM range(2) r(v))"
 
 
 def _query(decide, bad):
@@ -191,7 +191,7 @@ def _constant(value):
 # `when` skips it. Both paths name it, in one text without the `when`.
 BOTH_PATHS_CONSTANT = [
     ("a1_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x / 0)", "1 / 0"),
-    ("a1_infinite_literal", f"x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x * {INFINITY})", f"CAST('Infinity' AS DOUBLE)"),
+    ("a1_infinite_literal", f"x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(x * {INFINITY})", INFINITY),
     ("r1_objective", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(x / 0)", "1 / 0"),
     ("r1_budget_weight", "x(REAL) SUCH THAT x <= 4 AND SUM(x / 0) <= 9 MAXIMIZE SUM(c * x)", "1 / 0"),
     ("s1_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(x / 0)", "1 / 0"),
@@ -689,7 +689,7 @@ FACTORS = [
 @pytest.mark.parametrize("name,decide", FACTORS, ids=[case[0] for case in FACTORS])
 def test_a_factor_that_is_not_finite_is_named_as_written(decidb_cli, name, decide, bad, written):
     sql = _query(decide.format(bad=bad), "1.0")
-    assert _coefficient(f"(SELECT CAST('{written}' AS DOUBLE))") in _stderr(decidb_cli, sql, "off")
+    assert _coefficient(f"(SELECT '{written}'::DOUBLE)") in _stderr(decidb_cli, sql, "off")
 
 
 # A NULL at the places the refusals above read a value (a coefficient and a bound, in A1, R1 and S1): skipped in each.

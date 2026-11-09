@@ -384,7 +384,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", constraint_sources);
 	serializer.WritePropertyWithDefault<string>(213, "written_objective", written_objective);
 	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
-	serializer.WritePropertyWithDefault<vector<string>>(215, "source_fragments", source_fragments);
+	/* [Deleted] (vector<string>) "source_fragments" */
 	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
 	serializer.WritePropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", scope_checks);
 	/* [Deleted] (bool) "scoped_objective" */
@@ -410,7 +410,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->constraint_sources);
 	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->written_objective);
 	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
-	deserializer.ReadPropertyWithDefault<vector<string>>(215, "source_fragments", result->source_fragments);
+	deserializer.ReadDeletedProperty<vector<string>>(215, "source_fragments");
 	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
 	deserializer.ReadPropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", result->scope_checks);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");

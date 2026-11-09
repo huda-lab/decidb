@@ -629,9 +629,9 @@ _SMALL = "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT), y(INT
 @pytest.mark.parametrize(
     "clause, operand, op",
     [
-        ("POWER(x + 0.25, 2) < 11", "power(x + 0.25, 2)", "<"),
+        ("POWER(x + 0.25, 2) < 11", "POWER(x + 0.25, 2)", "<"),
         ("(x + 0.5) * y < 5", "(x + 0.5) * y", "<"),
-        ("SUM(POWER(x + 0.25, 2)) < 11", "power(x + 0.25, 2)", "<"),
+        ("SUM(POWER(x + 0.25, 2)) < 11", "POWER(x + 0.25, 2)", "<"),
         ("norm(x + 0.5, 1) > 3", "norm(x + 0.5, 1)", ">"),
         ("norm(x + 0.5, 2) > 3", "norm(x + 0.5, 2)", ">"),
         ("norm(x + 0.5, 'inf') > 3", "norm(x + 0.5, 'inf')", ">"),

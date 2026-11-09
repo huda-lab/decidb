@@ -48,7 +48,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // so the slot is what survives to be read afterward.
         struct SourceSubquerySlot {
             unique_ptr<Expression> *slot;
-            idx_t source_fragment_id = DConstants::INVALID_INDEX;
+            //! Where the subquery was written: flattening replaces the node, and the replacement is the same value.
+            optional_idx location;
         };
         vector<SourceSubquerySlot> uncorrelated_subquery_slots;
         vector<SourceSubquerySlot> correlated_subquery_slots;
@@ -61,11 +62,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                             // Correlated ones are recorded only so a rejection can call
                             // them a subquery; they stay out of the query-wide set and
                             // are refused by the fail-safe default either way.
-                            idx_t source_fragment_id = DConstants::INVALID_INDEX;
-                            TryParseSourceFragmentTag(slot->GetAlias(), source_fragment_id);
                             (subq.IsCorrelated() ? correlated_subquery_slots
                                                  : uncorrelated_subquery_slots)
-                                .push_back({&slot, source_fragment_id});
+                                .push_back({&slot, slot->GetQueryLocation()});
                         }
                         return;
                     }
@@ -141,13 +140,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 if (!HasDecideTag(alias, tag)) {
                     AddDecideTag(alias, tag);
                 }
-                if (entry.source_fragment_id != DConstants::INVALID_INDEX) {
-                    idx_t ignored;
-                    if (!TryParseSourceFragmentTag(alias, ignored)) {
-                        AddDecideTag(alias, MakeSourceFragmentTag(entry.source_fragment_id));
-                    }
-                }
                 (*slot)->SetAlias(std::move(alias));
+                (*slot)->SetQueryLocation(entry.location);
             }
         };
         tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
@@ -164,17 +158,14 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         bool objective_canonical_differs = false;
 		// The run-time checks of the clauses, built by the
 		// canonicalizer from each clause as bound, before it is canonicalized.
-		DecideScopeChecks scope_checks {statement.decide_keys, statement.keyed_scopes,
-		                                statement.decide_source_fragments};
-		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.keyed_scopes, scope_checks.keys};
+		DecideScopeChecks scope_checks {statement.decide_keys, statement.keyed_scopes, statement.decide_text};
+		DecideSourceNames message_names {scope_checks.source_text, scope_checks.keyed_scopes, scope_checks.keys};
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
 			                                  statement.keyed_scopes, statement.is_boolean_var,
 			                                  std::move(query_wide_table_indexes),
 			                                  std::move(correlated_subquery_table_indexes));
 			canonicalizer.QuoteMessagesWith(message_names);
-			DecideWrittenTerms written_terms {statement.decide_text, statement.decide_source_fragments};
-			canonicalizer.QuoteRespelledTermsFrom(written_terms);
 			// The algebra of every clause, judged once on the one spelling canonicalization wrote.
 			DecideShapeCheck shape_check(context, statement.decide_index, message_names);
 			if (statement.decide_constraints) {
@@ -182,7 +173,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
 				canonicalizer.VerifyCanonical(*statement.decide_constraints);
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
-				                             statement.decide_source_fragments, statement.keyed_scopes,
+				                             statement.decide_text, statement.keyed_scopes, statement.decide_index,
 				                             &statement.decide_keys);
 				shape_check.CheckConstraints(*statement.decide_constraints, statement.decide_constraint_sources);
 				canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
@@ -196,8 +187,11 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // FinalizeConstraintSourceInfo: written on the way in, canonical on the
                 // way out, captured around the one call that can change it. There is
                 // exactly one objective, so these are two strings rather than a registry.
-				DecideSourceNames objective_names {statement.decide_source_fragments, statement.keyed_scopes,
+				DecideSourceNames objective_names {statement.decide_text, statement.keyed_scopes,
 				                                   statement.decide_keys};
+				objective_names.decide_index = statement.decide_index;
+				// Both renderings are the plan's layers: the objective as bound and as canonicalized.
+				objective_names.written = false;
 				// As for a clause: the text the user wrote, cut at the parser's OBJECTIVE span, and DeciDB's
 				// renderings before and after canonicalization to tell whether it changed. The rendering stands in
 				// for the text only for a statement built without the parser's text.
@@ -229,7 +223,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->written_objective = std::move(written_objective);
         decide_op->canonical_objective = std::move(canonical_objective);
         decide_op->objective_canonical_differs = objective_canonical_differs;
-        decide_op->source_fragments = std::move(statement.decide_source_fragments);
         decide_op->source_text = std::move(statement.decide_text);
         // Capture the user's column names off the BindContext, which is still live here
         // and is the authority name resolution itself used. Every source kind is covered

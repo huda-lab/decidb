@@ -29,7 +29,7 @@ SELECT l_quantity FROM lineitem DECIDE y(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SU
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IS NULL MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT does not support '\(x IS NULL\)'.*
+<REGEX>:Binder Error: SUCH THAT does not support 'x IS NULL'.*
 
 # Bind IN
 statement ok
@@ -39,7 +39,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SU
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) IN (1,2,3) MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT does not support IN on 'sum\(x\)'. Only simple DECIDE variables are allowed as the IN target.*
+<REGEX>:Binder Error: SUCH THAT does not support IN on 'SUM\(x\)'. Only simple DECIDE variables are allowed as the IN target.*
 
 # Bind BETWEEN
 statement ok
@@ -71,7 +71,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x*x*x) <= 5 MAXIMIZE
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(l_quantity) <= 5  MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUM expression must reference at least one DECIDE variable, found 'sum\(l_quantity\)'.*
+<REGEX>:Binder Error: SUM expression must reference at least one DECIDE variable, found 'SUM\(l_quantity\)'.*
 
 # Repeated DECIDE variable in linear SUM
 statement ok

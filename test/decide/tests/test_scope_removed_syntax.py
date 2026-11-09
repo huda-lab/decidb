@@ -265,7 +265,7 @@ def test_colon_form_inside_a_plain_subquery_is_named(decidb_cli):
     """The colon form stays a spelling, but only for a DECIDE clause's own reducers."""
     sql = _query(clauses="x <= cap AND x <= (SELECT SUM(u: cap) FROM (VALUES (1, 'A')) u(cap, g))")
     stderr = decidb_cli.execute_raw(sql).stderr
-    assert "the colon form sum(u: cap) is not supported inside a subquery yet" in stderr, stderr
+    assert "the colon form SUM(u: cap) is not supported inside a subquery yet" in stderr, stderr
 
 
 # ---------------------------------------------------------------------------

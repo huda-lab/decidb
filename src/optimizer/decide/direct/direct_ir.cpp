@@ -70,7 +70,7 @@ public:
 		D_ASSERT(!decide.optimized && !decide.num_auxiliary_vars);
 		DirectIR ir;
 		ir.render = [&decide = decide](const Expression &expr) {
-			return RenderDecideSource(expr, decide.source_fragments, decide.keyed_scopes, &decide.keys);
+			return RenderDecideSource(expr, decide.source_text, decide.keyed_scopes, &decide.keys);
 		};
 		ir.decide_index = decide.decide_index;
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);

@@ -260,7 +260,7 @@ def test_a_column_addend_keeps_a_min_or_max_fractional(request, cli_fixture):
     cli = request.getfixturevalue(cli_fixture)
     result = cli.execute_raw(_query("x(INT)", "x <= cap AND MAX(x + w) > 3", "MINIMIZE SUM(x)"))
     assert (
-        "Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) and can take fractional values"
+        "Comparison '>' is not supported here: 'MAX(x + w)' has type DECIMAL(21,1) and can take fractional values"
     ) in result.stderr, result.stderr
 
 

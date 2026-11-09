@@ -367,7 +367,7 @@ def test_norm_with_a_relation_qualifier_reads_each_depot_once(
         ),
         pytest.param(
             "SUM(D: ship) by (D.region) <= 100",
-            "DECIDE: per D does not determine the decision ship (in sum(D: ship))",
+            "DECIDE: per D does not determine the decision ship (in SUM(D: ship))",
             id="colon-form-takes-the-data-check",
         ),
     ],

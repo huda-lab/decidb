@@ -768,22 +768,36 @@ noteDecideParen(PGNode *expr, core_yyscan_t yyscanner)
 	return expr;
 }
 
-/* DeciDB: a product, a power or a function call, anchored at its location, so a term the canonicalizer respells is
- * quoted as written. */
-static PGNode *
-noteDecideTerm(PGNode *term, YYLTYPE anchor, YYLTYPE span, core_yyscan_t yyscanner)
+/*
+ * DeciDB: the key of a reducer's own `per`, anchored at the location the reducer is bound at: the BY when it has one,
+ * else the call. The key's text is the reducer's own, whichever way another clause spells the same key.
+ */
+static void
+noteDecideReducerKey(PGNode *scope_node, int anchor, core_yyscan_t yyscanner)
 {
-	noteDecideSpan(yyscanner, anchor.start, PG_DECIDE_SPAN_TERM, span);
-	return term;
+	PGDecideScope *scope = (PGDecideScope *) scope_node;
+	YYLTYPE key;
+
+	if (scope->per != PG_DECIDE_PER_KEY)
+		return;
+	key.start = scope->key_start;
+	key.end = scope->key_end;
+	noteDecideSpan(yyscanner, anchor, PG_DECIDE_SPAN_PER, key);
 }
 
-/* DeciDB: the two sides of a comparison, anchored at its operator. */
-static PGNode *
-noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner)
+/*
+ * DeciDB: a reducer's call without its BY, anchored at the BY. The span runs from the start of the call to the end of
+ * its closing parenthesis; `call_start` is that of the call when the call is built by this rule (the scoped and the
+ * colon form), else `call_end` is the whole call (`func_application`).
+ */
+static void
+noteDecideCall(YYLTYPE call_end, YYLTYPE by, core_yyscan_t yyscanner, YYLTYPE call_start)
 {
-	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_CMP_LHS, lhs);
-	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_CMP_RHS, rhs);
-	return comparison;
+	YYLTYPE call = call_end;
+
+	if (call_start.start != 0 || call_start.end != 0)
+		call.start = call_start.start;
+	noteDecideSpan(yyscanner, by.start, PG_DECIDE_SPAN_CALL, call);
 }
 
 /*
@@ -796,7 +810,9 @@ noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYL
 	YYLTYPE bounds = lower;
 
 	bounds.end = upper.end;
-	return noteDecideSides(between, op, input, bounds, yyscanner);
+	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_BETWEEN_INPUT, input);
+	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_BETWEEN_BOUNDS, bounds);
+	return between;
 }
 
 /*

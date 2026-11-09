@@ -339,7 +339,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 
 	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
 
-	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	AssertComposable(comp);
 	LogicalDecide::ComposedMinMaxConstraint spec;
@@ -405,7 +405,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	vector<pair<int, const Expression *>> beside;
 	// An objective always has a direction, so no term needs the both-sides pin here.
-	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
 	                outer_push, terms, names, beside);
@@ -733,7 +733,10 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		// subjects spell it out as written.
 		{
 			using Kind = LogicalDecide::RewriteAccount::Kind;
-			const string key = SplitDecideTwoLevel(*per_wrapper, decide.source_fragments, decide.keyed_scopes).key;
+			const string key =
+			    SplitDecideTwoLevel(*per_wrapper, DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys,
+			                                                      decide.decide_index, decide.aux_var_expressions))
+			        .key;
 			auto inner_text = RenderDecideTwoLevelInner(RenderForPlan(inner_agg, decide), key);
 			// Defined members have no box, so every extremum over them, the outer one's
 			// included, is stated natively.

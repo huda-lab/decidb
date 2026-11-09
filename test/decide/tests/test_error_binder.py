@@ -883,12 +883,12 @@ class TestRefusalsSpeakSql:
     @pytest.mark.parametrize(
         "clause,quoted",
         [
-            ("x IS DISTINCT FROM 3", "'(x IS DISTINCT FROM 3)'"),  # a comparison DECIDE does not read
-            ("NOT (x <= 1 OR x >= 3)", "'(NOT ((x <= 1) OR (x >= 3)))'"),  # an operator it does not read
+            ("x IS DISTINCT FROM 3", "'x IS DISTINCT FROM 3'"),  # a comparison DECIDE does not read
+            ("NOT (x <= 1 OR x >= 3)", "'NOT (x <= 1 OR x >= 3)'"),  # an operator it does not read
             ("1", "'1'"),  # a clause of no kind it reads
-            ("x = (x > 2)", "'(x > 2)'"),  # a comparison over a decision as an operand
-            ("x >= (x BETWEEN 1 AND 3)", "'(x BETWEEN 1 AND 3)'"),  # the same, a BETWEEN
-            ("x <= (x > 1 AND cap > 1)", "'((x > 1) AND (cap > 1))'"),  # the same, an AND
+            ("x = (x > 2)", "'x > 2'"),  # a comparison over a decision as an operand
+            ("x >= (x BETWEEN 1 AND 3)", "'x BETWEEN 1 AND 3'"),  # the same, a BETWEEN
+            ("x <= (x > 1 AND cap > 1)", "'x > 1 AND cap > 1'"),  # the same, an AND
         ],
     )
     def test_unsupported_constraint_is_quoted(self, decidb_cli, clause, quoted):
@@ -899,7 +899,7 @@ class TestRefusalsSpeakSql:
         # A comparison over data is a 0/1 coefficient (test_data_operands.py); over a
         # decision it is refused.
         stderr = self._refusal(decidb_cli, "SUM(x * (x BETWEEN 1 AND 2)) <= 3")
-        assert "SUM expression does not support '(x BETWEEN 1 AND 2)'" in stderr, stderr
+        assert "SUM expression does not support 'x BETWEEN 1 AND 2'" in stderr, stderr
 
     # One per message the objective check words: no decision (a constant, a data column), a comparison, `count(*)`.
     @pytest.mark.parametrize(
@@ -907,7 +907,7 @@ class TestRefusalsSpeakSql:
         [
             ("MAXIMIZE 3", "MAXIMIZE 3 has no decision to optimize"),
             ("MINIMIZE cap", "MINIMIZE cap has no decision to optimize"),
-            ("MAXIMIZE x > 1", "MAXIMIZE does not support '(x > 1)'"),
+            ("MAXIMIZE x > 1", "MAXIMIZE does not support 'x > 1'"),
             ("MAXIMIZE count(*)", "does not support function 'count(*)'"),
         ],
     )
@@ -1004,7 +1004,7 @@ class TestBinderRefusalBranches:
             ("2 * (SELECT x)", r"Subquery in DECIDE SUM expression cannot contain DECIDE variables"),
             # The same as a call's lone argument, which a call prints with its alias: the refusal quotes `sum((SELECT x))`
             # as written, never the tag the binder put on the subquery.
-            ("(SELECT x)", r"found 'sum\(\(SELECT x\)\)'"),
+            ("(SELECT x)", r"found 'SUM\(\(SELECT x\)\)'"),
         ],
     )
     def test_reducer_argument(self, decidb_cli, argument, message):
@@ -1053,14 +1053,14 @@ class TestBinderRefusalBranches:
             # A reducer in a reducer under a product with a decision.
             ("SUM(2 * SUM(x))", r"an aggregate inside an aggregate is not supported yet"),
             # An aggregate with arguments no function takes.
-            ("SUM(w * x, 2)", r"SUM needs one argument, found 'sum\(\(w \* x\), 2\)'"),
+            ("SUM(w * x, 2)", r"SUM needs one argument, found 'SUM\(w \* x, 2\)'"),
             # MAX(x, n) is DuckDB's top-n aggregate, a list: the objective refuses it as a constraint does.
             ("max(x, 2)", r"MAX needs one argument, found 'max\(x, 2\)'"),
             # A scope whose body, or condition, does not bind.
             ("when c > 0: sum(nosuch * x)", r'Referenced column "nosuch" not found'),
             ("when nosuch > 0: sum(w * x)", r'Referenced column "nosuch" not found'),
             # An operator or CASE at the top, an operator below it, a product of data, a quotient by a reducer.
-            ("COALESCE(SUM(x), 0)", r"does not support 'COALESCE\(sum\(x\), 0\)'"),
+            ("COALESCE(SUM(x), 0)", r"does not support 'COALESCE\(SUM\(x\), 0\)'"),
             ("SUM(x) + COALESCE(x, 1)", r"operator 'COALESCE' cannot take a DECIDE variable"),
             ("CASE WHEN c > 1 THEN 1 ELSE 2 END", r"has no decision to optimize"),
             ("w * 2", r"clause does not support function '\*'"),

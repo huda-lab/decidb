@@ -49,6 +49,7 @@ void Transformer::NoteDecideExpression(const duckdb_libpgquery::PGNode &node, co
 	if (entry == decide_expr_nodes.end() || !expr.GetQueryLocation().IsValid()) {
 		return;
 	}
+
 	// Innermost first: an expression and an ancestor that took its location are told apart by the one transformed
 	// first, the inner.
 	decide_expr_spans.emplace(expr.GetQueryLocation().GetIndex(), entry->second);

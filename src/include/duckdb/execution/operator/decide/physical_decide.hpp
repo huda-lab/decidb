@@ -91,11 +91,6 @@ public:
     string canonical_objective;
     bool objective_canonical_differs = false;
 
-    //! The user's written spelling of every cast and scalar subquery in the DECIDE
-    //! clause, copied from LogicalDecide. RenderDecideSource replays it so EXPLAIN
-    //! and the diagnosis labels quote the clause the user typed.
-    vector<string> source_fragments;
-
     //! The DECIDE tail as the user wrote it, copied from LogicalDecide.
     DecideSourceText source_text;
 

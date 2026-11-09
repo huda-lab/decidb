@@ -19,38 +19,42 @@ class BindContext;
 class BoundAggregateExpression;
 class BoundConjunctionExpression;
 
-//! Tag source-only casts and subqueries before binding obscures their spelling.
-void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments);
-
-//! Preserve a source-fragment tag when a DECIDE binder replaces a parsed node.
-void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bound);
+//! The location rule (Clang's TreeTransform): a replacement takes the query location of exactly the node it equals in
+//! value, so a message quotes it as the text the user wrote for that node (`DecideSourceText`). A node whose value
+//! differs from every node it replaces takes none, and a render prints its operator and quotes its children. Every
+//! site that builds a node in place of another calls this; an edit that changes a located node's value in place
+//! clears its location instead.
+inline void DecideReplaces(Expression &replacement, const Expression &replaced) {
+	replacement.SetQueryLocation(replaced.GetQueryLocation());
+}
 
 //! Assign stable source ids to bound comparisons before planning rewrites them.
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.
-//! `text` supplies each comparison's two sides as the user wrote them.
-vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
+//! `text` is the query's text: each comparison's two sides are cut from it as the user wrote them.
+vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
-                                                            idx_t decide_index, const vector<DecideKey> *keys,
-                                                            const DecideSourceText &text);
+                                                            idx_t decide_index, const vector<DecideKey> *keys);
 
-//! Rebuild canonical display templates after PlanSubqueries and canonicalization.
+//! Rebuild canonical display templates after PlanSubqueries and canonicalization. `decide_index` tells a decision
+//! from data: the plan layer reprints the decision structure and quotes the data.
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
-                                  const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
-                                  const vector<DecideKey> *keys = nullptr);
+                                  const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
+                                  idx_t decide_index, const vector<DecideKey> *keys = nullptr);
 
 //! Render one bound expression as the user wrote it.
 //!
 //! This is the single user-facing renderer: `Expression::ToString()` prints the tree
 //! as BOUND, so it shows the casts DuckDB inserted while reconciling types and spells
-//! arithmetic as `"-"("*"(a, b), c)`. Authorship is what separates a cast the user
-//! typed from one the binder added, and `TagDecideSourceFragments` recorded exactly
-//! that before binding could obscure it -- so a tagged cast or subquery replays its
-//! written spelling out of `fragments` and an untagged one is dropped.
+//! arithmetic as `"-"("*"(a, b), c)`. A node's query location names the span of the
+//! query the user wrote for it (`DecideSourceText`, the Clang SourceManager idea), so a
+//! located node is quoted instead of reprinted, and an implicit cast, which takes its
+//! child's location, quotes as its child does. A node with no location (one an
+//! optimizer rewrite made) prints its operator and quotes its children.
 //!
 //! Every surface that echoes a DECIDE clause back to a user goes through here:
 //! EXPLAIN on both plans, and the clause labels an infeasibility diagnosis prints.
-string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
+string RenderDecideSource(const Expression &expr, const DecideSourceText &text,
                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr);
 
 //! The value a NULL guard (NULL_GUARD_TAG) protects: the first operand of a COALESCE, the THEN of a CASE. An expression
@@ -61,10 +65,10 @@ const Expression &DecideUnguarded(const Expression &expr);
 //! Whether `expr` is a NULL guard (NULL_GUARD_TAG), so DecideUnguarded reads through it.
 bool DecideIsGuarded(const Expression &expr);
 
-//! What a message about a clause renders with: the registries above. A column reads as the user wrote it
-//! (`D.depotID`): its bound reference carries that spelling as a source fragment.
+//! What a message about a clause renders with: the query's text and the registries above. A column reads as the user
+//! wrote it (`D.depotID`): its bound reference is located.
 struct DecideSourceNames {
-    const vector<string> &fragments;
+    const DecideSourceText &text;
     const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
     //! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
@@ -73,16 +77,23 @@ struct DecideSourceNames {
     //! name; `decide_index` tells a decision column apart. Null prints the name.
     idx_t decide_index = DConstants::INVALID_INDEX;
     const vector<pair<idx_t, string>> *aux_labels = nullptr;
+    //! True quotes every located node as the user wrote it, as a message does. False (a plan's layers) quotes the
+    //! located nodes that read no decision and reprints the decision structure, which canonicalization and the
+    //! rewrites reshape. DecidePlanNames makes the second kind.
+    bool written = true;
 };
 
-//! The names a plan and the rewrites render with: the clause registries and the auxiliary labels.
-DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
+//! The names a plan and the rewrites render with: the clause registries and the auxiliary labels. They render as a
+//! plan's layers do (DecideSourceNames::written is false).
+DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels);
 
 //! An expression as the query writes it (lower-case names, a reducer's `when`,
-//! `per` and `by`), every column qualified by its relation when `relations` lists any.
-string RenderDecideSource(const Expression &expr, const DecideSourceNames &names);
+//! `per` and `by`), every column qualified by its relation when `relations` lists any. `parent_precedence` is how
+//! tightly the operator it is an operand of binds (20 for `*`, 21 for the right of `/`): a text that binds looser is
+//! parenthesized.
+string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, int parent_precedence = 0);
 
 //! A reducer as the query writes it, without its `by`: `sum(when S.priority:
 //! ship)`, for a message that names its `by` group separately.
@@ -93,8 +104,10 @@ string RenderDecideReducer(const BoundAggregateExpression &reducer, const Decide
 //! norm's body goes through here, so a new definition changes one function.
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer);
 
-//! The key of a `per` wrapper, as written (`D.region`, `()`).
-string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
+//! The key of a `per` wrapper, as written (`D.region`, `()`): cut from the query where the wrapper is located, else the
+//! key as it was first written (`keys`).
+string RenderDecidePerKey(const BoundConjunctionExpression &per, const DecideSourceText &text,
+                          const vector<DecideKey> *keys);
 
 //! The two-level objective `outer(per k: inner(e) by (k))` (language/guide.md), which binds to the nested
 //! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k, taken apart: the `when` in front of the body
@@ -106,8 +119,7 @@ struct DecideTwoLevelParts {
 	string key;
 	const Expression *body = nullptr;
 };
-DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
-                                        const vector<KeyedScopeInfo> &keyed_scopes);
+DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names);
 //! The inner level, `inner(e) by (k)`, from the inner reducer as rendered (`inner(e)`).
 string RenderDecideTwoLevelInner(const string &inner, const string &key);
 //! The whole form, `outer(per k: inner(e) by (k))`, from the inner level as RenderDecideTwoLevelInner renders it.
@@ -209,8 +221,7 @@ InsertionOrderPreservingMap<string> RenderDecideParams(const OP &op) {
 
 	// What the optimizer made of the clauses: a column that stands for an expression prints it, and each rewrite's
 	// account follows its clause, the objective's its own.
-	auto names =
-	    DecidePlanNames(op.source_fragments, op.keyed_scopes, op.keys, op.decide_index, op.aux_var_expressions);
+	auto names = DecidePlanNames(op.source_text, op.keyed_scopes, op.keys, op.decide_index, op.aux_var_expressions);
 	vector<string> objective_accounts;
 	for (auto &account : op.rewrite_accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {

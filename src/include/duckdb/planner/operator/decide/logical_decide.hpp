@@ -196,8 +196,10 @@ struct DecideGroupBound {
 	//! INVALID_INDEX for any other bound.
 	idx_t low = DConstants::INVALID_INDEX;
 	idx_t high = DConstants::INVALID_INDEX;
-	//! The bound as the user wrote it, for a message.
+	//! The bound as the user wrote it, for a message, and where it was written: the column that stands for the bound
+	//! takes that location, so a render quotes it as the bound.
 	string text;
+	optional_idx location;
 
 	unique_ptr<DecideGroupBound> Copy() const {
 		auto copy = make_uniq<DecideGroupBound>();
@@ -213,6 +215,7 @@ struct DecideGroupBound {
 		copy->low = low;
 		copy->high = high;
 		copy->text = text;
+		copy->location = location;
 		return copy;
 	}
 
@@ -322,12 +325,6 @@ public:
     string written_objective;
     string canonical_objective;
     bool objective_canonical_differs = false;
-
-    //! The user's written spelling of every cast and scalar subquery in the DECIDE
-    //! clause, indexed by source fragment id. Binding rewrites both beyond recognition,
-    //! so RenderDecideSource replays them from here whenever a plan or a diagnosis
-    //! shows the user their own clause.
-    vector<string> source_fragments;
 
     //! The DECIDE tail as the user wrote it, with where the parser found each expression in it (the Clang
     //! SourceManager pattern). A bound node's query location names its span; a message cuts the text instead of

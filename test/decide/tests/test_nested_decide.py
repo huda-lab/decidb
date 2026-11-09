@@ -282,7 +282,7 @@ def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solv
     "inner_clauses,message",
     [
         ("SUCH THAT y <= cap OR y <= 1 MAXIMIZE SUM(y)", "SUCH THAT: OR is not supported"),
-        ("SUCH THAT y <= cap MAXIMIZE y > 1", r"MAXIMIZE does not support '\(y > 1\)'"),
+        ("SUCH THAT y <= cap MAXIMIZE y > 1", r"MAXIMIZE does not support 'y > 1'"),
     ],
     ids=["constraint", "objective"],
 )

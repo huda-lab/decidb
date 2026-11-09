@@ -53,30 +53,23 @@ struct DecideQualifierContext {
     vector<KeyedScopeInfo> *keyed_scopes = nullptr;
     //! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
     vector<DecideKey> *keys = nullptr;
-    //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
-    //! constraint adds its key as written, which binding expands past recognition.
-    vector<string> *source_fragments = nullptr;
-    //! The text the user wrote for the DECIDE tail (SelectNode::decide_text); null when the statement has none.
+    //! The text the user wrote for the DECIDE tail (SelectNode::decide_text), which a node's query location indexes.
     const DecideSourceText *source_text = nullptr;
 
-    //! The text written for the scope or `by` marker `marker`, added to source_fragments for a bound node to carry as
-    //! a fragment tag; INVALID_INDEX when the parser kept none.
-    idx_t WrittenFragment(const ParsedExpression &marker, DecideSpanRole role) const {
-        string text;
-        if (!source_text || !source_fragments || !source_text->Cut(marker.GetQueryLocation(), role, text)) {
-            return DConstants::INVALID_INDEX;
-        }
-        source_fragments->push_back(std::move(text));
-        return source_fragments->size() - 1;
+    //! The text written for the scope or `by` marker `marker`, as the user wrote it; false when the parser kept none.
+    bool WrittenText(const ParsedExpression &marker, DecideSpanRole role, string &text) const {
+        return source_text && source_text->Cut(marker.GetQueryLocation(), role, text);
     }
 };
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-//! `expr` as SQL, as a message quotes it: without the source-fragment and other tags the binders put on its nodes.
-string DecideWrittenSql(const ParsedExpression &expr);
+//! `expr` as a message quotes it: the span of the query the user wrote for it (`text`, which its query location
+//! indexes), else, for a node the parser kept no span for, its SQL without the tags the binders put on its nodes.
+string DecideWrittenSql(const ParsedExpression &expr, const DecideSourceText *text);
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg);
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
+                         const DecideSourceText *text, string &error_msg);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
@@ -90,7 +83,8 @@ string DecideWrittenFunctionName(const FunctionExpression &func);
 //! BoundCastExpression and authorship can no longer be recovered. Parser-internal
 //! casts have no query location and are deliberately ignored here.
 void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
-                                           const case_insensitive_map_t<idx_t> &variables);
+                                           const case_insensitive_map_t<idx_t> &variables,
+                                           const DecideSourceText *text);
 
 //! Where `when`, `per` and `by` may stand, checked on the parsed constraints (`objective`
 //! false) or objective before binding. `[when c] [per K]:` stands in front of a clause or
@@ -99,7 +93,7 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 //! reducer (the objective's two-level form aside). Anything else -- a scope inside a
 //! condition, a key or an ordinary subquery -- answers "not supported yet".
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                  bool objective);
+                                  bool objective, const DecideSourceText *text);
 
 //! Whether an objective (its `[when c] [per ()]:` peeled) has the two-level form
 //! `outer(per k: inner(e) by (k'))`: an outer reducer, optionally `by ()`, over a `per`
@@ -141,7 +135,8 @@ void ValidateDecideNoDataAggregateFactor(ClientContext &context, const ParsedExp
 //! declared name onto that index.
 void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
                                                  const case_insensitive_map_t<idx_t> &variables,
-                                                 const vector<LogicalType> &variable_types);
+                                                 const vector<LogicalType> &variable_types,
+                                                 const DecideSourceText *text);
 
 //! Reject a `<`, `>` or `<>` whose compared side is not provably whole-numbered from
 //! its **declared types**, naming the column and its type.
@@ -198,10 +193,6 @@ protected:
     //! marker replaces `expr_ptr` in place, so by the time the result comes back the
     //! node the caller held is no longer the one the user wrote.
     static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
-    //! A data column that bound at `location` carries its spelling as written (`S.cap`) as a source fragment, which
-    //! RenderDecideSource prints in any message and at any stage. A column the parser kept no text for, a decision
-    //! and anything that is not a plain column reference are left alone.
-    BindResult TagWrittenColumn(optional_idx location, BindResult result) const;
     //! Throws a clause's error at its root unless a column or table was not found. DuckDB
     //! retries a failed expression in each outer query, in case it refers to one, and reports
     //! that retry's error; only a missing name can be such a reference, so any other error is
@@ -229,8 +220,7 @@ protected:
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
     //! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (language/guide.md §5.1): the
-    //! relations' stored columns as an exact key scope, the tag of that scope, and
-    //! COLON_FORM_TAG for the echo.
+    //! relations' stored columns as an exact key scope and the tag of that scope.
     BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
     //! Binds `agg([when c] [per K]: e)`: `agg(e)` with `c` as the aggregate's filter and
     //! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a

@@ -327,7 +327,7 @@ def test_diagnose_names_the_clause_with_a_right_hand_aggregate(decidb_cli):
         DECIDE x(BOOL) SUCH THAT SUM(x * w) by (g) >= SUM(cap) by (g) + 100 MAXIMIZE SUM(p*x)"""
     rows, columns = decidb_cli.execute(sql, expect_number_range=True)
     clauses = {row[columns.index("clause")] for row in rows if row[columns.index("clause")]}
-    assert "sum(x * w) by (g) >= sum(cap) by (g) + 100" in clauses, rows
+    assert "SUM(x * w) by (g) >= SUM(cap) by (g) + 100" in clauses, rows
 
 
 # Right sides whose reducer the window reads in a way no other case does. id -> (aggregate text, its value over the rows
@@ -434,5 +434,5 @@ def test_rhs_aggregate_whose_own_when_empties_a_group_skips_it(decidb_cli, oracl
 @pytest.mark.error
 def test_rhs_aggregate_shapes_the_binder_rejects(decidb_cli):
     # The binder admits no DISTINCT reducer, so a window never has to copy one.
-    with pytest.raises(DeciDBCliError, match=r"does not support 'sum\(DISTINCT cap\)'"):
+    with pytest.raises(DeciDBCliError, match=r"does not support 'SUM\(DISTINCT cap\)'"):
         run(decidb_cli, _sql(PLAIN, "SUM(x * w) <= SUM(DISTINCT cap)"), "off")

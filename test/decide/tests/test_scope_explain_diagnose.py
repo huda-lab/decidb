@@ -606,9 +606,9 @@ def test_the_query_scope_still_folds_a_clause_into_one_edit(decidb_cli):
 @pytest.mark.diagnose
 def test_per_global_is_one_class(decidb_cli):
     """`per (): sum(x) by () >= 100` has one class and no key value: one finding, no group.
-    The echo leaves out `by ()`, which an omitted `by` means."""
+    The echo is the clause as written, `by ()` included."""
     findings = _findings(_diagnose(decidb_cli, "per (): sum(x) by () >= 100"))
-    assert findings == [("NULL", "NULL", 25, "source_literal", "per (): sum(x) >= 75")]
+    assert findings == [("NULL", "NULL", 25, "source_literal", "per (): sum(x) by () >= 75")]
 
 
 @pytest.mark.diagnose
@@ -752,8 +752,8 @@ def test_an_absorbed_bound_shares_no_slack_with_a_composed_clause(decidb_cli):
     assert_no_internal_leak(result, "composed and absorbed")
     rows = [row for row in _diagnose_relation.rows(result) if row["edit_source"] != "achievable_objective"]
     assert sorted((row["clause"], row["suggested_change"], int(float(row["amount"]))) for row in rows) == [
-        ("max(y) + sum(z) <= 4", "max(y) + sum(z) <= 9", 5),
-        ("sum(z) >= 10", "sum(z) >= 9", 1),
+        ("MAX(y) + SUM(z) <= 4", "MAX(y) + SUM(z) <= 9", 5),
+        ("SUM(z) >= 10", "SUM(z) >= 9", 1),
     ], rows
 
 

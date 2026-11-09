@@ -136,7 +136,7 @@ Invalid Input Error: DECIDE: per () does not determine D.region (in by (D.region
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE: per D does not determine the decision ship (in sum(D: ship)).
+Invalid Input Error: DECIDE: per D does not determine the decision ship (in SUM(D: ship)).
 
 # objective: when in front
 statement ok

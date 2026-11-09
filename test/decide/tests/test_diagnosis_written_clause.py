@@ -104,10 +104,10 @@ def test_a_data_only_bound_is_untouched(decidb_cli):
         MINIMIZE SUM(ship)
     """,
     )
-    assert "sum(ship) >= 9000" in message, message
-    clause = attrs.get("sum(ship) >= 9000")
+    assert "SUM(ship) >= 9000" in message, message
+    clause = attrs.get("SUM(ship) >= 9000")
     assert clause is not None, attrs
-    assert clause["suggested_change"].startswith("sum(ship) >= "), clause
+    assert clause["suggested_change"].startswith("SUM(ship) >= "), clause
 
 
 @pytest.mark.explain
@@ -159,8 +159,8 @@ _MIXED = "SELECT id, x, o FROM {} DECIDE x(INT), o(BOOL) SUCH THAT {} MINIMIZE S
 def test_a_written_bound_that_reads_data_repairs_after_a_literal(decidb_cli, bound):
     """A bound with data in it gives way to the literal floor, with or without a decision in it."""
     attrs, _ = _diagnostics(decidb_cli, _MIXED.format(_ONE_ROW, f"x <= {bound} AND SUM(x) >= 100"))
-    assert "sum(x) >= 100" in attrs, attrs
-    assert attrs["sum(x) >= 100"]["edit_source"] == "source_literal", attrs
+    assert "SUM(x) >= 100" in attrs, attrs
+    assert attrs["SUM(x) >= 100"]["edit_source"] == "source_literal", attrs
 
 
 @pytest.mark.error

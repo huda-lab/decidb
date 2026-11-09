@@ -6,6 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -102,13 +103,12 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 }
 
 //! Equals ignores aliases. On a decision-bearing node they are structure (a reducer's `by` and `per`), so they must
-//! agree there; on data they are provenance (where a column was written), which two equal values may differ in. A
-//! respelled term's written text is provenance too.
+//! agree there; on data they are provenance (where a column was written), which two equal values may differ in.
 static bool DecisionAliasesEqual(const Expression &left, const Expression &right, idx_t decide_index) {
 	if (!BoundExpressionReferencesDecide(left, decide_index)) {
 		return true;
 	}
-	if (StripWrittenTermTag(left.GetAlias()) != StripWrittenTermTag(right.GetAlias())) {
+	if (left.GetAlias() != right.GetAlias()) {
 		return false;
 	}
 	vector<const Expression *> left_children;
@@ -377,10 +377,8 @@ static string RebuiltAlias(const string &own, const string &replaced) {
 	return alias + replaced.substr(replaced_name.size());
 }
 
-//! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is. With `written`, the
-//! rewritten node also names its text as written, cut at its location.
-static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node,
-                                             optional_ptr<DecideWrittenTerms> written) {
+//! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is.
+static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node) {
 	auto form = ReadDecideProduct(context, node, decide_index);
 	auto product = BuildDecideProductForm(context, form);
 	auto *spelled = product.get();
@@ -392,53 +390,39 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 		return nullptr;
 	}
 	auto alias = RebuiltAlias(rebuilt->GetAlias(), node.GetAlias());
-	// The text goes on the product itself, below the cast back, which a reader looks through.
-	string text;
-	if (written && written->text.Cut(node.GetQueryLocation(), DecideSpanRole::TERM, text)) {
-		auto tag = MakeWrittenTermTag(written->fragments.size());
-		written->fragments.push_back(std::move(text));
-		if (spelled == rebuilt.get()) {
-			AddDecideTag(alias, tag);
-		} else {
-			auto spelled_alias = spelled->GetAlias();
-			AddDecideTag(spelled_alias, tag);
-			spelled->SetAlias(std::move(spelled_alias));
-		}
-	}
 	rebuilt->SetAlias(std::move(alias));
-	// The product is the written term respelled, so it points where the term was written, as the cast back does.
-	spelled->SetQueryLocation(node.GetQueryLocation());
-	rebuilt->SetQueryLocation(node.GetQueryLocation());
+	// The product is the written term respelled, equal to it for every input, so it points where the term was
+	// written, as the cast back does.
+	DecideReplaces(*spelled, node);
+	DecideReplaces(*rebuilt, node);
 	return rebuilt;
 }
 
-void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr,
-                              optional_ptr<DecideWrittenTerms> written) {
+void NormalizeProductsInPlace(ClientContext &context, idx_t decide_index, unique_ptr<Expression> &expr) {
 	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(
-	    *expr, [&](unique_ptr<Expression> &child) { NormalizeProductsInPlace(context, decide_index, child, written); });
+	    *expr, [&](unique_ptr<Expression> &child) { NormalizeProductsInPlace(context, decide_index, child); });
 	if (!IsDecideProductNode(context, *expr, decide_index)) {
 		return;
 	}
-	auto rebuilt = RewriteProduct(context, decide_index, *expr, written);
+	auto rebuilt = RewriteProduct(context, decide_index, *expr);
 	if (rebuilt) {
 		expr = std::move(rebuilt);
 	}
 }
 
-unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr,
-                                         optional_ptr<DecideWrittenTerms> written) {
+unique_ptr<Expression> NormalizeProducts(ClientContext &context, idx_t decide_index, const Expression &expr) {
 	auto result = expr.Copy();
-	NormalizeProductsInPlace(context, decide_index, result, written);
+	NormalizeProductsInPlace(context, decide_index, result);
 	return result;
 }
 
 unique_ptr<Expression> BuildDecideProduct(ClientContext &context, idx_t decide_index, unique_ptr<Expression> left,
                                           unique_ptr<Expression> right) {
 	auto product = Bind(context, "*", std::move(left), std::move(right));
-	auto rebuilt = RewriteProduct(context, decide_index, *product, nullptr);
+	auto rebuilt = RewriteProduct(context, decide_index, *product);
 	return rebuilt ? std::move(rebuilt) : std::move(product);
 }
 

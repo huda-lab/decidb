@@ -31,6 +31,20 @@ static string OperatorName(const Expression &expr) {
 	return StringUtil::Replace(name, "_", " ");
 }
 
+//! What the user called a conditional: `CASE`, or the `if` or `iif` that reaches the binder as the parser's CASE.
+static string WrittenConditional(const Expression &expr, const DecideSourceText &text) {
+	string written;
+	if (!text.Cut(expr.GetQueryLocation(), DecideSpanRole::EXPR, written)) {
+		return "CASE";
+	}
+	idx_t length = 0;
+	while (length < written.size() &&
+	       (isalnum(static_cast<unsigned char>(written[length])) || written[length] == '_')) {
+		length++;
+	}
+	return length == 0 ? "CASE" : StringUtil::Upper(written.substr(0, length));
+}
+
 void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &clause) const {
 	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
 		return;
@@ -38,9 +52,11 @@ void DecideShapeCheck::CheckVocabulary(const Expression &expr, const string &cla
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CASE:
 		Refuse(expr,
-		       "CASE over a DECIDE variable is not supported. Write the condition as a scope in front of the "
-		       "clause (when category = 'A': sum(x) >= 1), split rows into classes with per, or pre-compute "
-		       "conditional values in a CTE or subquery before the DECIDE clause.",
+		       StringUtil::Format("%s over a DECIDE variable is not supported. Write the condition as a scope in "
+		                          "front of the clause (when category = 'A': sum(x) >= 1), split rows into classes "
+		                          "with per, or pre-compute conditional values in a CTE or subquery before the "
+		                          "DECIDE clause.",
+		                          WrittenConditional(expr, names.text)),
 		       clause);
 	case ExpressionClass::BOUND_OPERATOR:
 		Refuse(expr, StringUtil::Format("DECIDE: operator '%s' cannot take a DECIDE variable.", OperatorName(expr)),

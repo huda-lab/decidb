@@ -59,7 +59,6 @@ public:
     //! Stable display provenance captured before PlanSubqueries and finalized after
     //! canonicalization. source_fragments preserves casts/subqueries while planning.
     vector<ConstraintSourceInfo> decide_constraint_sources;
-    vector<string> decide_source_fragments;
     //! The DECIDE tail as written, for the canonicalizer to quote a term it respells (NormalizeProducts).
     DecideSourceText decide_text;
     DecideSense decide_sense;

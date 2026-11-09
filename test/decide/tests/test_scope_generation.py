@@ -659,12 +659,12 @@ def test_an_input_with_no_rows_is_not_an_error(decidb_cli):
         ),
         pytest.param(
             "when row_number() over () > 1: ship <= 1",
-            "DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by",
+            "DECIDE: a window function such as 'row_number() over ()' is not supported in when, per or by",
             id="window-function-in-when",
         ),
         pytest.param(
             "sum(ship) by (row_number() over ()) <= 1",
-            "DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by",
+            "DECIDE: a window function such as 'row_number() over ()' is not supported in when, per or by",
             id="window-function-in-by",
         ),
         pytest.param(

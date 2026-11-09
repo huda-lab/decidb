@@ -34,36 +34,11 @@ static string DecideComparisonOperator(ExpressionType type) {
 	return type == ExpressionType::COMPARE_NOTEQUAL ? "<>" : ExpressionTypeToOperator(type);
 }
 
-void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments) {
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) {
-		TagDecideSourceFragments(child, fragments);
-	});
-	if (expr.GetExpressionClass() != ExpressionClass::CAST && expr.GetExpressionClass() != ExpressionClass::SUBQUERY) {
-		return;
-	}
-	idx_t fragment_id = fragments.size();
-	fragments.push_back(expr.ToString());
-	auto alias = expr.GetAlias();
-	AddDecideTag(alias, MakeSourceFragmentTag(fragment_id));
-	expr.SetAlias(std::move(alias));
-}
-
-void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bound) {
-	idx_t fragment_id;
-	if (!TryParseSourceFragmentTag(source.GetAlias(), fragment_id)) {
-		return;
-	}
-	auto alias = bound.GetAlias();
-	if (!TryParseSourceFragmentTag(alias, fragment_id)) {
-		AddDecideTag(alias, MakeSourceFragmentTag(fragment_id));
-		bound.SetAlias(std::move(alias));
-	}
-}
-
 namespace {
 //! What rendering a bound clause reads besides the tree.
 struct RenderContext {
-	const vector<string> &fragments;
+	//! The query's text: a located node is cut from it.
+	const DecideSourceText &text;
 	const vector<KeyedScopeInfo> &keyed_scopes;
 	//! The keys, so a reducer prints its `per K` and `by (...)`; null prints neither.
 	const vector<DecideKey> *keys = nullptr;
@@ -73,17 +48,18 @@ struct RenderContext {
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
 	//! False when the caller writes the `by` itself.
 	bool print_by = true;
-	//! True quotes a term canonicalization respelled as written (WRITTEN_TERM_TAG_PREFIX), as a message and a
-	//! diagnosis do; false prints it as respelled, as a plan's canonical layer does.
+	//! True quotes every located node as written, as a message and a diagnosis do. False quotes the data-only ones and
+	//! reprints the decision structure, which canonicalization and the rewrites reshape, as a plan's layers do.
 	bool written = false;
 };
 } // namespace
 
 //! The context `names` describes.
 static RenderContext ContextOf(const DecideSourceNames &names) {
-	RenderContext ctx {names.fragments, names.keyed_scopes, &names.keys};
+	RenderContext ctx {names.text, names.keyed_scopes, &names.keys};
 	ctx.decide_index = names.decide_index;
 	ctx.aux_labels = names.aux_labels;
+	ctx.written = names.written;
 	return ctx;
 }
 
@@ -110,11 +86,11 @@ const Expression &DecideUnguarded(const Expression &expr) {
 static string BinaryOperatorOf(const Expression &expr) {
 	const Expression *node = &expr;
 	while (node->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		idx_t fragment_id;
-		if (TryParseSourceFragmentTag(node->GetAlias(), fragment_id)) {
+		auto &child = *node->Cast<BoundCastExpression>().child;
+		if (!(node->GetQueryLocation() == child.GetQueryLocation())) {
 			return string(); // a cast the user wrote prints as written, parentheses and all
 		}
-		node = node->Cast<BoundCastExpression>().child.get();
+		node = &child;
 	}
 	if (node->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return string();
@@ -242,9 +218,9 @@ static string RenderWrittenWhen(const Expression &filter, const RenderContext &c
 
 //! A reducer's `by` key as it wrote it, else as the key it shares was first written.
 static string ByText(const BoundAggregateExpression &agg, const RenderContext &ctx, idx_t group_key) {
-	idx_t fragment_id;
-	if (TryParseGroupKeyTextTag(agg.GetAlias(), fragment_id)) {
-		return ctx.fragments[fragment_id];
+	string written;
+	if (ctx.text.Cut(agg.GetQueryLocation(), DecideSpanRole::BY, written)) {
+		return written;
 	}
 	return (*ctx.keys)[group_key].text;
 }
@@ -273,16 +249,12 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	                "(";
 	idx_t scope_idx;
 	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx)) {
-		auto key_text = DecideKeyText(*ctx.keys, ctx.keyed_scopes[scope_idx].key);
-		idx_t text_fragment;
-		if (TryParseQualifiedReducerTextTag(agg.GetAlias(), text_fragment)) {
-			key_text = ctx.fragments[text_fragment]; // the key as this reducer wrote it
+		// The key as this reducer wrote it, else as the key was first written.
+		string key_text;
+		if (!ctx.text.Cut(agg.GetQueryLocation(), DecideSpanRole::PER, key_text)) {
+			key_text = DecideKeyText(*ctx.keys, ctx.keyed_scopes[scope_idx].key);
 		}
-		if (HasDecideTag(agg.GetAlias(), COLON_FORM_TAG)) {
-			result += key_text + ": ";
-		} else {
-			scope += (scope.empty() ? "per " : " per ") + key_text;
-		}
+		scope += (scope.empty() ? "per " : " per ") + key_text;
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
@@ -324,10 +296,10 @@ const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer)
 
 //! An expression with the registries alone -- no relation names, no auxiliary labels: the form
 //! the clause renderers in this file use. `keys` prints each reducer's `per` and `by`.
-static string RenderSource(const Expression &expr, const vector<string> &fragments,
+static string RenderSource(const Expression &expr, const DecideSourceText &text,
                            const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr,
                            bool written = false) {
-	RenderContext ctx {fragments, keyed_scopes, keys};
+	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.written = written;
 	return RenderSource(expr, ctx);
 }
@@ -342,22 +314,55 @@ static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 	});
 }
 
+//! How tightly the node `expr` binds, for a text cut from the query: the text excludes the parentheses around it, so
+//! it takes them where its operator needs them. An arithmetic operator binds as RenderFunction says; any other
+//! infix form (a comparison, AND, OR, CASE, IN) binds looser than all of them; the rest are whole in themselves.
+static int QuotedPrecedence(const Expression &expr) {
+	if (auto precedence = ArithmeticPrecedence(BinaryOperatorOf(expr))) {
+		return precedence;
+	}
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_COMPARISON:
+	case ExpressionClass::BOUND_CONJUNCTION:
+	case ExpressionClass::BOUND_CASE:
+		return 5;
+	case ExpressionClass::BOUND_OPERATOR:
+		return expr.type == ExpressionType::OPERATOR_COALESCE ? 0 : 5;
+	default:
+		return 0;
+	}
+}
+
+//! The text the user wrote for `expr`, when its query location names a span of the query and the render may quote
+//! it. A message quotes every located node (ctx.written). A plan quotes the located nodes that read no decision and
+//! reprints the rest: canonicalization and the rewrites reshape the decision structure, and a located node's text is
+//! the user's for the value it had when it was bound. A reducer rendered without its `by` quotes its call alone.
+static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &text) {
+	if (!expr.GetQueryLocation().IsValid()) {
+		return false;
+	}
+	// The two comparisons a BETWEEN binds to carry its location, but each is half of its value, not the whole.
+	if (HasDecideTag(expr.GetAlias(), BETWEEN_LOWER_TAG) || HasDecideTag(expr.GetAlias(), BETWEEN_UPPER_TAG)) {
+		return false;
+	}
+	if (!ctx.written && BoundExpressionReferencesDecide(expr, ctx.decide_index)) {
+		return false;
+	}
+	if (!ctx.print_by && expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::CALL, text)) {
+		return true;
+	}
+	return ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::EXPR, text);
+}
+
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
-	idx_t fragment_id;
-	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id)) {
-		return ctx.fragments[fragment_id];
-	}
-	if (ctx.written && TryParseWrittenTermTag(expr.GetAlias(), fragment_id)) {
-		// The text the parser cut excludes the parentheses around it, so it takes them where its operator needs them.
-		int precedence = ArithmeticPrecedence(BinaryOperatorOf(expr));
-		auto &text = ctx.fragments[fragment_id];
-		return precedence != 0 && precedence < parent_precedence ? "(" + text + ")" : text;
-	}
-	if (HasDecideTag(expr.GetAlias(), WRITTEN_VALUE_TAG)) {
-		return StripDecideTags(expr.GetAlias()); // a value as written: SQL, not an identifier
-	}
 	if (HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
 		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
+	}
+	string quoted;
+	if (QuoteSpan(expr, ctx, quoted)) {
+		auto precedence = QuotedPrecedence(expr);
+		return precedence != 0 && precedence < parent_precedence ? "(" + quoted + ")" : quoted;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 	    HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {
@@ -365,9 +370,9 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	}
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CAST:
-		// Untagged casts were introduced by DuckDB binding and are display noise. The
-		// child takes the cast's place, precedence included: `2 * CAST(a + b AS DOUBLE)`
-		// prints `2 * (a + b)`.
+		// A cast with no span of its own was introduced by DuckDB binding (one the user wrote, or one that took its
+		// child's location, is quoted above) and is display noise. The child takes the cast's place, precedence
+		// included: `2 * CAST(a + b AS DOUBLE)` prints `2 * (a + b)`.
 		return RenderSource(*expr.Cast<BoundCastExpression>().child, ctx, parent_precedence);
 	case ExpressionClass::BOUND_COLUMN_REF: {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
@@ -456,34 +461,35 @@ static string AppendQualifier(string prefix, const string &suffix) {
 	return prefix;
 }
 
-string RenderDecidePerKey(const BoundConjunctionExpression &conj, const vector<string> &fragments) {
-	idx_t fragment_id;
-	if (!TryParseSourceFragmentTag(conj.GetAlias(), fragment_id) || fragment_id >= fragments.size()) {
-		throw InternalException("DECIDE: a per wrapper keeps no written key");
+string RenderDecidePerKey(const BoundConjunctionExpression &conj, const DecideSourceText &text,
+                          const vector<DecideKey> *keys) {
+	string written;
+	if (text.Cut(conj.GetQueryLocation(), DecideSpanRole::PER, written)) {
+		return written;
 	}
-	return fragments[fragment_id];
+	// A wrapper the optimizer built, or one of a statement with no source text, names the key as it was first written;
+	// `per ()` names none.
+	idx_t key;
+	if (!TryParsePerKeyTag(conj.GetAlias(), key)) {
+		return "()";
+	}
+	D_ASSERT(keys);
+	return DecideKeyText(*keys, key);
 }
 
 //! `per K`, in front of its clause.
-static string PerClassQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments) {
-	return "per " + RenderDecidePerKey(conj, fragments);
+static string PerClassQualifier(const BoundConjunctionExpression &conj, const RenderContext &ctx) {
+	return "per " + RenderDecidePerKey(conj, ctx.text, ctx.keys);
 }
 
-//! The condition of a `when` wrapper as the user wrote it; a wrapper whose text the parser did not keep renders its
-//! condition.
-static string WrittenWhen(const BoundConjunctionExpression &conj, const vector<string> &fragments,
-                          const vector<KeyedScopeInfo> &keyed_scopes) {
-	idx_t fragment_id;
-	if (TryParseSourceFragmentTag(conj.GetAlias(), fragment_id)) {
-		return fragments[fragment_id];
-	}
-	return RenderSource(*conj.children[1], fragments, keyed_scopes);
+//! The condition of a `when` wrapper as the user wrote it: the wrapper's second child, a data expression, quoted.
+static string WrittenWhen(const BoundConjunctionExpression &conj, const RenderContext &ctx) {
+	return RenderSource(*conj.children[1], ctx);
 }
 
 //! The qualifier of a `when` wrapper: `when c`, in front of its clause.
-static string WhenQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments,
-                            const vector<KeyedScopeInfo> &keyed_scopes) {
-	return "when " + WrittenWhen(conj, fragments, keyed_scopes);
+static string WhenQualifier(const BoundConjunctionExpression &conj, const RenderContext &ctx) {
+	return "when " + WrittenWhen(conj, ctx);
 }
 
 //! A qualifier (`when c per K`) is written in front of its clause and ends in a colon.
@@ -492,42 +498,38 @@ static string FrontQualifier(const string &qualifier) {
 }
 
 //! The `when c per K` qualifier of a clause's scope, as written in front of it.
-static string ScopeQualifier(const DecideEnclosingScope &scope, const vector<string> &fragments,
-                             const vector<KeyedScopeInfo> &keyed_scopes) {
-	return AppendQualifier(scope.when_wrapper ? WhenQualifier(*scope.when_wrapper, fragments, keyed_scopes) : string(),
-	                       scope.per_wrapper ? PerClassQualifier(*scope.per_wrapper, fragments) : string());
+static string ScopeQualifier(const DecideEnclosingScope &scope, const RenderContext &ctx) {
+	return AppendQualifier(scope.when_wrapper ? WhenQualifier(*scope.when_wrapper, ctx) : string(),
+	                       scope.per_wrapper ? PerClassQualifier(*scope.per_wrapper, ctx) : string());
 }
 
 //! Every comparison of a constraint tree with the `when c per K:` qualifier of the
 //! wrappers it sits under.
 template <class CALLBACK>
-static void VisitSourceComparisons(Expression &expr, const vector<string> &fragments,
-                                   const vector<KeyedScopeInfo> &keyed_scopes, DecideEnclosingScope scope,
+static void VisitSourceComparisons(Expression &expr, const RenderContext &ctx, DecideEnclosingScope scope,
                                    CALLBACK &&callback) {
 	scope = EnterDecideScope(expr, scope);
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			if (IsConstraintChild(conj, i)) {
-				VisitSourceComparisons(*conj.children[i], fragments, keyed_scopes, scope, callback);
+				VisitSourceComparisons(*conj.children[i], ctx, scope, callback);
 			}
 		}
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		callback(expr.Cast<BoundComparisonExpression>(),
-		         FrontQualifier(ScopeQualifier(scope, fragments, keyed_scopes)));
+		callback(expr.Cast<BoundComparisonExpression>(), FrontQualifier(ScopeQualifier(scope, ctx)));
 	}
 }
 
 //! The qualifier of an IN marker, which VisitSourceComparisons passes over: the front
 //! qualifier of the wrappers it sits under.
-static string ScopedInQualifier(const Expression &constraints, const Expression &in, const vector<string> &fragments,
-                                const vector<KeyedScopeInfo> &keyed_scopes) {
+static string ScopedInQualifier(const Expression &constraints, const Expression &in, const RenderContext &ctx) {
 	string found;
 	ForEachScopedConstraintLeaf(constraints, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
 		if (&leaf == &in) {
-			found = FrontQualifier(ScopeQualifier(scope, fragments, keyed_scopes));
+			found = FrontQualifier(ScopeQualifier(scope, ctx));
 		}
 	});
 	return found;
@@ -582,14 +584,18 @@ static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo 
 	upper.between_upper = true;
 }
 
-vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
+vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
-                                                            idx_t decide_index, const vector<DecideKey> *keys,
-                                                            const DecideSourceText &text) {
+                                                            idx_t decide_index, const vector<DecideKey> *keys) {
 	vector<ConstraintSourceInfo> result;
+	// DeciDB's own rendering of a side, and the clause as the user wrote it: a message quotes every located node.
+	RenderContext ctx {text, keyed_scopes, keys};
+	ctx.decide_index = decide_index;
+	auto written_ctx = ctx;
+	written_ctx.written = true;
 	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
 	idx_t lower_half = DConstants::INVALID_INDEX;
-	VisitSourceComparisons(constraints, fragments, keyed_scopes, DecideEnclosingScope(),
+	VisitSourceComparisons(constraints, ctx, DecideEnclosingScope(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
 		                       idx_t source_id = result.size();
 		                       bool between_lower = HasDecideTag(cmp.GetAlias(), BETWEEN_LOWER_TAG);
@@ -622,24 +628,25 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       // A scope written in front belongs to the clause as written:
 		                       // canonicalization drops the `per K:` of a clause in the
 		                       // aggregate shape, which still holds (its scope checks).
-		                       info.written_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys);
-		                       info.written_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys);
+		                       info.rendered_lhs = RenderSource(*cmp.left, ctx);
+		                       info.rendered_rhs = RenderSource(*cmp.right, ctx);
+		                       info.written_lhs = RenderSource(*cmp.left, written_ctx);
+		                       info.written_rhs = RenderSource(*cmp.right, written_ctx);
 		                       info.written_cmp = DecideComparisonOperator(cmp.type);
-		                       info.rendered_lhs = info.written_lhs;
-		                       info.rendered_rhs = info.written_rhs;
 		                       info.qualifier = qualifier;
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
-			                       info.source_lhs = info.written_lhs;
-			                       info.source_rhs = info.written_rhs;
+			                       // What an edit quotes stays DeciDB's own rendering.
+			                       info.source_lhs = info.rendered_lhs;
+			                       info.source_rhs = info.rendered_rhs;
 			                       info.source_rhs_reads_data = ReadsRowData(*cmp.right, decide_index);
 		                       }
-		                       // What an edit quotes stays DeciDB's own rendering; what a message quotes as the clause
-		                       // is the text the user wrote, cut from the query (a clause with no cut keeps the
-		                       // render).
+		                       // The halves of a BETWEEN carry its location, not their sides': the whole clause is the
+		                       // input and the text from the lower bound through the upper one.
 		                       string left, right;
-		                       bool cut = text.Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_LHS, left) &&
-		                                  text.Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_RHS, right);
+		                       bool cut = (between_lower || between_upper) &&
+		                                  text.Cut(cmp.GetQueryLocation(), DecideSpanRole::BETWEEN_INPUT, left) &&
+		                                  text.Cut(cmp.GetQueryLocation(), DecideSpanRole::BETWEEN_BOUNDS, right);
 		                       if (between_lower) {
 			                       lower_half = source_id;
 		                       } else if (between_upper) {
@@ -647,13 +654,9 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 				                       throw InternalException("DECIDE: the upper half of a BETWEEN came without "
 				                                               "its lower half; the binder emits them in order");
 			                       }
-			                       // The location is the BETWEEN's, so what was cut is the whole clause's sides.
 			                       LinkBetweenHalves(result[lower_half], info, lower_half, source_id,
 			                                         cut ? &left : nullptr, cut ? &right : nullptr);
 			                       lower_half = DConstants::INVALID_INDEX;
-		                       } else if (cut) {
-			                       info.written_lhs = std::move(left);
-			                       info.written_rhs = std::move(right);
 		                       }
 		                       result.push_back(std::move(info));
 	                       });
@@ -666,11 +669,11 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		AddDecideTag(alias, MakeSourceClauseTag(source_id));
 		in.SetAlias(std::move(alias));
 		ConstraintSourceInfo info;
-		info.canonical_lhs = RenderSource(in, fragments, keyed_scopes);
+		info.canonical_lhs = RenderSource(in, ctx);
 		info.spelled_lhs = info.canonical_lhs;
 		info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
 		// Its scope in front, as a comparison's: the IN itself shows no scope word.
-		info.qualifier = ScopedInQualifier(constraints, in, fragments, keyed_scopes);
+		info.qualifier = ScopedInQualifier(constraints, in, ctx);
 		result.push_back(std::move(info));
 	});
 	return result;
@@ -690,10 +693,14 @@ static bool ContainsSubquerySource(const Expression &expr) {
 }
 
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
-                                  const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
-                                  const vector<DecideKey> *keys) {
+                                  const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
+                                  idx_t decide_index, const vector<DecideKey> *keys) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
-	VisitSourceComparisons(mutable_constraints, fragments, keyed_scopes, DecideEnclosingScope(),
+	RenderContext ctx {text, keyed_scopes, keys};
+	ctx.decide_index = decide_index;
+	auto written_ctx = ctx;
+	written_ctx.written = true;
+	VisitSourceComparisons(mutable_constraints, ctx, DecideEnclosingScope(),
 	                       [&](BoundComparisonExpression &cmp, const string &) {
 		                       // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
 		                       idx_t source_id = DConstants::INVALID_INDEX;
@@ -704,10 +711,10 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 			                           "InitializeConstraintSourceInfo tags every comparison of the tree");
 		                       }
 		                       auto &info = sources[source_id];
-		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys, true);
-		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys, true);
-		                       info.spelled_lhs = RenderSource(*cmp.left, fragments, keyed_scopes, keys);
-		                       info.spelled_rhs = RenderSource(*cmp.right, fragments, keyed_scopes, keys);
+		                       info.canonical_lhs = RenderSource(*cmp.left, written_ctx);
+		                       info.canonical_rhs = RenderSource(*cmp.right, written_ctx);
+		                       info.spelled_lhs = RenderSource(*cmp.left, ctx);
+		                       info.spelled_rhs = RenderSource(*cmp.right, ctx);
 		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
 		                       info.canonical_differs = info.rendered_lhs != info.spelled_lhs ||
 		                                                info.rendered_rhs != info.spelled_rhs ||
@@ -723,30 +730,28 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	                       });
 }
 
-string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
+string RenderDecideSource(const Expression &expr, const DecideSourceText &text,
                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys) {
-	return RenderSource(expr, fragments, keyed_scopes, keys, true);
+	return RenderSource(expr, text, keyed_scopes, keys, true);
 }
 
-string RenderDecideSource(const Expression &expr, const DecideSourceNames &names) {
-	auto ctx = ContextOf(names);
-	ctx.written = true;
-	return RenderSource(expr, ctx);
+string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, int parent_precedence) {
+	return RenderSource(expr, ContextOf(names), parent_precedence);
 }
 
-DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
+DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels) {
-	DecideSourceNames names {fragments, keyed_scopes, keys};
+	DecideSourceNames names {text, keyed_scopes, keys};
 	names.decide_index = decide_index;
 	names.aux_labels = &aux_labels;
+	names.written = false;
 	return names;
 }
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
 	auto ctx = ContextOf(names);
 	ctx.print_by = false;
-	ctx.written = true;
 	return RenderSource(reducer, ctx);
 }
 
@@ -774,16 +779,15 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
-DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
-                                        const vector<KeyedScopeInfo> &keyed_scopes) {
+DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
 	DecideTwoLevelParts parts;
 	parts.body = per.children[0].get();
 	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &wrapper = parts.body->Cast<BoundConjunctionExpression>();
-		parts.when = WrittenWhen(wrapper, fragments, keyed_scopes);
+		parts.when = WrittenWhen(wrapper, ContextOf(names));
 		parts.body = wrapper.children[0].get();
 	}
-	parts.key = RenderDecidePerKey(per, fragments);
+	parts.key = RenderDecidePerKey(per, names.text, &names.keys);
 	return parts;
 }
 
@@ -799,15 +803,14 @@ string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, co
 //! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k: rendered as written
 //! when the wrapper still holds the nested reducer, else null.
 static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per,
-                                                  const vector<string> &fragments,
-                                                  const vector<KeyedScopeInfo> &keyed_scopes) {
-	auto parts = SplitDecideTwoLevel(per, fragments, keyed_scopes);
+                                                  const DecideSourceNames &names) {
+	auto parts = SplitDecideTwoLevel(per, names);
 	auto &outer = parts.body->Cast<BoundAggregateExpression>();
 	if (outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return nullptr;
 	}
 	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
-	string inner_body = RenderSource(*inner.children[0], fragments, keyed_scopes);
+	string inner_body = RenderSource(*inner.children[0], ContextOf(names));
 	auto inner_text =
 	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
 	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
@@ -818,7 +821,7 @@ static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpressi
 //! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
 //! inner value per class).
 static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
-	auto parts = SplitDecideTwoLevel(per, names.fragments, names.keyed_scopes);
+	auto parts = SplitDecideTwoLevel(per, names);
 	auto &inner = parts.body->Cast<BoundAggregateExpression>();
 	auto ctx = ContextOf(names);
 	ctx.print_by = false; // the `by` is the per key, written once below
@@ -830,13 +833,11 @@ static string RenderTwoLevelInner(const BoundConjunctionExpression &per, const D
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                      vector<idx_t> *out_source_ids, DecideEnclosingScope scope) {
-	auto &fragments = names.fragments;
-	auto &keyed_scopes = names.keyed_scopes;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsTwoLevelObjectiveWrapper(conj)) {
-			const auto front = ScopeQualifier(scope, fragments, keyed_scopes);
-			auto two_level = RenderTwoLevelObjective(conj, fragments, keyed_scopes);
+			const auto front = ScopeQualifier(scope, ContextOf(names));
+			auto two_level = RenderTwoLevelObjective(conj, names);
 			if (two_level) {
 				PushClause(out, out_source_ids, *two_level, DConstants::INVALID_INDEX);
 				return;
@@ -870,7 +871,7 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		PushClause(out, out_source_ids, string(), leaf_source_id);
 		return;
 	}
-	auto front_qualifier = FrontQualifier(ScopeQualifier(scope, fragments, keyed_scopes));
+	auto front_qualifier = FrontQualifier(ScopeQualifier(scope, ContextOf(names)));
 	PushClause(out, out_source_ids, AppendQualifier(front_qualifier, RenderSource(expr, ContextOf(names))),
 	           leaf_source_id);
 }

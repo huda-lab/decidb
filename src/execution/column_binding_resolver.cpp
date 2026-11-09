@@ -190,7 +190,10 @@ unique_ptr<Expression> ColumnBindingResolver::VisitReplace(BoundColumnRefExpress
 				// in verification mode
 				return nullptr;
 			}
-			return make_uniq<BoundReferenceExpression>(expr.GetAlias(), expr.return_type, i);
+			auto reference = make_uniq<BoundReferenceExpression>(expr.GetAlias(), expr.return_type, i);
+			// The same column at a chunk position: it stays where the query wrote it (DECIDE quotes it from there).
+			reference->SetQueryLocation(expr.GetQueryLocation());
+			return std::move(reference);
 		}
 	}
 	// LCOV_EXCL_START

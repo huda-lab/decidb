@@ -126,7 +126,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // A BOOL's 0/1 domain is carried by is_boolean_var alone: PhysicalDecide::Finalize applies it to the solver
         // column's bounds, so no SUCH THAT row is synthesized for it.
         vector<bool> is_boolean_var;
-        vector<string> decide_source_fragments;
 
         // Key scopes: one per distinct key, shared by the declarations and reducers on it.
 	    vector<DecideKey> keys;
@@ -213,10 +212,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // decision name is known now, so a decision in a condition or a key is named the
         // way the user spelled it.
         if (statement.decide_constraints) {
-            ValidateDecideScopeSpellings(*statement.decide_constraints, decide_variable_names, false);
+            ValidateDecideScopeSpellings(*statement.decide_constraints, decide_variable_names, false,
+                                         &statement.decide_text);
         }
         if (statement.decide_objective) {
-            ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true);
+            ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true,
+                                         &statement.decide_text);
         }
 
         // This is the only point where cast authorship is still observable. Reject
@@ -225,11 +226,11 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // expressions are intentionally outside this solver-algebra policy.
         if (statement.decide_constraints) {
             ValidateDecideNoExplicitDecisionCasts(*statement.decide_constraints,
-                                                  decide_variable_names);
+                                                  decide_variable_names, &statement.decide_text);
         }
         if (statement.decide_objective) {
             ValidateDecideNoExplicitDecisionCasts(*statement.decide_objective,
-                                                  decide_variable_names);
+                                                  decide_variable_names, &statement.decide_text);
         }
 
         if (statement.decide_constraints) {
@@ -242,18 +243,10 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             // the clause; the model builder keeps only the value half of the refusal (a
             // data column yielding a fractional coefficient).
             ValidateDecideNoIntegerStepComparisonOnReal(*statement.decide_constraints, decide_variable_names,
-                                                        var_types);
-            // Source-only casts and scalar subqueries lose their written spelling
-            // during binding/flattening. Give those atoms stable fragment ids now;
-            // the DECIDE binder carries the tags onto the bound nodes.
-            TagDecideSourceFragments(*statement.decide_constraints, decide_source_fragments);
+                                                        var_types, &statement.decide_text);
         }
         if (statement.decide_objective) {
             ValidateDecideNoDataAggregateFactor(context, *statement.decide_objective, decide_variable_names);
-            // The objective quotes its own SQL in a message (a `when` that keeps no row, a
-            // term that reads no decision), so its casts and subqueries keep their written
-            // text, as every constraint's do.
-            TagDecideSourceFragments(*statement.decide_objective, decide_source_fragments);
         }
 
         bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
@@ -272,7 +265,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         qualifier_context.decide_index = result.decide_index;
         qualifier_context.keyed_scopes = &keyed_scopes;
 	    qualifier_context.keys = &keys;
-	    qualifier_context.source_fragments = &decide_source_fragments;
 	    qualifier_context.source_text = &statement.decide_text;
         // Isolate with brackets to avoid multiple active binders.
         {
@@ -285,11 +277,11 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // read the decision's declared type off the DECIDE clause; every other
                 // operand's type is only known now that binding has resolved it. Together
                 // they are the whole refusal; the model builder raises none.
-			    DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
+			    DecideSourceNames names {statement.decide_text, keyed_scopes, keys};
 			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, names);
 			    result.decide_constraint_sources =
-			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
-			                                       result.decide_index, &keys, statement.decide_text);
+			        InitializeConstraintSourceInfo(*result.decide_constraints, statement.decide_text, keyed_scopes,
+			                                       result.decide_index, &keys);
 		    }
         }
         if (statement.decide_objective) {
@@ -306,7 +298,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			    RefuseVolatile(*element.expression, "a by key");
 		    }
 	    }
-	    result.decide_source_fragments = decide_source_fragments;
 	    result.decide_text = statement.decide_text;
         result.decide_sense = statement.decide_sense;
         // Update types in bind context to reflect the determined types from DECIDE clause

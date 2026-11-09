@@ -117,7 +117,6 @@ class BoundAggregateExpression;
 class BoundComparisonExpression;
 class BoundConjunctionExpression;
 struct DecideSourceNames;
-struct DecideWrittenTerms;
 struct DecideProductForm;
 class BoundColumnRefExpression;
 class BoundFunctionExpression;
@@ -174,7 +173,7 @@ struct DecideScopeChecks {
 	//! A check keyed by a scope's key and a `by` key together adds their union.
 	vector<DecideKey> &keys;
 	const vector<KeyedScopeInfo> &keyed_scopes;
-	const vector<string> &source_fragments;
+	const DecideSourceText &source_text;
 	vector<DecideScopeCheck> checks;
 };
 
@@ -238,11 +237,6 @@ public:
 	//! which alone has them; `names` must outlive the canonicalizer.
 	void QuoteMessagesWith(const DecideSourceNames &names) {
 		message_names = &names;
-	}
-	//! Tag each product it respells with its text as written, cut from `written`. Set by the planner, which alone has
-	//! the query's text; `written` must outlive the canonicalizer.
-	void QuoteRespelledTermsFrom(DecideWrittenTerms &written) {
-		written_terms = &written;
 	}
 
 	//! True when `expr` evaluates to a single value for the entire query, so it may
@@ -507,15 +501,12 @@ private:
 	bool judge_column_refs = false;
 	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
 	optional_ptr<const DecideSourceNames> message_names;
-	//! See QuoteRespelledTermsFrom; null leaves respelled terms untagged.
-	optional_ptr<DecideWrittenTerms> written_terms;
 	//! Which decision columns are declared BOOL, indexed by decide-column index.
 	vector<bool> boolean_decisions;
 
-	//! `expr` as a scope refusal quotes it.
-	string Quote(const Expression &expr) const;
-	//! `expr` by its written text when the query recorded it, else by its bound name.
-	string QuoteAsWritten(const Expression &expr) const;
+	//! `expr` as a scope refusal quotes it: the text the user wrote for it, parenthesized where it binds looser than
+	//! the operator it is an operand of (`parent_precedence`, as in RenderDecideSource).
+	string Quote(const Expression &expr, int parent_precedence = 0) const;
 };
 
 } // namespace duckdb

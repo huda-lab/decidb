@@ -254,7 +254,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
-	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	Helpers helpers {optimizer.context, decide, {}};
 

@@ -567,12 +567,11 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			                            UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() ==
 			                                ExpressionClass::BOUND_AGGREGATE;
 			if (!boolean_factor) {
-				throw BinderException("%s: '%s' is a decision, so it cannot %s %s. %s", clause_name,
-				                      UserFacingName(*factor), verb, UserFacingName(*term),
-				                      clause == Clause::CONSTRAINT
-				                          ? "Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."
-				                          : "Only constants, query-wide values or a BOOL decision can scale "
-				                            "SUM/AVG/MIN/MAX.");
+				throw BinderException(
+				    "%s: '%s' is a decision, so it cannot %s %s. %s", clause_name, Quote(*factor), verb, Quote(*term),
+				    clause == Clause::CONSTRAINT ? "Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."
+				                                 : "Only constants, query-wide values or a BOOL decision can scale "
+				                                   "SUM/AVG/MIN/MAX.");
 			}
 			multipliers.push_back(factor);
 			cur = term;
@@ -589,17 +588,15 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
 			// something anyone can type.
 			if (IsCorrelatedSubqueryRef(*factor)) {
-				throw BinderException(
-				    "%s: this subquery returns a different value for each row, "
-				    "so it cannot %s %s. Move it inside the aggregate, e.g. "
-				    "SUM(x %s (SELECT ...)).",
-				    clause_name, verb, UserFacingName(*term), factor_divides ? "/" : "*");
+				throw BinderException("%s: this subquery returns a different value for each row, "
+				                      "so it cannot %s %s. Move it inside the aggregate, e.g. "
+				                      "SUM(x %s (SELECT ...)).",
+				                      clause_name, verb, Quote(*term), factor_divides ? "/" : "*");
 			}
-			throw BinderException(
-			    "%s: '%s' varies per row, so it cannot %s %s. "
-			    "Move it inside the aggregate, e.g. SUM(x %s %s).",
-			    clause_name, UserFacingName(*factor), verb, UserFacingName(*term),
-			    factor_divides ? "/" : "*", UserFacingName(*factor));
+			throw BinderException("%s: '%s' varies per row, so it cannot %s %s. "
+			                      "Move it inside the aggregate, e.g. SUM(x %s %s).",
+			                      clause_name, Quote(*factor), verb, Quote(*term), factor_divides ? "/" : "*",
+			                      Quote(*factor, factor_divides ? 21 : 20));
 		}
 
 		(factor_divides ? divisors : multipliers).push_back(factor);
@@ -812,6 +809,8 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 		// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
 		definition = RebindReducer(marker, "sum", BindOp("abs", BindOp("sign", body.Copy())));
 	}
+	// A norm and its definition are one value (the order is in the alias, for a display).
+	DecideReplaces(*definition, marker);
 	auto alias = definition->GetAlias();
 	RemoveDecideTag(alias, string(NORM_MARKER_TAG_PREFIX) + order + "__");
 	AddDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + order + "__");
@@ -1142,7 +1141,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
                                                                   double &out_constant_offset) const {
 	auto desugared = DesugarNorms(objective);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective, written_terms);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective);
 	return CanonicalizeObjectiveInternal(*written, out_constant_offset);
 }
 
@@ -1160,6 +1159,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 			result->children.push_back(conjunction.children[i]->Copy());
 		}
 		result->SetAlias(conjunction.GetAlias());
+		// The wrapper is rebuilt around the canonical body and stands where it was written (its `per`, its `when`).
+		DecideReplaces(*result, conjunction);
 		return std::move(result);
 	}
 
@@ -1196,7 +1197,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		if (!TryEvaluateFoldableDouble(context, scaled ? *scaled : *atom.expr, value, FOLD_PLAIN)) {
 			throw BinderException("MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
 			                      "the objective. Remove it, or move it to the SELECT list.",
-			                      QuoteAsWritten(*atom.expr));
+			                      Quote(*atom.expr));
 		}
 		out_constant_offset += atom.sign * value;
 	}
@@ -1213,20 +1214,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	return result;
 }
 
-string DecideCanonicalizer::Quote(const Expression &expr) const {
-	return message_names ? RenderDecideSource(expr, *message_names) : UserFacingName(expr);
-}
-
-string DecideCanonicalizer::QuoteAsWritten(const Expression &expr) const {
-	// A node whose written text was recorded (a subquery or a cast) carries it in a tag,
-	// and only that text names it in SQL; a reducer is spelled as the plan prints it,
-	// with its `when` and `by`.
-	idx_t fragment_id;
-	auto *node = StripCastsForIdentity(expr);
-	return TryParseSourceFragmentTag(node->GetAlias(), fragment_id) ||
-	               node->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
-	           ? Quote(expr)
-	           : UserFacingName(expr);
+string DecideCanonicalizer::Quote(const Expression &expr, int parent_precedence) const {
+	return message_names ? RenderDecideSource(expr, *message_names, parent_precedence) : UserFacingName(expr);
 }
 
 DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const BoundComparisonExpression &cmp,
@@ -1541,6 +1530,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 
 		auto result = make_uniq<BoundConjunctionExpression>(conj.type);
 		result->SetAlias(conj.GetAlias());
+		DecideReplaces(*result, conj); // as the objective's wrapper above
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			// A `when` or `per` wrapper holds the constraint in child 0; the remaining
 			// children are its condition / key columns and are not constraints.
@@ -1588,7 +1578,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints) const {
 	auto desugared = DesugarNorms(constraints);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints, written_terms);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints);
 	auto result = CanonicalizeTreeInternal(*written);
 	ValidateCanonicalTree(*result);
 	return result;
@@ -1730,7 +1720,7 @@ static void AddDecisionChecks(const vector<const BoundColumnRefExpression *> &de
 
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
+	DecideSourceNames names {scope.source_text, scope.keyed_scopes, scope.keys};
 	auto reducer_text = RenderDecideReducer(reducer, names);
 	idx_t by = DConstants::INVALID_INDEX;
 	TryParseGroupKeyTag(reducer.GetAlias(), by);
@@ -1746,11 +1736,10 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	TryParseGroupKeyOrder(reducer.GetAlias(), by_order);
 	auto key = WithinGroups(scope.keyed_scopes[scope_idx].key, per_order, by, by_order, scope.keys, key_order);
 	// The key as this reducer wrote it, which another clause's spelling of the same columns does not change.
-	idx_t text_fragment;
-	auto subject = TryParseQualifiedReducerTextTag(reducer.GetAlias(), text_fragment) &&
-	                       text_fragment < scope.source_fragments.size()
-	                   ? scope.source_fragments[text_fragment]
-	                   : DecideKeyText(scope.keys, scope.keyed_scopes[scope_idx].key);
+	string subject;
+	if (!scope.source_text.Cut(reducer.GetQueryLocation(), DecideSpanRole::PER, subject)) {
+		subject = DecideKeyText(scope.keys, scope.keyed_scopes[scope_idx].key);
+	}
 	ClauseParts body;
 	CollectClauseParts(
 	    *reducer.children[0], decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, body);
@@ -1779,7 +1768,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
                                                  DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
+	DecideSourceNames names {scope.source_text, scope.keyed_scopes, scope.keys};
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
@@ -1790,7 +1779,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 		auto key = enclosing.PerKey();
 		vector<idx_t> key_order;
 		TryParsePerKeyOrder(per.GetAlias(), key_order);
-		auto key_text = RenderDecidePerKey(per, scope.source_fragments);
+		auto key_text = RenderDecidePerKey(per, scope.source_text, &scope.keys);
 		auto make_check = [&]() {
 			DecideScopeCheck check;
 			check.kind = DecideScopeCheckKind::DETERMINES;
@@ -1844,7 +1833,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		enclosing = EnterDecideScope(conj, enclosing);
 		body = conj.children[0].get();
 	}
-	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
+	DecideSourceNames names {scope.source_text, scope.keyed_scopes, scope.keys};
 	if (two_level) {
 		return; // its classes are the inner reducer's own `by` groups, its key's
 	}

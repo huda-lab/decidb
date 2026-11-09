@@ -93,4 +93,4 @@ def test_highs_coefficient_refusal_quotes_the_scope(decidb_cli_highs):
     """`DescribeRowClause`: HiGHS's refusal of a limit it cannot hold names the clause with its scope."""
     sql = _select("x >= 0 AND x <= 5 AND when p per g: SUM(x) >= 1e40", var="x(REAL)")
     stderr = decidb_cli_highs.execute_raw(sql, expect_number_range=True).stderr
-    assert "Constraint `when p per g: sum(x) >= 1e+40` sets a limit" in stderr, stderr
+    assert "Constraint `when p per g: SUM(x) >= 1e+40` sets a limit" in stderr, stderr

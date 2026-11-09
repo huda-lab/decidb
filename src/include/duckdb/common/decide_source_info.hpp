@@ -17,24 +17,28 @@ class Deserializer;
 
 //! What a span of the DECIDE tail is. The values are the parser's PGDecideSpanRole.
 enum class DecideSpanRole : uint8_t {
-	CMP_LHS = 0,
-	CMP_RHS = 1,
-	WHEN = 2,
-	PER = 3,
-	BY = 4,
-	COLUMN = 5,
-	TERM = 6,
+	//! The input of a BETWEEN and its bounds (`lo AND hi`), anchored at the BETWEEN. The bound halves carry its
+	//! location, so the clause is quoted whole.
+	BETWEEN_INPUT = 0,
+	BETWEEN_BOUNDS = 1,
+	//! A `per` key, anchored at the `per` (a reducer's own, at the location the reducer binds at); a reducer's `by`
+	//! key, anchored at the `by`.
+	PER = 2,
+	BY = 3,
 	//! The objective, anchored at the start of the tail (`tail_start`).
-	OBJECTIVE = 7,
+	OBJECTIVE = 4,
 	//! An expression of the tail, anchored at the query location its parsed expression took.
-	EXPR = 8
+	EXPR = 5,
+	//! A reducer's call without its `by`, anchored at the `by`, which is the location of the reducer that has one.
+	CALL = 6
 };
 
-//! The text of a DECIDE clause as the user wrote it (the Clang SourceManager / `CreateInfo::sql` pattern): the tail,
-//! `SUCH THAT` through the objective, and where the parser found each construct in it. A construct is named by the
-//! location of its own token, which the transformer also gives the parsed node as its query location, so a binder
-//! cuts the text of a node it holds without the node carrying any. Not compared by `SelectNode::Equals`, as the query
-//! location is not.
+//! The text of a DECIDE clause as the user wrote it (the Clang SourceManager pattern): the tail, `SUCH THAT` through
+//! the objective, and where the parser found each construct in it. A construct is named by the query location of its
+//! parsed node, which a bound node keeps (a copy and a serialization carry it), so a message cuts the text of a node
+//! it holds without the node carrying any. Every expression of the tail has an EXPR span; the other roles are the
+//! constructs that are no expression (a key, a BETWEEN's sides, the objective with its scope). Not compared by
+//! `SelectNode::Equals`, as the query location is not.
 struct DecideSourceText {
 	//! The tail, verbatim. Empty for a statement built without the parser's text.
 	string tail;

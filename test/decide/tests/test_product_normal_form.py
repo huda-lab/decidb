@@ -345,12 +345,12 @@ class TestShapeCheckRefusals:
             (
                 "SUM(POWER(x, 'inf'::DOUBLE)) <= 10",
                 r"POWER over a DECIDE variable needs an exponent that is a whole number known "
-                r"before the query runs, found 'CAST\('inf' AS DOUBLE\)'",
+                r"before the query runs, found ''inf'::DOUBLE'",
             ),
             (
                 "SUM(POWER(x, 1e10)) <= 10",
                 r"POWER over a DECIDE variable needs an exponent that is a whole number known "
-                r"before the query runs, found '10000000000\.0'",
+                r"before the query runs, found '1e10'",
             ),
             (
                 "SUM(x) + POWER(x, 0.5) * x <= 10",

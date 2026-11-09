@@ -1346,7 +1346,7 @@ def test_like_terms_over_constant_divisors(decidb_cli, clause, holds):
         ),
         pytest.param(
             "x * 'Infinity'::DOUBLE <= 3",
-            "DECIDE: CAST('Infinity' AS DOUBLE) is NaN or infinite. Use a finite value.",
+            "DECIDE: 'Infinity'::DOUBLE is NaN or infinite. Use a finite value.",
             id="infinite-literal",
         ),
         # Finite terms whose sum leaves the DOUBLE range: DeciDB's own arithmetic, so the clause is named.
@@ -1432,7 +1432,7 @@ def test_the_objective_refuses_a_reducer_over_data_alone(decidb_cli):
         SUCH THAT x <= 5 AND SUM(x) <= 7
         MAXIMIZE SUM(x) + AVG(w)
     """,
-        match=r"MAXIMIZE/MINIMIZE: 'avg\(w\)' does not reference a decision, so it cannot be part of the objective\.",
+        match=r"MAXIMIZE/MINIMIZE: 'AVG\(w\)' does not reference a decision, so it cannot be part of the objective\.",
     )
 
 
@@ -1480,7 +1480,7 @@ _DECISION_ROWS = "(VALUES (1, 2.0), (2, 3.0)) t(id, w)"
         pytest.param("SUM(x) / b <= 3", r"'b' is a decision, so it cannot divide SUM\(x\)\.", id="bool-divides"),
         pytest.param("SUM(x) / SUM(y) <= 3", r"DECIDE: cannot divide by a DECIDE variable\.", id="reducer-divides"),
         pytest.param(
-            "SUM(x) * (b - c) <= 3", r"'\(b - c\)' is a decision, so it cannot multiply SUM\(x\)\.", id="difference"
+            "SUM(x) * (b - c) <= 3", r"'b - c' is a decision, so it cannot multiply SUM\(x\)\.", id="difference"
         ),
         pytest.param(
             "SUM(x) * CASE WHEN w > 2 THEN b ELSE 0 END <= 3",
@@ -1509,7 +1509,7 @@ def test_a_decision_factor_on_a_reducer_is_refused(decidb_cli, clause, message):
     [
         pytest.param("NORM(x, 1)", "NORM(x, 1)", id="l1"),
         pytest.param("NORM(x, 2)", "NORM(x, 2)", id="l2"),
-        pytest.param("NORM(x, 'inf')", "NORM(x, inf)", id="linf"),
+        pytest.param("NORM(x, 'inf')", "NORM(x, 'inf')", id="linf"),
         pytest.param("NORM(x, 0)", "NORM(x, 0)", id="l0"),
         pytest.param("NORM(x, 0, 9)", "NORM(x, 0, 9)", id="l0-with-bound"),
     ],

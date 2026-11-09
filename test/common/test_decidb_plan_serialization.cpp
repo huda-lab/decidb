@@ -343,7 +343,6 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 
 	REQUIRE(after->written_objective == before->written_objective);
 	REQUIRE(after->canonical_objective == before->canonical_objective);
-	REQUIRE(after->source_fragments == before->source_fragments);
 	// The tail as the user wrote it, with the span of each expression in it.
 	REQUIRE(before->source_text.HasText());
 	REQUIRE(!before->source_text.spans.empty());

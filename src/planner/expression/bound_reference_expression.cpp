@@ -16,8 +16,7 @@ BoundReferenceExpression::BoundReferenceExpression(LogicalType type, idx_t index
 }
 
 string BoundReferenceExpression::GetName() const {
-	auto name = StripSourceFragmentTags(alias);
-	return name.empty() ? ToString() : name;
+	return alias.empty() ? ToString() : alias;
 }
 
 string BoundReferenceExpression::ToString() const {
@@ -26,9 +25,8 @@ string BoundReferenceExpression::ToString() const {
 		return "#" + to_string(index);
 	}
 #endif
-	auto name = StripSourceFragmentTags(alias);
-	if (!name.empty()) {
-		return name;
+	if (!alias.empty()) {
+		return alias;
 	}
 	return "#" + to_string(index);
 }
@@ -46,7 +44,9 @@ hash_t BoundReferenceExpression::Hash() const {
 }
 
 unique_ptr<Expression> BoundReferenceExpression::Copy() const {
-	return make_uniq<BoundReferenceExpression>(alias, return_type, index);
+	auto copy = make_uniq<BoundReferenceExpression>(alias, return_type, index);
+	copy->SetQueryLocation(GetQueryLocation());
+	return std::move(copy);
 }
 
 } // namespace duckdb

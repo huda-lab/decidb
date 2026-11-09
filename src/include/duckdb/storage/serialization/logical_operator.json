@@ -1028,7 +1028,8 @@
       {
         "id": 215,
         "name": "source_fragments",
-        "type": "vector<string>"
+        "type": "vector<string>",
+        "deleted": true
       },
       {
         "id": 216,

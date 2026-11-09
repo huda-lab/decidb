@@ -134,8 +134,9 @@ private:
 		    canonicalizer.ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::AGGREGATE;
 		bool query_wide = IsQueryWideBoundTag(comparison.right->GetAlias());
 		auto text = Written(*comparison.right);
+		auto location = comparison.right->GetQueryLocation();
 		if (aggregate_data_bound && IsGroupBound(comparison)) {
-			RecordReducers(comparison, text);
+			RecordReducers(comparison, text, location);
 			return;
 		}
 		ReplaceReducers(comparison.right);
@@ -149,8 +150,10 @@ private:
 		}
 		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
 		if (reduces) {
-			Record(comparison,
-			       DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid)));
+			auto group =
+			    DirectTightestBound(optimizer, comparison.type, comparison.right->Copy(), text, std::move(invalid));
+			group->location = location;
+			Record(comparison, std::move(group));
 			return;
 		}
 		AddValueCheck(std::move(invalid));
@@ -184,9 +187,10 @@ private:
 	}
 
 	//! Records the bound as the aggregates of its reducers and an expression over their placeholders.
-	void RecordReducers(BoundComparisonExpression &comparison, const string &text) {
+	void RecordReducers(BoundComparisonExpression &comparison, const string &text, optional_idx location) {
 		auto group = make_uniq<DecideGroupBound>();
 		group->text = text;
+		group->location = location;
 		ReplaceWithPlaceholders(comparison.right, optimizer.binder.GenerateTableIndex(), *group);
 		if (DirectIsUpperBound(comparison.type)) {
 			group->upper = comparison.right->Copy();
@@ -208,7 +212,6 @@ private:
 			return;
 		}
 		auto &reducer = expr->Cast<BoundAggregateExpression>();
-		auto name = ReducerName(reducer);
 		DecideGroupBound::Input input;
 		input.invalid = ArgumentMessage(reducer);
 		if (!reducer.children.empty()) {
@@ -217,7 +220,7 @@ private:
 		}
 		input.filter = std::move(reducer.filter);
 		auto placeholder = calc.Out(calc.Col(reducer.return_type, ColumnBinding(table_index, group.aggregates.size())));
-		placeholder->SetAlias(std::move(name));
+		NameAsWritten(*placeholder, reducer);
 		group.aggregates.push_back(
 		    {ColumnBinding(table_index, group.aggregates.size()), std::move(expr), group.inputs.size()});
 		group.inputs.push_back(std::move(input));
@@ -335,14 +338,19 @@ private:
 	//! keeps a NULL message from naming it as a column.
 	unique_ptr<Expression> NamedReducerValue(const BoundAggregateExpression &reducer, ExprPtr column) const {
 		auto result = calc.Out(InGroup(reducer, column));
-		result->SetAlias(ReducerName(reducer));
+		NameAsWritten(*result, reducer);
 		return result;
 	}
 
-	string ReducerName(const Expression &reducer) const {
-		auto alias = Written(reducer);
-		AddDecideTag(alias, WRITTEN_VALUE_TAG);
-		return alias;
+	//! `value` stands in for `written`, equal to it for the rows it is read on, so it is quoted as `written` is: it
+	//! takes its location (the location rule). An expression with no location, one a macro expanded, keeps the name
+	//! it prints as.
+	void NameAsWritten(Expression &value, const Expression &written) const {
+		if (written.GetQueryLocation().IsValid()) {
+			DecideReplaces(value, written);
+		} else {
+			value.SetAlias(Written(written));
+		}
 	}
 
 	//! `value` on a row in a group of the reducer's `by` key, NULL on a row whose written key column is NULL, which is
@@ -397,9 +405,12 @@ private:
 		}
 		comparison.right = std::move(DirectIsUpperBound(comparison.type) ? group.upper : group.lower);
 		DirectReplaceColumns(comparison.right, placeholders, values);
-		auto written = group.text;
-		AddDecideTag(written, WRITTEN_VALUE_TAG);
-		comparison.right->SetAlias(std::move(written));
+		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
+		if (group.location.IsValid()) {
+			comparison.right->SetQueryLocation(group.location);
+		} else {
+			comparison.right->SetAlias(group.text);
+		}
 		return messages;
 	}
 
@@ -494,7 +505,7 @@ private:
 	}
 
 	string Written(const Expression &expr) const {
-		return RenderDecideSource(expr, decide.source_fragments, decide.keyed_scopes, &decide.keys);
+		return RenderDecideSource(expr, decide.source_text, decide.keyed_scopes, &decide.keys);
 	}
 
 	Optimizer &optimizer;

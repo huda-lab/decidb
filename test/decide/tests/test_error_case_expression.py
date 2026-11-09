@@ -342,12 +342,12 @@ class TestCaseAnswersEverywhere:
         "aggregate bound, in a reducer's FILTER": (
             f"SUM(x) <= SUM(id) FILTER (WHERE {_CASE} = 1)",
             "SUM(x)",
-            "DECIDE clause does not support 'sum(id) FILTER",
+            "DECIDE clause does not support 'SUM(id) FILTER",
         ),
         "decision reducer's FILTER": (
             f"SUM(x) FILTER (WHERE {_CASE} = 1) <= 3",
             "SUM(x)",
-            "DECIDE clause does not support 'sum(x) FILTER",
+            "DECIDE clause does not support 'SUM(x) FILTER",
         ),
         "objective term": ("SUM(x) <= 3", f"SUM(x) + {_CASE}", "does not reference a decision"),
         "objective under when": ("SUM(x) <= 3", f"when id > 2: SUM(x) + {_CASE}", "does not reference a decision"),

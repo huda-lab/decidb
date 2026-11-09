@@ -419,7 +419,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		if (term.coefficient && !DecideUnguarded(*term.coefficient).IsFoldable()) {
 			names.inputs.push_back(term.coefficient->Copy());
 			names.texts.push_back(
-			    RenderDecideSource(*term.coefficient, decide.source_fragments, decide.keyed_scopes, &decide.keys));
+			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys));
 		}
 	}
 	if (!total) {

@@ -217,8 +217,8 @@ static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
 static void noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTYPE span);
 static PGNode *noteDecideExpr(PGNode *expr, YYLTYPE span, core_yyscan_t yyscanner);
 static PGNode *noteDecideParen(PGNode *expr, core_yyscan_t yyscanner);
-static PGNode *noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner);
-static PGNode *noteDecideTerm(PGNode *term, YYLTYPE anchor, YYLTYPE span, core_yyscan_t yyscanner);
+static void noteDecideReducerKey(PGNode *scope, int anchor, core_yyscan_t yyscanner);
+static void noteDecideCall(YYLTYPE call_end, YYLTYPE by, core_yyscan_t yyscanner, YYLTYPE call_start = YYLTYPE());
 static PGNode *noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYLTYPE upper,
 								 core_yyscan_t yyscanner);
 static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,

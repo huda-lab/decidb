@@ -142,7 +142,7 @@ def test_null_beside_a_decision_is_refused(decidb_cli, clause):
     """
     )
     assert (
-        "DECIDE: '(keep + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in "
+        "DECIDE: 'keep + NULL' is NULL whatever the decisions are; replace the NULL with a value, as in "
         "COALESCE(column, 0)"
     ) in result.stderr, result.stderr
     assert "INTERNAL" not in result.stderr, result.stderr

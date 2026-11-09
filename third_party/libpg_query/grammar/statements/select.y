@@ -335,21 +335,17 @@ decide_aggregate_when_condition:
  * ends it, so the condition is a full a_expr and needs no parentheses. */
 decide_when:
 			WHEN_DECIDE a_expr
-				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1);
-					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_WHEN, @2);
-				}
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
 			| WHEN_DECIDE_OBJECTIVE a_expr
-				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1);
-					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_WHEN, @2);
-				}
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
 		;
 
 decide_per:
 			PER_DECIDE expr_list
 				{
 					$$ = makeDecideScope(PG_DECIDE_PER_KEY, $2, @1, yyscanner);
+					((PGDecideScope *) $$)->key_start = @2.start;
+					((PGDecideScope *) $$)->key_end = @2.end;
 					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_PER, @2);
 				}
 			| PER_DECIDE_PAREN '(' ')'
@@ -2699,7 +2695,7 @@ a_expr_body:		c_expr									{ $$ = $1; }
 			| a_expr '-' a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "-", $1, $3, @2); }
 			| a_expr '*' a_expr
-				{ $$ = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", $1, $3, @2), @2, @$, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "*", $1, $3, @2); }
 			| a_expr '/' a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "/", $1, $3, @2); }
 			| a_expr INTEGER_DIVISION a_expr
@@ -2707,21 +2703,21 @@ a_expr_body:		c_expr									{ $$ = $1; }
 			| a_expr '%' a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "%", $1, $3, @2); }
 			| a_expr '^' a_expr
-				{ $$ = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", $1, $3, @2), @2, @$, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "^", $1, $3, @2); }
 			| a_expr POWER_OF a_expr
-				{ $$ = noteDecideTerm((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", $1, $3, @2), @2, @$, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", $1, $3, @2); }
 			| a_expr '<' a_expr
-				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2), @2, @1, @3, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2); }
 			| a_expr '>' a_expr
-				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2), @2, @1, @3, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2); }
 			| a_expr '=' a_expr
-				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2), @2, @1, @3, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2); }
 			| a_expr LESS_EQUALS a_expr
-				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2), @2, @1, @3, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2); }
 			| a_expr GREATER_EQUALS a_expr
-				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2), @2, @1, @3, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2); }
 			| a_expr NOT_EQUALS a_expr
-				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2), @2, @1, @3, yyscanner); }
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2); }
 
 			| a_expr qual_Op a_expr				%prec Op
 				{ $$ = (PGNode *) makeAExpr(PG_AEXPR_OP, $2, $1, $3, @2); }
@@ -3205,18 +3201,22 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 			| func_application decide_by
 				{
 					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
+					noteDecideCall(@1, @2, yyscanner);
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", $1, (PGNode *) $2, @2);
 				}
 			| func_name '(' decide_scope ':' func_arg_list ')'
 				{
 					/* DeciDB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
 					 * the first argument, the expression being reduced. */
+					noteDecideReducerKey($3, @1.start, yyscanner);
 					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
 					$$ = (PGNode *) makeFuncCall($1, $5, @1);
 				}
 			| func_name '(' decide_scope ':' func_arg_list ')' decide_by
 				{
+					noteDecideReducerKey($3, @7.start, yyscanner);
 					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
+					noteDecideCall(@6, @7, yyscanner, @1);
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_REDUCER_BY, "reducer_by", (PGNode *) makeFuncCall($1, $5, @1), (PGNode *) $7, @7);
 				}
@@ -3236,6 +3236,7 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * same idiom `columnrefList` uses for multi-column PER) rather than
 					 * being unpacked here, so the binder sees the full qualifier set.
 					 */
+					noteDecideSpan(yyscanner, @4.start, PG_DECIDE_SPAN_PER, @3);
 					$$ = makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner);
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
@@ -3256,6 +3257,8 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_by
 				{
 					/* DeciDB: the colon form with BY, sum(D: expr) BY (key) */
+					noteDecideCall(@6, @7, yyscanner, @1);
+					noteDecideSpan(yyscanner, @7.start, PG_DECIDE_SPAN_PER, @3);
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
 						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), (PGNode *) $7, @7);
 				}
@@ -3529,7 +3532,7 @@ func_expr: func_application within_group_clause filter_clause export_clause over
 					n->agg_filter = $3;
 					n->export_state = $4;
 					n->over = $5;
-					$$ = noteDecideTerm((PGNode *) n, @1, @1, yyscanner);
+					$$ = (PGNode *) n;
 				}
 			| func_expr_common_subexpr
 				{ $$ = $1; }
@@ -4346,12 +4349,10 @@ columnref: ColId
 columnref_opt_indirection:	ColId
 				{
 					$$ = makeColumnRef($1, NIL, @1, yyscanner);
-					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_COLUMN, @$);
 				}
 			| ColId indirection
 				{
 					$$ = makeColumnRef($1, $2, @1, yyscanner);
-					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_COLUMN, @$);
 				}
 		;
 

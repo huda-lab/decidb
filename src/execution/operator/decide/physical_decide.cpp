@@ -1258,7 +1258,7 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
 }
 
 DecideSourceNames PhysicalDecide::Names() const {
-	return DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
+	return DecidePlanNames(source_text, keyed_scopes, keys, decide_index, aux_var_expressions);
 }
 
 string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {
@@ -2432,7 +2432,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
 			if (!eval_const.rhs_is_shared_scalar &&
                 !ContainsScalarSubqueryProvenance(*constraint->rhs_expr)) {
-				eval_const.rhs_label = RenderDecideSource(*constraint->rhs_expr, source_fragments, keyed_scopes, &keys);
+				eval_const.rhs_label = RenderDecideSource(*constraint->rhs_expr, source_text, keyed_scopes, &keys);
 			}
 			eval_const.rhs_values.Reserve(num_rows);
 		}
@@ -2948,8 +2948,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
             if (ta.is_minmax) {
 				// Named as the plan prints the reducer, so a diagnosis over the extremum
 				// column reads `max(ship)`.
-				ta.label = term.agg_name + "(" +
-				           RenderDecideSource(*term.inner_expr, source_fragments, keyed_scopes, &keys) + ")";
+				ta.label =
+				    term.agg_name + "(" + RenderDecideSource(*term.inner_expr, source_text, keyed_scopes, &keys) + ")";
 			}
 			ta.inner_terms = &term.inner_terms;
 			if (term.filter) {

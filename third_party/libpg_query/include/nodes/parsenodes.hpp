@@ -1261,15 +1261,13 @@ typedef enum PGObjectiveSense {
  * the transformer gives the parsed node as its query location; start/end bound the text (end is just past it).
  */
 typedef enum PGDecideSpanRole {
-	PG_DECIDE_SPAN_CMP_LHS, /* the left side of a comparison */
-	PG_DECIDE_SPAN_CMP_RHS, /* the right side of a comparison */
-	PG_DECIDE_SPAN_WHEN,    /* a `when` condition */
-	PG_DECIDE_SPAN_PER,     /* a `per` key */
-	PG_DECIDE_SPAN_BY,      /* a reducer's `by` key */
-	PG_DECIDE_SPAN_COLUMN,  /* a column reference, as written (`S.cap`) */
-	PG_DECIDE_SPAN_TERM,    /* a product, a power or a function call, as written */
-	PG_DECIDE_SPAN_OBJECTIVE, /* the objective, anchored at the start of the tail */
-	PG_DECIDE_SPAN_EXPR      /* an expression; its anchor is the location the transformer gives `node` */
+	PG_DECIDE_SPAN_BETWEEN_INPUT,  /* the input of a BETWEEN (`x` of `x BETWEEN lo AND hi`), anchored at BETWEEN */
+	PG_DECIDE_SPAN_BETWEEN_BOUNDS, /* the bounds of a BETWEEN, from the lower through the upper (`lo AND hi`) */
+	PG_DECIDE_SPAN_PER,            /* a `per` key */
+	PG_DECIDE_SPAN_BY,             /* a reducer's `by` key */
+	PG_DECIDE_SPAN_OBJECTIVE,      /* the objective, anchored at the start of the tail */
+	PG_DECIDE_SPAN_EXPR,           /* an expression; its anchor is the location the transformer gives `node` */
+	PG_DECIDE_SPAN_CALL            /* a reducer's call without its `by`, anchored at the BY */
 } PGDecideSpanRole;
 
 typedef struct PGDecideSpan {
@@ -1312,6 +1310,8 @@ typedef struct PGDecideScope {
 	PGDecidePer per;
 	PGList *key;     /* key elements; NIL unless per is PG_DECIDE_PER_KEY */
 	int location;    /* of PER, or -1 without one */
+	int key_start;   /* the key's text; PG_DECIDE_PER_KEY only */
+	int key_end;
 } PGDecideScope;
 
 typedef struct PGSelectStmt {

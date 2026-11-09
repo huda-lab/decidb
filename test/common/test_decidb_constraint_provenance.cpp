@@ -240,10 +240,10 @@ duckdb::vector<DecideClauseLayers> LayersOf(duckdb::vector<duckdb::unique_ptr<Ex
                                             duckdb::vector<string> &unattributed) {
 	auto tree = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	tree->children = std::move(rows);
-	duckdb::vector<string> fragments;
+	DecideSourceText text;
 	duckdb::vector<KeyedScopeInfo> keyed_scopes;
 	duckdb::vector<DecideKey> keys;
-	DecideSourceNames names {fragments, keyed_scopes, keys};
+	DecideSourceNames names {text, keyed_scopes, keys};
 	duckdb::vector<string> objective_rows;
 	return CollectDecideClauseLayers(*tree, names, sources, unattributed, objective_rows, {});
 }

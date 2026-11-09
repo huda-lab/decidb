@@ -540,7 +540,7 @@ def test_foreign_column_inside_qualified_reducer_rejected(decidb_cli):
     """§3.2.2: `n` must determine everything inside `SUM(n: ...)`, as it does inside
     `sum(per n: ...)` (S4); a customer's balance varies within a nation."""
     with pytest.raises(
-        DeciDBCliError, match=r"per n does not determine c\.c_acctbal \(in sum\(n: c\.c_acctbal \* keepN\)\)"
+        DeciDBCliError, match=r"per n does not determine c\.c_acctbal \(in SUM\(n: c\.c_acctbal \* keepN\)\)"
     ):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls="",
@@ -552,7 +552,7 @@ def test_foreign_column_inside_qualified_reducer_rejected(decidb_cli):
 def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
     """A row-scoped decision is one per joined row, so `n` does not determine it: the
     data check of `sum(per n: ...)` refuses it (S4)."""
-    with pytest.raises(DeciDBCliError, match=r"per n does not determine the decision y \(in sum\(n: "):
+    with pytest.raises(DeciDBCliError, match=r"per n does not determine the decision y \(in SUM\(n: "):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls=", y(INT)",
             constraint="y <= 5",

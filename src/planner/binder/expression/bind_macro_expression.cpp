@@ -116,6 +116,12 @@ void ExpressionBinder::ReplaceMacroParameters(unique_ptr<ParsedExpression> &expr
 	    *expr, [&](unique_ptr<ParsedExpression> &child) { ReplaceMacroParameters(child, lambda_params); });
 }
 
+//! `expr` and everything under it with no query location.
+static void ClearQueryLocations(ParsedExpression &expr) {
+	expr.SetQueryLocation(optional_idx());
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) { ClearQueryLocations(child); });
+}
+
 void ExpressionBinder::UnfoldMacroExpression(FunctionExpression &function, ScalarMacroCatalogEntry &macro_func,
                                              unique_ptr<ParsedExpression> &expr) {
 	// validate the arguments and separate positional and default arguments
@@ -168,7 +174,14 @@ void ExpressionBinder::UnfoldMacroExpression(FunctionExpression &function, Scala
 		window_expr.filter_expr = std::move(macro_expr.filter);
 		// TODO: transfer order_bys when window functions support them
 	} else {
+		auto call_location = expr->GetQueryLocation();
 		expr = macro_def.expression->Copy();
+		// The body was parsed from the macro's definition, so its locations index that text, not this query's.
+		// The expansion stands where the call stood (Clang's expansion location): the root takes the call's
+		// location and the body loses its own. The arguments, substituted below, keep theirs: they were written in
+		// this query.
+		ClearQueryLocations(*expr);
+		expr->SetQueryLocation(call_location);
 	}
 
 	// qualify only the macro parameters with a new empty binder that only knows the macro binding

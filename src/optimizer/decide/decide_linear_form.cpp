@@ -723,7 +723,7 @@ private:
 				if (square || (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
 					throw InvalidInputException(
 					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
-					    RenderDecideSource(expr, op.source_fragments, op.keyed_scopes, &op.keys));
+					    RenderDecideSource(expr, op.source_text, op.keyed_scopes, &op.keys));
 				}
 				continue;
 			}
