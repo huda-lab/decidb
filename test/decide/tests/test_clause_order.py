@@ -150,7 +150,8 @@ def test_orders_produce_the_same_plan(decidb_cli):
     split_plan = _normalize_plan(decidb_cli.execute_raw(f"EXPLAIN {split}").stdout)
     single_plan = _normalize_plan(decidb_cli.execute_raw(f"EXPLAIN {single_block}").stdout)
 
-    assert "DECIDE" in split_plan
+    # The plan answers the DECIDE: the solver's DECIDE operator, or a direct solve rule.
+    assert "DECIDE" in split_plan or "Direct solve rule" in split_plan
     assert split_plan == single_plan
 
 
