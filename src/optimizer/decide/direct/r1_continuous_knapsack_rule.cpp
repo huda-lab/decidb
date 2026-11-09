@@ -676,23 +676,33 @@ public:
 		AddBox();
 		AddAnchorAndPrice();
 		AddRooms();
+		top = plan->GetColumnBindings();
 		return std::move(plan);
 	}
 
-	//! Where Build put the columns the aggregate plan reads.
-	ItemColumns Columns() const {
+	//! The columns of the plan Build returned, in output order. Every column Build declares is among them.
+	const vector<ColumnBinding> &Top() const {
+		return top;
+	}
+
+	//! Where Build put the columns the aggregate plan reads, each binding passed through `where`: a read of the stage
+	//! through a CTE (DirectSourceReader::ReadStaged) has the columns of the plan Build returned at other bindings.
+	ItemColumns Columns(const std::function<ColumnBinding(ColumnBinding)> &where) const {
+		auto binding_of = [&](const string &name) {
+			return where(columns.at(name).binding);
+		};
 		ItemColumns items;
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {
-			items.sources.push_back(columns.at(SourceName(i)).binding);
+			items.sources.push_back(binding_of(SourceName(i)));
 		}
 		for (idx_t i = 0; i < key_width; i++) {
-			items.keys.push_back(columns.at(KeyName(i)).binding);
+			items.keys.push_back(binding_of(KeyName(i)));
 		}
 		for (auto &name : message_names) {
-			items.messages.push_back(columns.at(name).binding);
+			items.messages.push_back(binding_of(name));
 		}
 		for (auto &name : computed_message_names) {
-			items.computed_messages.push_back(columns.at(name).binding);
+			items.computed_messages.push_back(binding_of(name));
 		}
 		items.limit_messages = limit_message_count;
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
@@ -701,17 +711,18 @@ public:
 				auto layout = DirectGroupLayout(limit_bounds[j]->inputs[i], condition.scoped);
 				DirectGroupInputColumns inputs;
 				if (layout.reads) {
-					inputs.reads = columns.at(LimitReadsName(j, i)).binding;
+					inputs.reads = binding_of(LimitReadsName(j, i));
 				}
 				if (layout.argument) {
-					inputs.argument = columns.at(LimitArgumentName(j, i)).binding;
+					inputs.argument = binding_of(LimitArgumentName(j, i));
 				}
 				items.limits.back().push_back(inputs);
 			}
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto column = [&](const char *name) {
-				return C(Dec(name, k));
+				auto &declared = columns.at(Dec(name, k));
+				return calc.Col(declared.type, where(declared.binding));
 			};
 			ItemExprs item;
 			item.v = column("v");
@@ -760,6 +771,8 @@ private:
 	//! The plan so far and the columns it carries, in output order. Every stage forwards every column, and unused
 	//! ones are removed with the rest of the unused columns after the DECIDE optimizer has run.
 	unique_ptr<LogicalOperator> plan;
+	//! The columns of the plan Build returned.
+	vector<ColumnBinding> top;
 	vector<string> names;
 	std::map<string, Column> columns;
 	//! The columns of the checks' messages, and how many are the NaN checks of what the limits read.
@@ -1154,6 +1167,13 @@ public:
 		if (condition.scoped) {
 			class_key = DirectClassKeyOf(condition.group_keys, condition.when != nullptr || condition.gated);
 		}
+		// Every read computes the items of the row by the same stage: the reader holds it once when it copies the
+		// source, and builds it per read otherwise. The layout is the stage's last build, whose columns every read has.
+		reader.SetRowStage([this](DirectSourceReader::Read read) {
+			layout = make_uniq<ItemStages>(condition, limit_bounds, optimizer, reader.SourceBindings(),
+			                               reader.SourceTypes());
+			return layout->Build(std::move(read.plan), read.table_index);
+		});
 	}
 
 	DirectSubstitute Build() {
@@ -1202,6 +1222,8 @@ private:
 	DirectSourceReader &reader;
 	const DirectStateErrors &errors;
 	idx_t reads_made = 0;
+	//! The last build of the row stage (ItemStages), which says where each item column is in a read.
+	unique_ptr<ItemStages> layout;
 	//! The class key of a group. Empty without a scope.
 	DirectClassKey class_key;
 
@@ -1234,11 +1256,20 @@ private:
 	//! A new read of the source, as stage 1 computes it.
 	Items ReadItems() {
 		reads_made++;
-		auto read = reader.ReadSource();
-		ItemStages stages(condition, limit_bounds, optimizer, reader.SourceBindings(), reader.SourceTypes());
+		auto staged = reader.ReadStaged();
+		// The read has the columns of the stage's plan, in its order.
+		auto &top = layout->Top();
+		D_ASSERT(top.size() == staged.columns.size());
 		Items items;
-		items.plan = stages.Build(std::move(read.plan), read.table_index);
-		items.columns = stages.Columns();
+		items.plan = std::move(staged.plan);
+		items.columns = layout->Columns([&](ColumnBinding binding) {
+			for (idx_t i = 0; i < top.size(); i++) {
+				if (top[i] == binding) {
+					return staged.columns[i];
+				}
+			}
+			throw InternalException("Direct solve: an item column is not among the columns of the stage");
+		});
 		return items;
 	}
 

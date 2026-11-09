@@ -2185,6 +2185,80 @@ def test_r1_source_is_one_copy_read_four_times_when_the_copy_fits(decidb_cli):
     assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 1, plan
 
 
+def _plan_tree(decidb_cli, prefix, query):
+    """The EXPLAIN (FORMAT JSON) tree of `query` as nested nodes."""
+    out = decidb_cli.execute_raw(f"{prefix} EXPLAIN (FORMAT JSON) {query}").stdout
+    return json.loads(out[out.index("[") :])
+
+
+def _walk(nodes):
+    for node in nodes:
+        yield node
+        yield from _walk(node.get("children", []))
+
+
+def _cte_scans(nodes, index):
+    """The CTE_SCANs of the CTE with that table index under `nodes`."""
+    return sum(
+        1 for node in _walk(nodes) if node["name"].strip() == "CTE_SCAN" and node["extra_info"]["CTE Index"] == index
+    )
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_the_row_stage_is_one_cte_read_four_times_when_the_copy_fits(decidb_cli):
+    # The item algebra of the four reads is one stage. When the plan copies the source it is the definition of a CTE
+    # (DirectSourceReader::SetRowStage), read four times, and it reads the stored table as itself because no other read
+    # takes the source: there is no copy of the source beside it. When the copy does not fit, each read builds the stage
+    # on its own scan of the table.
+    query = _wide_query("SUM(w*x) by (g) <= 500")
+    tree = _plan_tree(decidb_cli, f"SET decide_direct_solve='require'; {WIDE_SETUP}", query)
+    names = [node["name"].strip() for node in _walk(tree)]
+    stages = [node for node in _walk(tree) if node["name"].strip() == "CTE"]
+    assert [node["extra_info"]["CTE Name"] for node in stages] == ["direct_stage"], names
+    assert _cte_scans(tree, stages[0]["extra_info"]["Table Index"]) == 4 and names.count("SEQ_SCAN") == 1, names
+
+    rescanned = _plan_tree(decidb_cli, f"{REQUIRE_RESCAN}{WIDE_SETUP}", query)
+    names = [node["name"].strip() for node in _walk(rescanned)]
+    assert "CTE" not in names and "CTE_SCAN" not in names and names.count("SEQ_SCAN") == 4, names
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_the_row_stage_reads_the_source_through_the_verdict_and_the_side_tables(decidb_cli):
+    # A bound over other rows is a side table and its NaN check a verdict, which gate and join every read of the source,
+    # the stage's among them: the stage is the innermost CTE, and its definition scans the copy of the source, the side
+    # table and the verdict. The four reads of the stage scan the stage alone.
+    budget = "SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g) + pad_1"
+    query = _wide_query(budget)
+    tree = _plan_tree(decidb_cli, f"SET decide_direct_solve='require'; {WIDE_SETUP}", query)
+    ctes = {}
+    for node in _walk(tree):
+        if node["name"].strip() == "CTE":
+            ctes[node["extra_info"]["CTE Name"]] = node
+    assert set(ctes) == {"direct_source", "direct_bound", "direct_verdict", "direct_stage"}, ctes.keys()
+    index = {name: node["extra_info"]["Table Index"] for name, node in ctes.items()}
+    # Each CTE is defined inside the one before it, the stage last, so its definition can read all of them.
+    for outer, inner in [
+        ("direct_source", "direct_bound"),
+        ("direct_bound", "direct_verdict"),
+        ("direct_verdict", "direct_stage"),
+    ]:
+        assert any(node is ctes[inner] for node in _walk(ctes[outer]["children"][1:])), (outer, inner)
+    definition = ctes["direct_stage"]["children"][:1]
+    for name in ("direct_source", "direct_bound", "direct_verdict"):
+        assert _cte_scans(definition, index[name]) >= 1, name
+    reads = ctes["direct_stage"]["children"][1:]
+    assert _cte_scans(reads, index["direct_stage"]) == 4, reads
+    assert all(_cte_scans(reads, index[name]) == 0 for name in ("direct_source", "direct_bound", "direct_verdict"))
+    answer = (
+        "SELECT COUNT(*), ROUND(SUM(x), 6), ROUND(SUM(v * x), 6) FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT "
+        f"x BETWEEN 0 AND cap AND {budget} MAXIMIZE SUM(v*x)) q"
+    )
+    direct = _run(decidb_cli, f"{WIDE_SETUP} {answer}", "require")[0]
+    assert direct == _run(decidb_cli, f"{WIDE_SETUP} {answer}", "off")[0]
+
+
 # A stored table with 600 VARCHAR columns the rule never reads, 9.6 KB of inline strings a row: a copy of every column
 # (2000 rows, 19 MB) is more than an eighth of 32 MB. The parent reads one of them, which late materialization reads
 # again by row id, so the copy leaves the variable-width columns out and fits.

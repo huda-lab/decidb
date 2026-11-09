@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -33,6 +35,13 @@ bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t m
 //! the clauses read as one more column of the source. Every read, the source itself included, joins them back to its
 //! rows by the group key, so the source stays what it was and a repeatable chain stays repeatable. This is how DuckDB
 //! decorrelates a scalar subquery: a grouped aggregate over a second read, joined back by the correlation key.
+//!
+//! A reader can carry a row stage (SetRowStage): the per-row projections a rule computes over every read of the
+//! source, the same on each. When the source is copied, the stage is a common subplan, and the reader materializes it
+//! at its highest shared point, as the definition of a LogicalMaterializedCTE over the first read (gated, with its side
+//! tables): every read of the stage (ReadStaged) is then a reference to it, narrowed to the columns the read uses by
+//! the CTE column pruning of the optimizer, and the stage is computed once however many reads there are. A source that
+//! is recomputed has no copy to hold the stage: each read builds it again, as a read builds the source again.
 //!
 //! A reader can be gated (Gate) by a verdict on the rows, the scope checks', after which every read passes its rows
 //! only once the verdict holds. Gates chain: a later verdict is computed from reads the earlier one gates, so the
@@ -68,7 +77,7 @@ public:
 	//! Whether the source is materialized once. The copy holds every row the plan reads, so a plan over it holds rows
 	//! even when the rule's own plan streams.
 	bool Materialized() const {
-		return materialized;
+		return materialized || stage_cte_index != DConstants::INVALID_INDEX;
 	}
 	//! The source, until TakeRecomputedSource or Finish takes it.
 	LogicalOperator &Source() {
@@ -77,6 +86,22 @@ public:
 	}
 	//! A new read of the source.
 	Read ReadSource();
+
+	//! The per-row stage of a rule: the plan it builds over a read of the source, which forwards the read's columns and
+	//! adds its own. It is called with a read from ReadSource, once when the stage is shared and once per read when it
+	//! is not, and it builds the same columns each time, in the same order.
+	using RowStage = std::function<unique_ptr<LogicalOperator>(Read)>;
+	//! A read with the row stage applied: the plan, and its columns in the order the stage built them.
+	struct StagedRead {
+		unique_ptr<LogicalOperator> plan;
+		vector<ColumnBinding> columns;
+	};
+	//! Sets the stage every ReadStaged applies. Set once, before the first ReadStaged and after every Gate and every
+	//! other read: the shared stage reads the source through the newest verdict. When no other read takes the source,
+	//! the copy of it is the stage alone, and the stage reads the source as itself.
+	void SetRowStage(RowStage stage);
+	//! A new read of the source through the row stage.
+	StagedRead ReadStaged();
 	//! The source itself, as the last read of a source that is not materialized (recomputed, or read once): that read
 	//! keeps the source's own bindings, and the side tables' values keep their placeholders. Null for a materialized
 	//! source, every read of which has new bindings. The reader reads nothing after it.
@@ -123,6 +148,8 @@ private:
 	//! appended to `side_values`. With `own_bindings` the references carry the tables' placeholders.
 	unique_ptr<LogicalOperator> JoinSideTables(unique_ptr<LogicalOperator> top, bool own_bindings,
 	                                           vector<ColumnBinding> &side_values);
+	//! The source itself, forwarded like a read: the stage's read when it is the source's only reader.
+	Read ReadSourceAsItself();
 	unique_ptr<LogicalOperator> Gated(unique_ptr<LogicalOperator> read);
 	unique_ptr<LogicalOperator> CopyOfScan() const;
 	unique_ptr<LogicalOperator> CopyOfChain() const;
@@ -138,9 +165,18 @@ private:
 	//! The chain of a recomputed source (the source first, the scan excluded) and its scan; empty and null otherwise.
 	vector<reference<LogicalOperator>> chain;
 	optional_ptr<LogicalGet> chain_scan;
+	//! The number of reads ReadSource has made.
+	idx_t source_reads_taken = 0;
 	//! Whether the source is materialized, and the table index of its CTE.
 	bool materialized = false;
 	idx_t cte_index = DConstants::INVALID_INDEX;
+	//! The row stage, and when it is shared: the table index of its CTE, its definition until Finish takes it, and the
+	//! columns and types of the definition. The index is invalid when each read builds the stage.
+	RowStage row_stage;
+	idx_t stage_cte_index = DConstants::INVALID_INDEX;
+	unique_ptr<LogicalOperator> stage_definition;
+	vector<ColumnBinding> stage_bindings;
+	vector<LogicalType> stage_types;
 	//! A gate's verdict until Finish takes it, and the table index of its CTE.
 	struct Verdict {
 		unique_ptr<LogicalOperator> definition;
