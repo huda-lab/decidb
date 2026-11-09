@@ -903,7 +903,7 @@ private:
 			bound.reject_nan = fixed.reject_nan;
 			bound.coefficient = fixed.coefficient;
 			bound.written = fixed.written;
-			append_at(message_bindings[message++], calc.Out(DirectRowBoundMessage(calc, bound)));
+			append_at(message_bindings[message++], calc.Out(DirectRowBoundMessage(optimizer.context, calc, bound)));
 		}
 		auto score = make_uniq<LogicalProjection>(score_index, std::move(score_expressions));
 		score->children.push_back(std::move(source));

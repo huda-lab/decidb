@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
@@ -270,6 +271,29 @@ ExprPtr ExpressionBuilder::Extremum(const char *name, const vector<ExprPtr> &val
 
 bool DirectIsWholeNumbered(DirectDomain domain) {
 	return domain != DirectDomain::REAL;
+}
+
+double DirectTypeMagnitude(const LogicalType &type) {
+	if (!type.IsIntegral() && type.id() != LogicalTypeId::DECIMAL) {
+		return std::numeric_limits<double>::infinity();
+	}
+	auto largest = Value::MaximumValue(type).GetValue<double>();
+	auto least = Value::MinimumValue(type).GetValue<double>();
+	return std::max(std::fabs(largest), std::fabs(least));
+}
+
+double DirectMagnitudeBound(ClientContext &context, const Expression &expr) {
+	double constant;
+	if (TryEvaluateFoldableDouble(context, expr, constant, DIRECT_CONSTANT)) {
+		return std::isnan(constant) ? std::numeric_limits<double>::infinity() : std::fabs(constant);
+	}
+	// A cast keeps the value's magnitude when it converts one number to another (the binder reads every coefficient as
+	// DOUBLE), so the bound is the operand's; the operand of any other cast has no bound but its type's, which is
+	// infinite.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		return DirectMagnitudeBound(context, *expr.Cast<BoundCastExpression>().child);
+	}
+	return DirectTypeMagnitude(expr.return_type);
 }
 
 bool DirectProveValue(const DirectIR &ir, const Expression &expr) {

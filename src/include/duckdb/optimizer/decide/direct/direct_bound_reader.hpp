@@ -150,10 +150,12 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 //! the clause, as the solver path names it.
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause);
 
-//! Whether a number computed from `values` (with the part's factor, when `scaled`) needs no invalid-value check: each
-//! value, read as a row its NULL guard keeps reads it, is a constant, and their sum is finite at plan time. A row the
-//! guard skips reads 0, so the number is finite on every row. A constant that is not finite keeps its check, which
-//! raises at run time as the solver path does.
+//! Whether a number computed from `values` (with the part's factor, when `scaled`) needs no invalid-value check: the
+//! sum of the magnitude bounds of the values (DirectMagnitudeBound), each read as a row its NULL guard keeps reads it
+//! and times the factor, is below the range of a DOUBLE. A value of an exact numeric type is bounded by its type, so
+//! only a FLOAT or DOUBLE column, or an expression of one, keeps its check. A row the guard skips reads 0, so the
+//! number is finite on every row. A constant that is not finite keeps its check, which raises at run time as the solver
+//! path does.
 bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled = false,
                              double scale = 1.0, bool divides = false);
 

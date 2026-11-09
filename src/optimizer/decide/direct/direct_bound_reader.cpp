@@ -187,16 +187,18 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 	if (values.empty()) {
 		throw InternalException("DECIDE: a number check has no value to read; its caller promises at least one");
 	}
-	ExpressionBuilder calc(optimizer.context);
-	ExprPtr total;
+	// The number is the sum of the values, each negated, then multiplied or divided by the part's factor
+	// (DirectScaledTerm), so its magnitude is at most the sum of the values' bounds times the factor.
+	double total = 0.0;
 	for (auto &value : values) {
-		auto term = calc.Wrap(
-		    DirectScaledTerm(optimizer, DecideUnguarded(*value.expr).Copy(), value.sign, scaled, scale, divides));
-		total = total ? calc.Add(total, term) : term;
+		double bound = DirectMagnitudeBound(optimizer.context, DecideUnguarded(*value.expr));
+		if (scaled) {
+			bound = divides ? bound / std::fabs(scale) : bound * std::fabs(scale);
+		}
+		total += bound;
 	}
-	double constant;
-	return TryEvaluateFoldableDouble(optimizer.context, *calc.Out(total), constant, DIRECT_CONSTANT) &&
-	       std::isfinite(constant);
+	// Half the range leaves room for the rounding of the products and the sum themselves.
+	return total < std::numeric_limits<double>::max() / 2;
 }
 
 vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t decision) {

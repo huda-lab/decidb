@@ -304,6 +304,73 @@ def test_s1_a_finite_literal_score_adds_no_too_large_check(decidb_cli):
     assert checks("2 * x") < checks("q * x")
 
 
+def _invalid_value_checks(cli, column_type, decide):
+    # The number of invalid-value checks (a column NaN or infinite) in the plan of `decide` over a column `p` of the
+    # given type, a column `q` bounding the rows and an `id`; the plan is the rule's, or the query fails.
+    sql = f"""
+        EXPLAIN SELECT id FROM (
+            SELECT id, p::{column_type} AS p, q FROM (VALUES (1, 1.0, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) v(id, p, q)
+        ) t {decide}
+    """
+    plan = _raw(cli, sql).stdout
+    assert re.search(r"Direct solve rule:\s+\w+", plan.replace("│", "")), plan
+    return "".join(plan.replace("│", "").split()).count("isNaNorinfinite")
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "column_type,value,checked",
+    [
+        # DirectMagnitudeBound: an exact type bounds the value by its largest magnitude, through the cast to DOUBLE the
+        # binder puts on every coefficient, so no row can fail the check.
+        ("INTEGER", "p", False),
+        ("DECIMAL(15,2)", "p", False),
+        ("HUGEINT", "p", False),
+        ("DECIMAL(38,0)", "p", False),
+        # FLOAT and DOUBLE hold infinities, and so does a cast of a non-number or the quotient of two numbers.
+        ("DOUBLE", "p", True),
+        ("FLOAT", "p", True),
+        ("INTEGER", "p / 3", True),
+        ("VARCHAR", "p::DOUBLE", True),
+    ],
+)
+def test_a1_a_value_of_an_exact_type_has_no_invalid_value_check(decidb_cli, column_type, value, checked):
+    decide = f"DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER(s - {value}, 2))"
+    assert (_invalid_value_checks(decidb_cli, column_type, decide) > 0) == checked
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective,checked",
+    [
+        # A per-row constant is read through the part's factor (DirectIsFiniteWhereKept): a factor that carries the
+        # largest integer past a DOUBLE brings the check back, whether it multiplies or divides.
+        ("2 * SUM(POWER(s, 2) + p)", False),
+        ("SUM(POWER(s, 2) + p) / 2", False),
+        ("1e300 * SUM(POWER(s, 2) + p)", True),
+        ("SUM(POWER(s, 2) + p) / 1e-300", True),
+    ],
+)
+def test_a1_a_part_factor_that_overflows_an_exact_value_keeps_the_check(decidb_cli, objective, checked):
+    decide = f"DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE {objective}"
+    assert (_invalid_value_checks(decidb_cli, "HUGEINT", decide) > 0) == checked
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "name,decide",
+    [
+        ("r1_weight", "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND q AND SUM(p * x) <= 4 MAXIMIZE SUM(q * x)"),
+        ("r1_objective", "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND q AND SUM(x) <= 4 MAXIMIZE SUM(p * x)"),
+        ("s1_score", "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(p * x)"),
+        # DirectRowBoundMessage: the coefficient of a row that fixes x.
+        ("s1_fixing_coefficient", "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 AND p * x = q MAXIMIZE SUM(q * x)"),
+    ],
+)
+def test_r1_and_s1_a_value_of_an_exact_type_has_fewer_invalid_value_checks_than_a_double(decidb_cli, name, decide):
+    assert _invalid_value_checks(decidb_cli, "INTEGER", decide) < _invalid_value_checks(decidb_cli, "DOUBLE", decide)
+
+
 @pytest.mark.error
 @pytest.mark.correctness
 @pytest.mark.parametrize("budget", [False, True])

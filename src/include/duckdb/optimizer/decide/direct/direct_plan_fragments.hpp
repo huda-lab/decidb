@@ -436,6 +436,6 @@ struct DirectRowBound {
 
 //! The message a row raises for a per-row bound that is NaN or, for a coefficient, infinite, on a row its clause keeps;
 //! NULL when the bound is valid, or skips the instance it reaches.
-ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBound &bound);
+ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound);
 
 } // namespace duckdb

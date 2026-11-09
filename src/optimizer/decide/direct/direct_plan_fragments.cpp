@@ -1,5 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
+#include <cmath>
+
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -580,10 +582,14 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 	return state;
 }
 
-ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBound &bound) {
+ExprPtr DirectRowBoundMessage(ClientContext &context, const ExpressionBuilder &calc, const DirectRowBound &bound) {
 	auto none = calc.Constant(Value(LogicalType::VARCHAR));
 	auto message = none;
 	auto as_double = calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
+	if (std::isfinite(DirectMagnitudeBound(context, *bound.value))) {
+		// A value of an exact type is never NaN or infinite, so the row raises nothing.
+		return none;
+	}
 	if (bound.coefficient) {
 		message = calc.If(calc.Fn("isfinite", as_double), none,
 		                  calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, bound.written))));
