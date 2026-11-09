@@ -122,9 +122,12 @@ shows each compared group catches an injected difference (`DECIDB_EVALUATOR_INJE
 by `DECIDB_VERIFY_ALLOW=bug:group[:field prefix]`, whose prefix names whole words of a field's name (`clause 1`
 covers `clause 1 term 0`, not `clause 10`), and which writes the bug to `DECIDB_VERIFY_ALLOW_LOG` when the
 difference shows; the pytest marker `verify_known_difference(bug, groups)` sets both for its test under `verify` and
-fails the test once the bug no longer differs (`tests/_verify_known.py`). The second run is the flat evaluator again
-until the tree's model emitter exists, so `verify` builds no tree yet. The switch, the record and the comparison go
-when the flat evaluator does (P6).
+fails the test once the bug no longer differs (`tests/_verify_known.py`); the group `raised` allows a difference in
+what the two runs raised. `verify` builds the tree, so its construction's checks run on every query. Its second run is
+the tree's (`EvaluateTree`, below) where the tree covers the query, and flat's again where it does not, which the
+profile counter `verify.no_arm` counts. Flat walks the tree's descent beside its pass only in the run that prints a
+requested dump, so its second run walks none. The switch, the record and the comparison go when the flat evaluator
+does (P6).
 
 **`tree` today.** The deck's evaluator runs end to end, beside flat and not yet its equal (the suite run under
 `DECIDB_EVALUATOR=tree` still has failures):
@@ -139,7 +142,7 @@ when the flat evaluator does (P6).
   (`decide_tree_compile.cpp`) binds each clause root to stage 05's clause, copies stage 05's terms into the node's
   body, finds the node each term is computed on, and compiles each coefficient, bound, admitted end and member test
   into a program over that node's layout, by flat's own rules (`ToChunkReferences`): its carried columns, then the
-  program columns its programs add (which the descent does not carry yet), then an admitted end's inputs a and r. A
+  program columns its programs add (which the descent carries on each entry), then an admitted end's inputs a and r. A
   root takes the error rank of the stage-05 list its body comes from, in the order flat evaluates them (a folded
   bound's singleton row follows every constraint, and flat evaluates it under DIAGNOSE alone). A read of a data reducer or a frame
   compiles to a NULL of its type, since the tree computes no value for it yet, and the body names the first such read
@@ -150,24 +153,55 @@ when the flat evaluator does (P6).
   an E's classes lie within the G or O they feed. A collated key folds each read's spelling into its group's least at
   insert, one dictionary per key across every node, and a position takes its rows' least spelling when the descent
   finishes (D69).
-- *Bottom-up* (`decide_tree_evaluation.hpp`): each node in `eval_order`, after what it reads. An auxiliary has no
-  value where something it is defined from has none, a defining root or a product's factor (D88). A shared value is
-  walked once for errors, and the least-ranked error is raised (`DecideErrorLedger`). A Ctrl-C stops the evaluation
-  at its next node.
-- *Formulation*: an interim second back end (`decide_tree_formulation.cpp`) writes `SolverInput` from the values. The
-  plan replaces it with a model emitter onto stage 06, shape by shape, and then deletes it.
+- *Coverage*: a query is covered when every shape it has has an arm in the model emitter
+  (`DecideModelEmitter::Uncovered`, keyed on what stage 06 reads of the clauses and the query: products, squares, a
+  tightest bound, `<>` rows, a defined auxiliary, an extremum, the aggregate and class shapes, the objective, composed
+  clauses, links, frames, product links) and the tree computes a value for every node
+  (`DecideTreeColumns::Uncomputed`, an interim predicate apart from the shapes: a read of a data reducer or a frame, a
+  hidden root). The arms today are a clause with a model row per kept row, the folded bounds' rows a repair model
+  emits, and the declared decisions' classes: clauses with no objective. A covered query runs `EvaluateTree` and then
+  flat's tail (`BuildSolverInput`, `FormulateModel`, the solve); one that is not takes `FinalizeWithTreeFormulator`,
+  the interim path of the next two bullets, which the profile counter `execution.tree_fallback` counts.
+- *Bottom-up, covered* (`decide_tree_columns.hpp`): partial evaluation, as DuckDB's executor runs a projection, with no
+  expression interpreted per entry. Each node's programs run over its entries, one executor per window of 2,048
+  entries, with the one pass's per-row error capture (`DecideEvaluateWindow`), and are read through flat's
+  `ExtractDoubleColumn`, so a value and its message are flat's; a coefficient computed from inputs names the input
+  that is not finite at the failing entry. A node is computed when the emitter first reads it, not in an `eval_order`
+  walk, since no covered query reads one node's values from another yet. The descent's errors and the programs' go to
+  one ledger. A program's error ranks under its owner's rank in flat's order inside a clause: its block, then flat's
+  window of the input's rows, which the failing entry's row places (not the window of entries, since a `when` keeps
+  fewer entries than rows), execution before value, then the program's group and place in its block
+  (`DecideErrorRank::group`, `position`), then the row. A value error is found by reading its window entry by entry.
+- *Formulation, covered* (`decide_model_emitter.hpp`): the model emitter, an Adapter onto stage 06, writes what
+  `PhysicalDecide::Evaluate` writes for the model, gstate's evaluated clauses and the keyed mappings, in flat's
+  order, through flat's own blocks (`InitializeEvaluatedConstraint`, `DescribeBound`, `SkipNullInstances`,
+  `CountInstances`), so the tree and flat formulate through one code path. A keyed decision with no class at a row,
+  or a NULL coefficient or bound, skips its instance as flat skips it, and the skipped instances are reported unless a
+  clause raised.
+- *Bottom-up, interim* (`decide_tree_evaluation.hpp`): each node in `eval_order`, after what it reads, entry by entry.
+  An auxiliary has no value where something it is defined from has none, a defining root or a product's factor (D88).
+  A shared value is walked once for errors, and the least-ranked error is raised (`DecideErrorLedger`). A Ctrl-C
+  stops the evaluation at its next node.
+- *Formulation, interim*: a second back end (`decide_tree_formulation.cpp`) writes `SolverInput` from those values.
+  It goes, with the interim evaluation, once every shape has an arm.
 
 `tree-noside` plans no side plans and folds the data reducers in the descent; it fails exactly what `tree` fails.
 
 Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS`, `DECIDB_DUMP_BODIES` and `DECIDB_DUMP_VALUES`
-print the tree, the containers, the bodies and their programs, and the bottom-up values to stderr (the first two also
-under `flat`, which then builds the tree beside its own plan, whose EXPLAIN and answer stay as they are, and runs the
-descent in its pass, for the dump alone; the bodies print there with them); `DECIDB_DESCENT_CHUNK` sets the descent's
-chunk size; `DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer,
-which is internal;
-`DECIDB_TREE_INJECT=node:data:value` replaces a node's data value, so a test can show the solver reads the bottom-up
-values. Profile counters (`DECIDB_PROFILE`): `execution.input_scans` (scans of the input, 1), `execution.descent_rows`
-and `execution.required_values` (values walked for errors, linear in the entries).
+print the tree, the containers, the bodies and their programs, and the interim evaluation's values to stderr (the
+first two also under `flat`, which then builds the tree beside its own plan, whose EXPLAIN and answer stay as they
+are, and runs the descent in its pass, for the dump alone; the bodies print there with them). For a covered query the
+interim evaluation runs for the values dump alone, since the columns keep no dump of their own; under `verify` no run
+prints it, as flat's has no such values. `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
+`DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer, which is
+internal; `DECIDB_TREE_INJECT=node:data:value` replaces a node's data value in the interim evaluation, so a test can
+show its formulator reads the bottom-up values. `DECIDB_TREE_COVERAGE_LOG=path` appends a line per query, under
+`tree`, `tree-noside` or `verify`: `covered`, or the counter it took (`execution.tree_fallback`, `verify.no_arm`) and
+the first reason it is not covered, which is how a suite run counts what the tree covers. Profile counters
+(`DECIDB_PROFILE`): `execution.input_scans` (scans of the input, 1), `execution.descent_rows`,
+`execution.required_values` (values walked for errors by the interim evaluation, linear in the entries),
+`execution.tree_fallback` and `verify.no_arm`. Tests: `test_tree_emitter.py` (the covered and uncovered branches,
+each shape with no arm, flat's model and flat's error) and `test_evaluator_verify.py`.
 
 ## 2. The folded variable box
 
