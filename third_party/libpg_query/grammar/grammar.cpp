@@ -600,6 +600,49 @@ makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscan
 }
 
 /*
+ * DeciDB: whether name spells word, ignoring ASCII case (word is lower case).
+ */
+static bool
+decideSpells(const char *name, const char *word)
+{
+	for (; *name && *word; name++, word++)
+	{
+		char c = (*name >= 'A' && *name <= 'Z') ? *name + ('a' - 'A') : *name;
+
+		if (c != *word)
+			return false;
+	}
+	return *name == *word;
+}
+
+/*
+ * DeciDB: the type of a decision, read as a name so that DECIDE adds no keyword for it (a keyword
+ * makes DuckDB quote every name that spells it, as the UNION member bool). int, real and bool are
+ * the types, in any case; any other name is a syntax error at it.
+ */
+static PGTypeName *
+makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner)
+{
+	const char *marker;
+	PGTypeName *type;
+
+	if (decideSpells(name, "int"))
+		marker = "integer_variable";
+	else if (decideSpells(name, "real"))
+		marker = "real_variable";
+	else if (decideSpells(name, "bool"))
+		marker = "bool_variable";
+	else
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("syntax error at or near \"%s\"", name),
+				 parser_errposition(location)));
+	type = makeTypeName((char *) marker);
+	type->location = location;
+	return type;
+}
+
+/*
  * DeciDB: the type word of a declaration's type marker, so a message can quote
  * the declaration as written.
  */

@@ -168,12 +168,8 @@ opt_select:
 	;
 
 variable_type:
-			INT_P
-				{ $$ = makeTypeName("integer_variable"); $$->location = @1; }
-			| REAL
-				{ $$ = makeTypeName("real_variable"); $$->location = @1; }
-			| BOOL_P
-				{ $$ = makeTypeName("bool_variable"); $$->location = @1; }
+			ColId
+				{ $$ = makeDecideVariableType($1, @1, yyscanner); }
 		;
 
 /* A single typed variable declaration. The type is mandatory:
@@ -2962,10 +2958,6 @@ a_expr_body:		c_expr									{ $$ = $1; }
 			| a_expr IS NOT OF '(' type_list ')'		%prec IS
 				{
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "<>", $1, (PGNode *) $6, @2);
-				}
-			| a_expr IS variable_type			        %prec IS
-				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", $1, (PGNode *) $3, @2);
 				}
 			| a_expr BETWEEN opt_asymmetric b_expr AND a_expr		%prec BETWEEN
 				{
