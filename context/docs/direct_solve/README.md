@@ -26,7 +26,7 @@ refuses a quadratic limit. The other 14 classes in the catalogue are not started
 | Work on the shared engine or error wording | [framework/](framework/) |
 | See a class that is not built yet, or start one | [todo.md](todo.md) |
 | Time direct solve against Gurobi and HiGHS on TPC-H | [../performance/benchmarking/direct_solve.md](../performance/benchmarking/direct_solve.md) |
-| Rerun a measurement a rule's `done.md` cites | [../performance/benchmarking/archive_profilers.md](../performance/benchmarking/archive_profilers.md) |
+| Rerun an archived measurement a doc cites | [../performance/benchmarking/archive_profilers.md](../performance/benchmarking/archive_profilers.md) |
 | Know why `auto` is the default, or what a user can notice | [architecture/policy.md](architecture/policy.md) |
 | Read the definition and correctness argument of a class | `rules/<id>_<slug>/definition.md` |
 | Check current DECIDE syntax | `../language/guide.md` |
