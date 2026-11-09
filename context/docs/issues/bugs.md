@@ -20,5 +20,10 @@
   `DECIDE optimization is unbounded`, on a model whose every decision is bounded. Gurobi returns an unbounded status
   for the expanded square's constant `v^2`; HiGHS refuses to load it ("numbers too far apart in size"). Inside the
   backends; direct solve answers `x = v`.
+- **DuckDB moves a constant across a comparison and drops an overflow.** `SELECT i FROM t WHERE i + 127::TINYINT > 0`
+  over a TINYINT `i = 1` returns the row, where `SELECT i + 127::TINYINT FROM t` raises `Overflow in addition of INT8`.
+  DuckDB's `MoveConstantsRule` (expression rewriter) rewrites the filter to `i > -127`, which has no addition to
+  overflow; with `SET disabled_optimizers = 'expression_rewriter'` the filter raises. Inside DuckDB, for integer
+  comparisons only. No DECIDE check depends on an integer overflow in a filter: they compute in DOUBLE.
 
 Resolved behavior is documented by its owning `done.md`.

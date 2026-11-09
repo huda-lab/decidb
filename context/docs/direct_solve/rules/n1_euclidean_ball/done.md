@@ -99,8 +99,8 @@ A query N1 does not apply to keeps its answer: it runs on the solver, and `requi
 ## How it works
 
 Group-then-join over two reads of the source, as A2 is (`DirectJoinClassAnswers`): the first read computes each
-ball's sum of squared lengths once, on the group's one row; the second gives every row its target and joins its
-group's row on the key.
+ball's sum of squared lengths and the values that depend on it once, on the group's one row; the second gives every
+row its target and joins its group's row on the key.
 
 The first read:
 
@@ -116,19 +116,30 @@ The first read:
    infeasible, unbounded, and with a square the target's precision warning.
 8. `H`: a hash aggregate on the group key (`DirectHashAggregate`), one row per group: `h`, the sum of the squared
    lengths; whether every row's checks held (`bool_and`); and the group's limit, for a limit from the data.
+9. `C`: a projection over `H`'s output that computes what depends on the group alone, once, on its row: the length
+   `sqrt(h)`, whether `h` is below the normal range of a DOUBLE, whether `h` is 0 (with no square), and the verdict of
+   the group's checks. This is loop-invariant code motion: the second read would otherwise compute each of them again on
+   every row of the group, and a row of a group of 80 offers repeats `sqrt(h)` 80 times. The verdict is a chain in which
+   the checks of the rows come first and `h` past a DOUBLE next (`DirectRaiseTooLarge`), so `h`'s own error is raised
+   only for a group whose rows passed.
 
 The second read takes `[W0]`, the scope, `P1` and `P2` again and the row's value in the domain, joins the group's row
-on the class key (a SINGLE join, each column compared by what a NULL means in it, so a row in no ball matches no group),
-and ends in `P5`: the source columns, the answer, and the validation column that keeps the checks and the warning live.
+from `C` on the class key (a SINGLE join, each column compared by what a NULL means in it, so a row in no ball matches
+no group), and ends in `P5`: the source columns, the answer, and the validation column that keeps the verdict and the
+warning live. `P5` reads the length, the two flags and the limit from the group's row and computes no `sqrt`,
+comparison on `h` or range check of its own.
 
 `H` holds every row of the first read before it gives one, and each check on a row stands below it, so a bad last row
 raises under `LIMIT 1`; the target's precision warning is one of them. The second read raises nothing: the first has
-raised on any value it would. Two checks stand above the join: `h` past a DOUBLE with every square in range, and the
-scale warning from `h`. Only this plan computes `h`, and a parent that reads no row of that group sees neither. The
-solver has no such error, and the framework's [Number-range warning](../../framework/done.md) gives the rule for the
-warning. A row outside every ball reads NULL in `H`'s input, so it adds nothing to the group whose key it shares, and
-the answer does not read what the join gives it. The aggregate runs on every thread, which the window it replaces did
-not (§ Performance).
+raised on any value it would. `h` past a DOUBLE with every square in range is raised in `C`, when the groups are
+built, so a group whose `h` is past a DOUBLE raises whether or not a row of it is among the rows the parent reads. That
+holds under `LIMIT 1` and `COUNT(*)`, and for one bad group among many. It matches the solver path, which reads every
+row and so raises for any group, and the rule that every row is read. Only this plan computes `h`; the solver has no
+such number, and the error is the plan's own. The scale warning stays on the row: it prints for a row that reads the
+scale with a value of its own (`P5`), and a parent that reads no row of that group does not see it. The framework's
+[Number-range warning](../../framework/done.md) gives the rule for the warning. A row outside every ball reads NULL in
+`H`'s input, so it adds nothing to the group whose key it shares, and the answer does not read what the join gives it.
+The aggregate runs on every thread, which the window it replaces did not (§ Performance).
 
 The plan reads the source twice by itself (`pipelined`), so late materialization adds no third read for a stored
 column the parent reads and the rule does not use.
@@ -145,7 +156,7 @@ does not.
 
 | Check | What it covers |
 |---|---|
-| `test_direct_n1_euclidean_ball.py` (143 tests) | The answers. 83 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. Past the scales the solver answers (a limit of 1e300 over a factor of 1e-10, a subnormal `h`, a square factor of 1e308), the oracle solves the same scores at scale 1 and the direct answer, scaled back, must match it. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. Without Gurobi, in a subprocess with an invalid license. |
+| `test_direct_n1_euclidean_ball.py` (143 tests) | The answers. 83 cases run on the independent oracle (`oracle_solver`, through `add_quadratic_constraint`, built from the raw rows and the groups, limits and coefficients each case states in Python), on the solver path (`off`) and on the direct path (`require`): mixed, nonpositive and zero scores, `B` = 0 and `B` < 0, both domains, projection inside and outside the ball, every limit and objective spelling, `by`, `per K:`, `when`, NULL keys, NULL targets, column limits. 4 parent-query contexts. 9 empty-source cases. 13 error cases that must fail on both paths in one class. The boundary table against the solver alone: scores from 1e-200 to 1e154, limits to 1e25, infinite limits. Past the scales the solver answers (a limit of 1e300 over a factor of 1e-10, a subnormal `h`, a square factor of 1e308), the oracle solves the same scores at scale 1 and the direct answer, scaled back, must match it. The warning: `h` in and below the normal range, zero scores, a target in and out of the ball, a row outside every ball, once for many rows, again for each query. A group whose `h` is past a DOUBLE raises under `LIMIT 1` and `COUNT(*)` though no streamed row is in it (5,000 rows, a `LIMIT 1` met by the first vector). Without Gurobi, in a subprocess with an invalid license. |
 | `test_direct_rule_conformance.py` | The checks every rule owes, with N1's fixture: schema and rows, all-rows read for 5 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, a forced backend (Gurobi, since HiGHS has no quadratic limit), `DIAGNOSE`, 7 near misses that must decline under `require` and answer under `auto` as under `off`, and 4 forms that apply |
 | `test_direct_user_facing.py` | Every infeasible, unbounded, NaN and infinity error compared in full with the solver's, on 9 shapes; the too-large text |
 | `test_direct_source_values.py` | Each place N1 reads a value a `when` drops, with infinite, NaN and NULL values and with an expression that raises |

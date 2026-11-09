@@ -34,7 +34,7 @@ grammar conflict DECIDE introduces is keyed on a DECIDE token.
 ### Edits to existing DuckDB code
 
 Direct solve (`../direct_solve/`) replaces a DECIDE node with ordinary DuckDB operators, so its plans are only as cheap
-as DuckDB's own rules and operators make them. Five edits to DuckDB, none of which names DECIDE, make a plan the rules
+as DuckDB's own rules and operators make them. Six edits to DuckDB, none of which names DECIDE, make a plan the rules
 build run as DuckDB would run the same answer written as SQL. Each helps any query that has the shape it handles, and a
 standard query returns the same rows.
 
@@ -44,6 +44,15 @@ standard query returns the same rows.
   evaluate. Reason: the throwing `EvaluateScalar` would raise while planning, even over no rows and for a row an earlier
   `WHEN` takes, and the rewriter runs on direct plans, whose checks are `CASE`s that must raise only where they are
   chosen. The edit changes when an error is raised, not whether.
+- **`StatisticsPropagator::PropagateExpression` for a `CASE` (`optimizer/statistics/expression/propagate_case.cpp`).**
+  It propagates the `WHEN` checks first, then calls `CaseSimplificationRule::Simplify`, the fold the rule applies. A
+  check the statistics prove false or NULL is erased. A check they prove true becomes the `ELSE` and ends the checks.
+  When no check is left the `CASE` is its `ELSE`, and the expression is propagated again as that `ELSE`. A check that
+  fails to evaluate stays and raises at run time, as in the rule. Reason: DuckDB folds a constant in the statistics
+  handler that proves it (conjunction, comparison) and never reruns the expression rewriter after statistics, so a
+  `CASE` whose check is proved only by statistics, such as `x IS NULL` over a NOT NULL column, would keep the check
+  and evaluate it per row. A direct plan builds such checks for every nullable input, and its columns are often NOT
+  NULL. `Simplify` is shared with the rule so the two folds cannot differ.
 - **`ArithmeticSimplificationRule` (`optimizer/rule/arithmetic_simplification.cpp`).** For a FLOAT or DOUBLE expression
   it removes `x * 1.0`, `1.0 * x`, `x / 1.0` and `x - 0.0`. It matches `/` and the floating types
   (`IntegerOrFloatingTypeMatcher`, `matcher/type_matcher.hpp`) as well as the integer ones. Reason: these are the
@@ -68,7 +77,8 @@ standard query returns the same rows.
   walks the plan itself, to stop at the DECIDE source, which the user wrote and DuckDB has simplified
   (`../direct_solve/framework/done.md`, Canonicalization after lowering).
 
-Tests: `test/sql/optimizer/expression/test_case_simplification_error.test`, `test_nop_arithmetic_float.test` and
+Tests: `test/optimizer/statistics/statistics_case.test` (each fold, a nested `CASE`, a check that fails to evaluate),
+`test/sql/optimizer/expression/test_case_simplification_error.test`, `test_nop_arithmetic_float.test` and
 `test_not_distinct_from_to_equal.test`, `test/sql/join/left_outer/test_left_join_perfect_hash.test` (gaps, a NULL probe
 key, a key out of range, duplicate build keys, an empty build), and `test/common/test_decidb_perfect_hash_join.cpp`
 (which join types the executor takes).

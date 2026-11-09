@@ -18,11 +18,12 @@ python3 benchmark/decide/direct_solve/run.py --sf 0.125 0.25 --queries r1  # a s
 | `--sf` | `0.125` doubling to `512` | TPC-H scale factors, run smallest first |
 | `--queries` | every file in `queries/` | `s1`, `s1_global`, `a1`, `r1`, `r1_global`, `n1`, `n1_groups` |
 | `--modes` | `direct direct_1t gurobi` | must include `direct`, the baseline for every speedup and objective; `highs` is also available |
-| `--repeats` | 3 | runs of every mode per cell |
+| `--repeats` | 3 (5 under `--compare`) | runs of every mode per cell, or of each side under `--compare` |
 | `--repeat-budget` | 1800 | a run past this many seconds is its cell's last, so the `runs` column can read less than `--repeats` |
 | `--timeout` | 21600 | seconds before a run is killed |
 | `--solver-budget` | 7200 | a solver runs a size only if its median at the previous size was at most this |
 | `--db-dir` | `benchmark/decide/databases/direct_solve/` | where the TPC-H databases are cached |
+| `--compare` | off | run each query's direct plan beside its hand-written comparator instead of the sweep (§ Comparing with a hand-written plan); `--modes` is not used |
 
 It needs the release CLI and a Gurobi license. A row is written as its cell finishes, so a sweep can be stopped at any
 point and keeps what it measured. The databases up to `sf=512` take about 270 GB of disk.
@@ -100,6 +101,51 @@ never be the solver timed against itself.
   started) and reported as `timeout`. A run that fails is reported as `error`. Neither is ever reported as a time.
 - **Machine-heat rule.** Sizes run smallest first. A solver runs the next size of a query only when its median at the
   previous size was within `--solver-budget`; otherwise the cell reads `skipped (...)` with the reason.
+
+## Comparing with a hand-written plan
+
+`run.py --compare` answers a different question from the sweep: how close is the plan a direct-solve rule builds to the
+plan an expert writes by hand in SQL for the same answer? The sweep times direct solve against a solver. This mode times
+it against the cheapest correct relational plan, so the remaining gap is the plan's shape.
+
+```bash
+python3 benchmark/decide/direct_solve/run.py --compare --sf 1 --queries a1 n1 r1
+```
+
+**The comparators.** `hand/<query>.sql` holds one comparator for each file in `queries/`, with a header comment that
+says which obligations of the rule it carries. A comparator that skipped an obligation would be cheaper for a reason
+that is not the plan, so each carries what its rule owes:
+
+| Comparator | What it carries |
+|---|---|
+| `a1.sql` | the verdict first (an empty box raises infeasible, an answer that is not finite raises unbounded), no row released before every row has passed it, so two reads of the table; the target clamped into its box; `-0.0` turned into `0.0` |
+| `a2*.sql` | the class value computed once from a first read and checked finite (the checks of the class's sums and of its answer); the value clamped into its box; `-0.0` turned into `0.0` |
+| `n1.sql`, `n1_groups.sql` | each target and its square checked finite while `h` is summed; `h` checked finite; the scale `(value / sqrt(h)) * radius`; the warning for an `h` below the normal range on a row that has a value; the answer 0 for an `h` of 0; one ball per group, joined back by the key |
+| `r1.sql`, `r1_global.sql` | the price ranking by one window; offers at the same price share what the budget leaves them in proportion to their room, so the answer is the same on every run (a `ROWS` frame would split a tie by the order the rows arrive); the box clamp; a budget read from the data comes from a first read |
+| `s1.sql`, `s1_global.sql` | the ranking by one window and the cut at the bound; for a bound read from the data, the check that it is not below the lower bound 0 (infeasible) |
+
+A comparator is cheaper than the rule's plan only where the plan does work the comparator does not need. Where a check
+has nothing to raise on the benchmark data (every box is finite and starts at 0), the comparator's header says so and
+leaves it out. `test_direct_comparators.py` checks that every query has exactly one comparator and that each gives the
+answer of its direct plan on a small TPC-H database, to 1e-9.
+
+**The measure.** Both sides run in one `decidb` process under `PRAGMA enable_profiling='json'`, one statement per
+repeat, best of `--repeats`. The first run of each side is not timed: it reads the table in. Each query runs once on all
+threads and once on one thread.
+
+- **Summed operator CPU** is the measure: the sum of every operator's time, whatever the thread count. It compares the
+  work of the two plans and does not depend on how well either one parallelizes.
+- **Latency** is reported beside it, for each side.
+- **DECIDE planning** is reported apart. The `optimizer.direct.*` spans (`DECIDB_PROFILE`) are time the direct side
+  spends planning, so they are in its latency and in no operator's time. Reporting them apart keeps the CPU ratio a
+  comparison of plans and shows the planning cost on its own.
+- **Answers.** The run on one thread, where a sum is deterministic, compares the two sides' `COUNT(*)`,
+  `SUM(<decision>)` and objective. A difference is shown. A relative difference beyond 1e-9 stops the run with a
+  non-zero exit.
+
+The table has one row for each query and scale factor: the two CPU times and their ratio, the two latencies, the
+planning, the ratio of the one-thread latency to the all-thread latency for each side (what each side gains from the
+threads), and whether the answers are identical.
 
 ## Output
 

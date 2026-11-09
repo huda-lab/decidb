@@ -130,6 +130,15 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   ones. `DirectWarnIf` and `DirectBelowNormalRange` build the warning, which is always true (Number-range warning,
   below). A rule raises in the solver's order within a group (scope checks, the bound's NaN, an `=` bound's
   disagreement, then the least row message); across failing groups the order may differ.
+  **Message codes.** A rule that takes the least message of a group with an aggregate does not aggregate the texts. It
+  aggregates codes of them, as a column store dictionary-encodes a string column and decodes it late (late
+  materialization of strings). A message built by `DirectNumberMessage` or `DirectOnKeptRows` is a `CASE` over constant
+  texts, so every text it can take is known when the plan is built. `DirectEncodeMessage` collects those texts into a
+  `DirectMessageCodes`, sorted in ascending order, and returns the expression with each text replaced by its code (a
+  UINTEGER, NULL staying NULL). Because the texts are sorted, the least code is the code of the least text, so
+  `MIN` of the codes picks the message `MIN` of the texts would. `DirectDecodeMessage` turns the group's least code
+  back into its text, on the group's row, and that is the only place a text is built. The aggregate then hashes and
+  compares four-byte integers per row, not strings, and a row that passes carries no text.
 - **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
   One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
@@ -160,6 +169,25 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped decision's
   determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
   `DirectBuildOverOneRead`.
+
+  **Row stage.** A rule whose reads all compute the same per-row projections over the source gives the reader that
+  computation once (`SetRowStage`, a function from a read to the plan that forwards its columns and adds the stage's),
+  and takes each read of it with `ReadStaged`, which returns the plan and its columns in the order the stage built them.
+  The stage is set once, after every gate and every other read, because the shared stage reads the source through the
+  newest verdict. What a staged read is depends on the source:
+  - **A copied source.** The stage is a common subexpression of the reads, and the reader materializes it once (a
+    spool). It is the definition of a `LogicalMaterializedCTE` named `direct_stage`, built over the first read (gated,
+    with its side tables), and every staged read is a `LogicalCTERef` to it. The optimizer's CTE column pruning narrows
+    each reference to the columns that read uses. The stage is innermost among the reader's CTEs (`Finish`), because
+    its definition reads the verdicts and the side tables.
+  - **A copied source that only the stage reads.** When no other read has taken the source by the time the stage is
+    set, a copy would be read once, by the stage. The reader then drops the copy, and the stage reads the source as
+    itself, as DuckDB inlines a CTE that is referenced once.
+  - **A recomputed source.** There is no copy to hold the stage, so each staged read builds the stage again, as each
+    read builds the source again.
+  The stage is the same on every read, so no plan depends on which read has which rows. Materializing it trades one
+  held copy of the stage's output for the work of computing it once per read; the reader makes that trade only where it
+  already holds the source.
 - **Bound and term reader** (`direct_bound_reader.{hpp,cpp}`; the name is the first half's). The file reads two things,
   and reads each once, so that no two rules read a bound or an objective term differently. Its header defines
   `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
@@ -173,7 +201,10 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
     expressions. `DirectStaticFloor` lowers a decision's static floor on the rows where a lower bound under a `when`
     replaces the default of 0. `DirectClauseBounds` reads one clause's two ends on a row (no bound on a row its `when`
     drops), and `DirectRowBox` intersects them with the box. `DirectBoxIsEmpty` is true on a row whose box no value
-    satisfies.
+    satisfies. `DirectRowBox` leaves a static end that is infinite out of the `GREATEST` (lower) or `LEAST` (upper): an
+    infinite end clamps nothing, because −∞ is `GREATEST`'s identity and +∞ is `LEAST`'s for every value but NaN, and a
+    NaN bound has raised before the box is read. A box with no other end on that side is the constant ±∞. The floor of
+    a decision that no `when` can lower is the constant itself, so the plan carries no column for it.
   - **Terms of an objective part or a budget.** `DirectReadLinearPart` reads one linear part into a `DirectLinearPart`:
     its sign and constant factor, and each linear term's decision, sign and proved coefficient; it skips other term
     kinds. `DirectReadConstantTerm` reads a per-row constant. `DirectReadLinearForm` reads a linear form `w*x + t` in

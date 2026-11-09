@@ -6,12 +6,12 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `direct_solve/framework/todo.md` § How to work any task, `pipeline/architecture.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task.
 
-Each batch finishes completely. Lanes: H-51; the A2 measurement on a quiet machine, last.
+Each batch finishes completely. Lanes: H-52; the A2 measurement on a quiet machine, last.
 
 ## A2. A2's slow all-rows query
 
-- [ ] H-51 A direct plan does per-row work that belongs to a group, a constant or one read — direct_solve/framework/todo.md § H-51
-- [ ] H-48 A2's group-then-join plan is measured (quiet machine, after H-51) — direct_solve/framework/todo.md § H-48
+- [ ] H-52 Statistics prove constants that nothing reads as constants — direct_solve/framework/todo.md § H-52
+- [ ] H-48 A2's group-then-join plan is measured (quiet machine, after H-52) — direct_solve/framework/todo.md § H-48
 
 ## F1. Formatting (after every other batch)
 

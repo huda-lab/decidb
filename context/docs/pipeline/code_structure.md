@@ -86,6 +86,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `execution/column_binding_resolver.cpp` | 03 | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
 | `optimizer/rule/case_simplification.cpp`, `optimizer/rule/arithmetic_simplification.cpp`, `optimizer/expression_rewriter.cpp` | 05 | Edits to DuckDB's expression rewriter that direct plans rely on: a constant `WHEN` that fails to evaluate raises at run time, the IEEE-exact float identities, and `RewriteOperatorExpressions`; `architecture.md` § 1 |
 | `optimizer/statistics/operator/propagate_join.cpp` | 05 | IS NOT DISTINCT FROM becomes `=` when neither side can hold a NULL; `architecture.md` § 1 |
+| `optimizer/statistics/expression/propagate_case.cpp` | 05 | A `CASE` whose `WHEN` checks the statistics prove constant folds, by `CaseSimplificationRule::Simplify`, the fold the rewriter's rule makes; `architecture.md` § 1 |
 | `execution/operator/join/perfect_hash_join_executor.cpp` | 08 | The perfect hash join takes the LEFT and SINGLE joins, with one NULL slot past the build range; `architecture.md` § 1 |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | Extraction, materialization, evaluation, emission, readback |

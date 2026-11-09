@@ -8,7 +8,7 @@ Databases and results are gitignored (`benchmark/decide/.gitignore`), so keep th
 |---|---|---|---|
 | TPC-H suite | How long does each DECIDE query in a fixed set take on the solver path, and did a commit change that? | `run_benchmarks.py`, `queries/q*.sql` | [tpch_suite.md](tpch_suite.md) |
 | Pipeline profiler | Where inside the solver path does the time and memory go, stage by stage, on Gurobi and on HiGHS? | `profile_pipeline.py`, `queries/q*.sql`, `queries/p*.sql` | [pipeline_profiler.md](pipeline_profiler.md) |
-| Direct-solve benchmark | How much faster is direct solve than the forced solver on the same query, as the data grows? | `direct_solve/run.py`, `direct_solve/queries/*.sql` | [direct_solve.md](direct_solve.md) |
+| Direct-solve benchmark | How much faster is direct solve than the forced solver on the same query, as the data grows? | `direct_solve/run.py`, `direct_solve/queries/*.sql`, `direct_solve/hand/*.sql` (`--compare`) | [direct_solve.md](direct_solve.md) |
 | DIAGNOSE examples | What does a SQL user read, plain and under DIAGNOSE, for each example query on each backend? | `diagnose_examples/run.py`, `diagnose_examples/queries/*.sql` | [../../diagnostics/README.md](../../diagnostics/README.md) § Capturing examples |
 | Archived direct-solve profilers | The measurements each direct-solve rule's `done.md` cites | `direct_solve/archive/` | [archive_profilers.md](archive_profilers.md) |
 | Oracle-checked scale tests | Does DECIDE still match an independent solver on a few hundred to a few thousand rows? | `test/decide/tests/test_large_scale.py` | [scale_tests.md](scale_tests.md) |
