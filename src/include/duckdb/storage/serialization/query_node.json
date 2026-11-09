@@ -88,7 +88,8 @@
       {
         "id": 211,
         "name": "decide_sense",
-        "type": "DecideSense"
+        "type": "DecideSense",
+        "default": "DecideSense::FEASIBILITY"
       },
       {
         "id": 212,
@@ -98,7 +99,8 @@
       {
         "id": 213,
         "name": "decide_text",
-        "type": "DecideSourceText"
+        "type": "DecideSourceText",
+        "default": "DecideSourceText()"
       }
     ]
   },

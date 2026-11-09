@@ -65,6 +65,10 @@ struct DecideSourceText {
 	bool HasText() const {
 		return !tail.empty();
 	}
+	//! The serialized fields; the serializer compares a member with its default to leave a default out.
+	bool operator==(const DecideSourceText &other) const {
+		return tail == other.tail && tail_start == other.tail_start && spans == other.spans;
+	}
 	//! The text written for the construct of `role` whose token is at `location` (a query location); false when the
 	//! parser kept none.
 	bool Cut(optional_idx location, DecideSpanRole role, string &text) const;
