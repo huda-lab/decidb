@@ -35,6 +35,13 @@ solver path answers those queries, so none of them is wrong, only slower.
   text or a golden is not bloat, so stop and report it. Each removal names its evidence (no caller, a mutation that
   fails no test, the case that already reaches the branch). Record the lines and the `lizard` figures of the area
   before and after in the report.
+- **Small gains.** A change that adds an analysis, a mechanism or a special case for a gain inside the benchmark's
+  noise (±15% of CPU on a loaded machine) or a few milliseconds of latency is not done, and landed work of that kind is
+  removed; a change that simplifies is done even when it gains nothing. A ratio target is an aim, not a reason to add
+  machinery. Not done on this rule: a smallest-magnitude analysis to drop the below-normal check of a value of an exact
+  type (a2_abs_global, 0.6 ms); R1's per-row answer from window frames (a second plan shape for several decisions, and
+  prefix sums the segment tree does not keep monotone); proving R1's group checks at plan time. **Ruling (owner,
+  2026-11-09).**
 
 ## H-48 — A2's group-then-join plan is measured
 
@@ -42,35 +49,12 @@ solver path answers those queries, so none of them is wrong, only slower.
   § How it works). A2's § Performance still holds the window plan's figures, and only `sf=1` was timed on the new
   plan, under load (median of 5): `a2` 0.032 s on all threads against 0.046 s on one; Gurobi took 0.075 s on the old
   sweep.
-- **Change.** Run the sweep on a quiet machine and rewrite the § Performance of A2, N1 and S1 from it, with the plan's
-  explanation: A2's absolute loss, N1 and S1's group bounds moved to group-then-join after the old figures were taken.
+- **Change.** Run the sweep on a quiet machine and rewrite the § Performance of A2, N1, S1 and R1 from it, with the
+  plan's explanation: A2's absolute loss, N1 and S1's group bounds moved to group-then-join after the old figures were
+  taken. R1's section gives its CPU against the fair comparator (`run.py --compare`) and the cause of the gap: a group
+  check must raise even under `LIMIT`, so it is an aggregate over every row joined back, and the hand plan leaves out
+  the checks the TPC-H data cannot trip.
 - **Done when.** `a2` runs faster on all threads than on one and is ahead of Gurobi at every size
   (`benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs a2_abs_global n1 n1_groups
   s1 s1_global r1 r1_global`, and the same with
   `--modes direct highs`).
-
-## H-53 — Two mechanisms that buy nothing measurable
-
-- **Problem.** Statistics propagation folds what it proves and reads a constant column of a projection as its value
-  inside a computation (`statistics_propagator.cpp`, `propagate_columnref.cpp`). Two mechanisms beside it measure as
-  noise at `sf=1` (`benchmark/decide/direct_solve/run.py --compare`):
-  - **`DirectCanonicalize`'s constant-column propagation** (`ConstantPropagator`, the join types it passes constants
-    across, `direct_canonicalizer.cpp`) does the same job as the statistics propagator, earlier. Deleting it leaves a
-    few `x * 1.0` per row in 8 of the 11 benchmark plans and changes no query's CPU beyond noise; an `x / 1.0` measures
-    0.1 ms per 800K rows.
-  - **Statistics across a materialized CTE** (`propagate_cte.cpp`, `cte_columns`) moved r1 from 1.80× to 1.75× of its
-    comparator, inside the ±15% noise of a loaded machine, and carries an exclusion of its own (a recursive CTE).
-- **Change.**
-  1. Delete `ConstantPropagator` and its join-type list from `direct_canonicalizer.cpp`, the C++ tests that only reach
-     them (`test_decidb_direct_canonicalizer.cpp`), and the header's account of them. If the canonicalizer is then
-     DuckDB's rewriter over the operators a rule built, run `Optimizer::rewriter` over the adapter's child as DuckDB
-     runs it (`VisitOperator`), and delete `ExpressionRewriter::RewriteOperatorExpressions` (core) and the walk that
-     stops at the source, unless a plan of the source then changes; say which in the report.
-  2. Delete `propagate_cte.cpp`, its dispatch, `cte_columns` and `statistics_cte.test`.
-- **Ruling (owner, 2026-11-09).** Work that adds complexity for a gain inside noise or a few milliseconds of latency is
-  not done, and landed work of that kind is removed; a change that simplifies is done. Not done, on that rule: a
-  smallest-nonzero-magnitude analysis to drop the below-normal check of a value of an exact type (a2_abs_global, 0.6 ms
-  of latency); R1's per-row answer from window frames (a second plan shape for several decisions, and prefix sums the
-  segment tree does not keep monotone); proving R1's group checks at plan time.
-- **Done when.** The two mechanisms and their tests are gone; answers, error texts, warnings, the first error to raise
-  and goldens are unchanged; the benchmark's CPU is unchanged within noise; the matrix passes.

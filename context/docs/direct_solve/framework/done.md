@@ -87,31 +87,25 @@ serializer, highs) 6,430 passed; C++ `build/release/test/unittest "[decidb]"` 4,
   The eligible flag (`DirectCarried::eligible`) stays a column of its own for the stages that need it (a row's
   membership in a ball or a budget), outside the key. A2, N1, S1 (its class key, and the rank and count windows
   partitioned by it), R1 and the bound side tables take this one form.
-- **Canonicalization after lowering** (`direct_canonicalizer.{hpp,cpp}`; MLIR's canonicalize, LLVM's InstCombine). A
-  rule builds its expressions in general form, with a constant where a case does not arise (a flag that is always true,
-  a CASE on it), and DuckDB's expression rewriter has run before the DECIDE optimizer, so nothing simplifies them.
-  `DirectCanonicalize` is one pass over the operators a rule built, in the order a plan is read, which the rule driver
-  runs after `StripTagsAbove`, on the adapter's child. It stops at the DECIDE input (`source`), which the user wrote and
-  DuckDB has simplified. At each operator, children first:
-  1. Constant-column propagation: a reference to a projection column that holds a constant becomes the constant in
-     the expressions above the projection (projections, filters, windows, the aggregates of an aggregate). The constant
-     is not carried into the keys and conditions of a join or an aggregate, which stay columns because a hash join and
-     a hash aggregate are built on columns. Filters, windows and cross products pass their constant columns on. An
-     inner join passes both sides'; a LEFT or SINGLE join passes its left side's only, because a column of the
-     NULL-padded side is NULL for a row with no partner.
-  2. DuckDB's own rule set (`Optimizer::rewriter`) over the operator's expressions
-     (`ExpressionRewriter::RewriteOperatorExpressions`).
+- **Simplification after lowering** (MLIR's canonicalize, LLVM's InstCombine). A rule builds its expressions in
+  general form, with a constant where a case does not arise (a flag that is always true, a CASE on it), and DuckDB's
+  expression rewriter has run before the DECIDE optimizer, so nothing has simplified them. The rule driver runs DuckDB's
+  rewriter (`Optimizer::rewriter`) over the adapter's child after `StripTagsAbove`, as DuckDB runs it over a plan; over
+  the DECIDE input, which DuckDB has already rewritten, it changes nothing. Statistics propagation runs after the DECIDE
+  optimizer: it reads a constant the rule's stages carry as a column (a seed, a flag, a bound written as a number) as
+  its value inside the computations above, and folds what that makes constant
+  ([architecture.md](../../pipeline/architecture.md) § 1).
 
   The plan computes in DOUBLE, as the solver path does. A sum of an exact type stays a DOUBLE sum
   (`sum(CAST(x AS DOUBLE))`, not `CAST(sum(x) AS DOUBLE)`): a DECIMAL sum can overflow where the DOUBLE sum does not,
   an error the solver path never raises.
 
-  The pass changes no value and no error: each rule it applies is one DuckDB applies to any query. What it removes is
-  per-row work a constant decides (a CASE on a constant flag, an addition of a seed, a multiplication by 1.0). Measured
-  at `sf=1`, the rewriter alone lowers the cost of the row-side projections by about a tenth. Folding a constant
-  subtree alone saves nothing, since DuckDB evaluates one once per chunk (`../../performance/findings.md`, PERF-16).
-  The float identities the rewriter needs here, and the fix to its CASE rule, are in
-  [architecture.md](../../pipeline/architecture.md) § 1. Tests: `test_decidb_direct_canonicalizer.cpp`.
+  Neither pass changes a value or an error: each rule is one DuckDB applies to any query. What they remove is per-row
+  work a constant decides (a CASE on a constant flag, an addition of a seed, a multiplication by 1.0). Measured at
+  `sf=1`, the rewriter alone lowers the cost of the row-side projections by about a tenth. Folding a constant subtree
+  alone saves nothing, since DuckDB evaluates one once per chunk (`../../performance/findings.md`, PERF-16). The float
+  identities the rewriter needs here, and the fix to its CASE rule, are in
+  [architecture.md](../../pipeline/architecture.md) § 1.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectErrorPredicate` (a BOOLEAN that raises a given message, fixed or computed per row),
   `DirectValidBoundPredicate` and `DirectNumberMessage`. The two state errors come from `DirectStateErrors {infeasible,
@@ -442,13 +436,11 @@ rank window or a verified, streamed plan) and run on the same two central files.
 
 ## Verified by
 
-- C++ for the canonicalizer: `test_decidb_direct_canonicalizer.cpp` (a constant column carried up through the
-  operators that pass it on, the source left as it is, no constant across the padded side of an outer join, the keys of
-  a join and of an aggregate kept as columns).
-- DuckDB core edits (`../../pipeline/architecture.md` § 1): sqllogictests `test_case_simplification_error`,
-  `test_nop_arithmetic_float`, `test_not_distinct_from_to_equal` (`test/sql/optimizer/expression/`) and
-  `test_left_join_perfect_hash` (`test/sql/join/left_outer/`), and `test/common/test_decidb_perfect_hash_join.cpp`
-  (which join types the executor takes).
+- DuckDB core edits (`../../pipeline/architecture.md` § 1): sqllogictests `statistics_case`,
+  `statistics_constant_folding`, `statistics_constant_columns` (`test/optimizer/statistics/`),
+  `test_case_simplification_error`, `test_nop_arithmetic_float`, `test_not_distinct_from_to_equal`
+  (`test/sql/optimizer/expression/`) and `test_left_join_perfect_hash` (`test/sql/join/left_outer/`), and
+  `test/common/test_decidb_perfect_hash_join.cpp` (which join types the executor takes).
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: a per-row term the splitter cannot read, an
   order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not an exception),
   `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback when no rule applies, a rule that

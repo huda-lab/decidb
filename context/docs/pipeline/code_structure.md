@@ -71,7 +71,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
 | `optimizer/decide/decide_optimizer.cpp` | 05 | The pass dispatcher and the helpers the passes share |
 | `optimizer/decide/decide_rewrite_rhs_bounds.cpp` | 05 | `RewriteRhsAggregates`: a data-only reducer on a bound's right side becomes a placeholder column, recorded for the path to build as a side table (`direct_bound_tables.cpp`); runs before the other passes |
-| `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1, N1, A2), the plan fragments that replace the DECIDE node, and `direct_canonicalizer.cpp` (`DirectCanonicalize`: constant-column propagation, then DuckDB's expression rewriter, over the finished plan); `../direct_solve/README.md` |
+| `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1, N1, A2), and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
 | `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
 | `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | `<>` indicators and AVG→SUM |
 | `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
@@ -84,7 +84,8 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_answer_choice.cpp` | 05 | `ChooseDecideAnswer`: tries the direct-solve rules; when none applies, records the backend for the formulation passes (`ChooseDecideSolver`) |
 | `optimizer/decide/decide_solver_gate.cpp` | 05 | `DeriveDecideModelClass`, `RequireDecideSolverSupport` |
 | `execution/column_binding_resolver.cpp` | 03 | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
-| `optimizer/rule/case_simplification.cpp`, `optimizer/rule/arithmetic_simplification.cpp`, `optimizer/expression_rewriter.cpp` | 05 | Edits to DuckDB's expression rewriter that direct plans rely on: a constant `WHEN` that fails to evaluate raises at run time, the IEEE-exact float identities, and `RewriteOperatorExpressions`; `architecture.md` § 1 |
+| `optimizer/rule/case_simplification.cpp`, `optimizer/rule/arithmetic_simplification.cpp` | 05 | Edits to DuckDB's expression rewriter that direct plans rely on: a constant `WHEN` that fails to evaluate raises at run time, and the IEEE-exact float identities; `architecture.md` § 1 |
+| `optimizer/statistics_propagator.cpp`, `optimizer/statistics/expression/propagate_columnref.cpp` | 05 | Statistics propagation folds an expression whose children it made constant, and reads a constant column of a projection as its value inside a computation; `architecture.md` § 1 |
 | `optimizer/statistics/operator/propagate_join.cpp` | 05 | IS NOT DISTINCT FROM becomes `=` when neither side can hold a NULL; `architecture.md` § 1 |
 | `optimizer/statistics/expression/propagate_case.cpp` | 05 | A `CASE` whose `WHEN` checks the statistics prove constant folds, by `CaseSimplificationRule::Simplify`, the fold the rewriter's rule makes; `architecture.md` § 1 |
 | `execution/operator/join/perfect_hash_join_executor.cpp` | 08 | The perfect hash join takes the LEFT and SINGLE joins, with one NULL slot past the build range; `architecture.md` § 1 |

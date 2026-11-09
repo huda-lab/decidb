@@ -34,7 +34,7 @@ grammar conflict DECIDE introduces is keyed on a DECIDE token.
 ### Edits to existing DuckDB code
 
 Direct solve (`../direct_solve/`) replaces a DECIDE node with ordinary DuckDB operators, so its plans are only as cheap
-as DuckDB's own rules and operators make them. Six edits to DuckDB, none of which names DECIDE, make a plan the rules
+as DuckDB's own rules and operators make them. Seven edits to DuckDB, none of which names DECIDE, make a plan the rules
 build run as DuckDB would run the same answer written as SQL. Each helps any query that has the shape it handles, and a
 standard query returns the same rows.
 
@@ -72,12 +72,24 @@ standard query returns the same rows.
   is a SINGLE join on the class key. At `sf=1` it costs 20.8 ms of CPU as a SINGLE join on IS NOT DISTINCT FROM, 15.2 ms
   as a hash join on `=`, and 2.1 ms as a perfect hash join. Any LEFT join on a unique integer key of small range takes
   the same path.
-- **`ExpressionRewriter::RewriteOperatorExpressions` (`optimizer/expression_rewriter.cpp`).** It rewrites the
-  expressions of one operator, not of its children: `VisitOperator` without the descent. Reason: `DirectCanonicalize`
-  walks the plan itself, to stop at the DECIDE source, which the user wrote and DuckDB has simplified
-  (`../direct_solve/framework/done.md`, Canonicalization after lowering).
+- **`StatisticsPropagator::PropagateExpression` folds what it makes constant (`optimizer/statistics_propagator.cpp`).**
+  After an expression's own handler, an expression whose children are all constants and which `IsFoldable` admits is
+  evaluated with `ExpressionExecutor::TryEvaluateScalar` and becomes its value. An evaluation that fails leaves the
+  expression, which raises at run time on the rows that reach it, as in `CaseSimplificationRule`. Reason: the handlers
+  turn a child into a constant (a comparison or a `CASE` the statistics decide, a constant column below), and DuckDB
+  never reruns the expression rewriter after statistics, so the expression above the new constant kept computing it per
+  row.
+- **Constant columns (`optimizer/statistics/expression/propagate_columnref.cpp`,
+  `optimizer/statistics/operator/propagate_projection.cpp`).** A projection column whose expression is a constant, or a
+  reference to such a column, is recorded with its value. A reference to it inside a computation (an argument of a
+  function, a comparison, a `CASE`, a cast) becomes the constant before the computation is propagated, while the
+  column's statistics agree with the value on NULL. A reference that is itself an output, a join key or a group stays a
+  column, since a hash join and a hash aggregate are built on columns. Reason: a direct plan carries a constant through
+  its stages as a column (a seed, a flag, a bound the query writes as a number), and the computation above reads it per
+  row; the expression rewriter does not look through a projection.
 
 Tests: `test/optimizer/statistics/statistics_case.test` (each fold, a nested `CASE`, a check that fails to evaluate),
+`statistics_constant_folding.test` and `statistics_constant_columns.test` (the same directory),
 `test/sql/optimizer/expression/test_case_simplification_error.test`, `test_nop_arithmetic_float.test` and
 `test_not_distinct_from_to_equal.test`, `test/sql/join/left_outer/test_left_join_perfect_hash.test` (gaps, a NULL probe
 key, a key out of range, duplicate build keys, an empty build), and `test/common/test_decidb_perfect_hash_join.cpp`

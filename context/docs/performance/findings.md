@@ -265,13 +265,13 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
 - **Folding a constant subtree alone saves nothing on a direct plan (PERF-16).** DuckDB folds constants before the
   DECIDE optimizer runs, so the trees a direct rule builds start unfolded. A fold over the finished direct plan
   (`ExpressionRewriter` with `ConstantFoldingRule`, after `Apply`) folds them (`CAST(100 AS DOUBLE)` → `100.0`) and
-  saves nothing: on 1M lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s and
-  0.315 → 0.326 s, S1 0.044 → 0.044 s. DuckDB evaluates a constant subtree once per chunk, so per-row cost does not
-  depend on it. What costs per row is the operation a constant decides: a CASE on a constant flag, the addition of a
-  `0.0` seed, `x * 1.0`. `DirectCanonicalize` removes these with DuckDB's whole rule set after constant-column
-  propagation, and the rules build their sums without a seed; measured at `sf=1`, the rewriter alone lowers the cost of
-  the row-side projections by about a tenth (`../direct_solve/framework/done.md`). Messages are rendered before
-  `Apply`, so a fold there would change none.
+  saves nothing: on 1M lineitem rows, medians of 9, A1 0.119 → 0.118 s and 0.111 → 0.111 s, R1 0.372 → 0.376 s and 0.315
+  → 0.326 s, S1 0.044 → 0.044 s. DuckDB evaluates a constant subtree once per chunk, so per-row cost does not depend on
+  it. What costs per row is the operation a constant decides: a CASE on a constant flag, the addition of a `0.0` seed,
+  `x * 1.0`. DuckDB's rewriter over the operators a rule built and statistics propagation's constant columns remove
+  these, and the rules build their sums without a seed; measured at `sf=1`, the rewriter alone lowers the cost of the
+  row-side projections by about a tenth (`../direct_solve/framework/done.md`). Messages are rendered before `Apply`, so
+  a fold there would change none.
 - **Bound reducers are side tables.** A reducer a bound reads from data (`<= sum(cap) by (g)`) is a grouped aggregate
   on its own read of the source, materialized once and joined back to every read by its key (DuckDB's decorrelated
   scalar subquery), so a recomputable source stays recomputed. Against a window over the DECIDE source holding every
