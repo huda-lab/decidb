@@ -85,8 +85,9 @@ bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const v
 //! (FLOAT, DOUBLE) holds an infinity, so its bound is infinite.
 double DirectTypeMagnitude(const LogicalType &type);
 
-//! An upper bound on |`expr`| on every row: a constant's own magnitude (infinite for NaN), a cast's operand's, else the
-//! type's (DirectTypeMagnitude). It is a bound for what the row holds, not for what it computes from it.
+//! An upper bound on |`expr`| on every row: a constant's own magnitude (infinite for NaN), a cast's operand's while the
+//! cast's type holds it, else the type's (DirectTypeMagnitude). It is a bound for what the row holds, not for what it
+//! computes from it.
 double DirectMagnitudeBound(ClientContext &context, const Expression &expr);
 
 //! True for an INT or BOOL decision, whose bounds round to whole numbers.

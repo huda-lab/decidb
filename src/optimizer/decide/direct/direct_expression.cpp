@@ -282,16 +282,30 @@ double DirectTypeMagnitude(const LogicalType &type) {
 	return std::max(std::fabs(largest), std::fabs(least));
 }
 
+//! The largest finite magnitude a value of `type` holds: FLOAT's and DOUBLE's largest finite value, else the type's
+//! magnitude (DirectTypeMagnitude).
+static double DirectLargestFinite(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::FLOAT:
+		return std::numeric_limits<float>::max();
+	case LogicalTypeId::DOUBLE:
+		return std::numeric_limits<double>::max();
+	default:
+		return DirectTypeMagnitude(type);
+	}
+}
+
 double DirectMagnitudeBound(ClientContext &context, const Expression &expr) {
 	double constant;
 	if (TryEvaluateFoldableDouble(context, expr, constant, DIRECT_CONSTANT)) {
 		return std::isnan(constant) ? std::numeric_limits<double>::infinity() : std::fabs(constant);
 	}
-	// A cast keeps the value's magnitude when it converts one number to another (the binder reads every coefficient as
-	// DOUBLE), so the bound is the operand's; the operand of any other cast has no bound but its type's, which is
-	// infinite.
+	// A cast keeps its operand's magnitude while its type holds it (the binder reads every coefficient as DOUBLE).
+	// Past that, a FLOAT or DOUBLE rounds the value to an infinity and an exact type raises, so the bound is the
+	// type's. An operand that is not a number has its type's bound, which is infinite.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		return DirectMagnitudeBound(context, *expr.Cast<BoundCastExpression>().child);
+		auto bound = DirectMagnitudeBound(context, *expr.Cast<BoundCastExpression>().child);
+		return bound <= DirectLargestFinite(expr.return_type) ? bound : DirectTypeMagnitude(expr.return_type);
 	}
 	return DirectTypeMagnitude(expr.return_type);
 }

@@ -414,6 +414,9 @@ def _invalid_value_checks(cli, column_type, decide):
         ("FLOAT", "p", True),
         ("INTEGER", "p / 3", True),
         ("VARCHAR", "p::DOUBLE", True),
+        # A cast to FLOAT keeps the bound while FLOAT holds it; the largest UHUGEINT rounds to an infinity there.
+        ("INTEGER", "p::FLOAT", False),
+        ("UHUGEINT", "p::FLOAT", True),
     ],
 )
 def test_a1_a_value_of_an_exact_type_has_no_invalid_value_check(decidb_cli, column_type, value, checked):
