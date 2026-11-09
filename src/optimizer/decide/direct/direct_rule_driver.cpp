@@ -13,7 +13,6 @@
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
-#include "duckdb/optimizer/decide/direct/direct_canonicalizer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
@@ -310,8 +309,9 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	                                 late_materialization);
 	auto &installed = *adapter;
 	StripTagsAbove(installed, source);
-	// The adapter's dependencies are slots of its child, which stay columns.
-	DirectCanonicalize(optimizer, *installed.children[0], source);
+	// The rules build their expressions generally, and DuckDB's rewriter has run before the DECIDE optimizer, so
+	// nothing has simplified them. Run it over the adapter's child as DuckDB does.
+	optimizer.rewriter.VisitOperator(*installed.children[0]);
 	op = std::move(adapter);
 	// The operators above read the DECIDE node's bindings; from here they read the adapter's own.
 	RebindAboveAdapter(*root, installed, output_bindings);
