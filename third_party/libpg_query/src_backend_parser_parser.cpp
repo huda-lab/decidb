@@ -59,6 +59,7 @@ PGList *raw_parser(const char *str) {
 	yyextra.decide_after_rparen = false;
 	yyextra.decide_state_depth = 0;
 	yyextra.decide_spans = NIL;
+	yyextra.decide_paren_node = NULL;
 
 	/* initialize the bison parser */
 	parser_init(&yyextra);

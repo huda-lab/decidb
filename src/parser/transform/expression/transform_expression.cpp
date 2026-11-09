@@ -26,6 +26,35 @@ unique_ptr<ParsedExpression> Transformer::TransformNamedArg(duckdb_libpgquery::P
 }
 
 unique_ptr<ParsedExpression> Transformer::TransformExpression(duckdb_libpgquery::PGNode &node) {
+	auto result = TransformExpressionInternal(node);
+	auto &root = RootTransformer();
+	if (result && !root.decide_expr_nodes.empty()) {
+		root.NoteDecideExpression(node, *result);
+	}
+	return result;
+}
+
+void Transformer::IndexDecideExpressions(duckdb_libpgquery::PGList &spans) {
+	for (auto cell = spans.head; cell; cell = cell->next) {
+		auto &span = *reinterpret_cast<duckdb_libpgquery::PGDecideSpan *>(cell->data.ptr_value);
+		if (span.role == duckdb_libpgquery::PG_DECIDE_SPAN_EXPR && span.node) {
+			// a node several reductions returned keeps the last, which is the widest
+			decide_expr_nodes[span.node] = make_pair(span.start, span.end);
+		}
+	}
+}
+
+void Transformer::NoteDecideExpression(const duckdb_libpgquery::PGNode &node, const ParsedExpression &expr) {
+	auto entry = decide_expr_nodes.find(&node);
+	if (entry == decide_expr_nodes.end() || !expr.GetQueryLocation().IsValid()) {
+		return;
+	}
+	// Innermost first: an expression and an ancestor that took its location are told apart by the one transformed
+	// first, the inner.
+	decide_expr_spans.emplace(expr.GetQueryLocation().GetIndex(), entry->second);
+}
+
+unique_ptr<ParsedExpression> Transformer::TransformExpressionInternal(duckdb_libpgquery::PGNode &node) {
 
 	auto stack_checker = StackCheck();
 

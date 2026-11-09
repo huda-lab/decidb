@@ -25,7 +25,9 @@ enum class DecideSpanRole : uint8_t {
 	COLUMN = 5,
 	TERM = 6,
 	//! The objective, anchored at the start of the tail (`tail_start`).
-	OBJECTIVE = 7
+	OBJECTIVE = 7,
+	//! An expression of the tail, anchored at the query location its parsed expression took.
+	EXPR = 8
 };
 
 //! The text of a DECIDE clause as the user wrote it (the Clang SourceManager / `CreateInfo::sql` pattern): the tail,

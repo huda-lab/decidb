@@ -1268,7 +1268,8 @@ typedef enum PGDecideSpanRole {
 	PG_DECIDE_SPAN_BY,      /* a reducer's `by` key */
 	PG_DECIDE_SPAN_COLUMN,  /* a column reference, as written (`S.cap`) */
 	PG_DECIDE_SPAN_TERM,    /* a product, a power or a function call, as written */
-	PG_DECIDE_SPAN_OBJECTIVE /* the objective, anchored at the start of the tail */
+	PG_DECIDE_SPAN_OBJECTIVE, /* the objective, anchored at the start of the tail */
+	PG_DECIDE_SPAN_EXPR      /* an expression; its anchor is the location the transformer gives `node` */
 } PGDecideSpanRole;
 
 typedef struct PGDecideSpan {
@@ -1276,6 +1277,7 @@ typedef struct PGDecideSpan {
 	PGDecideSpanRole role;
 	int start;
 	int end;
+	PGNode *node; /* EXPR: the parsed node the span belongs to, else NULL */
 } PGDecideSpan;
 
 typedef struct PGDecideClause {

@@ -113,6 +113,9 @@ typedef struct base_yy_extra_type {
 	/* DeciDB: PGDecideSpan of every DECIDE construct parsed so far; each clause carries the list. */
 	PGList *decide_spans;
 
+	/* DeciDB: the node a parenthesized expression just returned, so its decorator leaves the parentheses out. */
+	PGNode *decide_paren_node;
+
 	/*
 	 * State variables that belong to the grammar.
 	 */

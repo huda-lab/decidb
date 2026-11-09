@@ -108,6 +108,9 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 				throw ParserException::SyntaxError(*RootTransformer().parsed_query, DECIDE_NO_CONSTRAINTS_MESSAGE,
 				                                   NumericCast<idx_t>(decide_clause.location));
 			}
+            if (decide_clause.spans) {
+                RootTransformer().IndexDecideExpressions(*decide_clause.spans);
+            }
             TransformExpressionList(*decide_clause.variables, result.decide_variables);
             result.decide_constraints = TransformExpression(decide_clause.constraints);
             if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {
@@ -138,6 +141,20 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
                         if (i != 1) {
                             text.spans[text.spans.size() - 4 + i] -= text.tail_start;
                         }
+                    }
+                }
+                // Every expression of the tail, anchored at the location its parsed expression took.
+                for (auto &entry : RootTransformer().decide_expr_spans) {
+                    auto &span = entry.second;
+                    if (span.first < decide_clause.tail_start || span.second > decide_clause.tail_end) {
+                        continue;
+                    }
+                    for (auto value : {NumericCast<idx_t>(entry.first), static_cast<idx_t>(DecideSpanRole::EXPR),
+                                       NumericCast<idx_t>(span.first), NumericCast<idx_t>(span.second)}) {
+                        text.spans.push_back(value);
+                    }
+                    for (idx_t i : {0, 2, 3}) {
+                        text.spans[text.spans.size() - 4 + i] -= text.tail_start;
                     }
                 }
             }

@@ -14,6 +14,7 @@
 #include "duckdb/common/stack_checker.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include <map>
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/parser/parsed_data/create_info.hpp"
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
@@ -88,6 +89,14 @@ private:
 	vector<CommonTableExpressionMap *> stored_cte_map;
 	//! Whether or not we are currently binding a window definition
 	bool in_window_definition = false;
+	//! DeciDB, on the root transformer. The span of every expression of a DECIDE clause, by the parse node the grammar
+	//! decorated (start and end offsets in the parsed query), and by the query location the parsed expression took.
+	//! Two expressions at one location keep the span of the one transformed first, the innermost.
+	unordered_map<const duckdb_libpgquery::PGNode *, pair<int, int>> decide_expr_nodes;
+	std::map<idx_t, pair<int, int>> decide_expr_spans;
+	//! Index the EXPR spans of a DECIDE clause's span list by the node they belong to.
+	void IndexDecideExpressions(duckdb_libpgquery::PGList &spans);
+	void NoteDecideExpression(const duckdb_libpgquery::PGNode &node, const ParsedExpression &expr);
 
 	void Clear();
 	bool InWindowDefinition();
@@ -235,7 +244,10 @@ private:
 	unique_ptr<ParsedExpression> TransformAExprInternal(duckdb_libpgquery::PGAExpr &root);
 	//! Transform a Postgres abstract expression into an Expression
 	unique_ptr<ParsedExpression> TransformExpression(optional_ptr<duckdb_libpgquery::PGNode> node);
+	//! The interceptor: transforms `node`, then keys the text the grammar recorded for it (DECIDE clauses only) by the
+	//! query location the parsed expression took.
 	unique_ptr<ParsedExpression> TransformExpression(duckdb_libpgquery::PGNode &node);
+	unique_ptr<ParsedExpression> TransformExpressionInternal(duckdb_libpgquery::PGNode &node);
 	//! Transform a Postgres function call into an Expression
 	unique_ptr<ParsedExpression> TransformFuncCall(duckdb_libpgquery::PGFuncCall &root);
 	unique_ptr<ParsedExpression> TransformFuncCallInternal(duckdb_libpgquery::PGFuncCall &root);

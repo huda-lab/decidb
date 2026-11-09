@@ -2656,7 +2656,14 @@ opt_interval:
  * of the first terminal instead; otherwise you will not get the behavior
  * you expect!  So we use %prec annotations freely to set precedences.
  */
-a_expr:		c_expr									{ $$ = $1; }
+/*
+ * DeciDB: a_expr and b_expr are decorators over the productions that build the node (a_expr_body, b_expr_body): the
+ * one reduction that sees every expression with its span, so a message can quote the text the user wrote for it.
+ */
+a_expr:		a_expr_body								{ $$ = noteDecideExpr($1, @1, yyscanner); }
+		;
+
+a_expr_body:		c_expr									{ $$ = $1; }
 			|
 			a_expr TYPECAST Typename
 					{ $$ = makeTypeCast($1, $3, 0, @2); }
@@ -3117,7 +3124,10 @@ a_expr:		c_expr									{ $$ = $1; }
  * cause trouble in the places where b_expr is used.  For simplicity, we
  * just eliminate all the boolean-keyword-operator productions from b_expr.
  */
-b_expr:		c_expr
+b_expr:		b_expr_body								{ $$ = noteDecideExpr($1, @1, yyscanner); }
+		;
+
+b_expr_body:		c_expr
 				{ $$ = $1; }
 			| b_expr TYPECAST Typename
 				{ $$ = makeTypeCast($1, $3, 0, @2); }
@@ -3323,7 +3333,8 @@ d_expr:		columnref_opt_indirection								{ $$ = $1; }
 indirection_expr_or_a_expr:
 			'(' a_expr ')'
 				{
-					$$ = $2;
+					/* DeciDB: the parentheses are not part of the expression's text */
+					$$ = noteDecideParen($2, yyscanner);
 				}
 			| indirection_expr
 				{

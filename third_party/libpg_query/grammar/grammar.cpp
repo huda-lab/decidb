@@ -727,7 +727,45 @@ noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTY
 	entry->role = role;
 	entry->start = span.start;
 	entry->end = span.end;
+	entry->node = NULL;
 	extra->decide_spans = lappend(extra->decide_spans, entry);
+}
+
+/*
+ * DeciDB: the span of one expression, keyed by the node that stands for it. The transformer gives the node's parsed
+ * expression a query location, which is how a message finds the text. A node returned by several reductions (a
+ * flattened AND, a negated constant) keeps the last, the widest; a parenthesized one keeps the span inside the
+ * parentheses (noteDecideParen).
+ */
+static PGNode *
+noteDecideExpr(PGNode *expr, YYLTYPE span, core_yyscan_t yyscanner)
+{
+	base_yy_extra_type *extra = pg_yyget_extra(yyscanner);
+	PGDecideSpan *entry;
+
+	if (expr == extra->decide_paren_node)
+	{
+		extra->decide_paren_node = NULL;
+		return expr;
+	}
+	if (!extra->in_decide_clause || !expr || span.start < 0)
+		return expr;
+	entry = (PGDecideSpan *) palloc(sizeof(PGDecideSpan));
+	entry->anchor = -1;
+	entry->role = PG_DECIDE_SPAN_EXPR;
+	entry->start = span.start;
+	entry->end = span.end;
+	entry->node = expr;
+	extra->decide_spans = lappend(extra->decide_spans, entry);
+	return expr;
+}
+
+/* DeciDB: `(e)` returns e itself; the decorator above would span the parentheses, so it skips this node once. */
+static PGNode *
+noteDecideParen(PGNode *expr, core_yyscan_t yyscanner)
+{
+	pg_yyget_extra(yyscanner)->decide_paren_node = expr;
+	return expr;
 }
 
 /* DeciDB: a product, a power or a function call, anchored at its location, so a term the canonicalizer respells is

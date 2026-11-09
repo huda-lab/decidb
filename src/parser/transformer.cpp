@@ -23,6 +23,8 @@ Transformer::~Transformer() {
 void Transformer::Clear() {
 	ClearParameters();
 	pivot_entries.clear();
+	decide_expr_nodes.clear();
+	decide_expr_spans.clear();
 }
 
 bool Transformer::TransformParseTree(duckdb_libpgquery::PGList *tree, vector<unique_ptr<SQLStatement>> &statements) {
