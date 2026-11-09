@@ -248,9 +248,10 @@ def test_a1_a_number_made_of_finite_literals_has_no_invalid_value_check(decidb_c
     [
         # A message left in the plan belongs to a number it computes (the sums and the answers), never to a literal. Each
         # query reaches one site that checks a number: the bound's coefficient, a square's linear and constant parts,
-        # a constant term, and a decision's linear sum.
-        ("POWER(s - 3, 2) + 2", 2),
-        ("3 * s", 3),
+        # a constant term, and a decision's linear sum. A number made of literals is a constant once the plan is
+        # canonicalized, which no check can fail, so these plans hold none.
+        ("POWER(s - 3, 2) + 2", 0),
+        ("3 * s", 0),
         # A column among the literals is still checked: the same query over `p` keeps the checks of its numbers.
         ("POWER(s - p, 2) + 2", 3),
     ],
@@ -302,6 +303,34 @@ def test_s1_a_finite_literal_score_adds_no_too_large_check(decidb_cli):
         return "".join(plan.replace("│", "").split()).count("computesanumbertoolargeforaDOUBLE")
 
     assert checks("2 * x") < checks("q * x")
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rule,decide",
+    [
+        # DirectFoldQuadratic adds the parts of a decision's `a` and `b` up from the first term, so a sum of columns has no
+        # 0.0 to start from: a part with a square only, with a linear term only, with both, and a part that names another
+        # decision (and adds nothing to this one).
+        ("A1_SEPARABLE_BOX", "s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER(s - p, 2))"),
+        ("A1_SEPARABLE_BOX", "s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(p * s)"),
+        ("A1_SEPARABLE_BOX", "s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER(s - p, 2) + p * s)"),
+        (
+            "A1_SEPARABLE_BOX",
+            "s(REAL), t(REAL) SUCH THAT s BETWEEN 0 AND q AND t BETWEEN 0 AND q MINIMIZE SUM(POWER(s - p, 2)) + SUM(q * t)",
+        ),
+        ("N1_EUCLIDEAN_BALL", "s(REAL) SUCH THAT SUM(POWER(s, 2)) <= 4 MAXIMIZE SUM(p * s)"),
+        ("A2_SINGLE_FACILITY_LOCATION", "per (): s(REAL) SUCH THAT s BETWEEN 0 AND 9 MINIMIZE SUM(POWER(s - p, 2))"),
+    ],
+)
+def test_a_quadratic_sum_of_columns_has_no_zero_seed(decidb_cli, rule, decide):
+    sql = f"""
+        EXPLAIN SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
+        DECIDE {decide}
+    """
+    plan = "".join(_raw(decidb_cli, sql).stdout.replace("│", "").split())
+    assert rule in plan, plan
+    assert '"+"(0.0,' not in plan, plan
 
 
 def _invalid_value_checks(cli, column_type, decide):

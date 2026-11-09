@@ -203,27 +203,31 @@ vector<DirectBoundColumns> DirectLayoutBoundClauses(Optimizer &optimizer, const 
 	return result;
 }
 
+//! The sum of `terms` added in order, with no 0.0 to start from: 0.0 + x is x except for x = -0.0, and a plan that adds
+//! a constant to every row computes it on every row. 0.0 for no terms.
+static ExprPtr SumOfTerms(const ExpressionBuilder &calc, const vector<ExprPtr> &terms) {
+	if (terms.empty()) {
+		return calc.Num(0.0);
+	}
+	auto total = terms[0];
+	for (idx_t i = 1; i < terms.size(); i++) {
+		total = calc.Add(total, terms[i]);
+	}
+	return total;
+}
+
 DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBuilder &calc,
                                        const vector<DirectQuadraticPart> &parts,
                                        const vector<DirectQuadraticColumns> &columns, idx_t decision) {
 	D_ASSERT(parts.size() == columns.size());
-	DirectQuadraticSum sum;
-	sum.a = calc.Num(0.0);
-	sum.b = calc.Num(0.0);
-	sum.linear = calc.Num(0.0);
-	bool has_linear = false;
+	vector<ExprPtr> a_terms, b_terms, linear_terms;
 	for (idx_t p = 0; p < parts.size(); p++) {
 		auto &part = parts[p];
 		auto &laid = columns[p];
-		ExprPtr a_part = calc.Num(0.0);
-		ExprPtr linear_part = calc.Num(0.0);
-		ExprPtr cross_part = calc.Num(0.0);
-		bool touched = false;
+		vector<ExprPtr> linear_part, a_part, cross_part;
 		for (idx_t i = 0; i < laid.linear.size(); i++) {
 			if (laid.linear_decision[i] == decision) {
-				linear_part = calc.Add(linear_part, calc.Col(LogicalType::DOUBLE, laid.linear[i]));
-				touched = true;
-				has_linear = true;
+				linear_part.push_back(calc.Col(LogicalType::DOUBLE, laid.linear[i]));
 			}
 		}
 		for (auto &square : laid.squares) {
@@ -233,11 +237,10 @@ DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBui
 			auto k = calc.Col(LogicalType::DOUBLE, square.k);
 			auto w = calc.Col(LogicalType::DOUBLE, square.w);
 			auto t = calc.Col(LogicalType::DOUBLE, square.t);
-			a_part = calc.Add(a_part, calc.Mul(k, calc.Mul(w, w)));
-			cross_part = calc.Add(cross_part, calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t))));
-			touched = true;
+			a_part.push_back(calc.Mul(k, calc.Mul(w, w)));
+			cross_part.push_back(calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t))));
 		}
-		if (!touched) {
+		if (linear_part.empty() && a_part.empty()) {
 			continue;
 		}
 		auto scaled = [&](ExprPtr value) {
@@ -245,14 +248,21 @@ DirectQuadraticSum DirectFoldQuadratic(Optimizer &optimizer, const ExpressionBui
 			                                         part.linear.scale, part.linear.divides));
 			return laid.has_mask ? calc.If(calc.Col(LogicalType::BOOLEAN, laid.mask), result, calc.Num(0.0)) : result;
 		};
-		auto linear_scaled = scaled(linear_part);
-		sum.a = calc.Add(sum.a, scaled(a_part));
-		sum.b = calc.Add(sum.b, calc.Add(linear_scaled, scaled(cross_part)));
-		sum.linear = calc.Add(sum.linear, linear_scaled);
+		vector<ExprPtr> b_part;
+		if (!linear_part.empty()) {
+			linear_terms.push_back(scaled(SumOfTerms(calc, linear_part)));
+			b_part.push_back(linear_terms.back());
+		}
+		if (!a_part.empty()) {
+			a_terms.push_back(scaled(SumOfTerms(calc, a_part)));
+			b_part.push_back(scaled(SumOfTerms(calc, cross_part)));
+		}
+		b_terms.push_back(SumOfTerms(calc, b_part));
 	}
-	if (!has_linear) {
-		sum.linear = nullptr;
-	}
+	DirectQuadraticSum sum;
+	sum.a = SumOfTerms(calc, a_terms);
+	sum.b = SumOfTerms(calc, b_terms);
+	sum.linear = linear_terms.empty() ? nullptr : SumOfTerms(calc, linear_terms);
 	return sum;
 }
 

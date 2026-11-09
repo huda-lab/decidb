@@ -1,0 +1,91 @@
+# name: test/sql/optimizer/expression/test_nop_arithmetic_float.test
+# description: NOP arithmetic on FLOAT and DOUBLE removes only the identities that are exact under IEEE 754
+# group: [expression]
+
+statement ok
+PRAGMA enable_verification
+
+statement ok
+CREATE TABLE f (x DOUBLE, y FLOAT)
+
+statement ok
+INSERT INTO f VALUES (42.5, 42.5), ('-0.0', '-0.0'), ('NaN', 'NaN'), ('Infinity', 'Infinity'), ('-Infinity', '-Infinity'), (NULL, NULL)
+
+# x * 1.0 and 1.0 * x, x / 1.0 and x - 0.0 are x, whatever x is: the operator is gone from the plan, and the sign of
+# zero, NaN, the infinities and NULL come through
+query II
+EXPLAIN SELECT x * 1.0, 1.0 * x, x / 1.0, x - 0.0 FROM f
+----
+physical_plan	<!REGEX>:.*\*.*
+
+query II
+EXPLAIN SELECT x / 1.0, x - 0.0 FROM f
+----
+physical_plan	<!REGEX>:.*[/-] .*
+
+query IIII
+SELECT x * 1.0, 1.0 * x, x / 1.0, x - 0.0 FROM f
+----
+42.5	42.5	42.5	42.5
+-0.0	-0.0	-0.0	-0.0
+nan	nan	nan	nan
+inf	inf	inf	inf
+-inf	-inf	-inf	-inf
+NULL	NULL	NULL	NULL
+
+# the same on FLOAT
+query IIII
+SELECT CAST(y * 1 AS VARCHAR), CAST(1 * y AS VARCHAR), CAST(y / 1 AS VARCHAR), CAST(y - 0 AS VARCHAR) FROM f WHERE y IS NOT NULL
+----
+42.5	42.5	42.5	42.5
+-0.0	-0.0	-0.0	-0.0
+nan	nan	nan	nan
+inf	inf	inf	inf
+-inf	-inf	-inf	-inf
+
+query II
+EXPLAIN SELECT y * 1, y - 0 FROM f
+----
+physical_plan	<!REGEX>:.*\*.*
+
+# the identities that are not exact stay: x + 0.0 turns -0.0 into 0.0, x * 0.0 is NaN for NaN and the infinities,
+# x - -0.0 is x + 0.0, and 0.0 - x and 1.0 / x are other operations
+query II
+EXPLAIN SELECT x + 0.0, 0.0 + x FROM f
+----
+physical_plan	<REGEX>:.*\+ 0\.0.*
+
+query II
+EXPLAIN SELECT x * 0.0 FROM f
+----
+physical_plan	<REGEX>:.*\* 0\.0.*
+
+query II
+EXPLAIN SELECT x - '-0.0'::DOUBLE FROM f
+----
+physical_plan	<REGEX>:.*- .*
+
+query IIII
+SELECT CAST(x + 0.0 AS VARCHAR), CAST(0.0 + x AS VARCHAR), CAST(x * 0.0 AS VARCHAR), CAST(x - '-0.0'::DOUBLE AS VARCHAR) FROM f WHERE x IS NOT NULL
+----
+42.5	42.5	0.0	42.5
+0.0	0.0	-0.0	0.0
+nan	nan	nan	nan
+inf	inf	nan	inf
+-inf	-inf	nan	-inf
+
+query II
+SELECT CAST(0.0 - x AS VARCHAR), CAST(1.0 / x AS VARCHAR) FROM f WHERE x IS NOT NULL
+----
+-42.5	0.023529411764705882
+0.0	-inf
+nan	nan
+-inf	0.0
+inf	-0.0
+
+# an expression of another type is not the operand's type: x * 1 reads the integer as DOUBLE, and a DECIMAL constant
+# is cast to it, so the cast constant is the one the rule sees
+query I
+SELECT CAST(x * 1 AS VARCHAR) FROM f WHERE x = 42.5
+----
+42.5

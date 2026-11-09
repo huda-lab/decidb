@@ -29,6 +29,9 @@ public:
 
 public:
 	void VisitOperator(LogicalOperator &op) override;
+	//! Rewrites the expressions of this operator alone, not of its children: VisitOperator without the descent, for a
+	//! caller that walks the plan itself (to stop at a subtree it must not change)
+	void RewriteOperatorExpressions(LogicalOperator &op);
 	void VisitExpression(unique_ptr<Expression> *expression) override;
 
 	// Generates either a constant_or_null(child) expression

@@ -5,6 +5,7 @@ add_library_unity(
   a2_single_facility_location_rule.cpp
   direct_bound_reader.cpp
   direct_bound_tables.cpp
+  direct_canonicalizer.cpp
   direct_plan_fragments.cpp
   direct_row_checks.cpp
   direct_runtime_checks.cpp

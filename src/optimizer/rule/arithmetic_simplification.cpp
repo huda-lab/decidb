@@ -1,5 +1,7 @@
 #include "duckdb/optimizer/rule/arithmetic_simplification.hpp"
 
+#include <cmath>
+
 #include "duckdb/common/exception.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/optimizer/expression_rewriter.hpp"
@@ -14,12 +16,12 @@ ArithmeticSimplificationRule::ArithmeticSimplificationRule(ExpressionRewriter &r
 	op->matchers.push_back(make_uniq<ConstantExpressionMatcher>());
 	op->matchers.push_back(make_uniq<ExpressionMatcher>());
 	op->policy = SetMatcher::Policy::SOME;
-	// we only match on simple arithmetic expressions (+, -, *, /)
-	op->function = make_uniq<ManyFunctionMatcher>(unordered_set<string> {"+", "-", "*", "//"});
-	// and only with numeric results
-	op->type = make_uniq<IntegerTypeMatcher>();
-	op->matchers[0]->type = make_uniq<IntegerTypeMatcher>();
-	op->matchers[1]->type = make_uniq<IntegerTypeMatcher>();
+	// we only match on simple arithmetic expressions (+, -, *, /, //)
+	op->function = make_uniq<ManyFunctionMatcher>(unordered_set<string> {"+", "-", "*", "/", "//"});
+	// and only with integer or floating results
+	op->type = make_uniq<IntegerOrFloatingTypeMatcher>();
+	op->matchers[0]->type = make_uniq<IntegerOrFloatingTypeMatcher>();
+	op->matchers[1]->type = make_uniq<IntegerOrFloatingTypeMatcher>();
 	root = std::move(op);
 }
 
@@ -35,6 +37,9 @@ unique_ptr<Expression> ArithmeticSimplificationRule::Apply(LogicalOperator &op, 
 		return make_uniq<BoundConstantExpression>(Value(root.return_type));
 	}
 	auto &func_name = root.function.name;
+	if (root.return_type.id() == LogicalTypeId::FLOAT || root.return_type.id() == LogicalTypeId::DOUBLE) {
+		return ApplyFloating(root, constant, constant_child);
+	}
 	if (func_name == "+") {
 		if (constant.value == 0) {
 			// addition with 0
@@ -71,4 +76,27 @@ unique_ptr<Expression> ArithmeticSimplificationRule::Apply(LogicalOperator &op, 
 	}
 	return nullptr;
 }
+
+//! The identities that hold bit for bit under IEEE 754, for every value of the operand, NaN, infinities and the sign of
+//! zero included: `x * 1`, `x / 1` and `x - 0`. `x + 0` is not one (-0.0 + 0.0 is +0.0), nor is `x * 0` (x may be NaN
+//! or infinite), nor `x - -0.0` (it is `x + 0.0`), so a floating type keeps those.
+unique_ptr<Expression> ArithmeticSimplificationRule::ApplyFloating(BoundFunctionExpression &root,
+                                                                   const BoundConstantExpression &constant,
+                                                                   idx_t constant_child) {
+	auto &other = root.children[1 - constant_child];
+	// the binder casts both operands of a floating operator to its type, so the operand can stand for the expression
+	D_ASSERT(other->return_type == root.return_type && constant.return_type == root.return_type);
+	auto value = constant.value.GetValue<double>();
+	auto &func_name = root.function.name;
+	bool identity = false;
+	if (func_name == "*") {
+		identity = value == 1.0;
+	} else if (func_name == "/") {
+		identity = constant_child == 1 && value == 1.0;
+	} else if (func_name == "-") {
+		identity = constant_child == 1 && value == 0.0 && !std::signbit(value);
+	}
+	return identity ? std::move(other) : nullptr;
+}
+
 } // namespace duckdb

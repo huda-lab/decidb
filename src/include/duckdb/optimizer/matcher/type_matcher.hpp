@@ -69,4 +69,12 @@ public:
 	}
 };
 
+//! The IntegerOrFloatingTypeMatcher class matches the integer types and FLOAT and DOUBLE
+class IntegerOrFloatingTypeMatcher : public TypeMatcher {
+public:
+	bool Match(const LogicalType &type) override {
+		return type.IsIntegral() || type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE;
+	}
+};
+
 } // namespace duckdb
