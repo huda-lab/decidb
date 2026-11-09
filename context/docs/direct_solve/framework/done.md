@@ -496,7 +496,8 @@ rank window or a verified, streamed plan) and run on the same two central files.
     and slope of a singleton row, which declines so the solver path raises the user's error, and the `default` arm of
     the `ExpressionType` switch in S1's `NormalizeCapacity`.
   - **Late materialization's own operators:** the extension-name check in `VisitForAdapters`, which keeps an operator
-    of another extension from being cast to the adapter, and the adapter-shape guards beside it
+    of another extension from being cast to the adapter, and `FindScanOfRowId`'s two raises on a rule's plan that lost
+    the row id or the definition of a copy, with the exit of its `while (true)`, which clang counts as an arm
     (`direct_late_materialization.cpp`).
   - **`InternalException` guards on a caller in another file:** `DirectWindowOfAggregate` on a reducer with bind data
     (the binder casts a reducer's argument to DOUBLE, so SUM, AVG, MIN, MAX and COUNT bind none);
