@@ -14,13 +14,17 @@ CaseSimplificationRule::CaseSimplificationRule(ExpressionRewriter &rewriter) : R
 unique_ptr<Expression> CaseSimplificationRule::Apply(LogicalOperator &op, vector<reference<Expression>> &bindings,
                                                      bool &changes_made, bool is_root) {
 	auto &root = bindings[0].get().Cast<BoundCaseExpression>();
+	return Simplify(GetContext(), root);
+}
+
+unique_ptr<Expression> CaseSimplificationRule::Simplify(ClientContext &context, BoundCaseExpression &root) {
 	for (idx_t i = 0; i < root.case_checks.size(); i++) {
 		auto &case_check = root.case_checks[i];
 		if (case_check.when_expr->IsFoldable()) {
 			// the WHEN check is a foldable expression
 			// use an ExpressionExecutor to execute the expression
 			Value constant_value;
-			if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), *case_check.when_expr, constant_value)) {
+			if (!ExpressionExecutor::TryEvaluateScalar(context, *case_check.when_expr, constant_value)) {
 				// the evaluation failed (an overflow, say): leave this check to raise at run time, on the rows that
 				// reach it, as ConstantFoldingRule leaves an expression that cannot be evaluated
 				continue;

@@ -261,6 +261,20 @@ def test_a1_a_finite_literal_adds_no_too_large_check(decidb_cli, objective, mess
     assert plan.count("computesanumbertoolargeforaDOUBLE") == messages, plan
 
 
+@pytest.mark.correctness
+def test_a1_a_plan_over_not_null_columns_has_no_check_the_statistics_prove_false(decidb_cli):
+    # `x IS NULL` over a NOT NULL column is false by the table's statistics, which statistics propagation folds into
+    # the CASE that holds it (propagate_case.cpp); before that fold the plan evaluated `CASE WHEN false ...` per row.
+    sql = """
+        CREATE OR REPLACE TEMP TABLE stock(id INTEGER NOT NULL, q DOUBLE NOT NULL);
+        INSERT INTO stock VALUES (1, 2.0), (2, 3.0);
+        EXPLAIN SELECT id, s FROM stock DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER(s - 3, 2))
+    """
+    plan = _raw(decidb_cli, sql).stdout
+    assert "A1_SEPARABLE_BOX" in plan, plan
+    assert "WHEN(false)" not in "".join(plan.replace("│", "").split()), plan
+
+
 def _r1_too_large_checks(cli, decisions, constraint, objective):
     sql = f"""
         EXPLAIN SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
