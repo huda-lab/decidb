@@ -17,7 +17,7 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 //! The shapes stage 06 accepts, by what it reads of the evaluated clauses and the query (EvaluatedConstraint,
-//! SolverInput): each has one arm, which calls flat's own blocks. The first ten have theirs; a query with any other
+//! SolverInput): each has one arm, which calls flat's own blocks. The first fifteen have theirs; a query with any other
 //! has none yet (DecideModelEmitter::Uncovered).
 enum class DecideModelShape : uint8_t {
 	//! A clause with one model row per kept row.
@@ -42,16 +42,24 @@ enum class DecideModelShape : uint8_t {
 	CLASS_SETS,
 	//! A relation-qualified reducer's classes, split by the values its body reads (KeyedScopeInfo::signature).
 	KEYED_SIGNATURE,
+	//! A MIN or a MAX the clause's direction does not drive (EvaluatedConstraint::minmax_agg_type): its group's rows,
+	//! the members stage 06 takes the extremum over.
+	EXTREMUM_ROWS,
+	//! A MIN or a MAX its direction drives (DecideConstraint::was_minmax_easy): a model row per member, grouped by its
+	//! `by` key, or a bound on one decision admitted on each member.
+	MEMBER_ROWS,
+	//! A MIN or a MAX objective, whose auxiliary stage 06 writes over its terms' rows.
+	OBJECTIVE_EXTREMUM,
+	//! A clause adding MIN, MAX, SUM and AVG reducers (EvaluatedClauses::composed_constraints): each a column over the
+	//! members of its reducer, which stage 06 gives an auxiliary and one outer row.
+	COMPOSED,
+	//! The objective's composed terms (EvaluatedClauses::composed_objective_terms).
+	OBJECTIVE_COMPOSED,
 	PRODUCT_TERMS,
 	SQUARE_TERMS,
 	TIGHTEST_BOUND,
-	EXTREMUM_ROWS,
-	MEMBER_ROWS,
 	OBJECTIVE_SQUARES,
 	OBJECTIVE_PRODUCTS,
-	OBJECTIVE_EXTREMUM,
-	OBJECTIVE_COMPOSED,
-	COMPOSED,
 	VALUE_LINKS,
 	FRAME_READS,
 	PRODUCT_LINKS
@@ -71,9 +79,10 @@ struct DecideVariants {
 //! and the keyed mappings, in flat's order, so frame reads and repair groups are numbered as flat numbers them.
 class DecideModelEmitter {
 public:
-	DecideModelEmitter(const PhysicalDecide &op, const DecideTree &tree, const DecideDescent &descent,
-	                   DecideTreeColumns &columns, DecideGlobalSinkState &gstate, PerGroupCache &groups,
-	                   const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors);
+	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
+	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
+	                   PerGroupCache &groups, const DecideSourceNames &names, idx_t num_rows,
+	                   DecideErrorLedger &errors);
 
 	//! The query's first shape with no arm, empty when every shape it has has one. Such a query takes the interim
 	//! formulator, or verify's flat second run, until every shape has one; so does one with a node the tree computes
@@ -89,9 +98,14 @@ public:
 	//! The objective's linear terms, each on the rows it reads, and each term's filter of those rows, which the
 	//! qualifiers and AVG then read (PhysicalDecide::EvaluateObjective); none without an objective.
 	vector<TermFilterState> Objective();
+	//! The composed MIN/MAX clauses, then the objective's composed terms, each term a column over the members of its G
+	//! (DecideBody::composed), as flat reads them after the objective; `first` is the input's first chunk, where a
+	//! term's factor is read.
+	void Composed(PhysicalDecide::EvaluatedClauses &evaluated, DataChunk &first);
 
 private:
 	const PhysicalDecide &op;
+	ClientContext &context;
 	const DecideTree &tree;
 	const DecideDescent &descent;
 	DecideTreeColumns &columns;
@@ -126,14 +140,27 @@ private:
 	//! The rows at which each auxiliary has no value (D88): a row its definition keeps where what the definition reads
 	//! unreduced is NULL, and a row where a decision the definition reads has no instance.
 	void ReadAbsence();
-	//! A clause in the aggregate shape: one model row per group of its `by` key, its kept rows grouped by flat's own
-	//! rules (GroupRowsByShape).
-	EvaluatedConstraint Groups(idx_t root);
+	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
+	//! into the decision's column.
+	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);
+	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its
+	//! kept rows grouped by flat's own rules (GroupRowsByShape), or one per member of an easy MIN or MAX; its instances
+	//! `counted` unless it is a folded bound's, which only a repair model emits.
+	EvaluatedConstraint Groups(idx_t root, bool counted);
+	//! The composed terms `terms` that `root`, a composed clause's or the objective's, holds: each read on the members
+	//! of its G, its factor on the input's `first` chunk (`what` names the clause or the objective); `null_factor` set
+	//! by a NULL one.
+	vector<ComposedMinMaxTermData> ComposedTerms(idx_t root, const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
+	                                             const char *what, DataChunk &first, bool &null_factor);
 	//! A grouped clause's terms on `rows`, its kept rows and their root's entries, with each term's filter as flat
 	//! reads it, and the rows some reducer's filter keeps (`active`, every row with a term that keeps every kept row).
 	//! Returns whether some term's filter keeps fewer than the kept rows.
 	bool ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<bool> &kept,
 	                      EvaluatedConstraint &evaluated, vector<TermFilterState> &filters, vector<bool> &active);
+	//! The rows a term in a reducer is read on, each with the entry of its site `site` standing for it: of the entries
+	//! `reads` marks, every row each stands for, but a relation-qualified reducer's term its entry's first row alone,
+	//! the first of its class (language/guide.md §5.1).
+	vector<pair<idx_t, idx_t>> ReadRows(idx_t site, const vector<bool> &reads, bool qualified) const;
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries).
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
 	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column);

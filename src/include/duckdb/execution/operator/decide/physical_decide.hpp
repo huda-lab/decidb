@@ -432,6 +432,16 @@ private:
     void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                  ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                  const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) const;
+	//! The tail of a composed clause's evaluation once its bound and terms are in `clause`, both evaluators': its one
+	//! instance is skipped where a factor is NULL (`null_factor`) or a term reads no row (deck pp. 50, 56), repaired in
+	//! a group after every other clause, and held where its `when` keeps a row, counted unless skipped. The rows its
+	//! `when` keeps (`kept_rows`) are read only under DIAGNOSE or once it is skipped; under DIAGNOSE `class_set` gives
+	//! the classes its one row stands for among them (D28). Appends the clause to `evaluated`.
+	void FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows,
+	                          const LogicalDecide::ComposedMinMaxConstraint &spec, bool null_factor,
+	                          const std::function<vector<bool>()> &kept_rows,
+	                          const std::function<idx_t(const vector<bool> &)> &class_set,
+	                          EvaluatedClauses::ComposedConstraint clause, EvaluatedClauses &evaluated) const;
 
     //! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
     //! reducer it holds, among those the clause and the reducer keep, grouped by its `by`

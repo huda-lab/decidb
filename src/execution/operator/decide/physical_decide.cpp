@@ -2423,9 +2423,15 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	DecideProfileScope phase("execution.tree_descent");
 	descent = make_uniq<DecideDescent>(*tree, context);
 	DecideInputScans() = 0;
+	// The input's first chunk, where a value the whole query shares is read (a composed term's factor).
+	DataChunk first;
 	DecideRowStore(context, gstate.data).Build([&](DataChunk &chunk, idx_t offset) {
 		AppendDecideDescent(*descent, chunk, offset);
 		gstate.descent_rows += chunk.size();
+		if (offset == 0) {
+			first.Initialize(Allocator::Get(context), chunk.GetTypes());
+			chunk.Copy(first);
+		}
 	});
 	descent->Finish();
 	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
@@ -2455,14 +2461,17 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	    *tree, *descent, context, names, [&](idx_t clause) { return WrittenClause(clause); }, errors);
 	// What the data checks and the data reducers no clause reads raise, at their ranks, before any clause is read.
 	columns.CheckData();
-	DecideModelEmitter emitter(*this, *tree, *descent, columns, gstate, per_group_cache, names, num_rows, errors);
+	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, per_group_cache, names, num_rows,
+	                           errors);
 	keyed_mappings = emitter.KeyedMappings();
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
 	// qualified as they are read (ApplyObjectiveQualifiers).
 	evaluated.linear_filters = emitter.Objective();
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
-	// Flat reports what the data left of each clause once its clauses and its objective are read, unless one raised.
+	emitter.Composed(evaluated, first);
+	// Flat reports what the data left of each clause once its clauses, its objective and its composed clauses are
+	// read, unless one raised.
 	if (!errors.HasErrorBefore(DecideErrorPhase::VALUE_LINKS)) {
 		ReportSkippedInstances(gstate, silent);
 	}
@@ -4400,35 +4409,15 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
         ExpressionExecutor exec(context);
         exec.AddExpression(transformed);
 		DecideRowWindows windows(chunk_expr_cache);
-		double v = 1.0;
-        bool got = false;
-		while (!got && windows.Next()) {
-			DataChunk result;
-            result.Initialize(context, {transformed.return_type});
-			windows.Execute(exec, nullptr, result);
-			Value val = result.data[0].GetValue(0);
-            if (val.IsNull()) {
-				is_null = true;
-				return 0.0;
-			}
-            v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-            if (!std::isfinite(v)) {
-				ThrowInvalidValue({DecideValueRole::COEFFICIENT, scale, Names(), clause});
-			}
-            got = true;
+		if (!windows.Next()) {
+			return 1.0;
 		}
-		if (!got) {
-            return 1.0;
-        }
-        if (divides) {
-            if (v == 0.0) {
-                throw InvalidInputException(
-                    "DECIDE %s: division by zero — the factor on an aggregate "
-                    "evaluated to 0.", what);
-            }
-            return 1.0 / v;
-        }
-        return v;
+		DataChunk result;
+		result.Initialize(context, {transformed.return_type});
+		windows.Execute(exec, nullptr, result);
+		const auto names = Names();
+		return DecideQueryWideScale(result.data[0].GetValue(0), divides, what,
+		                            {DecideValueRole::COEFFICIENT, scale, names, clause}, is_null);
 	};
 
 	// Evaluate one composed clause's terms into the stage-06 input. `what` is
@@ -4448,19 +4437,9 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		vector<ComposedMinMaxTermData> evaluated;
 		idx_t mask_slot = 0;
 		for (auto &term : terms) {
-            ComposedMinMaxTermData ta;
-            ta.is_minmax = (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND);
-            ta.agg_name = term.agg_name;
-            ta.sign = term.sign;
-            ta.is_easy = term.is_easy;
+			auto ta = DecideComposedTerm(term, source_fragments, keyed_scopes, keys);
             if (term.scale) {
 				ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what, clause, null_factor);
-			}
-            if (ta.is_minmax) {
-				// Named as the plan prints the reducer, so a diagnosis over the extremum
-				// column reads `max(ship)`.
-				ta.label = term.agg_name + "(" +
-				           RenderDecideSource(*term.inner_expr, source_fragments, keyed_scopes, &keys) + ")";
 			}
 			for (auto &inner_t : term.inner_terms) {
 				ta.variables.push_back(gstate.ReadVariable(inner_t));
@@ -4496,46 +4475,21 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 
 		return evaluated;
 	};
-	// A reducer over no rows is NULL (deck p. 56): its clause is skipped, its objective term dropped.
-	auto reads_no_row = [](const ComposedMinMaxTermData &term) {
-		return std::find(term.filter_mask.begin(), term.filter_mask.end(), true) == term.filter_mask.end();
-	};
-
 	for (auto &spec : composed_minmax_constraints) {
-		// The bound is row-invariant: the optimizer asserted it (AssertComposable) and the
-		// value rewrite takes every other shape. Decided by foldability, since
-		// canonicalization rebuilds the bound side as an additive chain, so a constant
-		// arrives as `(0 - 3) + 0` just as legitimately as `-3`.
-		if (!spec.rhs_expr->IsFoldable()) {
-			throw InternalException("DECIDE: a composed MIN/MAX clause reached execution with a bound that is "
-			                        "not a constant: %s",
-			                        spec.rhs_expr->ToString());
-		}
 		EvaluatedClauses::ComposedConstraint clause;
-		clause.rhs = ExpressionExecutor::EvaluateScalar(context, *spec.rhs_expr)
-                         .DefaultCastAs(LogicalType::DOUBLE)
-                         .GetValue<double>();
-		// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50).
+		clause.rhs = DecideComposedBound(context, spec);
 		bool null_factor = false;
 		clause.terms =
 		    EvaluateComposedTerms(spec.terms, "constraint", WrittenClause(spec.source_clause_id), null_factor);
-		clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), reads_no_row);
-		clause.repair_group_id =
-		    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
-		vector<bool> kept_rows(num_rows, true);
-		if (spec.scope.when && (diagnose || clause.skipped)) {
-			kept_rows = KeptRows(*spec.scope.when, chunk_expr_cache, context, num_rows);
-		}
-		// Its one instance, where its `when` keeps a row.
-		const idx_t instances = std::find(kept_rows.begin(), kept_rows.end(), true) != kept_rows.end() ? 1 : 0;
-		gstate.CountInstances(spec.source_clause_id, instances, clause.skipped ? 0 : instances);
-		// The classes its one row stands for (D28), under DIAGNOSE: its `per` key's values
-		// among the rows its `when` keeps, or those rows with no `per`.
-		if (diagnose) {
-			clause.class_set = CollectGroupClasses(spec.scope, keys, per_group_cache, chunk_expr_cache, context,
-			                                       num_rows, kept_rows, {}, 1, gstate.class_sets)[0];
-		}
-		evaluated.composed_constraints.push_back(std::move(clause));
+		FinishComposedClause(
+		    gstate, num_rows, spec, null_factor,
+		    [&]() { return KeptRows(*spec.scope.when, chunk_expr_cache, context, num_rows); },
+		    [&](const vector<bool> &kept_rows) {
+			    // Its `per` key's values among the rows its `when` keeps, or those rows with no `per`.
+			    return CollectGroupClasses(spec.scope, keys, per_group_cache, chunk_expr_cache, context, num_rows,
+			                               kept_rows, {}, 1, gstate.class_sets)[0];
+		    },
+		    std::move(clause), evaluated);
 	}
 
 	if (!composed_minmax_objective_terms.empty()) {
@@ -4543,9 +4497,33 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		bool null_factor = false;
 		auto terms = EvaluateComposedTerms(composed_minmax_objective_terms, "objective",
 		                                   WrittenClause(DConstants::INVALID_INDEX), null_factor);
-		terms.erase(std::remove_if(terms.begin(), terms.end(), reads_no_row), terms.end());
+		terms.erase(std::remove_if(terms.begin(), terms.end(), DecideComposedTermReadsNoRow), terms.end());
 		evaluated.composed_objective_terms = std::move(terms);
 	}
+}
+
+void PhysicalDecide::FinishComposedClause(DecideGlobalSinkState &gstate, idx_t num_rows,
+                                          const LogicalDecide::ComposedMinMaxConstraint &spec, bool null_factor,
+                                          const std::function<vector<bool>()> &kept_rows,
+                                          const std::function<idx_t(const vector<bool> &)> &class_set,
+                                          EvaluatedClauses::ComposedConstraint clause,
+                                          EvaluatedClauses &evaluated) const {
+	// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50), as does a reducer over no row.
+	clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), DecideComposedTermReadsNoRow);
+	clause.repair_group_id =
+	    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
+	vector<bool> kept(num_rows, true);
+	if (spec.scope.when && (diagnose || clause.skipped)) {
+		kept = kept_rows();
+	}
+	// Its one instance, where its `when` keeps a row.
+	const idx_t instances = std::find(kept.begin(), kept.end(), true) != kept.end() ? 1 : 0;
+	gstate.CountInstances(spec.source_clause_id, instances, clause.skipped ? 0 : instances);
+	// The classes its one row stands for (D28), under DIAGNOSE.
+	if (diagnose) {
+		clause.class_set = class_set(kept);
+	}
+	evaluated.composed_constraints.push_back(std::move(clause));
 }
 
 //===--------------------------------------------------------------------===//

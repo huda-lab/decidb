@@ -248,6 +248,7 @@ DecideErrorRank DecideTreeColumns::Rank(idx_t node, idx_t p, idx_t entry, bool v
 	rank.expression = DecideBlockExpression(program.block, row, value);
 	rank.group = program.group;
 	rank.position = program.position;
+	rank.part = program.part;
 	rank.row = row;
 	return rank;
 }

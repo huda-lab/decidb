@@ -615,6 +615,57 @@ void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters
 	}
 }
 
+ComposedMinMaxTermData DecideComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
+                                          const vector<string> &source_fragments,
+                                          const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys) {
+	ComposedMinMaxTermData evaluated;
+	evaluated.is_minmax = (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND);
+	evaluated.agg_name = term.agg_name;
+	evaluated.sign = term.sign;
+	evaluated.is_easy = term.is_easy;
+	if (evaluated.is_minmax) {
+		evaluated.label =
+		    term.agg_name + "(" + RenderDecideSource(*term.inner_expr, source_fragments, keyed_scopes, &keys) + ")";
+	}
+	return evaluated;
+}
+
+double DecideQueryWideScale(const Value &value, bool divides, const char *what, const ValueSource &source,
+                            bool &is_null) {
+	if (value.IsNull()) {
+		is_null = true;
+		return 0.0;
+	}
+	double v = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	if (!std::isfinite(v)) {
+		ThrowInvalidValue(source);
+	}
+	if (divides) {
+		if (v == 0.0) {
+			throw InvalidInputException("DECIDE %s: division by zero — the factor on an aggregate "
+			                            "evaluated to 0.",
+			                            what);
+		}
+		return 1.0 / v;
+	}
+	return v;
+}
+
+bool DecideComposedTermReadsNoRow(const ComposedMinMaxTermData &term) {
+	return std::find(term.filter_mask.begin(), term.filter_mask.end(), true) == term.filter_mask.end();
+}
+
+double DecideComposedBound(ClientContext &context, const LogicalDecide::ComposedMinMaxConstraint &spec) {
+	if (!spec.rhs_expr->IsFoldable()) {
+		throw InternalException("DECIDE: a composed MIN/MAX clause reached execution with a bound that is "
+		                        "not a constant: %s",
+		                        spec.rhs_expr->ToString());
+	}
+	return ExpressionExecutor::EvaluateScalar(context, *spec.rhs_expr)
+	    .DefaultCastAs(LogicalType::DOUBLE)
+	    .GetValue<double>();
+}
+
 void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, bool quadratic_inner,
                   idx_t num_rows, const vector<idx_t> &row_group_ids, idx_t num_groups) {
 	auto &coefficients = col.MutableDense();

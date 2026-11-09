@@ -42,11 +42,14 @@ struct DecideErrorRank {
 	idx_t group = 0;
 	idx_t position = 0;
 	idx_t row = DConstants::INVALID_INDEX;
+	//! A part of a clause flat evaluates whole, after its filters, before the next: a composed clause's terms, one
+	//! after another (PhysicalDecide::EvaluateComposedClauses); 0 everywhere else. It ranks before the expression.
+	idx_t part = 0;
 
 	bool operator<(const DecideErrorRank &other) const {
-		return std::tie(phase, step, clause, expression, group, position, row) <
-		       std::tie(other.phase, other.step, other.clause, other.expression, other.group, other.position,
-		                other.row);
+		return std::tie(phase, step, clause, part, expression, group, position, row) <
+		       std::tie(other.phase, other.step, other.clause, other.part, other.expression, other.group,
+		                other.position, other.row);
 	}
 };
 

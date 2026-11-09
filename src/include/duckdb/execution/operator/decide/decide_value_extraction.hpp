@@ -11,9 +11,11 @@
 #pragma once
 
 #include "duckdb/common/decide_value_messages.hpp"
+#include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include <functional>
 #include <map>
@@ -210,6 +212,30 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 //! `row_group_ids` empty is every row in one group.
 void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
                                   vector<idx_t> &row_group_ids, idx_t &num_groups);
+
+//! A composed MIN/MAX term's evaluation before its rows are read (ComposedMinMaxTermData): what it reduces, its sign,
+//! whether its direction is easy, and a MIN's or a MAX's name as the plan prints the reducer, so a diagnosis over its
+//! extremum column reads `max(ship)`.
+ComposedMinMaxTermData DecideComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
+                                          const vector<string> &source_fragments,
+                                          const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys);
+
+//! A composed term's factor (LogicalDecide::ComposedMinMaxTerm::scale), one value for the whole query by construction
+//! (the canonicalizer refuses one that varies by row), as read on a row: a NULL one makes its clause's instance NULL,
+//! which sets `is_null` and reads 0; one the model cannot read is refused, named by `source`; a divisor of 0 is a
+//! division by zero in `what`, the clause ("constraint") or the objective.
+double DecideQueryWideScale(const Value &value, bool divides, const char *what, const ValueSource &source,
+                            bool &is_null);
+
+//! Whether a composed term reads no row: a reducer over none is NULL (deck p. 56), so its clause is skipped and its
+//! objective term dropped.
+bool DecideComposedTermReadsNoRow(const ComposedMinMaxTermData &term);
+
+//! A composed clause's bound (LogicalDecide::ComposedMinMaxConstraint::rhs_expr): one constant by construction, which
+//! the optimizer asserts (AssertComposable) and the value rewrite leaves no other shape for. Decided by foldability,
+//! since canonicalization rebuilds the bound side as an additive chain, so a constant arrives as `(0 - 3) + 0` just as
+//! legitimately as `-3`.
+double DecideComposedBound(ClientContext &context, const LogicalDecide::ComposedMinMaxConstraint &spec);
 
 //! AVG denominator scaling, shared by the constraint and objective sides and by the linear/bilinear (single-column)
 //! and quadratic-inner (sqrt-scaled) cases. The rows a term reads are its filter: a clause's `when` is folded into it

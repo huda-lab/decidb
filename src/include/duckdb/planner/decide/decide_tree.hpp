@@ -42,9 +42,9 @@ struct DecideTermSite {
 };
 
 //! What a program computes on a node's entries: a term's coefficient, a bound (a tightest frame bound's own, whose NULL
-//! bounds nothing rather than leaving its instance without a value, D85), a member test, the rows an admitted bound
-//! applies to, or a value something else reads (a coefficient's inputs, an admitted bound's a and r, a square's scale).
-enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TEST, ADMITS, VALUE };
+//! bounds nothing rather than leaving its instance without a value, D85), a member test, or a value something else
+//! reads (a coefficient's inputs, an admitted bound's a and r, a square's scale).
+enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TEST, VALUE };
 
 //! A value a node's programs read from a G over data, a data reducer (language/guide.md §6.1): at an entry, the G's
 //! fold in the slot the entry's row reads it in, NULL where the row reaches none.
@@ -70,6 +70,9 @@ struct DecideProgram {
 	DecideBlock block = DecideBlock::FILTERS;
 	idx_t group = 0;
 	idx_t position = 0;
+	//! The part of its owner's evaluation it lies in (DecideErrorRank::part): a composed term's place among its
+	//! clause's terms.
+	idx_t part = 0;
 	//! Programs of the same node whose results an admitted end reads as its inputs a and r (DecideAdmittedInput).
 	vector<idx_t> arguments;
 };
@@ -85,16 +88,18 @@ struct DecideBody {
 	unique_ptr<DecideObjective> objective;
 	//! A value link's or a composed term's G: its inner terms; a frame link's else terms.
 	vector<DecideTerm> members;
+	//! A composed clause's root, or the objective's with composed terms: each term's G, in the order of its terms
+	//! (LogicalDecide::ComposedMinMaxTerm).
+	vector<idx_t> composed;
 	vector<DecideTerm> fallback;
 	vector<DecideTermSite> linear, products, fallback_sites;
 	//! Per quadratic group (the objective has one, its squared terms), its inner terms' sites.
 	vector<vector<DecideTermSite>> squares;
 	//! Per quadratic group, its scale's program on the holder; INVALID with no scale to compute.
 	vector<idx_t> square_scales;
-	//! A clause's bound, a program on its root, and its admitted ends, programs on its one term's site; INVALID when
-	//! it has none.
+	//! A clause's bound, a program on its root, and its admitted ends, programs on its one term's site, read on its
+	//! members there; INVALID when it has none.
 	idx_t rhs = DConstants::INVALID_INDEX;
-	idx_t admits = DConstants::INVALID_INDEX;
 	idx_t lower = DConstants::INVALID_INDEX;
 	idx_t upper = DConstants::INVALID_INDEX;
 	//! A clause whose rows a signature splits into variants (DecideClauseScope::signature): what a variant's name reads

@@ -4,6 +4,7 @@ query with a shape that has none takes the interim formulator. Each test names t
 
 import json
 import os
+import re
 import subprocess
 
 import pytest
@@ -78,12 +79,7 @@ def test_a_query_with_no_arm_takes_the_interim_formulator(decidb_cli):
 #: with stage 06), then what the tree computes no value for.
 UNCOVERED = {
     "TIGHTEST_BOUND": "x(REAL) SUCH THAT x <= 9 AND sum(x) by (t.g) <= at(previous else 9: t.c) over (t.id within t.g)",
-    "EXTREMUM_ROWS": "x(REAL) SUCH THAT x <= 9 AND max(x) by (t.g) >= 2",
-    "MEMBER_ROWS": "x(REAL) SUCH THAT x <= 9 AND max(x) by (t.g) <= 2",
     "OBJECTIVE_SQUARES": "x(REAL) SUCH THAT x <= t.c MINIMIZE sum(power(x - t.c, 2))",
-    "OBJECTIVE_EXTREMUM": "x(REAL) SUCH THAT x <= t.c MINIMIZE max(x)",
-    "OBJECTIVE_COMPOSED": "x(REAL) SUCH THAT x <= t.c MAXIMIZE max(x) + min(x)",
-    "COMPOSED": "x(REAL) SUCH THAT x <= 9 AND sum(x) + max(x) <= 10",
     "VALUE_LINKS": "x(REAL) SUCH THAT x <= 9 AND x <= sum(x) by (t.g)",
     "FRAME_READS": "x(REAL) SUCH THAT x <= 9 AND x <= at(previous else 1: x) over (t.id)",
     "PRODUCT_LINKS": "x(REAL), b(BOOL) SUCH THAT x <= 9 AND b * x <= 5",
@@ -986,3 +982,256 @@ def test_an_avg_under_not_equal_multiplies_its_bound(decidb_cli, tmp_path):
         SUCH THAT x >= 0 AND x <= 5 AND avg(x) by (t.g) <> 3 MAXIMIZE sum(x)"""
     flat, tree = models(decidb_cli, sql, tmp_path)
     assert tree == flat
+
+
+#: Rows for the MIN and MAX arms: g's groups a (rows 1, 2) and b (rows 3, 4), whose least c, 3 and 1, a group's bound
+#: `<= t.c` reads; w is NULL on row 4, and p keeps rows 1, 3 and 4.
+EXTREMA = """(VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true),
+    (4, 'b', 4.0, NULL, true)) t(id, g, c, w, p)"""
+
+
+def _covered_as_flat(cli, sql, tmp_path):
+    """The query is covered under tree, and the tree's model is flat's; returns the model."""
+    lines, result = coverage(cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(cli, sql, tmp_path)
+    assert tree == flat
+    return tree
+
+
+def test_an_easy_extremum_is_a_model_row_per_member(decidb_cli, tmp_path):
+    """An easy MAX, which its `<=` drives, is formulated in the grouped shape (MEMBER_ROWS): a model row per member of
+    its G, each bounded by its group's least c, 3, 3, 1 and 1. A member's terms are read as written on its own row, not
+    counted once in its group as a decision beside an aggregate's reducers is (CountTupleTermsOncePerGroup)."""
+    sql = f"""SELECT id, x, y FROM {EXTREMA} DECIDE x(INT), y(INT)
+        SUCH THAT max(x + y) by (t.g) <= t.c AND x <= 9 AND y <= 9 MAXIMIZE sum(x)"""
+    tree = _covered_as_flat(decidb_cli, sql, tmp_path)
+    assert re.findall(r"sense=< rhs=(\S+) nnz=2", tree) == ["3", "3", "1", "1"], tree
+
+
+def test_an_easy_extremum_of_one_decision_bounds_each_members_column(decidb_cli, tmp_path):
+    """`max(x) by (t.g) <= t.c` admits x up to its group's least c on each member of its G, its term's site, which the
+    model builder folds into each x's column (DecideModelEmitter::Admit): no row."""
+    sql = f"SELECT id, x FROM {EXTREMA} DECIDE x(REAL) SUCH THAT max(x) by (t.g) <= t.c MAXIMIZE sum(x)"
+    tree = _covered_as_flat(decidb_cli, sql, tmp_path)
+    assert re.findall(r" ub=(\S+) ", tree) == ["3", "3", "1", "1"] and "num_rows: 0" in tree, tree
+
+
+def test_a_hard_extremum_is_diagnosed_by_the_bound_as_written(decidb_cli, tmp_path):
+    """A hard MAX, which its `>=` does not drive, hands stage 06 its groups' rows (EXTREMUM_ROWS), whose outer row over
+    the extremum stage 06 stamps USER_PARAMETER: the diagnosis loosens the bound as written, 2 to 1, as flat's does."""
+    sql = (
+        f"DIAGNOSE SELECT id, x FROM {EXTREMA} DECIDE x(REAL) SUCH THAT x <= 1 AND max(x) by (t.g) >= 2 MINIMIZE sum(x)"
+    )
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat = run(decidb_cli, sql, "flat").stdout
+    assert "max(x) by (t.g) >= 1" in flat, flat
+    assert result.stdout == flat
+
+
+def test_a_folded_extremums_repair_rows_count_no_instance(decidb_cli, tmp_path):
+    """`max(x) <= 5` is folded into x's box, and its rows, which only a repair model emits, are a folded bound's: no
+    instance of them is counted, as flat counts none (DecideModelEmitter::Groups' `counted`)."""
+    sql = """DIAGNOSE SELECT id, x FROM (VALUES (1, 8), (2, 12)) t(id, lo)
+        DECIDE x(REAL) SUCH THAT x >= t.lo AND max(x) <= 5 MAXIMIZE sum(x)"""
+    _verified(decidb_cli, sql, tmp_path)
+
+
+def test_an_extremum_objective_takes_the_rows_its_filters_keep(decidb_cli, tmp_path):
+    """A MAX objective's members are the rows its terms' filters keep, which stage 06 reads (OBJECTIVE_EXTREMUM): its
+    `when` keeps rows 1, 3 and 4, and w's NULL test drops row 4."""
+    sql = f"""SELECT id, x FROM {EXTREMA} DECIDE x(REAL) SUCH THAT x <= t.c AND x >= 1
+        MINIMIZE when t.p: max(t.w * x)"""
+    _covered_as_flat(decidb_cli, sql, tmp_path)
+
+
+#: A join that repeats t's rows: t's classes 1 and 3 stand on two rows each, one entry of an operand over t's classes.
+JOINED = """(VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, g, n)
+    JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v')) s(id, k) ON t.id = s.id"""
+
+#: A MIN or MAX over t's classes reads every row an entry of its operand stands for, as flat reads each of them a
+#: member: stage 05 gives its terms no qualifier, since a class's repeats carry its value
+#: (DecideModelEmitter::ReadRows). A relation-qualified SUM reads its class's first row alone.
+JOINED_REDUCERS = {
+    "an-extremum-in-a-clause": "MIN(t: t.n * keep) <= 1 AND SUM(t: keep) >= 2 MAXIMIZE SUM(t: keep)",
+    "an-extremum-objective": "SUM(t: keep) >= 2 MINIMIZE MAX(t: t.n * keep)",
+    "a-composed-clause": "SUM(t: t.n * keep) + MAX(t: keep) <= 4 MAXIMIZE SUM(t: keep)",
+}
+
+
+@pytest.mark.parametrize("case", list(JOINED_REDUCERS))
+def test_a_reducer_over_a_classes_rows_reads_them_as_flat_does(decidb_cli, tmp_path, case):
+    sql = f"SELECT t.id, s.k, keep FROM {JOINED} DECIDE per t: keep(BOOL) SUCH THAT {JOINED_REDUCERS[case]}"
+    _covered_as_flat(decidb_cli, sql, tmp_path)
+
+
+#: A composed term qualified by a scope whose classes the values it reads split, a per-row decision's (D70, D71): its
+#: operand is the one the scope's keyed mapping reads (DecideTreeBuilder::Qualified), from a composed clause's terms and
+#: from the objective's, each covered with flat's model.
+QUALIFIED_COMPOSED = {
+    "a-clauses-term-over-a-relation": (
+        f"SELECT t.id, s.k, x, y FROM {JOINED}",
+        "AND sum(t: t.n * x) + max(s.id * y) <= 10 MAXIMIZE sum(x) + sum(y)",
+    ),
+    "an-objectives-term-per-key": (f"SELECT id, x, y FROM {EXTREMA}", "MAXIMIZE sum(x) - max(per t.g: t.c * y)"),
+}
+
+
+@pytest.mark.parametrize("case", list(QUALIFIED_COMPOSED))
+def test_a_qualified_composed_term_reads_its_scopes_classes(decidb_cli, tmp_path, case):
+    select, rest = QUALIFIED_COMPOSED[case]
+    sql = f"{select} DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 {rest}"
+    _covered_as_flat(decidb_cli, sql, tmp_path)
+    (tmp_path / "verify").mkdir()
+    _verified(decidb_cli, sql, tmp_path / "verify")
+
+
+#: Each a composed clause, `sum(x) + max(y)` and its kin (COMPOSED), the tree formulates and counts as flat does, by
+#: the branch it reaches (DecideModelEmitter::Composed), and whether flat warns that it constrains nothing.
+COMPOSED = {
+    # A row `z >= y` per member of the MAX, and one outer row over z and the sum.
+    "an-outer-row": ("sum(x) + max(y) <= 9", False),
+    # A factor, read as flat reads it, on the input's first rows (DecideQueryWideScale).
+    "a-factor": ("sum(x) + (SELECT 2.0) * max(y) <= 9", False),
+    # A NULL factor makes the clause's one instance NULL: it is skipped, with no outer row.
+    "a-null-factor": ("sum(x) + (SELECT NULL::DOUBLE) * max(y) <= 9", True),
+    # A reducer over no row is NULL: the clause is skipped, which flat reports once the clauses are read.
+    "a-reducer-over-no-row": ("sum(x) + max(when t.c > 100: y) <= 9", True),
+    # A `when` that keeps no row leaves the clause no instance, so there is nothing to report; its factor is read on the
+    # input's first rows, whatever the clause keeps.
+    "a-when-that-keeps-no-row": ("when t.c > 100: sum(x) + (SELECT 2.0) * max(y) <= 9", False),
+}
+
+
+@pytest.mark.parametrize("case", list(COMPOSED))
+def test_a_composed_clause_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case):
+    clause, warned = COMPOSED[case]
+    sql = f"""SELECT id, x, y FROM {EXTREMA} DECIDE x(INT), y(INT)
+        SUCH THAT {clause} AND x <= 5 AND y <= 5 MAXIMIZE sum(x) + sum(y)"""
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    assert ("constrains nothing" in result.stderr) == warned, result.stderr
+    assert result.stderr == run(decidb_cli, sql, "flat").stderr
+    flat, tree = [
+        decidb_cli.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(
+            sql, tmp_path / f"{evaluator}.dump", expect_warnings=("constrains nothing",) if warned else ()
+        )
+        for evaluator in ("flat", "tree")
+    ]
+    assert tree == flat
+    if case == "an-outer-row":
+        assert len(re.findall(r"sense=> rhs=0 nnz=2", tree)) == 4 and "sense=< rhs=9 nnz=5" in tree, tree
+    (tmp_path / "verify").mkdir()
+    _verified(decidb_cli, sql, tmp_path / "verify")
+
+
+def test_a_composed_clause_is_diagnosed_per_class_of_its_per(decidb_cli, tmp_path):
+    """Under DIAGNOSE a composed clause's one row stands for the classes of its `per t.g:` among its kept rows
+    (ComposedConstraint::class_set)."""
+    sql = f"""DIAGNOSE SELECT id, x, y FROM {EXTREMA} DECIDE x(INT), y(INT)
+        SUCH THAT per t.g: sum(x) + max(y) >= 90 AND x <= 5 AND y <= 5 MAXIMIZE sum(x) + sum(y)"""
+    _verified(decidb_cli, sql, tmp_path)
+    assert run(decidb_cli, sql).stdout == run(decidb_cli, sql, "flat").stdout
+
+
+#: Each an objective with composed terms (OBJECTIVE_COMPOSED): its terms, and a term over no row, which is dropped.
+COMPOSED_OBJECTIVES = {
+    "its-terms": "max(x) + min(y)",
+    "a-term-over-no-row": "sum(x) + max(when t.c > 100: y)",
+}
+
+
+@pytest.mark.parametrize("case", list(COMPOSED_OBJECTIVES))
+def test_a_composed_objective_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case):
+    sql = f"""SELECT id, x, y FROM {EXTREMA} DECIDE x(INT), y(INT)
+        SUCH THAT x <= t.c AND y <= 5 MAXIMIZE {COMPOSED_OBJECTIVES[case]}"""
+    _covered_as_flat(decidb_cli, sql, tmp_path)
+
+
+#: Rows with a NaN on row 2 in v and on row 1 in w.
+COMPOSED_NANS = "(VALUES (1, 1.0, 'NaN'::DOUBLE), (2, 'NaN'::DOUBLE, 1.0), (3, 1.0, 1.0)) t(id, v, w)"
+
+#: Each a composed clause's error, raised where flat raises it.
+COMPOSED_RAISED = {
+    # Term 0's NaN on row 2 before term 1's on row 1: flat reads a composed clause's terms one after another, each over
+    # every row before the next (DecideErrorRank::part).
+    "a-term-before-the-next": ("sum(t.v * x) + max(t.w * y) <= 10", "t.v is NaN"),
+    # Term 0's NaN on row 2 before term 1's factor, which flat reads with its term, after term 0.
+    "a-term-before-the-next-terms-factor": ("sum(t.v * x) + max(y) / (SELECT 'NaN'::DOUBLE) <= 10", "t.v is NaN"),
+    # A clause's NaN bound before a composed clause's factor, which the ledger holds at its rank.
+    "a-clause-before-a-factor": ("x <= t.v AND sum(x) + max(y) / (SELECT 'NaN'::DOUBLE) <= 10", "the bound t.v"),
+    # A coefficient DeciDB computed past a DOUBLE names the composed clause, as its term's G does
+    # (DecideNode::source_clause_id).
+    "a-coefficient-past-a-double": ("sum(x) + max(1e308 * 10 * y) <= 10", "max(1e308 * 10 * y) <= 10 computes"),
+}
+
+
+@pytest.mark.parametrize("case", list(COMPOSED_RAISED))
+def test_a_composed_clause_raises_flats_error(decidb_cli, case):
+    clauses, message = COMPOSED_RAISED[case]
+    sql = f"""SELECT id, x, y FROM {COMPOSED_NANS} DECIDE x(REAL), y(REAL)
+        SUCH THAT x <= 9 AND y <= 9 AND {clauses} MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert message in flat.stderr, flat.stderr
+    assert run(decidb_cli, sql).stderr == flat.stderr
+
+
+#: Three thousand rows: la is -1 on row 2,500, in the second window, and lb on row 10, in the first; in the first window
+#: too, a is 0 on row 2 and b is -1 on row 1. h is 1 on every row.
+COMPOSED_WINDOWS = """(SELECT i AS id, CASE WHEN i = 2500 THEN -1.0 ELSE 2.0 END AS la,
+    CASE WHEN i = 10 THEN -1.0 ELSE 2.0 END AS lb, CASE WHEN i = 2 THEN 0.0 ELSE 2.0 END AS a,
+    CASE WHEN i = 1 THEN -1.0 ELSE 2.0 END AS b, 1 AS h FROM range(3000) r(i)) t"""
+
+#: A composed clause's `when`, and the objective's where its composed terms alone carry it, is the first part of each
+#: term's filter (ScopeComposedTerms), which flat reads window by window, term by term, before any coefficient: each
+#: case raises flat's error under tree and verify, by the branch it reaches (DecideNode::filter_group, PartComposed).
+COMPOSED_WHEN_RAISED = {
+    # A term's `when` in the first window (row 10) before the clause's `when` in the second (row 2,500).
+    "a-terms-when-in-an-earlier-window": (
+        "AND when ln(t.la) > 0: sum(x) + max(when sqrt(t.lb) > 0: y) <= 9 MAXIMIZE sum(x)",
+        "square root of a negative number",
+    ),
+    # In one window, the clause's `when` (row 2) before its first term's own (row 1): group 0, then the term's.
+    "the-clauses-when-before-its-first-terms": (
+        "AND when ln(t.a) > 0: sum(when sqrt(t.b) > 0: x) + max(y) <= 9 MAXIMIZE sum(x)",
+        "logarithm of zero",
+    ),
+    # In one window, term 0's `when` (row 2) before term 1's (row 1): each term's filter in the group after its
+    # predecessor's.
+    "a-terms-when-before-the-next-terms": (
+        "AND sum(when ln(t.a) > -100: x) + max(when sqrt(t.b) > 0: y) <= 9 MAXIMIZE sum(x)",
+        "logarithm of zero",
+    ),
+    # An objective of composed terms alone: flat's objective has no term to read its `when` with, so its terms'
+    # filters read it, after the composed clauses (LogicalDecide::retained_objective_when).
+    "an-objective-of-composed-terms-alone": (
+        "MAXIMIZE when ln(t.la) > 0: max(x) + min(when sqrt(t.lb) > 0: y)",
+        "square root of a negative number",
+    ),
+    # An objective with a term of its own reads its `when` with it, before every composed term.
+    "an-objective-with-a-term-of-its-own": (
+        "MAXIMIZE when ln(t.la) > 0: sum(x) + min(when sqrt(t.lb) > 0: y)",
+        "logarithm of a negative number",
+    ),
+    # An objective that is checked to be produced once, by its `by (t.h)` (D72): the check reads its kept rows before
+    # anything else.
+    "an-objective-checked-to-be-produced-once": (
+        "MAXIMIZE when ln(t.la) > 0: max(x) by (t.h) + min(when sqrt(t.lb) > 0: y)",
+        "logarithm of a negative number",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(COMPOSED_WHEN_RAISED))
+def test_a_composed_when_raises_in_its_terms_filters(decidb_cli, tmp_path, case):
+    rest, message = COMPOSED_WHEN_RAISED[case]
+    sql = f"SELECT id, x, y FROM {COMPOSED_WINDOWS} DECIDE x(REAL), y(REAL) SUCH THAT x <= 9 AND y <= 9 {rest}"
+    flat = run(decidb_cli, sql, "flat").stderr
+    assert message in flat, flat
+    for evaluator in ("tree", "verify"):
+        folder = tmp_path / evaluator
+        folder.mkdir()
+        lines, result = coverage(decidb_cli, sql, folder, evaluator)
+        assert lines == [f"covered: {evaluator}"], result.stderr
+        assert result.stderr == flat

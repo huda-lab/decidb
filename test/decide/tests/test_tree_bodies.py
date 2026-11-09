@@ -262,14 +262,8 @@ PROGRAMS = {
     # beside the one carried column (a, a constant, is in the ends already). It names its bound.
     "admitted-ends": (
         decide(ROWS, "x(REAL)", "x <= t.c"),
-        r"bound rhs=1 admits=-1 lower=4 upper=5\n(?:.*\n)*  program 4 BOUND expr=[^\n]*\(\(#2 IS NULL\)\)[^\n]* "
+        r"bound rhs=1 lower=4 upper=5\n(?:.*\n)*  program 4 BOUND expr=[^\n]*\(\(#2 IS NULL\)\)[^\n]* "
         r"written=CAST\(c AS DOUBLE\) block=BOUND group=0 position=4 owner=0 arguments=2,3\n",
-    ),
-    # An easy extremum's admitted bound applies to its members, so it is computed on them, its `when` first.
-    "admitted-members": (
-        decide(ROWS, "x(REAL)", "x <= 9 AND min(when t.p: x) >= -5"),
-        r"bound rhs=0 admits=1 lower=4 upper=5\n(?:.*\n)*?node \d+ entries\n  column #0 reads input \d+\n"
-        r"[^\n]*\n  program 1 ADMITS expr=#0 written=p block=BOUND group=0 position=1 ",
     ),
     # A member test is a program on its node.
     "a-member-test": (

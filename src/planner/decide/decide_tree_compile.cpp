@@ -271,12 +271,15 @@ static void BindClauses(const DecidePreparedModel &prepared, DecideTree &tree, c
 }
 
 //! The composed clauses, which flat evaluates after the objective, then the objective's composed terms (the last
-//! slot): each term's G holds its inner terms.
+//! slot): each term's G holds its inner terms, and the root holding them each term's G.
 static void CopyComposed(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources) {
 	for (idx_t spec = 0; spec < sources.composed_reducers.size(); spec++) {
 		auto &terms = spec < op.composed_minmax_constraints.size() ? op.composed_minmax_constraints[spec].terms
 		                                                           : op.composed_minmax_objective_terms;
 		auto &reducers = sources.composed_reducers[spec];
+		const auto holder =
+		    spec < sources.composed_roots.size() ? sources.composed_roots[spec] : sources.objective_root;
+		tree.nodes[holder]->compiled.composed = reducers;
 		for (idx_t t = 0; t < reducers.size(); t++) {
 			auto &body = tree.nodes[reducers[t]]->compiled;
 			body.members = CopyTerms(terms[t].inner_terms);
@@ -355,6 +358,11 @@ public:
 
 	vector<DecideProgram> &Programs(idx_t node) {
 		return tree.nodes[node]->programs;
+	}
+
+	//! The group a node's filter is read in, its `when` and its member tests, where it is not its first term's place.
+	void FilterGroup(idx_t node, idx_t group) {
+		first_terms[node] = group;
 	}
 
 	//! What a variant of `root`'s clause is named by at its first row (DecideBody::names), as flat's NameVariants
@@ -567,13 +575,10 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 	const auto role = clause.tightest_frame_bound ? DecideProgramRole::TIGHTEST_BOUND : DecideProgramRole::BOUND;
 	body.rhs = compiler.Add(root, role, *clause.rhs_expr, root, DecideBlock::BOUND, 0, 0);
 	if (clause.admitted_lower) {
-		// A bound on one decision, admitted on each row its term is read on: an easy extremum's on its members. As
+		// A bound on one decision, admitted on each row its term is read on: an easy extremum's on its members, the
+		// entries of its reducer's operand, whose filter (DecideConstraint::admitted_member) the descent routes. As
 		// flat computes them: the members, then a and r on them, then each end over the row and those two.
 		const auto site = body.linear[0].node;
-		if (clause.admitted_member) {
-			body.admits =
-			    compiler.Add(site, DecideProgramRole::ADMITS, *clause.admitted_member, root, DecideBlock::BOUND, 0, 1);
-		}
 		const auto a = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_a, root, DecideBlock::BOUND, 0, 2);
 		const auto r = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_r, root, DecideBlock::BOUND, 0, 3);
 		body.lower =
@@ -629,6 +634,22 @@ static void CompileMembers(DecideProgramCompiler &compiler, idx_t holder, Decide
 	}
 }
 
+//! A composed root's terms, which flat reads one after another, each over every row before the next: each term's
+//! members' programs lie in its part. Before any of them it reads every term's filter, window by window, term by term,
+//! each after the root's `when`, which ScopeComposedTerms puts in front of it and the root's group 0 holds
+//! (DecideNode::filter_group): a term's filter is read in the group after its predecessor's.
+static void PartComposed(DecideProgramCompiler &compiler, DecideTree &tree, const DecideBody &body) {
+	for (idx_t t = 0; t < body.composed.size(); t++) {
+		const auto operand = DecideTreeOperand(tree, body.composed[t]);
+		for (auto &program : compiler.Programs(operand)) {
+			if (program.owner == body.composed[t]) {
+				program.part = t;
+			}
+		}
+		compiler.FilterGroup(operand, 1 + t);
+	}
+}
+
 static void CompilePrograms(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
                             const vector<idx_t> &record_nodes) {
 	DecideProgramCompiler compiler(context, op, tree, record_nodes);
@@ -641,6 +662,9 @@ static void CompilePrograms(ClientContext &context, const LogicalDecide &op, Dec
 		} else {
 			CompileMembers(compiler, i, body);
 		}
+	}
+	for (idx_t i = 0; i < tree.nodes.size(); i++) {
+		PartComposed(compiler, tree, tree.nodes[i]->compiled);
 	}
 	for (idx_t i = 0; i < tree.nodes.size(); i++) {
 		compiler.AddTests(i);
@@ -720,8 +744,6 @@ static string RoleName(DecideProgramRole role) {
 		return "TIGHTEST_BOUND";
 	case DecideProgramRole::TEST:
 		return "TEST";
-	case DecideProgramRole::ADMITS:
-		return "ADMITS";
 	case DecideProgramRole::VALUE:
 		return "VALUE";
 	}
@@ -778,8 +800,8 @@ static void ClauseLines(std::ostringstream &out, const DecideConstraint &clause,
 		    << " scale=" << Signed(body.square_scales[g]) << "\n";
 		Terms(out, group.inner_terms, body.squares[g], "    ", "inner");
 	}
-	out << "  bound rhs=" << Signed(body.rhs) << " admits=" << Signed(body.admits) << " lower=" << Signed(body.lower)
-	    << " upper=" << Signed(body.upper) << "\n";
+	out << "  bound rhs=" << Signed(body.rhs) << " lower=" << Signed(body.lower) << " upper=" << Signed(body.upper)
+	    << "\n";
 }
 
 static void ObjectiveLines(std::ostringstream &out, const DecideObjective &objective, const DecideBody &body) {

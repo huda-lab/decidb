@@ -409,8 +409,21 @@ private:
 				// An objective with a signature is checked to be produced once (D72, language/guide.md §7.3), and the
 				// check reads its kept rows and its signature before it counts its instances.
 				node.route_rank.phase = DecideErrorPhase::SCOPE_CHECK;
+			} else if (ReadsWhenInComposedFilters(node)) {
+				// Its `when` is the first part of its first composed term's filter, read at the terms' rank, window by
+				// window, before any term's own filter, which ranks after it (DecideNode::filter_group).
+				node.route_rank = tree->nodes[node.compiled.composed[0]]->route_rank;
+				node.filter_group = 0;
 			}
 		}
+	}
+
+	//! Whether flat reads a root's `when` only in its composed terms' filters, in front of each term's own
+	//! (ScopeComposedTerms): a composed clause's, and the objective's where flat's objective has no term to carry it
+	//! (LogicalDecide::retained_objective_when).
+	bool ReadsWhenInComposedFilters(const DecideNode &node) const {
+		return !node.compiled.composed.empty() &&
+		       (!node.objective || op.retained_objective_when != DConstants::INVALID_INDEX);
 	}
 
 	string Text(const Expression &expression) const {
@@ -797,10 +810,17 @@ private:
 			node.body = Lower(operand, *norm_body);
 		}
 		if (qualified && qualifier < op.keyed_scopes.size()) {
-			UseSignature(entry, op.keyed_scopes[qualifier].signature);
-			tree->qualified_operands[qualifier] = operand;
+			Qualified(operand, qualifier);
 		}
 		return index;
+	}
+
+	//! A relation-qualified reducer's operand, once its body is lowered: its instances are its qualifier's classes
+	//! split by the values its body reads (D70, D71), the keyed mapping of the qualifier's scope
+	//! (DecideModelEmitter::SignatureMapping), whichever reducer it is, a written one, a helper's or a composed term's.
+	void Qualified(idx_t operand, idx_t scope) {
+		UseSignature(*tree->nodes[operand], op.keyed_scopes[scope].signature);
+		tree->qualified_operands[scope] = operand;
 	}
 
 	idx_t Link(idx_t link_index) {
@@ -846,8 +866,7 @@ private:
 			entry.body = Lower(operand, *link.inner_expr);
 		}
 		if (link.qualifier_scope_idx < op.keyed_scopes.size()) {
-			UseSignature(entry, op.keyed_scopes[link.qualifier_scope_idx].signature);
-			tree->qualified_operands[link.qualifier_scope_idx] = operand;
+			Qualified(operand, link.qualifier_scope_idx);
 		}
 		return index;
 	}
@@ -939,6 +958,8 @@ private:
 		auto reducer = NewNode(DecideNodeKind::REDUCER);
 		reducers.push_back(reducer);
 		auto &node = *tree->nodes[reducer];
+		// Its message names its clause, as its root's does.
+		node.source_clause_id = tree->nodes[owner]->source_clause_id;
 		node.aggregate = term.agg_name;
 		node.text = term.inner_expr ? term.agg_name + "(" + Text(*term.inner_expr) + ")" : term.agg_name;
 		node.decision_value = true;
@@ -964,6 +985,9 @@ private:
 		}
 		if (term.inner_expr) {
 			entry.body = Lower(operand, *term.inner_expr);
+		}
+		if (term.qualifier_scope_idx < op.keyed_scopes.size()) {
+			Qualified(operand, term.qualifier_scope_idx);
 		}
 		auto value = Read(owner, reducer, LogicalType::DOUBLE, node.text);
 		if (term.scale) {
