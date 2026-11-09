@@ -413,7 +413,7 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER_DECIDE_PAREN '(' columnrefList ')'
+			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER_DECIDE_PAREN '(' decide_per_columnList ')'
 				{
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
@@ -429,7 +429,7 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
-			| decide_item_expr PER_DECIDE_PAREN '(' columnrefList ')'
+			| decide_item_expr PER_DECIDE_PAREN '(' decide_per_columnList ')'
 				{
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
@@ -592,7 +592,7 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| decide_item_expr WHEN_DECIDE a_expr PER_DECIDE_PAREN '(' columnrefList ')'
+			| decide_item_expr WHEN_DECIDE a_expr PER_DECIDE_PAREN '(' decide_per_columnList ')'
 				{
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
@@ -608,7 +608,7 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
-			| decide_item_expr PER_DECIDE_PAREN '(' columnrefList ')'
+			| decide_item_expr PER_DECIDE_PAREN '(' decide_per_columnList ')'
 				{
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
@@ -3225,7 +3225,7 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * moves to ':' vs ')' after a completed func_arg_list, which is
 					 * conflict-free. Every item in the list must be a bare relation
 					 * name; the whole list travels as one PGList (cast to PGNode*, the
-					 * same idiom `columnrefList` uses for multi-column PER) rather than
+					 * same idiom `decide_per_columnList` uses for multi-column PER) rather than
 					 * being unpacked here, so the binder sees the full qualifier set.
 					 */
 					noteDecideSpan(yyscanner, @4.start, PG_DECIDE_SPAN_PER, @3);
@@ -4328,8 +4328,14 @@ case_arg:	a_expr									{ $$ = $1; }
 		;
 
 columnrefList:
+			columnref								{ $$ = list_make1($1); }
+			| columnrefList ',' columnref				{ $$ = lappend($1, $3); }
+		;
+
+/* DeciDB: the columns of a PER key, each bare or qualified (r.id). */
+decide_per_columnList:
 			columnref_opt_indirection								{ $$ = list_make1($1); }
-			| columnrefList ',' columnref_opt_indirection				{ $$ = lappend($1, $3); }
+			| decide_per_columnList ',' columnref_opt_indirection				{ $$ = lappend($1, $3); }
 		;
 
 columnref: ColId
