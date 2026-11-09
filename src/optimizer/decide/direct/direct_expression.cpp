@@ -87,7 +87,10 @@ void DirectReplaceColumns(unique_ptr<Expression> &expr, const vector<ColumnBindi
 	D_ASSERT(columns.size() == values.size());
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto found = std::find(columns.begin(), columns.end(), expr->Cast<BoundColumnRefExpression>().binding);
-		D_ASSERT(found != columns.end());
+		if (found == columns.end()) {
+			throw InternalException("DECIDE: a direct-solve expression reads a column outside the ones replaced; its "
+			                        "caller promises it reads only those");
+		}
 		expr = values[NumericCast<idx_t>(found - columns.begin())]->Copy();
 		return;
 	}

@@ -184,7 +184,9 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 
 bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled, double scale,
                              bool divides) {
-	D_ASSERT(!values.empty()); // every caller checks a number it computed from at least one value
+	if (values.empty()) {
+		throw InternalException("DECIDE: a number check has no value to read; its caller promises at least one");
+	}
 	ExpressionBuilder calc(optimizer.context);
 	ExprPtr total;
 	for (auto &value : values) {
@@ -303,7 +305,9 @@ bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const
 }
 
 bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const string &clause, DirectWeightedForm &out) {
-	D_ASSERT(term.IsAbs()); // the caller has found the ABS
+	if (!term.IsAbs()) {
+		throw InternalException("DECIDE: an absolute value is expected here; the A2 rule promises an ABS term");
+	}
 	return DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
 	       DirectReadLinearForm(ir, term.inner, clause, out.inner);
 }
