@@ -285,7 +285,9 @@ def run(db, mode, sql, timeout):
     # which holds the query's text.
     before_stats = re.split(r"real|^\s*Command ", stderr, flags=re.MULTILINE)[0]
     if proc.returncode != 0 or "Error" in before_stats:
-        detail = before_stats.strip().splitlines()[0][:160] if before_stats.strip() else "failed"
+        lines = before_stats.strip().splitlines()
+        # The error's own line, not the first: `DECIDB_BENCH:` timing lines are written before it.
+        detail = next((line for line in lines if "Error" in line), lines[0] if lines else "failed")[:160]
         print(f"  [{mode}] error: {detail}", file=sys.stderr)
         return wall, peak_mib, "error", stdout, stderr
     return wall, peak_mib, None, stdout, stderr
