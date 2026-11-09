@@ -249,10 +249,10 @@ def test_a1_a_number_made_of_finite_literals_has_no_invalid_value_check(decidb_c
         # A message left in the plan belongs to a number it computes (the sums and the answers), never to a literal. Each
         # query reaches one site that checks a number: the bound's coefficient, a square's linear and constant parts,
         # a constant term, and a decision's linear sum.
-        ("POWER(s - 3, 2) + 2", 4),
-        ("3 * s", 6),
+        ("POWER(s - 3, 2) + 2", 2),
+        ("3 * s", 3),
         # A column among the literals is still checked: the same query over `p` keeps the checks of its numbers.
-        ("POWER(s - p, 2) + 2", 6),
+        ("POWER(s - p, 2) + 2", 3),
     ],
 )
 def test_a1_a_finite_literal_adds_no_too_large_check(decidb_cli, objective, messages):

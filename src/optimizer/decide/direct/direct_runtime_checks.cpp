@@ -58,8 +58,10 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer, const
 	return DirectErrorPredicate(optimizer, errors.unbounded);
 }
 
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
-                            const std::function<ExprPtr(const Expression &)> &into) {
+//! What a number that is not finite is named: the first of its inputs that is not finite, then a constant that is not,
+//! and otherwise the clause.
+static ExprPtr NotFiniteMessage(const ExpressionBuilder &calc, const DirectNumberNames &names,
+                                const std::function<ExprPtr(const Expression &)> &into) {
 	auto message = calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, names.clause)));
 	// Built from the last input back, so the first that is not finite is the one named. A NULL input is no answer.
 	for (idx_t i = names.inputs.size(); i > 0; i--) {
@@ -75,8 +77,14 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 		auto named = DecideInvalidValueMessage(DecideValueRole::CONSTANT, names.constant_texts[i - 1]);
 		message = calc.If(not_finite, calc.Constant(Value(named)), message);
 	}
+	return message;
+}
+
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
+                            const std::function<ExprPtr(const Expression &)> &into) {
 	auto none = calc.Constant(Value(LogicalType::VARCHAR));
-	return calc.If(calc.IsNull(number), none, calc.If(calc.Fn("isfinite", number), none, message));
+	return calc.If(calc.IsNull(number), none,
+	               calc.If(calc.Fn("isfinite", number), none, NotFiniteMessage(calc, names, into)));
 }
 
 ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause) {
@@ -86,13 +94,24 @@ ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number
 }
 
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
-	return DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-	                     DirectErrorPredicate(optimizer, calc.Out(message)));
+	return DirectRaiseUnless(calc, calc.Out(calc.IsNull(message)), DirectErrorPredicate(optimizer, calc.Out(message)));
+}
+
+//! The check of a number: true when it is finite, and otherwise the error `bad` names unless the number is NULL. The
+//! gate is one BOOLEAN per row, and `bad` is built on the rows that fail alone, as a CASE evaluates a branch only where
+//! it is chosen.
+static unique_ptr<Expression> RaiseUnlessFinite(Optimizer &optimizer, const ExpressionBuilder &calc,
+                                                const ExprPtr &number, const ExprPtr &bad) {
+	auto raise = calc.Wrap(
+	    DirectRaiseUnless(calc, calc.Out(calc.IsNull(number)), DirectErrorPredicate(optimizer, calc.Out(bad))));
+	return calc.Out(calc.If(calc.Fn("isfinite", number), calc.Bool(true), raise));
 }
 
 unique_ptr<Expression> DirectRaiseTooLarge(Optimizer &optimizer, const ExprPtr &number, const string &clause) {
 	ExpressionBuilder calc(optimizer.context);
-	return DirectRaiseMessage(optimizer, calc, DirectNumberMessage(calc, number, clause));
+	DirectNumberNames names;
+	names.clause = clause;
+	return RaiseUnlessFinite(optimizer, calc, number, NotFiniteMessage(calc, names, nullptr));
 }
 
 unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding number, const DirectNumberNames &names,
@@ -103,11 +122,10 @@ unique_ptr<Expression> DirectCheckNumber(Optimizer &optimizer, ColumnBinding num
 		return nullptr;
 	}
 	ExpressionBuilder calc(optimizer.context);
-	auto message =
-	    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), names, [&](const Expression &input) {
-		    return calc.Wrap(DirectOverProjection(input, source_bindings, projection_index));
-	    });
-	return DirectRaiseMessage(optimizer, calc, message);
+	auto bad = NotFiniteMessage(calc, names, [&](const Expression &input) {
+		return calc.Wrap(DirectOverProjection(input, source_bindings, projection_index));
+	});
+	return RaiseUnlessFinite(optimizer, calc, calc.Col(LogicalType::DOUBLE, number), bad);
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
