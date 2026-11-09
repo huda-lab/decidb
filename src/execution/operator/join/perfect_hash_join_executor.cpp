@@ -362,6 +362,33 @@ void PerfectHashJoinExecutor::FillSelectionVectorSwitchProbe(Vector &source, Sel
 	}
 }
 
+//! Every probe row picks a slot: its key's, or the NULL slot past the build range when its key is NULL, out of the
+//! range or absent from the build.
+template <typename T>
+void PerfectHashJoinExecutor::TemplatedFillSelectionVectorProbeOuter(UnifiedVectorFormat &vector_data,
+                                                                     SelectionVector &build_sel_vec, idx_t count,
+                                                                     idx_t &probe_sel_count) {
+	auto min_value = perfect_join_statistics.build_min.GetValueUnsafe<T>();
+	auto max_value = perfect_join_statistics.build_max.GetValueUnsafe<T>();
+	auto data = reinterpret_cast<T *>(vector_data.data);
+	const auto null_slot = perfect_join_statistics.build_range + 1;
+	for (idx_t i = 0; i < count; ++i) {
+		auto data_idx = vector_data.sel->get_index(i);
+		idx_t slot = null_slot;
+		if (vector_data.validity.RowIsValid(data_idx)) {
+			auto input_value = data[data_idx];
+			if (min_value <= input_value && input_value <= max_value) {
+				auto idx = (idx_t)(input_value - min_value);
+				if (bitmap_build_idx[idx]) {
+					slot = idx;
+				}
+			}
+		}
+		build_sel_vec.set_index(i, slot);
+	}
+	probe_sel_count = count;
+}
+
 template <typename T>
 void PerfectHashJoinExecutor::TemplatedFillSelectionVectorProbe(Vector &source, SelectionVector &build_sel_vec,
                                                                 SelectionVector &probe_sel_vec, idx_t count,
@@ -374,24 +401,7 @@ void PerfectHashJoinExecutor::TemplatedFillSelectionVectorProbe(Vector &source, 
 	auto data = reinterpret_cast<T *>(vector_data.data);
 	auto validity_mask = &vector_data.validity;
 	if (IsProbeOuter()) {
-		// every probe row picks a slot: its key's, or the NULL slot past the build range when its key is NULL, out of
-		// the range or absent from the build
-		const auto null_slot = perfect_join_statistics.build_range + 1;
-		for (idx_t i = 0; i < count; ++i) {
-			auto data_idx = vector_data.sel->get_index(i);
-			idx_t slot = null_slot;
-			if (validity_mask->RowIsValid(data_idx)) {
-				auto input_value = data[data_idx];
-				if (min_value <= input_value && input_value <= max_value) {
-					auto idx = (idx_t)(input_value - min_value);
-					if (bitmap_build_idx[idx]) {
-						slot = idx;
-					}
-				}
-			}
-			build_sel_vec.set_index(i, slot);
-		}
-		probe_sel_count = count;
+		TemplatedFillSelectionVectorProbeOuter<T>(vector_data, build_sel_vec, count, probe_sel_count);
 		return;
 	}
 	// build selection vector for non-dense build
