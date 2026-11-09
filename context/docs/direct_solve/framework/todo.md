@@ -49,57 +49,28 @@ solver path answers those queries, so none of them is wrong, only slower.
   s1 s1_global r1 r1_global`, and the same with
   `--modes direct highs`).
 
-## H-52 — Statistics prove constants that nothing reads as constants
+## H-53 — Two mechanisms that buy nothing measurable
 
-- **Problem.** At `sf=1` (`benchmark/decide/direct_solve/run.py --compare`, summed operator CPU, direct against the fair
-  comparator in `hand/`), a1 stands at 1.86×, a2_abs_global 1.42× and r1 2.01×; n1 at 1.20–1.35× across runs and
-  n1_groups 1.29× sit near the line; the rest are at or under 1.19×. The causes, from EXPLAIN and the profiles:
-  - **A constant the statistics prove stops where it is proved.** Statistics propagation folds a `CASE` to a constant
-    inside a projection (`propagate_case.cpp`), but nothing folds what reads it, because DuckDB's expression rewriter
-    and `DirectCanonicalize` both run before statistics propagation. A2's weight
-    `CAST(CASE WHEN v IS NOT NULL THEN 1 ELSE 0 END AS DOUBLE)` becomes `CAST(1 AS DOUBLE)`, evaluated per row, and the
-    projection above computes `#0 != 0.0`, `abs(#0) < DBL_MIN` and `/ #0` on it per row (9 ms of a2_abs_global's 30).
-    A1's clause end folds to `-inf`, and the projection above computes `greatest(0.0, #0)` and `#0 = inf` per row
-    (4.5 ms per read).
-  - **Statistics stop at a CTE reference.** R1's per-row stage is a `LogicalMaterializedCTE`; its readers are
-    `LogicalCTERef`s, which carry no statistics, so their checks over NOT NULL columns do not fold.
-  - **A double negation.** `DirectScaledTerm` (`direct_plan_fragments.cpp`, `sign < 0`) negates a coefficient in one
-    projection, and N1 (`calc.Neg(b)`) and A2 (`calc.Neg(constant)`) negate it again one projection higher (about 4 ms
-    of n1).
-  - **R1's rounds of aggregate-then-join.** R1's window is 182 ms against the hand plan's 270 ms for two windows; the
-    gap is three hash aggregates over 800K rows (76 + 54 + 28 ms) and their joins back (59 ms): the totals, the price
-    and the shares. The hand plan's `RANGE` frame gives each row its peer group's sums from the one sort.
-- **Change** (commits in this order; re-measure after each):
-  1. **Constant folding inside statistics propagation** (core). After an expression's children are propagated, an
-     expression whose children are all constants and that is foldable is evaluated
-     (`ExpressionExecutor::TryEvaluateScalar`; a failure leaves it, to raise at run time). Tested on the children, not
-     with a recursive `IsFoldable` per node. `error` and the warning function are volatile, so they never fold.
-  2. **Constant-column propagation inside statistics propagation** (core). A projection column whose expression is a
-     constant after propagation, or a reference to a column that is, records its binding and value. A column reference
-     to a recorded binding becomes the constant when it sits inside a computation, never when it is the whole
-     expression (a key, a sort column, a pass-through stay columns), and only while the binding's statistics exist and
-     agree on NULL-ness with the value (a NULL-padded side is marked nullable, so a non-NULL constant stops there).
-  3. **Statistics across a materialized CTE** (core). Propagating a `LogicalMaterializedCTE` records its definition's
-     column statistics and constants by CTE index; a `LogicalCTERef` to it takes them by position. A reference to a
-     `LogicalRecursiveCTE` takes nothing.
-  4. **The canonicalizer's constant propagation measured against commit 2.** Delete `DirectCanonicalize`'s
-     `ConstantPropagator` and its join-type list if the 11 benchmark plans and their CPU are unchanged; otherwise keep
-     it and record in its header which fold needs the constant before the rewriter runs.
-  5. **One negation.** A consumer that needs the opposite sign asks `DirectScaledTerm` for it when the term is built
-     (algebraic simplification before lowering), where the un-negated term has no other reader.
-  6. **R1's peer-group sums from its one window.** In the existing window (same partition and order),
-     `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` gives a row the sum through its peer group and
-     `RANGE BETWEEN CURRENT ROW AND CURRENT ROW` the peer group's own sum, and the totals are full-partition aggregates
-     of the same window. Measure the shape that reads them in place of the price and shares aggregate-then-join rounds;
-     take it if it wins and every obligation (proportional ties, the anchor, the open-up and open-down checks) holds.
-- **Ruling (owner, 2026-11-09, delegated).** (1) The fix is in the statistics propagator (sparse conditional constant
-  propagation: constants are the narrowest statistics, and the pass that proves them folds them, as its comparison and
-  conjunction handlers do), not a second `DirectCanonicalize` after statistics. (2) A constant replaces a column
-  reference only inside a computation: no list of key positions. (3) Commit 4 deletes the duplicate only on a measured
-  tie. (4) R1 keeps proportional tie sharing; the `RANGE`-frame shape is measured before full-partition totals alone.
-  (5) An arithmetic identity left per row after commit 2 (`x / 1.0`) gets a rule only if its cost is measured.
-- **Done when.** Each `run.py` query at `sf=1`, one process, best of 5, within 1.3× of its fair
-  comparator in summed operator CPU; on all threads no slower than on one at every size, or no further from that than
-  its comparator is; answers, error texts, warnings and the first error to raise unchanged; goldens unchanged; EXPLAIN
-  changes in core sqllogictests read and accepted one by one; the matrix passes. A query that misses is reported with
-  its profile and the cause.
+- **Problem.** Statistics propagation folds what it proves and reads a constant column of a projection as its value
+  inside a computation (`statistics_propagator.cpp`, `propagate_columnref.cpp`). Two mechanisms beside it measure as
+  noise at `sf=1` (`benchmark/decide/direct_solve/run.py --compare`):
+  - **`DirectCanonicalize`'s constant-column propagation** (`ConstantPropagator`, the join types it passes constants
+    across, `direct_canonicalizer.cpp`) does the same job as the statistics propagator, earlier. Deleting it leaves a
+    few `x * 1.0` per row in 8 of the 11 benchmark plans and changes no query's CPU beyond noise; an `x / 1.0` measures
+    0.1 ms per 800K rows.
+  - **Statistics across a materialized CTE** (`propagate_cte.cpp`, `cte_columns`) moved r1 from 1.80× to 1.75× of its
+    comparator, inside the ±15% noise of a loaded machine, and carries an exclusion of its own (a recursive CTE).
+- **Change.**
+  1. Delete `ConstantPropagator` and its join-type list from `direct_canonicalizer.cpp`, the C++ tests that only reach
+     them (`test_decidb_direct_canonicalizer.cpp`), and the header's account of them. If the canonicalizer is then
+     DuckDB's rewriter over the operators a rule built, run `Optimizer::rewriter` over the adapter's child as DuckDB
+     runs it (`VisitOperator`), and delete `ExpressionRewriter::RewriteOperatorExpressions` (core) and the walk that
+     stops at the source, unless a plan of the source then changes; say which in the report.
+  2. Delete `propagate_cte.cpp`, its dispatch, `cte_columns` and `statistics_cte.test`.
+- **Ruling (owner, 2026-11-09).** Work that adds complexity for a gain inside noise or a few milliseconds of latency is
+  not done, and landed work of that kind is removed; a change that simplifies is done. Not done, on that rule: a
+  smallest-nonzero-magnitude analysis to drop the below-normal check of a value of an exact type (a2_abs_global, 0.6 ms
+  of latency); R1's per-row answer from window frames (a second plan shape for several decisions, and prefix sums the
+  segment tree does not keep monotone); proving R1's group checks at plan time.
+- **Done when.** The two mechanisms and their tests are gone; answers, error texts, warnings, the first error to raise
+  and goldens are unchanged; the benchmark's CPU is unchanged within noise; the matrix passes.
