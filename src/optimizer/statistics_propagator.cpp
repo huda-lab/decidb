@@ -153,6 +153,9 @@ bool StatisticsPropagator::TryFoldConstants(unique_ptr<Expression> &expr) {
 }
 
 unique_ptr<BaseStatistics> StatisticsPropagator::PropagateExpression(unique_ptr<Expression> &expr) {
+	// a child that reads a constant column becomes the constant first, so that the handler, and the fold after it, see
+	// the constant
+	SubstituteConstantColumns(*expr);
 	auto stats = PropagateExpression(*expr, expr);
 	if (TryFoldConstants(expr)) {
 		stats = StatisticsFromValue(expr->Cast<BoundConstantExpression>().value);

@@ -291,7 +291,10 @@ def test_a1_a_plan_over_not_null_columns_has_no_check_the_statistics_prove_false
     ],
 )
 def test_a1_a_box_clamps_only_to_a_finite_static_end(decidb_cli, bounds, kept, left_out):
+    # The plan the rule builds is read before statistics propagation, which folds `greatest(0.0, -1e1000)` of a
+    # clause that bounds nothing to the floor 0.0.
     sql = f"""
+        SET disabled_optimizers='statistics_propagation';
         CREATE OR REPLACE TEMP TABLE stock(id INTEGER NOT NULL, q DOUBLE NOT NULL);
         INSERT INTO stock VALUES (1, 2.0), (2, 3.0);
         EXPLAIN SELECT id, s FROM stock DECIDE s(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(s - 3, 2))

@@ -88,6 +88,14 @@ private:
 	void CreateFilterFromJoinStats(unique_ptr<LogicalOperator> &child, unique_ptr<Expression> &expr,
 	                               const BaseStatistics &stats_before, const BaseStatistics &stats_after);
 
+	//! Replace each child of an expression that is a reference to a column holding one value on every row by that
+	//! value. A reference that is the whole expression stays a column.
+	void SubstituteConstantColumns(Expression &expr);
+	//! The value a column holds on every row, when the propagation proves one (see constant_columns)
+	bool TryGetConstantColumn(ColumnBinding binding, Value &value);
+	//! Record the column `binding` as constant when `expr`, the expression that computes it, is a constant or a
+	//! reference to a constant column
+	void RecordConstantColumn(ColumnBinding binding, const Expression &expr);
 	//! Evaluate an expression whose children are all constants and replace it with the result. Returns false, and
 	//! leaves the expression, when it is not foldable or the evaluation fails.
 	bool TryFoldConstants(unique_ptr<Expression> &expr);
@@ -119,6 +127,11 @@ private:
 	optional_ptr<LogicalOperator> root;
 	//! The map of ColumnBinding -> statistics for the various nodes
 	column_binding_map_t<unique_ptr<BaseStatistics>> statistics_map;
+	//! The columns that hold one value on every row: the constants a projection computes and the columns that pass
+	//! one on. A column is read as its value only while statistics for it exist and agree with the value on NULL:
+	//! the join handlers mark the NULL-padded side as able to hold NULL, and compressed materialization moves the
+	//! statistics of a column it compresses to a new binding.
+	column_binding_map_t<Value> constant_columns;
 	//! Node stats for the current node
 	unique_ptr<NodeStatistics> node_stats;
 };

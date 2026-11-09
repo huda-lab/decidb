@@ -1,0 +1,103 @@
+# name: test/optimizer/statistics/statistics_constant_columns.test
+# description: Statistics propagation reads a column that holds one value on every row as that value
+# group: [statistics]
+
+statement ok
+PRAGMA enable_verification;
+
+statement ok
+PRAGMA explain_output = OPTIMIZED_ONLY;
+
+statement ok
+CREATE TABLE integers AS SELECT * FROM (VALUES (1), (2), (3)) tbl(i);
+
+# a computation over a constant column of the projection below it folds
+query II
+EXPLAIN SELECT upper(c) || 'x' FROM (SELECT 'a' AS c, i FROM integers);
+----
+logical_opt	<!REGEX>:.*upper.*
+
+query I
+SELECT upper(c) || 'x' FROM (SELECT 'a' AS c, i FROM integers) ORDER BY i;
+----
+Ax
+Ax
+Ax
+
+# a column that passes the constant on is a constant too
+query II
+EXPLAIN SELECT upper(d) || 'x' FROM (SELECT c AS d, i FROM (SELECT 'a' AS c, i FROM integers));
+----
+logical_opt	<!REGEX>:.*upper.*
+
+# a constant column that is the whole expression stays a column
+query II
+EXPLAIN SELECT c, i FROM (SELECT 'a' AS c, i FROM integers);
+----
+logical_opt	<!REGEX>:.*'a'.*
+
+query II
+SELECT c, i FROM (SELECT 'a' AS c, i FROM integers) ORDER BY i;
+----
+a	1
+a	2
+a	3
+
+# a NULL constant: the column cannot hold anything else
+query II
+EXPLAIN SELECT upper(c) FROM (SELECT NULL::VARCHAR AS c, i FROM integers);
+----
+logical_opt	<!REGEX>:.*upper.*
+
+query I
+SELECT upper(c) FROM (SELECT NULL::VARCHAR AS c, i FROM integers);
+----
+NULL
+NULL
+NULL
+
+# the side an outer join pads holds NULL where it has no partner, so its constant is not read as one
+query II
+SELECT l.i, r.c || 'x' FROM integers l LEFT JOIN (SELECT 'a' AS c, i FROM integers WHERE i < 3) r ON l.i = r.i ORDER BY l.i;
+----
+1	ax
+2	ax
+3	NULL
+
+query II
+EXPLAIN SELECT l.i, r.c || 'x' FROM integers l LEFT JOIN (SELECT 'a' AS c, i FROM integers WHERE i < 3) r ON l.i = r.i;
+----
+logical_opt	<REGEX>:.*\|\|.*
+
+query II
+SELECT l.c || 'x', r.i FROM (SELECT 'a' AS c, i FROM integers WHERE i < 3) l RIGHT JOIN integers r ON l.i = r.i ORDER BY r.i;
+----
+ax	1
+ax	2
+NULL	3
+
+query II
+SELECT l.c || 'x', r.c || 'y' FROM (SELECT 'a' AS c, i FROM integers WHERE i < 3) l FULL JOIN (SELECT 'b' AS c, i FROM integers WHERE i > 1) r ON l.i = r.i ORDER BY coalesce(l.i, r.i);
+----
+ax	NULL
+ax	by
+NULL	by
+
+# a positional join pads the shorter side
+query II
+SELECT l.c || 'x', r.i FROM (SELECT 'a' AS c FROM integers WHERE i < 3) l POSITIONAL JOIN integers r ORDER BY r.i;
+----
+ax	1
+ax	2
+NULL	3
+
+# a constant column read by an aggregate and a filter
+query I
+SELECT count(*) FROM (SELECT 5 AS c, i FROM integers) WHERE c + i > 6;
+----
+2
+
+query I
+SELECT sum(c + 1) FROM (SELECT 5 AS c, i FROM integers);
+----
+18
