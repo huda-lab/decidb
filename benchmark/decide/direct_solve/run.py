@@ -28,6 +28,18 @@ Beside the CSV, a JSON manifest records the commit, the binary, the solver versi
 
     python3 benchmark/decide/direct_solve/run.py                           # every query, every size
     python3 benchmark/decide/direct_solve/run.py --sf 0.00125 0.0125 --queries r1
+
+Compare mode (`--compare`). Runs, instead of the sweep above, each query's direct plan beside its comparator in `hand/`:
+the plan an expert writes by hand for the same answer, which carries what the rule owes (its verdict before the first row
+is released, its clamps and checks, R1's proportional ties). A plan that skips an obligation measures the obligation,
+not the plan. Both sides run in one process under `PRAGMA enable_profiling='json'`, best of `--repeats`, once on all
+threads and once on one. The table reports, for each side, the summed operator CPU (the measure: the sum of every
+operator's time, whatever the thread count) and the latency; the planning DECIDE adds (the `optimizer.direct.*` spans,
+read from `DECIDB_PROFILE`) is reported apart, since it is in the direct side's latency and in no operator's time. The
+two sides' answers (`COUNT(*)`, `SUM(<decision>)` and the objective) are compared on one thread, where a sum is
+deterministic: a difference is shown, and a relative difference beyond 1e-9 stops the run.
+
+    python3 benchmark/decide/direct_solve/run.py --compare --sf 1 --queries a1 n1 r1
 """
 
 import argparse
@@ -89,6 +101,144 @@ def warm(db):
     with db.open("rb") as handle:
         while handle.read(1 << 24):
             pass
+
+
+HAND = HERE / "hand"
+BENCH_ERROR = re.compile(r"(Error|error:)")
+
+
+def load_hand(name):
+    """The comparator's SQL, without its comment lines."""
+    text = (HAND / f"{name}.sql").read_text()
+    return "\n".join(line for line in text.splitlines() if not line.startswith("--")).strip().rstrip(";")
+
+
+def planning_ms(stderr):
+    """The DECIDE planning of each direct run, in milliseconds: the `optimizer.direct.*` spans that share a parent
+    (DECIDB_PROFILE prints a begin and an end event for each span, with its parent's id)."""
+    per_parent = {}
+    for line in stderr.splitlines():
+        if not line.startswith("DECIDB_PROFILE: "):
+            continue
+        event = json.loads(line[len("DECIDB_PROFILE: ") :])
+        if event.get("event") == "end" and event["name"].startswith("optimizer.direct."):
+            per_parent[event["parent"]] = per_parent.get(event["parent"], 0.0) + event["duration_ms"]
+    return list(per_parent.values())
+
+
+def profile_pair(db, direct_sql, hand_sql, threads, repeats, timeout, scratch):
+    """Runs both sides in one process. Returns {side: {"cpu": ms, "latency": ms}}, "planning" (ms, the direct side's) and
+    "answers" (the first run's CSV line of each side), or {"status": ...} when a run failed."""
+    setting = f"SET threads={threads}; " if threads else ""
+    lines = [
+        setting + "SET decide_direct_solve='require';",
+        direct_sql,  # the first run of each side is not timed: it reads the table in
+        hand_sql,
+    ]
+    for side, sql in (("direct", direct_sql), ("hand", hand_sql)):
+        for i in range(repeats):
+            lines.append(f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{scratch}/{side}{i}.json';")
+            lines.append(sql)
+            lines.append("PRAGMA disable_profiling;")
+    env = {k: v for k, v in os.environ.items() if k not in ("DECIDB_FORCE_SOLVER", "DECIDB_BENCH", "DECIDB_TIME_LIMIT")}
+    env["DECIDB_PROFILE"] = "1"
+    try:
+        proc = subprocess.run(
+            [str(BINARY), str(db), "-readonly", "-noheader", "-csv"],
+            input="\n".join(lines),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout"}
+    quiet = "\n".join(line for line in proc.stderr.splitlines() if not line.startswith("DECIDB_PROFILE: "))
+    if proc.returncode != 0 or BENCH_ERROR.search(quiet + proc.stdout):
+        return {"status": "error", "detail": (quiet + proc.stdout).strip()[:300]}
+    result = {}
+    for side in ("direct", "hand"):
+        profiles = [json.loads((Path(scratch) / f"{side}{i}.json").read_text()) for i in range(repeats)]
+        result[side] = {
+            "cpu": min(p["cpu_time"] for p in profiles) * 1000,
+            "latency": min(p["latency"] for p in profiles) * 1000,
+        }
+    result["planning"] = min(planning_ms(proc.stderr)[1:] or [0.0])  # the first run is cold
+    result["answers"] = proc.stdout.strip().splitlines()[:2]
+    return result
+
+
+def answers_differ(direct_line, hand_line):
+    """(identical, relative difference) of two result lines `count,sum,objective`."""
+    if direct_line == hand_line:
+        return True, 0.0
+    worst = 0.0
+    for a, b in zip(direct_line.split(","), hand_line.split(",")):
+        x, y = float(a), float(b)
+        worst = max(worst, abs(x - y) / max(1.0, abs(x), abs(y)))
+    return False, worst
+
+
+def compare(args):
+    """The sweep's replacement under `--compare`: both sides of each query, best of `args.repeats`."""
+    import tempfile
+
+    print(f"machine load at start: {os.getloadavg()[0]:.2f} (1 minute)", file=sys.stderr)
+    rows, failed = [], False
+    header = [
+        "query",
+        "sf",
+        "direct CPU ms",
+        "hand CPU ms",
+        "CPU ratio",
+        "direct latency ms",
+        "hand latency ms",
+        "DECIDE planning ms",
+        "threads: direct 1t/all",
+        "threads: hand 1t/all",
+        "answers",
+    ]
+    print("| " + " | ".join(header) + " |")
+    print("|---" + "|---:" * (len(header) - 1) + "|")
+    for sf in sorted(args.sf):
+        db = args.db_dir / f"tpch_sf{sf}.db"
+        prepare(db, sf)
+        warm(db)
+        for name in args.queries:
+            body, decision, objective = load_query(name)
+            parent = f"SELECT COUNT(*), SUM({decision}), {objective} FROM (%s) q;"
+            direct_sql, hand_sql = parent % body, parent % load_hand(name)
+            with tempfile.TemporaryDirectory() as scratch:
+                all_threads = profile_pair(db, direct_sql, hand_sql, None, args.repeats, args.timeout, scratch)
+                one_thread = profile_pair(db, direct_sql, hand_sql, 1, args.repeats, args.timeout, scratch)
+            if "status" in all_threads or "status" in one_thread:
+                bad = all_threads if "status" in all_threads else one_thread
+                print(f"| {name} | {sf} | {bad['status']}: {bad.get('detail', '')} |")
+                failed = True
+                continue
+            identical, difference = answers_differ(*one_thread["answers"])
+            answers = "identical" if identical else f"differ by {difference:.1e}"
+            if difference > 1e-9:
+                failed = True
+            d, h = all_threads["direct"], all_threads["hand"]
+            row = [
+                name,
+                sf,
+                f"{d['cpu']:.1f}",
+                f"{h['cpu']:.1f}",
+                f"{d['cpu'] / h['cpu']:.2f}",
+                f"{d['latency']:.1f}",
+                f"{h['latency']:.1f}",
+                f"{all_threads['planning']:.2f}",
+                f"{one_thread['direct']['latency'] / d['latency']:.2f}",
+                f"{one_thread['hand']['latency'] / h['latency']:.2f}",
+                answers,
+            ]
+            rows.append(row)
+            print("| " + " | ".join(str(c) for c in row) + " |")
+            sys.stdout.flush()
+    print(f"machine load at end: {os.getloadavg()[0]:.2f} (1 minute)", file=sys.stderr)
+    sys.exit(1 if failed else 0)
 
 
 def run(db, mode, sql, timeout):
@@ -245,7 +395,12 @@ def main():
     parser.add_argument("--sf", nargs="+", type=float, default=list(SCALE_FACTORS), help="TPC-H scale factors")
     parser.add_argument("--queries", nargs="+", choices=names, default=names)
     parser.add_argument("--modes", nargs="+", choices=MODES, default=list(DEFAULT_MODES))
-    parser.add_argument("--repeats", type=int, default=3, help="runs of every mode per cell (median is reported)")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help="runs of every mode per cell (median is reported; 3), or of each side of --compare (best is reported; 5)",
+    )
     parser.add_argument(
         "--repeat-budget", type=float, default=1800.0, help="a run past this many seconds is its cell's last"
     )
@@ -257,7 +412,19 @@ def main():
         help="run a solver at a size only if its median at the previous (smaller) size took at most this long",
     )
     parser.add_argument("--db-dir", type=Path, default=DB_DIR)
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="run each query's direct plan beside its comparator in hand/ (best of --repeats, one process) instead of "
+        "the sweep; --modes is not used",
+    )
     args = parser.parse_args()
+    if args.repeats is None:
+        args.repeats = 5 if args.compare else 3
+    if args.compare:
+        if not BINARY.exists():
+            parser.error(f"build the release CLI first: {BINARY}")
+        compare(args)
     if "direct" not in args.modes:
         parser.error("--modes must include direct, the baseline every speedup and objective is measured against")
     if not BINARY.exists():
