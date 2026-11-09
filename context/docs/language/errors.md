@@ -21,7 +21,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A removed spelling | parse (`D.x`: bind) | names the new spelling (§3) |
 | `OR` between constraints | bind | `SUCH THAT: OR is not supported.` |
 | A comparison, `BETWEEN` or conjunction that reads a decision, used as a number (`x <= (x > 1)`) | bind | `SUCH THAT does not support '(x > 1)'` (`SUM expression` / `MAXIMIZE` inside a reducer / the objective) |
-| A column of an outer query (`LATERAL`, a scalar subquery in another query's select list), in any clause or the `WHERE` | bind | `DECIDE: 'k' refers to an outer query, which a DECIDE cannot read; to solve per group, join that table into this query's FROM and write the clause with per` |
+| A column of an outer query (`LATERAL`, a scalar subquery in another query's select list), in any clause or the `WHERE` | bind | `DECIDE: 'o.k' refers to an outer query, which a DECIDE cannot read; to solve per group, join that table into this query's FROM and write the clause with per` |
 | `by` after a call other than `SUM`, `AVG`, `MIN`, `MAX`, `norm`, `count` | bind | `DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count` |
 | `when` or `per` inside a call other than `SUM`, `AVG`, `MIN`, `MAX` | bind | `DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint or inside a reducer` |
 | A decision in a `when`, a key or a `by` | bind | `DECIDE: x is a decision; when, per and by may only use data` |

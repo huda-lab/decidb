@@ -221,8 +221,8 @@ data and unaffected.
   outer bound. A refusal of the inner query reaches the user as its own message.
 - **Outer queries**: a DECIDE solves one problem, so it cannot read a column of an outer query (a `LATERAL` subquery,
   or a scalar subquery in another query's select list), in any clause or its `WHERE`. The message names the column
-  and points to joining that table into the FROM and writing the clause with `per`; when the column sits inside a
-  reducer, it quotes the reducer.
+  as written, inside a reducer or a `when`, `per` or `by` too, and points to joining that table into the FROM and
+  writing the clause with `per`.
 - **NULL**: a NULL data value is skipped where it is read, never read as a zero (deck pp. 50, 56). A reducer skips a
   row whose summand is NULL, as SQL does: `SUM(w * x)` leaves out the rows where `w` is NULL, `SUM(a*x + b*y)` drops
   the row's whole summand when `a` is NULL, and `AVG(w * x)` divides by the rows it kept. A NULL that reaches a

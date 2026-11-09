@@ -385,7 +385,7 @@ rank window or a verified, streamed plan) and run on the same two central files.
     test of a group-bound input (`direct_plan_fragments.cpp`); and `ref.depth == 0` in `DirectReferencesOnlySource`
     (`direct_expression.cpp`), which every caller's determinism check rules out but the function's contract promises
     on its own. A `per` key cannot be an expression, a `when` or `by` reading a decision is refused earlier, and an
-    outer reference does not plan (BIND-1).
+    outer reference is refused by the binder.
   - **The canonicalizer's promise that a reducer's data is guarded:** the second operand of A1's `IsConstantProblem`
     (`!constant_values(inner.constant)`, `!term.value->IsFoldable()`); any non-foldable data in a reducer makes the
     canonicalizer guard every coefficient, so the first operand returns first.

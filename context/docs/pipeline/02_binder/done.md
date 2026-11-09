@@ -93,7 +93,8 @@ never an outer query, whose column would be one constant per run of this one:
    S.depotID or D.depotID in the per key"*), else the one relation that has it
    (DuckDB's ambiguity error otherwise).
 3. A relation (`R`, `S.R`, `C.S.R`), standing for its stored columns.
-4. Otherwise *"DECIDE: depot is neither a column nor a relation of the FROM clause"*.
+4. A column of an outer query: the outer-query refusal (§ the outer-query refusal below).
+5. Otherwise *"DECIDE: depot is neither a column nor a relation of the FROM clause"*.
 
 `rowid` and a generated column are not stored columns: named, they are an error;
 inside a relation, they are skipped. Columns are registered through
@@ -353,21 +354,27 @@ is not taken for a scope written inside a subquery.
 
 A DECIDE inside a subquery reports its own refusal. When an expression fails to bind in a
 subquery, DuckDB retries it in each outer query, in case it refers to one, and reports the
-retry's error, so an inner *"SUCH THAT: OR is not supported"* would reach the user as the
-outer *"Referenced column "y" not found"*. Only a missing name can be an outer reference,
-so `DecideBinder::ThrowClauseError` throws any other error at the clause's root, before
-the retry; a column or table not found (`COLUMN_NOT_FOUND`, `TABLE_NOT_FOUND`) goes on to
-it. `BindContext` marks a table not found with `TABLE_NOT_FOUND` for this.
+retry's error. That retry binds the clause in a binder that knows no DECIDE construct: an
+inner *"SUCH THAT: OR is not supported"* would reach the user as the outer *"Referenced
+column "y" not found"*, and a missing name inside a `when` as an unknown function
+`__scope_when__`. A clause reads no outer query (below), so the retry has nothing to find:
+`DecideBinder::ThrowClauseError` throws every error at the clause's root, before it.
 
 A DECIDE cannot read a column of an outer query, in any clause or in its `WHERE`: it solves
-one problem, and re-solving it per outer row is not built. At the end of `BindSelectNode`,
-a DECIDE query whose binder holds a correlated column is refused, naming it: *"DECIDE: 'k'
-refers to an outer query, which a DECIDE cannot read; to solve per group, join that table
-into this query's FROM and write the clause with per"*. A subquery inside a clause that is
-correlated to the DECIDE's own rows keeps that correlation on its own binder, so it is not
-caught. A clause reaches the outer column through the retry above (a column or a table not
-found); when the column sits inside a reducer, SQL binds the whole aggregate in the outer
-query, and the message quotes the reducer.
+one problem, and re-solving it per outer row is not built. The refusal is raised at the
+column, where it fails to resolve in the query's own bind context: `DecideBinder` overrides
+`QualifyColumnName`, and the per-key resolver (`ResolveKeyElement`) calls the same helper,
+`ThrowIfOuterColumn`. The helper asks each active binder only to qualify the name, as
+DuckDB's retry does, and binds nothing there; if one resolves it, the column is refused as
+written: *"DECIDE: 'o.cap' refers to an outer query, which a DECIDE cannot read; to solve per
+group, join that table into this query's FROM and write the clause with per"*. So every
+construct (a scope's `when` or `per`, a reducer's `when`, `per` or `by`, the objective, a
+declaration's `per`) gives that one message, and a reducer over an outer column names the
+column, not the reducer. A name no binder resolves keeps DuckDB's *"Referenced column ...
+not found"*. The `WHERE` is bound by DuckDB's own binder, so at the end of `BindSelectNode`
+a DECIDE query whose binder still holds a correlated column is refused with the same
+message, naming the column. A subquery inside a clause that is correlated to the DECIDE's
+own rows resolves that column in the DECIDE's binder, so it is not refused.
 
 Correlation is observed later, in
 `plan_select_node.cpp`, at the only point where it is still visible — see
@@ -607,7 +614,7 @@ the select list is bound before any exists, so an auxiliary never appears in
 | Degree, and the check that refuses on it (stage 04) | `src/planner/decide/decide_product_form.cpp`, `decide_shape_check.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
-| Refusing a DECIDE that reads an outer query | `src/planner/binder/query_node/bind_select_node.cpp` |
+| Refusing a DECIDE that reads an outer query (`ThrowIfOuterColumn`; the `WHERE` backstop in `BindSelectNode`) | `src/planner/expression_binder/decide/decide_binder.cpp`, `src/planner/binder/query_node/bind_select_node.cpp` |
 | Which parts of a query a walk visits (`decide_clauses`) | `src/parser/parsed_expression_iterator.cpp` |
 | Key scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |
