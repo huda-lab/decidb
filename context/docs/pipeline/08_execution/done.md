@@ -169,13 +169,14 @@ does (P6).
   group's rank is flat's group number: NULL sorts after every value, as `ORDER BY` places it.
 - *Coverage*: a query is covered when every shape it has has an arm in the model emitter
   (`DecideModelEmitter::Uncovered`, keyed on what stage 06 reads of the clauses and the query: products, squares, a
-  tightest bound, an extremum, the objective's squares, products, MIN/MAX and composed terms, composed clauses, links,
-  frames, product links) and the tree computes a value for every node (`DecideTreeColumns::Uncomputed`, an interim
-  predicate apart from the shapes: a read of a frame, a norm's fold, a read of a decision-valued child where only data
-  is computed, a hidden root other than a data check). The arms today are a clause with a model row per kept row, or per
-  variant of a class of its `per K:`, the folded bounds' rows a repair model emits, the declared decisions' classes and
-  a relation-qualified reducer's, the objective's linear terms, a clause in the aggregate shape, a `<>` clause, a row
-  defining an auxiliary and the classes a diagnosis reports a row stands for. A covered query runs `EvaluateTree` and
+  tightest bound, the objective's squares and products, links, frames, product links) and the tree computes a value for
+  every node (`DecideTreeColumns::Uncomputed`, an interim predicate apart from the shapes: a read of a frame, a norm's
+  fold, a read of a decision-valued child where only data is computed, a hidden root other than a data check). The arms
+  today are a clause with a model row per kept row, or per variant of a class of its `per K:`, the folded bounds' rows a
+  repair model emits, the declared decisions' classes and a relation-qualified reducer's, the objective's linear terms,
+  a clause in the aggregate shape, a `<>` clause, a row defining an auxiliary, the classes a diagnosis reports a row
+  stands for, an easy and a hard MIN or MAX, a MIN or MAX objective, and a composed clause and the objective's composed
+  terms. A covered query runs `EvaluateTree` and
   then flat's tail (`BuildSolverInput`, `FormulateModel`, the solve); one that is not takes
   `FinalizeWithTreeFormulator`, the interim path of the next two bullets, which the profile counter
   `execution.tree_fallback` counts.
@@ -211,8 +212,15 @@ does (P6).
   `when`, before every term, window by window, by the first term its node holds (`DecideNode::filter_group`), the
   reducer's own `when`, which the descent reads, then its member tests. A grouped clause's root and its G's of the `by`
   key read the key in the grouping block (`DecideNode::key_block`), element by element, after the terms: a row the key
-  raises on, or leaves in no group, still reaches the terms, whose errors rank first. A value error is found by reading
-  its window entry by entry.
+  raises on, or leaves in no group, still reaches the terms, whose errors rank first. Flat reads a composed clause's
+  terms one after another, each over every row before the next, after every term's filter: a composed term's programs
+  rank in its part (`DecideErrorRank::part`, the term's place, which ranks before the block). It reads those filters
+  window by window, term by term, each with the clause's `when` in front of its own (`ScopeComposedTerms`): the
+  clause's `when` is read in the filter block at the terms' rank, in group 0, and each term's filter, its `when` and
+  member tests, in the group after its predecessor's (`PartComposed`), so a term's error in an earlier window ranks
+  before the `when`'s in a later one. The objective's `when` is read so too where its composed terms alone carry it,
+  flat's objective having no term to read it with (`LogicalDecide::retained_objective_when`), unless its scope check
+  reads it first (D72). A value error is found by reading its window entry by entry.
 - *Formulation, covered* (`decide_model_emitter.hpp`): the model emitter, an Adapter onto stage 06, writes what
   `PhysicalDecide::Evaluate` writes for the model, gstate's evaluated clauses and the keyed mappings, in flat's order,
   through flat's own blocks (`InitializeEvaluatedConstraint`, `DescribeBound`, `SkipNullInstances`, `CountInstances`),
@@ -250,10 +258,33 @@ does (P6).
   definition reads a NULL unreduced or a decision with no instance (`absent_reads`, D88): the definitions are read in
   `eval_order`, which puts what defines a decision before what reads it, and a row reading an auxiliary with no value
   skips its instance, as the objective drops its term there. A `<>` clause's rows are flat's, and an AVG under `<>`
-  multiplies its bound by its group's count (`HoistAvgIntoNotEqualBound`). Two of flat's rules have no arm yet, since no
-  covered query reaches them: in the aggregate shape a reducer's member reading an auxiliary with no value, which flat
-  skips the group for (`MarkAbsentDecisionReads`; a covered member's NULL test drops it first, and a value link's
-  absence needs the links' arm), and a tightest frame bound (`TakeTightestFrameBound`), which reads a frame. Three
+  multiplies its bound by its group's count (`HoistAvgIntoNotEqualBound`). An easy MIN or MAX, which its direction
+  drives (`DecideConstraint::was_minmax_easy`), is a clause in the grouped shape: a model row per member of its G,
+  grouped by its `by` key, whose terms are read as written on the member's own row, not counted once in its group. Its
+  bound on one decision is admitted on each member (`DecideModelEmitter::Admit`), an entry of its term's site, the
+  reducer's operand, whose filter (`admitted_member`) the descent routes, so no program tests it; a row no member stands
+  on emits no model row, so what flat admits there, every value, is never read. An admitted end is never NULL, since a
+  NULL coefficient or bound admits every value (`DecideReadSingletonRow`): flat's marking of a row whose end is NULL is
+  reached by no query, so the tree has none, and a NULL end is an internal error. A hard MIN or MAX
+  (`minmax_clause_idx`) hands stage 06 its groups' rows, over which stage 06 builds the extremum and the outer row it
+  stamps USER_PARAMETER. A MIN or MAX over a relation's classes reads every row an entry of its operand stands for, as
+  flat reads each a member: stage 05 gives its terms no qualifier, since a class's repeats carry its value
+  (`ReadRows`). A MIN or MAX objective's members are the rows its terms' filters keep, which stage 06 reads. A composed
+  clause's root holds each term's G (`DecideBody::composed`), and each term is a column over its G's members, a
+  relation-qualified one's first row of each class, with flat's name and label (`DecideComposedTerm`). A qualified
+  term's operand is the one its scope's keyed mapping reads, as a written reducer's and a helper's are
+  (`DecideTreeBuilder::Qualified`), so a scope whose classes its values split (D70) has them. A term's factor is one
+  value for the whole query, read as flat reads it, on the input's first chunk, which the descent's one scan keeps,
+  whatever the clause keeps (`DecideQueryWideScale`). A NULL factor or a reducer over no row skips the clause
+  (`DecideComposedTermReadsNoRow`); its one instance holds where its `when` keeps a row, the rows its root holds, and
+  under DIAGNOSE it stands for the classes of its `per K:` among those rows, by flat's own tail
+  (`PhysicalDecide::FinishComposedClause`); the objective drops a composed term over no row. A composed
+  term's G names its clause in a message, as its root does (`DecideNode::source_clause_id`). Three of flat's rules have
+  no arm yet, since no covered query reaches them: in the aggregate shape a reducer's member reading an auxiliary with
+  no value, which flat skips the group for (`MarkAbsentDecisionReads`; a covered member's NULL test drops it first, and
+  a value link's absence needs the links' arm), a tightest frame bound (`TakeTightestFrameBound`), which reads a frame,
+  and flat's leaving out of a hard MIN's or MAX's group a row its terms' filters all drop (its terms share one
+  reducer's members, so no row the tree emits is one). Three
   differences are open, each where no covered query is known to reach it: an objective term reads an auxiliary's absence
   at its entry's first row rather than on each row the entry stands for (`ReadEntries`), which differs where the absence
   varies inside an entry; a variant whose first row D88 moves to a later row of its entry is named by the entry's first
@@ -291,7 +322,10 @@ covered, which is how a suite run counts what the tree covers. Profile counters
 each shape with no arm, flat's model and flat's error, the objective's reads, the aggregate shape's rows, the data
 reducers, the reducers' filters, the `by` key's rank, the rows in no group, the interim's blocks, the rows per class and
 variant, the classes a diagnosis reports, a qualified reducer's split classes and its rows in no class, a variant's
-names as written, an auxiliary's absence, a definition's error ranks and `<>`) and `test_evaluator_verify.py`.
+names as written, an auxiliary's absence, a definition's error ranks, `<>`, an easy and a hard MIN or MAX, a MIN or MAX
+objective, the rows a reducer over a relation's classes reads, a composed clause and objective, their qualified terms
+and their errors, and a composed `when`'s place among its terms' filters) and
+`test_evaluator_verify.py`.
 
 ## 2. The folded variable box
 
