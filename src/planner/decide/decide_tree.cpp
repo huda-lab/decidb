@@ -320,7 +320,7 @@ public:
 	//! The bodies from what stage 05 lowered, then the order and ranks they read.
 	unique_ptr<DecideTree> Finish() {
 		sources.link_nodes = link_nodes;
-		CompileDecideTree(op, *tree, sources);
+		CompileDecideTree(context, op, *tree, sources);
 		PostOrder();
 		ErrorRanks();
 		tree->Validate();
@@ -1157,6 +1157,19 @@ void DecideTree::Validate() const {
 			if (read.node >= nodes.size() || read.column != input_column_count + read.node) {
 				throw InternalException("DECIDE tree body has an invalid child result");
 			}
+		}
+		// A program reads its node's layout, then the results of its arguments, and no column of a plan.
+		for (auto &program : node.programs) {
+			const auto width = node.columns.size() + node.program_columns.size() + program.arguments.size();
+			std::function<void(const Expression &)> check = [&](const Expression &expression) {
+				if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+				    (expression.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+				     expression.Cast<BoundReferenceExpression>().index >= width)) {
+					throw InternalException("DECIDE tree node %llu has a program reading outside its layout", i);
+				}
+				ExpressionIterator::EnumerateChildren(expression, check);
+			};
+			check(*program.expression);
 		}
 	}
 	for (auto root : roots) {

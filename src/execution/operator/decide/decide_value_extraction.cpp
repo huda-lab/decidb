@@ -20,6 +20,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 
 #include <algorithm>
@@ -34,7 +35,13 @@ namespace duckdb {
 // BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
 // evaluate expressions against data chunks (which use positional indices).
 
-unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context) {
+unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context, const DecideChunkLeaf &leaf) {
+	if (leaf) {
+		auto mapped = leaf(expr);
+		if (mapped) {
+			return mapped;
+		}
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
@@ -42,7 +49,7 @@ unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		vector<unique_ptr<Expression>> new_children;
 		for (auto &child : func.children) {
-			new_children.push_back(ToChunkReferences(*child, context));
+			new_children.push_back(ToChunkReferences(*child, context, leaf));
 		}
 		unique_ptr<FunctionData> new_bind_info;
 		if (func.bind_info) {
@@ -52,7 +59,7 @@ unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &
 		                                                           std::move(new_children), std::move(new_bind_info));
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
-		auto transformed_child = ToChunkReferences(*cast.child, context);
+		auto transformed_child = ToChunkReferences(*cast.child, context, leaf);
 		return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type,
 		                                          cast.try_cast);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
@@ -61,25 +68,31 @@ unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &
 		throw InternalException("DECIDE: a reducer reached row evaluation: %s", expr.ToString());
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
-		auto left = ToChunkReferences(*comp.left, context);
-		auto right = ToChunkReferences(*comp.right, context);
+		auto left = ToChunkReferences(*comp.left, context, leaf);
+		auto right = ToChunkReferences(*comp.right, context, leaf);
 		return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
 		for (auto &child : conj.children) {
-			result->children.push_back(ToChunkReferences(*child, context));
+			result->children.push_back(ToChunkReferences(*child, context, leaf));
 		}
 		return std::move(result);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
 		auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
 		for (auto &child : op_expr.children) {
-			result->children.push_back(ToChunkReferences(*child, context));
+			result->children.push_back(ToChunkReferences(*child, context, leaf));
 		}
 		return std::move(result);
 	} else {
-		return expr.Copy();
+		auto copy = expr.Copy();
+		if (leaf) {
+			// Another layout maps every leaf, so the children of a node copied whole are mapped too.
+			ExpressionIterator::EnumerateChildren(
+			    *copy, [&](unique_ptr<Expression> &child) { child = ToChunkReferences(*child, context, leaf); });
+		}
+		return copy;
 	}
 }
 

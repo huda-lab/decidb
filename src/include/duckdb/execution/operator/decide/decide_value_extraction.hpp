@@ -22,10 +22,16 @@ namespace duckdb {
 class ClientContext;
 struct DecideSourceNames;
 
+//! Maps a node of an expression into another chunk layout, or returns null to leave it to ToChunkReferences.
+using DecideChunkLeaf = std::function<unique_ptr<Expression>(const Expression &expr)>;
+
 //! Transform a coefficient/value expression for ExpressionExecutor.
 //! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_COMPARISON,
 //! BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
-unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context);
+//! With `leaf`, every node is offered to it first, and the children of a node copied whole are transformed too: the
+//! tree's programs (CompileDecideTree) are rebuilt by these rules over their node's layout.
+unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context,
+                                         const DecideChunkLeaf &leaf = nullptr);
 
 //! `expr` constant-folded once by DuckDB's own rule, as the expression rewriter folds a query's own expressions.
 unique_ptr<Expression> DecideFoldConstants(unique_ptr<Expression> expr, ClientContext &context);

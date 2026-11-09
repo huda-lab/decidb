@@ -7,9 +7,11 @@ import os
 import re
 import subprocess
 
+import pytest
+
 ROWS = "(VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', 5.0, 1.0, false), (3, 'b', 1.0, 4.0, true)) t(id, g, c, w, p)"
 
-TERM = re.compile(r"^\s+(term|inner) (\d+) var=(-?\d+) child=(-?\d+) site=(-?\d+) label=(.*)$")
+TERM = re.compile(r"^\s+(term|inner) (\d+) var=(-?\d+) child=(-?\d+) site=(-?\d+) program=(-?\d+) label=(.*)$")
 
 
 def run(cli, sql, **env):
@@ -53,7 +55,8 @@ def dumps(cli, sql, **env):
                     "var": int(term[3]),
                     "child": int(term[4]),
                     "site": int(term[5]),
-                    "label": term[6],
+                    "program": int(term[6]),
+                    "label": term[7],
                 }
             )
     return texts, blocks
@@ -221,3 +224,138 @@ def test_flat_dumps_the_bodies_of_the_tree_a_dump_requests(decidb_cli):
     assert result.returncode == 0, result.stderr
     bodies = result.stderr.split("DECIDB_BODIES_BEGIN\n", 1)[1].split("DECIDB_BODIES_END", 1)[0]
     assert re.search(r"(?m)^node \d+ clause 0 rank=constraints:0$", bodies), bodies
+
+
+NULL_ROWS = "(VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', NULL, 1.0, false), (3, 'b', 1.0, 4.0, true)) t(id, g, c, w, p)"
+
+
+def decide(rows, decisions, clauses, objective="MAXIMIZE sum(x)"):
+    return f"SELECT id FROM {rows} DECIDE {decisions} SUCH THAT {clauses} {objective}"
+
+
+#: One query per branch of the program compile (CompileDecideTree), with the line of the bodies dump it must print.
+#: Programs read their node's layout: its carried columns (#0, ...), then its program columns.
+PROGRAMS = {
+    # A coefficient reads a source column its site carries, by its place among them.
+    "a-carried-column": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND sum(t.c * x) by (t.g) <= 5"),
+        r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=1 ",
+    ),
+    # A query-wide scale is read on the operand of the reducer it scales, which does not carry it: a program column,
+    # which the coefficient's input then finds there.
+    "a-program-column": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND (SELECT 2.0) * sum(t.c * x) by (t.g) <= 5"),
+        r"column #1 reads input \d+\n  program 0 COEFFICIENT expr=\"\*\"\(CAST\(#1 AS DOUBLE\), CAST\(#0 AS DOUBLE\)\)"
+        r"[^\n]*\n  program 1 VALUE expr=CAST\(#1 AS DOUBLE\) ",
+    ),
+    # A clause's bound is a program on its root.
+    "a-bound": (
+        decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9 AND x + y <= t.c", "MAXIMIZE sum(x + y)"),
+        r"program \d+ BOUND expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=2 group=0 position=0 ",
+    ),
+    # A bound that reads a frame and may differ within a group is the tightest one there (D85): a role of its own.
+    "a-tightest-bound": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND sum(x) by (t.g) <= at(previous else 10: t.c) over (t.id within t.g)"),
+        r"program 0 TIGHTEST_BOUND .* stage=2 group=0 position=0 ",
+    ),
+    # An admitted bound computes a and r, then each end over the row and those two, read after the layout: r is #2
+    # beside the one carried column (a, a constant, is in the ends already). It names its bound.
+    "admitted-ends": (
+        decide(ROWS, "x(REAL)", "x <= t.c"),
+        r"bound rhs=1 admits=-1 lower=4 upper=5\n(?:.*\n)*  program 4 BOUND expr=[^\n]*\(\(#2 IS NULL\)\)[^\n]* "
+        r"written=CAST\(c AS DOUBLE\) stage=2 group=0 position=4 owner=0 arguments=2,3\n",
+    ),
+    # An easy extremum's admitted bound applies to its members, so it is computed on them, its `when` first.
+    "admitted-members": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND min(when t.p: x) >= -5"),
+        r"bound rhs=0 admits=1 lower=4 upper=5\n(?:.*\n)*?node \d+ entries\n  column #0 reads input \d+\n"
+        r"[^\n]*\n  program 1 ADMITS expr=#0 written=p stage=2 group=0 position=1 ",
+    ),
+    # A member test is a program on its node.
+    "a-member-test": (
+        decide(NULL_ROWS, "x(REAL)", "x <= 9 AND sum(t.c * x) <= 5"),
+        r"program \d+ TEST expr=\(#0 IS NOT NULL\) written=\(c IS NOT NULL\) stage=0 group=0 position=0 owner=-1",
+    ),
+    # A member test that reads a child result has no program yet.
+    "a-member-test-reads-a-child": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND sum(t.w * x * max(t.c) by (t.g)) <= 9"),
+        r"uncompiled: a member test reads a child",
+    ),
+    # A read of a data reducer, and of a frame, has no value yet: a NULL, printed as computed, not by its alias.
+    "a-data-reducer": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x <= max(t.c) by (t.g)"),
+        r"program 1 BOUND expr=CAST\(CASE  WHEN \(\(#0 IS NULL\)\) THEN \(NULL\) ELSE NULL END AS DOUBLE\) "
+        r"[^\n]*\n(?:.*\n)*  uncompiled: reads a data reducer\n",
+    ),
+    "a-frame": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x - at(previous: x) over (t.id) <= 1"),
+        r"uncompiled: reads a frame",
+    ),
+    # A body that reads a frame in a term and a data reducer in its bound names the first.
+    "the-first-reason": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x - at(previous: x) over (t.id) <= max(t.c) by (t.g)"),
+        r"uncompiled: reads a frame\n",
+    ),
+    # The objective's squared terms follow its terms.
+    "objective-squares": (
+        decide(ROWS, "x(REAL)", "x <= 9", "MINIMIZE sum(power(x - t.c, 2)) + sum(t.w * x)"),
+        r"program 1 COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=1 group=0 position=2 ",
+    ),
+    # A helper's members are computed on its operand, a frame helper's else terms on its O after its members.
+    "helper-members": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND sum(max(t.w * x) by (t.g)) <= 5"),
+        r"members rank=links:0\n  term 0 var=0 child=-1 site=(\d+) program=0 [^\n]*\nnode \1 entries\n"
+        r"  program 0 COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(w AS DOUBLE\) stage=1 ",
+    ),
+    "frame-else": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x <= sum(from previous to next else t.w: x) over (t.id)"),
+        r"  fallback\n    term 0 var=-1 child=-1 site=(\d+) program=1 [^\n]*\n(?:.*\n)*?  program 1 COEFFICIENT "
+        r"expr=NULL [^\n]* stage=1 group=0 position=1 ",
+    ),
+}
+
+
+#: The branches whose query squares or multiplies decisions, which needs Gurobi: the solver check refuses such a query
+#: before the tree's bodies are built, so these run through decidb_cli_gurobi, which skips without it.
+GUROBI_PROGRAMS = {
+    # A product's coefficient of 1 is left out by stage 05, so it has no program; a data one has.
+    "a-product-of-one": (
+        decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9 AND x * y <= 10", "MAXIMIZE sum(x + y)"),
+        r"product 0 vars=0,1 child=-1 site=\d+ program=-1",
+    ),
+    "a-product-coefficient": (
+        decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9 AND t.c * x * y <= 10", "MAXIMIZE sum(x + y)"),
+        r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=3 ",
+    ),
+    # A square's query-wide scale is a program on its root; an unscaled square has none.
+    "a-square-scale": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND (SELECT 2.0) * sum(power(x - t.c, 2)) <= 50"),
+        r"square 0 child=\d+ sign=1 scale=1\n(?:.*\n)*  program 1 VALUE expr=CAST\(#0 AS DOUBLE\) [^\n]* stage=4 group=0",
+    ),
+    "a-square-unscaled": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND sum(power(x - t.c, 2)) <= 50"),
+        r"square 0 child=\d+ sign=1 scale=-1",
+    ),
+    # The objective's products are their own block.
+    "objective-product": (
+        decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9", "MAXIMIZE sum(t.c * x * y)"),
+        r"program 0 COEFFICIENT expr=COALESCE\(CAST\(#0 AS DOUBLE\), 0.0\) [^\n]* stage=3 group=0 position=0 ",
+    ),
+}
+
+
+def assert_compiled(cli, sql, line):
+    result = run(cli, sql)
+    assert "DECIDB_BODIES_BEGIN" in result.stderr, result.stderr
+    bodies = result.stderr.split("DECIDB_BODIES_BEGIN\n", 1)[1].split("DECIDB_BODIES_END", 1)[0]
+    assert re.search(line, bodies), bodies
+
+
+@pytest.mark.parametrize("case", list(PROGRAMS))
+def test_a_program_is_compiled_on_its_site(decidb_cli, case):
+    assert_compiled(decidb_cli, *PROGRAMS[case])
+
+
+@pytest.mark.parametrize("case", list(GUROBI_PROGRAMS))
+def test_a_quadratic_program_is_compiled_on_its_site(decidb_cli_gurobi, case):
+    assert_compiled(decidb_cli_gurobi, *GUROBI_PROGRAMS[case])

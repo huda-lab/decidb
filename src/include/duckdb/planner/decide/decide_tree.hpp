@@ -32,9 +32,38 @@ struct DecideTreeRead {
 	bool decision_value;
 };
 
-//! Where one term of a body is computed (language/guide.md §6.1): the E or O whose entries it ranges over.
+//! Where one term of a body is computed (language/guide.md §6.1): the E or O whose entries it ranges over, its
+//! coefficient's program there, and the programs of the values it is computed from, which only a message reads.
 struct DecideTermSite {
 	idx_t node = DConstants::INVALID_INDEX;
+	//! Into the site's programs; INVALID for a coefficient of 1 that stage 05 left out (a product's).
+	idx_t program = DConstants::INVALID_INDEX;
+	vector<idx_t> inputs;
+};
+
+//! What a program computes on a node's entries: a term's coefficient, a bound (a tightest frame bound's own, whose NULL
+//! bounds nothing rather than leaving its instance without a value, D85), a member test, the rows an admitted bound
+//! applies to, or a value something else reads (a coefficient's inputs, an admitted bound's a and r, a square's scale).
+enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TEST, ADMITS, VALUE };
+
+//! An expression a node's entries compute (language/guide.md §6.1), over the node's layout: its carried columns, then
+//! its program columns, then the results of `arguments`. Built by flat's own rules (ToChunkReferences), so it is the
+//! expression flat evaluates, and folded where it is executed, as flat folds it.
+struct DecideProgram {
+	DecideProgramRole role;
+	unique_ptr<Expression> expression;
+	//! What a message names: stage 05's coefficient or bound as written.
+	unique_ptr<Expression> written;
+	int sign = 1;
+	//! The node whose rank its errors take (the holder of its term or bound); INVALID for the node's own.
+	idx_t owner = DConstants::INVALID_INDEX;
+	//! Its place among flat's evaluations of its owner: the block (0 the member tests, 1 the terms, 2 the bound and
+	//! admitted ends, 3 the products, 4 the squares), a square's group, and its order in the block.
+	idx_t stage = 0;
+	idx_t group = 0;
+	idx_t position = 0;
+	//! Programs of the same node whose results an admitted end reads as its inputs a and r (DecideAdmittedInput).
+	vector<idx_t> arguments;
 };
 
 //! f(e1..ep, G1..Gq): stage 05's own records for what a node holds, copied once stage 05 lowered them, so a term keeps
@@ -52,6 +81,16 @@ struct DecideBody {
 	vector<DecideTermSite> linear, products, fallback_sites;
 	//! Per quadratic group (the objective has one, its squared terms), its inner terms' sites.
 	vector<vector<DecideTermSite>> squares;
+	//! Per quadratic group, its scale's program on the holder; INVALID with no scale to compute.
+	vector<idx_t> square_scales;
+	//! A clause's bound, a program on its root, and its admitted ends, programs on its one term's site; INVALID when
+	//! it has none.
+	idx_t rhs = DConstants::INVALID_INDEX;
+	idx_t admits = DConstants::INVALID_INDEX;
+	idx_t lower = DConstants::INVALID_INDEX;
+	idx_t upper = DConstants::INVALID_INDEX;
+	//! What the tree computes no value for yet, the first reason met: the node's query has no arm until it does.
+	string uncompiled;
 	//! The rank flat's evaluation gives the stage-05 list the body was copied from (PhysicalDecide::Evaluate):
 	//! constraints by their place, the objective, composed clauses, then the objective's composed terms.
 	DecideErrorPhase phase = DecideErrorPhase::INVALID;
@@ -121,6 +160,13 @@ struct DecideNode {
 	unique_ptr<DecideConstraint> facts;
 	//! Stage 05's terms for what the node holds (CompileDecideTree).
 	DecideBody compiled;
+	//! What its entries compute, and its member tests among them (TEST programs).
+	vector<DecideProgram> programs;
+	vector<idx_t> tests;
+	//! The source columns its programs read beyond `columns` (a query-wide scale on a reducer's operand), as chunk
+	//! references. They are no field and split no entry; the descent does not carry them on its entries yet, so a
+	//! program that reads one has no value there.
+	vector<unique_ptr<Expression>> program_columns;
 };
 
 struct DecideTree {
@@ -185,9 +231,11 @@ private:
 	unique_ptr<Builder> builder;
 };
 
-//! Binds the clause roots to stage 05's clauses in leaf order, copies stage 05's terms into each node's body and finds
-//! where each is computed; a binding that does not match is an internal error.
-void CompileDecideTree(const LogicalDecide &op, DecideTree &tree, const DecideTreeSources &sources);
+//! Binds the clause roots to stage 05's clauses in leaf order, copies stage 05's terms into each node's body, finds
+//! where each is computed and compiles its coefficient, bounds and member tests into programs there; a binding that
+//! does not match is an internal error.
+void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
+                       const DecideTreeSources &sources);
 
 //! A G's operand: its one SCOPE child.
 idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer);
