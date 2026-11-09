@@ -1,6 +1,7 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
@@ -51,6 +52,64 @@ TEST_CASE("Every expression of a DECIDE tail has the span the user wrote", "[dec
 	REQUIRE(Has(spans, "x BETWEEN 0 AND 1"));
 	REQUIRE(Has(spans, "0"));
 	REQUIRE(Has(spans, "(w + 1) * sum(x)"));
+}
+
+TEST_CASE("A span says how tightly its text binds, as the parser read it", "[decidb]") {
+	// The text is the user's, so its parentheses under an operator depend on the operator written, not on the bound
+	// node (a macro call binds as its expansion, an `if` as a CASE).
+	Parser parser;
+	parser.ParseQuery("SELECT x FROM t DECIDE x(INT) SUCH THAT sum(x) <= 3 MAXIMIZE (w + 1) * sum(x) + if(c, 1, 2) "
+	                  "- x ** 2");
+	auto &select = parser.statements[0]->Cast<SelectStatement>().node->Cast<SelectNode>();
+	duckdb::vector<std::pair<string, int>> found;
+	std::function<void(const ParsedExpression &)> walk = [&](const ParsedExpression &expr) {
+		string text;
+		int binding;
+		if (select.decide_text.CutExpr(expr.GetQueryLocation(), text, binding)) {
+			found.emplace_back(text, binding);
+		}
+		ParsedExpressionIterator::EnumerateChildren(expr, walk);
+	};
+	walk(*select.decide_objective);
+	auto binding_of = [&](const string &text) {
+		for (auto &entry : found) {
+			if (entry.first == text) {
+				return entry.second;
+			}
+		}
+		return -1;
+	};
+	REQUIRE(binding_of("(w + 1) * sum(x) + if(c, 1, 2) - x ** 2") == static_cast<int>(DecideBinding::ADDITIVE));
+	REQUIRE(binding_of("(w + 1) * sum(x)") == static_cast<int>(DecideBinding::MULTIPLICATIVE));
+	REQUIRE(binding_of("x ** 2") == static_cast<int>(DecideBinding::POWER));
+	REQUIRE(binding_of("w + 1") == static_cast<int>(DecideBinding::ADDITIVE));
+	REQUIRE(binding_of("sum(x)") == static_cast<int>(DecideBinding::WHOLE));
+	REQUIRE(binding_of("if(c, 1, 2)") == static_cast<int>(DecideBinding::WHOLE));
+	REQUIRE(binding_of("x") == static_cast<int>(DecideBinding::WHOLE));
+}
+
+TEST_CASE("A comparison, an AND and a CASE bind looser than arithmetic", "[decidb]") {
+	Parser parser;
+	parser.ParseQuery(
+	    "SELECT x FROM t DECIDE x(INT) SUCH THAT sum(x) <= 3 MAXIMIZE sum(x * CASE WHEN a > 1 AND b THEN 1 "
+	    "ELSE 2 END)");
+	auto &select = parser.statements[0]->Cast<SelectStatement>().node->Cast<SelectNode>();
+	duckdb::vector<std::pair<string, int>> found;
+	std::function<void(const ParsedExpression &)> walk = [&](const ParsedExpression &expr) {
+		string text;
+		int binding;
+		if (select.decide_text.CutExpr(expr.GetQueryLocation(), text, binding)) {
+			found.emplace_back(text, binding);
+		}
+		ParsedExpressionIterator::EnumerateChildren(expr, walk);
+	};
+	walk(*select.decide_objective);
+	for (auto text : {"a > 1 AND b", "a > 1", "CASE WHEN a > 1 AND b THEN 1 ELSE 2 END"}) {
+		auto entry =
+		    std::find_if(found.begin(), found.end(), [&](const std::pair<string, int> &e) { return e.first == text; });
+		REQUIRE(entry != found.end());
+		REQUIRE(entry->second == static_cast<int>(DecideBinding::LOOSE));
+	}
 }
 
 TEST_CASE("A parenthesized expression's span leaves the parentheses out", "[decidb]") {

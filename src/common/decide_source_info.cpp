@@ -15,12 +15,23 @@ static string WrittenDecideComparison(const ConstraintSourceInfo &source) {
 	return cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
 }
 
+static constexpr idx_t SPAN_ENTRY_SIZE = 5;
+
 bool DecideSourceText::Cut(optional_idx location, DecideSpanRole role, string &text) const {
+	int ignored;
+	return CutEntry(location, role, text, ignored);
+}
+
+bool DecideSourceText::CutExpr(optional_idx location, string &text, int &binding) const {
+	return CutEntry(location, DecideSpanRole::EXPR, text, binding);
+}
+
+bool DecideSourceText::CutEntry(optional_idx location, DecideSpanRole role, string &text, int &binding) const {
 	if (!location.IsValid() || location.GetIndex() < tail_start) {
 		return false;
 	}
 	if (!indexed) {
-		for (idx_t i = 0; i + 3 < spans.size(); i += 4) {
+		for (idx_t i = 0; i + SPAN_ENTRY_SIZE <= spans.size(); i += SPAN_ENTRY_SIZE) {
 			index.emplace(std::make_pair(spans[i], spans[i + 1]), i);
 		}
 		indexed = true;
@@ -30,6 +41,7 @@ bool DecideSourceText::Cut(optional_idx location, DecideSpanRole role, string &t
 		return false;
 	}
 	text = tail.substr(spans[entry->second + 2], spans[entry->second + 3] - spans[entry->second + 2]);
+	binding = NumericCast<int>(spans[entry->second + 4]);
 	return true;
 }
 

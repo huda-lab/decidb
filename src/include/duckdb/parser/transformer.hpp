@@ -92,8 +92,14 @@ private:
 	//! DeciDB, on the root transformer. The span of every expression of a DECIDE clause, by the parse node the grammar
 	//! decorated (start and end offsets in the parsed query), and by the query location the parsed expression took.
 	//! Two expressions at one location keep the span of the one transformed first, the innermost.
+	struct DecideExprSpan {
+		int start;
+		int end;
+		//! How tightly the parsed node binds (DecideBinding), for a quote to parenthesize by the text it cuts.
+		int binding;
+	};
 	unordered_map<const duckdb_libpgquery::PGNode *, pair<int, int>> decide_expr_nodes;
-	std::map<idx_t, pair<int, int>> decide_expr_spans;
+	std::map<idx_t, DecideExprSpan> decide_expr_spans;
 	//! Index the EXPR spans of a DECIDE clause's span list by the node they belong to.
 	void IndexDecideExpressions(duckdb_libpgquery::PGList &spans);
 	void NoteDecideExpression(const duckdb_libpgquery::PGNode &node, const ParsedExpression &expr);

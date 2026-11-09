@@ -314,30 +314,13 @@ static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 	});
 }
 
-//! How tightly the node `expr` binds, for a text cut from the query: the text excludes the parentheses around it, so
-//! it takes them where its operator needs them. An arithmetic operator binds as RenderFunction says; any other
-//! infix form (a comparison, AND, OR, CASE, IN) binds looser than all of them; the rest are whole in themselves.
-static int QuotedPrecedence(const Expression &expr) {
-	if (auto precedence = ArithmeticPrecedence(BinaryOperatorOf(expr))) {
-		return precedence;
-	}
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::BOUND_COMPARISON:
-	case ExpressionClass::BOUND_CONJUNCTION:
-	case ExpressionClass::BOUND_CASE:
-		return 5;
-	case ExpressionClass::BOUND_OPERATOR:
-		return expr.type == ExpressionType::OPERATOR_COALESCE ? 0 : 5;
-	default:
-		return 0;
-	}
-}
-
 //! The text the user wrote for `expr`, when its query location names a span of the query and the render may quote
 //! it. A message quotes every located node (ctx.written). A plan quotes the located nodes that read no decision and
 //! reprints the rest: canonicalization and the rewrites reshape the decision structure, and a located node's text is
 //! the user's for the value it had when it was bound. A reducer rendered without its `by` quotes its call alone.
-static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &text) {
+//! `binding` is how tightly the quoted text binds, as the parser read it (DecideBinding): the text is the user's, so
+//! whether it takes parentheses under an operator is the text's to say, not the bound node's.
+static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &text, int &binding) {
 	if (!expr.GetQueryLocation().IsValid()) {
 		return false;
 	}
@@ -350,9 +333,10 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 	}
 	if (!ctx.print_by && expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
 	    ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::CALL, text)) {
+		binding = NumericCast<int>(DecideBinding::WHOLE);
 		return true;
 	}
-	return ctx.text.Cut(expr.GetQueryLocation(), DecideSpanRole::EXPR, text);
+	return ctx.text.CutExpr(expr.GetQueryLocation(), text, binding);
 }
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
@@ -360,9 +344,9 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
 	}
 	string quoted;
-	if (QuoteSpan(expr, ctx, quoted)) {
-		auto precedence = QuotedPrecedence(expr);
-		return precedence != 0 && precedence < parent_precedence ? "(" + quoted + ")" : quoted;
+	int binding;
+	if (QuoteSpan(expr, ctx, quoted, binding)) {
+		return binding != 0 && binding < parent_precedence ? "(" + quoted + ")" : quoted;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 	    HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {

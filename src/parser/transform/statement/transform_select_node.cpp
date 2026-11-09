@@ -134,27 +134,26 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
                     if (span.anchor < decide_clause.tail_start || span.end > decide_clause.tail_end) {
                         continue;
                     }
-                    for (auto value : {span.anchor, static_cast<int>(span.role), span.start, span.end}) {
+                    for (auto value : {span.anchor, static_cast<int>(span.role), span.start, span.end, 0}) {
                         text.spans.push_back(NumericCast<idx_t>(value));
                     }
-                    for (idx_t i = 0; i < 4; i++) {
-                        if (i != 1) {
-                            text.spans[text.spans.size() - 4 + i] -= text.tail_start;
-                        }
+                    for (idx_t i : {0, 2, 3}) {
+                        text.spans[text.spans.size() - 5 + i] -= text.tail_start;
                     }
                 }
                 // Every expression of the tail, anchored at the location its parsed expression took.
                 for (auto &entry : RootTransformer().decide_expr_spans) {
                     auto &span = entry.second;
-                    if (span.first < decide_clause.tail_start || span.second > decide_clause.tail_end) {
+                    if (span.start < decide_clause.tail_start || span.end > decide_clause.tail_end) {
                         continue;
                     }
                     for (auto value : {NumericCast<idx_t>(entry.first), static_cast<idx_t>(DecideSpanRole::EXPR),
-                                       NumericCast<idx_t>(span.first), NumericCast<idx_t>(span.second)}) {
+                                       NumericCast<idx_t>(span.start), NumericCast<idx_t>(span.end),
+                                       NumericCast<idx_t>(span.binding)}) {
                         text.spans.push_back(value);
                     }
                     for (idx_t i : {0, 2, 3}) {
-                        text.spans[text.spans.size() - 4 + i] -= text.tail_start;
+                        text.spans[text.spans.size() - 5 + i] -= text.tail_start;
                     }
                 }
             }

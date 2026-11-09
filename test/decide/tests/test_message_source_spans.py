@@ -72,7 +72,7 @@ def test_a_product_term_is_named_by_its_operator_over_the_written_factors(decidb
 def test_a_case_factor_is_quoted_as_written(decidb_cli):
     stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * CASE WHEN s = 'F' THEN 1 ELSE 2 END"))
     assert "'CASE WHEN s = 'F' THEN 1 ELSE 2 END' varies" in stderr, stderr
-    assert "e.g. SUM(x * CASE WHEN s = 'F' THEN 1 ELSE 2 END)." in stderr, stderr
+    assert "e.g. SUM(x * (CASE WHEN s = 'F' THEN 1 ELSE 2 END))." in stderr, stderr
 
 
 @pytest.mark.error
@@ -90,6 +90,13 @@ def test_a_sum_in_a_factor_is_quoted_as_written_and_parenthesized_in_the_suggest
 
 
 @pytest.mark.error
+def test_a_call_that_binds_as_a_case_takes_no_parentheses_under_a_product(decidb_cli):
+    """`if(...)` binds as a CASE, which a bound node would parenthesize; the text is a call, so it stays whole."""
+    stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * if(s = 'F', 1, 2)"))
+    assert "e.g. SUM(x * if(s = 'F', 1, 2))." in stderr, stderr
+
+
+@pytest.mark.error
 def test_a_parameter_is_quoted_as_written(decidb_cli):
     """`$1` is what the user wrote, not its value."""
     result = decidb_cli.execute_script("PREPARE p AS " + _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * $1") + ";\n")
@@ -104,6 +111,8 @@ def test_a_macro_call_is_quoted_as_the_call(decidb_cli):
         "CREATE TEMP MACRO twice(v) AS v * 2 + w;\n" + _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * twice(b + 1)") + ";\n"
     )
     assert "'twice(b + 1)' varies per row, so it cannot multiply SUM(x)." in result.stderr, result.stderr
+    # The call is whole in the text, though its expansion is a `+`: the suggestion takes no parentheses.
+    assert "e.g. SUM(x * twice(b + 1))." in result.stderr, result.stderr
 
 
 @pytest.mark.explain

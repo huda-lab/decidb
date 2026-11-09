@@ -1,3 +1,4 @@
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/default_expression.hpp"
@@ -44,6 +45,55 @@ void Transformer::IndexDecideExpressions(duckdb_libpgquery::PGList &spans) {
 	}
 }
 
+//! How tightly the parsed node binds, read from the node the grammar built: the text it spans is the user's, so the
+//! level is the user's operator, whatever the bound tree makes of it.
+static int DecideBindingOf(const duckdb_libpgquery::PGNode &node) {
+	using namespace duckdb_libpgquery;
+	switch (node.type) {
+	case T_PGAExpr: {
+		auto &expr = reinterpret_cast<const PGAExpr &>(node);
+		switch (expr.kind) {
+		case PG_AEXPR_OP: {
+			if (!expr.lexpr || !expr.rexpr) {
+				return NumericCast<int>(DecideBinding::WHOLE); // a prefix or postfix operator
+			}
+			string name = reinterpret_cast<PGValue *>(expr.name->head->data.ptr_value)->val.str;
+			if (name == "+" || name == "-") {
+				return NumericCast<int>(DecideBinding::ADDITIVE);
+			}
+			if (name == "*" || name == "/" || name == "//" || name == "%") {
+				return NumericCast<int>(DecideBinding::MULTIPLICATIVE);
+			}
+			return name == "**" || name == "^" ? NumericCast<int>(DecideBinding::POWER)
+			                                    : NumericCast<int>(DecideBinding::LOOSE);
+		}
+		// A call written as one, and DECIDE's markers for the scope and `by` of a reducer, are whole.
+		case PG_AEXPR_NULLIF:
+		case AEXPR_PAREN:
+		case PG_AEXPR_QUALIFIED_REDUCER:
+		case PG_AEXPR_SCOPE_WHEN:
+		case PG_AEXPR_SCOPE_PER:
+		case PG_AEXPR_SCOPE_PER_ROW:
+		case PG_AEXPR_REDUCER_BY:
+			return NumericCast<int>(DecideBinding::WHOLE);
+		default:
+			return NumericCast<int>(DecideBinding::LOOSE); // IN, LIKE, BETWEEN, IS DISTINCT, ...
+		}
+	}
+	case T_PGBoolExpr:
+	case T_PGNullTest:
+	case T_PGBooleanTest:
+	case T_PGCaseExpr:
+		return NumericCast<int>(DecideBinding::LOOSE);
+	case T_PGSubLink:
+		// `x IN (SELECT ..)` and `x = ANY (..)` have a test expression; a bare subquery is whole.
+		return reinterpret_cast<const PGSubLink &>(node).testexpr ? NumericCast<int>(DecideBinding::LOOSE)
+		                                                           : NumericCast<int>(DecideBinding::WHOLE);
+	default:
+		return NumericCast<int>(DecideBinding::WHOLE);
+	}
+}
+
 void Transformer::NoteDecideExpression(const duckdb_libpgquery::PGNode &node, const ParsedExpression &expr) {
 	auto entry = decide_expr_nodes.find(&node);
 	if (entry == decide_expr_nodes.end() || !expr.GetQueryLocation().IsValid()) {
@@ -52,7 +102,8 @@ void Transformer::NoteDecideExpression(const duckdb_libpgquery::PGNode &node, co
 
 	// Innermost first: an expression and an ancestor that took its location are told apart by the one transformed
 	// first, the inner.
-	decide_expr_spans.emplace(expr.GetQueryLocation().GetIndex(), entry->second);
+	decide_expr_spans.emplace(expr.GetQueryLocation().GetIndex(),
+	                          DecideExprSpan {entry->second.first, entry->second.second, DecideBindingOf(node)});
 }
 
 unique_ptr<ParsedExpression> Transformer::TransformExpressionInternal(duckdb_libpgquery::PGNode &node) {

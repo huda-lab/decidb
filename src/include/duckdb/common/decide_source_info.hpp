@@ -33,6 +33,19 @@ enum class DecideSpanRole : uint8_t {
 	CALL = 6
 };
 
+//! How tightly the text of an EXPR span binds, which decides whether it needs parentheses as an operand: the level of
+//! its outermost operator as the user wrote it (the parsed node's, not the bound node's, which a macro, a fold or an
+//! `if` that binds as a CASE can differ from). A span quoted under an operator that binds tighter is parenthesized.
+enum class DecideBinding : uint8_t {
+	//! A call, a column, a literal, a cast, a parenthesized or subquery expression: whole in itself.
+	WHOLE = 0,
+	//! A comparison, AND, OR, NOT, IS, IN, LIKE, BETWEEN or CASE: looser than every arithmetic operator.
+	LOOSE = 5,
+	ADDITIVE = 10,
+	MULTIPLICATIVE = 20,
+	POWER = 30
+};
+
 //! The text of a DECIDE clause as the user wrote it (the Clang SourceManager pattern): the tail, `SUCH THAT` through
 //! the objective, and where the parser found each construct in it. A construct is named by the query location of its
 //! parsed node, which a bound node keeps (a copy and a serialization carry it), so a message cuts the text of a node
@@ -44,7 +57,8 @@ struct DecideSourceText {
 	string tail;
 	//! Where the tail starts in the string that was parsed; a location is relative to it.
 	idx_t tail_start = 0;
-	//! Four entries per construct: the anchor, its role, and its start and end, all relative to `tail_start`.
+	//! Five entries per construct: the anchor, its role, its start and end (all relative to `tail_start`), and, for an
+	//! EXPR span, its DecideBinding (0 for any other role).
 	vector<idx_t> spans;
 
 	bool HasText() const {
@@ -53,12 +67,15 @@ struct DecideSourceText {
 	//! The text written for the construct of `role` whose token is at `location` (a query location); false when the
 	//! parser kept none.
 	bool Cut(optional_idx location, DecideSpanRole role, string &text) const;
+	//! The text of the expression at `location` and how tightly it binds (a DecideBinding).
+	bool CutExpr(optional_idx location, string &text, int &binding) const;
 
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static DecideSourceText Deserialize(Deserializer &deserializer);
 
 private:
+	bool CutEntry(optional_idx location, DecideSpanRole role, string &text, int &binding) const;
 	//! (anchor, role) to the construct's entry in `spans`, built on first use.
 	mutable std::map<std::pair<idx_t, idx_t>, idx_t> index;
 	mutable bool indexed = false;
