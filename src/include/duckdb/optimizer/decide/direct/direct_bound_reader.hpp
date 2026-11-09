@@ -159,6 +159,15 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled = false,
                              double scale = 1.0, bool divides = false);
 
+//! A bound on the magnitude of one term of a number DirectIsFiniteWhereKept judges: the bound of `value`
+//! (DirectMagnitudeBound, through its NULL guard) times the part's factor, when `scaled`. A rule whose number is made
+//! of terms with factors of their own sums these and asks DirectSumIsFinite.
+double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, bool scaled, double scale, bool divides);
+
+//! Whether a number whose terms' magnitudes sum to at most `total` is below the range of a DOUBLE, whatever the
+//! rounding of its sums.
+bool DirectSumIsFinite(double total);
+
 //! Reads the sign and constant factor of one part and each of its linear terms. Returns false when the factor is not a
 //! finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of the source row.
 //! A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule checks those,

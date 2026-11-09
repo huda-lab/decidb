@@ -191,12 +191,20 @@ bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValu
 	// (DirectScaledTerm), so its magnitude is at most the sum of the values' bounds times the factor.
 	double total = 0.0;
 	for (auto &value : values) {
-		double bound = DirectMagnitudeBound(optimizer.context, DecideUnguarded(*value.expr));
-		if (scaled) {
-			bound = divides ? bound / std::fabs(scale) : bound * std::fabs(scale);
-		}
-		total += bound;
+		total += DirectScaledMagnitude(optimizer, *value.expr, scaled, scale, divides);
 	}
+	return DirectSumIsFinite(total);
+}
+
+double DirectScaledMagnitude(Optimizer &optimizer, const Expression &value, bool scaled, double scale, bool divides) {
+	double bound = DirectMagnitudeBound(optimizer.context, DecideUnguarded(value));
+	if (scaled) {
+		bound = divides ? bound / std::fabs(scale) : bound * std::fabs(scale);
+	}
+	return bound;
+}
+
+bool DirectSumIsFinite(double total) {
 	// Half the range leaves room for the rounding of the products and the sum themselves.
 	return total < std::numeric_limits<double>::max() / 2;
 }

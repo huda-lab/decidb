@@ -333,6 +333,59 @@ def test_a_quadratic_sum_of_columns_has_no_zero_seed(decidb_cli, rule, decide):
     assert '"+"(0.0,' not in plan, plan
 
 
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "column_type,objective,message",
+    [
+        # S1's score is the sum of its parts' terms. Values of exact types, whose bounds (with the parts' factors) sum
+        # below the range of a DOUBLE, cannot fail, so the rank window holds no minimum of a message beside the rank.
+        ("INTEGER", "SUM(p * x)", False),
+        ("INTEGER", "SUM(p * x) + SUM(q * x)", False),
+        ("INTEGER", "SUM(p * x) / 2", False),
+        # A factor that takes a term past the range brings the message back: of the first part, or of a later one.
+        ("INTEGER", "1e300 * SUM(p * x)", True),
+        ("INTEGER", "SUM(p * x) + 1e300 * SUM(q * x)", True),
+        ("INTEGER", "1e300 * SUM(p * x) + SUM(q * x)", True),
+        ("INTEGER", "SUM(p * x) / 1e-300", True),
+        # FLOAT and DOUBLE hold infinities.
+        ("DOUBLE", "SUM(p * x)", True),
+        ("INTEGER", "SUM(p / 3 * x)", True),
+    ],
+)
+def test_s1_a_score_that_cannot_fail_has_no_message_to_take_the_minimum_of(decidb_cli, column_type, objective, message):
+    sql = f"""
+        EXPLAIN SELECT id FROM (
+            SELECT id, p::{column_type} AS p, q::{column_type} AS q
+            FROM (VALUES (1, 1.0, 2.0), (2, NULL, 3.0), (3, 4.0, 5.0)) v(id, p, q)
+        ) t DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}
+    """
+    plan = "".join(_raw(decidb_cli, sql).stdout.replace("│", "").split())
+    assert "S1_UNIFORM_MATROID" in plan, plan
+    assert ("min(#" in plan) == message, plan
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "column_type,checked",
+    [
+        # A per-row bound of an exact type is never NaN, so the plan does not look for it; FLOAT and DOUBLE can be.
+        ("INTEGER", False),
+        ("DECIMAL(15,2)", False),
+        ("DOUBLE", True),
+        ("FLOAT", True),
+    ],
+)
+def test_a1_a_bound_of_an_exact_type_is_not_checked_for_nan(decidb_cli, column_type, checked):
+    sql = f"""
+        EXPLAIN SELECT id FROM (
+            SELECT id, q::{column_type} AS q FROM (VALUES (1, 2.0), (2, 3.0), (3, 5.0)) v(id, q)
+        ) t DECIDE s(REAL) SUCH THAT s BETWEEN 0 AND q MINIMIZE SUM(POWER(s - 3, 2))
+    """
+    plan = "".join(_raw(decidb_cli, sql).stdout.replace("│", "").split())
+    assert "A1_SEPARABLE_BOX" in plan, plan
+    assert ("isNaNonsomerows" in plan) == checked, plan
+
+
 def _invalid_value_checks(cli, column_type, decide):
     # The number of invalid-value checks (a column NaN or infinite) in the plan of `decide` over a column `p` of the
     # given type, a column `q` bounding the rows and an `id`; the plan is the rule's, or the query fails.

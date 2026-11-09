@@ -197,7 +197,10 @@ vector<DirectBoundColumns> DirectLayoutBoundClauses(Optimizer &optimizer, const 
 		                                   source_bindings, p1.index)) {
 			checks.push_back(std::move(check));
 		}
-		checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text));
+		// A right side of an exact type is never NaN.
+		if (!std::isfinite(DirectMagnitudeBound(optimizer.context, *clause.rhs))) {
+			checks.push_back(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text));
+		}
 		result.push_back(columns);
 	}
 	return result;

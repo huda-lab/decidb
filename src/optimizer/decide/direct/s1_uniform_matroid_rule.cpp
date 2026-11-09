@@ -585,7 +585,10 @@ public:
 		// ProjectScore appends its columns in this order and checks each against it.
 		idx_t next_slot = source_bindings.size();
 		score_binding = ColumnBinding(score_index, next_slot++);
-		score_message_binding = ColumnBinding(score_index, next_slot++);
+		has_score_message = ScoreCanFail();
+		if (has_score_message) {
+			score_message_binding = ColumnBinding(score_index, next_slot++);
+		}
 		if (condition.scoped) {
 			class_key = DirectClassKeyOf(condition.group_keys, condition.when_condition || condition.gated);
 			eligible_binding = ColumnBinding(score_index, next_slot++);
@@ -718,7 +721,11 @@ private:
 	bool has_lower = false;
 	bool has_upper = false;
 	ColumnBinding score_binding;
-	//! The message the score raises on a row, NULL where it is valid.
+	//! Whether a score can fail: be NaN or infinite, or the sum of the parts' scores pass a DOUBLE. A score made of
+	//! values of exact types, whose bounds sum below the range of a DOUBLE (DirectScaledMagnitude), cannot, and the
+	//! plan has no message for it.
+	bool has_score_message = false;
+	//! The message the score raises on a row, NULL where it is valid. Unset without a score message.
 	ColumnBinding score_message_binding;
 	ColumnBinding eligible_binding;
 	//! The class key of the scope, and its columns in the score projection. Empty without a scope.
@@ -793,6 +800,16 @@ private:
 		return std::move(state.plan);
 	}
 
+	//! Whether the score of a row can fail: the terms of the parts, with their factors, are bounded by a sum below the
+	//! range of a DOUBLE only if none can.
+	bool ScoreCanFail() const {
+		double total = 0.0;
+		for (auto &term : condition.objective_parts) {
+			total += DirectScaledMagnitude(optimizer, *term.coefficient, term.scaled, term.scale, term.divides);
+		}
+		return !DirectSumIsFinite(total);
+	}
+
 	//! Whether reducer `part` scores a finite constant on every row, which no row can fail (DirectIsFiniteWhereKept).
 	bool PartIsFiniteConstant(idx_t part) const {
 		vector<DirectSignedValue> values;
@@ -842,17 +859,20 @@ private:
 		auto into_score = [&](const Expression &input) {
 			return calc.Wrap(CopyIntoState(input, scope));
 		};
-		vector<ExprPtr> candidates;
-		for (idx_t p = 0; p < part_scores.size(); p++) {
-			// Every part has a term (PartIsFiniteConstant finds it).
-			D_ASSERT(part_scores[p]);
-			if (!PartIsFiniteConstant(p)) {
-				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_names[p], into_score));
+		if (has_score_message) {
+			vector<ExprPtr> candidates;
+			for (idx_t p = 0; p < part_scores.size(); p++) {
+				// Every part has a term (PartIsFiniteConstant finds it).
+				D_ASSERT(part_scores[p]);
+				if (!PartIsFiniteConstant(p)) {
+					candidates.push_back(
+					    DirectNumberMessage(calc, part_scores[p], condition.part_names[p], into_score));
+				}
 			}
+			candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
+			auto score_message = candidates.size() > 1 ? calc.Coalesce(candidates) : candidates[0];
+			append_at(score_message_binding, calc.Out(score_message));
 		}
-		candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
-		auto score_message = candidates.size() > 1 ? calc.Coalesce(candidates) : candidates[0];
-		append_at(score_message_binding, calc.Out(score_message));
 		if (condition.scoped) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));
 			for (idx_t i = 0; i < key_bindings.size(); i++) {
@@ -936,7 +956,9 @@ private:
 		for (auto &binding : message_bindings) {
 			message_minimum.push_back(add(calc.Col(LogicalType::VARCHAR, binding)));
 		}
-		score_message_minimum = add(calc.Col(LogicalType::VARCHAR, score_message_binding));
+		if (has_score_message) {
+			score_message_minimum = add(calc.Col(LogicalType::VARCHAR, score_message_binding));
+		}
 	}
 
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
@@ -1152,7 +1174,9 @@ private:
 		for (idx_t i = limit_message_count; i < message_minimum.size(); i++) {
 			raise(message_minimum[i]);
 		}
-		raise(score_message_minimum);
+		if (has_score_message) {
+			raise(score_message_minimum);
+		}
 		if (!group_checks.empty()) {
 			checks.push_back(in_group(std::move(group_checks)));
 		}
