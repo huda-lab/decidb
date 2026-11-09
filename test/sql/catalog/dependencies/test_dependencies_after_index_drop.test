@@ -1,0 +1,68 @@
+# name: test/sql/catalog/dependencies/test_dependencies_after_index_drop.test
+# description: Dropping a table or an index removes all of its dependency records, also the one on the schema
+# group: [dependencies]
+
+# the dependency records of an index are found by their name prefix: [Index, main, ix, Schema, main, main] has to be
+# found when the index is dropped, or it outlives the index and duckdb_dependencies() reads a missing entry
+
+statement ok
+CREATE TABLE tbl(i INTEGER);
+
+statement ok
+CREATE INDEX ix ON tbl(i);
+
+statement ok
+DROP TABLE tbl;
+
+query I
+SELECT count(*) FROM duckdb_dependencies();
+----
+0
+
+statement ok
+CREATE TABLE tbl(i INTEGER);
+
+statement ok
+CREATE INDEX ix ON tbl(i);
+
+statement ok
+DROP INDEX ix;
+
+query I
+SELECT count(*) FROM duckdb_dependencies();
+----
+0
+
+statement ok
+DROP TABLE tbl;
+
+query I
+SELECT count(*) FROM duckdb_dependencies();
+----
+0
+
+# the same with a schema-qualified table and index
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE TABLE s1.tbl(i INTEGER);
+
+statement ok
+CREATE INDEX ix ON s1.tbl(i);
+
+statement ok
+DROP TABLE s1.tbl;
+
+query I
+SELECT count(*) FROM duckdb_dependencies();
+----
+0
+
+statement ok
+DROP SCHEMA s1;
+
+query I
+SELECT count(*) FROM duckdb_dependencies();
+----
+0
