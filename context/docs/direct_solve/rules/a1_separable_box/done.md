@@ -135,43 +135,31 @@ is built (constant columns propagated, DuckDB's expression rewriter over it).
 
 ## Performance
 
-**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
-machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
-with the same DOUBLE arithmetic. `a1` takes 13.8 ms against 3.0 ms for the hand-written query, a ratio of 4.6. On all
-threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. The gap is the plan's shape: A1
-reads its source twice (verify, then stream). It is open work.
+Measured on 2026-11-09 at `2230755259`, on an 11-core Apple M3 Pro at a load of 5 to 6.
 
-Measured on this machine with `benchmark/decide/direct_solve/archive/profile_direct_a1.py`: direct 2026-10-30 at
-`5b2d175ec7`, median of 3 runs (load about 9); the solver (Gurobi, 1 run) 2026-10-13 at `7a480a1a71`, a path verify,
-then stream does not change. Each run is a fresh `decidb` process that opens the stored database; peak memory is the
-process's own. The result is one aggregate row, so the time is the plan, not the transfer.
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries a1` runs the direct
+plan beside a query written by hand for the same answer (`hand/a1.sql`), with the same checks and the same DOUBLE
+arithmetic, in one process, best of 5, over the 800,000 rows of `partsupp`. The hand plan owes what the rule owes: its
+verdict over every row before the first row is released, so it reads the table twice too. CPU is every operator's time
+summed; latency is on all threads; the planning DECIDE adds is apart. Both sides gave the same answer.
 
-| Shape, 5,000,000 rows | Direct | Direct peak | Solver | Solver peak | Speedup |
-|---|---:|---:|---:|---:|---:|
-| `REAL`, quadratic, per-row bounds | 0.09 s | 95 MiB | 3.22 s | 5.5 GiB | 36x |
-| the same, parent reads only `COUNT(*)` | 0.07 s | 93 MiB | 3.00 s | 5.5 GiB | 43x |
-| the same with a `when` on the objective | 0.12 s | 98 MiB | 2.73 s | 4.9 GiB | 23x |
-| `INT`, linear, per-row bounds | 0.12 s | 101 MiB | 2.75 s | 4.3 GiB | 23x |
-| `BOOL`, linear, bounds only | 0.06 s | 77 MiB | 0.99 s | 1.0 GiB | 17x |
-| constants only (one read) | 0.03 s | 41 MiB | 0.82 s | 1.4 GiB | 27x |
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
+|---|---:|---:|---:|---:|---:|---:|
+| `a1` | 29.7 ms | 25.9 ms | 1.14 | 7.3 ms | 5.4 ms | 0.50 ms |
 
-At 1,000,000 rows direct takes 0.02 to 0.05 s and 37 to 68 MiB, against the solver's 0.2 to 1.1 GiB. At 100,000 rows
-both paths finish in under 0.1 s.
+**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries a1`: a fresh `decidb` process per run, median of 3.
+At every size Gurobi's objective agreed with direct solve's within 1e-6. A speedup divides Gurobi's median by direct's
+median from the same sweep. Times include process start and database open, about 20 ms, which is most of the direct
+time at these sizes.
 
-**Wide parent-read columns.** A 512-byte payload the parent reads back streams through the second read, and nothing
-holds it: at 1,000,000 rows direct takes 0.05 s and 57 MiB against the solver's 0.63 s and 1.7 GiB (13x), and an
-unused payload takes 0.04 s and 56 MiB. The speedup is smaller than S1's because the solver is already
-cheap on a bound-only problem. S1's footprint numbers are in `../../architecture/result_adapter.md` ("Memory of holding
-rows").
+| Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | Speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100,000 | 0.024 s | 0.024 s | 23 MiB | 0.090 s | 87 MiB | 3.8x |
+| 200,000 | 0.025 s | 0.027 s | 24 MiB | 0.101 s | 142 MiB | 4.1x |
+| 400,000 | 0.026 s | 0.034 s | 26 MiB | 0.189 s | 242 MiB | 7.2x |
+| 800,000 | 0.028 s | 0.047 s | 28 MiB | 0.353 s | 456 MiB | 12.5x |
 
-**Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):
-
-```sh
-python3 benchmark/decide/direct_solve/archive/profile_direct_a1.py --rows 100000 1000000 --db-dir /tmp/a1db
-python3 benchmark/decide/direct_solve/archive/profile_direct_a1.py --rows 5000000 --repeats 3 --db-dir /tmp/a1db \
-  --shapes real_quadratic real_quadratic_when int_linear bool_bounds constant_problem count_only
-```
-
-The runner pins `require` for direct and `off` for the solver, and runs the solver at a size only if its previous size
-took at most `--solver-budget` seconds. The 5,000,000-row database needs only the narrow table; build it by hand to skip
-the wide one.
+At 800,000 rows direct solve answers 12.5 times as fast as Gurobi in a sixteenth of its peak memory, and all threads
+take 0.6 of one thread's time. HiGHS has no cell: its QP solver stops with "Large nullspace" once more than 4,000
+decisions end strictly inside their bounds, which A1's do at 10,000 rows (`../../../pipeline/07_solver/done.md`, HiGHS
+backend).
