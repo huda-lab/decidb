@@ -53,6 +53,8 @@ private:
 	unique_ptr<NodeStatistics> PropagateStatistics(LogicalOrder &op, unique_ptr<LogicalOperator> &node_ptr);
 	unique_ptr<NodeStatistics> PropagateStatistics(LogicalWindow &op, unique_ptr<LogicalOperator> &node_ptr);
 	unique_ptr<NodeStatistics> PropagateStatistics(LogicalDecide &op, unique_ptr<LogicalOperator> &node_ptr);
+	unique_ptr<NodeStatistics> PropagateStatistics(LogicalMaterializedCTE &op, unique_ptr<LogicalOperator> &node_ptr);
+	unique_ptr<NodeStatistics> PropagateStatistics(LogicalCTERef &op, unique_ptr<LogicalOperator> &node_ptr);
 	//! Folds each NULL test DecideCanonicalizer::SkipNullData added whose verdict the statistics decide.
 	void FoldSkipNullTests(unique_ptr<Expression> &expr);
 
@@ -132,6 +134,14 @@ private:
 	//! the join handlers mark the NULL-padded side as able to hold NULL, and compressed materialization moves the
 	//! statistics of a column it compresses to a new binding.
 	column_binding_map_t<Value> constant_columns;
+	//! What the definition of a materialized CTE proves of one of its columns: its statistics, and the value it holds
+	//! on every row when there is one
+	struct CTEColumn {
+		unique_ptr<BaseStatistics> stats;
+		unique_ptr<Value> constant;
+	};
+	//! The columns of each materialized CTE's definition by CTE index, which its references take by position
+	unordered_map<idx_t, vector<CTEColumn>> cte_columns;
 	//! Node stats for the current node
 	unique_ptr<NodeStatistics> node_stats;
 };
