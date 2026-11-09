@@ -63,6 +63,10 @@ TEST_CASE("The perfect hash join takes the join types that keep a probe row", "[
 	// An empty table is replaced by an empty result before the physical plan.
 	REQUIRE_NO_FAIL(con.Query("INSERT INTO build VALUES (1, 10, 'a'), (3, 30, 'c'), (5, 50, 'e')"));
 	REQUIRE_NO_FAIL(con.Query("INSERT INTO probe SELECT i, i % 7 FROM range(100) t(i)"));
+	// a probe side that holds a NULL
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE probe_nulls (id INTEGER, k INTEGER)"));
+	REQUIRE_NO_FAIL(con.Query(
+	    "INSERT INTO probe_nulls SELECT i, CASE WHEN i % 5 = 0 THEN NULL ELSE i % 7 END FROM range(100) t(i)"));
 	auto join = [&](const string &type, const string &on) {
 		return "SELECT * FROM probe " + type + " JOIN build ON " + on;
 	};
@@ -70,13 +74,26 @@ TEST_CASE("The perfect hash join takes the join types that keep a probe row", "[
 		REQUIRE(TakesPerfectHashJoin(con, join("INNER", "probe.k = build.k")));
 		REQUIRE(TakesPerfectHashJoin(con, join("LEFT", "probe.k = build.k")));
 	}
+	SECTION("the SINGLE join of a scalar subquery, whose keys the statistics show hold no NULL") {
+		REQUIRE_NO_FAIL(con.Query("CREATE TABLE keys (k INTEGER NOT NULL, v INTEGER)"));
+		REQUIRE_NO_FAIL(con.Query("INSERT INTO keys VALUES (1, 10), (3, 30), (5, 50)"));
+		REQUIRE_NO_FAIL(con.Query("CREATE TABLE asks (id INTEGER, k INTEGER NOT NULL)"));
+		REQUIRE_NO_FAIL(con.Query("INSERT INTO asks SELECT i, i % 7 FROM range(100) t(i)"));
+		REQUIRE(TakesPerfectHashJoin(con, "SELECT id, (SELECT v FROM keys WHERE keys.k = asks.k) FROM asks"));
+		// the probe key can hold a NULL: the decorrelated condition stays IS NOT DISTINCT FROM
+		REQUIRE(!TakesPerfectHashJoin(con,
+		                              "SELECT id, (SELECT v FROM keys WHERE keys.k = probe_nulls.k) FROM probe_nulls"));
+	}
 	SECTION("the joins that pad the probe side or filter it") {
 		REQUIRE(!TakesPerfectHashJoin(con, join("FULL", "probe.k = build.k")));
 		REQUIRE(!TakesPerfectHashJoin(con, "SELECT * FROM probe WHERE probe.k IN (SELECT k FROM build)"));
 	}
 	SECTION("a condition that is not one integer equality") {
 		REQUIRE(!TakesPerfectHashJoin(con, join("LEFT", "probe.k = build.k AND probe.id = build.v")));
-		REQUIRE(!TakesPerfectHashJoin(con, join("LEFT", "probe.k IS NOT DISTINCT FROM build.k")));
+		REQUIRE(!TakesPerfectHashJoin(
+		    con, "SELECT * FROM probe_nulls LEFT JOIN build ON probe_nulls.k IS NOT DISTINCT FROM build.k"));
+		// the statistics of neither side hold a NULL: the condition is =
+		REQUIRE(TakesPerfectHashJoin(con, join("LEFT", "probe.k IS NOT DISTINCT FROM build.k")));
 		REQUIRE(!TakesPerfectHashJoin(con, join("LEFT", "CAST(probe.k AS VARCHAR) = build.s")));
 	}
 }

@@ -27,6 +27,12 @@ void StatisticsPropagator::PropagateStatistics(LogicalComparisonJoin &join, uniq
 				// nothing to do here
 				continue;
 			}
+			if (condition.comparison == ExpressionType::COMPARE_NOT_DISTINCT_FROM && !stats_left->CanHaveNull() &&
+			    !stats_right->CanHaveNull()) {
+				// neither side can have a null value, so two keys are not distinct exactly when they are equal, and
+				// the join can compare them with =, which a perfect hash join takes
+				condition.comparison = ExpressionType::COMPARE_EQUAL;
+			}
 			auto prune_result = PropagateComparison(*stats_left, *stats_right, condition.comparison);
 			// Add stats to logical_join for perfect hash join
 			join.join_stats.push_back(stats_left->ToUnique());

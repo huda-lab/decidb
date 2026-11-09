@@ -1,0 +1,116 @@
+# name: test/sql/optimizer/expression/test_not_distinct_from_to_equal.test
+# description: A join compares with = a condition written IS NOT DISTINCT FROM when the statistics of neither side can hold a NULL
+# group: [expression]
+
+statement ok
+PRAGMA enable_verification
+
+statement ok
+CREATE TABLE l (x INTEGER, z INTEGER)
+
+statement ok
+CREATE TABLE r (x INTEGER, z INTEGER)
+
+# x holds no NULL in either table, z holds one in each
+statement ok
+INSERT INTO l VALUES (1, 1), (2, NULL), (3, 3)
+
+statement ok
+INSERT INTO r VALUES (1, 1), (2, NULL), (4, 4)
+
+query II
+EXPLAIN SELECT * FROM l JOIN r ON l.x IS NOT DISTINCT FROM r.x
+----
+physical_plan	<!REGEX>:.*IS NOT DISTINCT FROM.*
+
+query II
+EXPLAIN SELECT * FROM l LEFT JOIN r ON l.x IS NOT DISTINCT FROM r.x
+----
+physical_plan	<!REGEX>:.*IS NOT DISTINCT FROM.*
+
+# each condition is judged on its own sides
+query II
+EXPLAIN SELECT * FROM l JOIN r ON l.x IS NOT DISTINCT FROM r.x AND l.z IS NOT DISTINCT FROM r.z
+----
+physical_plan	<REGEX>:.*x = x.*z IS NOT DISTINCT FROM z.*
+
+# a NULL on either side keeps the condition: both, and each alone
+query II
+EXPLAIN SELECT * FROM l JOIN r ON l.z IS NOT DISTINCT FROM r.z
+----
+physical_plan	<REGEX>:.*IS NOT DISTINCT FROM.*
+
+# a NULL on one side only keeps the condition, whichever side the join orders it to: the table with the NULL is the
+# smaller or the larger of the two
+statement ok
+CREATE TABLE few_nulls AS SELECT * FROM (VALUES (1), (NULL)) t(z)
+
+statement ok
+CREATE TABLE many_clean AS SELECT i % 50 AS z FROM range(500) t(i)
+
+query II
+EXPLAIN SELECT * FROM few_nulls JOIN many_clean ON few_nulls.z IS NOT DISTINCT FROM many_clean.z
+----
+physical_plan	<REGEX>:.*IS NOT DISTINCT FROM.*
+
+query II
+EXPLAIN SELECT * FROM many_clean JOIN few_nulls ON few_nulls.z IS NOT DISTINCT FROM many_clean.z
+----
+physical_plan	<REGEX>:.*IS NOT DISTINCT FROM.*
+
+statement ok
+CREATE TABLE many_nulls AS SELECT CASE WHEN i % 10 = 0 THEN NULL ELSE i % 50 END AS z FROM range(500) t(i)
+
+statement ok
+CREATE TABLE few_clean AS SELECT * FROM (VALUES (1), (2)) t(z)
+
+query II
+EXPLAIN SELECT * FROM few_clean JOIN many_nulls ON few_clean.z IS NOT DISTINCT FROM many_nulls.z
+----
+physical_plan	<REGEX>:.*IS NOT DISTINCT FROM.*
+
+query II
+EXPLAIN SELECT * FROM many_nulls JOIN few_clean ON few_clean.z IS NOT DISTINCT FROM many_nulls.z
+----
+physical_plan	<REGEX>:.*IS NOT DISTINCT FROM.*
+
+# the answers are those of IS NOT DISTINCT FROM: a NULL key matches a NULL key
+query IIII
+SELECT l.x, l.z, r.x, r.z FROM l JOIN r ON l.z IS NOT DISTINCT FROM r.z ORDER BY l.x
+----
+1	1	1	1
+2	NULL	2	NULL
+
+query IIII
+SELECT l.x, l.z, r.x, r.z FROM l JOIN r ON l.x IS NOT DISTINCT FROM r.x AND l.z IS NOT DISTINCT FROM r.z ORDER BY l.x
+----
+1	1	1	1
+2	NULL	2	NULL
+
+query III
+SELECT l.x, r.x, r.z FROM l LEFT JOIN r ON l.x IS NOT DISTINCT FROM r.x ORDER BY l.x
+----
+1	1	1
+2	2	NULL
+3	NULL	NULL
+
+# a SINGLE join of a scalar subquery with a unique key per row, over keys that hold no NULL
+statement ok
+CREATE TABLE keys (k INTEGER NOT NULL, v INTEGER)
+
+statement ok
+INSERT INTO keys VALUES (1, 10), (2, 20), (4, 40)
+
+statement ok
+CREATE TABLE asks (id INTEGER, k INTEGER NOT NULL)
+
+statement ok
+INSERT INTO asks VALUES (1, 1), (2, 3), (3, 4), (4, 2)
+
+query II
+SELECT id, (SELECT v FROM keys WHERE keys.k = asks.k) FROM asks ORDER BY id
+----
+1	10
+2	NULL
+3	40
+4	20
