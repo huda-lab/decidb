@@ -252,6 +252,10 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!   P4    the row's squared length in the ball, every other check a row can raise, and the target's warning
 //!   H     a hash aggregate on the group key, one row per group (one row for a single ball): h, the sum of the squared
 //!         lengths; whether the checks of the rows held; and the group's limit, for a limit read from the data
+//!   C     the group's values, computed once on its row (loop-invariant code motion: they depend on the group alone):
+//!         the length sqrt(h), whether h is below the normal range of a DOUBLE, whether h is 0, and the checks of the
+//!         rows together with h's own: h past a DOUBLE (the solver has no such number, and every row that would read h
+//!         raises)
 //!
 //! The second read is [W0], the scope, P1 and P2 again and the row's target and value (P3), joined with the group's row
 //! on the key, then
@@ -262,10 +266,10 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! holds every row of the first read before it gives one, and each check on a row stands below it, so no joined row
 //! exists before every row has passed its checks. The second read computes P1 and P2 again for the row's target and
 //! raises nothing: the first read has raised on any value it would. A row outside every ball reads NULL in H's input,
-//! so it adds nothing to the group whose key it shares, and the answer does not read what the join gives it. The two
-//! checks above the join read h, which only the plan computes: h past a DOUBLE (the solver has no such number, and
-//! every row that would read h raises), and the warning that h has lost precision, which a row that reads the scale
-//! prints.
+//! so it adds nothing to the group whose key it shares, and the answer does not read what the join gives it. Because C
+//! raises for h when the groups are built, a group whose h passes a DOUBLE raises whether or not a streamed row reads
+//! it, as the solver, which reads every row, would. The row's warning of the scale stays on the row: it prints for a
+//! row that reads the scale with a value of its own.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
@@ -283,8 +287,8 @@ public:
 		}
 	}
 
-	//! The class plan over the first read `rows`: the group key's columns, then h, whether the checks of the rows held,
-	//! and the group's limit when it is read from the data, one row per group.
+	//! The class plan over the first read `rows`: the group key's columns, then the group's values
+	//! (ComputeClassValues), one row per group.
 	unique_ptr<LogicalOperator> BuildClasses(unique_ptr<LogicalOperator> rows) const {
 		auto state = ScopeOf(std::move(rows));
 		auto from_scope = DirectCarriedOf(state, source_bindings.size());
@@ -327,7 +331,7 @@ public:
 			// The limit is one value on the rows a group's ball holds, and NULL on the others.
 			stage.Add(DirectHashAggregate(optimizer, calc, "max", Double(lengths.limit)));
 		}
-		return stage.Finish(std::move(plan));
+		return ComputeClassValues(stage.Finish(std::move(plan)), lengths.carried.key);
 	}
 
 	//! The substitute over the second read `rows`: its source columns, then each row's answer, and the column that
@@ -350,13 +354,19 @@ public:
 
 		auto &carried = values.carried;
 		auto joined = DirectJoinClassAnswers(binder, std::move(plan), carried.keys, carried.key, std::move(classes));
-		D_ASSERT(joined.answers.size() == (limit_bound ? 3 : 2));
-		auto total = calc.Coalesce({Double(joined.answers[0]), calc.Num(0.0)});
+		D_ASSERT(joined.answers.size() == ClassValueCount());
+		ClassValues group;
+		group.length = Double(joined.answers[0]);
+		group.below_normal = Boolean(joined.answers[1]);
+		idx_t next = 3;
+		if (!condition.has_square) {
+			group.still = Boolean(joined.answers[next++]);
+		}
 		// A row is in a ball when the clause keeps it and the group has a limit.
 		auto in_ball = condition.scoped ? Boolean(carried.eligible) : calc.Bool(true);
 		ExprPtr limit = calc.Num(condition.limit);
 		if (limit_bound) {
-			limit = Double(joined.answers[2]);
+			limit = Double(joined.answers[next]);
 			in_ball = calc.And(in_ball, calc.Not(calc.IsNull(limit)));
 		}
 
@@ -364,11 +374,10 @@ public:
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			p5.Add(calc.Out(calc.Col(source_types[i], carried.source[i])));
 		}
-		auto scale = Scale(Double(values.value), limit, in_ball, total);
+		auto scale = Scale(Double(values.value), limit, in_ball, group);
 		p5.Add(scale.answer);
 		vector<unique_ptr<Expression>> checks;
-		checks.push_back(calc.Out(Boolean(joined.answers[1])));
-		checks.push_back(DirectRaiseTooLarge(optimizer, total, condition.objective_written));
+		checks.push_back(calc.Out(Boolean(joined.answers[2])));
 		checks.push_back(DirectWarnIf(calc, calc.Out(scale.loses_precision)));
 		p5.Add(DirectAllHold(calc, std::move(checks)));
 
@@ -418,6 +427,13 @@ private:
 		ColumnBinding limit;
 		ColumnBinding squared_length;
 		ColumnBinding valid;
+	};
+	//! A group's values on the second read, from its row (ComputeClassValues).
+	struct ClassValues {
+		ExprPtr length;
+		ExprPtr below_normal;
+		//! Whether h is 0; only a direction without a square reads it.
+		ExprPtr still;
 	};
 	//! Columns of the second read's P3: the row's value in the domain.
 	struct Values {
@@ -634,6 +650,42 @@ private:
 	}
 
 	//===------------------------------------------------------------------===//
+	// C: the group's values, from its row
+	//===------------------------------------------------------------------===//
+
+	//! The columns ComputeClassValues gives after the key: the length, whether h is below the normal range, whether the
+	//! checks held, then whether h is 0 (with no square) and the group's limit (read from the data).
+	idx_t ClassValueCount() const {
+		return 3 + (condition.has_square ? 0 : 1) + (limit_bound ? 1 : 0);
+	}
+
+	//! The group's row over the aggregate `classes` (the key, then h, whether the rows' checks held and the limit):
+	//! what depends on h alone. The checks of the rows come first in the chain, so h's own raises only for a group
+	//! whose rows passed.
+	unique_ptr<LogicalOperator> ComputeClassValues(unique_ptr<LogicalOperator> classes,
+	                                               const DirectClassKey &key) const {
+		auto bindings = classes->GetColumnBindings();
+		idx_t keys = key.types.size();
+		DirectProjectionStage c(binder.GenerateTableIndex());
+		c.Forward(vector<ColumnBinding>(bindings.begin(), bindings.begin() + NumericCast<int64_t>(keys)), key.types);
+		// A group with no row in a ball has no h, and no row of it reads one.
+		auto total = Double(bindings[keys]);
+		c.Add(calc.Fn("sqrt", total));
+		c.Add(DirectBelowNormalRange(calc, total));
+		vector<unique_ptr<Expression>> checks;
+		checks.push_back(calc.Out(Boolean(bindings[keys + 1])));
+		checks.push_back(DirectRaiseTooLarge(optimizer, total, condition.objective_written));
+		c.Add(DirectAllHold(calc, std::move(checks)));
+		if (!condition.has_square) {
+			c.Add(calc.Cmp(ExpressionType::COMPARE_EQUAL, total, calc.Num(0.0)));
+		}
+		if (limit_bound) {
+			c.Add(Double(bindings[keys + 2]));
+		}
+		return c.Finish(std::move(classes));
+	}
+
+	//===------------------------------------------------------------------===//
 	// P5: the answer
 	//===------------------------------------------------------------------===//
 
@@ -656,25 +708,23 @@ private:
 	//! A row reads the scale when a ball holds it and, with a square, its target lies outside that ball. A row with a
 	//! square inside the ball returns its own value and reads no scale. h below the normal range of a DOUBLE has lost
 	//! precision, so a row that reads the scale with a value of its own, or finds h 0 with one, warns.
-	Scaled Scale(const ExprPtr &value, const ExprPtr &limit, const ExprPtr &in_ball, const ExprPtr &total) const {
+	Scaled Scale(const ExprPtr &value, const ExprPtr &limit, const ExprPtr &in_ball, const ClassValues &group) const {
 		auto zero = calc.Num(0.0);
 		auto radius = Radius(limit);
-		auto length = calc.Fn("sqrt", total);
-		auto scaled = calc.Mul(calc.Div(value, length), radius);
+		auto scaled = calc.Mul(calc.Div(value, group.length), radius);
 		auto reads = in_ball;
 		ExprPtr answer;
 		if (condition.has_square) {
-			reads = calc.And(reads, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, length, radius));
+			reads = calc.And(reads, calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, group.length, radius));
 			answer = calc.If(reads, scaled, value);
 		} else {
-			auto still = calc.Cmp(ExpressionType::COMPARE_EQUAL, total, zero);
-			answer = calc.If(calc.And(reads, calc.Not(still)), scaled, zero);
+			answer = calc.If(calc.And(reads, calc.Not(group.still)), scaled, zero);
 		}
 		auto has_value = calc.Not(calc.Cmp(ExpressionType::COMPARE_EQUAL, value, zero));
 		Scaled result;
 		// Adding 0.0 turns -0.0 into 0.0.
 		result.answer = calc.Out(calc.Add(answer, zero));
-		result.loses_precision = calc.Out(calc.And(reads, calc.And(has_value, DirectBelowNormalRange(calc, total))));
+		result.loses_precision = calc.Out(calc.And(reads, calc.And(has_value, group.below_normal)));
 		return result;
 	}
 };

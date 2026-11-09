@@ -674,6 +674,26 @@ def test_n1_a_sum_of_squares_past_a_double_raises_though_each_square_is_in_range
     assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
 
 
+# 5,000 rows: the first 4,998 are in group `a`, whose h passes; the last two are in group `b`, whose h is past a DOUBLE
+# though each square is in range. A vector holds 2,048 rows, so a `LIMIT 1` is met by the first vector, which holds no row
+# of `b`.
+_ONE_GROUP_OVERFLOWS = (
+    "FROM (SELECT i, CASE WHEN i < 4998 THEN 'a' ELSE 'b' END AS k, "
+    "(CASE WHEN i < 4998 THEN 1.0 ELSE 1.2e154 END)::DOUBLE AS s FROM range(5000) t(i)) DECIDE x(REAL) SUCH THAT SUM(POWER(x, 2)) by (k) <= 25 MAXIMIZE SUM(s * x)"
+)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("read", ["SELECT count(*) FROM (", "SELECT x FROM ("])
+@pytest.mark.parametrize("tail", ["", " LIMIT 1"])
+def test_n1_a_group_whose_h_passes_a_double_raises_though_no_streamed_row_reads_it(decidb_cli, read, tail):
+    # h is checked when the groups are built (the group's row, above the aggregate), so the group raises whether or not
+    # a row of it is among the rows read: the solver reads every row, and raises for the one group of several.
+    sql = f"{read}{_ONE_GROUP_OVERFLOWS}) q{tail}"
+    direct = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stderr
+    assert "MAXIMIZE SUM(s * x) computes a number too large for a DOUBLE" in direct
+
+
 @pytest.mark.correctness
 def test_n1_a_target_past_a_double_raises_on_a_row_outside_every_ball(decidb_cli):
     # Nothing squares the target of a row no ball holds, so only the check of the target itself reads it.
