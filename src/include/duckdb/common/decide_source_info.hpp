@@ -37,9 +37,10 @@ enum class DecideSpanRole : uint8_t {
 //! its outermost operator as the user wrote it (the parsed node's, not the bound node's, which a macro, a fold or an
 //! `if` that binds as a CASE can differ from). A span quoted under an operator that binds tighter is parenthesized.
 enum class DecideBinding : uint8_t {
-	//! A call, a column, a literal, a cast, a parenthesized or subquery expression: whole in itself.
+	//! A call, a column, a literal, a cast, a CASE (it ends in END), a parenthesized or subquery expression: whole in
+	//! itself.
 	WHOLE = 0,
-	//! A comparison, AND, OR, NOT, IS, IN, LIKE, BETWEEN or CASE: looser than every arithmetic operator.
+	//! A comparison, AND, OR, NOT, IS, IN, LIKE or BETWEEN: looser than every arithmetic operator.
 	LOOSE = 5,
 	ADDITIVE = 10,
 	MULTIPLICATIVE = 20,

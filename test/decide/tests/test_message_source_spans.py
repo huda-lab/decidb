@@ -72,7 +72,7 @@ def test_a_product_term_is_named_by_its_operator_over_the_written_factors(decidb
 def test_a_case_factor_is_quoted_as_written(decidb_cli):
     stderr = _stderr(decidb_cli, _query("SUM(x) <= 7", "MAXIMIZE SUM(x) * CASE WHEN s = 'F' THEN 1 ELSE 2 END"))
     assert "'CASE WHEN s = 'F' THEN 1 ELSE 2 END' varies" in stderr, stderr
-    assert "e.g. SUM(x * (CASE WHEN s = 'F' THEN 1 ELSE 2 END))." in stderr, stderr
+    assert "e.g. SUM(x * CASE WHEN s = 'F' THEN 1 ELSE 2 END)." in stderr, stderr
 
 
 @pytest.mark.error

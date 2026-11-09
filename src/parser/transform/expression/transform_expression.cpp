@@ -83,8 +83,8 @@ static int DecideBindingOf(const duckdb_libpgquery::PGNode &node) {
 	case T_PGBoolExpr:
 	case T_PGNullTest:
 	case T_PGBooleanTest:
-	case T_PGCaseExpr:
 		return NumericCast<int>(DecideBinding::LOOSE);
+	// CASE ... END is delimited by its END: whole, like a call. (The default, below.)
 	case T_PGSubLink:
 		// `x IN (SELECT ..)` and `x = ANY (..)` have a test expression; a bare subquery is whole.
 		return reinterpret_cast<const PGSubLink &>(node).testexpr ? NumericCast<int>(DecideBinding::LOOSE)

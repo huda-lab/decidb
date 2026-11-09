@@ -88,7 +88,7 @@ TEST_CASE("A span says how tightly its text binds, as the parser read it", "[dec
 	REQUIRE(binding_of("x") == static_cast<int>(DecideBinding::WHOLE));
 }
 
-TEST_CASE("A comparison, an AND and a CASE bind looser than arithmetic", "[decidb]") {
+TEST_CASE("A comparison and an AND bind looser than arithmetic, a CASE is whole", "[decidb]") {
 	Parser parser;
 	parser.ParseQuery(
 	    "SELECT x FROM t DECIDE x(INT) SUCH THAT sum(x) <= 3 MAXIMIZE sum(x * CASE WHEN a > 1 AND b THEN 1 "
@@ -108,7 +108,9 @@ TEST_CASE("A comparison, an AND and a CASE bind looser than arithmetic", "[decid
 		auto entry =
 		    std::find_if(found.begin(), found.end(), [&](const std::pair<string, int> &e) { return e.first == text; });
 		REQUIRE(entry != found.end());
-		REQUIRE(entry->second == static_cast<int>(DecideBinding::LOOSE));
+		// A CASE ends in END, so it is whole under any operator.
+		REQUIRE(entry->second ==
+		        static_cast<int>(string(text).rfind("CASE", 0) == 0 ? DecideBinding::WHOLE : DecideBinding::LOOSE));
 	}
 }
 
