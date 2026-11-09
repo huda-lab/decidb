@@ -114,19 +114,36 @@ Branch by Abstraction with a whole Parallel Run. `DECIDB_EVALUATOR` picks one, r
 `PhysicalDecide::Evaluate` is the region from the one pass to the helper decisions' members. Under `verify` it runs as
 ever and alone prints; then the evaluation fields of the sink state stand aside, a second run fills its own in silence,
 and `CompareDecideEvaluations` (`decide_evaluator.hpp`) compares what each would hand the model, before
-`BuildSolverInput` consumes it. A difference is an INTERNAL error, so a suite run under `verify` fails any test whose
-query differs, with no assertion written. `test_evaluator_verify.py` shows each compared group catches an injected
-difference. The second run is the flat evaluator again until the tree's model emitter exists, so `verify` builds no
-tree yet. The switch, the record and the comparison go when the flat evaluator does (P6).
+`BuildSolverInput` consumes it: every field of each clause that stage 06 reads, the objective's columns, the composed
+clauses, the links, the mappings, the class sets, the absent reads and the row each frame read selects. The two
+records compare group by group, so a group that records more shifts no other. A difference is an INTERNAL error, so a
+suite run under `verify` fails any test whose query differs, with no assertion written. `test_evaluator_verify.py`
+shows each compared group catches an injected difference (`DECIDB_EVALUATOR_INJECT`). A known difference is allowed
+by `DECIDB_VERIFY_ALLOW=bug:group[:field prefix]`, whose prefix names whole words of a field's name (`clause 1`
+covers `clause 1 term 0`, not `clause 10`), and which writes the bug to `DECIDB_VERIFY_ALLOW_LOG` when the
+difference shows; the pytest marker `verify_known_difference(bug, groups)` sets both for its test under `verify` and
+fails the test once the bug no longer differs (`tests/_verify_known.py`). The second run is the flat evaluator again
+until the tree's model emitter exists, so `verify` builds no tree yet. The switch, the record and the comparison go
+when the flat evaluator does (P6).
 
 **`tree` today.** The deck's evaluator runs end to end, beside flat and not yet its equal (the suite run under
 `DECIDB_EVALUATOR=tree` still has failures):
 
-- *The tree* (`decide_tree.hpp`, `BuildDecideTree`): built at plan time from the clause list, the link and record
-  tables and the frames, with the deck's three node classes, E (`SCOPE`), G (`REDUCER`) and O (`FRAME`). An E's σ is
-  the binder's signature of its clause; a generated NULL test is a member test that carries its columns and adds no
-  σ field. A root in the grouped shape (the aggregate shape, an easy or a composed extremum) with no `per` is a class
-  of its `by` key, as flat's grouped rows are (`language/guide.md` §6.4). A root's text is its clause as written.
+- *The tree* (`decide_tree.hpp`, `DecideTreeConstruction`): built at plan time in two halves around stage 05. Its
+  nodes come from the clause list, the link and record tables and the frames, with the deck's three node classes, E
+  (`SCOPE`), G (`REDUCER`) and O (`FRAME`). An E's σ is the binder's signature of its clause; a generated NULL test is
+  a member test that carries its columns and adds no σ field. A root in the grouped shape (the aggregate shape, an
+  easy or a composed extremum) with no `per` is a class of its `by` key, as flat's grouped rows are
+  (`language/guide.md` §6.4). A root's text is its clause as written. Stage 05 then lowers the clauses once, for
+  flat, and names on each reducer's terms the G they range over (`DecideTerm::child`); the second half
+  (`decide_tree_compile.cpp`) binds each clause root to stage 05's clause, copies stage 05's terms into the node's
+  body, finds the node each term is computed on, and compiles each coefficient, bound, admitted end and member test
+  into a program over that node's layout, by flat's own rules (`ToChunkReferences`): its carried columns, then the
+  program columns its programs add (which the descent does not carry yet), then an admitted end's inputs a and r. A
+  root takes the error rank of the stage-05 list its body comes from, in the order flat evaluates them (a folded
+  bound's singleton row follows every constraint, and flat evaluates it under DIAGNOSE alone). A read of a data reducer or a frame
+  compiles to a NULL of its type, since the tree computes no value for it yet, and the body names the first such read
+  (`uncompiled`).
 - *Top-down* (`decide_descent.hpp`): the descent reads the buffered input in `Finalize`'s one scan
   (`DecideRowStore::Build`), so the sink stays parallel. A G's or O's groups lie in no enclosing slot, because the
   rewrites already make a reducer's key its whole path key (`language/guide.md` §5.5): only a `by` opens a level, and
@@ -142,9 +159,12 @@ tree yet. The switch, the record and the comparison go when the flat evaluator d
 
 `tree-noside` plans no side plans and folds the data reducers in the descent; it fails exactly what `tree` fails.
 
-Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS` and `DECIDB_DUMP_VALUES` print the tree, the
-containers and the bottom-up values to stderr (the first two also under `flat`, which then builds the tree and runs the
-descent in its pass, for the dump alone); `DECIDB_DESCENT_CHUNK` sets the descent's chunk size;
+Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS`, `DECIDB_DUMP_BODIES` and `DECIDB_DUMP_VALUES`
+print the tree, the containers, the bodies and their programs, and the bottom-up values to stderr (the first two also
+under `flat`, which then builds the tree beside its own plan, whose EXPLAIN and answer stay as they are, and runs the
+descent in its pass, for the dump alone; the bodies print there with them); `DECIDB_DESCENT_CHUNK` sets the descent's
+chunk size; `DECIDB_EVALUATOR_INJECT=g1`, where the tree is built, makes stage 05's hook find no node for a reducer,
+which is internal;
 `DECIDB_TREE_INJECT=node:data:value` replaces a node's data value, so a test can show the solver reads the bottom-up
 values. Profile counters (`DECIDB_PROFILE`): `execution.input_scans` (scans of the input, 1), `execution.descent_rows`
 and `execution.required_values` (values walked for errors, linear in the entries).
