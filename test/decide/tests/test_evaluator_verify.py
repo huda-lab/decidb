@@ -14,8 +14,9 @@ from ._verify_known import allow_setting, stale_markers
 
 ROWS = "(VALUES (1, 'a', 3.0::DOUBLE), (2, 'a', 4.0::DOUBLE), (3, 'b', 5.0::DOUBLE)) t(id, g, c)"
 PLAIN = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c MAXIMIZE sum(x)"
-#: A clause in the aggregate shape, which the tree has no arm for yet.
-NO_ARM = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c AND sum(x) by (t.g) <= 5 MAXIMIZE sum(x)"
+#: A frame read, which the tree has no arm for yet.
+NO_ARM = f"""SELECT id, x FROM {ROWS} DECIDE x(REAL)
+    SUCH THAT x <= t.c AND x <= at(previous else 9: x) over (t.id) MAXIMIZE sum(x)"""
 
 #: One query per compared group, each holding a field of it.
 GROUPS = {
@@ -98,11 +99,11 @@ def test_a_difference_of_one_ulp_is_no_difference(decidb_cli):
     assert "differ" not in result.stderr, result.stderr
 
 
-#: A clause whose every instance is skipped, which warns once, not once per run. The second run is flat's for a clause
-#: in the aggregate shape, which has no arm, and the tree's for clauses per row, which reports in silence too.
+#: A clause whose every instance is skipped, which warns once, not once per run. The second run is flat's for a query
+#: reading a frame, which has no arm, and the tree's for clauses per row, which reports in silence too.
 SKIPPED_EVERYWHERE = {
     "flat-again": f"""SELECT id, x FROM {ROWS} DECIDE x(REAL)
-        SUCH THAT x <= 9 AND sum(when t.c > 100: x) <= 5 MAXIMIZE sum(x)""",
+        SUCH THAT x <= at(previous else 9: x) over (t.id) AND sum(when t.c > 100: x) <= 5 MAXIMIZE sum(x)""",
     "the-trees-silent-report": """SELECT id, x FROM (VALUES (1, NULL::DOUBLE, 1.0), (2, NULL, 2.0)) t(id, n, d)
         DECIDE x(REAL) SUCH THAT x + 2 <= t.n AND x + 1 <= t.d""",
 }
@@ -129,8 +130,8 @@ KEYED_ONLY = f"SELECT id, y FROM {ROWS} DECIDE per t.g: y(REAL) SUCH THAT y <= t
 
 
 def test_verify_walks_no_descent_for_a_query_with_no_arm(decidb_cli):
-    """The aggregate shape has no arm, so the second run is flat's, and flat walks a descent only for a dump it prints.
-    A descent would refuse this chunk size."""
+    """A frame read has no arm, so the second run is flat's, and flat walks a descent only for a dump it prints. A
+    descent would refuse this chunk size."""
     result = _verify(decidb_cli, NO_ARM, DECIDB_DESCENT_CHUNK="0")
     assert result.returncode == 0 and "DECIDB_DESCENT_CHUNK" not in result.stderr, result.stderr
 
@@ -171,14 +172,29 @@ WHEN_ONLY = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= 9 AND when 
 #: y, outside every reducer, is read on the two rows the objective keeps, its filter's rows, each compared.
 OUTSIDE = f"""SELECT id, x, y FROM {ROWS} DECIDE x(REAL), per (): y(REAL)
     SUCH THAT x <= 9 AND y <= 4 MAXIMIZE when t.c > 3: sum(x) + y"""
-#: flat reads y once per class of t.g by keeping its first row there, as the tree reads its operand's one entry.
+#: flat reads y once per class of t.g by keeping its first row there, as the tree reads its operand's first entry.
 QUALIFIED = f"SELECT id, y FROM {ROWS} DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: y)"
+#: z, beside the reducer, reads every kept row, so each kept row of a group is one of its rows, though the reducer's
+#: `when` keeps rows 1 and 3 alone: both runs give each row its group.
+BESIDE = f"""SELECT id, x FROM {ROWS} DECIDE x(REAL), per (): z(REAL)
+    SUCH THAT x <= 9 AND z <= 9 AND sum(when t.c < 3.5 OR t.c > 4.5: x) by (t.g) + z <= 5 MAXIMIZE sum(x) + z"""
+#: Each group of a NOCASE key is named by its least spelling, 'A' for the rows spelled 'a' and 'A', by both runs.
+NAMED = """SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM (VALUES (1, 'a'), (2, 'A'), (3, 'b')) v(id, g)) t
+    DECIDE x(REAL) SUCH THAT x <= 9 AND sum(x) by (t.g) <= 5 MAXIMIZE sum(x)"""
 
 
 @pytest.mark.parametrize(
     "sql",
-    [ROWS_ONLY, KEYED_ONLY, WHEN_ONLY, OUTSIDE, QUALIFIED],
-    ids=["rows", "keyed", "a-when", "a-term-outside-every-reducer", "a-qualified-reducer"],
+    [ROWS_ONLY, KEYED_ONLY, WHEN_ONLY, OUTSIDE, QUALIFIED, BESIDE, NAMED],
+    ids=[
+        "rows",
+        "keyed",
+        "a-when",
+        "a-term-outside-every-reducer",
+        "a-qualified-reducer",
+        "a-term-beside-a-filtered-reducer",
+        "a-groups-names",
+    ],
 )
 def test_the_tree_and_flat_agree(decidb_cli, sql):
     _assert_two_runs_agree(decidb_cli, sql)

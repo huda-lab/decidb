@@ -23,6 +23,7 @@ static const char *const DECIDE_MODEL_SHAPE_NAMES[] = {
     "REPAIR_ROWS",
     "KEYED_DECLARED",
     "OBJECTIVE_LINEAR",
+    "GROUP_ROWS",
     "PRODUCT_TERMS",
     "SQUARE_TERMS",
     "TIGHTEST_BOUND",
@@ -30,8 +31,8 @@ static const char *const DECIDE_MODEL_SHAPE_NAMES[] = {
     "DEFINED_READS",
     "EXTREMUM_ROWS",
     "MEMBER_ROWS",
-    "GROUP_ROWS",
     "CLASS_ROWS",
+    "CLASS_SETS",
     "OBJECTIVE_SQUARES",
     "OBJECTIVE_PRODUCTS",
     "OBJECTIVE_EXTREMUM",
@@ -43,9 +44,10 @@ static const char *const DECIDE_MODEL_SHAPE_NAMES[] = {
     "KEYED_SIGNATURE",
 };
 
-//! The shapes of a clause beyond its rows, from what stage 06 reads of it (EvaluatedConstraint): its products and
-//! squares, what its bound and rows read, then how its rows are made.
-static void ClauseShapes(const DecideConstraint &clause, vector<DecideModelShape> &shapes) {
+//! The shapes of a clause beyond its rows and groups, from what stage 06 reads of it (EvaluatedConstraint): its
+//! products and squares, what its bound and rows read, how its rows are made, then the classes a diagnosis reports they
+//! stand for.
+static void ClauseShapes(const DecideConstraint &clause, bool diagnose, vector<DecideModelShape> &shapes) {
 	if (clause.has_bilinear) {
 		shapes.push_back(DecideModelShape::PRODUCT_TERMS);
 	}
@@ -68,11 +70,12 @@ static void ClauseShapes(const DecideConstraint &clause, vector<DecideModelShape
 	if (clause.was_minmax_easy) {
 		shapes.push_back(DecideModelShape::MEMBER_ROWS);
 	}
-	if (clause.lhs_is_aggregate) {
-		shapes.push_back(DecideModelShape::GROUP_ROWS);
-	}
 	if (clause.scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 		shapes.push_back(DecideModelShape::CLASS_ROWS);
+	}
+	// A group's row stands for the classes of its kept rows (EvaluatedConstraint::group_class_set).
+	if (diagnose && clause.lhs_is_aggregate) {
+		shapes.push_back(DecideModelShape::CLASS_SETS);
 	}
 }
 
@@ -83,7 +86,7 @@ static vector<DecideModelShape> QueryShapes(const DecideTree &tree, const Physic
 	for (auto root : tree.roots) {
 		auto &body = tree.nodes[root]->compiled;
 		if (body.clause) {
-			ClauseShapes(*body.clause, shapes);
+			ClauseShapes(*body.clause, op.diagnose, shapes);
 		}
 		if (body.objective && body.objective->has_quadratic) {
 			shapes.push_back(DecideModelShape::OBJECTIVE_SQUARES);
@@ -128,10 +131,39 @@ string DecideModelEmitter::Uncovered(const DecideTree &tree, const PhysicalDecid
 }
 
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, const DecideTree &tree, const DecideDescent &descent,
-                                       DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
+                                       DecideTreeColumns &columns, DecideGlobalSinkState &gstate, PerGroupCache &groups,
                                        const DecideSourceNames &names, idx_t num_rows, DecideErrorLedger &errors)
-    : op(op), tree(tree), descent(descent), columns(columns), gstate(gstate), names(names), num_rows(num_rows),
-      errors(errors) {
+    : op(op), tree(tree), descent(descent), columns(columns), gstate(gstate), groups(groups), names(names),
+      num_rows(num_rows), errors(errors) {
+}
+
+SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const DecideDescent &descent, idx_t node) {
+	const auto key = tree.nodes[node]->key;
+	auto &slots = descent.Containers()[node].groups;
+	vector<vector<Value>> values(slots.size());
+	for (auto &slot : slots) {
+		values[slot.rank] = descent.Label(key, slot.key);
+	}
+	SolverInput::KeyValues key_values;
+	for (auto &element : DecideKeyElements(tree.keys, key)) {
+		key_values.null_modes.push_back(element.null_mode);
+	}
+	key_values.values_of = [values](idx_t group) {
+		return values[group];
+	};
+	return key_values;
+}
+
+vector<pair<idx_t, idx_t>> DecideEntryRows(const DecideTree &tree, const DecideDescent &descent, idx_t node) {
+	auto &container = descent.Containers()[node];
+	if (tree.nodes[node]->per != DecideTreePer::ROW) {
+		return container.routed;
+	}
+	vector<pair<idx_t, idx_t>> rows;
+	for (idx_t e = 0; e < container.entries.size(); e++) {
+		rows.emplace_back(container.entries[e].row, e);
+	}
+	return rows;
 }
 
 vector<KeyedMapping> DecideDeclaredMappings(const DecideDescent &descent) {
@@ -216,7 +248,8 @@ void DecideModelEmitter::Constraints() {
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
 	const idx_t num_evaluated = num_constraints + (op.diagnose ? prepared.singleton_row_constraints.size() : 0);
 	for (idx_t c = 0; c < num_evaluated; c++) {
-		auto evaluated = Rows(roots[c], c < num_constraints);
+		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
+		auto evaluated = clause.lhs_is_aggregate ? Groups(roots[c]) : Rows(roots[c], c < num_constraints);
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
 		    .push_back(std::move(evaluated));
 	}
@@ -281,6 +314,174 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	return evaluated;
 }
 
+void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
+                                            const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column) {
+	// A term beside the reducers stays in its group's row only as data of the `by` key's own columns times a decision
+	// of the group's class or of none (language/guide.md §6.4): NULL, or with no instance, only on a kept row in no
+	// group, which emits nothing.
+	vector<bool> in_no_group(descent.Containers()[root].entries.size(), false);
+	auto numbers = columns.Numbers(root, site.program, columns.Tested(root), &in_no_group, &site, &term.inputs);
+	column.AssignDense(num_rows);
+	for (auto &read : rows) {
+		column.Set(read.first, numbers[read.second]);
+	}
+}
+
+vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const DecideTermSite &site,
+                                               CoefficientColumn &column, TermFilterState &filter) {
+	auto &entries = descent.Containers()[site.node].entries;
+	// Its member tests are its filter's NULL tests of what its body reads and of its decisions' keys, so no member's
+	// coefficient is NULL and every member's decision has an instance (D84).
+	const auto &tested = columns.Tested(site.node);
+	auto numbers = columns.Numbers(site.node, site.program, tested, nullptr, &site, &term.inputs);
+	// A relation-qualified reducer reads each class of its qualifier once in each group, at its first row
+	// (language/guide.md §5.1).
+	const auto qualified = term.qualifier_scope_idx != DConstants::INVALID_INDEX;
+	const auto reads = qualified ? columns.FirstOfEachInstance(site.node, tested) : tested;
+	filter.avg_scale = term.avg_scale;
+	filter.has_filter = qualified;
+	filter.mask.assign(num_rows, false);
+	column.AssignDense(num_rows);
+	for (idx_t e = 0; e < entries.size(); e++) {
+		if (reads[e]) {
+			filter.mask[entries[e].row] = true;
+			column.Set(entries[e].row, numbers[e]);
+		}
+	}
+	vector<bool> members(num_rows, false);
+	for (auto &read : DecideEntryRows(tree, descent, site.node)) {
+		members[read.first] = members[read.first] || tested[read.second];
+	}
+	return members;
+}
+
+idx_t DecideModelEmitter::ByReducer(idx_t root) const {
+	auto &node = *tree.nodes[root];
+	for (auto child : node.children) {
+		if (tree.nodes[child]->kind == DecideNodeKind::REDUCER && tree.nodes[child]->key == node.facts->group_key) {
+			return child;
+		}
+	}
+	throw InternalException("DECIDE tree: %s reads no G of its `by` key", node.text);
+}
+
+bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<bool> &kept,
+                                          EvaluatedConstraint &evaluated, vector<TermFilterState> &filters,
+                                          vector<bool> &active) {
+	auto &body = tree.nodes[root]->compiled;
+	auto &terms = body.clause->lhs_terms;
+	bool has_local_filters = false;
+	bool unfiltered = false;
+	for (idx_t t = 0; t < terms.size(); t++) {
+		auto &site = body.linear[t];
+		if (site.node == root) {
+			// A term beside the reducers is read on each kept row, and counted once in its group.
+			ReadBesideReducers(root, terms[t], site, rows, evaluated.row_coefficients[t]);
+			unfiltered = true;
+			continue;
+		}
+		const auto members = ReadInReducer(terms[t], site, evaluated.row_coefficients[t], filters[t]);
+		// A filter that keeps every kept row filters nothing, as flat reads it (ReadTermFilters).
+		bool filters_rows = false;
+		for (idx_t row = 0; row < num_rows && !filters_rows; row++) {
+			filters_rows = kept[row] && !members[row];
+		}
+		if (!filters_rows) {
+			unfiltered = true;
+			continue;
+		}
+		filters[t].has_filter = true;
+		has_local_filters = true;
+		for (idx_t row = 0; row < num_rows; row++) {
+			active[row] = active[row] || members[row];
+		}
+	}
+	if (unfiltered) {
+		std::fill(active.begin(), active.end(), true);
+	}
+	return has_local_filters;
+}
+
+EvaluatedConstraint DecideModelEmitter::Groups(idx_t root) {
+	auto &body = tree.nodes[root]->compiled;
+	auto &clause = *body.clause;
+	auto evaluated = InitializeEvaluatedConstraint(clause, body.clause_index,
+	                                               [&](const DecideTerm &term) { return gstate.ReadVariable(term); });
+	// The rows the clause keeps: every row its root holds, which its `when` routed, with the entry standing for each.
+	const auto rows = DecideEntryRows(tree, descent, root);
+	vector<bool> kept(num_rows, false);
+	for (auto &read : rows) {
+		kept[read.first] = true;
+	}
+	vector<bool> null_rows(num_rows, false);
+	vector<TermFilterState> filters(clause.lhs_terms.size());
+	// The rows some reducer's filter keeps, which alone emit their group's row when every term has a filter.
+	vector<bool> active(num_rows, false);
+	const auto has_local_filters = ReadGroupedTerms(root, rows, kept, evaluated, filters, active);
+	// Each kept row's group of the `by` key: its slot in the clause's G of that key, numbered by value.
+	const auto keyed = clause.group_key != DConstants::INVALID_INDEX;
+	const auto by = keyed ? ByReducer(root) : DConstants::INVALID_INDEX;
+	vector<idx_t> group_of(num_rows, DConstants::INVALID_INDEX);
+	idx_t num_key_groups = 0;
+	if (keyed) {
+		auto &container = descent.Containers()[by];
+		for (auto &entry : container.entries) {
+			group_of[entry.row] = container.groups[entry.slot].rank;
+		}
+		num_key_groups = container.groups.size();
+	}
+	const DecideKeyGroups key_groups {group_of, num_key_groups};
+	idx_t grouped_instances = 0;
+	// A `per K:` that names classes holds once per class, so not at all with every kept row's K NULL.
+	auto &classes = descent.Containers()[root].groups;
+	const auto kept_groups = GroupRowsByShape(
+	    clause, num_rows, kept, has_local_filters, active, keyed ? &key_groups : nullptr,
+	    [&]() {
+		    return std::any_of(classes.begin(), classes.end(),
+		                       [](const DecideDescentGroup &slot) { return slot.in_a_class; });
+	    },
+	    nullptr, evaluated, grouped_instances);
+	if (keyed) {
+		Name(by, kept_groups, evaluated);
+	}
+	// A group in which a reducer reads no member has no value there, so neither has its instance (D68).
+	vector<const TermFilterState *> reducers;
+	for (auto &filter : filters) {
+		reducers.push_back(&filter);
+	}
+	SkipGroupsWithAnEmptyReducer(reducers, num_rows, evaluated.row_group_ids, evaluated.num_groups);
+	CountTupleTermsOncePerGroup(clause.lhs_terms, num_rows, evaluated);
+	if (DescribeBound(clause, num_rows, names, op.source_fragments, op.keyed_scopes, op.keys, evaluated)) {
+		vector<bool> nulls(descent.Containers()[root].entries.size(), false);
+		auto bound = columns.Numbers(root, body.rhs, columns.Tested(root), &nulls);
+		evaluated.rhs_values.AssignDense(num_rows);
+		for (auto &read : rows) {
+			evaluated.rhs_values.Set(read.first, bound[read.second]);
+			null_rows[read.first] = null_rows[read.first] || nulls[read.second];
+		}
+	}
+	D_ASSERT(!clause.admitted_lower);
+	ScaleAvgTerms(clause, filters, num_rows, evaluated);
+	SkipNullInstances(null_rows, true, num_rows, evaluated.row_group_ids, evaluated.num_groups);
+	gstate.CountInstances(evaluated.source_clause_id, grouped_instances,
+	                      CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, true));
+	return evaluated;
+}
+
+void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedConstraint &evaluated) {
+	// Each group is named by its key's values, which the solver input reads by its rank.
+	auto &slots = descent.Containers()[by].groups;
+	vector<idx_t> first_rows(slots.size());
+	for (auto &slot : slots) {
+		first_rows[slot.rank] = slot.first_row;
+	}
+	const auto values = groups.key_values.size();
+	groups.key_values.push_back(DecideGroupKeyValues(tree, descent, by));
+	for (auto group : kept_groups) {
+		evaluated.group_names.push_back({values, group, first_rows[group]});
+	}
+}
+
 vector<TermFilterState> DecideModelEmitter::Objective() {
 	vector<TermFilterState> filters;
 	auto found = std::find_if(tree.roots.begin(), tree.roots.end(),
@@ -318,9 +519,12 @@ vector<TermFilterState> DecideModelEmitter::Objective() {
 		coefficients[t].AssignDense(num_rows);
 		// Stage 05 read a NULL coefficient as 0 (DropNullObjectiveTerms), so none is read here. An entry that reads no
 		// instance of the term's decision gives it no value, so the term is dropped there and its coefficient never
-		// read (D84).
-		const auto reads = columns.ReadEntries(site.node, term.variable_index);
-		auto numbers = columns.Numbers(site.node, site.program, reads, nullptr, &site, &term.inputs);
+		// read (D84). A relation-qualified reducer reads each class once, at its first row (language/guide.md §5.1).
+		const auto present = columns.ReadEntries(site.node, term.variable_index);
+		auto numbers = columns.Numbers(site.node, site.program, present, nullptr, &site, &term.inputs);
+		const auto reads = term.qualifier_scope_idx == DConstants::INVALID_INDEX
+		                       ? present
+		                       : columns.FirstOfEachInstance(site.node, present);
 		auto read = [&](idx_t row, idx_t entry) {
 			if (reads[entry]) {
 				filter.mask[row] = true;

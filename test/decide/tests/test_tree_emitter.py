@@ -12,8 +12,9 @@ ROWS = "(VALUES (1, 'a', 3.0::DOUBLE), (2, 'a', 4.0::DOUBLE), (3, 'b', 5.0::DOUB
 #: Every clause in the per-row shape and no objective: the shapes with an arm.
 ROWS_ONLY = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c AND x + 1 >= 2"
 PLAIN = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c MAXIMIZE sum(x)"
-#: A clause in the aggregate shape, which has no arm yet.
-NO_ARM = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c AND sum(x) by (t.g) <= 5 MAXIMIZE sum(x)"
+#: A frame read, which has no arm yet.
+NO_ARM = f"""SELECT id, x FROM {ROWS} DECIDE x(REAL)
+    SUCH THAT x <= t.c AND x <= at(previous else 9: x) over (t.id) MAXIMIZE sum(x)"""
 
 
 def run(cli, sql, evaluator="tree", **env):
@@ -66,7 +67,7 @@ def test_a_query_with_an_arm_is_formulated_as_flat_formulates_it(decidb_cli, tmp
 
 
 def test_a_query_with_no_arm_takes_the_interim_formulator(decidb_cli):
-    """The uncovered branch: a clause in the aggregate shape has no arm yet."""
+    """The uncovered branch: a frame read has no arm yet."""
     result = run(decidb_cli, NO_ARM, DECIDB_PROFILE="1")
     assert counters(result, "execution.tree_fallback") == [1], result.stderr
     flat = run(decidb_cli, f"{NO_ARM} ORDER BY id", "flat").stdout
@@ -81,7 +82,6 @@ UNCOVERED = {
     "DEFINED_READS": "x(REAL) SUCH THAT x <= 9 AND x + abs(x - t.c) <= 20",
     "EXTREMUM_ROWS": "x(REAL) SUCH THAT x <= 9 AND max(x) by (t.g) >= 2",
     "MEMBER_ROWS": "x(REAL) SUCH THAT x <= 9 AND max(x) by (t.g) <= 2",
-    "GROUP_ROWS": "x(REAL) SUCH THAT x <= 9 AND sum(x) by (t.g) <= 5",
     "CLASS_ROWS": "x(REAL), y(REAL) SUCH THAT x <= 9 AND per t.g: x + y <= 5",
     "OBJECTIVE_SQUARES": "x(REAL) SUCH THAT x <= t.c MINIMIZE sum(power(x - t.c, 2))",
     "OBJECTIVE_EXTREMUM": "x(REAL) SUCH THAT x <= t.c MINIMIZE max(x)",
@@ -92,9 +92,8 @@ UNCOVERED = {
     "PRODUCT_LINKS": "x(REAL), b(BOOL) SUCH THAT x <= 9 AND b * x <= 5",
     # t.c takes several values in a class of t.g, so the reducer reads one value per class and value of t.c.
     "KEYED_SIGNATURE": "x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: t.c * y)",
-    # A bound's data reducer of DOUBLE values is checked for NaN first, by a hidden root; one of DECIMAL values is not.
-    "data value check": "x(REAL) SUCH THAT x <= max(t.c) by (t.g)",
-    "reads a data reducer": "x(REAL) SUCH THAT x <= max(t.c::DECIMAL(4, 1)) by (t.g)",
+    # A norm's value is folded from a body of its arguments, which the tree computes no value for yet.
+    "a data reducer folds a norm": "x(REAL) SUCH THAT x <= norm(t.c, 1) by (t.g)",
 }
 
 #: The shapes that multiply or square decisions in a clause, or multiply them in the objective, which HiGHS refuses
@@ -121,9 +120,10 @@ def test_a_product_or_square_with_no_arm_is_named(decidb_cli_gurobi, shape, tmp_
     _assert_named(decidb_cli_gurobi, GUROBI_UNCOVERED, shape, tmp_path)
 
 
-def test_a_covered_query_is_logged_covered(decidb_cli, tmp_path):
-    lines, result = coverage(decidb_cli, ROWS_ONLY, tmp_path)
-    assert lines == ["covered"], result.stderr
+@pytest.mark.parametrize("evaluator", ["tree", "verify"])
+def test_a_covered_query_is_logged_covered_by_its_evaluator(decidb_cli, tmp_path, evaluator):
+    lines, result = coverage(decidb_cli, ROWS_ONLY, tmp_path, evaluator)
+    assert lines == [f"covered: {evaluator}"], result.stderr
 
 
 def test_a_null_coefficient_skips_its_row(decidb_cli, tmp_path):
@@ -205,6 +205,16 @@ RAISED = {
         "SELECT id, x FROM (VALUES (1, 2.0), (2, 0.0), (3, -1.0)) t(id, w) "
         "DECIDE x(REAL) SUCH THAT x <= 9 AND ln(t.w) * x <= 100",
         "cannot take logarithm of zero",
+    ),
+    # The clause's `when` (row 2,500, in the second window) before a reducer's member test (row 10, in the first): the
+    # clause's `when` routes its rows, so it ranks before every filter, whatever the windows (DecideNode::filter_group
+    # is a reducer's alone).
+    "a-clauses-when-before-a-reducers-filter": (
+        "SELECT id, x FROM (SELECT range AS id, range % 2 AS g, CASE WHEN range = 2500 THEN -1.0 ELSE 2.0 END AS a, "
+        "CASE WHEN range = 10 THEN -1.0 ELSE 2.0 END AS w FROM range(3000)) t "
+        "DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x <= 1 AND y <= 1 AND "
+        "when sqrt(t.a) > -1: sum(ln(t.w) * x) by (t.g) + 2 * y <= 5 MAXIMIZE sum(x)",
+        "cannot take square root of a negative number",
     ),
     # A coefficient DeciDB computed past a DOUBLE from finite values names its clause.
     "a-computed-coefficient-past-a-double": (
@@ -331,8 +341,8 @@ def test_an_objective_reads_the_rows_flat_reads(decidb_cli, tmp_path, case):
 
 
 def test_a_qualified_reducer_reads_one_row_per_class(decidb_cli, tmp_path):
-    """`sum(per t.g: y)` reads y once per class of t.g: its operand holds one entry per class, rows 1 and 3, the rows
-    flat's qualifier keeps."""
+    """`sum(per t.g: y)` reads y once per class of t.g, at its first row: rows 1 and 3, the rows flat's qualifier
+    keeps."""
     sql = (
         f"SELECT id, x, y FROM {ROWS} DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x + y <= t.c MAXIMIZE sum(per t.g: y)"
     )
@@ -377,7 +387,7 @@ def test_a_member_test_raises_in_flats_order(decidb_cli, tmp_path, case):
     flat = run(decidb_cli, sql, "flat")
     assert "cannot take logarithm of zero" in flat.stderr, flat.stderr
     lines, tree = coverage(decidb_cli, sql, tmp_path)
-    assert lines == ["covered"], tree.stderr
+    assert lines == ["covered: tree"], tree.stderr
     assert tree.stderr == flat.stderr
 
 
@@ -396,7 +406,7 @@ def test_a_term_reading_no_instance_is_dropped(decidb_cli, tmp_path, case):
     sql = f"""SELECT id, x, y FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, NULL, {ABSENT[case]})) t(id, g, c)
         DECIDE x(REAL), per t.g: y(REAL) SUCH THAT x <= 1 AND y <= 2 MAXIMIZE when t.id = 2: sum(x) + t.c * y"""
     lines, result = coverage(decidb_cli, sql, tmp_path)
-    assert lines == ["covered"], result.stderr
+    assert lines == ["covered: tree"], result.stderr
     flat, tree = models(decidb_cli, sql, tmp_path)
     assert tree == flat
 
@@ -408,3 +418,329 @@ def test_an_objective_produced_twice_raises_flats_error(decidb_cli):
     flat = run(decidb_cli, sql, "flat")
     assert "the objective would be produced more than once" in flat.stderr, flat.stderr
     assert run(decidb_cli, sql).stderr == flat.stderr
+
+
+#: Rows for the aggregate shape: group a holds rows 1 and 2, group b rows 3, 5 and 6, and row 4's g is NULL, so it is in
+#: no group and has no y. Row 1's k is NULL, so it is in no class of t.k, though it is group a's first row; class v
+#: holds rows 3 and 6 of group b, with two values of c.
+GROUPED_ROWS = (
+    "(VALUES (1, 'a', NULL, 3.0::DOUBLE, true), (2, 'a', 'u', 4.0, false), (3, 'b', 'v', 5.0, true), "
+    "(4, NULL, 'v', 6.0, true), (5, 'b', 'u', 7.0, false), (6, 'b', 'v', 8.0, false)) t(id, g, k, c, p)"
+)
+
+#: Each a clause in the aggregate shape, whose model the tree builds as flat builds it, by the branch it reaches
+#: (DecideModelEmitter::Groups).
+GROUPED = {
+    # A model row per group of the `by` key, each named by its value (ByReducer, Name).
+    "a-group-per-key": "sum(x) by (t.g) <= 5",
+    # No key: one group of every kept row.
+    "one-group": "sum(x) <= 12",
+    # The reducer's own `when` keeps rows 1, 3 and 4, so a group emits the rows it reads (a filter of kept rows).
+    "a-reducers-own-when": "sum(when t.p: x) by (t.g) <= 5",
+    # The second reducer reads no row of group a (c is 3 and 4 there), so group a has no value and is skipped
+    # (SkipGroupsWithAnEmptyReducer).
+    "a-group-a-reducer-reads-no-row-of": "sum(x) by (t.g) + sum(when t.c > 4.5: x) by (t.g) <= 8",
+    # z, beside the reducers, is read on each kept row and counted once per group, on its first row
+    # (ReadBesideReducers, CountTupleTermsOncePerGroup).
+    "a-term-beside-the-reducers": "sum(x) by (t.g) + z <= 5",
+    # Row 1 is in no class of t.k but is group a's first row: its root holds it, so z counts there, as flat counts it
+    # (DecideNode::holds_rows_in_no_class).
+    "a-row-in-no-class-of-its-per": "per t.k: sum(x) by (t.g) + z <= 5",
+    # AVG divides by the rows its group reads (ScaleAvgTerms).
+    "an-avg": "avg(x) by (t.g) <= 2",
+    # The bound is read on each kept row (DescribeBound).
+    "a-bound-on-each-row": "sum(x) by (t.g) <= t.c",
+    # The clause's `when` keeps rows 2 to 6.
+    "a-clauses-when": "when t.c > 3.5: sum(x) by (t.g) <= 5",
+    # A data reducer's value in each group: a hole of the root's layout, which its NaN check reads as well.
+    "a-data-reducer": "sum(x) by (t.g) <= max(t.c) by (t.g)",
+    # Each variant of a class of t.k once in its group: class v of group b reads 5 and 8, class u 7, so group b's
+    # bound is 20 (DecideTreeColumns::FirstOfEachInstance).
+    "a-data-reducer-per-class": "x <= 30 AND x <= sum(per t.k: t.c) by (t.g)",
+    # Row 4 reaches no group of the data reducer, its g NULL: it reads NULL, so it has no bound.
+    "a-data-reducer-a-row-reaches-no-group-of": "x <= sum(t.c) by (t.g)",
+}
+
+
+@pytest.mark.parametrize("case", list(GROUPED))
+def test_a_grouped_clause_is_formulated_as_flat_formulates_it(decidb_cli, tmp_path, case):
+    sql = f"""SELECT id, x FROM {GROUPED_ROWS} DECIDE x(REAL), per t.g: y(REAL), per (): z(REAL)
+        SUCH THAT x <= 9 AND y <= 9 AND z <= 9 AND {GROUPED[case]} MAXIMIZE sum(x) + sum(y) + z"""
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+def test_a_clause_with_no_class_of_its_per_holds_no_instance(decidb_cli, tmp_path):
+    """Every k is NULL, so `per t.k` names no class: the clause holds no instance."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', NULL::VARCHAR), (2, 'b', NULL)) t(id, g, k)
+        DECIDE x(REAL) SUCH THAT x <= 9 AND per t.k: sum(x) by (t.g) <= 5 MAXIMIZE sum(x)"""
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+def test_an_emptied_group_is_counted_as_flat_counts_it(decidb_cli):
+    """No row has c above 100, so each group's reducer reads none: each of the clause's 2 instances has no value (D90),
+    which the tree counts as flat does."""
+    sql = f"""SELECT id, x FROM {GROUPED_ROWS} DECIDE x(REAL)
+        SUCH THAT x <= 9 AND sum(when t.c > 100: x) by (t.g) <= 5 MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "each of its 2 instances has no value" in flat.stderr, flat.stderr
+    assert run(decidb_cli, sql).stderr == flat.stderr
+
+
+#: Rows 1 and 2 share a NOCASE class of g, spelled 'a' and 'A', which the reducer's member test reads apart.
+NOCASE_ROWS = (
+    "(SELECT id, g COLLATE NOCASE AS g, p FROM (VALUES (1, 'a', 5.0), (2, 'A', 4.0), (3, 'b', 3.0)) v(id, g, p)) t"
+)
+
+#: A relation-qualified reducer reads each class of its qualifier once, at its first row, however many entries its
+#: spellings make of the class (FirstOfEachInstance): in a clause, and in the objective.
+QUALIFIED = {
+    "in-a-clause": "y <= 10 AND sum(per t.g: y) <= 12 MAXIMIZE sum(t.p * y)",
+    "in-the-objective": "y <= 10 MAXIMIZE sum(per t.g: y)",
+}
+
+
+@pytest.mark.parametrize("case", list(QUALIFIED))
+def test_a_qualified_reducer_reads_each_class_once(decidb_cli, tmp_path, case):
+    sql = f"SELECT id, y FROM {NOCASE_ROWS} DECIDE per t.g: y(INT) SUCH THAT {QUALIFIED[case]}"
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+def test_a_qualified_avg_divides_by_its_classes(decidb_cli, tmp_path):
+    """The join repeats t's rows, and `avg(t: x)` reads each of them once in its group: its filter is the
+    de-duplication, so AVG divides by the classes it keeps, as flat's qualifier does (ReadInReducer's has_filter)."""
+    sql = """SELECT t.id, s.k, x FROM (VALUES (1, 'a', 3.0, true), (2, 'a', 4.0, false), (3, 'b', 5.0, true),
+        (4, NULL, 6.0, true)) t(id, g, c, p) JOIN (VALUES (1, 'u'), (1, 'v'), (2, 'u'), (3, 'u'), (3, 'v'), (3, 'w'),
+        (4, 'u')) s(id, k) ON t.id = s.id
+        DECIDE per t.id: x(REAL) SUCH THAT x <= 9 AND avg(t: x) by (t.g) <= 2 MAXIMIZE sum(t: x)"""
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+def test_a_data_check_raises_flats_message_without_side_plans(decidb_cli):
+    """Under tree-noside no side plan checks the data reducer's values: its hidden root does, at the check's rank."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 2.0::DOUBLE), (2, 'a', 'NaN'::DOUBLE)) t(id, g, c)
+        DECIDE x(REAL) SUCH THAT x <= max(t.c) by (t.g) MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "the bound t.c is NaN on some rows" in flat.stderr, flat.stderr
+    assert run(decidb_cli, sql, "tree-noside").stderr == flat.stderr
+
+
+def test_a_folds_error_raises_flats_message_without_side_plans(decidb_cli):
+    """Group a's sum of two DECIMAL(38) maxima overflows as the side plan's sum does: the fold raises its error at the
+    data reducer's rank (DecideTreeColumns::Folds)."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 99999999999999999999999999999999999999::DECIMAL(38, 0)),
+        (2, 'a', 99999999999999999999999999999999999999::DECIMAL(38, 0)), (3, 'b', 5::DECIMAL(38, 0))) t(id, g, c)
+        DECIDE x(REAL) SUCH THAT x <= 9 AND x <= sum(t.c) by (t.g) / 1e40 MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "Overflow in HUGEINT addition" in flat.stderr, flat.stderr
+    assert run(decidb_cli, sql, "tree-noside").stderr == flat.stderr
+
+
+def test_a_data_check_raises_what_its_window_meets_first(decidb_cli):
+    """The check of max(ln(t.w)) reads ln only where the clause's `when` keeps the row, as the side plan's does: its
+    window raises the `when`'s error (row 2), which a vectorized evaluation meets before row 1's logarithm."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 2.0::DOUBLE, -1.0), (2, 'a', -3.0, 2.0), (3, 'b', 3.0, 5.0))
+        t(id, g, c, w) DECIDE x(REAL) SUCH THAT x <= 9 AND when sqrt(t.c) > -1: x <= max(ln(t.w)) by (t.g)
+        MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "cannot take square root of a negative number" in flat.stderr, flat.stderr
+    assert run(decidb_cli, sql, "tree-noside").stderr == flat.stderr
+
+
+#: Flat reads a reducer's own `when` in its terms' filter, window by window and term by term, after the routes and
+#: before any coefficient: each case raises flat's error, a `when`'s or a member test's, where the descent reads the
+#: `when` (DecideNode::filter_group).
+FILTER_RAISED = {
+    # Term 0's member test (row 2) before term 1's `when` (row 1).
+    "a-test-before-the-next-terms-when": (
+        "(VALUES (1, 0.0, 2.0, 1.0), (2, 2.0, -1.0, 1.0)) t(id, a, w, v)",
+        "sum(ln(t.w) * t.v * x) + sum(when ln(t.a) > -100: x)",
+        "logarithm of a negative number",
+    ),
+    # Term 0's `when` (row 2) before term 1's (row 1).
+    "a-when-before-the-next-terms-when": (
+        "(VALUES (1, 2.0, -1.0, 1.0), (2, 0.0, 2.0, 1.0)) t(id, a, w, v)",
+        "sum(when ln(t.a) > -100: x) + sum(when ln(t.w) > -100: 2 * x)",
+        "logarithm of zero",
+    ),
+    # A reducer's `when` (row 2) before its own member test (row 1): the filter reads the `when` first.
+    "a-when-before-its-member-test": (
+        "(VALUES (1, 2.0, -1.0, 1.0), (2, 0.0, 2.0, 1.0)) t(id, a, w, v)",
+        "sum(when ln(t.a) > -100: ln(t.w) * t.v * x)",
+        "logarithm of zero",
+    ),
+    # A `when` of two conjuncts reads them in their order: the first's error (row 2) before the second's (row 1).
+    "a-conjunction-in-its-order": (
+        "(VALUES (1, 2.0, -1.0, 1.0), (2, -1.0, 2.0, 1.0)) t(id, a, w, v)",
+        "sum(when sqrt(t.a) > -1 AND ln(t.w) > -100: x)",
+        "square root of a negative number",
+    ),
+    # A member test in the first window (row 10) before the `when` in the second (row 2,500).
+    "a-window-before-the-next": (
+        "(SELECT range AS id, CASE WHEN range = 2500 THEN 0.0 ELSE 2.0 END AS a, "
+        "CASE WHEN range = 10 THEN -1.0 ELSE 2.0 END AS w, 1.0 AS v FROM range(3000)) t",
+        "sum(when ln(t.a) > -100: ln(t.w) * t.v * x)",
+        "logarithm of a negative number",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(FILTER_RAISED))
+def test_a_reducers_when_raises_in_its_filter(decidb_cli, tmp_path, case):
+    rows, objective, message = FILTER_RAISED[case]
+    sql = f"SELECT id, x FROM {rows} DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE {objective}"
+    flat = run(decidb_cli, sql, "flat")
+    assert message in flat.stderr, flat.stderr
+    lines, tree = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], tree.stderr
+    assert tree.stderr == flat.stderr
+
+
+def test_a_grouped_clauses_reducers_raise_in_term_order(decidb_cli, tmp_path):
+    """In a clause, as in the objective: term 0's member test (row 2) before term 1's `when` (row 1)."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 0.0, 2.0, 1.0), (2, 'a', 2.0, -1.0, 1.0)) t(id, g, a, w, v)
+        DECIDE x(REAL) SUCH THAT x <= 1 AND sum(ln(t.w) * t.v * x) by (t.g) + sum(when ln(t.a) > -100: x) by (t.g) <= 5
+        MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "logarithm of a negative number" in flat.stderr, flat.stderr
+    lines, tree = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], tree.stderr
+    assert tree.stderr == flat.stderr
+
+
+#: Flat groups a clause's kept rows by its `by` key after it computes the terms, so a key's error ranks after theirs:
+#: under each evaluator that reads the clause, each case raises flat's error (DecideNode::key_block).
+KEY_RAISED = {
+    # A reducer's own `when` (row 1) before the key (row 2).
+    "a-reducers-when-before-its-by-key": (
+        "(VALUES (1, 2.0, -1.0), (2, -1.0, 2.0), (3, 3.0, 5.0)) t(id, c, w)",
+        "sum(when ln(t.w) > -100: x) by (sqrt(t.c)) <= 8",
+        "logarithm of a negative number",
+    ),
+    # A coefficient (row 1) before the key (row 2).
+    "a-coefficient-before-the-by-key": (
+        "(VALUES (1, 2.0, -1.0), (2, -1.0, 2.0), (3, 3.0, 5.0)) t(id, c, w)",
+        "sum(ln(t.w) * x) by (sqrt(t.c)) <= 8",
+        "logarithm of a negative number",
+    ),
+    # The key raises on row 2, which still reaches the terms, whose coefficient raises there first.
+    "a-coefficient-on-a-row-its-key-raises-on": (
+        "(VALUES (1, 2.0), (2, -1.0), (3, 3.0)) t(id, c)",
+        "sum(ln(t.c) * x) by (sqrt(t.c)) <= 8",
+        "logarithm of a negative number",
+    ),
+    # A key's elements in their order, the logarithm's (row 2) before the square root's (row 1).
+    "a-keys-elements-in-their-order": (
+        "(VALUES (1, -1.0, 2.0), (2, 2.0, -1.0), (3, 3.0, 5.0)) t(id, c, w)",
+        "sum(x) by (sqrt(t.c), ln(t.w)) <= 8",
+        "logarithm of a negative number",
+    ),
+}
+
+
+@pytest.mark.parametrize("evaluator", ["tree", "verify"])
+@pytest.mark.parametrize("case", list(KEY_RAISED))
+def test_a_by_key_raises_after_the_terms(decidb_cli, tmp_path, case, evaluator):
+    rows, clause, message = KEY_RAISED[case]
+    sql = f"SELECT id, x FROM {rows} DECIDE x(REAL) SUCH THAT x <= 9 AND {clause} MAXIMIZE sum(x)"
+    flat = run(decidb_cli, sql, "flat")
+    assert message in flat.stderr, flat.stderr
+    lines, result = coverage(decidb_cli, sql, tmp_path, evaluator)
+    assert lines == [f"covered: {evaluator}"], result.stderr
+    assert result.stderr == flat.stderr
+
+
+@pytest.mark.parametrize("evaluator", ["tree", "verify"])
+def test_a_row_in_no_group_reaches_the_operand(decidb_cli, tmp_path, evaluator):
+    """Row 2's g is NULL, so it is in no group of the G: it still reaches the G's operand, which flat computes on every
+    row the G reads, so its NaN coefficient raises flat's message (DecideDescent::Visit)."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 3.0::DOUBLE), (2, NULL, 'NaN'::DOUBLE), (3, 'b', 5.0)) t(id, g, c)
+        DECIDE x(REAL) SUCH THAT x <= 9 AND sum(t.c * x) by (t.g) <= 8 MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "t.c is NaN or infinite on some rows" in flat.stderr, flat.stderr
+    lines, result = coverage(decidb_cli, sql, tmp_path, evaluator)
+    assert lines == [f"covered: {evaluator}"], result.stderr
+    assert result.stderr == flat.stderr
+
+
+@pytest.mark.parametrize("evaluator", ["tree", "verify"])
+def test_the_objective_reads_no_term_at_a_row_in_no_group(decidb_cli, tmp_path, evaluator):
+    """Flat reads the objective's sum of group sums in place (D81), on the rows of each group: row 2's g is NULL, so
+    its logarithm of 0 is never computed, and the objective's G does not route the row to its operand."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 1.0), (2, NULL, 0.0), (3, 'b', 2.0)) t(id, g, w)
+        DECIDE x(INT) SUCH THAT x <= 10 AND sum(x) <= 10 MAXIMIZE sum(per t.g: sum(ln(t.w) * x) by (t.g))"""
+    lines, result = coverage(decidb_cli, sql, tmp_path, evaluator)
+    assert lines == [f"covered: {evaluator}"], result.stderr
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    assert result.stdout == run(decidb_cli, sql, "flat").stdout
+
+
+def test_the_interim_reads_no_value_of_a_g_at_a_row_in_no_group(decidb_cli):
+    """A frame read takes the interim formulator. Row 2 is in class u of `per t.k:` but in no group of t.g: it holds no
+    entry of the G, so its group's row reads no sum there, and x is free at 9 on it."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', 'u', 1, 3.0), (2, NULL, 'u', 2, 4.0), (3, 'b', 'v', 3, 5.0))
+        t(id, g, k, s, c) DECIDE x(REAL) SUCH THAT x <= 9 AND per t.k: sum(x) by (t.g) <= at(previous else 2: t.c)
+        over (t.s) MAXIMIZE sum(x) ORDER BY id"""
+    result = run(decidb_cli, sql, DECIDB_PROFILE="1")
+    assert counters(result, "execution.tree_fallback") == [1], result.stderr
+    assert result.stdout == run(decidb_cli, sql, "flat").stdout
+
+
+def test_the_interim_raises_in_flats_blocks(decidb_cli):
+    """A frame read takes the interim formulator, which ranks what it computes in flat's blocks, as the columns do: the
+    reducer's member test in its filter and its coefficient among the terms, both after the reducer's own `when` the
+    descent reads in the filter. The `when` raises on row 2, the test and the coefficient on row 1."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', -1.0, 2.0), (2, 'a', 2.0, -1.0), (3, 'b', 3.0, 5.0)) t(id, g, c, w)
+        DECIDE x(REAL) SUCH THAT x <= at(previous else 9: x) over (t.id) AND x <= 9 AND
+        sum(when ln(t.w) > -100: sqrt(t.c) * x) by (t.g) <= 8 MAXIMIZE sum(x)"""
+    flat = run(decidb_cli, sql, "flat")
+    assert "logarithm of a negative number" in flat.stderr, flat.stderr
+    result = run(decidb_cli, sql, DECIDB_PROFILE="1")
+    assert counters(result, "execution.tree_fallback") == [1], result.stderr
+    assert result.stderr.splitlines()[-1] == flat.stderr.splitlines()[-1]
+
+
+def test_the_interim_reads_a_grouped_roots_classes_alone(decidb_cli):
+    """A frame read takes the interim formulator, whose root of `per t.k:` holds the rows in no class of t.k as well:
+    it reads none of them, so with every k NULL the clause holds no instance, and x is free at 9."""
+    sql = """SELECT id, x FROM (VALUES (1, 'a', NULL::VARCHAR, 1, 3.0), (2, 'a', NULL, 2, 4.0)) t(id, g, k, s, c)
+        DECIDE x(REAL) SUCH THAT x <= 9 AND per t.k: sum(x) by (t.g) <= at(previous: t.c) over (t.s within t.g)
+        MAXIMIZE sum(x) ORDER BY id"""
+    result = run(decidb_cli, sql, DECIDB_PROFILE="1")
+    assert counters(result, "execution.tree_fallback") == [1], result.stderr
+    assert result.stdout == run(decidb_cli, sql, "flat").stdout
+
+
+#: A relation's columns compare NULL as a value: rows 2 and 3 are one group of d, which flat numbers after every other.
+RELATION_ROWS = "(VALUES (1, 'a', 2), (2, NULL, 4), (3, NULL, 4), (4, 'b', 1))"
+
+
+def test_a_null_key_value_is_the_last_group(decidb_cli, tmp_path):
+    """The tree's groups are numbered as flat numbers them, NULL after every value, so the model's rows come in flat's
+    order."""
+    sql = f"""SELECT id, x FROM {RELATION_ROWS} t(id, g, c)
+        JOIN (SELECT DISTINCT g AS dg, c AS dc FROM {RELATION_ROWS} s(id, g, c)) d
+        ON t.g IS NOT DISTINCT FROM d.dg AND t.c = d.dc
+        DECIDE x(REAL) SUCH THAT x <= 9 AND sum(x) by (d) <= t.c MAXIMIZE sum(x)"""
+    lines, result = coverage(decidb_cli, sql, tmp_path)
+    assert lines == ["covered: tree"], result.stderr
+    flat, tree = models(decidb_cli, sql, tmp_path)
+    assert tree == flat
+
+
+def test_a_diagnosis_of_a_grouped_clause_has_no_arm_yet(decidb_cli, tmp_path):
+    """A diagnosis reports the classes a group's row stands for (SolverInput::class_sets), which no arm emits yet."""
+    lines, result = coverage(decidb_cli, f"DIAGNOSE {GROUPS_DIAGNOSED}", tmp_path)
+    assert lines == ["execution.tree_fallback: CLASS_SETS"], result.stderr
+
+
+GROUPS_DIAGNOSED = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x >= 9 AND sum(x) by (t.g) <= 5"

@@ -62,10 +62,12 @@ bool DecideErrorStopsTheQuery(const ErrorData &error);
 //! over, into `values` from `offset` on. When a row raises, each row is evaluated alone, a failing one keeping its
 //! error in `errors` and NULL; the executor, whose states the failure may have left half written, is made again by
 //! `remake`. So an error waits for a read that reaches its row (language/guide.md §6.3), and the one pass's rows
-//! (DecideRowStore) and a tree node's entries (DecideTreeColumns) are evaluated alike.
+//! (DecideRowStore) and a tree node's entries (DecideTreeColumns) are evaluated alike. `raised`, when given, keeps the
+//! error the whole window's evaluation raised: the one DuckDB's vectorized evaluation of the window meets first.
 void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor> &executor, idx_t expr_idx,
                           const std::function<unique_ptr<ExpressionExecutor>()> &remake, const Expression &lowered,
-                          Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset);
+                          Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset,
+                          ErrorData *raised = nullptr);
 
 //! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and how a message reads one of them on the
 //! row the coefficient fails on: `value_at(input, i)` is its value at row i of the window the coefficient was computed
@@ -134,6 +136,9 @@ void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColu
 //! none for a group with no row.
 vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows);
 
+//! A clause's terms outside its reducers in the aggregate shape, counted on the first row of each of its groups.
+void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedConstraint &evaluated);
+
 //! The instances `row_group_ids` names: in the aggregate shape each group a row stands in, else each row in a group.
 //! Empty is every row in one group.
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped);
@@ -157,6 +162,66 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const DecideSourceNames &names,
                    const vector<string> &source_fragments, const vector<KeyedScopeInfo> &keyed_scopes,
                    const vector<DecideKey> &keys, EvaluatedConstraint &evaluated);
+
+//! Per-term filter state for a reducer's own `when` (constraint terms, bilinear terms, quadratic groups, and their
+//! objective-side equivalents all share this shape).
+struct TermFilterState {
+	vector<bool> mask;
+	bool has_filter = false;
+	bool avg_scale = false;
+	//! An objective AVG's `by` groups among the rows it reads (DecideTerm::avg_group_key), which its 1/n divides by;
+	//! empty for one group.
+	vector<idx_t> avg_group_ids;
+	idx_t avg_num_groups = 0;
+};
+
+//! A key's groups over the rows a clause reads it on, numbered by the key's values: each row's group, INVALID_INDEX
+//! for a row in none (flat's PerGroupCacheEntry; the tree's G slots by rank).
+struct DecideKeyGroups {
+	const vector<idx_t> &row_group_ids;
+	idx_t num_groups;
+};
+
+//! The rows `read_rows` holds (every row when null) and `row_filter` keeps, numbered by their group of `groups`, the
+//! groups renumbered densely in key-value order; INVALID_INDEX on every other row. Returns the kept groups, as
+//! `groups` numbers them. The optional second map is over the same numbering but the looser `loose_row_filter`: a
+//! group no strict row reached emits no constraint, so its rows stay out.
+vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
+                               const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
+                               vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
+                               const std::function<bool(idx_t)> *loose_row_filter = nullptr,
+                               vector<idx_t> *out_loose_row_group_ids = nullptr);
+
+//! The rows of a clause in the grouped shape (the aggregate shape, an easy MIN/MAX; language/guide.md §6.4): its kept
+//! rows `scoped_kept` grouped by its `by` key's `groups` (null with no key), a group emitting the rows a reducer reads
+//! (`local_row_active`, with `has_local_filters`), or, under `<>`, every kept row. A `per K:` that names classes holds
+//! once per class, so with no kept row in a class (`any_class`) there is none. Writes `evaluated`'s row groups,
+//! `kept_row_group_ids` (when given: every kept row of an emitted group) and the instances the clause holds before any
+//! with no value is skipped (D90). Returns the groups of `groups` it keeps, which its names name.
+vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
+                               bool has_local_filters, const vector<bool> &local_row_active,
+                               const DecideKeyGroups *groups, const std::function<bool()> &any_class,
+                               vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
+                               idx_t &grouped_instances);
+
+//! A reducer over no rows is NULL, and a NULL instance is skipped (deck p. 56): in the aggregate shape, a group in
+//! which some reducer reads no row has no instance. Only a reducer's term carries a filter (its own `when`, its
+//! NULL-data and absent-decision tests, its de-duplication), so a term with none reads every row of its group.
+//! `row_group_ids` empty is every row in one group.
+void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
+                                  vector<idx_t> &row_group_ids, idx_t &num_groups);
+
+//! AVG denominator scaling, shared by the constraint and objective sides and by the linear/bilinear (single-column)
+//! and quadratic-inner (sqrt-scaled) cases. The rows a term reads are its filter: a clause's `when` is folded into it
+//! upstream.
+void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, bool quadratic_inner,
+                  idx_t num_rows, const vector<idx_t> &row_group_ids, idx_t num_groups);
+
+//! Each AVG term of `constraint` divided by the rows its filter reads in its group (ScaleAvgRows); the clause is
+//! `avg_scaled` when every linear term was, a pure AVG left side, which the model builder tags so a diagnosis renders
+//! it as `AVG(...)` (a mixed or a bilinear or quadratic left side has no clean AVG re-quote).
+void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
+                   EvaluatedConstraint &evaluated);
 
 //! The least and the greatest of the values added, as ORDER BY places them (NULL last), so a message naming them does
 //! not depend on the order rows arrive in. It holds the values' addresses, which must outlive it.

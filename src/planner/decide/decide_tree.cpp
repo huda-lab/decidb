@@ -320,6 +320,7 @@ public:
 	//! The bodies from what stage 05 lowered, then the order and ranks they read.
 	unique_ptr<DecideTree> Finish() {
 		sources.link_nodes = link_nodes;
+		sources.record_nodes = record_nodes;
 		CompileDecideTree(context, op, *tree, sources);
 		PostOrder();
 		ErrorRanks();
@@ -605,11 +606,25 @@ private:
 	//! A clause in the grouped shape (the aggregate shape, an easy or a composed extremum) is one model row per group
 	//! of its `by` key (language/guide.md §6.4), so a root no `per` made a class root is a class of that key, one for
 	//! `by ()`. Its sigma stays what it reads: a frame bound's position still tells a group's anchors apart, and the
-	//! group takes their tightest value (D85). A `per K:` keeps its class, which names the classes a row stands for.
+	//! group takes their tightest value (D85). A `per K:` keeps its class, which names the classes a row stands for,
+	//! and a kept row in none of them still lies in a group, whose row reads it. Flat groups the kept rows by the `by`
+	//! key after it computes the terms, on every kept row: the root and its G's of that key read the key there.
 	void GroupClass(DecideNode &node) {
-		if (node.per == DecideTreePer::ROW && (node.facts->lhs_is_aggregate || node.facts->was_minmax_easy)) {
+		if (!node.facts->lhs_is_aggregate && !node.facts->was_minmax_easy) {
+			return;
+		}
+		if (node.per == DecideTreePer::ROW) {
 			node.key = node.facts->group_key;
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
+			node.key_block = DecideBlock::BY_KEY;
+		} else {
+			node.holds_rows_in_no_class = true;
+		}
+		for (auto child : node.children) {
+			auto &reducer = *tree->nodes[child];
+			if (reducer.kind == DecideNodeKind::REDUCER && reducer.key == node.facts->group_key) {
+				reducer.key_block = DecideBlock::BY_KEY;
+			}
 		}
 	}
 
@@ -1158,9 +1173,17 @@ void DecideTree::Validate() const {
 				throw InternalException("DECIDE tree body has an invalid child result");
 			}
 		}
-		// A program reads its node's layout, then the results of its arguments, and no column of a plan.
+		// A program reads its node's layout, then the results of its arguments, and no column of a plan. A hole reads a
+		// G over data.
+		for (auto &hole : node.holes) {
+			if (hole.node >= nodes.size() || nodes[hole.node]->kind != DecideNodeKind::REDUCER ||
+			    nodes[hole.node]->decision_value) {
+				throw InternalException("DECIDE tree node %llu reads a hole of no data reducer", i);
+			}
+		}
 		for (auto &program : node.programs) {
-			const auto width = node.columns.size() + node.program_columns.size() + program.arguments.size();
+			const auto width =
+			    node.columns.size() + node.program_columns.size() + node.holes.size() + program.arguments.size();
 			std::function<void(const Expression &)> check = [&](const Expression &expression) {
 				if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
 				    (expression.GetExpressionClass() == ExpressionClass::BOUND_REF &&

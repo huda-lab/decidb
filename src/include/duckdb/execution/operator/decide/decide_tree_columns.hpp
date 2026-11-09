@@ -11,6 +11,8 @@
 
 #include "duckdb/common/decide_error_ledger.hpp"
 #include "duckdb/execution/operator/decide/decide_descent.hpp"
+#include "duckdb/function/aggregate_function.hpp"
+#include "duckdb/storage/arena_allocator.hpp"
 
 #include <functional>
 
@@ -18,6 +20,43 @@ namespace duckdb {
 
 class ClientContext;
 struct DecideSourceNames;
+
+//! A G over data's value per slot (language/guide.md §6.1): one AggregateFunction state per slot in a dense array, as
+//! DuckDB's PerfectAggregateHashTable lays out its groups, updated a window of members at a time and finalized once.
+//! The tree's columns fold a data reducer here, and so does the interim evaluation.
+class DecideAggregateStates {
+public:
+	//! `slots` states of `aggregate`; `text` is the reducer as written, which a NaN it reads is named by, unless
+	//! `rejects_nan` is false: a count reads none of its values, and the columns leave a NaN to the data check, which
+	//! ranks first (DecideTreeColumns::Folds). A NaN reaches a fold that refuses it only where no check reads it: the
+	//! interim's fold of a reducer over a frame.
+	DecideAggregateStates(ClientContext &context, const BoundAggregateExpression &aggregate, idx_t slots, string text,
+	                      bool rejects_nan);
+	~DecideAggregateStates();
+	//! Folds member i, `arguments[a][i]` for each argument a, into the state of slot `slots[i]`. A NaN its first
+	//! argument holds raises the reducer's message.
+	void Update(const vector<vector<Value>> &arguments, const vector<idx_t> &slots);
+	//! Each slot's value; a slot that folded no member holds what the aggregate gives no rows.
+	vector<Value> Finalize();
+
+private:
+	const BoundAggregateExpression &aggregate;
+	ArenaAllocator allocator;
+	AggregateInputData input;
+	idx_t slot_count;
+	idx_t state_size;
+	data_ptr_t states;
+	string text;
+	bool rejects_nan;
+};
+
+//! DECIDB_TREE_INJECT=node:data:value, a test's stand-in for a node's data value, which shows a parent reads the
+//! bottom-up values (L7): the node, INVALID_INDEX when unset, and the value, cast to the node's type.
+struct DecideTreeInjection {
+	idx_t node = DConstants::INVALID_INDEX;
+	string data;
+};
+DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree);
 
 //! A node's programs on its entries (DecideNode::programs), computed once its descent is finished: each program's
 //! values on every entry, and the entries its evaluation raised on, with the error, which is held in the ledger at its
@@ -46,10 +85,21 @@ public:
 	//! The entries of `node` that read no instance of decision `variable`: a keyed decision's at a row in no class of
 	//! its key (D84). None for no decision (INVALID_INDEX).
 	vector<bool> Absent(idx_t node, idx_t variable) const;
+	//! Of the entries `reads` marks, the first of each instance of `node`, in row order: a reducer per K reads each
+	//! variant of a class once in each group, at its first row (language/guide.md §5.1, §7.1), however many entries
+	//! the variant holds.
+	vector<bool> FirstOfEachInstance(idx_t node, const vector<bool> &reads) const;
+
+	//! The value of a G over data in each of its slots: its function folded over its operand's members there
+	//! (DecideAggregateStates), NULL where the fold raised, whose error is held at the G's rank.
+	const vector<Value> &Folds(idx_t reducer);
+	//! Each data check's message, a hidden root's, where it is not NULL, at the check's rank.
+	void CheckData();
 
 	//! Interim, apart from the model emitter's shapes: the first node these columns compute no value for yet, a read
-	//! of a data reducer or a frame (DecideBody::uncompiled) or a hidden root (a value check, a definition no
-	//! clause reads), empty when there is none. A query with one has no arm. It goes once they compute every node.
+	//! of a frame, a norm's fold or a decision-valued child's read where only data is computed
+	//! (DecideBody::uncompiled), or a hidden root other than a data check, empty when there is none. A query with one
+	//! has no arm. It goes once they compute every node.
 	static string Uncomputed(const DecideTree &tree);
 
 private:
@@ -64,8 +114,15 @@ private:
 	DecideErrorLedger &errors;
 	vector<unique_ptr<NodeColumns>> nodes;
 
+	//! Per G over data, its folds, once computed; per G, the slot each row lies in, once read.
+	unordered_map<idx_t, vector<Value>> folds;
+	unordered_map<idx_t, vector<idx_t>> row_slots;
+	DecideTreeInjection injection;
+
 	NodeColumns &Computed(idx_t node);
 	void ComputeNode(idx_t node, NodeColumns &columns);
+	//! Each entry of `node`'s value of its hole `hole`: the fold of the hole's G in the slot the entry's row reads.
+	vector<Value> HoleValues(idx_t node, idx_t hole);
 	//! Which of its entries the node's member tests keep, and the errors they raise.
 	void ReadTests(idx_t node, NodeColumns &columns);
 	//! Holds each error of `program` on an entry `reads` marks, at its rank.

@@ -8,6 +8,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
 #include "duckdb/execution/operator/decide/decide_row_evaluation.hpp"
+#include "duckdb/execution/operator/decide/decide_tree_columns.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -49,8 +50,7 @@ static DecideTreeValuePtr ErrorValue(const LogicalType &type, const ErrorData &e
 	return result;
 }
 
-//! An expression's ordinal in its node's rank: what routes the node's rows (the descent's reads, a member test) counts
-//! from 0, and what the node computes once they are routed from AFTER_ROUTING.
+//! A frame's checks of its timelines rank after the descent's reads that route its rows, which count from 0.
 static constexpr idx_t AFTER_ROUTING = 1000000;
 
 static bool StopsEvaluation(const ErrorData &error) {
@@ -92,26 +92,32 @@ DecideTreeEvaluation::DecideTreeEvaluation(const DecideTree &tree_p, const Decid
 			rows[node][entries[entry].row].push_back(entry);
 		}
 		auto &definition = *tree.nodes[node];
-		auto assign = [&](const Expression &root, DecideErrorRank rank, idx_t &ordinal) {
+		// Each part of an expression at the next place of its block: a member test's from its program's, in its
+		// reducer's filter after the reducer's own `when` the descent reads there (DecideTreeColumns), and what the node
+		// computes once its rows are routed among the terms.
+		auto assign = [&](const Expression &root, DecideErrorRank rank, DecideBlock block, idx_t &position) {
 			std::function<void(const Expression &)> visit = [&](const Expression &expression) {
-				rank.expression = ordinal++;
-				expression_ranks[node][&expression] = rank;
+				rank.position = position++;
+				expression_ranks[node][&expression] = {rank, block};
 				ExpressionIterator::EnumerateChildren(expression, [&](const Expression &child) { visit(child); });
 			};
 			visit(root);
 		};
-		idx_t ordinal = 0;
-		for (auto &test : definition.member_tests) {
-			assign(*test, definition.route_rank, ordinal);
+		for (idx_t i = 0; i < definition.member_tests.size(); i++) {
+			auto rank = definition.route_rank;
+			auto &program = definition.programs[definition.tests[i]];
+			rank.group = program.group;
+			auto position = program.position;
+			assign(*definition.member_tests[i], rank, DecideBlock::FILTERS, position);
 		}
-		ordinal = AFTER_ROUTING;
+		idx_t ordinal = 0;
 		for (auto *expression : {definition.body.get(), definition.rhs.get(), definition.fallback.get()}) {
 			if (expression) {
-				assign(*expression, definition.value_rank, ordinal);
+				assign(*expression, definition.value_rank, DecideBlock::TERMS, ordinal);
 			}
 		}
 		for (auto &argument : definition.arguments) {
-			assign(*argument, definition.value_rank, ordinal);
+			assign(*argument, definition.value_rank, DecideBlock::TERMS, ordinal);
 		}
 	}
 }
@@ -445,10 +451,12 @@ DecideTreeValuePtr DecideTreeEvaluation::ExpressionValue(const Expression &expre
 		}
 		auto ranked = expression_ranks[node_index].find(&expression);
 		auto rank = tree.nodes[node_index]->value_rank;
-		rank.expression = AFTER_ROUTING;
+		auto block = DecideBlock::TERMS;
 		if (ranked != expression_ranks[node_index].end()) {
-			rank = ranked->second;
+			rank = ranked->second.rank;
+			block = ranked->second.block;
 		}
+		rank.expression = DecideBlockExpression(block, entry.row, false);
 		rank.row = entry.row;
 		auto value = ErrorValue(expression.return_type, error, rank);
 		value->node = node_index;
@@ -456,76 +464,6 @@ DecideTreeValuePtr DecideTreeEvaluation::ExpressionValue(const Expression &expre
 		return value;
 	}
 }
-
-//! One typed SQL aggregate state, including bind data and state destruction on an exceptional update/finalize.
-class TreeAggregateState {
-public:
-	TreeAggregateState(ClientContext &context, const BoundAggregateExpression &aggregate_p)
-	    : aggregate(aggregate_p), allocator(BufferAllocator::Get(context)), input(aggregate.bind_info.get(), allocator),
-	      pointer(LogicalType::POINTER),
-	      state(allocator.AllocateAligned(aggregate.function.state_size(aggregate.function))) {
-		aggregate.function.initialize(aggregate.function, state);
-		FlatVector::GetData<data_ptr_t>(pointer)[0] = state;
-	}
-	~TreeAggregateState() {
-		if (aggregate.function.destructor) {
-			aggregate.function.destructor(pointer, input, 1);
-		}
-	}
-	Value Fold(const vector<vector<DecideTreeValuePtr>> &arguments, const vector<idx_t> &members) {
-		vector<idx_t> distinct_members;
-		if (aggregate.IsDistinct()) {
-			unordered_map<hash_t, vector<idx_t>> buckets;
-			for (auto member : members) {
-				hash_t hash = 0;
-				for (auto &argument : arguments) {
-					hash ^= argument[member]->data.Hash() + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-				}
-				auto &bucket = buckets[hash];
-				bool duplicate = false;
-				for (auto previous : bucket) {
-					bool equal = true;
-					for (auto &argument : arguments) {
-						equal &= Value::NotDistinctFrom(argument[member]->data, argument[previous]->data);
-					}
-					duplicate |= equal;
-				}
-				if (!duplicate) {
-					bucket.push_back(member);
-					distinct_members.push_back(member);
-				}
-			}
-		}
-		auto &reads = aggregate.IsDistinct() ? distinct_members : members;
-		for (idx_t offset = 0; offset < reads.size(); offset += STANDARD_VECTOR_SIZE) {
-			const auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, reads.size() - offset);
-			vector<Vector> sources;
-			for (idx_t argument = 0; argument < arguments.size(); argument++) {
-				const auto type = aggregate.children[argument]->return_type;
-				sources.emplace_back(type);
-				for (idx_t row = 0; row < count; row++) {
-					sources.back().SetValue(row, arguments[argument][reads[offset + row]]->data);
-				}
-			}
-			Vector targets(LogicalType::POINTER);
-			auto pointers = FlatVector::GetData<data_ptr_t>(targets);
-			for (idx_t row = 0; row < count; row++) {
-				pointers[row] = state;
-			}
-			aggregate.function.update(sources.data(), input, sources.size(), targets, count);
-		}
-		Vector result(aggregate.return_type);
-		aggregate.function.finalize(pointer, input, result, 1, 0);
-		return result.GetValue(0);
-	}
-
-private:
-	const BoundAggregateExpression &aggregate;
-	ArenaAllocator allocator;
-	AggregateInputData input;
-	Vector pointer;
-	data_ptr_t state;
-};
 
 DecideTreeValuePtr DecideTreeEvaluation::Reduce(idx_t node_index, const BoundAggregateExpression *function,
                                                 const vector<vector<DecideTreeValuePtr>> &arguments,
@@ -579,19 +517,15 @@ DecideTreeValuePtr DecideTreeEvaluation::Reduce(idx_t node_index, const BoundAgg
 	// its value and comparison key (BindMinMax). A rewrite renames a carrier only for a reducer over decisions, which
 	// is symbolic above and never reaches this fold.
 	try {
-		if (aggregate != "count" && !arguments.empty()) {
+		DecideAggregateStates states(context, *function, 1, node.text, aggregate != "count");
+		vector<vector<Value>> values(arguments.size());
+		for (idx_t argument = 0; argument < arguments.size(); argument++) {
 			for (auto member : kept) {
-				auto &value = arguments[0][member]->data;
-				if (!value.IsNull() &&
-				    (value.type().InternalType() == PhysicalType::DOUBLE ||
-				     value.type().InternalType() == PhysicalType::FLOAT) &&
-				    std::isnan(value.GetValue<double>())) {
-					throw InvalidInputException(DecideFrameNanMessage(node.text));
-				}
+				values[argument].push_back(arguments[argument][member]->data);
 			}
 		}
-		TreeAggregateState state(context, *function);
-		auto value = DataValue(state.Fold(arguments, kept));
+		states.Update(values, vector<idx_t>(kept.size(), 0));
+		auto value = DataValue(states.Finalize()[0]);
 		value->operation = node.text;
 		return value;
 	} catch (std::exception &ex) {
@@ -608,6 +542,14 @@ void DecideTreeEvaluation::Scope(idx_t node_index) {
 	auto &result = results[node_index];
 	auto &container = descent.Containers()[node_index];
 	for (auto &entry : container.entries) {
+		// This evaluation reads a grouped root's classes alone: a row in none has no value here.
+		if (!container.groups[entry.slot].in_a_class) {
+			result.entries.push_back(AbsentValue(LogicalType::BOOLEAN));
+			if (node.rhs) {
+				result.rhs.push_back(AbsentValue(node.rhs->return_type));
+			}
+			continue;
+		}
 		auto value = node.body ? ExpressionValue(*node.body, node_index, entry) : DataValue(Value::BOOLEAN(true));
 		if (node.value_check && value->kind == DecideTreeValueKind::DATA) {
 			auto rank = node.value_rank;
@@ -681,6 +623,9 @@ void DecideTreeEvaluation::Scope(idx_t node_index) {
 	for (idx_t index = 0; index < container.entries.size(); index++) {
 		auto &entry = container.entries[index];
 		auto base = entry.instance;
+		if (!container.groups[entry.slot].in_a_class) {
+			continue;
+		}
 		if (groups != DConstants::INVALID_INDEX) {
 			// A row whose `by` key is NULL is in no group (D5), so it is no instance.
 			const auto member = ChildEntry(groups, entry);
@@ -1097,27 +1042,9 @@ void DecideTreeEvaluation::Evaluate() {
 	if (evaluated) {
 		return;
 	}
-	const char *injection = std::getenv("DECIDB_TREE_INJECT");
-	idx_t injected_node = DConstants::INVALID_INDEX;
-	string injected_data;
-	if (injection) {
-		auto parts = StringUtil::Split(string(injection), ':');
-		if (parts.size() != 3 || parts[1] != "data") {
-			throw InvalidInputException("DECIDB_TREE_INJECT: expected node:data:value");
-		}
-		try {
-			size_t consumed = 0;
-			injected_node = std::stoull(parts[0], &consumed);
-			if (consumed != parts[0].size() || injected_node >= tree.nodes.size()) {
-				throw InvalidInputException("DECIDB_TREE_INJECT: node is outside this tree");
-			}
-		} catch (std::invalid_argument &) {
-			throw InvalidInputException("DECIDB_TREE_INJECT: node must be an unsigned node index");
-		} catch (std::out_of_range &) {
-			throw InvalidInputException("DECIDB_TREE_INJECT: node is outside this tree");
-		}
-		injected_data = parts[2];
-	}
+	const auto injection = ReadDecideTreeInjection(tree);
+	const auto injected_node = injection.node;
+	const auto &injected_data = injection.data;
 	for (auto node : tree.eval_order) {
 		// A Ctrl-C stops the evaluation at its next node, as it stops the descent at its next visit.
 		if (context.interrupted) {

@@ -8,6 +8,7 @@
 
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/vector.hpp"
+#include "duckdb/common/vector_size.hpp"
 
 #include <algorithm>
 #include <tuple>
@@ -47,6 +48,20 @@ struct DecideErrorRank {
 		                other.row);
 	}
 };
+
+//! Where flat reads an expression inside its evaluation of a clause or the objective (PhysicalDecide::Evaluate): first
+//! the reads that route its rows (ROUTE, its `when`), then its blocks, each over every window of the input's rows
+//! before the next: the term filters, the terms, the grouping of the kept rows by the `by` key, the bound and admitted
+//! ends, the products, the squares.
+enum class DecideBlock : uint8_t { ROUTE, FILTERS, TERMS, BY_KEY, BOUND, PRODUCTS, SQUARES };
+
+//! Flat's order inside its evaluation of a clause or the objective (DecideErrorRank::expression), after the reads that
+//! route its rows: a block runs over every window of the input's rows before the next, and a window executes every
+//! expression of its block before it checks any `value`. A window's number stays below 2^54 for any row, under the
+//! block's bits.
+inline idx_t DecideBlockExpression(DecideBlock block, idx_t row, bool value) {
+	return (idx_t(block) << 56) | ((row / STANDARD_VECTOR_SIZE) << 1) | idx_t(value);
+}
 
 //! Errors are added only when a read reaches their value. A computed frame value's latent error can therefore stay
 //! in its node without entering this ledger when the only anchor reading it has no surviving instance.

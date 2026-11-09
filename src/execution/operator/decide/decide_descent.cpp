@@ -35,9 +35,11 @@ static bool DescentEqual(const vector<Value> &left, const vector<Value> &right) 
 	return true;
 }
 
+//! A value's place in a key's order: NULL after every value, as ORDER BY places it and flat numbers a key's groups
+//! (NumberGroupsByValue), so a group's rank is flat's group number.
 static bool DescentLess(const Value &left, const Value &right) {
 	if (left.IsNull() || right.IsNull()) {
-		return left.IsNull() && !right.IsNull();
+		return !left.IsNull() && right.IsNull();
 	}
 	return left < right;
 }
@@ -135,8 +137,13 @@ vector<Value> DecideDescent::Evaluate(const Expression &expression, DataChunk &c
 				throw;
 			}
 			rank.row = active_row_base + rows[i].row;
+			if (read_block != DecideBlock::ROUTE) {
+				rank.expression = DecideBlockExpression(read_block, rank.row, false);
+			}
 			errors.Add(rank, error);
-			if (active_node < failed_rows.size()) {
+			// A read flat makes before the terms keeps the row from them; one it makes after them leaves the row in no
+			// class of the key, so its terms are still computed.
+			if (active_node < failed_rows.size() && read_block <= DecideBlock::FILTERS) {
 				failed_rows[active_node].insert(rank.row);
 			}
 			result.emplace_back(expression.return_type);
@@ -211,6 +218,9 @@ vector<vector<Value>> DecideDescent::Key(idx_t key, DataChunk &chunk, const vect
 	bool collated = false;
 	for (idx_t c = 0; c < elements.size(); c++) {
 		auto &element = elements[c];
+		if (read_block != DecideBlock::ROUTE) {
+			current_rank.position = c;
+		}
 		const auto rank = current_rank.expression;
 		auto values = Evaluate(element.Grouping(), chunk, rows);
 		if (element.collated) {
@@ -505,8 +515,15 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		}
 	}
 	container.rows_in += rows.size();
-	for (auto &condition : node.when) {
-		auto truth = Truth(*condition, chunk, rows);
+	for (idx_t k = 0; k < node.when.size(); k++) {
+		// A reducer's own `when` is read in its terms' filter, at its place there (DecideNode::filter_group).
+		const auto filter = node.filter_group != DConstants::INVALID_INDEX;
+		read_block = filter ? DecideBlock::FILTERS : DecideBlock::ROUTE;
+		current_rank.group = filter ? node.filter_group : 0;
+		current_rank.position = filter ? k : 0;
+		auto truth = Truth(*node.when[k], chunk, rows);
+		read_block = DecideBlock::ROUTE;
+		current_rank.group = current_rank.position = 0;
 		vector<RoutingRow> kept;
 		for (idx_t i = 0; i < rows.size(); i++) {
 			if (truth[i] == 1 && !Failed(rows[i].row)) {
@@ -522,7 +539,11 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		return;
 	}
 	vector<bool> present;
+	// A grouped clause's keys are read where flat groups its kept rows, after its terms (DecideNode::key_block).
+	read_block = node.key_block;
 	auto keys = Key(node.key, chunk, rows, present);
+	read_block = DecideBlock::ROUTE;
+	current_rank.position = 0;
 	vector<RoutingRow> children;
 	vector<RoutingRow> stored;
 	vector<idx_t> slots;
@@ -531,7 +552,11 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 			continue;
 		}
 		auto child = rows[i];
-		if (!present[i]) {
+		// Flat reads a reducer's operand on every row its G reads, except the objective's, which it reads in place, on
+		// the rows of each group alone (D81).
+		const auto reducer =
+		    node.kind == DecideNodeKind::REDUCER && node.value_rank.phase != DecideErrorPhase::OBJECTIVE;
+		if (!present[i] && !node.holds_rows_in_no_class && !reducer) {
 			if (node.kind == DecideNodeKind::SCOPE) {
 				children.push_back(child);
 			}
@@ -546,15 +571,24 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base,
 		// generates, as S3's tightest bound, is on no reducer's path: the reducers its operand reads keep their groups.
 		const auto within = node.kind == DecideNodeKind::SCOPE ? rows[i].parent_slot : DConstants::INVALID_INDEX;
 		const auto slot = FindGroup(node_index, within, std::move(key), row_base + rows[i].row);
+		container.groups[slot].in_a_class = present[i];
+		if (node.kind != DecideNodeKind::SCOPE) {
+			child.parent_slot = slot;
+		}
+		children.push_back(child);
+		// A row in no group of a G has no value of it (language/guide.md §5.2), so it holds no entry of the G; it still
+		// reaches the G's operand, as flat computes a clause's terms on every kept row and a side plan a data reducer's
+		// arguments, so an error there is raised (§7.2).
+		if (!present[i] && reducer) {
+			continue;
+		}
 		stored.push_back(rows[i]);
 		slots.push_back(slot);
 		if (node.kind != DecideNodeKind::SCOPE) {
-			child.parent_slot = slot;
 			// A reader reads a G's or O's value at its group or timeline, and an `else` at the anchor's own row
 			// (language/guide.md §5.6; DecideDescentEntry::reads).
 			index.landed.emplace(row_base + rows[i].row, node.fallback ? row_base + rows[i].row : slot);
 		}
-		children.push_back(child);
 	}
 	// A node records the classes of the keyed decisions it defines or reads where it is reached. Its sigma need not
 	// name them: a root's names only what its written clause reads.

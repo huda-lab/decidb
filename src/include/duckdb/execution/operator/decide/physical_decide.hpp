@@ -8,6 +8,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
+#include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
@@ -56,18 +57,6 @@ struct PerGroupCache {
     //! Each key's representative values, of its grouping as it stands: a rebuilt entry
     //! replaces its key's. Moved into SolverInput::key_values once extraction is done.
     vector<SolverInput::KeyValues> key_values;
-};
-
-//! Per-term filter state for a reducer's own `when` (constraint terms, bilinear terms,
-//! quadratic groups, and their objective-side equivalents all share this shape).
-struct TermFilterState {
-    vector<bool> mask;
-    bool has_filter = false;
-    bool avg_scale = false;
-    //! An objective AVG's `by` groups among the rows it reads (DecideTerm::avg_group_key),
-    //! which its 1/n divides by; empty for one group.
-    vector<idx_t> avg_group_ids;
-    idx_t avg_num_groups = 0;
 };
 
 //===--------------------------------------------------------------------===//
@@ -402,11 +391,11 @@ private:
                   ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                   vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
     //! The tree's evaluation of a query it has an arm for (DecideModelEmitter::Uncovered): its descent over the input
-    //! (into `descent`, which the group names read), each node's programs over its entries, and the model emitter,
-    //! filling what Evaluate fills. It prints only when not `silent`.
+    //! (into `descent`), each node's programs over its entries, and the model emitter, filling what Evaluate fills,
+    //! with the values its groups are named by in `per_group_cache`. It prints only when not `silent`.
     void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                      unique_ptr<DecideDescent> &descent, vector<KeyedMapping> &keyed_mappings,
-                      EvaluatedClauses &evaluated, bool silent) const;
+                      unique_ptr<DecideDescent> &descent, PerGroupCache &per_group_cache,
+                      vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
     //! The interim tree formulator, which a query with no arm in the model emitter takes until every shape has
     //! one: its descent, per-entry evaluation and formulation, then the solve.
     SinkFinalizeType FinalizeWithTreeFormulator(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,

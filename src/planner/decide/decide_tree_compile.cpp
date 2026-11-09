@@ -26,6 +26,10 @@ namespace duckdb {
 //! The compile's helpers, named apart: the planner's DECIDE files build as one unit.
 namespace decide_tree_compile {
 
+//! Where a hole's index starts while a node's programs are compiled, above any column of its layout: its program
+//! columns grow until the last program is compiled.
+static constexpr idx_t DECIDE_HOLE_BASE = idx_t(1) << 48;
+
 static unique_ptr<Expression> CopyOrNull(const unique_ptr<Expression> &expression) {
 	return expression ? expression->Copy() : nullptr;
 }
@@ -306,13 +310,15 @@ static void CopyLinks(const LogicalDecide &op, DecideTree &tree, const vector<id
 //! layout. A read the tree computes no value for yet becomes a NULL of its type and names the reason on the body.
 class DecideProgramCompiler {
 public:
-	DecideProgramCompiler(ClientContext &context, const LogicalDecide &op, DecideTree &tree)
-	    : context(context), op(op), tree(tree), first_terms(tree.nodes.size(), DConstants::INVALID_INDEX) {
+	DecideProgramCompiler(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
+	                      const vector<idx_t> &record_nodes)
+	    : context(context), op(op), tree(tree), record_nodes(record_nodes),
+	      first_terms(tree.nodes.size(), DConstants::INVALID_INDEX) {
 	}
 
 	//! A program on `site` computing `expression`, ranked with `owner`'s body; returns its index on the site.
-	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, idx_t stage, idx_t group,
-	          idx_t position, int sign = 1) {
+	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, DecideBlock block,
+	          idx_t group, idx_t position, int sign = 1) {
 		auto &owner_body = tree.nodes[owner]->compiled;
 		DecideProgram program;
 		program.role = role;
@@ -320,7 +326,7 @@ public:
 		program.written = expression.Copy();
 		program.sign = sign;
 		program.owner = owner;
-		program.stage = stage;
+		program.block = block;
 		program.group = group;
 		program.position = position;
 		auto &programs = tree.nodes[site]->programs;
@@ -329,10 +335,11 @@ public:
 	}
 
 	//! A term's coefficient and its inputs on its site.
-	void AddTerm(const DecideTerm &term, DecideTermSite &site, idx_t owner, idx_t stage, idx_t group, idx_t position) {
+	void AddTerm(const DecideTerm &term, DecideTermSite &site, idx_t owner, DecideBlock block, idx_t group,
+	             idx_t position) {
 		site.program =
-		    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, stage, group, position, term.sign);
-		AddInputs(term.inputs, site, owner, stage, group, position);
+		    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, block, group, position, term.sign);
+		AddInputs(term.inputs, site, owner, block, group, position);
 		first_terms[site.node] = MinValue(first_terms[site.node], position);
 	}
 
@@ -340,10 +347,10 @@ public:
 	template <class PRODUCT>
 	void AddProduct(const PRODUCT &term, DecideTermSite &site, idx_t owner, idx_t position) {
 		if (term.coefficient) {
-			site.program =
-			    Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner, 3, 0, position, term.sign);
+			site.program = Add(site.node, DecideProgramRole::COEFFICIENT, *term.coefficient, owner,
+			                   DecideBlock::PRODUCTS, 0, position, term.sign);
 		}
-		AddInputs(term.inputs, site, owner, 3, 0, position);
+		AddInputs(term.inputs, site, owner, DecideBlock::PRODUCTS, 0, position);
 	}
 
 	vector<DecideProgram> &Programs(idx_t node) {
@@ -352,18 +359,43 @@ public:
 
 	//! A node's member tests, over its own carried columns, once every term is compiled. Flat reads them in their
 	//! reducer's filter, which it reads for each of its owner's terms in their order, window by window, before any
-	//! coefficient: so a test's group is the first term its node holds, and its position its place among the tests.
+	//! coefficient: so a test's group is the first term its node holds, and its position its place in the filter,
+	//! after the reducer's own `when`, which the descent reads at the same group (DecideNode::filter_group).
 	void AddTests(idx_t index) {
 		auto &node = *tree.nodes[index];
+		if (!node.root) {
+			node.filter_group = first_terms[index];
+		}
 		for (idx_t i = 0; i < node.member_tests.size(); i++) {
 			DecideProgram program;
 			program.role = DecideProgramRole::TEST;
-			program.expression = TranslateTest(index, *node.member_tests[i]);
+			program.expression = TranslateTree(index, *node.member_tests[i], "a member test reads a child");
 			program.written = node.member_tests[i]->Copy();
 			program.group = first_terms[index];
-			program.position = i;
+			program.position = node.when.size() + i;
 			node.tests.push_back(node.programs.size());
 			node.programs.push_back(std::move(program));
+		}
+	}
+
+	//! What a node computes from the data alone, in the tree's own terms: a data check's message on its hidden root,
+	//! and a data reducer's arguments on its operand, which the G folds.
+	void AddData(idx_t index) {
+		auto &node = *tree.nodes[index];
+		if (node.value_check) {
+			node.compiled.check = AddValue(index, *node.body, "a data check reads a child");
+		}
+		if (node.kind != DecideNodeKind::REDUCER || node.decision_value || !node.function) {
+			return;
+		}
+		const auto operand = DecideTreeOperand(tree, index);
+		auto &operand_node = *tree.nodes[operand];
+		for (auto &argument : operand_node.arguments) {
+			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer reads a child"));
+		}
+		// A norm folds a body of its arguments, which its value checks for NaN first (DecideWrittenNormBody).
+		if (node.body) {
+			Uncompiled(operand_node.compiled, "a data reducer folds a norm", LogicalType::BOOLEAN);
 		}
 	}
 
@@ -371,13 +403,25 @@ private:
 	ClientContext &context;
 	const LogicalDecide &op;
 	DecideTree &tree;
+	const vector<idx_t> &record_nodes;
 	//! Per node, the place among its owner's terms of the first term it holds; INVALID while it holds none.
 	vector<idx_t> first_terms;
 
-	void AddInputs(const vector<unique_ptr<Expression>> &inputs, DecideTermSite &site, idx_t owner, idx_t stage,
+	//! A program of `index`'s own computing `expression`, in the tree's terms, ranked with the node.
+	idx_t AddValue(idx_t index, const Expression &expression, const char *child_reason) {
+		auto &node = *tree.nodes[index];
+		DecideProgram program;
+		program.role = DecideProgramRole::VALUE;
+		program.expression = TranslateTree(index, expression, child_reason);
+		program.written = expression.Copy();
+		node.programs.push_back(std::move(program));
+		return node.programs.size() - 1;
+	}
+
+	void AddInputs(const vector<unique_ptr<Expression>> &inputs, DecideTermSite &site, idx_t owner, DecideBlock block,
 	               idx_t group, idx_t position) {
 		for (auto &input : inputs) {
-			site.inputs.push_back(Add(site.node, DecideProgramRole::VALUE, *input, owner, stage, group, position));
+			site.inputs.push_back(Add(site.node, DecideProgramRole::VALUE, *input, owner, block, group, position));
 		}
 	}
 
@@ -416,9 +460,9 @@ private:
 				return nullptr;
 			}
 			auto &type = leaf_expression.return_type;
-			for (auto &retained : op.retained_bound_aggregates) {
-				if (retained.placeholder->Equals(leaf_expression)) {
-					return Uncompiled(body, "reads a data reducer", type);
+			for (idx_t record = 0; record < op.retained_bound_aggregates.size(); record++) {
+				if (op.retained_bound_aggregates[record].placeholder->Equals(leaf_expression)) {
+					return Hole(site, record_nodes[record], type);
 				}
 			}
 			if (kind == ExpressionClass::BOUND_REF) {
@@ -442,31 +486,51 @@ private:
 		return ToChunkReferences(expression, context, leaf);
 	}
 
-	//! A member test, which Lower already read in the tree's terms: a source column among its node's carried ones.
-	unique_ptr<Expression> TranslateTest(idx_t index, const Expression &test) {
+	//! A G over data's value as `site` reads it: a hole of its layout, after its program columns, which are known once
+	//! every program is compiled (BindLayout).
+	unique_ptr<Expression> Hole(idx_t site, idx_t reducer, const LogicalType &type) {
+		auto &holes = tree.nodes[site]->holes;
+		idx_t hole = 0;
+		while (hole < holes.size() && holes[hole].node != reducer) {
+			hole++;
+		}
+		if (hole == holes.size()) {
+			holes.push_back({reducer, type});
+		}
+		return make_uniq<BoundReferenceExpression>(type, DECIDE_HOLE_BASE + hole);
+	}
+
+	//! An expression Lower already read in the tree's terms (a member test, a data check, a data reducer's argument):
+	//! a source column among its node's carried ones, and a G over data's value as a hole. A decision-valued child's
+	//! result it reads, it computes no value for yet.
+	unique_ptr<Expression> TranslateTree(idx_t index, const Expression &expression, const char *child_reason) {
 		auto &node = *tree.nodes[index];
 		DecideChunkLeaf leaf = [&](const Expression &leaf_expression) -> unique_ptr<Expression> {
 			auto &type = leaf_expression.return_type;
 			if (leaf_expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-				// A generated NULL test reads data: a reducer's own (DecideCanonicalizer::SkipNullData) or a key's.
-				throw InternalException("DECIDE tree: a member test of %s reads a decision", node.text);
+				// A generated NULL test reads data, a reducer's own (DecideCanonicalizer::SkipNullData) or a key's,
+				// and a data check or a data reducer reads no decision.
+				throw InternalException("DECIDE tree: %s reads a decision", node.text);
 			}
 			if (leaf_expression.GetExpressionClass() != ExpressionClass::BOUND_REF) {
 				return nullptr;
 			}
 			const auto column = leaf_expression.Cast<BoundReferenceExpression>().index;
 			if (column >= tree.input_column_count) {
-				return Uncompiled(node.compiled, "a member test reads a child", type);
+				auto &child = *tree.nodes[column - tree.input_column_count];
+				if (child.kind == DecideNodeKind::REDUCER && !child.decision_value && child.function) {
+					return Hole(index, column - tree.input_column_count, type);
+				}
+				return Uncompiled(node.compiled, child_reason, type);
 			}
 			for (idx_t i = 0; i < node.columns.size(); i++) {
 				if (node.columns[i]->Equals(leaf_expression)) {
 					return make_uniq<BoundReferenceExpression>(type, i);
 				}
 			}
-			throw InternalException("DECIDE tree: a member test of %s reads a column its node does not carry",
-			                        node.text);
+			throw InternalException("DECIDE tree: %s reads a column its node does not carry", node.text);
 		};
-		return ToChunkReferences(test, context, leaf);
+		return ToChunkReferences(expression, context, leaf);
 	}
 };
 
@@ -474,22 +538,25 @@ private:
 static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &clause = *body.clause;
 	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
-		compiler.AddTerm(clause.lhs_terms[t], body.linear[t], root, 1, 0, t);
+		compiler.AddTerm(clause.lhs_terms[t], body.linear[t], root, DecideBlock::TERMS, 0, t);
 	}
 	// A constant bound is a program too: it folds where it is executed.
 	const auto role = clause.tightest_frame_bound ? DecideProgramRole::TIGHTEST_BOUND : DecideProgramRole::BOUND;
-	body.rhs = compiler.Add(root, role, *clause.rhs_expr, root, 2, 0, 0);
+	body.rhs = compiler.Add(root, role, *clause.rhs_expr, root, DecideBlock::BOUND, 0, 0);
 	if (clause.admitted_lower) {
 		// A bound on one decision, admitted on each row its term is read on: an easy extremum's on its members. As
 		// flat computes them: the members, then a and r on them, then each end over the row and those two.
 		const auto site = body.linear[0].node;
 		if (clause.admitted_member) {
-			body.admits = compiler.Add(site, DecideProgramRole::ADMITS, *clause.admitted_member, root, 2, 0, 1);
+			body.admits =
+			    compiler.Add(site, DecideProgramRole::ADMITS, *clause.admitted_member, root, DecideBlock::BOUND, 0, 1);
 		}
-		const auto a = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_a, root, 2, 0, 2);
-		const auto r = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_r, root, 2, 0, 3);
-		body.lower = compiler.Add(site, DecideProgramRole::BOUND, *clause.admitted_lower, root, 2, 0, 4);
-		body.upper = compiler.Add(site, DecideProgramRole::BOUND, *clause.admitted_upper, root, 2, 0, 5);
+		const auto a = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_a, root, DecideBlock::BOUND, 0, 2);
+		const auto r = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_r, root, DecideBlock::BOUND, 0, 3);
+		body.lower =
+		    compiler.Add(site, DecideProgramRole::BOUND, *clause.admitted_lower, root, DecideBlock::BOUND, 0, 4);
+		body.upper =
+		    compiler.Add(site, DecideProgramRole::BOUND, *clause.admitted_upper, root, DecideBlock::BOUND, 0, 5);
 		auto &programs = compiler.Programs(site);
 		for (auto end : {body.lower, body.upper}) {
 			programs[end].written = clause.rhs_expr->Copy();
@@ -501,11 +568,11 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 	}
 	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
 		auto &group = clause.quadratic_groups[g];
-		body.square_scales.push_back(group.scale
-		                                 ? compiler.Add(root, DecideProgramRole::VALUE, *group.scale, root, 4, g, 0)
-		                                 : DConstants::INVALID_INDEX);
+		body.square_scales.push_back(
+		    group.scale ? compiler.Add(root, DecideProgramRole::VALUE, *group.scale, root, DecideBlock::SQUARES, g, 0)
+		                : DConstants::INVALID_INDEX);
 		for (idx_t t = 0; t < group.inner_terms.size(); t++) {
-			compiler.AddTerm(group.inner_terms[t], body.squares[g][t], root, 4, g, 1 + t);
+			compiler.AddTerm(group.inner_terms[t], body.squares[g][t], root, DecideBlock::SQUARES, g, 1 + t);
 		}
 	}
 }
@@ -514,10 +581,11 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 static void CompileObjective(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &objective = *body.objective;
 	for (idx_t t = 0; t < objective.terms.size(); t++) {
-		compiler.AddTerm(objective.terms[t], body.linear[t], root, 1, 0, t);
+		compiler.AddTerm(objective.terms[t], body.linear[t], root, DecideBlock::TERMS, 0, t);
 	}
 	for (idx_t t = 0; t < objective.squared_terms.size(); t++) {
-		compiler.AddTerm(objective.squared_terms[t], body.squares[0][t], root, 1, 0, objective.terms.size() + t);
+		compiler.AddTerm(objective.squared_terms[t], body.squares[0][t], root, DecideBlock::TERMS, 0,
+		                 objective.terms.size() + t);
 	}
 	for (idx_t i = 0; i < objective.bilinear_terms.size(); i++) {
 		compiler.AddProduct(objective.bilinear_terms[i], body.products[i], root, i);
@@ -527,15 +595,17 @@ static void CompileObjective(DecideProgramCompiler &compiler, idx_t root, Decide
 //! A composed term's or a helper's members, then a frame helper's else terms.
 static void CompileMembers(DecideProgramCompiler &compiler, idx_t holder, DecideBody &body) {
 	for (idx_t t = 0; t < body.members.size(); t++) {
-		compiler.AddTerm(body.members[t], body.linear[t], holder, 1, 0, t);
+		compiler.AddTerm(body.members[t], body.linear[t], holder, DecideBlock::TERMS, 0, t);
 	}
 	for (idx_t t = 0; t < body.fallback.size(); t++) {
-		compiler.AddTerm(body.fallback[t], body.fallback_sites[t], holder, 1, 0, body.members.size() + t);
+		compiler.AddTerm(body.fallback[t], body.fallback_sites[t], holder, DecideBlock::TERMS, 0,
+		                 body.members.size() + t);
 	}
 }
 
-static void CompilePrograms(ClientContext &context, const LogicalDecide &op, DecideTree &tree) {
-	DecideProgramCompiler compiler(context, op, tree);
+static void CompilePrograms(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
+                            const vector<idx_t> &record_nodes) {
+	DecideProgramCompiler compiler(context, op, tree, record_nodes);
 	for (idx_t i = 0; i < tree.nodes.size(); i++) {
 		auto &body = tree.nodes[i]->compiled;
 		if (body.clause) {
@@ -548,18 +618,28 @@ static void CompilePrograms(ClientContext &context, const LogicalDecide &op, Dec
 	}
 	for (idx_t i = 0; i < tree.nodes.size(); i++) {
 		compiler.AddTests(i);
+		compiler.AddData(i);
 	}
 }
 
-//! An admitted end reads its inputs a and r after its node's layout, which is known once every program on the node is
-//! compiled: they are bound there as flat binds them after its chunk's columns (DecideBindAdmittedInputs). A program
-//! with no inputs is left as it is.
-static void BindAdmittedInputs(DecideTree &tree) {
+//! A node's layout is known once every program on it is compiled: its holes follow its program columns, and an
+//! admitted end reads its inputs a and r after them, bound as flat binds them after its chunk's columns
+//! (DecideBindAdmittedInputs).
+static void BindLayout(DecideTree &tree) {
 	for (auto &node : tree.nodes) {
-		const auto width = node->columns.size() + node->program_columns.size();
+		const auto columns = node->columns.size() + node->program_columns.size();
+		const auto width = columns + node->holes.size();
 		const BoundReferenceExpression a(LogicalType::DOUBLE, width);
 		const BoundReferenceExpression r(LogicalType::DOUBLE, width + 1);
 		for (auto &program : node->programs) {
+			ExpressionIterator::EnumerateExpression(program.expression, [&](Expression &expression) {
+				if (expression.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+					auto &reference = expression.Cast<BoundReferenceExpression>();
+					if (reference.index >= DECIDE_HOLE_BASE) {
+						reference.index = columns + reference.index - DECIDE_HOLE_BASE;
+					}
+				}
+			});
 			program.expression = DecideBindAdmittedInputs(*program.expression, a, r);
 		}
 	}
@@ -579,8 +659,8 @@ void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTr
 	}
 	decide_tree_compile::CopyComposed(op, tree, sources);
 	decide_tree_compile::CopyLinks(op, tree, sources.link_nodes);
-	decide_tree_compile::CompilePrograms(context, op, tree);
-	decide_tree_compile::BindAdmittedInputs(tree);
+	decide_tree_compile::CompilePrograms(context, op, tree, sources.record_nodes);
+	decide_tree_compile::BindLayout(tree);
 }
 
 namespace decide_tree_compile {
@@ -620,6 +700,11 @@ static string RoleName(DecideProgramRole role) {
 		return "VALUE";
 	}
 	throw InternalException("DECIDE tree: an unknown program role");
+}
+
+static const char *BlockName(DecideBlock block) {
+	static const char *const NAMES[] = {"ROUTE", "FILTERS", "TERMS", "BY_KEY", "BOUND", "PRODUCTS", "SQUARES"};
+	return NAMES[static_cast<idx_t>(block)];
 }
 
 static string Label(const unique_ptr<Expression> &coefficient) {
@@ -692,11 +777,15 @@ static void ProgramLines(std::ostringstream &out, const DecideNode &node) {
 		out << "  column #" << node.columns.size() + c << " reads input "
 		    << node.program_columns[c]->Cast<BoundReferenceExpression>().index << "\n";
 	}
+	for (idx_t h = 0; h < node.holes.size(); h++) {
+		out << "  hole #" << node.columns.size() + node.program_columns.size() + h << " reads node "
+		    << node.holes[h].node << "\n";
+	}
 	for (idx_t p = 0; p < node.programs.size(); p++) {
 		auto &program = node.programs[p];
 		out << "  program " << p << " " << RoleName(program.role) << " expr=" << Computed(*program.expression)
-		    << " written=" << program.written->ToString() << " stage=" << program.stage << " group=" << program.group
-		    << " position=" << program.position << " owner=" << Signed(program.owner);
+		    << " written=" << program.written->ToString() << " block=" << BlockName(program.block)
+		    << " group=" << program.group << " position=" << program.position << " owner=" << Signed(program.owner);
 		for (idx_t a = 0; a < program.arguments.size(); a++) {
 			out << (a ? "," : " arguments=") << program.arguments[a];
 		}

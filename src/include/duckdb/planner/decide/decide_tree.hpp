@@ -46,9 +46,16 @@ struct DecideTermSite {
 //! applies to, or a value something else reads (a coefficient's inputs, an admitted bound's a and r, a square's scale).
 enum class DecideProgramRole : uint8_t { COEFFICIENT, BOUND, TIGHTEST_BOUND, TEST, ADMITS, VALUE };
 
+//! A value a node's programs read from a G over data, a data reducer (language/guide.md §6.1): at an entry, the G's
+//! fold in the slot the entry's row reads it in, NULL where the row reaches none.
+struct DecideHole {
+	idx_t node;
+	LogicalType type;
+};
+
 //! An expression a node's entries compute (language/guide.md §6.1), over the node's layout: its carried columns, then
-//! its program columns, then the results of `arguments`. Built by flat's own rules (ToChunkReferences), so it is the
-//! expression flat evaluates, and folded where it is executed, as flat folds it.
+//! its program columns, then its holes, then the results of `arguments`. Built by flat's own rules
+//! (ToChunkReferences), so it is the expression flat evaluates, and folded where it is executed, as flat folds it.
 struct DecideProgram {
 	DecideProgramRole role;
 	unique_ptr<Expression> expression;
@@ -57,10 +64,10 @@ struct DecideProgram {
 	int sign = 1;
 	//! The node whose rank its errors take (the holder of its term or bound); INVALID for the node's own.
 	idx_t owner = DConstants::INVALID_INDEX;
-	//! Its place among flat's evaluations of its owner, after the descent's reads of the owner's rows: the block (0 the
-	//! member tests, 1 the terms, 2 the bound and admitted ends, 3 the products, 4 the squares), a square's group or a
+	//! Its place among flat's evaluations of its owner, after the descent's reads of the owner's rows: the block (a
+	//! member test in the filters, a term, the bound or an admitted end, a product, a square), a square's group or a
 	//! member test's first term, and its order in the block.
-	idx_t stage = 0;
+	DecideBlock block = DecideBlock::FILTERS;
 	idx_t group = 0;
 	idx_t position = 0;
 	//! Programs of the same node whose results an admitted end reads as its inputs a and r (DecideAdmittedInput).
@@ -90,6 +97,10 @@ struct DecideBody {
 	idx_t admits = DConstants::INVALID_INDEX;
 	idx_t lower = DConstants::INVALID_INDEX;
 	idx_t upper = DConstants::INVALID_INDEX;
+	//! A data check's message, a program on its hidden root; INVALID for any other node.
+	idx_t check = DConstants::INVALID_INDEX;
+	//! A G over data's operand: its function's arguments, programs on it, which the G folds per slot.
+	vector<idx_t> arguments;
 	//! What the tree computes no value for yet, the first reason met: the node's query has no arm until it does.
 	string uncompiled;
 	//! The rank flat's evaluation gives the stage-05 list the body was copied from (PhysicalDecide::Evaluate):
@@ -154,8 +165,20 @@ struct DecideNode {
 	bool repair_rows = false;
 	bool minmax_easy = false;
 	bool tightest_bound = false;
+	//! A grouped root whose `per K:` names the classes its rows stand for (DecideClauseScope::NAMES_CLASSES): its
+	//! instances are its `by` key's groups (language/guide.md §6.4), so it holds a kept row in no class of K too, in a
+	//! slot of its own (DecideDescentGroup::in_a_class).
+	bool holds_rows_in_no_class = false;
+	//! Where flat reads its key: a grouped clause's root and its G's of its `by` key read it where flat groups the kept
+	//! rows, after their terms (DecideBlock::BY_KEY), so a row the key raises on still reaches them; any other key
+	//! routes its node's rows (ROUTE).
+	DecideBlock key_block = DecideBlock::ROUTE;
 	//! A hidden root's non-NULL string is the data check's error message.
 	bool value_check = false;
+	//! Flat reads a reducer's own `when` inside the filter of its terms, window by window, before any term is
+	//! computed: on a node that holds terms, the first of them (DecideProgram::group), which its `when` ranks under;
+	//! INVALID on a node whose rows are routed before any term is read.
+	idx_t filter_group = DConstants::INVALID_INDEX;
 	//! Immutable clause metadata shared with flat lowering. Its term vectors are
 	//! empty: the graph's bodies and child results supply the model's terms.
 	unique_ptr<DecideConstraint> facts;
@@ -168,6 +191,8 @@ struct DecideNode {
 	//! references. Its entries carry them (DecideDescentEntry::program_columns), but they are no field and split no
 	//! entry.
 	vector<unique_ptr<Expression>> program_columns;
+	//! The data reducers its programs read, after its program columns in its layout.
+	vector<DecideHole> holes;
 };
 
 struct DecideTree {
@@ -213,6 +238,8 @@ struct DecideTreeSources {
 	vector<idx_t> composed_roots;
 	//! [link] -> its helper's G, or its O for a frame.
 	vector<idx_t> link_nodes;
+	//! [record] -> its G (LogicalDecide::retained_bound_aggregates).
+	vector<idx_t> record_nodes;
 };
 
 //! Builder with a director (plan_decide.cpp): the nodes come from the final clauses before stage 05 lowers them, the

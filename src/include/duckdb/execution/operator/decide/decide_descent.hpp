@@ -52,6 +52,9 @@ struct DecideDescentGroup {
 	//! Value-order rank, assigned by Finish; storage addresses remain stable.
 	idx_t rank = DConstants::INVALID_INDEX;
 	vector<idx_t> entries;
+	//! False for a slot of rows in no class of the key: a root's (DecideNode::holds_rows_in_no_class), and a G's, whose
+	//! rows reach its operand alone and hold no entry of it.
+	bool in_a_class = true;
 };
 
 struct DecideDescentPosition {
@@ -154,6 +157,9 @@ private:
 	DecideErrorRank current_rank;
 	idx_t active_node = DConstants::INVALID_INDEX;
 	idx_t active_row_base = 0;
+	//! The block of flat's in which the visit's read ranks, by the row's window: a reducer's own `when` in the term
+	//! filters, a grouped clause's key in its grouping; ROUTE for a read that routes the node's rows.
+	DecideBlock read_block = DecideBlock::ROUTE;
 	vector<unordered_set<idx_t>> failed_rows;
 	bool Failed(idx_t row) const {
 		return active_node < failed_rows.size() && failed_rows[active_node].count(active_row_base + row);

@@ -4,6 +4,7 @@
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
+#include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -170,20 +171,8 @@ private:
 		if (tree.nodes[node]->key == DConstants::INVALID_INDEX) {
 			return DConstants::INVALID_INDEX;
 		}
-		auto &groups = descent.Containers()[node].groups;
-		vector<vector<Value>> values(groups.size());
-		for (auto &group : groups) {
-			values[group.rank] = descent.Label(tree.nodes[node]->key, group.key);
-		}
-		SolverInput::KeyValues keys;
-		for (auto &element : DecideKeyElements(tree.keys, tree.nodes[node]->key)) {
-			keys.null_modes.push_back(element.null_mode);
-		}
-		keys.values_of = [values](idx_t group) {
-			return values[group];
-		};
 		const auto index = input.key_values.size();
-		input.key_values.push_back(std::move(keys));
+		input.key_values.push_back(DecideGroupKeyValues(tree, descent, node));
 		stored_key_values.emplace(node, index);
 		return index;
 	}

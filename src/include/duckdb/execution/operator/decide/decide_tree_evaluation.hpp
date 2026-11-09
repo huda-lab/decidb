@@ -88,7 +88,13 @@ private:
 	ClientContext &context;
 	vector<DecideTreeNodeResult> results;
 	vector<unordered_map<idx_t, vector<idx_t>>> rows;
-	vector<unordered_map<const Expression *, DecideErrorRank>> expression_ranks;
+	//! Where an expression's error ranks under its node's rank: in flat's block (DecideBlock) for it, at its place
+	//! there, which the failing entry's row places by its window as a program's does (DecideTreeColumns).
+	struct ExpressionRank {
+		DecideErrorRank rank;
+		DecideBlock block;
+	};
+	vector<unordered_map<const Expression *, ExpressionRank>> expression_ranks;
 	bool evaluated = false;
 
 	DecideTreeValuePtr ExpressionValue(const Expression &expression, idx_t node, const DecideDescentEntry &entry);

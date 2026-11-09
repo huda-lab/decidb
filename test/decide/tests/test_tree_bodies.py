@@ -239,7 +239,7 @@ PROGRAMS = {
     # A coefficient reads a source column its site carries, by its place among them.
     "a-carried-column": (
         decide(ROWS, "x(REAL)", "x <= 9 AND sum(t.c * x) by (t.g) <= 5"),
-        r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=1 ",
+        r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) block=TERMS ",
     ),
     # A query-wide scale is read on the operand of the reducer it scales, which does not carry it: a program column,
     # which the coefficient's input then finds there.
@@ -251,30 +251,30 @@ PROGRAMS = {
     # A clause's bound is a program on its root.
     "a-bound": (
         decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9 AND x + y <= t.c", "MAXIMIZE sum(x + y)"),
-        r"program \d+ BOUND expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=2 group=0 position=0 ",
+        r"program \d+ BOUND expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) block=BOUND group=0 position=0 ",
     ),
     # A bound that reads a frame and may differ within a group is the tightest one there (D85): a role of its own.
     "a-tightest-bound": (
         decide(ROWS, "x(REAL)", "x <= 9 AND sum(x) by (t.g) <= at(previous else 10: t.c) over (t.id within t.g)"),
-        r"program 0 TIGHTEST_BOUND .* stage=2 group=0 position=0 ",
+        r"program 0 TIGHTEST_BOUND .* block=BOUND group=0 position=0 ",
     ),
     # An admitted bound computes a and r, then each end over the row and those two, read after the layout: r is #2
     # beside the one carried column (a, a constant, is in the ends already). It names its bound.
     "admitted-ends": (
         decide(ROWS, "x(REAL)", "x <= t.c"),
         r"bound rhs=1 admits=-1 lower=4 upper=5\n(?:.*\n)*  program 4 BOUND expr=[^\n]*\(\(#2 IS NULL\)\)[^\n]* "
-        r"written=CAST\(c AS DOUBLE\) stage=2 group=0 position=4 owner=0 arguments=2,3\n",
+        r"written=CAST\(c AS DOUBLE\) block=BOUND group=0 position=4 owner=0 arguments=2,3\n",
     ),
     # An easy extremum's admitted bound applies to its members, so it is computed on them, its `when` first.
     "admitted-members": (
         decide(ROWS, "x(REAL)", "x <= 9 AND min(when t.p: x) >= -5"),
         r"bound rhs=0 admits=1 lower=4 upper=5\n(?:.*\n)*?node \d+ entries\n  column #0 reads input \d+\n"
-        r"[^\n]*\n  program 1 ADMITS expr=#0 written=p stage=2 group=0 position=1 ",
+        r"[^\n]*\n  program 1 ADMITS expr=#0 written=p block=BOUND group=0 position=1 ",
     ),
     # A member test is a program on its node.
     "a-member-test": (
         decide(NULL_ROWS, "x(REAL)", "x <= 9 AND sum(t.c * x) <= 5"),
-        r"program \d+ TEST expr=\(#0 IS NOT NULL\) written=\(c IS NOT NULL\) stage=0 group=0 position=0 owner=-1",
+        r"program \d+ TEST expr=\(#0 IS NOT NULL\) written=\(c IS NOT NULL\) block=FILTERS group=0 position=0 owner=-1",
     ),
     # A member test ranks in its reducer's filter, by the first term its node holds: w's linear term (0), not its
     # squared terms (2 and 3), which follow every linear term (DecideProgramCompiler::AddTests).
@@ -285,24 +285,39 @@ PROGRAMS = {
             "x <= 9 AND y <= 9",
             "MINIMIZE sum(power(x - t.c, 2) + t.w * x) + sum(t.c * y)",
         ),
-        r"program \d+ TEST expr=\(#1 IS NOT NULL\) written=\(w IS NOT NULL\) stage=0 group=0 position=1 ",
+        r"program \d+ TEST expr=\(#1 IS NOT NULL\) written=\(w IS NOT NULL\) block=FILTERS group=0 position=1 ",
     ),
-    # A member test that reads a child result has no program yet.
-    "a-member-test-reads-a-child": (
+    # A member test that reads a data reducer reads it as a hole, after the node's carried columns.
+    "a-member-test-reads-a-data-reducer": (
         decide(ROWS, "x(REAL)", "x <= 9 AND sum(t.w * x * max(t.c) by (t.g)) <= 9"),
-        r"uncompiled: a member test reads a child",
+        r"  hole #2 reads node \d+\n(?:.*\n)*  program 2 TEST expr=\(CAST\(CASE  WHEN \(\(#1 IS NULL\)\) THEN \(NULL\) "
+        r"ELSE #2 END AS DOUBLE\) IS NOT NULL\) ",
     ),
-    # A read of a data reducer, and of a frame, has no value yet: a NULL, printed as computed, not by its alias.
+    # A read of a data reducer is a hole of its node's layout, after its carried and program columns, which the
+    # bound and the admitted end that both read it share: the G's value in the slot the entry's row reads.
     "a-data-reducer": (
         decide(ROWS, "x(REAL)", "x <= 9 AND x <= max(t.c) by (t.g)"),
-        r"program 1 BOUND expr=CAST\(CASE  WHEN \(\(#0 IS NULL\)\) THEN \(NULL\) ELSE NULL END AS DOUBLE\) "
-        r"[^\n]*\n(?:.*\n)*  uncompiled: reads a data reducer\n",
+        r"  hole #1 reads node \d+\n(?:.*\n)*  program 1 BOUND expr=CAST\(CASE  WHEN \(\(#0 IS NULL\)\) THEN \(NULL\) "
+        r"ELSE #1 END AS DOUBLE\) [^\n]*\n(?:.*\n)*  program 3 VALUE expr=CAST\(CASE  WHEN \(\(#0 IS NULL\)\) THEN "
+        r"\(NULL\) ELSE #1 END AS DOUBLE\) ",
     ),
+    # A data reducer's arguments are programs on its operand, which the G folds per slot.
+    "a-data-reducers-arguments": (
+        decide(ROWS, "x(REAL)", "x <= 9 AND x <= max(t.c) by (t.g)"),
+        r"node \d+ entries\n  program 0 VALUE expr=#0 written=c block=FILTERS group=0 position=0 owner=-1\n",
+    ),
+    # A data check's message is a program on its hidden root.
+    "a-data-check": (
+        decide("(VALUES (1, 'a', 3.0::DOUBLE)) t(id, g, c)", "x(REAL)", "x <= max(t.c) by (t.g)"),
+        r"node 0 entries\n  program 0 VALUE expr=CASE  WHEN \(\(#0 IS NULL\)\) THEN \(NULL\) ELSE CASE  WHEN "
+        r"\(isnan\(#1\)\) THEN ",
+    ),
+    # A read of a frame has no value yet: a NULL, printed as computed, not by its alias.
     "a-frame": (
         decide(ROWS, "x(REAL)", "x <= 9 AND x - at(previous: x) over (t.id) <= 1"),
         r"uncompiled: reads a frame",
     ),
-    # A body that reads a frame in a term and a data reducer in its bound names the first.
+    # A body that reads a frame in a term names it, though its bound's data reducer is a hole.
     "the-first-reason": (
         decide(ROWS, "x(REAL)", "x <= 9 AND x - at(previous: x) over (t.id) <= max(t.c) by (t.g)"),
         r"uncompiled: reads a frame\n",
@@ -310,18 +325,18 @@ PROGRAMS = {
     # The objective's squared terms follow its terms.
     "objective-squares": (
         decide(ROWS, "x(REAL)", "x <= 9", "MINIMIZE sum(power(x - t.c, 2)) + sum(t.w * x)"),
-        r"program 1 COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=1 group=0 position=2 ",
+        r"program 1 COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) block=TERMS group=0 position=2 ",
     ),
     # A helper's members are computed on its operand, a frame helper's else terms on its O after its members.
     "helper-members": (
         decide(ROWS, "x(REAL)", "x <= 9 AND sum(max(t.w * x) by (t.g)) <= 5"),
         r"members rank=links:0\n  term 0 var=0 child=-1 site=(\d+) program=0 [^\n]*\nnode \1 entries\n"
-        r"  program 0 COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(w AS DOUBLE\) stage=1 ",
+        r"  program 0 COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(w AS DOUBLE\) block=TERMS ",
     ),
     "frame-else": (
         decide(ROWS, "x(REAL)", "x <= 9 AND x <= sum(from previous to next else t.w: x) over (t.id)"),
         r"  fallback\n    term 0 var=-1 child=-1 site=(\d+) program=1 [^\n]*\n(?:.*\n)*?  program 1 COEFFICIENT "
-        r"expr=NULL [^\n]* stage=1 group=0 position=1 ",
+        r"expr=NULL [^\n]* block=TERMS group=0 position=1 ",
     ),
 }
 
@@ -336,12 +351,13 @@ GUROBI_PROGRAMS = {
     ),
     "a-product-coefficient": (
         decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9 AND t.c * x * y <= 10", "MAXIMIZE sum(x + y)"),
-        r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) stage=3 ",
+        r"program \d+ COEFFICIENT expr=CAST\(#0 AS DOUBLE\) written=CAST\(c AS DOUBLE\) block=PRODUCTS ",
     ),
     # A square's query-wide scale is a program on its root; an unscaled square has none.
     "a-square-scale": (
         decide(ROWS, "x(REAL)", "x <= 9 AND (SELECT 2.0) * sum(power(x - t.c, 2)) <= 50"),
-        r"square 0 child=\d+ sign=1 scale=1\n(?:.*\n)*  program 1 VALUE expr=CAST\(#0 AS DOUBLE\) [^\n]* stage=4 group=0",
+        r"square 0 child=\d+ sign=1 scale=1\n(?:.*\n)*  program 1 VALUE expr=CAST\(#0 AS DOUBLE\) [^\n]* "
+        r"block=SQUARES group=0",
     ),
     "a-square-unscaled": (
         decide(ROWS, "x(REAL)", "x <= 9 AND sum(power(x - t.c, 2)) <= 50"),
@@ -350,7 +366,7 @@ GUROBI_PROGRAMS = {
     # The objective's products are their own block.
     "objective-product": (
         decide(ROWS, "x(REAL), y(REAL)", "x <= 9 AND y <= 9", "MAXIMIZE sum(t.c * x * y)"),
-        r"program 0 COEFFICIENT expr=COALESCE\(CAST\(#0 AS DOUBLE\), 0.0\) [^\n]* stage=3 group=0 position=0 ",
+        r"program 0 COEFFICIENT expr=COALESCE\(CAST\(#0 AS DOUBLE\), 0.0\) [^\n]* block=PRODUCTS group=0 position=0 ",
     ),
 }
 

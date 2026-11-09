@@ -171,7 +171,8 @@ bool DecideErrorStopsTheQuery(const ErrorData &error) {
 
 void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor> &executor, idx_t expr_idx,
                           const std::function<unique_ptr<ExpressionExecutor>()> &remake, const Expression &lowered,
-                          Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset) {
+                          Vector &values, std::map<idx_t, ErrorData> &errors, DataChunk &chunk, idx_t offset,
+                          ErrorData *raised) {
 	const idx_t count = chunk.size();
 	const auto &type = lowered.return_type;
 	Vector out(type);
@@ -182,6 +183,9 @@ void DecideEvaluateWindow(ClientContext &context, unique_ptr<ExpressionExecutor>
 		ErrorData error(ex);
 		if (DecideErrorStopsTheQuery(error)) {
 			throw;
+		}
+		if (raised) {
+			*raised = error;
 		}
 		executor = remake();
 		Vector rows(type);
@@ -340,6 +344,15 @@ vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_
 	return rows;
 }
 
+void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedConstraint &evaluated) {
+	auto counted = FirstRowOfEachGroup(evaluated.row_group_ids, evaluated.num_groups, num_rows);
+	for (idx_t term_idx = 0; term_idx < terms.size(); term_idx++) {
+		if (CountsOnce(terms[term_idx])) {
+			CountOnce(evaluated.row_coefficients[term_idx], counted);
+		}
+	}
+}
+
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped) {
 	if (row_group_ids.empty()) {
 		return grouped ? MinValue<idx_t>(num_rows, 1) : num_rows;
@@ -461,6 +474,203 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, const Dec
 	}
 	evaluated.rhs_values.Reserve(num_rows);
 	return true;
+}
+
+vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
+                               const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
+                               vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
+                               const std::function<bool(idx_t)> *loose_row_filter,
+                               vector<idx_t> *out_loose_row_group_ids) {
+	// The call's kept groups, renumbered densely in key-value order.
+	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+	vector<idx_t> kept_groups;
+	if (out_loose_row_group_ids) {
+		out_loose_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
+	}
+	if (groups.num_groups == 0 || num_rows == 0) {
+		out_num_groups = 0;
+		return kept_groups;
+	}
+	auto reads = [&](idx_t r) {
+		return (!read_rows || (*read_rows)[r]) && groups.row_group_ids[r] != DConstants::INVALID_INDEX;
+	};
+	vector<idx_t> remap(groups.num_groups, DConstants::INVALID_INDEX);
+	for (idx_t r = 0; r < num_rows; r++) {
+		if (reads(r) && (!row_filter || row_filter(r))) {
+			remap[groups.row_group_ids[r]] = 0;
+		}
+	}
+	idx_t next_remap = 0;
+	for (idx_t unf_gid = 0; unf_gid < remap.size(); unf_gid++) {
+		if (remap[unf_gid] == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		remap[unf_gid] = next_remap++;
+		kept_groups.push_back(unf_gid);
+	}
+	for (idx_t r = 0; r < num_rows; r++) {
+		if (reads(r) && (!row_filter || row_filter(r))) {
+			out_row_group_ids[r] = remap[groups.row_group_ids[r]];
+		}
+	}
+	out_num_groups = next_remap;
+
+	if (out_loose_row_group_ids) {
+		// Same `remap`, so a row lands in the group the model builder will emit for.
+		for (idx_t r = 0; r < num_rows; r++) {
+			if (!reads(r) || (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r))) {
+				continue;
+			}
+			idx_t mapped = remap[groups.row_group_ids[r]];
+			if (mapped == DConstants::INVALID_INDEX) {
+				continue; // group emits no constraint
+			}
+			(*out_loose_row_group_ids)[r] = mapped;
+		}
+	}
+	return kept_groups;
+}
+
+vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
+                               bool has_local_filters, const vector<bool> &local_row_active,
+                               const DecideKeyGroups *groups, const std::function<bool()> &any_class,
+                               vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
+                               idx_t &grouped_instances) {
+	// A reducer's members are the rows its own `when` keeps -- a MIN/MAX reads them as members -- while every kept row
+	// of a group bounds it. A `<>` emits every kept row, since each one's bound is excluded.
+	bool every_kept_row = constraint.comparison_type == ExpressionType::COMPARE_NOTEQUAL;
+	std::function<bool(idx_t)> emitted = [&](idx_t row) {
+		return scoped_kept[row] && (every_kept_row || !has_local_filters || local_row_active[row]);
+	};
+	std::function<bool(idx_t)> kept = [&](idx_t row) {
+		return scoped_kept[row];
+	};
+	vector<idx_t> kept_groups;
+	if (groups) {
+		kept_groups = DecideKeptGroups(*groups, num_rows, emitted, &scoped_kept, evaluated.row_group_ids,
+		                               evaluated.num_groups, kept_row_group_ids ? &kept : nullptr, kept_row_group_ids);
+		vector<bool> held(groups->num_groups, false);
+		grouped_instances = 0;
+		for (idx_t row = 0; row < num_rows; row++) {
+			const idx_t group = groups->row_group_ids[row];
+			if (scoped_kept[row] && group != DConstants::INVALID_INDEX && !held[group]) {
+				held[group] = true;
+				grouped_instances++;
+			}
+		}
+	} else {
+		grouped_instances = std::find(scoped_kept.begin(), scoped_kept.end(), true) != scoped_kept.end();
+	}
+	if (!groups && (constraint.scope.when || has_local_filters)) {
+		evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+		for (idx_t row = 0; row < num_rows; row++) {
+			evaluated.row_group_ids[row] = emitted(row) ? 0 : DConstants::INVALID_INDEX;
+		}
+		evaluated.num_groups = 1;
+	}
+	// A `per K:` that names classes holds once per class; with every kept row's K NULL there is no class, so no
+	// instance.
+	if (constraint.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES && !any_class()) {
+		evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+		if (kept_row_group_ids) {
+			kept_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
+		}
+		evaluated.num_groups = 0;
+		grouped_instances = 0;
+	}
+	return kept_groups;
+}
+
+void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
+                                  vector<idx_t> &row_group_ids, idx_t &num_groups) {
+	auto filtered = [](const TermFilterState *filter) {
+		return filter->has_filter;
+	};
+	if (std::none_of(filters.begin(), filters.end(), filtered)) {
+		return;
+	}
+	if (row_group_ids.empty()) {
+		row_group_ids.assign(num_rows, 0);
+		num_groups = 1;
+	}
+	vector<bool> skipped(num_groups, false);
+	for (auto filter : filters) {
+		if (!filter->has_filter) {
+			continue;
+		}
+		vector<bool> read(num_groups, false);
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (row_group_ids[row] != DConstants::INVALID_INDEX && filter->mask[row]) {
+				read[row_group_ids[row]] = true;
+			}
+		}
+		for (idx_t group = 0; group < num_groups; group++) {
+			skipped[group] = skipped[group] || !read[group];
+		}
+	}
+	for (auto &group : row_group_ids) {
+		if (group != DConstants::INVALID_INDEX && skipped[group]) {
+			group = DConstants::INVALID_INDEX;
+		}
+	}
+}
+
+void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask, bool quadratic_inner,
+                  idx_t num_rows, const vector<idx_t> &row_group_ids, idx_t num_groups) {
+	auto &coefficients = col.MutableDense();
+	if (row_group_ids.empty()) {
+		idx_t denominator = 0;
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (!has_filter || filter_mask[row]) {
+				denominator++;
+			}
+		}
+		if (denominator == 0) {
+			std::fill(coefficients.begin(), coefficients.end(), 0.0);
+			return;
+		}
+		double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(denominator))
+		                               : 1.0 / static_cast<double>(denominator);
+		for (auto &coefficient : coefficients) {
+			coefficient *= scale;
+		}
+		return;
+	}
+
+	vector<idx_t> group_counts(num_groups, 0);
+	for (idx_t row = 0; row < num_rows; row++) {
+		idx_t gid = row_group_ids[row];
+		if (gid == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (!has_filter || filter_mask[row]) {
+			group_counts[gid]++;
+		}
+	}
+	for (idx_t row = 0; row < coefficients.size(); row++) {
+		idx_t gid = row_group_ids[row];
+		if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
+			coefficients[row] = 0.0;
+			continue;
+		}
+		double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(group_counts[gid]))
+		                               : 1.0 / static_cast<double>(group_counts[gid]);
+		coefficients[row] *= scale;
+	}
+}
+
+void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
+                   EvaluatedConstraint &evaluated) {
+	bool all_avg = !constraint.lhs_terms.empty() && !constraint.has_bilinear && !constraint.has_quadratic;
+	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
+		if (filters[term_idx].avg_scale) {
+			ScaleAvgRows(evaluated.row_coefficients[term_idx], filters[term_idx].has_filter, filters[term_idx].mask,
+			             /*quadratic_inner=*/false, num_rows, evaluated.row_group_ids, evaluated.num_groups);
+		} else {
+			all_avg = false;
+		}
+	}
+	evaluated.avg_scaled = all_avg;
 }
 
 void DecideValueRange::Add(const Value &value) {
