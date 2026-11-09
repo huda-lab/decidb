@@ -424,9 +424,9 @@ private:
 			// Concave: the better endpoint, from the sign of f(upper) - f(lower) = (upper - lower) * s.
 			auto s = calc.Add(calc.Mul(a, calc.Add(upper, lower)), b);
 			auto concave = calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, s, zero), upper, lower);
-			// Linear: the end the slope points away from. With no slope at all the lowest value allowed, or zero
-			// clamped into the box when the box is open below.
-			auto flat = calc.If(calc.Fn("isfinite", lower), lower, calc.Min({calc.Max({zero, lower}), upper}));
+			// Linear: the end the slope points away from. With no slope at all the lowest value allowed, or zero, or
+			// the upper end below it, when the box is open below.
+			auto flat = calc.If(calc.Fn("isfinite", lower), lower, calc.Min({zero, upper}));
 			auto linear = calc.If(calc.Cmp(ExpressionType::COMPARE_LESSTHAN, b, zero), upper,
 			                      calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, b, zero), lower, flat));
 			auto chosen = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero), convex,
