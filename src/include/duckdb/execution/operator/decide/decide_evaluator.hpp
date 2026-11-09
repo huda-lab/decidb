@@ -53,9 +53,13 @@ public:
 };
 
 //! Raises INTERNAL at the first thing the two runs differ in: one raised and the other did not, their messages, or a
-//! field. Doubles compare within a few ulps, since a second evaluator may sum in another order. Two runs that raised
-//! alike stopped where they stopped, so their fields are not compared. DECIDB_EVALUATOR_INJECT=<group> changes the
-//! second run's first field of a group, and <group>:ulp nudges it by one ulp: how a test shows the comparison can fail.
+//! field. Fields compare group by group, each group's in their order, so a group that records more shifts no other.
+//! Doubles compare within a few ulps, since a second evaluator may sum in another order. Two runs that raised alike
+//! stopped where they stopped, so their fields are not compared. DECIDB_EVALUATOR_INJECT=<group>[,...] changes the
+//! second run's first field of each group, <group>:ulp nudges it by one ulp and <group>:extra adds a field to the
+//! group: how a test shows the comparison can fail. DECIDB_VERIFY_ALLOW=<bug>:<group>[:<field prefix>][,...] names a
+//! difference a test knows of, the group's fields whose name begins with the prefix's words: those fields are compared
+//! apart, and a difference there is written to DECIDB_VERIFY_ALLOW_LOG as its bug rather than raised.
 void CompareDecideEvaluations(const DecideEvaluationRecord &flat, const ErrorData &flat_error,
                               DecideEvaluationRecord second, const ErrorData &second_error);
 

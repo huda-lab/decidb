@@ -3151,12 +3151,54 @@ static void RecordClause(DecideEvaluationRecord &record, const EvaluatedConstrai
 	}
 	record.Add("rows", name, StringUtil::Format("%llu groups", clause.num_groups), Ids(clause.row_group_ids));
 	for (idx_t term = 0; term < clause.row_coefficients.size(); term++) {
-		record.Add("terms", name + " term " + to_string(term), to_string(clause.variable_indices[term]),
+		record.Add("terms", name + " term " + to_string(term),
+		           to_string(clause.variable_indices[term]) + " " + clause.coefficient_labels[term],
 		           ValuesAt(clause.row_coefficients[term], emitted));
 	}
 	record.Add("bounds", name, string(), ValuesAt(clause.rhs_values, emitted));
 	record.Add("bounds", name + " admitted", string(), ValuesAt(clause.admitted_lower, emitted));
 	record.Add("bounds", name + " admits", string(), ValuesAt(clause.admitted_upper, emitted));
+	// What stage 06 reads of the clause beside its columns, every field of EvaluatedConstraint, then its class sets.
+	vector<double> facts {double(clause.comparison_type),
+	                      double(clause.kind),
+	                      Id(clause.source_clause_id),
+	                      Id(clause.removal_group_id),
+	                      Id(clause.repair_group_id),
+	                      double(clause.lhs_is_aggregate),
+	                      Id(clause.lifted_floor),
+	                      Id(clause.minmax_clause_idx),
+	                      Id(clause.ne_clause_idx),
+	                      double(clause.ne_avg_rhs_scale),
+	                      Id(clause.abs_aux_idx),
+	                      double(clause.abs_is_pos_bound),
+	                      double(clause.has_quadratic),
+	                      double(clause.rhs_is_shared_scalar),
+	                      clause.rhs_mechanism_offset,
+	                      double(clause.avg_scaled),
+	                      double(clause.rows_stand_with_their_class)};
+	for (auto set : clause.group_class_set) {
+		facts.push_back(Id(set));
+	}
+	record.Add("facts", name, clause.minmax_agg_type + " | " + clause.rhs_label + " | " + clause.rhs_written,
+	           std::move(facts));
+	for (idx_t i = 0; i < clause.bilinear_terms.size(); i++) {
+		auto &product = clause.bilinear_terms[i];
+		record.Add("products", name + " product " + to_string(i),
+		           to_string(product.var_a) + " " + to_string(product.var_b),
+		           ValuesAt(product.row_coefficients, emitted));
+	}
+	// A square: its sign, then each term's coefficients at the emitted rows.
+	for (idx_t g = 0; g < clause.quadratic_groups.size(); g++) {
+		auto &square = clause.quadratic_groups[g];
+		vector<string> variables;
+		vector<double> numbers {square.sign};
+		for (idx_t term = 0; term < square.row_coefficients.size(); term++) {
+			variables.push_back(to_string(square.variable_indices[term]));
+			auto values = ValuesAt(square.row_coefficients[term], emitted);
+			numbers.insert(numbers.end(), values.begin(), values.end());
+		}
+		record.Add("squares", name + " square " + to_string(g), StringUtil::Join(variables, " "), std::move(numbers));
+	}
 	vector<string> names;
 	for (auto &group : clause.group_names) {
 		names.push_back(NameByValue(group, cache));
@@ -3167,7 +3209,8 @@ static void RecordClause(DecideEvaluationRecord &record, const EvaluatedConstrai
 }
 
 static void RecordComposedTerm(DecideEvaluationRecord &record, const ComposedMinMaxTermData &term, const string &name) {
-	record.Add("clauses", name, term.agg_name + " " + term.label, {double(term.sign), term.scale});
+	record.Add("clauses", name, term.agg_name + " " + term.label,
+	           {double(term.sign), term.scale, double(term.is_minmax), double(term.is_easy)});
 	record.Add("clauses", name + " rows", string(), Mask(term.filter_mask));
 	for (idx_t i = 0; i < term.per_term_coefs.size(); i++) {
 		record.Add("clauses", name + " term " + to_string(i), to_string(term.variables[i]), term.per_term_coefs[i]);
@@ -3207,7 +3250,8 @@ DecideEvaluationRecord PhysicalDecide::RecordEvaluation(DecideGlobalSinkState &g
 	for (idx_t c = 0; c < evaluated.composed_constraints.size(); c++) {
 		auto &composed = evaluated.composed_constraints[c];
 		const string name = "composed " + to_string(c);
-		record.Add("clauses", name, composed.skipped ? "skipped" : "held", {composed.rhs});
+		record.Add("clauses", name, composed.skipped ? "skipped" : "held",
+		           {composed.rhs, Id(composed.repair_group_id), Id(composed.class_set)});
 		for (idx_t t = 0; t < composed.terms.size(); t++) {
 			RecordComposedTerm(record, composed.terms[t], name + " term " + to_string(t));
 		}
@@ -3222,6 +3266,8 @@ DecideEvaluationRecord PhysicalDecide::RecordEvaluation(DecideGlobalSinkState &g
 		record.Add("links", link.label + " members", string(), members.constants);
 		record.Add("links", link.label + " terms", string(), Ids(members.variables));
 		record.Add("links", link.label + " rows", string(), Ids(members.rows));
+		record.Add("links", link.label + " spec", string(),
+		           {double(link.need_envelope), double(link.need_closing), double(link.frame), double(link.inlined)});
 	}
 	for (idx_t m = 0; m < keyed_mappings.size(); m++) {
 		auto &mapping = keyed_mappings[m];
@@ -3229,7 +3275,27 @@ DecideEvaluationRecord PhysicalDecide::RecordEvaluation(DecideGlobalSinkState &g
 		           Ids(mapping.row_to_class));
 	}
 	for (auto &read : gstate.frame_reads) {
-		record.Add("frames", to_string(read.first) + " through frame " + to_string(read.second), string());
+		// The row the frame selects for each row, which stage 06 reads the decision at.
+		vector<idx_t> selected;
+		for (idx_t row = 0; row < num_rows; row++) {
+			selected.push_back(gstate.frame_maps[read.second].SelectedRow(row));
+		}
+		record.Add("frames", to_string(read.first) + " through frame " + to_string(read.second), string(),
+		           Ids(selected));
+	}
+	for (idx_t i = 0; i < gstate.class_sets.size(); i++) {
+		auto &set = gstate.class_sets[i];
+		vector<string> classes;
+		for (auto &name : set.classes) {
+			classes.push_back(NameByValue(name, cache));
+		}
+		record.Add("class_sets", to_string(i), to_string(int(set.kind)) + " " + StringUtil::Join(classes, "; "),
+		           Ids(set.rows));
+	}
+	for (idx_t var = 0; var < gstate.absent_reads.size(); var++) {
+		if (!gstate.absent_reads[var].empty()) {
+			record.Add("absent", to_string(var), string(), Mask(gstate.absent_reads[var]));
+		}
 	}
 	for (auto &entry : gstate.clause_instances) {
 		record.Add("instances", to_string(entry.first), string(),
