@@ -163,7 +163,7 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 //! Is some backend that takes `needed` installed on this host?
 bool AnyAvailable(const SolverModelClass &needed) {
 	for (auto &backend : SolverRegistry::Backends()) {
-		if (backend.IsAvailable() && SupportsModelClass(needed, backend.Capabilities().model_classes)) {
+		if (backend.IsAvailable() && SupportsModelClass(needed, backend.ModelClasses())) {
 			return true;
 		}
 	}
@@ -177,10 +177,18 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 }
 
 SolverModelClassGap FindDecideSolverGap(const SolverModelClass &needed, const SolverBackend &backend) {
-	return FindModelClassGap(needed, backend.Capabilities().model_classes);
+	return FindModelClassGap(needed, backend.ModelClasses());
 }
 
 bool DecideSolverRuns(const SolverModelClass &needed) {
+	// The backend SelectSolverBackend picks takes `needed` whenever every backend does, so the pick is made only when
+	// the answer depends on it: its availability probe loads Gurobi's library and starts a licensed environment, and a
+	// query a direct-solve rule answers asks this only for the wording of its errors.
+	auto &backends = SolverRegistry::Backends();
+	if (std::all_of(backends.begin(), backends.end(),
+	                [&](const SolverBackend &backend) { return SupportsModelClass(needed, backend.ModelClasses()); })) {
+		return true;
+	}
 	return FindDecideSolverGap(needed, SelectSolverBackend()) == SolverModelClassGap::NONE;
 }
 

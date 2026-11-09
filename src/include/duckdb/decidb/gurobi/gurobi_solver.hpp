@@ -21,12 +21,16 @@ public:
     //! Check if Gurobi is available at runtime (library linked + valid license)
     static bool IsAvailable();
 
-    //! What Gurobi declares on THIS host. Partly a runtime fact: a construct flag is
+    //! The model classes Gurobi loads: every class DeciDB builds. A fact about Gurobi,
+    //! answered without opening the library.
+    static SolverModelClass ModelClasses();
+
+    //! The constructs Gurobi states natively on THIS host. A runtime fact: a flag is
     //! true only when the dynamically loaded library actually exported the symbol that
     //! construct needs, so this loads the library first rather than baking an answer in
-    //! at compile time. Upstream stages read it through SolverBackend::Capabilities(),
+    //! at compile time. Upstream stages read it through SolverBackend::Constructs(),
     //! which applies the DECIDB_NATIVE_CONSTRUCTS mask.
-    static const SolverCapabilities &Capabilities();
+    static const SolverConstructSupport &Constructs();
 
     //! Create a resumable Gurobi session: the one way a DECIDE query reaches
     //! Gurobi. Every solve runs as one or more chunks on a session, so a

@@ -20,24 +20,27 @@ bool DeterministicNaive::IsAvailable() {
     return true;
 }
 
-const SolverCapabilities &DeterministicNaive::Capabilities() {
+SolverModelClass DeterministicNaive::ModelClasses() {
     // The floor of the registry, and the reason every field can be left at its default:
     // HiGHS declares nothing. Plain linear objectives, and convex quadratic objectives
     // whose Q is diagonal. Every model class is false, so a query needing one is refused
-    // with a message about the host; every construct is false, so each arrives fully
-    // lowered — the path DeciDB has always taken.
+    // with a message about the host.
     //
     // `singular_quadratic` is false for a different reason than the other three. HiGHS
     // LOADS a rank-deficient Q without complaint; it just answers it wrong, stopping
     // partway along the flat valley of optima or failing outright, on roughly half of
     // them. Refusing is the only way to keep a wrong answer from being returned as an
     // optimal one. Revisit as HiGHS's QP solver improves.
-    //
-    // Nothing here reads DECIDB_NATIVE_CONSTRUCTS: SolverBackend::Capabilities() masks
-    // constructs for every backend, so the switch reaches HiGHS whether or not HiGHS
-    // ever declares one. It is a no-op today precisely because this table is empty.
-    static const SolverCapabilities capabilities;
-    return capabilities;
+    return SolverModelClass();
+}
+
+const SolverConstructSupport &DeterministicNaive::Constructs() {
+    // Every construct is false, so each arrives fully lowered — the path DeciDB has
+    // always taken. Nothing here reads DECIDB_NATIVE_CONSTRUCTS: SolverBackend::Constructs()
+    // masks constructs for every backend, so the switch reaches HiGHS whether or not
+    // HiGHS ever declares one. It is a no-op today precisely because this table is empty.
+    static const SolverConstructSupport constructs;
+    return constructs;
 }
 
 namespace {

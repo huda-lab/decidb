@@ -34,12 +34,11 @@ void ChooseDecideSolver(LogicalDecide &op) {
 	op.optimized = true;
 	SolverBackend backend = SelectSolverBackend();
 	op.solver_backend_name = backend.Name();
-	// The formulation decision, made HERE and read everywhere else. `Capabilities()`
+	// The formulation decision, made HERE and read everywhere else. `Constructs()`
 	// answers what the backend CAN state; recording it on the plan turns that into what
-	// this query WILL leave native. The two are the same table, which is why one type
-	// carries both — but the question is asked exactly once, at the only stage entitled
-	// to choose a formulation.
-	op.use_native_constructs = backend.Capabilities().constructs;
+	// this query WILL leave native. The two are the same table, asked exactly once, at
+	// the only stage entitled to choose a formulation.
+	op.use_native_constructs = backend.Constructs();
 	// ...and the policy that governs their use. Read here, with the rest of the
 	// formulation decision, rather than at the emission site: an environment read
 	// scattered across stage 08 would be a second place the formulation gets decided.

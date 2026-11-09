@@ -21,10 +21,10 @@ namespace {
 //! backend is in play — capability questions go through the capability types, and
 //! session behavior through SolverSession's virtuals.
 const SolverBackendInfo REGISTERED_BACKENDS[] = {
-    {"gurobi", "Gurobi", GurobiSolver::IsAvailable, GurobiSolver::Capabilities,
+    {"gurobi", "Gurobi", GurobiSolver::IsAvailable, GurobiSolver::ModelClasses, GurobiSolver::Constructs,
      GurobiSolver::CreateSession},
-    {"highs", "HiGHS", DeterministicNaive::IsAvailable, DeterministicNaive::Capabilities,
-     DeterministicNaive::CreateSession},
+    {"highs", "HiGHS", DeterministicNaive::IsAvailable, DeterministicNaive::ModelClasses,
+     DeterministicNaive::Constructs, DeterministicNaive::CreateSession},
 };
 
 //! Test-only A/B switch, mirroring DECIDB_FORCE_SOLVER. It is three-valued because the
@@ -92,16 +92,20 @@ bool SolverBackend::IsAvailable() const {
 	return info->is_available();
 }
 
-SolverCapabilities SolverBackend::Capabilities() const {
+SolverModelClass SolverBackend::ModelClasses() const {
 	D_ASSERT(info);
-	SolverCapabilities capabilities = info->capabilities();
-	// The one place the A/B switch is applied. Model classes are untouched on purpose:
-	// a model class has no lowering path to fall back to, so masking one would not slow
-	// a query down, it would refuse it.
+	// Never masked: a model class has no lowering path to fall back to, so masking one
+	// would not slow a query down, it would refuse it.
+	return info->model_classes();
+}
+
+SolverConstructSupport SolverBackend::Constructs() const {
+	D_ASSERT(info);
+	// The one place the A/B switch is applied.
 	if (!NativeConstructsEnabled()) {
-		capabilities.constructs = SolverConstructSupport();
+		return SolverConstructSupport();
 	}
-	return capabilities;
+	return info->constructs();
 }
 
 unique_ptr<SolverSession> SolverBackend::CreateSession() const {
@@ -132,7 +136,7 @@ SolverBackend SolverRegistry::Find(const string &name) {
 vector<string> SolverRegistry::BackendsSupporting(const SolverModelClass &needed) {
 	vector<string> names;
 	for (auto &backend : Backends()) {
-		if (SupportsModelClass(needed, backend.Capabilities().model_classes)) {
+		if (SupportsModelClass(needed, backend.ModelClasses())) {
 			names.emplace_back(backend.DisplayName());
 		}
 	}

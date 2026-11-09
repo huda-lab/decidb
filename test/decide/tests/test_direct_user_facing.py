@@ -324,7 +324,7 @@ def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(dec
 
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p","s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
+@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p", "s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
 def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient):
     # A literal that is not finite keeps its check, which names it as a constant as the solver path does. Under the
     # data's NULL skip the literal is still no column's value, so it is never named as one.
@@ -956,6 +956,17 @@ def test_require_reports_the_conflict_before_it_looks_at_the_forced_backend(deci
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
     error = _raw(invalid, sql, mode="require").stderr
     assert "conflicts with DECIDB_FORCE_SOLVER" in error and "is not a solver DeciDB knows" not in error, error
+
+
+@pytest.mark.correctness
+def test_a_query_a_rule_answers_loads_no_solver(decidb_cli):
+    # DecideSolverRuns' short-circuit: every backend takes a linear model, so the wording of the state errors does not
+    # depend on which backend would run DIAGNOSE, and no backend is picked. Without it, the pick probes Gurobi (loads
+    # its library and starts a licensed environment, a span of its own) on every query a rule answers.
+    sql = _source_query((2.0, 9.0, -1.0), 1)
+    profiled = _raw(decidb_cli.with_env({"DECIDB_PROFILE": "1"}), sql)
+    assert '"name":"optimizer.direct.analyze"' in profiled.stderr, profiled.stderr
+    assert "gurobi.availability_probe" not in profiled.stderr, profiled.stderr
 
 
 @pytest.mark.correctness

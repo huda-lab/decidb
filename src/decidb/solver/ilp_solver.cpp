@@ -435,8 +435,7 @@ static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBacke
 	// Model class. Decided at plan time on the prepared form, and the query was already
 	// refused there if the chosen backend could not take it (stage 05's
 	// RequireDecideSolverSupport). This asserts the prediction matched the fact.
-	SolverCapabilities capabilities = backend.Capabilities();
-	SolverModelClassGap gap = FindModelClassGap(model.ModelClass(), capabilities.model_classes);
+	SolverModelClassGap gap = FindModelClassGap(model.ModelClass(), backend.ModelClasses());
 	if (gap != SolverModelClassGap::NONE) {
 		throw InternalException("DECIDE built a model %s cannot load; the plan-time model-class "
 		                        "check did not predict it",
@@ -446,7 +445,7 @@ static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBacke
 	// backend's construct table and recorded the answer on the plan, so one reaching a
 	// backend that did not declare it means the plan and the solve disagree about which
 	// backend is in play — and the adapter would have no way to express it.
-	auto &constructs = capabilities.constructs;
+	auto constructs = backend.Constructs();
 	if (!model.indicator_constraints.empty() && !constructs.not_equal) {
 		throw InternalException("DECIDE left a construct native for %s, which does not declare it",
 		                        backend.Name());

@@ -49,7 +49,7 @@ namespace duckdb {
 //!
 //! A construct is only worth a field if it is A/B-verifiable: forcing it back down its
 //! lowering path must reach the same optimum. `DECIDB_NATIVE_CONSTRUCTS=off` is how
-//! that is checked, and SolverBackend::Capabilities() applies it to EVERY backend —
+//! that is checked, and SolverBackend::Constructs() applies it to EVERY backend —
 //! the switch belongs to the contract, not to whichever backend happens to declare a
 //! construct today.
 //!
@@ -212,20 +212,5 @@ inline SolverModelClassGap FindModelClassGap(const SolverModelClass &needed, con
 inline bool SupportsModelClass(const SolverModelClass &needed, const SolverModelClass &supported) {
 	return FindModelClassGap(needed, supported) == SolverModelClassGap::NONE;
 }
-
-//===----------------------------------------------------------------------===//
-// The pair, as one backend answers it
-//===----------------------------------------------------------------------===//
-
-//! What one backend declares, both kinds together. This exists only so the registry
-//! asks each backend a single question; every call site below it reads one member or
-//! the other, never the whole thing.
-struct SolverCapabilities {
-	//! Constructs this backend states natively. Masked centrally by
-	//! SolverBackend::Capabilities() when DECIDB_NATIVE_CONSTRUCTS=off.
-	SolverConstructSupport constructs;
-	//! Model classes this backend can load at all.
-	SolverModelClass model_classes;
-};
 
 } // namespace duckdb

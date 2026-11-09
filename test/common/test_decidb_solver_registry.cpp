@@ -37,9 +37,9 @@ using namespace duckdb;
 // is always available), and that capability declarations are present rather than
 // left to a default nobody wrote down.
 //
-// Capabilities come back BY VALUE from SolverBackend::Capabilities(), which is where
-// the DECIDB_NATIVE_CONSTRUCTS mask is applied for every backend, so these read the
-// same table the pipeline reads.
+// Constructs come back BY VALUE from SolverBackend::Constructs(), which is where the
+// DECIDB_NATIVE_CONSTRUCTS mask is applied for every backend, so these read the same
+// table the pipeline reads.
 TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 	auto &backends = SolverRegistry::Backends();
 
@@ -51,7 +51,8 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 			// Both probes must be callable on any host. IsAvailable() may answer
 			// false — that is a fact about the machine, not a gap in the table.
 			(void)backend.IsAvailable();
-			(void)backend.Capabilities();
+			(void)backend.ModelClasses();
+			(void)backend.Constructs();
 		}
 	}
 
@@ -83,23 +84,24 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 		// HiGHS is the floor: plain linear and convex quadratic objectives only.
 		// Every model-class flag false means a query needing one is refused, and
 		// every construct flag false means everything arrives fully lowered.
-		auto highs_caps = highs.Capabilities();
-		CHECK(!highs_caps.model_classes.quadratic_constraints);
-		CHECK(!highs_caps.model_classes.nonconvex_quadratic);
-		CHECK(!highs_caps.model_classes.miqp);
-		CHECK(!highs_caps.model_classes.singular_quadratic);
-		CHECK(!highs_caps.constructs.abs);
-		CHECK(!highs_caps.constructs.min_max);
-		CHECK(!highs_caps.constructs.not_equal);
-		CHECK(!highs_caps.constructs.bilinear);
+		auto highs_classes = highs.ModelClasses();
+		CHECK(!highs_classes.quadratic_constraints);
+		CHECK(!highs_classes.nonconvex_quadratic);
+		CHECK(!highs_classes.miqp);
+		CHECK(!highs_classes.singular_quadratic);
+		auto highs_constructs = highs.Constructs();
+		CHECK(!highs_constructs.abs);
+		CHECK(!highs_constructs.min_max);
+		CHECK(!highs_constructs.not_equal);
+		CHECK(!highs_constructs.bilinear);
 
 		// Gurobi takes every model class DeciDB can build. Its construct flags are
 		// declared as they are implemented, each with the loader symbol behind it,
 		// so this only asserts the model-class gates it must always satisfy.
-		auto gurobi_caps = gurobi.Capabilities();
-		CHECK(gurobi_caps.model_classes.quadratic_constraints);
-		CHECK(gurobi_caps.model_classes.nonconvex_quadratic);
-		CHECK(gurobi_caps.model_classes.miqp);
+		auto gurobi_classes = gurobi.ModelClasses();
+		CHECK(gurobi_classes.quadratic_constraints);
+		CHECK(gurobi_classes.nonconvex_quadratic);
+		CHECK(gurobi_classes.miqp);
 	}
 
 	SECTION("selection honors DECIDB_FORCE_SOLVER and refuses a bad name") {

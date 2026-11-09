@@ -30,12 +30,16 @@ struct SolverBackendInfo {
 	//! Runtime probe: is the library loadable and the license valid on THIS host?
 	//! A backend that is always present answers true unconditionally.
 	bool (*is_available)();
-	//! What this backend declares, before the central DECIDB_NATIVE_CONSTRUCTS mask
-	//! is applied (see SolverBackend::Capabilities). Queried through a function rather
-	//! than stored inline because capability is partly a runtime fact — a dynamically
-	//! loaded library may not export the symbol a native construct needs, so the
-	//! answer is not known until the library is open.
-	const SolverCapabilities &(*capabilities)();
+	//! The model classes this backend can load at all. Mathematics, the same on every
+	//! host: answering loads no library and checks no licence, so a refusal can name a
+	//! solver the host lacks, and a question whose answer every backend shares costs
+	//! nothing (DecideSolverRuns).
+	SolverModelClass (*model_classes)();
+	//! The constructs this backend states natively, before the central
+	//! DECIDB_NATIVE_CONSTRUCTS mask (see SolverBackend::Constructs). A runtime fact: a
+	//! dynamically loaded library may not export the symbol a native construct needs,
+	//! so the answer may open the library.
+	const SolverConstructSupport &(*constructs)();
 	//! Fresh session factory. The returned session owns no solver state until Solve().
 	unique_ptr<SolverSession> (*create_session)();
 };
@@ -65,12 +69,14 @@ public:
 	const char *DisplayName() const;
 	//! Is this backend usable on this host right now?
 	bool IsAvailable() const;
-	//! What upstream stages may assume: the backend's own declaration with the
-	//! test-only DECIDB_NATIVE_CONSTRUCTS switch applied. Returned BY VALUE because
+	//! The model classes this backend can load: a gate, read without loading anything.
+	SolverModelClass ModelClasses() const;
+	//! The constructs upstream stages may assume: the backend's own declaration with
+	//! the test-only DECIDB_NATIVE_CONSTRUCTS switch applied. Returned BY VALUE because
 	//! that switch is a property of the contract rather than of any one backend, so
 	//! masking happens here, once, for every registered backend — not copy-pasted into
-	//! each one. Read `.constructs` or `.model_classes`; nothing needs both.
-	SolverCapabilities Capabilities() const;
+	//! each one.
+	SolverConstructSupport Constructs() const;
 	//! Open a fresh session on this backend.
 	unique_ptr<SolverSession> CreateSession() const;
 

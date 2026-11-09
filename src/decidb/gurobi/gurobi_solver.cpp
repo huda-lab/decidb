@@ -61,27 +61,33 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
-const SolverCapabilities &GurobiSolver::Capabilities() {
+SolverModelClass GurobiSolver::ModelClasses() {
+    // Model classes Gurobi accepts directly. These are gates: nothing lowers a
+    // non-convex objective into linear rows, so a backend that says false here
+    // makes the query unrunnable rather than slow. A fact about Gurobi, not about
+    // this host, so nothing here opens the library.
+    SolverModelClass classes;
+    classes.quadratic_constraints = true;
+    classes.nonconvex_quadratic = true;
+    classes.miqp = true;
+    // Gurobi's QP solver handles a rank-deficient Q — the flat valley one squared
+    // expression over several decisions produces — and reaches the true optimum on
+    // it. Verified against the sweep behind the HiGHS refusal.
+    classes.singular_quadratic = true;
+    return classes;
+}
+
+const SolverConstructSupport &GurobiSolver::Constructs() {
     // Cached alongside IsAvailable(): both are answers about the library that was
     // loaded into THIS process, and neither can change without a fresh start.
     //
     // This reports what Gurobi CAN do. The test-only DECIDB_NATIVE_CONSTRUCTS switch is
-    // not applied here — SolverBackend::Capabilities() masks constructs centrally, for
+    // not applied here — SolverBackend::Constructs() masks constructs centrally, for
     // every backend, so no backend carries its own copy of the switch.
-    static const SolverCapabilities capabilities = []() {
-        SolverCapabilities caps;
-        // Model classes Gurobi accepts directly. These are gates: nothing lowers a
-        // non-convex objective into linear rows, so a backend that says false here
-        // makes the query unrunnable rather than slow.
-        caps.model_classes.quadratic_constraints = true;
-        caps.model_classes.nonconvex_quadratic = true;
-        caps.model_classes.miqp = true;
-        // Gurobi's QP solver handles a rank-deficient Q — the flat valley one squared
-        // expression over several decisions produces — and reaches the true optimum on
-        // it. Verified against the sweep behind the HiGHS refusal.
-        caps.model_classes.singular_quadratic = true;
-        // Construct flags. Each is true only when the loaded library actually exported
-        // the symbol behind it — a capability is partly a runtime fact — and each is
+    static const SolverConstructSupport constructs = []() {
+        SolverConstructSupport supported;
+        // Each flag is true only when the loaded library actually exported the symbol
+        // behind it — a construct is partly a runtime fact — and each is
         // A/B-verifiable: DECIDB_NATIVE_CONSTRUCTS=off forces every one back down its
         // lowering path, which must reach the same optimum. A flag that cannot be
         // tested that way does not belong in the table.
@@ -96,13 +102,13 @@ const SolverCapabilities &GurobiSolver::Capabilities() {
         // ahead of the code that honors it.
         if (GurobiLoader::Load()) {
             auto &api = GurobiLoader::API();
-            caps.constructs.abs = api.addgenconstrAbs != nullptr;
-            caps.constructs.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
-            caps.constructs.not_equal = api.addgenconstrIndicator != nullptr;
+            supported.abs = api.addgenconstrAbs != nullptr;
+            supported.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
+            supported.not_equal = api.addgenconstrIndicator != nullptr;
         }
-        return caps;
+        return supported;
     }();
-    return capabilities;
+    return constructs;
 }
 
 namespace {
@@ -280,7 +286,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 
     // 3b'. General constraints — constructs DeciDB left native rather than lowering.
     // Pure translation: the model only ever holds a kind this backend declared in
-    // GurobiSolver::Capabilities() (checked by AssertBackendAcceptsBuiltModel), and that
+    // GurobiSolver::Constructs() (checked by AssertBackendAcceptsBuiltModel), and that
     // declaration is itself gated on the loader having found the symbol.
     phase.Next("gurobi.general_constraints");
     for (auto &gc : ilp.general_constraints) {

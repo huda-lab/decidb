@@ -381,7 +381,7 @@ struct SolverModel {
 
     //! Constructs the backend takes natively rather than as rows: the result column,
     //! the argument columns, and the provenance every row carries. Non-empty only when
-    //! the chosen backend declared the construct in its SolverCapabilities, so an
+    //! the chosen backend declared the construct in its SolverConstructSupport, so an
     //! adapter never sees a kind it did not ask for. Every other backend received the
     //! lowered rows in `constraints` instead.
     struct GeneralConstraint {
