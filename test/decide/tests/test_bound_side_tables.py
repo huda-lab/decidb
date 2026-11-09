@@ -254,3 +254,14 @@ def test_a_bound_over_a_stored_table_is_the_oracles(decidb_cli, scope_solver):
         rows, columns = run(decidb_cli, sql, mode)
         result = aligned([dict(zip(columns, row)) for row in rows], model, "id")
         assert model.judge_scoped(result, clauses, MAXIMIZE_P) == pytest.approx(optimum), mode
+
+
+# The side table's aggregate is a copy of the reducer, whose alias carries its tags; the plan shows none
+# (execute_raw fails on an internal tag). The solver path keeps the side table in its plan.
+@pytest.mark.explain
+@pytest.mark.parametrize("explain", ["EXPLAIN", "EXPLAIN (FORMAT JSON)"])
+def test_a_side_table_shows_no_internal_tag(decidb_cli, explain):
+    decidb_cli.execute_raw(
+        f"SET decide_direct_solve = 'off'; {explain} SELECT id, x FROM {TABLE} DECIDE x(BOOL) "
+        "SUCH THAT SUM(x) by (g) <= SUM(cap) by (g) AND SUM(x) <= SUM(per k: v) MAXIMIZE SUM(p * x)"
+    )
