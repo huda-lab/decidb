@@ -145,87 +145,36 @@ source, and joined to the rows of the window (group-then-join, as A2).
 
 ## Performance
 
-**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
-machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
-with the same DOUBLE arithmetic.
+Measured on 2026-11-09 at `0ab6224c60`, on an 11-core Apple M3 Pro at a load of about 3.
 
-| Query | Direct | Hand-written | Ratio | Summed operator CPU, ratio |
-|---|---:|---:|---:|---:|
-| `s1` | 18.3 ms | 16.3 ms | 1.12 | 1.08 |
-| `s1_global` | 19.8 ms | 19.0 ms | 1.04 | 1.10 |
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries s1 s1_global` runs the
+direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the same checks and the same
+DOUBLE arithmetic, in one process, best of 5, over the 800,000 rows of `partsupp`. CPU is every operator's time summed;
+latency is on all threads; the planning DECIDE adds is apart. Both sides gave the same answer.
 
-On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
-of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07).
-
-Measured 2026-10-13 (macOS arm64, 11 cores): the global narrow rows on top of `95ee8bf58c` with only variable-width columns late-materialized, the rest at `7a480a1a71`, where those shapes plan the same way. 5,000,000 stored rows; every query ran in a fresh process
-that only opens the database file, so peak memory is the query's own. Times are median query-plus-collection seconds
-(direct 1 to 3 runs, Gurobi 1 or 2). In all 36 runs direct and Gurobi agreed on selected count and objective. HiGHS was
-not measured. The grouped rows come from an earlier per-group plan and are not re-measured on the plan that reads a `by` key.
-
-| Shape | Direct | Gurobi | Speedup | Direct peak | Gurobi peak |
-|---|---:|---:|---:|---:|---:|
-| Global top-K, narrow, full output | 0.18 s | 2.89 s | 16x | 1.0 GiB | 2.3 GiB |
-| Global top-K, narrow, every column reduced in the query | 0.17 s | 2.84 s | 17x | 0.9 GiB | 2.2 GiB |
-| Global top-K, unused 512 B payload (pruned) | 0.16 s | 3.00 s | 19x | 0.8 GiB | 5.3 GiB |
-| 100 groups, fixed values | 0.33 s | 32.4 s | 98x | 0.5 GiB | 6.6 GiB |
-| 100 groups, aggregate-local `WHEN` | 0.30 s | 28.4 s | 95x | 0.5 GiB | 6.0 GiB |
-| 100 groups, local `WHEN`, source-valued bound | 0.55 s | 27.4 s | 50x | 0.7 GiB | 3.7 GiB |
-| 100 groups, source-valued bounds | 0.50 s | 29.6 s | 59x | 0.7 GiB | 6.3 GiB |
-| 100 groups, paired source-valued bounds | 0.66 s | 29.6 s | 45x | 0.8 GiB | 6.3 GiB |
-| 100 groups, `COALESCE` source-valued bound | 0.57 s | 29.5 s | 52x | 0.6 GiB | 6.3 GiB |
-
-The two global narrow rows return the `BIGINT` key `i`, which stays in the single read (only a variable-width column is
-late-materialized; `../../architecture/result_adapter.md` § Late materialization of a stored table). Gurobi's peak
-varies by about 2 GiB between identical runs (4.6 to 6.5 GiB on the 100-group shape over four runs): the model it
-receives is the same in every run, and the peak is reached inside its presolve, which takes 32 of the 33 s. DeciDB's own
-part of those runs peaks at 1.2 GiB.
-
-The speedup comes mostly from the solver being slow here: it builds a model with millions of variables, which direct solve
-skips. A shape whose solver model is cheap would show a smaller win.
-
-**Without an objective** (`SUM(x) BETWEEN rows/20 AND rows/10`, one aggregate row, direct 3 runs, solver 1): 0.05 against
-0.07 s at 100,000 rows, 0.06 against 0.28 s (85 against 325 MiB) at 1,000,000, and 0.16 against 1.23 s (541 to 657 MiB
-against 1.6 GiB) at 5,000,000.
-
-**With an objective `when`** (`SUM(pick) <= 0.1 * COUNT(*)` over TPC-H `partsupp`, `MAXIMIZE when ps_supplycost < 500:
-SUM(ps_availqty * pick)` and the same `when` inside the sum), measured 2026-11-05 on 800,000 rows with
-`benchmark/decide/direct_solve/run.py` (a fresh process per run, 3 runs each, median, every run's objective within 1e-6
-of direct's; none timed out). The plain query on the same rows is the line under it.
-
-| Shape | Direct | Direct, 1 thread | Gurobi | Speedup | Direct peak | Gurobi peak |
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
 |---|---:|---:|---:|---:|---:|---:|
-| `when` in front | 0.214 s | 0.215 s | 0.616 s | 2.9x | 199 MiB | 452 MiB |
-| `when` inside the sum | 0.219 s | 0.214 s | 0.645 s | 2.9x | 199 MiB | 453 MiB |
-| no `when` | 0.206 s | 0.206 s | 0.947 s | 4.6x | 177 MiB | 465 MiB |
+| `s1` | 151.2 ms | 147.3 ms | 1.03 | 17.4 ms | 17.1 ms | 0.07 ms |
+| `s1_global` | 134.9 ms | 126.0 ms | 1.07 | 20.2 ms | 18.1 ms | 0.19 ms |
 
-The `when` adds about 5% to direct. The speedup is smaller because Gurobi's own time falls with the `when`, which drops
-about half the rows' terms here. At 400,000 rows the `when` shapes are 3.5x.
+Both are within the measurement's noise of the hand plan: the plan is the hand plan's rank window and the rule's check.
 
-**Weak spots**
+**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries s1 s1_global` (Gurobi) and the same with `--modes
+direct highs`: a fresh `decidb` process per run, median of 3, load 3 to 6. At every size each solver's objective agreed
+with direct solve's within 1e-6. A speedup divides the solver's median by direct's median from the same sweep. Times
+include process start and database open, about 20 ms, which is most of the direct time at these sizes.
 
-| Case | Result |
-|---|---|
-| Wide rows (512 B) returned in full | Direct 0.46 s versus Gurobi 3.40 s, 7.4x; reduced inside the query, 0.46 against 2.95 s. The payload is late-materialized from the stored table, so it never enters the rank. Memory 3.9 GiB versus 6.2 GiB with the full result collected, 1.4 GiB versus 5.4 GiB when reduced. Footprint numbers are in `../../architecture/result_adapter.md` |
-| Small inputs, up to 10,000 rows | Everything finishes in about 20 ms, so no real difference (earlier measurement, not re-run) |
-| 100,000 wide rows, trivial capacity | Direct about 5% slower than Gurobi, two runs (earlier measurement, not re-run). The only measured loss |
-| Capacity 0 or all rows, 5M narrow | Still wins, by 3 to 4x instead of 16x (earlier measurement, not re-run) |
+| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `s1` | 100,000 | 0.026 s | 0.029 s | 44 MiB | 0.493 s | 100 MiB | 0.089 s | 99 MiB | 19.0x, 3.8x |
+| `s1` | 200,000 | 0.027 s | 0.038 s | 56 MiB | 0.717 s | 162 MiB | 0.176 s | 170 MiB | 26.6x, 5.9x |
+| `s1` | 400,000 | 0.032 s | 0.058 s | 80 MiB | 1.437 s | 294 MiB | 0.349 s | 317 MiB | 44.8x, 10.1x |
+| `s1` | 800,000 | 0.037 s | 0.091 s | 120 MiB | 2.909 s | 563 MiB | 0.672 s | 601 MiB | 78.2x, 17.2x |
+| `s1_global` | 100,000 | 0.025 s | 0.025 s | 34 MiB | 0.365 s | 103 MiB | 0.108 s | 98 MiB | 14.6x, 4.5x |
+| `s1_global` | 200,000 | 0.029 s | 0.032 s | 46 MiB | 0.276 s | 142 MiB | 0.248 s | 173 MiB | 9.5x, 7.8x |
+| `s1_global` | 400,000 | 0.035 s | 0.049 s | 75 MiB | 0.591 s | 249 MiB | 0.555 s | 321 MiB | 16.8x, 15.2x |
+| `s1_global` | 800,000 | 0.040 s | 0.069 s | 118 MiB | 0.704 s | 465 MiB | 0.999 s | 610 MiB | 17.7x, 24.7x |
 
-**Reproduce** (after `make release`; the sweep above took about 4.5 minutes):
-
-```sh
-clang++ -std=c++17 -O2 -I src/include benchmark/decide/direct_solve/archive/profile_direct_s1_api.cpp \
-  -L build/release/src -lduckdb -Wl,-rpath,$PWD/build/release/src \
-  -o benchmark/decide/results/profile_direct_s1_api
-P="python3 benchmark/decide/direct_solve/archive/profile_direct_s1_api.py --rows 5000000 --db-dir /tmp/s1db --keep-db --timeout 180"
-$P --widths 0 512 --output-kinds full consume --modes direct gurobi --repeats 2
-$P --widths 512 --output-kinds aggregate --modes direct gurobi --scopes global --cardinalities upper --repeats 2
-$P --widths 0 --output-kinds aggregate --modes direct gurobi --scopes grouped_local_when --cardinalities interval --bound-kinds constant source --repeats 1
-$P --widths 0 --output-kinds aggregate --modes direct gurobi --scopes grouped --pins fixed --cardinalities interval --repeats 1
-$P --widths 0 --output-kinds aggregate --modes direct gurobi --scopes grouped --cardinalities interval --bound-kinds source source_pair source_coalesce --repeats 1
-```
-
-Add `--output file.csv` to keep the raw rows. The runner pins `require` for direct and `off` for the solver, so a run never
-silently uses the other path. The wide database needs about 3 GiB of disk.
-
-The objective `when` table: put the two queries above in `benchmark/decide/direct_solve/queries/`, then run
-`python3 benchmark/decide/direct_solve/run.py --sf 0.5 1 --modes direct direct_1t gurobi --queries s1_global <their names>`.
+The solver path builds one binary decision per row; HiGHS solves the per-supplier model faster than Gurobi. Direct solve
+is ahead of both at every size, 18 to 78 times Gurobi and 17 to 25 times HiGHS at 800,000 rows, in a fourth to a fifth
+of their peak memory.

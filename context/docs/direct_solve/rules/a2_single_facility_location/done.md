@@ -152,51 +152,52 @@ on these shapes is in [todo.md](todo.md).
 
 ## Performance
 
-**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
-machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
-with the same DOUBLE arithmetic.
+Measured on 2026-11-09 at `0ab6224c60`, on an 11-core Apple M3 Pro at a load of about 3.
 
-| Query | Direct | Hand-written | Ratio | Summed operator CPU, ratio |
-|---|---:|---:|---:|---:|
-| `a2` | 5.5 ms | 3.5 ms | 1.58 | 1.18 |
-| `a2_keyed` | 9.9 ms | 7.2 ms | 1.38 | 1.17 |
-| `a2_abs` | 17.6 ms | 14.9 ms | 1.18 | 1.16 |
-| `a2_abs_global` | 16.1 ms | 16.1 ms | 1.00 | not measured |
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries a2 a2_keyed a2_abs
+a2_abs_global` runs the direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the
+same checks and the same DOUBLE arithmetic, in one process, best of 5, over the 800,000 rows of `partsupp`. CPU is every
+operator's time summed; latency is on all threads; the planning DECIDE adds is apart. Both sides gave the same answer.
 
-On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
-of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07). The
-latency gap of `a2` (ratio 1.58) is the plan's shape: the plan reads its source more than once. It is open work.
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
+|---|---:|---:|---:|---:|---:|---:|
+| `a2` | 20.3 ms | 17.4 ms | 1.16 | 6.0 ms | 3.6 ms | 0.84 ms |
+| `a2_keyed` | 36.2 ms | 31.6 ms | 1.15 | 9.7 ms | 7.2 ms | 0.86 ms |
+| `a2_abs` | 151.7 ms | 119.6 ms | 1.27 | 32.7 ms | 20.7 ms | 0.52 ms |
+| `a2_abs_global` | 30.4 ms | 21.1 ms | 1.44 | 15.1 ms | 13.3 ms | 0.34 ms |
 
-Measured with `benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs` (Gurobi) and
-the same with `--modes direct highs` on 2026-11-07 at `09f510c7e9` (median of 3 runs, load about 4 to 6). Every size
-agreed with both solvers on the objective within 1e-6, and no solver run failed. All three queries choose a price over
-`partsupp`'s `ps_supplycost` in `[0, 2000]`: `a2` one query-wide center under the squared loss, `a2_keyed` one per
-supplier (10,000 classes at `sf=1`), `a2_abs` one median per supplier under the absolute loss. Each speedup divides
-the solver's median by direct's median from the same sweep.
+The hand plans carry the rule's checks, so the 15 to 44% more CPU is the rule's general plan against one written for the
+query. `a2_abs_global` also checks that the median is not below DOUBLE's normal range, which a DECIMAL column cannot
+produce; proving that while planning needs a magnitude analysis, not done for its 0.6 ms (`../../framework/todo.md` §
+How to work any task, Small gains).
+
+**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries a2 a2_keyed a2_abs a2_abs_global` (Gurobi) and the same
+with `--modes direct highs`: a fresh `decidb` process per run, median of 3, load 3 to 6. At every size each solver's
+objective agreed with direct solve's within 1e-6. A speedup divides the solver's median by direct's median from the same
+sweep. Times include process start and database open, about 20 ms, which is most of the direct time at these sizes.
 
 | Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `a2` | 100,000 | 0.034 s | 0.033 s | 38 MiB | 0.032 s | 38 MiB | 0.028 s | 28 MiB | 0.9x, 0.8x |
-| `a2` | 200,000 | 0.042 s | 0.042 s | 42 MiB | 0.037 s | 43 MiB | 0.033 s | 34 MiB | 0.9x, 0.8x |
-| `a2` | 400,000 | 0.061 s | 0.060 s | 49 MiB | 0.050 s | 54 MiB | 0.046 s | 45 MiB | 0.8x, 0.7x |
-| `a2` | 800,000 | 0.094 s | 0.094 s | 64 MiB | 0.075 s | 76 MiB | 0.071 s | 66 MiB | 0.8x, 0.8x |
-| `a2_keyed` | 100,000 | 0.034 s | 0.043 s | 79 MiB | 0.036 s | 42 MiB | 0.034 s | 44 MiB | 1.1x, 1.0x |
-| `a2_keyed` | 200,000 | 0.037 s | 0.059 s | 92 MiB | 0.048 s | 50 MiB | 0.056 s | 88 MiB | 1.3x, 1.5x |
-| `a2_keyed` | 400,000 | 0.044 s | 0.093 s | 124 MiB | 0.072 s | 67 MiB | 0.133 s | 247 MiB | 1.6x, 2.9x |
-| `a2_keyed` | 800,000 | 0.059 s | 0.161 s | 184 MiB | 0.127 s | 99 MiB | 0.391 s | 851 MiB | 2.2x, 6.5x |
-| `a2_abs` | 100,000 | 0.058 s | 0.063 s | 76 MiB | 0.863 s | 593 MiB | 2.985 s | 381 MiB | 14.9x, 63.1x |
-| `a2_abs` | 200,000 | 0.059 s | 0.099 s | 94 MiB | 2.058 s | 1,378 MiB | 8.072 s | 746 MiB | 34.6x, 133.0x |
-| `a2_abs` | 400,000 | 0.084 s | 0.173 s | 136 MiB | 4.769 s | 2,639 MiB | 22.009 s | 1,455 MiB | 56.7x, 254.2x |
-| `a2_abs` | 800,000 | 0.139 s | 0.324 s | 251 MiB | 11.964 s | 4,416 MiB | 62.359 s | 2,782 MiB | 86.1x, 461.2x |
+| `a2` | 100,000 | 0.023 s | 0.023 s | 24 MiB | 0.033 s | 38 MiB | 0.027 s | 29 MiB | 1.4x, 1.1x |
+| `a2` | 200,000 | 0.024 s | 0.026 s | 25 MiB | 0.040 s | 44 MiB | 0.031 s | 34 MiB | 1.7x, 1.4x |
+| `a2` | 400,000 | 0.024 s | 0.029 s | 26 MiB | 0.050 s | 54 MiB | 0.048 s | 45 MiB | 2.1x, 1.9x |
+| `a2` | 800,000 | 0.026 s | 0.038 s | 29 MiB | 0.077 s | 76 MiB | 0.073 s | 66 MiB | 3.0x, 2.7x |
+| `a2_keyed` | 100,000 | 0.025 s | 0.024 s | 26 MiB | 0.039 s | 42 MiB | 0.035 s | 44 MiB | 1.6x, 1.4x |
+| `a2_keyed` | 200,000 | 0.025 s | 0.027 s | 27 MiB | 0.049 s | 50 MiB | 0.055 s | 88 MiB | 2.0x, 2.4x |
+| `a2_keyed` | 400,000 | 0.028 s | 0.036 s | 53 MiB | 0.074 s | 67 MiB | 0.151 s | 247 MiB | 2.6x, 5.1x |
+| `a2_keyed` | 800,000 | 0.029 s | 0.046 s | 63 MiB | 0.121 s | 99 MiB | 0.479 s | 851 MiB | 4.1x, 14.4x |
+| `a2_abs` | 100,000 | 0.027 s | 0.026 s | 31 MiB | 1.028 s | 602 MiB | 3.141 s | 378 MiB | 38.6x, 120x |
+| `a2_abs` | 200,000 | 0.030 s | 0.031 s | 38 MiB | 2.174 s | 1,376 MiB | 7.777 s | 746 MiB | 73.0x, 269x |
+| `a2_abs` | 400,000 | 0.032 s | 0.048 s | 68 MiB | 5.085 s | 2,651 MiB | 27.443 s | 1,413 MiB | 159x, 782x |
+| `a2_abs` | 800,000 | 0.039 s | 0.071 s | 107 MiB | 12.322 s | 4,517 MiB | 70.521 s | 2,498 MiB | 313x, 1,341x |
+| `a2_abs_global` | 100,000 | 0.025 s | 0.024 s | 27 MiB | 0.414 s | 338 MiB | 247.218 s | 368 MiB | 16.8x, 10,702x |
+| `a2_abs_global` | 200,000 | 0.027 s | 0.028 s | 31 MiB | 0.785 s | 656 MiB | 998.352 s | 696 MiB | 29.5x, 38,696x |
+| `a2_abs_global` | 400,000 | 0.032 s | 0.036 s | 46 MiB | 1.556 s | 1,215 MiB | – | – | 48.8x, – |
+| `a2_abs_global` | 800,000 | 0.040 s | 0.053 s | 75 MiB | 4.059 s | 2,261 MiB | – | – | 101x, – |
 
-Times include process start and database open, about 20 ms, which is most of the direct time at the small sizes.
-
-The query-wide squared loss is slower than both solvers, at 0.7 to 0.9 times their speed. The solver path folds a
-query-wide decision into one variable whose coefficients are the same two sums, so it does A2's arithmetic too; A2's
-plan computes the answer and its checks once per row, and its window, with no key to partition by, hands every row
-above it to one thread (`direct` and `direct, 1 thread` time the same). Framework task H-48 holds the fix
-(`../../framework/todo.md`). The keyed squared loss is ahead (1.0 to 6.5 times), as the same per-row work runs in
-parallel. The absolute loss is 15 to 86 times faster than Gurobi and 63 to 461 times faster than HiGHS, which solve
-one helper decision per row, and needs a tenth (HiGHS) to a seventeenth (Gurobi) of their peak memory at `sf=1`. The
-keyed squared loss takes more memory than Gurobi (184 MiB against 99 MiB at `sf=1`): its window holds every row,
-where the solver keeps one variable per class.
+Every A2 query is ahead of both solvers at every size. A2 computes each class's answer once, in an aggregate, and joins
+it back to the rows, so every thread works on the rows: `a2` takes 0.026 s on all threads against 0.038 s on one at
+800,000 rows, where the solver path folds the query-wide decision into one variable over the same two sums. The absolute
+loss puts one helper decision per row in the solver's model; keyed (`a2_abs`) it runs 39 to 313 times Gurobi's speed in
+a fortieth of its peak memory at 800,000 rows. Query-wide (`a2_abs_global`) HiGHS took 247 s at 100,000 rows and 998 s
+at 200,000, so the sweep stopped running it; that time is inside HiGHS's solve (`../../../issues/bugs.md`, Limitations).

@@ -173,44 +173,37 @@ cases and stated in the test file. They are that file's own.
 
 ## Performance
 
-**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
-machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
-with the same DOUBLE arithmetic.
+Measured on 2026-11-09 at `0ab6224c60`, on an 11-core Apple M3 Pro at a load of about 3.
 
-| Query | Direct | Hand-written | Ratio |
-|---|---:|---:|---:|
-| `n1` | 9.5 ms | 3.0 ms | 3.19 |
-| `n1_groups` | 14.4 ms | 5.4 ms | 2.65 |
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries n1 n1_groups` runs the
+direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the same checks and the same
+DOUBLE arithmetic, in one process, best of 5, over the 800,000 rows of `partsupp`. CPU is every operator's time summed;
+latency is on all threads; the planning DECIDE adds is apart. Both sides gave the same answer.
 
-On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
-of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07). The gap
-is the plan's shape: the plan reads its source more than once. It is open work.
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
+|---|---:|---:|---:|---:|---:|---:|
+| `n1` | 34.2 ms | 27.5 ms | 1.25 | 7.6 ms | 5.9 ms | 0.24 ms |
+| `n1_groups` | 49.9 ms | 41.9 ms | 1.19 | 11.0 ms | 9.3 ms | 0.26 ms |
 
-Measured with `benchmark/decide/direct_solve/run.py --sf 0.125 0.25 0.5 1 --queries n1 n1_groups` on 2026-11-05 at
-`d5a5559a49` (median of 3 runs, load about 8). Every size agreed with Gurobi on the objective within 1e-6, and no solver
-run failed. `n1` has one limit over every row; `n1_groups` has one per supplier.
+The hand plans carry the rule's checks; the 19 to 25% more CPU is the rule's general plan against one written for the
+query.
 
-| Query | Decisions | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | Speedup |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `n1` | 100,000 | 0.027 s | 0.026 s | 28 MiB | 0.417 s | 113 MiB | 15x |
-| `n1` | 200,000 | 0.034 s | 0.033 s | 33 MiB | 0.857 s | 202 MiB | 25x |
-| `n1` | 400,000 | 0.047 s | 0.047 s | 42 MiB | 1.656 s | 363 MiB | 35x |
-| `n1` | 800,000 | 0.080 s | 0.079 s | 60 MiB | 3.483 s | 722 MiB | 44x |
-| `n1` | 1,600,000 | 0.147 s | 0.147 s | 104 MiB | 6.234 s | 1,409 MiB | 43x |
-| `n1` | 3,200,000 | 0.270 s | 0.271 s | 175 MiB | 13.212 s | 2,808 MiB | 49x |
-| `n1` | 6,400,000 | 0.513 s | 0.511 s | 316 MiB | 25.699 s | 4,732 MiB | 50x |
-| `n1_groups` | 100,000 | 0.027 s | 0.032 s | 52 MiB | 0.447 s | 120 MiB | 16x |
-| `n1_groups` | 200,000 | 0.032 s | 0.045 s | 67 MiB | 1.001 s | 210 MiB | 32x |
-| `n1_groups` | 400,000 | 0.038 s | 0.070 s | 100 MiB | 1.767 s | 415 MiB | 47x |
-| `n1_groups` | 800,000 | 0.049 s | 0.122 s | 185 MiB | 3.349 s | 789 MiB | 68x |
-| `n1_groups` | 1,600,000 | 0.078 s | 0.242 s | 349 MiB | 6.712 s | 1,575 MiB | 87x |
-| `n1_groups` | 3,200,000 | 0.127 s | 0.461 s | 541 MiB | 60.338 s | 3,104 MiB | 474x |
-| `n1_groups` | 6,400,000 | 0.207 s | 0.907 s | 909 MiB | 32.837 s | 4,817 MiB | 159x |
+**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries n1 n1_groups` (Gurobi) and the same with `--modes
+direct highs`: a fresh `decidb` process per run, median of 3, load 3 to 6. At every size each solver's objective agreed
+with direct solve's within 1e-6. A speedup divides the solver's median by direct's median from the same sweep. Times
+include process start and database open, about 20 ms, which is most of the direct time at these sizes.
 
-Times include process start and database open, about 20 ms, which is most of the direct time at the small sizes.
+| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `n1` | 100,000 | 0.030 s | 0.030 s | 32 MiB | 0.421 s | 114 MiB | – | – | 13.8x, – |
+| `n1` | 200,000 | 0.030 s | 0.031 s | 33 MiB | 0.874 s | 203 MiB | – | – | 29.4x, – |
+| `n1` | 400,000 | 0.029 s | 0.038 s | 36 MiB | 1.697 s | 366 MiB | – | – | 59.1x, – |
+| `n1` | 800,000 | 0.032 s | 0.051 s | 40 MiB | 3.295 s | 727 MiB | – | – | 102x, – |
+| `n1_groups` | 100,000 | 0.030 s | 0.030 s | 34 MiB | 0.444 s | 123 MiB | – | – | 14.6x, – |
+| `n1_groups` | 200,000 | 0.029 s | 0.032 s | 35 MiB | 1.007 s | 205 MiB | – | – | 35.1x, – |
+| `n1_groups` | 400,000 | 0.033 s | 0.042 s | 48 MiB | 1.774 s | 419 MiB | – | – | 54.4x, – |
+| `n1_groups` | 800,000 | 0.035 s | 0.059 s | 54 MiB | 3.339 s | 803 MiB | – | – | 94.1x, – |
 
-The sizes from 1,600,000 decisions up (`--sf 2 4 8`) were measured on 2026-11-06 at `f39828c659`, load about 3 to 4,
-with the same agreement check; every size agreed. Direct time grows linearly with the rows and stays under a second at
-6,400,000 decisions, with a fifteenth (`n1`) to a fifth (`n1_groups`) of Gurobi's peak memory. Gurobi's time on
-`n1_groups` at 3,200,000 decisions spread from 17.3 s to 89.6 s over its three runs, with model build steady at 0.26 s,
-so the spread is the solver's; its median is above its time at 6,400,000.
+HiGHS has no row: the solver path refuses a quadratic limit unless the backend is Gurobi, and says so. Direct time stays
+near the process's start-up cost up to 800,000 rows, 14 to 102 times Gurobi's speed, in a fifteenth to an eighteenth of
+its peak memory at 800,000 rows. Direct solve also answers where no Gurobi licence is present.

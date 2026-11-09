@@ -166,103 +166,42 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 
 ## Performance
 
-**Against DuckDB's own plan.** Measured at `sf=1` (800,000 rows of `partsupp`), best of 5 in one process, with the
-machine at a load of about 4 on 11 cores. The reference is a query written by hand in SQL that computes the same answer
-with the same DOUBLE arithmetic.
+Measured on 2026-11-09 at `0ab6224c60`, on an 11-core Apple M3 Pro at a load of about 3.
 
-| Query | Direct | Hand-written | Ratio |
-|---|---:|---:|---:|
-| `r1` | 124 ms | 27.8 ms | 4.47 |
-| `r1_global` | 81.6 ms | 78.5 ms | 1.04 |
+**Against a hand-written plan.** `benchmark/decide/direct_solve/run.py --compare --sf 1 --queries r1 r1_global` runs the
+direct plan beside a query written by hand for the same answer (`hand/<query>.sql`), with the same DOUBLE arithmetic, in
+one process, best of 5, over the 800,000 rows of `partsupp`. CPU is every operator's time summed; latency is on all
+threads; the planning DECIDE adds is apart. Both sides gave the same answer, to 2e-14 relative.
 
-On all threads every direct query of this sweep takes 0.22 to 0.50 of its one-thread time. At `sf=0.125` the queries
-of 2 to 8 ms take 1.01 to 1.04 times as long on all threads as on one, as DuckDB's own plans do (1.01 to 1.07). The gap
-of `r1` is the plan's shape: the plan reads its source more than once. It is open work.
-
-Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/direct_solve/archive/profile_direct_r1.py`.
-The per-group rows come from an earlier per-group plan and are not re-measured on the plan that reads a `by` key.
-Each run is a fresh `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs
-(median), each solver 1 run; the solver path is `off` with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent
-reads one aggregate row, so the time is the plan, not the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
-
-| Shape, 5,000,000 rows | Direct | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | vs Gurobi | vs HiGHS |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `<=` budget, positive weights | 0.63 s | 0.9 GiB | 7.37 s | 3.8 GiB | 24.0 s | 4.5 GiB | 11.7x | 38.1x |
-| `<=` budget, weights of mixed sign | 0.65 s | 0.9 GiB | 5.80 s | 3.7 GiB | 8.98 s | 4.7 GiB | 8.9x | 13.7x |
-| `>=` cover, `MINIMIZE` | 0.62 s | 0.8 GiB | 7.06 s | 4.6 GiB | 24.0 s | 4.7 GiB | 11.4x | 38.6x |
-| `=` budget | 0.70 s | 0.9 GiB | 7.10 s | 4.4 GiB | 24.7 s | 4.7 GiB | 10.1x | 35.0x |
-| `BETWEEN` budget | 0.63 s | 0.9 GiB | 8.15 s | 4.3 GiB | 26.1 s | 4.4 GiB | 13.0x | 41.6x |
-| per-group, 1,000 groups | 0.58 s | 0.4 GiB | 9.33 s | 4.6 GiB | 31.6 s | 4.5 GiB | 16.1x | 54.6x |
-| `WHEN` on the budget | 0.73 s | 0.9 GiB | 6.23 s | 4.3 GiB | 18.2 s | 4.6 GiB | 8.5x | 24.9x |
-| two decisions | 1.36 s | 1.6 GiB | 14.7 s | 4.7 GiB | 46.9 s | 5.7 GiB | 10.8x | 34.4x |
-| budget from a column, per group | 0.61 s | 0.4 GiB | 8.96 s | 5.8 GiB | 31.5 s | 5.6 GiB | 14.7x | 51.5x |
-| budget from an aggregate | 1.08 s | 1.4 GiB | 7.46 s | 4.5 GiB | 24.5 s | 5.4 GiB | 6.9x | 22.7x |
-| `<=` budget, parent reads only `COUNT(*)` | 0.55 s | 0.9 GiB | 6.75 s | 5.6 GiB | 23.3 s | 5.5 GiB | 12.3x | 42.5x |
-
-At 1,000,000 rows direct runs 0.13 to 0.35 s (4.5x to 16.5x Gurobi, 9.0x to 41.2x HiGHS) and peaks at 0.2 to 0.4 GiB,
-against 1.4 to 2.2 GiB for Gurobi. Every shape beats both solvers at both sizes.
-
-**Floor and scaling.** Measured with `benchmark/decide/direct_solve/archive/profile_r1_floor.py` in the same session; medians of 3
-interleaved runs. The floor is a hand-written DuckDB query of the narrow shape for `le_positive`: keys, `t = v / w` and
-rooms; one sort by `t`; a running sum; a join back that gives every row its answer. It returns the same objective and
-`SUM(x)` as the direct plan at both sizes.
-
-| Rows | Method | Shape | 1 thread | All threads | CPU / wall (all) | Peak (all) |
-|---|---|---|---:|---:|---:|---:|
-| 1M | floor | `le_positive` | 0.30 s | 0.11 s | 4.6 | 217 MiB |
-| 1M | direct | `le_positive` | 0.61 s | 0.16 s | 6.0 | 178 MiB |
-| 1M | direct | `per_groups` | 0.71 s | 0.16 s | 6.5 | 168 MiB |
-| 1M | direct | `two_decisions` | 1.24 s | 0.35 s | 5.6 | 403 MiB |
-| 1M | Gurobi | `le_positive` | | 1.20 s | 1.06 | 1.4 GiB |
-| 5M | floor | `le_positive` | 1.62 s | 0.51 s | 5.3 | 1.2 GiB |
-| 5M | direct | `le_positive` | 3.04 s | 0.60 s | 8.2 | 873 MiB |
-| 5M | direct | `per_groups` | 3.58 s | 0.61 s | 8.3 | 391 MiB |
-| 5M | direct | `two_decisions` | 6.04 s | 1.31 s | 8.2 | 1.7 GiB |
-| 5M | Gurobi | `le_positive` | | 7.15 s | 1.02 | 4.8 GiB |
-| 5M | Gurobi | `per_groups` | | 9.47 s | 3.66 | 5.3 GiB |
-| 5M | Gurobi | `two_decisions` | | 14.73 s | 1.00 | 5.0 GiB |
-
-**Where the time goes.** On one budget the plan runs 1.2 times the floor with all threads (0.60 s against 0.51 s at
-5,000,000 rows) and about twice its work on one thread (3.04 s against 1.62 s): it reads the source four times, and each
-read evaluates the per-row checks and item values the floor does not have. It keeps 6 to 8 cores busy. `PER` costs no
-more than one budget. Two decisions run about 2 times one decision at 5,000,000 rows (1.8 to 2.2 times over repeated
-runs with all threads, 2.03 on one thread, 2.1 times the CPU: 10.5 s against 4.9 s), because the one sort holds
-10,000,000 items and each read computes both decisions' item values; an `UNNEST` unpivot in stage 3 ran 4.2 times. The
-`two_decisions` rows of this table were measured on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot,
-three runs each. A budget from an aggregate over
-the clause's group is computed in R1's own aggregate; any other is a side table over another read of the source.
-
-**With an objective `when`** (`SUM(ship * ps_supplycost) <= 0.1 * SUM(ps_supplycost)` over TPC-H `partsupp`, `ship`
-in [0, 1], `MAXIMIZE when ps_supplycost < 500: SUM(ps_availqty * ship)` and the same `when` inside the sum), measured
-2026-11-05 on 800,000 rows with `benchmark/decide/direct_solve/run.py` (a fresh process per run, 3 runs each, median,
-every run's objective within 1e-6 of direct's; none timed out).
-
-| Shape | Direct | Direct, 1 thread | Gurobi | Speedup | Direct peak | Gurobi peak |
+| Query | Direct CPU | Hand CPU | CPU ratio | Direct latency | Hand latency | DECIDE planning |
 |---|---:|---:|---:|---:|---:|---:|
-| `when` in front | 0.134 s | 0.452 s | 0.914 s | 6.8x | 215 MiB | 644 MiB |
-| `when` inside the sum | 0.134 s | 0.452 s | 0.952 s | 7.1x | 222 MiB | 643 MiB |
-| no `when` | 0.125 s | 0.444 s | 1.250 s | 10.0x | 202 MiB | 760 MiB |
+| `r1` | 648.1 ms | 335.8 ms | 1.93 | 99.7 ms | 60.4 ms | 1.19 ms |
+| `r1_global` | 438.6 ms | 456.3 ms | 0.96 | 72.3 ms | 112.5 ms | 1.18 ms |
 
-To repeat it, put the two queries in `benchmark/decide/direct_solve/queries/` and run
-`python3 benchmark/decide/direct_solve/run.py --sf 0.5 1 --modes direct direct_1t gurobi --queries r1_global <their names>`.
+With one budget over every row (`r1_global`) the plan matches the hand plan. With a budget per group (`r1`) it takes
+1.93 times its CPU. A group's checks (a budget no row can meet, an item that improves without limit) must raise even
+when the query reads only some rows, under `LIMIT`, so the plan aggregates every row of each group and joins the verdict
+back before it releases a row. The hand plan reads each row's answer from two windows and leaves the checks out, since
+TPC-H's data cannot trip them (every box is finite and starts at 0). Reading the answer from window frames instead would
+need a second plan shape for several decisions, and is not done for this gain (`../../framework/todo.md` § How to work
+any task, Small gains).
 
-**Reproduce** (after `make release`; the sweep takes about 20 minutes, building the databases included):
+**Against the solvers.** `run.py --sf 0.125 0.25 0.5 1 --queries r1 r1_global` (Gurobi) and the same with `--modes
+direct highs`: a fresh `decidb` process per run, median of 3, load 3 to 6. At every size each solver's objective agreed
+with direct solve's within 1e-6. A speedup divides the solver's median by direct's median from the same sweep. Times
+include process start and database open, about 20 ms, which is most of the direct time at these sizes.
 
-```sh
-python3 benchmark/decide/direct_solve/archive/profile_direct_r1.py --rows 1000000 5000000 --repeats 3 --solver-budget 60 --db-dir build/r1db
-```
+| Query | Rows | Direct | Direct, 1 thread | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | Speedup (Gurobi, HiGHS) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `r1` | 100,000 | 0.071 s | 0.069 s | 133 MiB | 0.156 s | 125 MiB | 0.109 s | 118 MiB | 2.2x, 1.6x |
+| `r1` | 200,000 | 0.079 s | 0.114 s | 173 MiB | 0.310 s | 203 MiB | 0.216 s | 206 MiB | 3.9x, 2.6x |
+| `r1` | 400,000 | 0.092 s | 0.198 s | 229 MiB | 0.671 s | 422 MiB | 0.411 s | 377 MiB | 7.3x, 4.0x |
+| `r1` | 800,000 | 0.120 s | 0.375 s | 345 MiB | 1.386 s | 855 MiB | 0.794 s | 764 MiB | 11.5x, 6.5x |
+| `r1_global` | 100,000 | 0.042 s | 0.057 s | 70 MiB | 0.140 s | 130 MiB | 0.111 s | 98 MiB | 3.3x, 2.9x |
+| `r1_global` | 200,000 | 0.048 s | 0.092 s | 94 MiB | 0.259 s | 216 MiB | 0.247 s | 174 MiB | 5.5x, 4.5x |
+| `r1_global` | 400,000 | 0.062 s | 0.164 s | 149 MiB | 0.576 s | 390 MiB | 0.525 s | 319 MiB | 9.3x, 7.8x |
+| `r1_global` | 800,000 | 0.092 s | 0.308 s | 254 MiB | 1.132 s | 744 MiB | 1.047 s | 623 MiB | 12.3x, 10.4x |
 
-The floor and scaling table (about 8 minutes):
-
-```sh
-python3 benchmark/decide/direct_solve/archive/profile_r1_floor.py --rows 1000000 5000000 --shapes le_positive per_groups two_decisions \
-    --methods floor direct gurobi --threads 1 all --floor-threads 1 all --repeats 3 --db-dir build/r1db
-```
-
-The operator profile (one run per cell; `--variants` and `--repeats` widen it):
-
-```sh
-python3 benchmark/decide/direct_solve/archive/profile_r1_plan.py --rows 1000000 --shapes le_positive two_decisions --threads 1 all \
-    --db-dir build/r1db_plan
-```
-
+Direct solve is ahead of both solvers at every size, 11.5 to 12.3 times Gurobi and 6.5 to 10.4 times HiGHS at 800,000
+rows, in a third to two fifths of Gurobi's peak memory. It runs on all threads: 0.12 s against 0.38 s on one for `r1` at
+800,000 rows.

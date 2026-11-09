@@ -25,5 +25,11 @@
   DuckDB's `MoveConstantsRule` (expression rewriter) rewrites the filter to `i > -127`, which has no addition to
   overflow; with `SET disabled_optimizers = 'expression_rewriter'` the filter raises. Inside DuckDB, for integer
   comparisons only. No DECIDE check depends on an integer overflow in a filter: they compute in DOUBLE.
+- **HiGHS on a query-wide absolute loss.** `DECIDE per (): center(REAL) ... MINIMIZE SUM(ABS(center - v))` gives the
+  solver one shared column and two rows per data row (`t >= center - v`, `t >= v - center`), the standard model. HiGHS
+  solves it in 247 s at 100,000 rows and 998 s at 200,000, quadratic in the rows, with model build at 4 to 9 ms; Gurobi
+  solves the same model in 0.4 and 0.8 s, and direct solve answers in 0.02 s
+  (`benchmark/decide/direct_solve/queries/a2_abs_global.sql`). The keyed form, one column per supplier, takes HiGHS
+  3 to 70 s from 100,000 to 800,000 rows. Inside HiGHS's solve, on a column that appears in every row.
 
 Resolved behavior is documented by its owning `done.md`.

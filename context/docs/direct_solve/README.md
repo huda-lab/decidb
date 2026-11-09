@@ -10,8 +10,8 @@ gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL`
 objective); **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions); **N1**, "stay inside one sum
 of squares" (one `SUM(POWER(x, 2)) <= B` over a `REAL` decision, per group or over all rows); and **A2**, "one shared
 value closest to every row" (one query-wide or keyed `REAL` decision under a squared, absolute or maximum absolute
-loss). Each class's `done.md` gives its speed against Gurobi; all are faster except A2's query-wide squared loss
-(framework task H-48). N1 also answers without a Gurobi license, where the solver path
+loss). Each class's `done.md` gives its speed against Gurobi and HiGHS; every class is faster than
+each solver that takes it, at every size measured. N1 also answers without a Gurobi license, where the solver path
 refuses a quadratic limit. The other 14 classes in the catalogue are not started.
 
 ## Where to look
