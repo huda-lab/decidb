@@ -161,22 +161,6 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 	return true;
 }
 
-//! The comparison that holds between `-a` and `-b` when `comparison` holds between `a` and `b`.
-ExpressionType FlipComparison(ExpressionType comparison) {
-	switch (comparison) {
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		return ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-	case ExpressionType::COMPARE_LESSTHAN:
-		return ExpressionType::COMPARE_GREATERTHAN;
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		return ExpressionType::COMPARE_LESSTHANOREQUALTO;
-	case ExpressionType::COMPARE_GREATERTHAN:
-		return ExpressionType::COMPARE_LESSTHAN;
-	default:
-		return comparison;
-	}
-}
-
 //! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null otherwise. CheckCondition has
 //! declined a membership constraint before it asks, and checks that the terms add up to exactly one `x`.
 const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
@@ -470,7 +454,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		}
 		auto &bound = *factor->rhs;
 		bool negated = body.direction < 0;
-		auto type = negated ? FlipComparison(factor->comparison) : factor->comparison;
+		auto type = negated ? FlipComparisonExpression(factor->comparison) : factor->comparison;
 		if (factor->group_bound) {
 			if (!DirectGroupBoundIsReadable(ir, *factor->group_bound)) {
 				return false;

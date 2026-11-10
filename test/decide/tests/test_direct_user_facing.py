@@ -638,7 +638,7 @@ def test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word(decidb_cli
     assert direct == _raw(decidb_cli, sql, mode="off").stderr
 
 
-_N1_ROWS ="(1, 3.0::DOUBLE, 1.0::DOUBLE, 9.0::DOUBLE, 'a'), (2, {s}::DOUBLE, {y}::DOUBLE, {l}::DOUBLE, {k})"
+_N1_ROWS = "(1, 3.0::DOUBLE, 1.0::DOUBLE, 9.0::DOUBLE, 'a'), (2, {s}::DOUBLE, {y}::DOUBLE, {l}::DOUBLE, {k})"
 _N1_MAX = "SUM(POWER(x, 2)) <= l MAXIMIZE SUM(s * x)"
 
 
