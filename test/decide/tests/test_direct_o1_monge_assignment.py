@@ -23,6 +23,7 @@ from collections import Counter
 
 import pytest
 
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -157,6 +158,9 @@ def _sql(case, wrap="plain"):
     setup = _tables(case)
     if wrap == "plain":
         return f"{setup} {select} FROM ({source} {decide}) q"
+    if wrap in ("limit_one", "count"):
+        reads = "*" if wrap == "limit_one" else "COUNT(*)"
+        return f"{setup} SELECT {reads} FROM ({source} {decide}) q {'LIMIT 1' if wrap == 'limit_one' else ''}"
     if wrap == "parent_join":
         return f"{setup} {select} FROM ({source} {decide}) q JOIN (VALUES (1), (2), (3), (4)) k(lid) USING (lid)"
     if wrap == "recombined_filters":
@@ -322,3 +326,18 @@ def test_o1_monge_error_cases_fail_on_both_paths(decidb_cli, name):
     sql = _sql(ERROR_CASES[name])
     assert outcome(decidb_cli, sql, "off") == ("error", "invalid_value")
     assert outcome(decidb_cli, sql, "require") == ("error", "invalid_value")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("wrap", ["limit_one", "count"])
+def test_o1_monge_a_bad_position_on_the_last_row_raises_whatever_the_parent_reads(decidb_cli, wrap):
+    # 71 x 71 pairs, and the last left row inserted is the only NaN. A parent that reads one row or a count still
+    # raises, on `off` and on `require`: the rule reads every pair row before it releases one.
+    left = [(i, float(i)) for i in range(70)] + [(70, NAN)]
+    right = [(i, float(i)) for i in range(71)]
+    sql = _sql(_case(f"MINIMIZE SUM({SQUARED} * x)", _squared, left=left, right=right), wrap)
+    for mode in ("off", "require"):
+        with pytest.raises(DeciDBCliError, match="is NaN or infinite on some rows"):
+            run(decidb_cli, sql, mode)
