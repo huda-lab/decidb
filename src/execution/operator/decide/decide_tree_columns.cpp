@@ -359,6 +359,9 @@ const vector<bool> &DecideTreeColumns::Tested(idx_t node) {
 
 vector<bool> DecideTreeColumns::ReadEntries(idx_t node, const DecideTerm &term) {
 	auto reads = Tested(node);
+	if (!MayBeAbsent(term)) {
+		return reads;
+	}
 	auto &rows = descent.Containers()[node].rows;
 	for (idx_t e = 0; e < reads.size(); e++) {
 		reads[e] = reads[e] && !TermAbsentAt(term, rows[e]);
@@ -475,6 +478,27 @@ bool DecideTreeColumns::AbsentAt(idx_t variable, idx_t row) const {
 	return scope.IsKeyed() && (*mappings)[scope.keyed_scope_idx].IsAbsent(row);
 }
 
+bool DecideTreeColumns::MayBeAbsent(idx_t variable) const {
+	if (variable == DConstants::INVALID_INDEX) {
+		return false;
+	}
+	if (absent_reads && !(*absent_reads)[variable].empty()) {
+		return true;
+	}
+	for (auto &product : tree.bilinear_links) {
+		if (product.aux_idx == variable && (MayBeAbsent(product.bool_var_idx) || MayBeAbsent(product.other_var_idx))) {
+			return true;
+		}
+	}
+	return tree.variable_scopes[variable].IsKeyed();
+}
+
+bool DecideTreeColumns::MayBeAbsent(const DecideTerm &term) const {
+	// A frame reads nothing at an anchor with no position, whatever its decision.
+	return term.variable_index != DConstants::INVALID_INDEX &&
+	       (term.frame_read != DConstants::INVALID_INDEX || MayBeAbsent(term.variable_index));
+}
+
 bool DecideTreeColumns::TermAbsentAt(const DecideTerm &term, idx_t row) const {
 	if (term.variable_index == DConstants::INVALID_INDEX || term.frame_read == DConstants::INVALID_INDEX) {
 		return AbsentAt(term.variable_index, row);
@@ -525,7 +549,7 @@ unique_ptr<Vector> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
 		auto &reducer = descent.Containers()[read.node];
 		for (idx_t e = 0; e < reducer.Count(); e++) {
 			slots.resize(MaxValue<idx_t>(slots.size(), reducer.rows[e] + 1), DConstants::INVALID_INDEX);
-			slots[reducer.rows[e]] = reducer.slots[e];
+			slots[reducer.rows[e]] = reducer.Slot(e);
 		}
 	}
 	Vector folds(tree.nodes[read.node]->function->return_type, MaxValue<idx_t>(values.size(), 1));
@@ -625,11 +649,11 @@ void DecideTreeColumns::CheckData() {
 vector<bool> DecideTreeColumns::FirstOfEachInstance(idx_t node, const vector<bool> &reads) const {
 	auto &container = descent.Containers()[node];
 	vector<bool> first(reads.size(), false);
-	vector<bool> seen(container.instance_entries.size(), false);
+	vector<bool> seen(container.Instances(), false);
 	for (idx_t e = 0; e < reads.size(); e++) {
 		// A row in no class of the key has no value to read (DecideNode::holds_rows_in_no_class).
-		const auto instance = container.instances[e];
-		if (reads[e] && container.groups.InAClass(container.slots[e]) && !seen[instance]) {
+		const auto instance = container.Instance(e);
+		if (reads[e] && container.groups.InAClass(container.Slot(e)) && !seen[instance]) {
 			seen[instance] = true;
 			first[e] = true;
 		}
@@ -695,12 +719,12 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 	std::map<vector<Value>, idx_t, bool (*)(const vector<Value> &, const vector<Value> &)> first(DecideDescentKeyLess);
 	for (auto e : order) {
 		if (!container.values.GetValue(layout.partition_present, e).GetValue<bool>() ||
-		    !container.groups.InAClass(container.slots[e])) {
+		    !container.groups.InAClass(container.Slot(e))) {
 			continue;
 		}
 		auto known = first.emplace(partition(e), e);
 		const auto earlier = known.first->second;
-		if (known.second || container.slots[earlier] == container.slots[e]) {
+		if (known.second || container.Slot(earlier) == container.Slot(e)) {
 			continue;
 		}
 		vector<string> names;
@@ -708,7 +732,7 @@ void DecideTreeColumns::CheckPartition(const DecideFrameSpec &frame, idx_t node)
 			names.push_back(element.name);
 		}
 		auto timeline = [&](idx_t anchor) {
-			return descent.Label(tree.nodes[node]->key, container.groups.Key(container.slots[anchor]));
+			return descent.Label(tree.nodes[node]->key, container.groups.Key(container.Slot(anchor)));
 		};
 		auto rank = tree.nodes[node]->route_rank;
 		rank.expression = DecideBlockExpression(DecideBlock::FILTERS, 0, false) + 1;
@@ -904,7 +928,7 @@ string DecideTreeColumns::Dump() const {
 				auto &program = columns.programs[p];
 				out << (p ? ", " : " ") << (program.errors.count(e) ? "error" : program.values->GetValue(e).ToString());
 			}
-			out << (columns.tested[e] ? "" : " untested") << " instance " << entries.instances[e] << "\n";
+			out << (columns.tested[e] ? "" : " untested") << " instance " << entries.Instance(e) << "\n";
 		}
 	}
 	return out.str();

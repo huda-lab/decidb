@@ -65,7 +65,7 @@ public:
 
 private:
 	//! A set E's routed rows; null for a node per row, whose entries are its rows.
-	const vector<pair<idx_t, idx_t>> *routed = nullptr;
+	const unsafe_vector<pair<idx_t, idx_t>> *routed = nullptr;
 	const unsafe_vector<idx_t> *rows = nullptr;
 };
 

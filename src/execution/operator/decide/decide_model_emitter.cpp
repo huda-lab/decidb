@@ -219,8 +219,11 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
 	// relation-qualified reducer lists each class once in its group, at its first row (language/guide.md §5.1).
 	LinkMembers members;
 	members.reads = columns.Tested(site);
-	for (idx_t e = 0; e < entries.Count(); e++) {
-		for (auto &term : body.members) {
+	for (auto &term : body.members) {
+		if (!columns.MayBeAbsent(term)) {
+			continue;
+		}
+		for (idx_t e = 0; e < entries.Count(); e++) {
 			members.reads[e] = members.reads[e] && !columns.TermAbsentAt(term, entries.rows[e]);
 		}
 	}
@@ -263,9 +266,9 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
 	mapping.num_classes = members.groups;
 	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
 	// A group with no member has no helper, so a row of it reads none (PhysicalDecide::BuildScopeMapping).
-	auto &slots = descent.Containers()[link].slots;
+	auto &reducer = descent.Containers()[link];
 	for (auto read : DecideEntryRows(tree, descent, link)) {
-		mapping.row_to_class[read.first] = members.group_of_slot[slots[read.second]];
+		mapping.row_to_class[read.first] = members.group_of_slot[reducer.Slot(read.second)];
 	}
 	DecideMapRowsInNoClass(mapping);
 	return mapping;
@@ -300,6 +303,9 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	// A product's auxiliary has none where a factor has none (DecideTreeColumns::AbsentAt), which stage 06 reads too.
 	for (auto &product : op.bilinear_links) {
 		auto &absent = gstate.absent_reads[product.aux_idx];
+		if (!columns.MayBeAbsent(product.aux_idx)) {
+			continue;
+		}
 		for (idx_t row = 0; row < num_rows; row++) {
 			if (columns.AbsentAt(product.aux_idx, row)) {
 				absent.resize(num_rows, false);
@@ -334,6 +340,9 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root) {
 	// A decision it reads has no instance on a row, wherever the row lies: a term's, a product's factors, a
 	// square's terms'.
 	auto absent_rows = [&](const DecideTerm &term) {
+		if (!columns.MayBeAbsent(term)) {
+			return;
+		}
 		for (idx_t row = 0; row < num_rows; row++) {
 			if (columns.TermAbsentAt(term, row)) {
 				mark(row);
@@ -422,11 +431,17 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
 	// defines it has none (D88).
+	vector<const DecideTerm *> absent_terms;
+	for (auto &term : clause.lhs_terms) {
+		if (columns.MayBeAbsent(term)) {
+			absent_terms.push_back(&term);
+		}
+	}
 	vector<bool> null_rows(num_rows, false);
 	for (auto read : rows) {
 		null_rows[read.first] = nulls[read.second];
-		for (auto &term : clause.lhs_terms) {
-			null_rows[read.first] = null_rows[read.first] || columns.TermAbsentAt(term, read.first);
+		for (auto term : absent_terms) {
+			null_rows[read.first] = null_rows[read.first] || columns.TermAbsentAt(*term, read.first);
 		}
 	}
 	if (clause.admitted_lower) {
@@ -490,7 +505,7 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 	auto &container = descent.Containers()[node];
 	auto &fields = tree.nodes[node]->signature;
 	const auto starts = SignatureStarts(tree, *tree.nodes[node]);
-	auto identity = container.groups.Key(container.slots[entry]);
+	auto identity = container.groups.Key(container.Slot(entry));
 	const auto read = container.Signature(entry);
 	const auto row = container.rows[entry];
 	for (idx_t i = 0; i < fields.size(); i++) {
@@ -541,10 +556,10 @@ DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *s
 	vector<idx_t> held;
 	for (idx_t e = 0; e < entries; e++) {
 		const auto row = container.rows[e];
-		if (!container.groups.InAClass(container.slots[e])) {
+		if (!container.groups.InAClass(container.Slot(e))) {
 			continue;
 		}
-		class_ids.emplace(container.groups.Key(container.slots[e]), 0);
+		class_ids.emplace(container.groups.Key(container.Slot(e)), 0);
 		if (std::none_of(frames.begin(), frames.end(), [&](idx_t f) { return gstate.frame_maps[f].Absent(row); })) {
 			held.push_back(e);
 			identities[e] = Identity(node, e);
@@ -569,7 +584,7 @@ DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *s
 	vector<idx_t> class_of(entries, DConstants::INVALID_INDEX);
 	for (auto e : held) {
 		variant_of[e] = variant_ids[identities[e]];
-		class_of[e] = class_ids[container.groups.Key(container.slots[e])];
+		class_of[e] = class_ids[container.groups.Key(container.Slot(e))];
 	}
 	result.of_row.assign(num_rows, DConstants::INVALID_INDEX);
 	result.class_of_row.assign(num_rows, DConstants::INVALID_INDEX);
@@ -609,7 +624,7 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 	vector<vector<Value>> values;
 	for (idx_t variant = 0; variant < entry_of.size(); variant++) {
 		const auto entry = entry_of[variant];
-		const auto slot = container.slots[entry];
+		const auto slot = container.Slot(entry);
 		values.emplace_back();
 		for (idx_t i = 0; i < names.size(); i++) {
 			const auto collated = i < elements.size() && elements[i].collated;
@@ -653,7 +668,7 @@ void DecideModelEmitter::KeyClasses(idx_t root, vector<idx_t> &class_ids, vector
 	}
 	class_ids.assign(num_rows, DConstants::INVALID_INDEX);
 	for (auto read : DecideEntryRows(tree, descent, root)) {
-		class_ids[read.first] = class_of_slot[container.slots[read.second]];
+		class_ids[read.first] = class_of_slot[container.Slot(read.second)];
 	}
 }
 
@@ -810,7 +825,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	if (keyed) {
 		auto &container = descent.Containers()[by];
 		for (idx_t e = 0; e < container.Count(); e++) {
-			group_of[container.rows[e]] = container.groups.ranks[container.slots[e]];
+			group_of[container.rows[e]] = container.groups.ranks[container.Slot(e)];
 		}
 		num_key_groups = container.groups.size();
 	}
@@ -896,7 +911,7 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 	auto reads = columns.Tested(root);
 	for (idx_t e = 0; tightest && clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES && e < reads.size();
 	     e++) {
-		reads[e] = reads[e] && container.groups.InAClass(container.slots[e]);
+		reads[e] = reads[e] && container.groups.InAClass(container.Slot(e));
 	}
 	vector<bool> nulls(container.Count(), false);
 	auto bound = columns.Numbers(root, body.rhs, reads, &nulls);
@@ -945,11 +960,17 @@ void DecideModelEmitter::ReadPart(const DecideTermSite &site, bool qualified, in
 	auto numbers = site.program == DConstants::INVALID_INDEX
 	                   ? vector<double>(reads.size(), double(sign))
 	                   : columns.Numbers(site.node, site.program, reads, &nulls, &site, &inputs);
+	vector<idx_t> absent;
+	for (auto variable : variables) {
+		if (columns.MayBeAbsent(variable)) {
+			absent.push_back(variable);
+		}
+	}
 	column.AssignDense(num_rows);
 	for (auto &read : ReadRows(site.node, reads, qualified)) {
 		column.Set(read.first, numbers[read.second]);
 		null_rows[read.first] = null_rows[read.first] || nulls[read.second];
-		for (auto variable : variables) {
+		for (auto variable : absent) {
 			null_rows[read.first] = null_rows[read.first] || columns.AbsentAt(variable, read.first);
 		}
 	}

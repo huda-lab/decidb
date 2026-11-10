@@ -98,6 +98,11 @@ public:
 	//! its scope, a helper's where its group holds no member, or an auxiliary's row where what defines it has no value
 	//! (`absent_reads`, or a factor of its product). None for no decision (INVALID_INDEX).
 	bool AbsentAt(idx_t variable, idx_t row) const;
+	//! Whether AbsentAt can hold at some row: a keyed decision, an auxiliary some row of its definition leaves with
+	//! none (so far), a product's whose factor may have none. A decision that cannot is read at every row.
+	bool MayBeAbsent(idx_t variable) const;
+	//! Whether TermAbsentAt can hold at some row: a term of such a decision, or of a frame.
+	bool MayBeAbsent(const DecideTerm &term) const;
 	//! Whether `term` reads, at `row`, an instance with no value: its decision's at the row (AbsentAt), or, for a term
 	//! of a frame, where the frame reads nothing or at the row it selects (DecideFrameReadsAbsent).
 	bool TermAbsentAt(const DecideTerm &term, idx_t row) const;

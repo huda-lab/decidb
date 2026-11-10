@@ -278,11 +278,12 @@ static unsafe_vector<idx_t> DescentGroupRanks(const DecideNodeGroups &groups) {
 
 DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
     : tree(tree_p), context(context_p), containers(tree.nodes.size()), group_maps(tree.nodes.size()),
-      entry_maps(tree.nodes.size()), instance_maps(tree.nodes.size()), signature_types(tree.nodes.size()),
-      shared(tree.nodes.size(), false), seen(tree.nodes.size()), landed(tree.nodes.size()),
-      decision_groups(tree.keyed_scopes.size()), decision_sort_keys(tree.keyed_scopes.size()),
-      decision_rows(tree.keyed_scopes.size()), decision_recorded(tree.keyed_scopes.size()),
-      decision_layouts(tree.keyed_scopes.size()), spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
+      empty_key_slots(tree.nodes.size()), entry_maps(tree.nodes.size()), instance_maps(tree.nodes.size()),
+      signature_types(tree.nodes.size()), shared(tree.nodes.size(), false), enclosed(tree.nodes.size(), false),
+      seen(tree.nodes.size()), landed(tree.nodes.size()), decision_groups(tree.keyed_scopes.size()),
+      decision_sort_keys(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
+      decision_recorded(tree.keyed_scopes.size()), decision_layouts(tree.keyed_scopes.size()),
+      spellings(tree.keys.size()), failed_rows(tree.nodes.size()) {
 	// The paths that reach each node, roots first: a node reached by one reads each of a window's rows once.
 	vector<idx_t> paths(tree.nodes.size(), 0);
 	std::function<void(idx_t)> reach = [&](idx_t node) {
@@ -295,6 +296,12 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 	};
 	for (auto root : tree.roots) {
 		reach(root);
+	}
+	// An E no node routes rows to is reached as a root alone, so its rows lie in no enclosing slot.
+	for (auto &node : tree.nodes) {
+		for (auto child : node->children) {
+			enclosed[child] = tree.nodes[child]->kind == DecideNodeKind::SCOPE;
+		}
 	}
 	auto &allocator = Allocator::Get(context);
 	for (idx_t n = 0; n < tree.nodes.size(); n++) {
@@ -336,11 +343,12 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		auto key = DescentKeyTypes(tree, node.key);
 		container.groups.keys.Initialize(allocator, key);
 		vector<LogicalType> slot_types;
-		if (scope) {
+		if (enclosed[n]) {
 			slot_types.push_back(LogicalType::UBIGINT);
 		}
 		slot_types.insert(slot_types.end(), key.begin(), key.end());
-		if (!slot_types.empty()) {
+		// An empty key's slots are found by their enclosing slot alone, in a table (FindGroups).
+		if (!key.empty()) {
 			group_maps[n] = make_uniq<DecideKeyMap>(context, slot_types);
 		}
 		if (!scope) {
@@ -358,6 +366,18 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 }
 
 DecideDescent::~DecideDescent() {
+}
+
+void DecideDescent::Reserve(idx_t rows) {
+	for (idx_t n = 0; n < tree.nodes.size(); n++) {
+		auto &container = containers[n];
+		if (tree.nodes[n]->kind == DecideNodeKind::SCOPE && !container.groups.per_row) {
+			container.routed.reserve(rows);
+			continue;
+		}
+		container.rows.reserve(rows);
+		container.parent_slots.reserve(rows);
+	}
 }
 
 void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, const Reach &rows, Vector &result) {
@@ -679,14 +699,23 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
 	};
 	auto &map = group_maps[node_index];
 	if (!map) {
+		// An empty key: a G's or O's is one slot, an E's one per enclosing slot, found by it in a direct-address
+		// table, the slot outside any last.
+		auto &table = empty_key_slots[node_index];
 		for (auto i : selected) {
-			// A G's or O's empty key is one slot.
-			if (groups.size() == 0) {
+			const auto parent = scope ? rows.parents[i] : DConstants::INVALID_INDEX;
+			const auto at = parent == DConstants::INVALID_INDEX ? 0 : parent + 1;
+			if (at >= table.size()) {
+				table.resize(at + 1, DConstants::INVALID_INDEX);
+			}
+			if (table[at] == DConstants::INVALID_INDEX) {
+				table[at] = groups.size();
 				create(i);
 				groups.keys.Append(keys, *FlatVector::IncrementalSelectionVector(), 1);
 			}
-			groups.first_rows[0] = MinValue(groups.first_rows[0], row_base + rows.rows[i]);
-			slots[i] = 0;
+			auto &first = groups.first_rows[table[at]];
+			first = MinValue(first, row_base + rows.rows[i]);
+			slots[i] = table[at];
 		}
 		return;
 	}
@@ -702,7 +731,7 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
 		selection.set_index(j, selected[j]);
 	}
 	vector<LogicalType> types;
-	if (scope) {
+	if (enclosed[node_index]) {
 		types.push_back(LogicalType::UBIGINT);
 	}
 	auto key_types = keys.GetTypes();
@@ -711,7 +740,7 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe
 	probe.InitializeEmpty(types);
 	idx_t column = 0;
 	Vector parents(LogicalType::UBIGINT);
-	if (scope) {
+	if (enclosed[node_index]) {
 		auto data = FlatVector::GetData<uint64_t>(parents);
 		for (idx_t j = 0; j < count; j++) {
 			data[j] = rows.parents[selected[j]];
@@ -910,10 +939,8 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	entry_maps[batch.node]->FindOrCreate(probe, entries.data(), next);
 	// The rows that make a new entry, each the first to read its values.
 	unsafe_vector<idx_t> created;
-	const auto routed = container.routed.size();
-	container.routed.resize(routed + count);
 	for (idx_t i = 0; i < count; i++) {
-		container.routed[routed + i] = make_pair(row_base + batch.rows.rows[i], entries[i]);
+		container.routed.emplace_back(row_base + batch.rows.rows[i], entries[i]);
 		if (entries[i] == container.Count() + created.size()) {
 			created.push_back(i);
 		}
@@ -1058,21 +1085,21 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 		pending.push_back(std::move(batch));
 		return;
 	}
-	// A node per row's slots are its entries (DecideNodeGroups::per_row); each entry is an instance of its own.
+	// Each entry is an instance of its own; a node per row's entry is its own slot too (DecideNodeGroups::per_row).
 	const auto base = container.Count();
-	const auto instance_base = container.instance_entries.size();
 	container.rows.resize(base + kept_count);
 	container.parent_slots.resize(base + kept_count);
-	container.slots.resize(base + kept_count);
-	container.instances.resize(base + kept_count);
-	container.instance_entries.resize(instance_base + kept_count);
+	auto entry_rows = container.rows.data() + base;
+	auto entry_parents = container.parent_slots.data() + base;
 	for (idx_t k = 0; k < kept_count; k++) {
 		const auto i = kept->get_index(k);
-		container.rows[base + k] = row_base + stored.rows[i];
-		container.parent_slots[base + k] = stored.parents[i];
-		container.slots[base + k] = container.groups.per_row ? base + k : slots[i];
-		container.instances[base + k] = instance_base + k;
-		container.instance_entries[instance_base + k] = base + k;
+		entry_rows[k] = row_base + stored.rows[i];
+		entry_parents[k] = stored.parents[i];
+	}
+	for (idx_t k = 0; k < kept_count && !container.groups.per_row; k++) {
+		container.slots.push_back(slots[kept->get_index(k)]);
+		container.instances.push_back(container.instance_entries.size());
+		container.instance_entries.push_back(base + k);
 	}
 	if (container.groups.per_row) {
 		container.groups.per_row_slots += kept_count;
@@ -1426,8 +1453,8 @@ string DecideDescent::Dump() const {
 		auto &groups = container.groups;
 		const auto kind = node.kind == DecideNodeKind::SCOPE ? "E" : node.kind == DecideNodeKind::REDUCER ? "G" : "O";
 		out << "node " << n << " " << kind << " rows " << container.rows_in << " -> " << container.rows_out
-		    << " groups=" << groups.size() << " entries=" << container.Count()
-		    << " instances=" << container.instance_entries.size() << " text=" << node.text << "\n";
+		    << " groups=" << groups.size() << " entries=" << container.Count() << " instances=" << container.Instances()
+		    << " text=" << node.text << "\n";
 		auto print = [&](const vector<Value> &values) {
 			for (idx_t i = 0; i < values.size(); i++) {
 				out << (i ? ", " : "") << values[i].ToString();
@@ -1460,7 +1487,7 @@ string DecideDescent::Dump() const {
 		}
 		for (idx_t e = 0; e < container.Count(); e++) {
 			out << "  row " << container.rows[e] << " parent " << container.parent_slots[e] << " slot "
-			    << container.slots[e] << " instance " << container.instances[e] << " (";
+			    << container.Slot(e) << " instance " << container.Instance(e) << " (";
 			print(container.Signature(e));
 			out << ") data=(";
 			print(container.Columns(e));

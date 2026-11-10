@@ -141,18 +141,19 @@ struct DecideEntryLayout {
 struct DecideNodeContainer {
 	unsafe_vector<idx_t> rows;
 	unsafe_vector<idx_t> parent_slots;
+	//! Per entry its slot and its instance, and per instance its first entry, read through Slot, Instance and
+	//! Instances: empty for a node per row, whose entry is its own slot and instance (DecideNodeGroups::per_row).
 	unsafe_vector<idx_t> slots;
 	unsafe_vector<idx_t> instances;
+	unsafe_vector<idx_t> instance_entries;
 	DecideColumns values;
 	DecideEntryLayout layout;
-	//! Per instance, its first entry.
-	vector<idx_t> instance_entries;
 	//! A set E keeps one entry per distinct slot, signature, carried columns and reads -- where its row reads each node
 	//! it depends on: a G's group, an O's timeline, or the row where the O has an `else` (D88) -- at least one per
 	//! variant and fewer than its rows (DecideDescent::InsertDistinct): each row it keeps, with the entry standing for
 	//! it, a pair per row for every set E, though only the objective's root reads them yet. Empty for a node per row,
 	//! whose entries are its rows.
-	vector<pair<idx_t, idx_t>> routed;
+	unsafe_vector<pair<idx_t, idx_t>> routed;
 	DecideNodeGroups groups;
 	DecideNodeTimelines timelines;
 	idx_t rows_in = 0;
@@ -160,6 +161,15 @@ struct DecideNodeContainer {
 
 	idx_t Count() const {
 		return rows.size();
+	}
+	idx_t Slot(idx_t entry) const {
+		return groups.per_row ? entry : slots[entry];
+	}
+	idx_t Instance(idx_t entry) const {
+		return groups.per_row ? entry : instances[entry];
+	}
+	idx_t Instances() const {
+		return groups.per_row ? Count() : instance_entries.size();
 	}
 	vector<Value> Signature(idx_t entry) const {
 		return values.GetValues(entry, 0, layout.columns);
@@ -179,6 +189,9 @@ class DecideDescent {
 public:
 	DecideDescent(const DecideTree &tree, ClientContext &context);
 	~DecideDescent();
+	//! Room for `rows` input rows: a node holds at most an entry per row, a set E a routed row per row. Memory is
+	//! committed only as rows arrive.
+	void Reserve(idx_t rows);
 	void Append(DataChunk &chunk, idx_t row_base);
 	void Finish();
 	const vector<DecideNodeContainer> &Containers() const {
@@ -254,8 +267,10 @@ private:
 	ClientContext &context;
 	vector<DecideNodeContainer> containers;
 	//! Per node, the dictionary of its (enclosing slot, key); null for a node per row, whose rows are each a slot of
-	//! their own, and for an empty key outside any slot, which is one.
+	//! their own, and for an empty key, whose slots its enclosing slots find (empty_key_slots).
 	vector<unique_ptr<DecideKeyMap>> group_maps;
+	//! Per node of an empty key, its slot by enclosing slot plus one, 0 for none: INVALID where none is made yet.
+	vector<unsafe_vector<idx_t>> empty_key_slots;
 	//! Per set E, its entries by (slot, signature, columns, reads) and its instances by (slot, signature).
 	vector<unique_ptr<DecideKeyMap>> entry_maps;
 	vector<unique_ptr<DecideKeyMap>> instance_maps;
@@ -264,6 +279,9 @@ private:
 	//! Per node, whether more than one path of the tree reaches it: only then may a window's row arrive twice with one
 	//! enclosing slot, and only its first arrival is read.
 	vector<bool> shared;
+	//! Per node, whether its rows can arrive in an enclosing slot: an E some node routes rows to. Only then is the
+	//! slot part of its key's dictionary.
+	vector<bool> enclosed;
 	//! Per shared node and window, the (row, enclosing slot) pairs that arrived.
 	vector<std::set<pair<idx_t, idx_t>>> seen;
 	//! Per G or O and window: where each row it reaches reads its value (DecideNodeContainer::routed), INVALID where it

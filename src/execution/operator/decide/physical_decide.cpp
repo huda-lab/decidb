@@ -2335,6 +2335,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// row is the position the buffer gives it, the one every later phase reads.
 	DecideProfileScope phase("execution.tree_descent");
 	descent = make_uniq<DecideDescent>(*tree, context);
+	descent->Reserve(num_rows);
 	DecideInputScans() = 0;
 	// The input's first chunk, where a value the whole query shares is read (a composed term's or a square's factor).
 	DataChunk first;
