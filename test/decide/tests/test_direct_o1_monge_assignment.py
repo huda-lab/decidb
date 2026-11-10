@@ -19,6 +19,7 @@ table and the model builder live outside that source, so after editing a case or
 from `results/oracle_cache.json`.
 """
 
+import math
 from collections import Counter
 
 import pytest
@@ -340,4 +341,180 @@ def test_o1_monge_a_bad_position_on_the_last_row_raises_whatever_the_parent_read
     sql = _sql(_case(f"MINIMIZE SUM({SQUARED} * x)", _squared, left=left, right=right), wrap)
     for mode in ("off", "require"):
         with pytest.raises(DeciDBCliError, match="is NaN or infinite on some rows"):
+            run(decidb_cli, sql, mode)
+
+
+# A side the plan cannot scan twice is copied once and read from the copy. A filter that calls `random()` is volatile, so
+# the side is no repeatable scan, and `random() * 0` keeps every row, so the answer is the one without it. The count is
+# the number of copies the plan holds.
+KEEP_ALL_LEFT = "l.lpos + random() * 0 > -1000000"
+KEEP_ALL_RIGHT = "r.rpos + random() * 0 > -1000000"
+COPIED_CASES = {
+    "copied_left_side": (_case(f"MINIMIZE SUM({SQUARED} * x)", _squared, where=KEEP_ALL_LEFT), 1),
+    "copied_right_side": (_case(f"MINIMIZE SUM({SQUARED} * x)", _squared, where=KEEP_ALL_RIGHT), 1),
+    "copied_both_sides": (
+        _case(f"MINIMIZE SUM({SQUARED} * x)", _squared, where=f"{KEEP_ALL_LEFT} AND {KEEP_ALL_RIGHT}"),
+        2,
+    ),
+    # The copy holds the duplicate rows too, and a class is still one of them paired.
+    "copied_both_sides_with_duplicates": (
+        _case(
+            f"MINIMIZE SUM({SQUARED} * x)",
+            _squared,
+            left=[(1, 5.0), (1, 5.0), (2, 9.0)],
+            right=[(7, 6.0), (8, 1.0), (8, 1.0), (8, 1.0)],
+            where=f"{KEEP_ALL_LEFT} AND {KEEP_ALL_RIGHT}",
+        ),
+        2,
+    ),
+}
+
+
+def _plan_text(decidb_cli, sql):
+    """The `require` plan of a query built by `_sql`, as one string."""
+    explain = sql.replace("SELECT lid", "EXPLAIN SELECT lid", 1)
+    return decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {explain}").stdout
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(COPIED_CASES))
+def test_o1_monge_a_side_that_is_not_a_repeatable_scan_is_copied_and_still_applies(decidb_cli, oracle_solver, name):
+    case, copies = COPIED_CASES[name]
+    sql = _sql(case)
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli, sql, oracle, lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode)
+    )
+    assert _plan_text(decidb_cli, sql).count("direct_source") == copies
+
+
+# A NULL is a value of a class on both sides: two rows with a NULL key are one class, and a NULL-keyed row and a keyed
+# row at the same position are two.
+NULL_KEY_BOTH_SIDES = _case(
+    f"MINIMIZE SUM({SQUARED} * x)",
+    _squared,
+    left=[(None, 5.0), (None, 5.0), (1, 5.0), (2, 9.0)],
+    right=[(None, 6.0), (None, 6.0), (8, 6.0), (9, 1.0)],
+)
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_o1_monge_duplicate_rows_with_a_null_key_on_both_sides_are_one_class_each(decidb_cli, oracle_solver):
+    case = NULL_KEY_BOTH_SIDES
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli,
+        _sql(case),
+        oracle,
+        lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
+    )
+
+
+# The key column that is not the position is a DOUBLE, where SQL equality has -0.0 equal to 0.0 and a NaN equal to a
+# NaN: the rows of a pair of these are one class, as the solver's grouping has them.
+KEYED_CASES = {
+    "signed_zero_key_left": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(-0.0, 5.0), (0.0, 5.0), (1.0, 9.0)],
+        right=[(2.0, 6.0), (3.0, 1.0)],
+    ),
+    "signed_zero_key_right": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(2.0, 6.0), (3.0, 1.0)],
+        right=[(-0.0, 5.0), (0.0, 5.0), (1.0, 9.0)],
+    ),
+    "nan_key_left": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(NAN, 5.0), (NAN, 5.0), (1.0, 9.0)],
+        right=[(2.0, 6.0), (3.0, 1.0)],
+    ),
+    "nan_key_both": _case(
+        f"MINIMIZE SUM({SQUARED} * x)",
+        _squared,
+        left=[(NAN, 5.0), (NAN, 5.0), (1.0, 9.0)],
+        right=[(NAN, 6.0), (3.0, 1.0), (NAN, 6.0)],
+    ),
+}
+
+
+def _double(value):
+    """A DOUBLE constant; a negative zero is written as text, since `-0.0` is a decimal negated."""
+    if value == 0.0 and math.copysign(1.0, value) < 0:
+        return "CAST('-0.0' AS DOUBLE)"
+    return sql_literal(value, "DOUBLE")
+
+
+def _keyed_sql(case):
+    statements = []
+    for side, alias in (("left", "l"), ("right", "r")):
+        values = ", ".join("(" + ", ".join(_double(v) for v in row) + ")" for row in case[side])
+        statements.append(
+            f"CREATE OR REPLACE TEMP TABLE o1_{side}({alias}key DOUBLE, {alias}pos DOUBLE NOT NULL); "
+            f"INSERT INTO o1_{side} VALUES {values};"
+        )
+    decide = f"DECIDE x(BOOL) SUCH THAT {PER_SIDE} {case['objective']}"
+    return f"{' '.join(statements)} SELECT lkey, lpos, rkey, rpos, x FROM (FROM o1_left l CROSS JOIN o1_right r {decide}) q"
+
+
+def _same_value(value):
+    """The value as SQL equality sees it: -0.0 is 0.0, and every NaN is one value. The CLI's JSON writes a NaN as null,
+    and these tables hold no NULL."""
+    return "nan" if value is None or math.isnan(value) else value + 0.0
+
+
+def _check_keyed_assignment(case, oracle, rows, columns, mode):
+    """`_check_assignment` for a DOUBLE key, whose classes are compared as SQL compares them."""
+    left, right = case["left"], case["right"]
+    assert columns == ["lkey", "lpos", "rkey", "rpos", "x"], mode
+    same = lambda row: tuple(_same_value(v) for v in row)
+    assert Counter(same(row[:4]) for row in rows) == Counter(same(l + r) for l in left for r in right), mode
+    assert all(type(row[4]) is int and row[4] in (0, 1) for row in rows), mode
+    for classes, part in ((left, slice(0, 2)), (right, slice(2, 4))):
+        for distinct in {same(row) for row in classes}:
+            selected = sum(row[4] for row in rows if same(row[part]) == distinct)
+            assert selected == 1, (mode, distinct, selected)
+    cost = sum(_coefficient(case, row[1], row[3]) * row[4] for row in rows)
+    assert cost == pytest.approx(oracle.objective_value, abs=1e-6), (mode, cost, oracle.objective_value)
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(KEYED_CASES))
+def test_o1_monge_signed_zeros_and_nans_in_a_key_column_are_one_class_as_on_the_solver_path(
+    decidb_cli, oracle_solver, name
+):
+    case = KEYED_CASES[name]
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli,
+        _keyed_sql(case),
+        oracle,
+        lambda rows, columns, mode: _check_keyed_assignment(case, oracle, rows, columns, mode),
+    )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+def test_o1_monge_a_decimal_product_that_overflows_raises_on_both_paths_though_no_check_is_made(decidb_cli):
+    # DECIMAL(38, 0) positions are finite however large, so the coefficient has no check of its own to raise. DuckDB's
+    # own multiplication overflows on the one pair, and the plan must still compute the coefficient on every pair.
+    big = "100000000000000000000000000000"
+    sql = (
+        "CREATE OR REPLACE TEMP TABLE o1_left(lid INTEGER, lpos DECIMAL(38, 0) NOT NULL); "
+        "CREATE OR REPLACE TEMP TABLE o1_right(rid INTEGER, rpos DECIMAL(38, 0) NOT NULL); "
+        f"INSERT INTO o1_left VALUES (1, {big}), (2, 1); INSERT INTO o1_right VALUES (7, {big}), (8, 2); "
+        f"SELECT lid, rid, x FROM (FROM o1_left l CROSS JOIN o1_right r DECIDE x(BOOL) SUCH THAT {PER_SIDE} "
+        f"MAXIMIZE SUM({PRODUCT} * x)) q"
+    )
+    for mode in ("off", "require"):
+        with pytest.raises(DeciDBCliError, match="Overflow in multiplication of DECIMAL"):
             run(decidb_cli, sql, mode)

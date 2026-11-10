@@ -2,7 +2,6 @@
 
 #include <algorithm>
 
-#include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -14,7 +13,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/operator/logical_cross_product.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
@@ -191,8 +190,8 @@ public:
 		if (!ProveCost(ir, context, *condition)) {
 			return nullptr;
 		}
-		// The classes of each side, then the pairs.
-		condition->source_reads = 3;
+		// The source's rows are read once: by the pairs (each side reads its own rows).
+		condition->source_reads = 1;
 		return std::move(condition);
 	}
 	string Summary() const override {
@@ -293,103 +292,124 @@ bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &cond
 	return true;
 }
 
-//! Builds the plan of one problem whose condition holds: the classes of each side ranked by position (a hash aggregate
-//! of a read of the source on the key and a rank window), joined back to a third read of the pairs, which picks the
-//! matched pairs.
+//! Builds the plan of one problem whose condition holds, the shape of a hand plan: each side ranks and chooses its copy
+//! of every class on its own rows, and the pairs are formed once. The work whose keys come from one side runs below the
+//! cross product (eager aggregation, applied to windows); a plan that ranks on the pairs would sort and group n^2 rows
+//! for the n a side has.
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, const vector<ColumnBinding> &source_bindings_p,
-	            const vector<LogicalType> &source_types_p, const DirectStateErrors &errors_p)
+	            const vector<LogicalType> &source_types_p, idx_t left_width_p, const DirectStateErrors &errors_p)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context),
-	      source_bindings(source_bindings_p), source_types(source_types_p), errors(errors_p) {
+	      source_bindings(source_bindings_p), source_types(source_types_p), left_width(left_width_p), errors(errors_p) {
 	}
 
-	//! The class plan over a read `rows`: the side's key columns, then the rank of the class by position (greatest
-	//! first when `descending`) and the number of classes, one row per class.
-	unique_ptr<LogicalOperator> RankClasses(unique_ptr<LogicalOperator> rows, const Side &side, bool descending) const {
-		DirectAggregateStage distinct(binder);
-		vector<ColumnBinding> classes;
-		for (idx_t i = 0; i < side.key.size(); i++) {
-			classes.push_back(distinct.Group(calc.Out(calc.Col(side.class_key.types[i], side.key[i]))));
+	//! The verdict on every pair (DirectSourceReader::Gate): true when the written coefficient is a valid number on
+	//! each of them, and otherwise the error of a pair that raises it. `left` and `right` are one read of each side;
+	//! their pairs are the source's rows.
+	unique_ptr<LogicalOperator> CheckPairs(DirectSourceReader::Read left, DirectSourceReader::Read right) const {
+		// The source's columns as the two reads have them.
+		vector<ColumnBinding> read_columns;
+		vector<unique_ptr<Expression>> as_read;
+		for (idx_t i = 0; i < source_bindings.size(); i++) {
+			auto on_left = i < left_width;
+			read_columns.emplace_back(on_left ? left.table_index : right.table_index, on_left ? i : i - left_width);
+			as_read.push_back(calc.Out(calc.Col(source_types[i], read_columns.back())));
 		}
-		auto plan = distinct.Finish(std::move(rows));
-		auto position = calc.Col(side.class_key.types[side.position], classes[side.position]);
-		auto order = descending ? OrderType::DESCENDING : OrderType::ASCENDING;
-		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
-		// for.
-		auto rank =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-		auto count =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, LogicalType::BIGINT,
-		                                     make_uniq<AggregateFunction>(CountStarFun::GetFunction()), nullptr);
-		// The count shares the rank's order, so that the two share one sort.
-		for (auto window : {rank.get(), count.get()}) {
-			window->start = WindowBoundary::UNBOUNDED_PRECEDING;
-			window->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-			window->orders.emplace_back(order, OrderByNullType::NULLS_LAST, calc.Out(position));
-		}
-		auto ranked = make_uniq<LogicalWindow>(binder.GenerateTableIndex());
-		ranked->expressions.push_back(std::move(rank));
-		ranked->expressions.push_back(std::move(count));
-		ranked->children.push_back(std::move(plan));
-		return std::move(ranked);
-	}
-
-	//! The substitute over the read `rows` of the pairs: its source columns, then 1 on one pair of each matched class
-	//! pair, and the column that keeps the checks and the window live. `left` and `right` are the sides' class plans
-	//! (RankClasses).
-	DirectSubstitute Assign(unique_ptr<LogicalOperator> rows, unique_ptr<LogicalOperator> left,
-	                        unique_ptr<LogicalOperator> right) const {
 		DirectProjectionStage p1(binder.GenerateTableIndex());
-		auto pairs = p1.Forward(source_bindings, source_types);
+		p1.Forward(read_columns, source_types);
 		// The written coefficient on every pair, as the solver reads it.
 		auto &cost = condition.cost;
 		auto &term = cost.terms[0];
-		auto coefficient = p1.Add(DirectScaledTerm(optimizer, term.coefficient->Copy(), cost.sign * term.sign,
-		                                           cost.scaled, cost.scale, cost.divides));
+		auto written = term.coefficient->Copy();
+		DirectReplaceColumns(written, source_bindings, as_read);
+		auto coefficient = p1.Add(DirectScaledTerm(optimizer, std::move(written), cost.sign * term.sign, cost.scaled,
+		                                           cost.scale, cost.divides));
 		vector<unique_ptr<Expression>> checks;
 		if (auto valid = DirectCheckNumber(optimizer, coefficient, cost.names[0], DirectValuesOn(cost, 0),
 		                                   source_bindings, p1.index, cost.scaled, cost.scale, cost.divides)) {
 			checks.push_back(std::move(valid));
+		} else {
+			// No value can make it past the DOUBLE range, but DuckDB's own evaluation of it can still raise, and only
+			// a check that reads the number keeps it computed.
+			checks.push_back(calc.Out(
+			    calc.Coalesce({calc.Fn("isfinite", calc.Col(LogicalType::DOUBLE, coefficient)), calc.Bool(true)})));
 		}
-		auto joined = Join(p1.Finish(std::move(rows)), pairs, condition.left, std::move(left));
-		auto left_answers = joined.answers;
-		joined = Join(std::move(joined.plan), pairs, condition.right, std::move(right));
-		auto &right_answers = joined.answers;
-		// The two sides pair one to one only with as many classes on one side as on the other.
-		checks.push_back(DirectRaiseUnless(
-		    calc,
-		    calc.Out(calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Col(LogicalType::BIGINT, left_answers[1]),
-		                      calc.Col(LogicalType::BIGINT, right_answers[1]))),
-		    DirectInfeasibleErrorPredicate(optimizer, errors)));
-		auto checked = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
-		checked->children.push_back(std::move(joined.plan));
+		auto pairs = LogicalCrossProduct::Create(std::move(left.plan), std::move(right.plan));
+		return DirectAllRowsValid(optimizer, p1.Finish(std::move(pairs)), DirectAllHold(calc, std::move(checks)));
+	}
 
-		// Of the pairs of one matched pair of classes, the first by the window's order is the one assigned.
-		auto left_rank = calc.Col(LogicalType::BIGINT, left_answers[0]);
-		auto right_rank = calc.Col(LogicalType::BIGINT, right_answers[0]);
-		auto first =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-		first->start = WindowBoundary::UNBOUNDED_PRECEDING;
-		first->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-		first->partitions.push_back(calc.Out(left_rank));
-		first->partitions.push_back(calc.Out(right_rank));
-		auto window_index = binder.GenerateTableIndex();
-		auto window = make_uniq<LogicalWindow>(window_index);
-		window->expressions.push_back(std::move(first));
-		window->children.push_back(std::move(checked));
+	//! One side over its read `rows`, whose columns are `columns` of `types` (the side's own bindings, which the
+	//! caller re-points at the read): the same columns, then the rank of the row's class by position (greatest first
+	//! when `descending`), the number of classes, and whether the row is the one copy of its class that pairs. The
+	//! columns are those of the projection `index`.
+	unique_ptr<LogicalOperator> Rank(unique_ptr<LogicalOperator> rows, const Side &side, bool descending,
+	                                 const vector<ColumnBinding> &columns, const vector<LogicalType> &types,
+	                                 idx_t index) const {
+		// Rows of one class are peers: the order names the position, then every other column of the key.
+		auto rank_index = binder.GenerateTableIndex();
+		auto ranks = make_uniq<LogicalWindow>(rank_index);
+		for (auto type :
+		     {ExpressionType::WINDOW_ROW_NUMBER, ExpressionType::WINDOW_RANK, ExpressionType::WINDOW_RANK_DENSE}) {
+			// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no
+			// operation for.
+			auto window = make_uniq<BoundWindowExpression>(type, LogicalType::BIGINT, nullptr, nullptr);
+			window->start = WindowBoundary::UNBOUNDED_PRECEDING;
+			window->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+			auto order = [&](idx_t i, OrderType direction) {
+				window->orders.emplace_back(direction, OrderByNullType::NULLS_LAST,
+				                            calc.Out(calc.Col(side.class_key.types[i], side.key[i])));
+			};
+			order(side.position, descending ? OrderType::DESCENDING : OrderType::ASCENDING);
+			for (idx_t i = 0; i < side.key.size(); i++) {
+				if (i != side.position) {
+					order(i, OrderType::ASCENDING);
+				}
+			}
+			ranks->expressions.push_back(std::move(window));
+		}
+		ranks->children.push_back(std::move(rows));
+		// ROW_NUMBER, RANK and DENSE_RANK: the first copy of a class is where the first two agree, and the greatest
+		// dense rank counts the classes. The count is a window over the one sorted order, not a second sort.
+		auto copy_number = calc.Col(LogicalType::BIGINT, ColumnBinding(rank_index, 0));
+		auto copy_rank = calc.Col(LogicalType::BIGINT, ColumnBinding(rank_index, 1));
+		auto class_rank = calc.Col(LogicalType::BIGINT, ColumnBinding(rank_index, 2));
+		auto count_index = binder.GenerateTableIndex();
+		auto counted = make_uniq<LogicalWindow>(count_index);
+		counted->expressions.push_back(DirectWindowExtremum(optimizer, "max", calc.Out(class_rank)));
+		counted->children.push_back(std::move(ranks));
+		DirectProjectionStage ranked(index);
+		ranked.Forward(columns, types);
+		ranked.Add(class_rank);
+		ranked.Add(calc.Col(LogicalType::BIGINT, ColumnBinding(count_index, 0)));
+		ranked.Add(calc.Cmp(ExpressionType::COMPARE_EQUAL, copy_number, copy_rank));
+		return ranked.Finish(std::move(counted));
+	}
 
+	//! The substitute over the `pairs` of the two ranked sides (Rank, with the projections `left` and `right`): the
+	//! source columns, then 1 on the one pair of each matched pair of classes, and the class-count check that keeps
+	//! the sides' ranks live.
+	DirectSubstitute Assign(unique_ptr<LogicalOperator> pairs, idx_t left, idx_t right) const {
 		DirectProjectionStage result(binder.GenerateTableIndex());
-		result.Forward(pairs, source_types);
-		auto number = calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, 0));
-		auto assigned = calc.And(calc.Cmp(ExpressionType::COMPARE_EQUAL, left_rank, right_rank),
-		                         calc.Cmp(ExpressionType::COMPARE_EQUAL, number, calc.Constant(Value::BIGINT(1))));
+		for (idx_t i = 0; i < source_bindings.size(); i++) {
+			auto on_left = i < left_width;
+			result.Add(calc.Out(
+			    calc.Col(source_types[i], ColumnBinding(on_left ? left : right, on_left ? i : i - left_width))));
+		}
+		// Each ranked side has its rank, class count and first-copy flag after its source columns.
+		auto right_width = source_bindings.size() - left_width;
+		auto left_rank = calc.Col(LogicalType::BIGINT, ColumnBinding(left, left_width));
+		auto right_rank = calc.Col(LogicalType::BIGINT, ColumnBinding(right, right_width));
+		auto left_count = calc.Col(LogicalType::BIGINT, ColumnBinding(left, left_width + 1));
+		auto right_count = calc.Col(LogicalType::BIGINT, ColumnBinding(right, right_width + 1));
+		auto left_first = calc.Col(LogicalType::BOOLEAN, ColumnBinding(left, left_width + 2));
+		auto right_first = calc.Col(LogicalType::BOOLEAN, ColumnBinding(right, right_width + 2));
+		auto assigned =
+		    calc.And(calc.Cmp(ExpressionType::COMPARE_EQUAL, left_rank, right_rank), calc.And(left_first, right_first));
 		result.Add(calc.If(assigned, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0))));
-		// The otherwise unused number is a blocking dependency: it forces a complete read of the pairs, and so every
-		// check, before an outer LIMIT, COUNT or column-pruning parent returns. The coefficient is carried for the same
-		// reason: a value no check reads is still computed on every pair, and raises where the solver's would.
-		result.Add(calc.Out(number));
-		result.Add(calc.Out(calc.Col(LogicalType::DOUBLE, coefficient)));
+		// The two sides pair one to one only with as many classes on one side as on the other.
+		result.Add(DirectRaiseUnless(calc, calc.Out(calc.Cmp(ExpressionType::COMPARE_EQUAL, left_count, right_count)),
+		                             DirectInfeasibleErrorPredicate(optimizer, errors)));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1);
@@ -397,8 +417,7 @@ public:
 			substitute.slot_map.push_back(i);
 		}
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
-		substitute.validated_columns.push_back(source_bindings.size() + 2);
-		substitute.child = result.Finish(std::move(window));
+		substitute.child = result.Finish(std::move(pairs));
 		return substitute;
 	}
 
@@ -407,34 +426,44 @@ private:
 	Optimizer &optimizer;
 	Binder &binder;
 	ExpressionBuilder calc;
-	vector<ColumnBinding> source_bindings;
-	vector<LogicalType> source_types;
+	//! The source's columns, the first `left_width` of them the left side's.
+	const vector<ColumnBinding> &source_bindings;
+	const vector<LogicalType> &source_types;
+	idx_t left_width;
 	const DirectStateErrors &errors;
-
-	//! Joins each pair to the rank and count of its class on `side`; `pairs` are the pair rows' source columns.
-	DirectJoinedAnswers Join(unique_ptr<LogicalOperator> rows, const vector<ColumnBinding> &pairs, const Side &side,
-	                         unique_ptr<LogicalOperator> classes) const {
-		vector<ColumnBinding> key;
-		for (auto &column : side.key) {
-			key.push_back(pairs[IndexOf(source_bindings, column)]);
-		}
-		return DirectJoinClassAnswers(binder, std::move(rows), key, side.class_key, std::move(classes));
-	}
 };
 
 DirectSubstitute Rule::Apply(DirectSourceReader &reader, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate, const DirectStateErrors &errors) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), errors);
-	auto left = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
-		return plan.RankClasses(std::move(rows), condition.left, false);
-	});
-	auto right = DirectBuildOverRead(reader, reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
-		return plan.RankClasses(std::move(rows), condition.right, condition.opposite);
-	});
-	return DirectBuildOverOneRead(reader, [&](unique_ptr<LogicalOperator> rows) {
-		return plan.Assign(std::move(rows), std::move(left), std::move(right));
-	});
+	// The source is read once, so the reader hands back DECIDE's own cross product. O1's shape has no bound table and
+	// no row check, which would be reads of their own and a gate on it. The node stays in the plan as the cross
+	// product of the ranked sides: the rule driver keeps a reference to it.
+	auto pairs = reader.TakeRecomputedSource();
+	D_ASSERT(pairs && pairs->type == LogicalOperatorType::LOGICAL_CROSS_PRODUCT && pairs->children.size() == 2);
+	// One reader for each side: it reads the side's rows twice, once for the check of the coefficient and once to rank,
+	// and makes the choice between a rescan and a copy of n rows for each side.
+	DirectSourceReader left(optimizer, std::move(pairs->children[0]), 2, vector<idx_t>());
+	DirectSourceReader right(optimizer, std::move(pairs->children[1]), 2, vector<idx_t>());
+	auto left_width = left.SourceBindings().size();
+	PlanBuilder plan(condition, optimizer, reader.SourceBindings(), reader.SourceTypes(), left_width, errors);
+	// Verify, then stream: the left side ranks once every pair is known to be valid.
+	left.Gate(plan.CheckPairs(left.ReadSource(), right.ReadSource()));
+	auto rank = [&](DirectSourceReader &side_reader, const Side &side, bool descending, idx_t index) {
+		return DirectBuildOverRead(side_reader, side_reader.ReadSource(), [&](unique_ptr<LogicalOperator> rows) {
+			return plan.Rank(std::move(rows), side, descending, side_reader.SourceBindings(), side_reader.SourceTypes(),
+			                 index);
+		});
+	};
+	auto left_index = optimizer.binder.GenerateTableIndex();
+	auto right_index = optimizer.binder.GenerateTableIndex();
+	pairs->children[0] = rank(left, condition.left, false, left_index);
+	pairs->children[1] = rank(right, condition.right, condition.opposite, right_index);
+	pairs->ResolveOperatorTypes();
+	auto substitute = plan.Assign(std::move(pairs), left_index, right_index);
+	// The check reads the right side's copy, so that is outermost.
+	substitute.child = right.Finish(left.Finish(std::move(substitute.child)));
+	return substitute;
 }
 
 } // namespace direct_o1_monge_assignment
