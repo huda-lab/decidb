@@ -403,8 +403,6 @@ CITATION.cff
 # notes
 # context/docs/todo.md
 context/presentations
-# paper workings: notes, captures and drafts, never committed
-context/paper/
 
 
 # Claude Code session/lock files
