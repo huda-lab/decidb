@@ -51,17 +51,13 @@ SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const Decide
 	return key_values;
 }
 
-vector<pair<idx_t, idx_t>> DecideEntryRows(const DecideTree &tree, const DecideDescent &descent, idx_t node) {
+DecideEntryRows::DecideEntryRows(const DecideTree &tree, const DecideDescent &descent, idx_t node) {
 	auto &container = descent.Containers()[node];
 	if (tree.nodes[node]->per != DecideTreePer::ROW) {
-		return container.routed;
+		routed = &container.routed;
+	} else {
+		rows = &container.rows;
 	}
-	vector<pair<idx_t, idx_t>> rows;
-	rows.reserve(container.Count());
-	for (idx_t e = 0; e < container.Count(); e++) {
-		rows.emplace_back(container.rows[e], e);
-	}
-	return rows;
 }
 
 vector<KeyedMapping> DecideDeclaredMappings(const DecideDescent &descent) {
@@ -268,7 +264,7 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
 	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
 	// A group with no member has no helper, so a row of it reads none (PhysicalDecide::BuildScopeMapping).
 	auto &slots = descent.Containers()[link].slots;
-	for (auto &read : DecideEntryRows(tree, descent, link)) {
+	for (auto read : DecideEntryRows(tree, descent, link)) {
 		mapping.row_to_class[read.first] = members.group_of_slot[slots[read.second]];
 	}
 	DecideMapRowsInNoClass(mapping);
@@ -329,7 +325,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root) {
 	auto null_rows = [&](idx_t node, idx_t program) {
 		rank.position = position++;
 		const auto nulls = columns.NullEntries(node, program, columns.Tested(node), rank);
-		for (auto &read : DecideEntryRows(tree, descent, node)) {
+		for (auto read : DecideEntryRows(tree, descent, node)) {
 			if (nulls[read.second]) {
 				mark(read.first);
 			}
@@ -401,7 +397,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	vector<bool> nulls(entries, false);
 	auto scatter = [&](const vector<double> &numbers, CoefficientColumn &column) {
 		column.AssignDense(num_rows);
-		for (auto &read : rows) {
+		for (auto read : rows) {
 			column.Set(read.first, numbers[read.second]);
 		}
 	};
@@ -415,7 +411,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 		Classes(root, rows, evaluated);
 	} else if (clause.scope.when) {
 		evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-		for (auto &read : rows) {
+		for (auto read : rows) {
 			evaluated.row_group_ids[read.first] = 0;
 		}
 		evaluated.num_groups = 1;
@@ -427,7 +423,7 @@ EvaluatedConstraint DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
 	// defines it has none (D88).
 	vector<bool> null_rows(num_rows, false);
-	for (auto &read : rows) {
+	for (auto read : rows) {
 		null_rows[read.first] = nulls[read.second];
 		for (auto &term : clause.lhs_terms) {
 			null_rows[read.first] = null_rows[read.first] || columns.TermAbsentAt(term, read.first);
@@ -476,7 +472,7 @@ void DecideModelEmitter::Classes(idx_t root, const vector<pair<idx_t, idx_t>> &r
 	}
 	// Each variant's row stands for its class (D28), and is named as its own where its class has more than one.
 	vector<bool> kept(num_rows, false);
-	for (auto &read : rows) {
+	for (auto read : rows) {
 		kept[read.first] = true;
 	}
 	evaluated.group_class_set = DecideGroupClassSets(
@@ -577,7 +573,7 @@ DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *s
 	}
 	result.of_row.assign(num_rows, DConstants::INVALID_INDEX);
 	result.class_of_row.assign(num_rows, DConstants::INVALID_INDEX);
-	for (auto &read : DecideEntryRows(tree, descent, node)) {
+	for (auto read : DecideEntryRows(tree, descent, node)) {
 		result.of_row[read.first] = variant_of[read.second];
 		result.class_of_row[read.first] = class_of[read.second];
 	}
@@ -596,7 +592,7 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 	for (idx_t variant = 0; variant < first_rows.size(); variant++) {
 		variant_at[first_rows[variant]] = variant;
 	}
-	for (auto &read : DecideEntryRows(tree, descent, root)) {
+	for (auto read : DecideEntryRows(tree, descent, root)) {
 		if (variant_at[read.first] != DConstants::INVALID_INDEX) {
 			entry_of[variant_at[read.first]] = read.second;
 		}
@@ -656,18 +652,18 @@ void DecideModelEmitter::KeyClasses(idx_t root, vector<idx_t> &class_ids, vector
 		}
 	}
 	class_ids.assign(num_rows, DConstants::INVALID_INDEX);
-	for (auto &read : DecideEntryRows(tree, descent, root)) {
+	for (auto read : DecideEntryRows(tree, descent, root)) {
 		class_ids[read.first] = class_of_slot[container.slots[read.second]];
 	}
 }
 
 void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
-                                            const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column,
+                                            const DecideEntryRows &rows, CoefficientColumn &column,
                                             vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
 	auto numbers = columns.Numbers(root, site.program, columns.Tested(root), &nulls, &site, &term.inputs);
 	column.AssignDense(num_rows);
-	for (auto &read : rows) {
+	for (auto read : rows) {
 		column.Set(read.first, numbers[read.second]);
 		null_rows[read.first] = null_rows[read.first] || nulls[read.second];
 	}
@@ -676,7 +672,7 @@ void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, 
 vector<pair<idx_t, idx_t>> DecideModelEmitter::ReadRows(idx_t site, const vector<bool> &reads, bool qualified) const {
 	auto &entries = descent.Containers()[site].rows;
 	vector<pair<idx_t, idx_t>> rows;
-	for (auto &read : DecideEntryRows(tree, descent, site)) {
+	for (auto read : DecideEntryRows(tree, descent, site)) {
 		if (reads[read.second] && (!qualified || entries[read.second] == read.first)) {
 			rows.push_back(read);
 		}
@@ -694,12 +690,12 @@ vector<pair<idx_t, idx_t>> DecideModelEmitter::Filter(idx_t site, bool qualified
 	auto rows = ReadRows(site, ReadEntriesOf(site, qualified), qualified);
 	filter.has_filter = qualified;
 	filter.mask.assign(num_rows, false);
-	for (auto &read : rows) {
+	for (auto read : rows) {
 		filter.mask[read.first] = true;
 	}
 	const auto &tested = columns.Tested(site);
 	members.assign(num_rows, false);
-	for (auto &read : DecideEntryRows(tree, descent, site)) {
+	for (auto read : DecideEntryRows(tree, descent, site)) {
 		members[read.first] = members[read.first] || tested[read.second];
 	}
 	return rows;
@@ -734,7 +730,7 @@ idx_t DecideModelEmitter::ByReducer(idx_t root) const {
 	throw InternalException("DECIDE tree: %s reads no G of its `by` key", node.text);
 }
 
-bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<bool> &kept,
+bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
                                           EvaluatedConstraint &evaluated, vector<TermFilterState> &filters,
                                           vector<bool> &active, vector<bool> &null_rows) {
 	auto &body = tree.nodes[root]->compiled;
@@ -797,7 +793,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	// The rows the clause keeps: every row its root holds, which its `when` routed, with the entry standing for each.
 	const auto rows = DecideEntryRows(tree, descent, root);
 	vector<bool> kept(num_rows, false);
-	for (auto &read : rows) {
+	for (auto read : rows) {
 		kept[read.first] = true;
 	}
 	vector<bool> null_rows(num_rows, false);
@@ -885,7 +881,7 @@ EvaluatedConstraint DecideModelEmitter::Groups(idx_t root, bool counted) {
 	return evaluated;
 }
 
-vector<bool> DecideModelEmitter::GroupBound(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<bool> &null_rows,
+vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows,
                                             EvaluatedConstraint &evaluated) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
@@ -905,7 +901,7 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const vector<pair<idx_t,
 	vector<bool> nulls(container.Count(), false);
 	auto bound = columns.Numbers(root, body.rhs, reads, &nulls);
 	evaluated.rhs_values.AssignDense(num_rows);
-	for (auto &read : rows) {
+	for (auto read : rows) {
 		evaluated.rhs_values.Set(read.first, bound[read.second]);
 		auto &marked = tightest ? bound_null : null_rows;
 		marked[read.first] = marked[read.first] || nulls[read.second] || (tightest && !reads[read.second]);
@@ -925,7 +921,7 @@ void DecideModelEmitter::Admit(const DecideBody &body, EvaluatedConstraint &eval
 	const auto upper = columns.Numbers(site, body.upper, members, nullptr);
 	evaluated.admitted_lower.AssignDense(num_rows);
 	evaluated.admitted_upper.AssignDense(num_rows);
-	for (auto &read : DecideEntryRows(tree, descent, site)) {
+	for (auto read : DecideEntryRows(tree, descent, site)) {
 		evaluated.admitted_lower.Set(read.first, lower[read.second]);
 		evaluated.admitted_upper.Set(read.first, upper[read.second]);
 	}
@@ -971,7 +967,7 @@ double DecideModelEmitter::SquareSign(idx_t root, idx_t g, vector<bool> &null_ro
 		    FirstRowValue(*group.scale), group,
 		    {DecideValueRole::COEFFICIENT, *group.scale, names, op.WrittenClause(node.source_clause_id)}, is_null);
 		// A NULL one makes every instance of the clause NULL.
-		for (auto &read : DecideEntryRows(tree, descent, root)) {
+		for (auto read : DecideEntryRows(tree, descent, root)) {
 			null_rows[read.first] = null_rows[read.first] || is_null;
 		}
 		return sign;
@@ -1193,7 +1189,7 @@ void DecideModelEmitter::Composed(PhysicalDecide::EvaluatedClauses &evaluated) {
 		// The rows its `when` keeps are the rows its root holds, and their classes those of its `per K:`.
 		auto kept_rows = [&]() {
 			vector<bool> kept(num_rows, false);
-			for (auto &read : DecideEntryRows(tree, descent, clauses[c])) {
+			for (auto read : DecideEntryRows(tree, descent, clauses[c])) {
 				kept[read.first] = true;
 			}
 			return kept;
@@ -1248,7 +1244,7 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 		const auto reads = ReadEntriesOf(site, qualified);
 		const auto rows = ReadRows(site, reads, qualified);
 		evaluated.filter_mask.assign(num_rows, false);
-		for (auto &read : rows) {
+		for (auto read : rows) {
 			evaluated.filter_mask[read.first] = true;
 		}
 		for (idx_t i = 0; i < members.members.size(); i++) {
@@ -1257,7 +1253,7 @@ vector<ComposedMinMaxTermData> DecideModelEmitter::ComposedTerms(idx_t root,
 			auto numbers =
 			    columns.Numbers(site, members.linear[i].program, reads, nullptr, &members.linear[i], &inner.inputs);
 			evaluated.per_term_coefs.emplace_back(num_rows, 0.0);
-			for (auto &read : rows) {
+			for (auto read : rows) {
 				evaluated.per_term_coefs.back()[read.first] = numbers[read.second];
 			}
 		}

@@ -71,13 +71,12 @@ private:
 
 //! A node's slots (language/guide.md §6.1), or a keyed scope's classes: per slot the G or O slot an E's class lies in
 //! (INVALID for a G's or O's group, whose key is its whole path key), its first row, its rank by value, and the
-//! values its rows group on, a collated column under its collation, which a message quotes through Label. A node per
-//! row's slots are its rows: each is a class of its own, keyed by its row, and holds no key values.
+//! values its rows group on, a collated column under its collation, which a message quotes through Label.
 struct DecideNodeGroups {
-	vector<idx_t> parent_slots;
-	vector<idx_t> first_rows;
+	unsafe_vector<idx_t> parent_slots;
+	unsafe_vector<idx_t> first_rows;
 	//! Value order, of the enclosing slot and then the key, assigned by Finish (flat's NumberGroupsByValue).
-	vector<idx_t> ranks;
+	unsafe_vector<idx_t> ranks;
 	//! False for a slot of rows in no class of the key: a root's (DecideNode::holds_rows_in_no_class), and a G's, whose
 	//! rows reach its operand alone and hold no entry of it. Empty for a node per row.
 	vector<bool> in_a_class;
@@ -86,10 +85,13 @@ struct DecideNodeGroups {
 	//! class by (LeastSpellingRows); Label's is the least over every read of the key. Empty for a key with no collated
 	//! column.
 	vector<DecideSpelling> spellings;
+	//! A node per row's slots are its entries, each a class of its own keyed by its row: none is held here, and no
+	//! reader numbers them.
 	bool per_row = false;
+	idx_t per_row_slots = 0;
 
 	idx_t size() const {
-		return parent_slots.size();
+		return per_row ? per_row_slots : parent_slots.size();
 	}
 	bool InAClass(idx_t slot) const {
 		return per_row || in_a_class[slot];
@@ -137,10 +139,10 @@ struct DecideEntryLayout {
 //! (E's per never changes it), its own slot -- an E instance, a reducer group or a frame timeline -- and its instance,
 //! its distinct sigma within the class, which several entries of a set E can share; and its values.
 struct DecideNodeContainer {
-	vector<idx_t> rows;
-	vector<idx_t> parent_slots;
-	vector<idx_t> slots;
-	vector<idx_t> instances;
+	unsafe_vector<idx_t> rows;
+	unsafe_vector<idx_t> parent_slots;
+	unsafe_vector<idx_t> slots;
+	unsafe_vector<idx_t> instances;
 	DecideColumns values;
 	DecideEntryLayout layout;
 	//! Per instance, its first entry.
@@ -203,8 +205,8 @@ public:
 private:
 	//! The rows of a window reaching a node: each row of the window, and the enclosing slot it arrives in.
 	struct Reach {
-		vector<sel_t> rows;
-		vector<idx_t> parents;
+		unsafe_vector<sel_t> rows;
+		unsafe_vector<idx_t> parents;
 		idx_t size() const {
 			return rows.size();
 		}
@@ -214,6 +216,10 @@ private:
 		void Add(sel_t row, idx_t parent) {
 			rows.push_back(row);
 			parents.push_back(parent);
+		}
+		void Reserve(idx_t count) {
+			rows.reserve(count);
+			parents.reserve(count);
 		}
 	};
 	//! A group of a collated key and its least spelling so far: a hash aggregate over every read of the key (Key),
@@ -241,7 +247,7 @@ private:
 	struct Pending {
 		idx_t node;
 		Reach rows;
-		vector<idx_t> slots;
+		unsafe_vector<idx_t> slots;
 		DataChunk values;
 	};
 	const DecideTree &tree;
@@ -283,14 +289,21 @@ private:
 	//! filters, a grouped clause's key in its grouping; ROUTE for a read that routes the node's rows.
 	DecideBlock read_block = DecideBlock::ROUTE;
 	vector<unordered_set<idx_t>> failed_rows;
+	//! The active node's failed rows, null before any node is visited.
+	const unordered_set<idx_t> *active_failed = nullptr;
 	bool Failed(idx_t row) const {
-		return active_node < failed_rows.size() && !failed_rows[active_node].empty() &&
-		       failed_rows[active_node].count(active_row_base + row);
+		return active_failed && !active_failed->empty() && active_failed->count(active_row_base + row);
 	}
 	//! A set E's entries of the current window, inserted once every root has descended (DecideNodeContainer::routed).
 	vector<unique_ptr<Pending>> pending;
 
 	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const Reach &incoming);
+	//! The rows of `reaching` each `when` part of `node` keeps, in `own` unless none is written: null once none is
+	//! left.
+	const Reach *Gate(const DecideNode &node, DataChunk &chunk, const Reach *reaching, Reach &own);
+	//! What a keyed node holds of `rows`: each row's slot by its key and the entries of those its key classes, and the
+	//! rows its children read, in `own_children` for a G's or O's, which reach them in their slots.
+	const Reach &HoldKeyed(idx_t node, DataChunk &chunk, const Reach &rows, idx_t row_base, Reach &own_children);
 	//! `expression` on `rows` into `result`, a vector of its type; a row it fails on is NULL, its error held at the
 	//! read's rank.
 	void Evaluate(const Expression &expression, DataChunk &chunk, const Reach &rows, Vector &result);
@@ -304,8 +317,8 @@ private:
 	//! `node`'s signature on `rows`, its values' columns (signature_types) into `values`.
 	void Signature(idx_t node, DataChunk &chunk, const Reach &rows, idx_t row_base, DataChunk &values);
 	//! The slot each of `rows` lies in, `selected` of them by their key `keys`, created in row order.
-	void FindGroups(idx_t node, const Reach &rows, const vector<idx_t> &selected, DataChunk &keys,
-	                const vector<bool> &present, idx_t row_base, vector<idx_t> &slots);
+	void FindGroups(idx_t node, const Reach &rows, const unsafe_vector<idx_t> &selected, DataChunk &keys,
+	                const vector<bool> &present, idx_t row_base, unsafe_vector<idx_t> &slots);
 	//! Of a keyed scope, the class of each row of `keys` (its layout's columns), INVALID where `present` is false.
 	void FindDecisionGroups(idx_t scope, DataChunk &keys, const vector<bool> &present, const vector<idx_t> &rows,
 	                        vector<idx_t> &classes);
@@ -316,12 +329,14 @@ private:
 	//! What `node` holds of its `stored` rows, each in its slot of `slots`: the classes of the keyed decisions it
 	//! reads, and an entry per row no read failed on, its signature, carried and program columns and an O's order;
 	//! a set E's wait for every root (pending).
-	void Store(idx_t node, DataChunk &chunk, const Reach &stored, const vector<idx_t> &slots, idx_t row_base);
+	void Store(idx_t node, DataChunk &chunk, const Reach &stored, const unsafe_vector<idx_t> &slots, idx_t row_base);
 	//! An O's order value on `stored`, its comparison bytes and its partition, into `values` at `layout`.
 	void FrameOrder(const DecideNode &node, const DecideEntryLayout &layout, DataChunk &chunk, const Reach &stored,
 	                DataChunk &values);
 	//! An O's timelines (DecideNodeTimelines), once every row is appended and its slots are ranked.
 	void Timelines(idx_t node);
+	//! `rows` without those a read failed on: `rows` itself where none failed, else `kept`.
+	const Reach &Unfailed(const Reach &rows, Reach &kept) const;
 };
 
 } // namespace duckdb

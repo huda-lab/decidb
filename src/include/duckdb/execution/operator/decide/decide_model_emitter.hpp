@@ -26,6 +26,49 @@ struct DecideVariants {
 	idx_t num_classes = 0;
 };
 
+//! Each row `node`'s entries stand for, with the entry standing for it: a set E's routed rows, a node per row's own,
+//! read in place from its container.
+class DecideEntryRows {
+public:
+	DecideEntryRows(const DecideTree &tree, const DecideDescent &descent, idx_t node);
+	idx_t size() const {
+		return routed ? routed->size() : rows->size();
+	}
+	pair<idx_t, idx_t> operator[](idx_t i) const {
+		return routed ? (*routed)[i] : pair<idx_t, idx_t>((*rows)[i], i);
+	}
+	class Iterator {
+	public:
+		Iterator(const DecideEntryRows &rows, idx_t i) : rows(rows), i(i) {
+		}
+		pair<idx_t, idx_t> operator*() const {
+			return rows[i];
+		}
+		Iterator &operator++() {
+			i++;
+			return *this;
+		}
+		bool operator!=(const Iterator &other) const {
+			return i != other.i;
+		}
+
+	private:
+		const DecideEntryRows &rows;
+		idx_t i;
+	};
+	Iterator begin() const {
+		return Iterator(*this, 0);
+	}
+	Iterator end() const {
+		return Iterator(*this, size());
+	}
+
+private:
+	//! A set E's routed rows; null for a node per row, whose entries are its rows.
+	const vector<pair<idx_t, idx_t>> *routed = nullptr;
+	const unsafe_vector<idx_t> *rows = nullptr;
+};
+
 //! Writes what PhysicalDecide::Evaluate writes for the model, from the tree's containers: gstate's evaluated clauses
 //! and the keyed mappings, in flat's order, so frame reads and repair groups are numbered as flat numbers them.
 class DecideModelEmitter {
@@ -126,7 +169,7 @@ private:
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).
-	vector<bool> GroupBound(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<bool> &null_rows,
+	vector<bool> GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows,
 	                        EvaluatedConstraint &evaluated);
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
@@ -171,7 +214,7 @@ private:
 	//! square's filter as flat reads it, and the rows some reducer's filter keeps (`active`, every row with a part that
 	//! keeps every kept row), and the rows where a term's coefficient is NULL (`null_rows`). Returns whether some
 	//! filter keeps fewer than the kept rows.
-	bool ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<bool> &kept,
+	bool ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
 	                      EvaluatedConstraint &evaluated, vector<TermFilterState> &filters, vector<bool> &active,
 	                      vector<bool> &null_rows);
 	//! The rows a term in a reducer is read on, each with the entry of its site `site` standing for it: of the entries
@@ -187,8 +230,8 @@ private:
 	vector<pair<idx_t, idx_t>> Filter(idx_t site, bool qualified, TermFilterState &filter, vector<bool> &members);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).
-	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
-	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column, vector<bool> &null_rows);
+	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, const DecideEntryRows &rows,
+	                        CoefficientColumn &column, vector<bool> &null_rows);
 	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
 	//! routed and its member tests keep, a kept row in no group among them, since flat computes the term on every kept
 	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.
@@ -208,8 +251,6 @@ vector<KeyedMapping> DecideDeclaredMappings(const DecideDescent &descent);
 //! the key on (DecideDescent::Label, D69).
 SolverInput::KeyValues DecideGroupKeyValues(const DecideTree &tree, const DecideDescent &descent, idx_t node);
 
-//! Each row `node`'s entries stand for, with the entry standing for it: a set E's routed rows, a node per row's own.
-vector<pair<idx_t, idx_t>> DecideEntryRows(const DecideTree &tree, const DecideDescent &descent, idx_t node);
 
 
 } // namespace duckdb

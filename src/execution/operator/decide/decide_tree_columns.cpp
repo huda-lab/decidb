@@ -56,28 +56,48 @@ DecideAggregateStates::~DecideAggregateStates() {
 	}
 }
 
-void DecideAggregateStates::Update(const vector<vector<Value>> &arguments, const vector<idx_t> &slots,
-                                   const vector<Value> *read) {
-	// A NaN has no place in an order or a sum: the reducer refuses it, wherever it lies among the members.
-	if (!read && !arguments.empty()) {
-		read = &arguments[0];
+//! Whether `values` holds a NaN at one of its `count` rows.
+static bool DecideReadsNan(Vector &values, idx_t count) {
+	const auto type = values.GetType().InternalType();
+	if (type != PhysicalType::DOUBLE && type != PhysicalType::FLOAT) {
+		return false;
 	}
-	for (idx_t member = 0; rejects_nan && read && member < slots.size(); member++) {
-		auto &value = (*read)[member];
-		const auto type = value.type().InternalType();
-		if (!value.IsNull() && (type == PhysicalType::DOUBLE || type == PhysicalType::FLOAT) &&
-		    std::isnan(value.GetValue<double>())) {
-			throw InvalidInputException(DecideFrameNanMessage(text));
+	UnifiedVectorFormat format;
+	values.ToUnifiedFormat(count, format);
+	for (idx_t i = 0; i < count; i++) {
+		const auto index = format.sel->get_index(i);
+		if (format.validity.RowIsValid(index) &&
+		    (type == PhysicalType::DOUBLE ? std::isnan(UnifiedVectorFormat::GetData<double>(format)[index])
+		                                  : std::isnan(UnifiedVectorFormat::GetData<float>(format)[index]))) {
+			return true;
 		}
 	}
-	for (idx_t offset = 0; offset < slots.size(); offset += STANDARD_VECTOR_SIZE) {
-		const auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, slots.size() - offset);
+	return false;
+}
+
+void DecideAggregateStates::Update(const vector<const Vector *> &arguments, const vector<idx_t> &members,
+                                   const vector<idx_t> &slots, const Vector *read) {
+	// A NaN has no place in an order or a sum: the reducer refuses it, wherever it lies among the members.
+	if (!read && !arguments.empty()) {
+		read = arguments[0];
+	}
+	for (idx_t offset = 0; offset < members.size(); offset += STANDARD_VECTOR_SIZE) {
+		const auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, members.size() - offset);
+		SelectionVector selection(count);
+		for (idx_t i = 0; i < count; i++) {
+			selection.set_index(i, members[offset + i]);
+		}
+		if (rejects_nan && read) {
+			Vector values(*read, selection, count);
+			if (DecideReadsNan(values, count)) {
+				throw InvalidInputException(DecideFrameNanMessage(text));
+			}
+		}
 		vector<Vector> sources;
 		for (idx_t a = 0; a < arguments.size(); a++) {
-			sources.emplace_back(aggregate.children[a]->return_type);
-			for (idx_t i = 0; i < count; i++) {
-				sources.back().SetValue(i, arguments[a][offset + i]);
-			}
+			// A program computes its argument as the reducer binds it.
+			D_ASSERT(arguments[a]->GetType() == aggregate.children[a]->return_type);
+			sources.emplace_back(*arguments[a], selection, count);
 		}
 		Vector targets(LogicalType::POINTER);
 		auto addresses = FlatVector::GetData<data_ptr_t>(targets);
@@ -180,12 +200,16 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 			layout.push_back(column->return_type);
 		}
 	}
-	vector<vector<Value>> holes;
+	vector<unique_ptr<Vector>> holes;
 	for (idx_t h = 0; h < node.holes.size(); h++) {
 		layout.push_back(node.holes[h].type);
-		holes.push_back(frames || node.holes[h].column == DConstants::INVALID_INDEX
-		                    ? HoleValues(index, h)
-		                    : vector<Value>(count, Value(node.holes[h].type)));
+		if (frames || node.holes[h].column == DConstants::INVALID_INDEX) {
+			holes.push_back(HoleValues(index, h));
+			continue;
+		}
+		holes.push_back(make_uniq<Vector>(node.holes[h].type));
+		holes.back()->SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(*holes.back(), true);
 	}
 	columns.programs.resize(node.programs.size());
 	vector<idx_t> over_layout, computed;
@@ -228,10 +252,8 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 				chunk.data[j].Reference(
 				    container.values.Window(start / STANDARD_VECTOR_SIZE).data[container.layout.columns + j]);
 			}
-			for (idx_t i = 0; i < size; i++) {
-				for (idx_t h = 0; h < holes.size(); h++) {
-					chunk.data[layout.size() - holes.size() + h].SetValue(i, holes[h][start + i]);
-				}
+			for (idx_t h = 0; h < holes.size(); h++) {
+				chunk.data[layout.size() - holes.size() + h].Slice(*holes[h], start, start + size);
 			}
 			for (idx_t a = 0; a < arguments.size(); a++) {
 				chunk.data[layout.size() + a].Slice(*columns.programs[arguments[a]].values, start, start + size);
@@ -466,16 +488,35 @@ void DecideTreeColumns::ReadAbsence(const vector<KeyedMapping> &classes, const v
 	absent_reads = &reads;
 }
 
-vector<Value> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
+//! `source`'s values at `selected` (INVALID for none, NULL) as `type`, a vector of `selected.size()` values.
+static unique_ptr<Vector> DecideGather(const Vector &source, idx_t source_count, const vector<idx_t> &selected,
+                                       const LogicalType &type) {
+	const auto count = selected.size();
+	// One NULL after the source's values stands for every row that reads none.
+	Vector extended(source.GetType(), source_count + 1);
+	VectorOperations::Copy(source, extended, source_count, 0, 0);
+	FlatVector::SetNull(extended, source_count, true);
+	SelectionVector selection(MaxValue<idx_t>(count, 1));
+	for (idx_t i = 0; i < count; i++) {
+		selection.set_index(i, selected[i] == DConstants::INVALID_INDEX ? source_count : selected[i]);
+	}
+	auto result = make_uniq<Vector>(source.GetType(), MaxValue<idx_t>(count, 1));
+	VectorOperations::Copy(extended, *result, selection, count, 0, 0);
+	if (type == source.GetType()) {
+		return result;
+	}
+	auto cast = make_uniq<Vector>(type, MaxValue<idx_t>(count, 1));
+	VectorOperations::DefaultCast(*result, *cast, count);
+	return cast;
+}
+
+unique_ptr<Vector> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
 	auto &read = tree.nodes[node]->holes[hole];
+	auto &rows = descent.Containers()[node].rows;
 	if (read.column != DConstants::INVALID_INDEX) {
 		// A frame's column, at the entry's row: the anchor it reads the frame at.
 		auto &column = *frame_values.values[read.column];
-		vector<Value> result;
-		for (auto row : descent.Containers()[node].rows) {
-			result.push_back(column.GetValue(row).DefaultCastAs(read.type));
-		}
-		return result;
+		return DecideGather(column, frame_rows, vector<idx_t>(rows.begin(), rows.end()), read.type);
 	}
 	auto &values = Folds(read.node);
 	// The slot each row lies in: a G over data has an entry per row it reaches (DecideDescent::Visit).
@@ -487,12 +528,16 @@ vector<Value> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
 			slots[reducer.rows[e]] = reducer.slots[e];
 		}
 	}
-	vector<Value> result;
-	for (auto row : descent.Containers()[node].rows) {
-		const auto slot = row < slots.size() ? slots[row] : DConstants::INVALID_INDEX;
-		result.push_back(slot == DConstants::INVALID_INDEX ? Value(read.type) : values[slot].DefaultCastAs(read.type));
+	Vector folds(tree.nodes[read.node]->function->return_type, MaxValue<idx_t>(values.size(), 1));
+	for (idx_t slot = 0; slot < values.size(); slot++) {
+		folds.SetValue(slot, values[slot]);
 	}
-	return result;
+	vector<idx_t> read_slots;
+	read_slots.reserve(rows.size());
+	for (auto row : rows) {
+		read_slots.push_back(row < slots.size() ? slots[row] : DConstants::INVALID_INDEX);
+	}
+	return DecideGather(folds, values.size(), read_slots, read.type);
 }
 
 const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
@@ -512,20 +557,18 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 	}
 	const auto members = FirstOfEachInstance(operand, tested);
 	const auto norm_body = tree.nodes[operand]->compiled.norm_body;
-	vector<vector<Value>> values(arguments.size());
-	vector<Value> body;
+	vector<idx_t> read;
 	vector<idx_t> slots;
 	for (idx_t e = 0; e < entries.Count(); e++) {
-		if (!members[e]) {
-			continue;
+		if (members[e]) {
+			read.push_back(e);
+			slots.push_back(entries.parent_slots[e]);
 		}
-		slots.push_back(entries.parent_slots[e]);
-		for (idx_t a = 0; a < arguments.size(); a++) {
-			values[a].push_back(Computed(operand).programs[arguments[a]].values->GetValue(e));
-		}
-		if (norm_body != DConstants::INVALID_INDEX) {
-			body.push_back(Computed(operand).programs[norm_body].values->GetValue(e));
-		}
+	}
+	auto &computed = Computed(operand);
+	vector<const Vector *> values;
+	for (auto argument : arguments) {
+		values.push_back(computed.programs[argument].values.get());
 	}
 	const auto slot_count = descent.Containers()[reducer].groups.size();
 	auto &result = folds[reducer];
@@ -542,7 +585,8 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 		const bool rejects_nan = std::find(over_frames.begin(), over_frames.end(), reducer) != over_frames.end() &&
 		                         StringUtil::Lower(node.function->function.name) != "count";
 		DecideAggregateStates states(context, *node.function, slot_count, node.text, rejects_nan);
-		states.Update(values, slots, norm_body == DConstants::INVALID_INDEX ? nullptr : &body);
+		states.Update(values, read, slots,
+		              norm_body == DConstants::INVALID_INDEX ? nullptr : computed.programs[norm_body].values.get());
 		result = states.Finalize();
 	} catch (std::exception &ex) {
 		errors.Add(node.value_rank, ErrorData(ex));
@@ -566,12 +610,13 @@ void DecideTreeColumns::CheckData() {
 			errors.Add(Rank(root, check, raised.first, false), raised.second);
 		}
 		auto &messages = *column.values;
+		UnifiedVectorFormat format;
+		messages.ToUnifiedFormat(rows.size(), format);
 		for (idx_t e = 0; e < rows.size(); e++) {
-			auto message = messages.GetValue(e);
-			if (!message.IsNull()) {
+			if (format.validity.RowIsValid(format.sel->get_index(e))) {
 				auto rank = node.value_rank;
 				rank.row = rows[e];
-				errors.Add(rank, ErrorData(InvalidInputException(message.ToString())));
+				errors.Add(rank, ErrorData(InvalidInputException(messages.GetValue(e).ToString())));
 			}
 		}
 	}
@@ -679,6 +724,7 @@ void DecideTreeColumns::ReadFrames(const vector<DecideFrameSpec> &frames, const 
                                    const vector<LogicalDecide::ReducerValueLink> &links, idx_t num_rows,
                                    vector<DecideFrameMap> &maps) {
 	frame_maps = &maps;
+	frame_rows = num_rows;
 	// Each frame's timelines, frame after frame, where its rows are routed: its range's limit as its windows are
 	// listed, after every read of its rows, then its partition (D75).
 	frame_peers.resize(frames.size());
@@ -757,18 +803,21 @@ DecideTreeColumns::FrameExpressions(const DecidePreparedModel &prepared,
 DecideFrameValues DecideTreeColumns::FrameRows(idx_t node, idx_t program, const vector<bool> &rows) {
 	auto &column = FramePrograms(node).programs[program];
 	const auto num_rows = rows.size();
-	DecideFrameValues result(column.values->GetType(), num_rows + 1);
-	FlatVector::Validity(result.values).SetAllInvalid(num_rows + 1);
 	auto &entries = descent.Containers()[node].rows;
+	// Each row's anchor entry where `rows` marks it, gathered: NULL at every other row, and at the one past the end.
+	vector<idx_t> read(num_rows + 1, DConstants::INVALID_INDEX);
 	for (idx_t e = 0; e < entries.size(); e++) {
 		const auto row = entries[e];
-		if (!rows[row]) {
-			continue;
+		if (rows[row]) {
+			read[row] = e;
 		}
-		result.values.SetValue(row, column.values->GetValue(e));
-		auto error = column.errors.find(e);
-		if (error != column.errors.end()) {
-			result.errors.emplace(row, error->second);
+	}
+	DecideFrameValues result(column.values->GetType(), num_rows + 1);
+	result.values.Reference(*DecideGather(*column.values, entries.size(), read, column.values->GetType()));
+	for (auto &error : column.errors) {
+		const auto row = entries[error.first];
+		if (rows[row]) {
+			result.errors.emplace(row, error.second);
 		}
 	}
 	return result;

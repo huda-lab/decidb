@@ -35,10 +35,11 @@ public:
 	DecideAggregateStates(ClientContext &context, const BoundAggregateExpression &aggregate, idx_t slots, string text,
 	                      bool rejects_nan);
 	~DecideAggregateStates();
-	//! Folds member i, `arguments[a][i]` for each argument a, into the state of slot `slots[i]`. A NaN of what it reads
-	//! (`read`, its first argument when null: a norm's body otherwise) raises the reducer's message.
-	void Update(const vector<vector<Value>> &arguments, const vector<idx_t> &slots,
-	            const vector<Value> *read = nullptr);
+	//! Folds member i, entry `members[i]` of each argument's values over the operand's entries, into the state of slot
+	//! `slots[i]`. A NaN of what it reads (`read`, its first argument when null: a norm's body otherwise) raises the
+	//! reducer's message.
+	void Update(const vector<const Vector *> &arguments, const vector<idx_t> &members, const vector<idx_t> &slots,
+	            const Vector *read = nullptr);
 	//! Each slot's value; a slot that folded no member holds what the aggregate gives no rows.
 	vector<Value> Finalize();
 
@@ -145,8 +146,10 @@ private:
 	const vector<KeyedMapping> *mappings = nullptr;
 	const vector<vector<bool>> *absent_reads = nullptr;
 	const vector<DecideFrameMap> *frame_maps = nullptr;
-	//! Each frame column's value on every row, and the error a row carries, read where a reader reaches the row.
+	//! Each frame column's value on every row, of `frame_rows`, and the error a row carries, read where a reader
+	//! reaches the row.
 	DecideFrameColumnValues frame_values;
+	idx_t frame_rows = 0;
 	struct FramePeer {
 		idx_t slot;
 		idx_t position;
@@ -187,8 +190,9 @@ private:
 	//! D73, frame after frame, position after position: a position of two payloads a frame reads is refused, once the
 	//! decisions' classes are known (FRAME_PEERS).
 	void CheckPositions(const vector<DecideFrameSpec> &frames);
-	//! Each entry of `node`'s value of its hole `hole`: the fold of the hole's G in the slot the entry's row reads.
-	vector<Value> HoleValues(idx_t node, idx_t hole);
+	//! Each entry of `node`'s value of its hole `hole`, a vector over its entries: the fold of the hole's G in the slot
+	//! the entry's row reads, or a frame's column at the entry's row.
+	unique_ptr<Vector> HoleValues(idx_t node, idx_t hole);
 	//! Which of its entries the node's member tests keep, and the errors they raise.
 	void ReadTests(idx_t node, NodeColumns &columns);
 	//! Holds each error of `program` on an entry `reads` marks, at its rank.

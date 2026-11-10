@@ -169,10 +169,6 @@ static void DescentIds(Vector &result, const idx_t *values, idx_t count) {
 	}
 }
 
-static void DescentIds(Vector &result, const vector<idx_t> &values) {
-	DescentIds(result, values.data(), values.size());
-}
-
 void DecideColumns::Initialize(Allocator &allocator_p, vector<LogicalType> types_p) {
 	allocator = &allocator_p;
 	types = std::move(types_p);
@@ -216,9 +212,7 @@ vector<Value> DecideColumns::GetValues(idx_t row, idx_t begin, idx_t end) const 
 }
 
 vector<Value> DecideNodeGroups::Key(idx_t slot) const {
-	if (per_row) {
-		return {Value::UBIGINT(first_rows[slot])};
-	}
+	D_ASSERT(!per_row);
 	return keys.GetValues(slot, 0, keys.Types().size());
 }
 
@@ -228,7 +222,7 @@ const DecideSpelling &DecideNodeGroups::Spelling(idx_t slot) const {
 
 //! Ranks numbering `count` items by their sort keys, `keys` of `count` BLOBs as CreateSortKey writes them, equal keys
 //! in item order: flat's NumberGroupsByValue.
-static vector<idx_t> DescentRanks(const vector<string_t> &keys) {
+static unsafe_vector<idx_t> DescentRanks(const vector<string_t> &keys) {
 	vector<idx_t> order(keys.size());
 	std::iota(order.begin(), order.end(), 0);
 	std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
@@ -237,7 +231,7 @@ static vector<idx_t> DescentRanks(const vector<string_t> &keys) {
 		const auto compared = memcmp(l.GetData(), r.GetData(), MinValue(l.GetSize(), r.GetSize()));
 		return compared != 0 ? compared < 0 : l.GetSize() < r.GetSize();
 	});
-	vector<idx_t> ranks(keys.size());
+	unsafe_vector<idx_t> ranks(keys.size());
 	for (idx_t rank = 0; rank < order.size(); rank++) {
 		ranks[order[rank]] = rank;
 	}
@@ -257,51 +251,9 @@ static void DescentSortKeys(DataChunk &columns, StringHeap &heap, vector<string_
 	}
 }
 
-//! A node's slots by value: of the enclosing slot, then of the key (flat's NumberGroupsByValue). A node per row's slot
-//! is keyed by its row, so its slots rank by enclosing slot and then row: they are made in row order within one
-//! enclosing slot, unless two paths reach the node, which a sort of that slot's rows orders.
-static void DescentRankGroups(DecideNodeGroups &groups) {
+//! A node's slots by value: of the enclosing slot, then of the key (flat's NumberGroupsByValue).
+static unsafe_vector<idx_t> DescentGroupRanks(const DecideNodeGroups &groups) {
 	const auto count = groups.size();
-	if (groups.per_row) {
-		idx_t enclosing = 0;
-		for (auto parent : groups.parent_slots) {
-			if (parent != DConstants::INVALID_INDEX) {
-				enclosing = MaxValue(enclosing, parent + 1);
-			}
-		}
-		// A counting sort by the enclosing slot, INVALID last.
-		vector<idx_t> begin(enclosing + 2, 0);
-		auto bucket = [&](idx_t slot) {
-			const auto parent = groups.parent_slots[slot];
-			return parent == DConstants::INVALID_INDEX ? enclosing : parent;
-		};
-		for (idx_t slot = 0; slot < count; slot++) {
-			begin[bucket(slot) + 1]++;
-		}
-		for (idx_t b = 1; b < begin.size(); b++) {
-			begin[b] += begin[b - 1];
-		}
-		vector<idx_t> order(count);
-		auto next = begin;
-		for (idx_t slot = 0; slot < count; slot++) {
-			order[next[bucket(slot)]++] = slot;
-		}
-		for (idx_t b = 0; b + 1 < begin.size(); b++) {
-			auto first = order.begin() + begin[b];
-			auto last = order.begin() + begin[b + 1];
-			auto by_row = [&](idx_t left, idx_t right) {
-				return groups.first_rows[left] < groups.first_rows[right];
-			};
-			if (!std::is_sorted(first, last, by_row)) {
-				std::stable_sort(first, last, by_row);
-			}
-		}
-		groups.ranks.assign(count, 0);
-		for (idx_t rank = 0; rank < count; rank++) {
-			groups.ranks[order[rank]] = rank;
-		}
-		return;
-	}
 	StringHeap heap;
 	vector<string_t> keys;
 	keys.reserve(count);
@@ -321,7 +273,7 @@ static void DescentRankGroups(DecideNodeGroups &groups) {
 		columns.SetCardinality(size);
 		DescentSortKeys(columns, heap, keys);
 	}
-	groups.ranks = DescentRanks(keys);
+	return DescentRanks(keys);
 }
 
 DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
@@ -412,13 +364,17 @@ void DecideDescent::Evaluate(const Expression &expression, DataChunk &chunk, con
 	if (rows.empty()) {
 		return;
 	}
-	SelectionVector selection(rows.size());
-	for (idx_t i = 0; i < rows.size(); i++) {
-		selection.set_index(i, rows.rows[i]);
+	// A window's rows reach a node distinct and in order, so all of them are the window itself.
+	DataChunk sliced;
+	if (rows.size() != chunk.size()) {
+		SelectionVector selection(rows.size());
+		for (idx_t i = 0; i < rows.size(); i++) {
+			selection.set_index(i, rows.rows[i]);
+		}
+		sliced.InitializeEmpty(chunk.GetTypes());
+		sliced.Slice(chunk, selection, rows.size());
 	}
-	DataChunk selected;
-	selected.InitializeEmpty(chunk.GetTypes());
-	selected.Slice(chunk, selection, rows.size());
+	auto &selected = rows.size() != chunk.size() ? sliced : chunk;
 	auto rank = current_rank;
 	current_rank.expression++;
 	try {
@@ -709,8 +665,9 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 	values.SetCardinality(rows.size());
 }
 
-void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const vector<idx_t> &selected, DataChunk &keys,
-                               const vector<bool> &present, idx_t row_base, vector<idx_t> &slots) {
+void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const unsafe_vector<idx_t> &selected,
+                               DataChunk &keys, const vector<bool> &present, idx_t row_base,
+                               unsafe_vector<idx_t> &slots) {
 	auto &node = *tree.nodes[node_index];
 	auto &groups = containers[node_index].groups;
 	const auto scope = node.kind == DecideNodeKind::SCOPE;
@@ -718,19 +675,11 @@ void DecideDescent::FindGroups(idx_t node_index, const Reach &rows, const vector
 	auto create = [&](idx_t i) {
 		groups.parent_slots.push_back(scope ? rows.parents[i] : DConstants::INVALID_INDEX);
 		groups.first_rows.push_back(row_base + rows.rows[i]);
-		if (!groups.per_row) {
-			groups.in_a_class.push_back(present[i]);
-		}
+		groups.in_a_class.push_back(present[i]);
 	};
 	auto &map = group_maps[node_index];
 	if (!map) {
 		for (auto i : selected) {
-			if (scope) {
-				// An E's per never merges a node per row's rows: each is a slot of its own, keyed by its row.
-				slots[i] = groups.size();
-				create(i);
-				continue;
-			}
 			// A G's or O's empty key is one slot.
 			if (groups.size() == 0) {
 				create(i);
@@ -943,27 +892,28 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	types.insert(types.end(), node.dependencies.size(), LogicalType::UBIGINT);
 	DataChunk probe;
 	probe.Initialize(Allocator::Get(context), types);
-	DescentIds(probe.data[0], batch.slots);
+	DescentIds(probe.data[0], batch.slots.data(), count);
 	for (idx_t c = 0; c < value_columns; c++) {
 		probe.data[1 + c].Reference(batch.values.data[c]);
 	}
 	// Where its row reads each node it depends on (DecideNodeContainer::routed).
-	vector<vector<idx_t>> reads(node.dependencies.size(), vector<idx_t>(count, DConstants::INVALID_INDEX));
 	for (idx_t d = 0; d < node.dependencies.size(); d++) {
 		auto &landing = landed[node.dependencies[d]];
-		for (idx_t i = 0; i < count && !landing.empty(); i++) {
-			reads[d][i] = landing[batch.rows.rows[i]];
+		auto reads = FlatVector::GetData<uint64_t>(probe.data[1 + value_columns + d]);
+		for (idx_t i = 0; i < count; i++) {
+			reads[i] = landing.empty() ? DConstants::INVALID_INDEX : landing.data()[batch.rows.rows[i]];
 		}
-		DescentIds(probe.data[1 + value_columns + d], reads[d]);
 	}
 	probe.SetCardinality(count);
-	vector<idx_t> entries(count);
+	unsafe_vector<idx_t> entries(count);
 	idx_t next = container.Count();
 	entry_maps[batch.node]->FindOrCreate(probe, entries.data(), next);
 	// The rows that make a new entry, each the first to read its values.
-	vector<idx_t> created;
+	unsafe_vector<idx_t> created;
+	const auto routed = container.routed.size();
+	container.routed.resize(routed + count);
 	for (idx_t i = 0; i < count; i++) {
-		container.routed.emplace_back(row_base + batch.rows.rows[i], entries[i]);
+		container.routed[routed + i] = make_pair(row_base + batch.rows.rows[i], entries[i]);
 		if (entries[i] == container.Count() + created.size()) {
 			created.push_back(i);
 		}
@@ -981,7 +931,7 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 		signatures.data[c].Slice(probe.data[c], selection, created.size());
 	}
 	signatures.SetCardinality(created.size());
-	vector<idx_t> instances(created.size());
+	unsafe_vector<idx_t> instances(created.size());
 	idx_t next_instance = container.instance_entries.size();
 	instance_maps[batch.node]->FindOrCreate(signatures, instances.data(), next_instance);
 	for (idx_t k = 0; k < created.size(); k++) {
@@ -1037,7 +987,7 @@ void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &
 	CreateSortKeyHelpers::CreateSortKey(*compared, stored.size(), modifiers, values.data[layout.order_key]);
 }
 
-void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &stored, const vector<idx_t> &slots,
+void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &stored, const unsafe_vector<idx_t> &slots,
                           idx_t row_base) {
 	auto &node = *tree.nodes[node_index];
 	auto &container = containers[node_index];
@@ -1071,12 +1021,18 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 	}
 	values.SetCardinality(stored.size());
 	// An entry per row no read failed on.
-	SelectionVector kept(MaxValue<idx_t>(stored.size(), 1));
-	idx_t kept_count = 0;
-	for (idx_t i = 0; i < stored.size(); i++) {
-		if (!Failed(stored.rows[i])) {
-			kept.set_index(kept_count++, i);
+	SelectionVector unfailed;
+	const SelectionVector *kept = FlatVector::IncrementalSelectionVector();
+	idx_t kept_count = stored.size();
+	if (active_failed && !active_failed->empty()) {
+		unfailed.Initialize(MaxValue<idx_t>(stored.size(), 1));
+		kept_count = 0;
+		for (idx_t i = 0; i < stored.size(); i++) {
+			if (!Failed(stored.rows[i])) {
+				unfailed.set_index(kept_count++, i);
+			}
 		}
+		kept = &unfailed;
 	}
 	if (kept_count == 0) {
 		return;
@@ -1086,52 +1042,59 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 		// which another root may route later in the window. So its entries wait for every root.
 		auto batch = make_uniq<Pending>();
 		batch->node = node_index;
+		batch->rows.rows.resize(kept_count);
+		batch->rows.parents.resize(kept_count);
+		batch->slots.resize(kept_count);
 		for (idx_t k = 0; k < kept_count; k++) {
-			const auto i = kept.get_index(k);
-			batch->rows.Add(stored.rows[i], stored.parents[i]);
-			batch->slots.push_back(slots[i]);
+			const auto i = kept->get_index(k);
+			batch->rows.rows[k] = stored.rows[i];
+			batch->rows.parents[k] = stored.parents[i];
+			batch->slots[k] = slots[i];
 		}
 		if (layout.end > 0) {
 			batch->values.InitializeEmpty(container.values.Types());
-			batch->values.Slice(values, kept, kept_count);
+			batch->values.Slice(values, *kept, kept_count);
 		}
 		pending.push_back(std::move(batch));
 		return;
 	}
+	// A node per row's slots are its entries (DecideNodeGroups::per_row); each entry is an instance of its own.
+	const auto base = container.Count();
+	const auto instance_base = container.instance_entries.size();
+	container.rows.resize(base + kept_count);
+	container.parent_slots.resize(base + kept_count);
+	container.slots.resize(base + kept_count);
+	container.instances.resize(base + kept_count);
+	container.instance_entries.resize(instance_base + kept_count);
 	for (idx_t k = 0; k < kept_count; k++) {
-		const auto i = kept.get_index(k);
-		container.rows.push_back(row_base + stored.rows[i]);
-		container.parent_slots.push_back(stored.parents[i]);
-		container.slots.push_back(slots[i]);
-		container.instances.push_back(container.instance_entries.size());
-		container.instance_entries.push_back(container.Count() - 1);
+		const auto i = kept->get_index(k);
+		container.rows[base + k] = row_base + stored.rows[i];
+		container.parent_slots[base + k] = stored.parents[i];
+		container.slots[base + k] = container.groups.per_row ? base + k : slots[i];
+		container.instances[base + k] = instance_base + k;
+		container.instance_entries[instance_base + k] = base + k;
 	}
-	container.values.Append(values, kept, kept_count);
+	if (container.groups.per_row) {
+		container.groups.per_row_slots += kept_count;
+	}
+	container.values.Append(values, *kept, kept_count);
 }
 
-void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, const Reach &incoming) {
-	auto &node = *tree.nodes[node_index];
-	active_node = node_index;
-	active_row_base = row_base;
-	// Its `when` first, where flat reads it (DecideNode::when_rank), then the rest at its own rank.
-	current_rank = node.when_rank;
-	if (context.interrupted) {
-		throw InterruptException();
+const DecideDescent::Reach &DecideDescent::Unfailed(const Reach &rows, Reach &kept) const {
+	if (!active_failed || active_failed->empty()) {
+		return rows;
 	}
-	auto &container = containers[node_index];
-	// Shared DAG edges may route the same row and context twice. Its input value is inserted once, independently of
-	// which reader visits first.
-	Reach rows;
-	if (shared[node_index]) {
-		for (idx_t i = 0; i < incoming.size(); i++) {
-			if (seen[node_index].emplace(incoming.rows[i], incoming.parents[i]).second) {
-				rows.Add(incoming.rows[i], incoming.parents[i]);
-			}
+	kept.Reserve(rows.size());
+	for (idx_t i = 0; i < rows.size(); i++) {
+		if (!Failed(rows.rows[i])) {
+			kept.Add(rows.rows[i], rows.parents[i]);
 		}
-	} else {
-		rows = incoming;
 	}
-	container.rows_in += rows.size();
+	return kept;
+}
+
+const DecideDescent::Reach *DecideDescent::Gate(const DecideNode &node, DataChunk &chunk, const Reach *reaching,
+                                                Reach &own) {
 	for (idx_t k = 0; k < node.when.size(); k++) {
 		// A reducer's own `when` is read in its terms' filter, at its place there (DecideNode::filter_group,
 		// filter_part).
@@ -1140,26 +1103,29 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 		current_rank.part = node.filter_part;
 		current_rank.group = filter ? node.filter_group : 0;
 		current_rank.position = filter ? k : 0;
-		auto truth = Truth(*node.when[k], chunk, rows);
+		auto truth = Truth(*node.when[k], chunk, *reaching);
 		read_block = DecideBlock::ROUTE;
 		current_rank.part = current_rank.group = current_rank.position = 0;
 		Reach kept;
-		for (idx_t i = 0; i < rows.size(); i++) {
-			if (truth[i] == 1 && !Failed(rows.rows[i])) {
-				kept.Add(rows.rows[i], rows.parents[i]);
+		kept.Reserve(reaching->size());
+		for (idx_t i = 0; i < reaching->size(); i++) {
+			if (truth[i] == 1 && !Failed(reaching->rows[i])) {
+				kept.Add(reaching->rows[i], reaching->parents[i]);
 			}
 		}
-		rows = std::move(kept);
-		if (rows.empty()) {
-			return;
+		own = std::move(kept);
+		reaching = &own;
+		if (own.empty()) {
+			return nullptr;
 		}
 	}
-	current_rank.phase = node.route_rank.phase;
-	current_rank.step = node.route_rank.step;
-	current_rank.clause = node.route_rank.clause;
-	if (rows.empty()) {
-		return;
-	}
+	return reaching;
+}
+
+const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk &chunk, const Reach &rows,
+                                                     idx_t row_base, Reach &own_children) {
+	auto &node = *tree.nodes[node_index];
+	auto &container = containers[node_index];
 	vector<bool> present;
 	KeySpellings spelled;
 	DataChunk keys;
@@ -1177,60 +1143,126 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 	auto unclassed = [&](idx_t i) {
 		return !present[i] && !node.holds_rows_in_no_class && !reducer;
 	};
-	vector<idx_t> grouped;
-	for (idx_t i = 0; i < rows.size(); i++) {
-		if (!Failed(rows.rows[i]) && !unclassed(i)) {
+	// The rows that take a slot: those no read failed on, in a class of the key or held anyway.
+	const auto count = rows.size();
+	const auto none_failed = !active_failed || active_failed->empty();
+	unsafe_vector<idx_t> grouped;
+	grouped.reserve(count);
+	for (idx_t i = 0; i < count; i++) {
+		if ((none_failed || !Failed(rows.rows[i])) && !unclassed(i)) {
 			grouped.push_back(i);
 		}
 	}
-	vector<idx_t> slots(rows.size(), DConstants::INVALID_INDEX);
+	unsafe_vector<idx_t> slots(count, DConstants::INVALID_INDEX);
 	FindGroups(node_index, rows, grouped, keys, present, row_base, slots);
-	Reach children;
-	Reach stored;
-	vector<idx_t> stored_slots;
-	auto &landing = landed[node_index];
-	for (idx_t i = 0; i < rows.size(); i++) {
-		const auto row = rows.rows[i];
-		if (Failed(row)) {
-			continue;
-		}
-		if (unclassed(i)) {
-			if (scope) {
-				children.Add(row, rows.parents[i]);
-			}
-			continue;
-		}
-		const auto slot = slots[i];
-		// A collated key's own least spelling over the rows the node holds in the group.
-		if (!spelled.sort_keys.empty()) {
-			auto &groups = container.groups;
-			groups.spellings.resize(groups.size());
-			auto &spelling = groups.spellings[slot];
-			spelling.Fold(spelling.least.empty() ? groups.Key(slot) : spelling.label, spelled.spelled,
+	// A collated key's own least spelling over the rows the node holds in the group.
+	if (!spelled.sort_keys.empty()) {
+		auto &groups = container.groups;
+		groups.spellings.resize(groups.size());
+		for (auto i : grouped) {
+			auto &spelling = groups.spellings[slots[i]];
+			spelling.Fold(spelling.least.empty() ? groups.Key(slots[i]) : spelling.label, spelled.spelled,
 			              spelled.sort_keys, i);
 		}
-		children.Add(row, scope ? rows.parents[i] : slot);
-		// A row in no group of a G has no value of it (language/guide.md §5.2), so it holds no entry of the G; it still
-		// reaches the G's operand, as flat computes a clause's terms on every kept row and a side plan a data reducer's
-		// arguments, so an error there is raised (§7.2).
-		if (!present[i] && reducer) {
-			continue;
+	}
+	// A row in no group of a G has no value of it (language/guide.md §5.2), so it holds no entry of the G; it still
+	// reaches the G's operand, as flat computes a clause's terms on every kept row and a side plan a data reducer's
+	// arguments, so an error there is raised (§7.2). Where every row takes a slot and an entry, they are the rows
+	// themselves.
+	Reach own_stored;
+	unsafe_vector<idx_t> own_slots;
+	const Reach *stored = &rows;
+	const unsafe_vector<idx_t> *stored_slots = &slots;
+	bool every_row = grouped.size() == count;
+	for (idx_t k = 0; k < grouped.size() && every_row && reducer; k++) {
+		every_row = present[grouped[k]];
+	}
+	if (!every_row) {
+		own_stored.Reserve(grouped.size());
+		own_slots.reserve(grouped.size());
+		for (auto i : grouped) {
+			if (present[i] || !reducer) {
+				own_stored.Add(rows.rows[i], rows.parents[i]);
+				own_slots.push_back(slots[i]);
+			}
 		}
-		stored.Add(row, rows.parents[i]);
-		stored_slots.push_back(slot);
-		// A reader reads a G's or O's value at its group or timeline, and an `else` at the anchor's own row
-		// (language/guide.md §5.6; DecideNodeContainer::routed).
-		if (!scope && landing[row] == DConstants::INVALID_INDEX) {
-			landing[row] = node.fallback ? row_base + row : slot;
+		stored = &own_stored;
+		stored_slots = &own_slots;
+	}
+	// A reader reads a G's or O's value at its group or timeline, and an `else` at the anchor's own row
+	// (language/guide.md §5.6; DecideNodeContainer::routed).
+	if (!scope) {
+		auto landing = landed[node_index].data();
+		for (idx_t k = 0; k < stored->size(); k++) {
+			const auto row = stored->rows[k];
+			if (landing[row] == DConstants::INVALID_INDEX) {
+				landing[row] = node.fallback ? row_base + row : (*stored_slots)[k];
+			}
 		}
 	}
-	Store(node_index, chunk, stored, stored_slots, row_base);
-	Reach reached;
-	for (idx_t i = 0; i < children.size(); i++) {
-		if (!Failed(children.rows[i])) {
-			reached.Add(children.rows[i], children.parents[i]);
-		}
+	Store(node_index, chunk, *stored, *stored_slots, row_base);
+	// An E's rows reach its children in the slots they arrived in, every row it reads, as `per` never gates them; a
+	// G's or O's in its own, those that took one.
+	if (scope) {
+		return rows;
 	}
+	own_children.rows.resize(grouped.size());
+	own_children.parents.resize(grouped.size());
+	for (idx_t k = 0; k < grouped.size(); k++) {
+		own_children.rows[k] = rows.rows[grouped[k]];
+		own_children.parents[k] = slots[grouped[k]];
+	}
+	return own_children;
+}
+
+void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, const Reach &incoming) {
+	auto &node = *tree.nodes[node_index];
+	active_node = node_index;
+	active_failed = &failed_rows[node_index];
+	active_row_base = row_base;
+	// Its `when` first, where flat reads it (DecideNode::when_rank), then the rest at its own rank.
+	current_rank = node.when_rank;
+	if (context.interrupted) {
+		throw InterruptException();
+	}
+	auto &container = containers[node_index];
+	// Shared DAG edges may route the same row and context twice. Its input value is inserted once, independently of
+	// which reader visits first.
+	Reach own;
+	const Reach *reaching = &incoming;
+	if (shared[node_index]) {
+		for (idx_t i = 0; i < incoming.size(); i++) {
+			if (seen[node_index].emplace(incoming.rows[i], incoming.parents[i]).second) {
+				own.Add(incoming.rows[i], incoming.parents[i]);
+			}
+		}
+		reaching = &own;
+	}
+	container.rows_in += reaching->size();
+	reaching = Gate(node, chunk, reaching, own);
+	if (!reaching) {
+		return;
+	}
+	auto &rows = *reaching;
+	current_rank.phase = node.route_rank.phase;
+	current_rank.step = node.route_rank.step;
+	current_rank.clause = node.route_rank.clause;
+	if (rows.empty()) {
+		return;
+	}
+	Reach own_children;
+	const Reach *children = &rows;
+	if (container.groups.per_row) {
+		// An E per row: each row it holds is a slot of its own, its entry, and its children read every row it holds,
+		// as `per` never gates them.
+		current_rank.position = 0;
+		Reach unfailed;
+		Store(node_index, chunk, Unfailed(rows, unfailed), {}, row_base);
+	} else {
+		children = &HoldKeyed(node_index, chunk, rows, row_base, own_children);
+	}
+	Reach unfailed;
+	auto &reached = Unfailed(*children, unfailed);
 	container.rows_out += reached.size();
 	for (auto child : node.children) {
 		Visit(child, chunk, row_base, reached);
@@ -1376,7 +1408,9 @@ void DecideDescent::Finish() {
 		decision_groups[scope].ranks = DescentRanks(decision_sort_keys[scope]);
 	}
 	for (idx_t n = 0; n < tree.nodes.size(); n++) {
-		DescentRankGroups(containers[n].groups);
+		if (!containers[n].groups.per_row) {
+			containers[n].groups.ranks = DescentGroupRanks(containers[n].groups);
+		}
 		if (tree.nodes[n]->kind == DecideNodeKind::FRAME && containers[n].layout.order != DConstants::INVALID_INDEX) {
 			Timelines(n);
 		}
@@ -1399,7 +1433,26 @@ string DecideDescent::Dump() const {
 				out << (i ? ", " : "") << values[i].ToString();
 			}
 		};
-		for (idx_t slot = 0; slot < groups.size(); slot++) {
+		if (groups.per_row) {
+			// A node per row's slots are its entries, numbered here alone, by enclosing slot and then row: no reader
+			// numbers them.
+			vector<idx_t> order(container.Count());
+			std::iota(order.begin(), order.end(), 0);
+			std::stable_sort(order.begin(), order.end(), [&](idx_t left, idx_t right) {
+				return container.parent_slots[left] != container.parent_slots[right]
+				           ? container.parent_slots[left] < container.parent_slots[right]
+				           : container.rows[left] < container.rows[right];
+			});
+			vector<idx_t> ranks(order.size());
+			for (idx_t rank = 0; rank < order.size(); rank++) {
+				ranks[order[rank]] = rank;
+			}
+			for (idx_t slot = 0; slot < container.Count(); slot++) {
+				out << "  group " << slot << " rank " << ranks[slot] << " parent " << container.parent_slots[slot]
+				    << " key=(" << container.rows[slot] << ")\n";
+			}
+		}
+		for (idx_t slot = 0; slot < groups.size() && !groups.per_row; slot++) {
 			out << "  group " << slot << " rank " << groups.ranks[slot] << " parent " << groups.parent_slots[slot]
 			    << " key=(";
 			print(groups.Key(slot));
