@@ -22,19 +22,8 @@ wrong admit is a wrong answer.
   to the pair rows. A hand plan of this shape ran in 64 ms at 600 × 600, where Gurobi took 1.47 s.
 - **Lean.** No new shared helper until a second rule needs it; no case outside the shapes above.
 
-## O1-1 — The IR records the two sides of a cross product
-
-- **Problem.** A rule reads only the IR, and the IR does not say whether the source is a complete cross product or which
-  columns come from which side. O1's first fact (every left row meets every right row) depends on it.
-- **Change.** `DirectIR::Read` records, when DECIDE's child is a `LogicalCrossProduct`, the source bindings of each side;
-  empty otherwise. Nothing else looks through operators: a projection, filter or join above the cross product leaves it
-  empty.
-- **Done when.** `test_decidb_direct_ir.cpp` has a case for a cross product (one-side filter included), a cross-side
-  filter (empty) and a single table (empty), and `build/release/test/unittest` passes on those cases by name.
-
 ## O1-2 — O1's recognition
 
-- **Needs.** O1-1.
 - **Problem.** No rule recognizes the matching shape in the scope rulings.
 - **Change.** `o1_monge_assignment_rule.cpp` with `CheckCondition` for the rulings' source, constraint and objective
   conditions, returning the two key sides, the position columns and the rank direction (equal ranks, or opposite for
@@ -59,7 +48,7 @@ wrong admit is a wrong answer.
 
 ## O1-4 — O1's standard tests
 
-- **Needs.** O1-1. Written against the scope rulings; its `require` runs pass once O1-3 is combined.
+- **Needs.** Written against the scope rulings; its `require` runs pass once O1-3 is combined.
 - **Problem.** O1 has none of the standard tests.
 - **Change.**
   - A `RuleFixture` in `_direct_rule_fixtures.py`, with near misses: a cross-side filter, `per l.id`, a computed

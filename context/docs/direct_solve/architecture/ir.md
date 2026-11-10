@@ -36,6 +36,11 @@ mark it not proved.
   puts a row with a NULL in no class; an element that stands for a relation's columns (`per D:`) takes NULL as a value.
   The source columns alone cannot tell the two apart, which is why the key, not its slots, is in the IR.
   `DirectKeyElement::Copy()` copies an element.
+- `cross_product` holds the source columns of each side when DECIDE's own child is a cross product, and is empty
+  otherwise. Every row of one side then meets every row of the other, which a rule cannot learn from the columns. A
+  one-side `WHERE` keeps it, because filter pushdown runs before the DECIDE optimizer and places the filter inside its
+  side; a filter across both sides makes a join, and any operator between DECIDE and the cross product leaves it
+  empty. Looking through operators would need a proof per operator, so the front end does not.
 - A per-row comparison carries the solver path's own reading of it (`DecideReadSingletonRow`): `singleton_row`
   when it is a bound on one decision, and `bound`, the interval of values it admits as DuckDB evaluates the comparison
   (D64). `variable_bound` is set when the solver path folds it into its decision's box instead of emitting a model row
