@@ -26,25 +26,46 @@ wrong admit is a wrong answer.
   to the pair rows. A hand plan of this shape ran in 64 ms at 600 × 600, where Gurobi took 1.47 s.
 - **Lean.** No new shared helper until a second rule needs it; no case outside the shapes above.
 
-## O1-5 — O1's docs leave Prototype
+## O1-9 — O1 ranks each side on its own rows
 
-- **Problem.** `definition.md` lists O1 as Prototype for two reasons the rule settles: complete pair support and
-  numeric ordering.
-- **Change.**
-  - `definition.md` is marked Exact, its example uses `per l`, and each condition in the scope rulings gets its proof.
-    Complete support follows from the cross product. Duplicate rows share a cost, so one copy of each pair suffices.
-    The ordering is exact on the input values and rounding stays far inside the solver's tolerance. A declared
-    `NOT NULL` position rules out the free item a dropped NULL term makes.
-  - `done.md` in the done format, from the code (`o1_monge_assignment_rule.cpp`) and its tests: what it admits
-    (including the casts it looks through and the constant factor in the part's scale), what it declines (a maximized
-    distance, `pow`/`**`/`^`, `TRY_CAST`, a nullable position), the plan (three source reads, the hidden coefficient
-    column), and where it differs from the solver.
-  - O1's status row in `../../README.md` reads Works, and its links table points to O1's `done.md` and `todo.md`.
-- **Done when.** Every claim in `done.md` names the test that holds it. Doc-only: no tests.
+- **Problem.** O1's plan does its work on the pairs, not on the rows of each side. It reads the cross product three
+  times, groups all n² pairs into classes twice on the whole row key, joins all n² pairs back to the classes twice, and
+  runs a window over all n² pairs to pick one copy of each matched class pair. At 3,200 suppliers per side (10.24M
+  pairs) it takes 51 s of CPU and 7.8 s of latency, where a hand-written plan of the same answer takes 47 ms
+  (`run.py --compare --sf 0.32 --queries o1`).
+- **Cause.** A cross product is never a repeatable chain (`DirectRepeatableSourceChain`), so with three reads the
+  source reader materializes all n² pairs, and every stage reads them.
+- **Change (architect review, 2026-11-10).** Eager aggregation (Yan–Larson), applied to windows: the work whose keys
+  come from one side runs below the cross product, on that side's rows.
+  - `Rule::Apply` reads the source once (`source_reads = 1`, `TakeRecomputedSource()`), which is DECIDE's own cross
+    product, and builds one `DirectSourceReader` per child, two reads each, so each side makes the existing choice
+    between a rescan and an n-row CTE. The cross-product node is reused as the plan's own cross product, never freed
+    (the driver holds a reference to it).
+  - `Rank`, per side: one window of `ROW_NUMBER`, `RANK` and `DENSE_RANK`, ordered by the position in the side's
+    direction, then every other key column; a second window gives the class count as the greatest `DENSE_RANK`.
+    `DENSE_RANK` is the class rank; `ROW_NUMBER = RANK` marks one copy of each class.
+  - `CheckPairs`: the written coefficient and its `DirectCheckNumber` over the cross product of one read of each side,
+    in `DirectAllRowsValid`, gating the left reader (A1's verify-then-stream). The verdict evaluates the coefficient
+    even where `DirectCheckNumber` gives no check, so DuckDB's own evaluation error still raises.
+  - `Assign`, over the cross product of the two ranked sides: the source columns, then `x` = equal dense ranks and
+    both copies first, then the class-count check (`DirectRaiseUnless`) as the validated column.
+  - The right reader is finished outermost: the verdict reads the right side's CTE.
+  - Dead after the change, deleted with it: `RankClasses`' aggregate and count window, `PlanBuilder::Join`, the pair
+    window, the validated coefficient column.
+- **Rulings (owner, 2026-11-10).**
+  - The every-pair check is the gate over one extra pass of the pairs, not a proof over each side's extreme positions.
+  - A row check or bound table under O1 is a `D_ASSERT`: O1's shape makes neither, so a decline would be unreachable.
+  - The class count is a second window over the dense rank, not a second sort.
+  - `../../architecture/rules.md` names one reader per side as the way a rule reads a cross-product source.
+- **Tests to add.** A side that is materialized (a join or `random()` on one side, and on both); duplicate rows with a
+  NULL key; -0.0 against 0.0 and a NaN in a key column that is not the position, where window peers and the old
+  grouping could differ.
+- **Done when.** `run.py --compare --sf 0.32 --queries o1` gives a CPU ratio within 5 of the hand plan; the O1 tests
+  pass (`./test/decide/run_tests.sh -n 2 -k "o1_monge or O1 or comparator"`); C++ `unittest "[decidb]"` passes.
 
 ## O1-6 — O1's Performance is measured
 
-- **Needs.** O1-5. A quiet machine; the owner starts the run.
+- **Needs.** O1-9. A quiet machine.
 - **Problem.** `done.md` has no Performance section, which every working class has.
 - **Change.** A hand plan `benchmark/decide/direct_solve/hand/o1.sql` and an O1 query in the benchmark, measured as
   `../../../performance/benchmarking/direct_solve.md` § Comparing with a hand-written plan describes, against Gurobi and
@@ -61,16 +82,3 @@ wrong admit is a wrong answer.
   records the primary-key columns on the same walk. Every other column key declines.
 - **Done when.** An oracle case with a primary key answers under `require`; the same query without the key declines;
   `./test/decide/run_tests.sh -n 2 -k o1_monge` passes.
-
-## O1-8 — The number-range warning on O1's plan
-
-- **Decision needed.**
-- **Problem.** With `INT` positions near 2e9, the solver path prints "a very large or very small number may make this
-  answer inaccurate"; O1's plan prints nothing. The warning describes the solver's floating-point model. Rank pairing
-  compares the positions themselves, so its answer has no such error.
-- **Options.**
-  1. No warning on O1's plan; `done.md` lists it as a difference from the solver. No code.
-  2. Warn as the solver does, from the same coefficient range (R1's plan does this). A range check on every pair row.
-- **Recommendation.** Option 1: the warning would claim an inaccuracy the plan does not have.
-- **Done when.** Option 1: the difference is in `done.md`. Option 2: a test compares the warning under `require` and
-  `off`, and `./test/decide/run_tests.sh -n 2 -k o1_monge` passes.

@@ -3,8 +3,8 @@
 `benchmark/decide/direct_solve/run.py` times direct solve against the forced solver, Gurobi and HiGHS, on the same
 DECIDE query as the data grows. Direct solve is the optimizer rewrite that answers some DECIDE problems with relational
 operators instead of a solver ([`../../direct_solve/README.md`](../../direct_solve/README.md)). The numbers feed the
-paper's direct-solve section. There is a query for each direct-solve rule that works today: A1, and S1, R1 and N1 in two
-forms each, many small groups and one bound over every row.
+paper's direct-solve section. There is a query for each direct-solve rule that works today: A1, O1, A2 in four forms,
+and S1, R1 and N1 in two forms each, many small groups and one bound over every row.
 
 ## Running
 
@@ -16,7 +16,7 @@ python3 benchmark/decide/direct_solve/run.py --sf 0.125 0.25 --queries r1  # a s
 | Option | Default | Meaning |
 |---|---|---|
 | `--sf` | `0.125` doubling to `512` | TPC-H scale factors, run smallest first |
-| `--queries` | every file in `queries/` | `s1`, `s1_global`, `a1`, `r1`, `r1_global`, `n1`, `n1_groups` |
+| `--queries` | every file in `queries/` | the file names in `queries/`, such as `s1`, `a2_keyed`, `o1` |
 | `--modes` | `direct direct_1t gurobi` | must include `direct`, the baseline for every speedup and objective; `highs` is also available |
 | `--repeats` | 3 (5 under `--compare`) | runs of every mode per cell, or of each side under `--compare` |
 | `--repeat-budget` | 1800 | a run past this many seconds is its cell's last, so the `runs` column can read less than `--repeats` |
@@ -52,7 +52,9 @@ capacity and `ps_supplycost` its unit cost.
 ## Queries
 
 Each query uses one table, `partsupp`, and only SELECT, DECIDE, FROM, SUCH THAT and the objective: no joins, filters
-or subqueries. The time then measures the optimization and not other operators.
+or subqueries. The time then measures the optimization and not other operators. O1 is the exception: its decisions are
+the pairs of a cross product, so it reads `supplier` twice, and its decision count is the square of the supplier count
+(10,000 × sf).
 
 | Query | Rule | DECIDE part | What it asks |
 |---|---|---|---|
@@ -62,6 +64,7 @@ or subqueries. The time then measures the optimization and not other operators.
 | `r1.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty AND SUM(ship) by (ps_partkey) <= 5000`, `MAXIMIZE SUM(ps_supplycost * ship)` | each part ships at most 5,000 units across its suppliers, at the highest total cost |
 | `r1_global.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND 1 AND SUM(ship * ps_supplycost) <= 0.1 * SUM(ps_supplycost)`, `MAXIMIZE SUM(ps_availqty * ship)` | take a fraction of each offer, spending at most a tenth of the total cost, to secure the most stock |
 | `n1.sql` | N1, Euclidean ball | `ship(REAL)`, `SUM(POWER(ship, 2)) <= 1000000`, `MAXIMIZE SUM(ps_supplycost * ship)` | ship along each offer's cost, with one limit on the sum of squared amounts over every offer |
+| `o1.sql` | O1, Monge assignment | `x(BOOL)` over `supplier l CROSS JOIN supplier r`, `per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1`, `MINIMIZE SUM(l.s_acctbal * r.s_acctbal * x)` | pair every supplier with one partner, richest with poorest, for the least total product of balances |
 | `n1_groups.sql` | N1, Euclidean ball | `ship(REAL)`, `SUM(POWER(ship, 2)) by (ps_suppkey) <= 1000000`, `MAXIMIZE SUM(ps_supplycost * ship)` | the same, with a limit for each supplier over its 80 offers |
 
 A1 minimizes a square so that each row has an optimum inside its range and the solver faces a QP, not a problem
@@ -122,6 +125,7 @@ that is not the plan, so each carries what its rule owes:
 | `a2*.sql` | the class value computed once from a first read and checked finite (the checks of the class's sums and of its answer); the value clamped into its box; `-0.0` turned into `0.0` |
 | `n1.sql`, `n1_groups.sql` | each target and its square checked finite while `h` is summed; `h` checked finite; the scale `(value / sqrt(h)) * radius`; the warning for an `h` below the normal range on a row that has a value; the answer 0 for an `h` of 0; one ball per group, joined back by the key |
 | `r1.sql`, `r1_global.sql` | the price ranking by one window; offers at the same price share what the budget leaves them in proportion to their room, so the answer is the same on every run (a `ROWS` frame would split a tie by the order the rows arrive); the box clamp; a budget read from the data comes from a first read |
+| `o1.sql` | each side ranked by one window, the right side descending, and equal ranks selected; supplier rows are distinct and both sides are one table, so the rule's distinct classes, one-copy window and class-count check have nothing to do, and a product of two balances is always finite |
 | `s1.sql`, `s1_global.sql` | the ranking by one window and the cut at the bound; for a bound read from the data, the check that it is not below the lower bound 0 (infeasible) |
 
 A comparator is cheaper than the rule's plan only where the plan does work the comparator does not need. Where a check

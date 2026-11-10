@@ -1,11 +1,9 @@
 # O1 — Monge assignment
 
-Catalogue status: Prototype.
+Catalogue status: Exact.
 
 > Any assignment with the same objective value is acceptable. Wherever this text describes a stable or deterministic
 > tie order, it describes the catalogue's construction, not a requirement on the result.
-
-Exact mathematical translation, but still a prototype because complete pair support and the required numeric ordering must be proved from the DECIDE plan.
 
 ## Worked example
 
@@ -28,13 +26,19 @@ L3 -\> R3
 Its total penalty is 1 + 4 + 1 = 6.
 
 ```sql
+CREATE TABLE left_items (id INTEGER, position DOUBLE NOT NULL);
+CREATE TABLE right_items (id INTEGER, position DOUBLE NOT NULL);
+
 SELECT l.id AS left_id, r.id AS right_id, selected
 FROM left_items l CROSS JOIN right_items r
 DECIDE selected(BOOL)
-SUCH THAT per l.id: sum(selected) by (l.id) = 1
-AND per r.id: sum(selected) by (r.id) = 1
+SUCH THAT per l: sum(selected) by (l) = 1
+AND per r: sum(selected) by (r) = 1
 MINIMIZE SUM(POWER(l.position-r.position, 2)*selected);
 ```
+
+`per l` makes each distinct row of `left_items` one class, so a duplicate row shares its class, and `NOT NULL` on the
+positions is what lets the plan rely on them (see Correctness).
 
 ```sql
 WITH left_ranked AS (
@@ -118,11 +122,22 @@ For distance, consider two left positions a \<= a' and two right positions b \<=
 
 For a product objective, the rearrangement inequality gives equal ranks for maximization and opposite ranks for minimization. Stable identity ordering resolves position ties without changing the objective.
 
+Every left row meets every right row when DECIDE's source is a cross product: filter pushdown runs before the DECIDE
+optimizer, so a filter on one side sits inside that side, and a filter across both sides turns the cross product into
+a join, which is not O1. The classes of a relation key are the distinct rows of their side, so the copies of one row
+share its position and every pair of two classes costs the same on each of its copies; choosing one copy of each
+matched pair reaches the optimum of the classes. A NULL position would make its item free: `SUM` drops a NULL term, so
+that item costs nothing against any partner and the rank order no longer places it. A position declared `NOT NULL` on
+the table its side scans rules this out for every row the plan reads.
+
+The rank order is computed on the input values themselves, so the pairing is exact for them. The costs the objective
+evaluates round each term once, far inside the solver's own tolerance.
+
 ## Eligibility conditions
 
-> • Every decision is BOOL, and the normalized child is proved to contain exactly one decision for every pair of two unique, non-NULL side identities.
+> • Every decision is BOOL, and DECIDE's source is a cross product of the two sides, so it holds a decision for every pair of a left row and a right row.
 >
-> • Pair support is a complete cross product with no filters, missing pairs, or duplicate pair decisions.
+> • No filter reads both sides; a filter on one side only changes that side's rows.
 >
 > • The only coupling constraints require exactly one selected pair per left identity and exactly one per right identity.
 >
@@ -134,12 +149,8 @@ For a product objective, the rearrangement inequality gives equal ranks for maxi
 >
 > • There is no additional objective term, secondary objective, or other coupling constraint.
 >
-> • Positions and scale values are finite and non-NULL, and subtraction, absolute value, squaring, multiplication, and comparison preserve the required ordering under DECIDE's numeric policy.
+> • Positions are columns declared `NOT NULL` on the tables their sides scan directly; scale values are finite constants.
 >
 > • Ties use stable internal identities rather than an unproved user key.
 >
 > • The result emits one Boolean assignment for every original pair row and preserves DECIDE's source cardinality, schema, ordering, status, and output mapping.
-
-## Prototype limitations
-
-The rank construction is mathematically exact, but DeciDB must still prove from a general child plan that the pair relation is a complete, duplicate-free cross product with the required identities and masks. It must also certify that evaluated numeric values retain the distance or product ordering. If either fact cannot be proved, the query remains on the general solver path.
