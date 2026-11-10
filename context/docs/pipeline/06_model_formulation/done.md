@@ -519,8 +519,15 @@ effective bound magnitude plus its worst-case term contribution, plus a 1-unit
 margin covering the integer-step band of the `<>` rewrite; its per-row worst case,
 `DecideRowTermRange()`, sums each term's largest magnitude and serves only it. Every
 other Big-M is sized from the expression's **signed interval**, walked by
-`DecideRowSignedRange()`: ABS, `<>` and MIN/MAX share that one walk, and terms that
-cancel (`c*x - c*y`) are measured together rather than each at its worst.
+`SignedRowRange::Of` (`ilp_linearization_internal.hpp`; `DecideRowSignedRange()` reads a constraint's row through it):
+ABS, `<>`, the value rewrite's helpers and every MIN/MAX auxiliary (flat, two-level and composed) share that one walk,
+and terms that cancel (`c*x - c*y`) are measured together rather than each at its worst. Each end is walked on its own,
+so a decision with a positive coefficient and a floor gives the row a finite floor whatever its ceiling. An end that no
+contributing box derives is **open** (`lo_open` / `hi_open`; `Lo()` / `Hi()` read it as an infinity). An end that every
+box derives but whose value overflows a DOUBLE is not open: it is a number too large for a DOUBLE, folded into the
+auxiliary's box as an infinity, and the hand-off names the clause that reads it, on every path and both backends, as it
+names every sum past a DOUBLE. Reading it as open would make one number an error in one clause and the solver's to judge
+in another.
 `AuxRange::Span()` is the auxiliary-family twin, for the MIN/MAX auxiliaries that are
 pinned against a whole expression rather than compared to a fixed bound. An
 `AuxRange` covers its members and nothing else: each end starts at the first member
@@ -779,7 +786,8 @@ pins it onto one. In the easy direction the outer comparison supplies the closin
 and the envelope alone is exact. Every term's reach is walked once by
 `ComposedTermRange` and reused three times — as the auxiliary's box, as the closing
 Big-M, and as the box of any column the native arm pins — so the arms cannot disagree
-about what the term can reach.
+about what the term can reach. It walks each end through the one signed walk (§ Big-M constants), so a composed term
+keeps every finite end the flat path keeps for the same term.
 
 ### `<>` disjunctions
 
@@ -841,8 +849,8 @@ it becomes `SUM(x) >= 1`.
 
 `DecideRowSignedRange` computes the interval, respecting coefficient signs where
 `DecideRowTermRange` takes magnitudes — a Big-M only has to dominate a range, but a
-collapse has to know which side of `K` it lies on. An unbounded side yields an infinite
-endpoint rather than declining outright, because both collapses are one-sided: a decision
+collapse has to know which side of `K` it lies on. An open side reads as an infinite
+endpoint (`Lo()` / `Hi()`) rather than declining outright, because both collapses are one-sided: a decision
 that is merely non-negative has a finite floor and no ceiling, and that floor alone
 licenses `>= K+1`.
 
@@ -950,8 +958,7 @@ formulation choice — the arm is known at the moment the variable would be allo
 **Each `t` is boxed by its own row.** `EmitNativeAbs` brackets the argument column from
 the row's own C1: `inner_r = k_r - sum_{v != aux} c_v x_v`, walked with
 `DecideRowSignedRange` (skipping the auxiliary) and folded in with
-`AuxRange::CoverRowSided` — the same per-row machinery
-`LinearizeMinMaxConstraints` already uses, keeping each end it can derive
+`AuxRange::CoverRowEnds` — the same per-row walk every MIN/MAX auxiliary uses, keeping each end it can derive
 independently. One interval per link, the **cover over rows**, would hand every row
 but the extreme one more room than it can reach, and a single unbounded row would leave
 every row's column free. A slack continuous column is a measured cost at the root LP relaxation, which is

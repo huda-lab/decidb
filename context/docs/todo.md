@@ -7,7 +7,6 @@ Read first: `.claude/CLAUDE.md`, `pipeline/04_canonicalizer/done.md` § 1, `dire
 Checks: each task's **Done when**; the full gate in `direct_solve/framework/todo.md` § How to work any task, once at
 combine.
 
-## 1. Owner decision, then work (FRM-2, then FRM-4: both edit `linearization_minmax.cpp`)
+## 1. Owner decision, then work
 
-- [ ] FRM-2 A composed extremum's box keeps its finite end — pipeline/06_model_formulation/todo.md § FRM-2
 - [ ] FRM-4 The two-level objective under a factor of unknown sign — pipeline/06_model_formulation/todo.md § FRM-4
