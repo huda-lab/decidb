@@ -341,8 +341,8 @@ test/decide/capture_suite_log.sh compare OLD NEW [--limit N]   # query by query
 the wrapper runs becomes one JSON line in its xdist worker's file: the mode, the test, the environment the wrapper
 added, the SQL, the exit code, stdout and stderr. The script runs the four modes of `run_direct_matrix.sh` (`auto`,
 `off`, `serializer`, `highs`). Each mode's folder also holds `junit.xml`, `pytest.log` and a manifest of the commit, the
-uncommitted `src` files and the binary's checksum. Any other `DECIDB_` variable stays on, so a capture under
-`DECIDB_EVALUATOR=tree` is a log to compare with flat's. Only queries that go through the wrapper are logged:
+uncommitted `src` files and the binary's checksum. Any other `DECIDB_` variable stays on, as it does for the suite.
+Only queries that go through the wrapper are logged:
 `golden/capture.sh` and the fuzz runner call the binary themselves.
 
 **Compare.** `suite_log.py` pairs queries by SQL and wrapper environment, never by test, since a session fixture's query

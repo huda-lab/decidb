@@ -150,7 +150,7 @@ def test_a_grouped_root_holds_one_entry_per_group(decidb_cli, case):
     clause, groups = GROUPED_ROOT_CASES[case]
     sql = f"""SELECT id, x FROM (VALUES (1, 'a', 1.0), (2, 'a', 2.0), (3, 'b', 3.0)) t(id, g, w) DECIDE x(INT)
         SUCH THAT x <= 3 AND {clause} MAXIMIZE sum(x) ORDER BY id"""
-    _, containers = construction(decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}), sql)
+    _, containers = construction(decidb_cli, sql)
     roots = [node for node in nodes(containers) if node["text"] == clause]
     assert [(node["entries"], node["instances"]) for node in roots] == [(groups, groups)], containers
 
@@ -163,7 +163,7 @@ def test_a_frame_with_no_else_keeps_one_entry_per_variant(decidb_cli):
     clause = "per (): y <= at(last: t.v) over (t.p)"
     sql = f"""SELECT id, y FROM (VALUES (1, 1, 4), (2, 2, 6), (3, 3, 7)) t(id, p, v) DECIDE per (): y(INT)
         SUCH THAT y <= 9 AND {clause} MAXIMIZE y ORDER BY id"""
-    _, containers = construction(decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}), sql)
+    _, containers = construction(decidb_cli, sql)
     roots = [node for node in nodes(containers) if node["text"] == clause]
     assert [(node["entries"], node["instances"]) for node in roots] == [(1, 1)], containers
 
@@ -226,7 +226,5 @@ postorder=[0,2,1,5,4,3]
 @pytest.mark.parametrize("case", list(PINNED_DUMPS))
 def test_the_construction_writes_the_tree_it_wrote(decidb_cli, case):
     decide, expected = PINNED_DUMPS[case]
-    tree, _ = construction(
-        decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}), f"SELECT id FROM {_PINNED_ROWS} DECIDE {decide}"
-    )
+    tree, _ = construction(decidb_cli, f"SELECT id FROM {_PINNED_ROWS} DECIDE {decide}")
     assert tree == expected

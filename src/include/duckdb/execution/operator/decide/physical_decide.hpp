@@ -22,7 +22,6 @@ namespace duckdb {
 class DecideGlobalSinkState;
 
 class DecideDescent;
-class DecideEvaluationRecord;
 class DecideRowStore;
 
 //! Per-Finalize cache of TransformToChunkExpression results, keyed by the original
@@ -300,45 +299,6 @@ private:
     //! Layer 8 never re-selects: it looks up the name stage 05 recorded.
     SolverBackend PlannedSolverBackend() const;
 
-	//! PHASE 1.3: the annotated tree of the one pass (deck pp. 81, 99): every expression a later phase reads on a row,
-	//! registered for the pass to evaluate (DecideRowStore).
-	void RegisterEvaluation(ClientContext &context, ChunkExprCache &chunk_expr_cache, DecideRowStore &store) const;
-	//! PHASE 1.4: each frame selector's timelines and selections (gstate.frame_maps), then
-	//! the values the frames read as columns beside the one pass's
-	//! (DecidePreparedModel::frame_columns), so every later phase reads them as data.
-	void BuildFrames(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache) const;
-	//! D73, after the scope checks: the rows of a selected position read one payload
-	//! (CheckDecideFramePeers).
-	void CheckFramePeers(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                     ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                     const vector<KeyedMapping> &keyed_mappings) const;
-	//! PHASE 1.5: one row→class mapping per key scope -- a keyed decision's key columns,
-	//! or a helper decision's `by` key over the rows its clause keeps
-	//! (KeyedScopeInfo::value_link) -- and each auxiliary's absence (gstate.absent_reads), resolved in the order
-	//! the definitions read each other.
-    vector<KeyedMapping> BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                              ChunkExprCache &chunk_expr_cache,
-                                              PerGroupCache &per_group_cache) const;
-	//! The mapping of key scope `scope_idx`, once every scope and auxiliary its link reads is resolved in
-	//! `keyed_mappings` and gstate.absent_reads (BuildKeyedMappings).
-	KeyedMapping BuildScopeMapping(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                               ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-	                               const vector<KeyedMapping> &keyed_mappings, idx_t scope_idx) const;
-	//! The member rows of `link`, a reducer's helper: the rows its clause keeps (into `kept`), then those its own
-	//! filter keeps, less each row in no class of its own `per` and each row at which one of its terms reads an
-	//! instance with no value -- a nested reducer's helper whose group holds no member, an auxiliary standing for a
-	//! value with none. That member reads NULL, which a reducer skips (language/guide.md §7.2). Every scope and
-	//! auxiliary the link reads is resolved by then.
-	vector<bool> ValueLinkMembers(ClientContext &context, DecideGlobalSinkState &gstate,
-	                              const LogicalDecide::ReducerValueLink &link, idx_t num_rows,
-	                              ChunkExprCache &chunk_expr_cache, const vector<KeyedMapping> &mappings,
-	                              vector<bool> &kept) const;
-
-	//! PHASE 1.6: the scope check of the objective (language/guide.md §7.3), before any clause is evaluated: it is
-    //! produced once (D72), so a field of its signature with a second value over its kept rows is an error.
-    void RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                        ChunkExprCache &chunk_expr_cache, const vector<KeyedMapping> &keyed_mappings) const;
     //! Records an EXPLAIN ANALYZE line (run_time_accounts) for a scoped expression that generated `variants`
     //! instances -- `unit`: constraints, or a reducer's values -- from `classes` classes.
     void RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants, idx_t classes) const;
@@ -353,11 +313,6 @@ private:
     //! of one member written in -- an EXPLAIN ANALYZE line under each clause whose plan line names the helper.
     void ReportInlinedHelpers(const SolverInput &input) const;
 
-    //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
-    //! result to gstate.evaluated_constraints.
-    void EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                             ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                             const vector<KeyedMapping> &keyed_mappings) const;
 
     //! Everything PHASE 2 reads off the data that a later phase still needs. It carries
     //! objective terms *and* composed-MIN/MAX constraint clauses, so it is named for the
@@ -387,48 +342,17 @@ private:
         vector<ComposedMinMaxTermData> composed_objective_terms;
     };
 
-    //! PHASES 1.3 to 2: the evaluator, from the one pass to the helper decisions' members. It reads the rows, fills
-    //! gstate's evaluation fields and the arguments after `row_store`, and prints only when not `silent`.
-    void Evaluate(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows, DecideRowStore &row_store,
-                  ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                  vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
-    //! The tree's evaluation (language/guide.md §6.4): its descent over the input (into `descent`), each node's
-    //! programs over its entries, and the model emitter, filling what Evaluate fills, with the values its groups are
-    //! named by in `per_group_cache`. It prints only when not `silent`.
+    //! The evaluation (language/guide.md §6.4): the tree's descent over the input (into `descent`), each node's
+    //! programs over its entries, and the model emitter, filling gstate's evaluation fields and the arguments after
+    //! `descent`, with the values its groups are named by in `per_group_cache`. It prints only when not `silent`.
     void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                       unique_ptr<DecideDescent> &descent, PerGroupCache &per_group_cache,
                       vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated, bool silent) const;
-    //! What Evaluate left, in the form two runs compare.
-    DecideEvaluationRecord RecordEvaluation(DecideGlobalSinkState &gstate, idx_t num_rows, const PerGroupCache &cache,
-                                            const vector<KeyedMapping> &keyed_mappings,
-                                            const EvaluatedClauses &evaluated) const;
-    //! `DECIDB_EVALUATOR=verify`: Evaluate as ever, then a second run in silence on fields of its own, the two compared
-    //! (CompareDecideEvaluations). What the first run raised, it raises last.
-    void VerifyEvaluation(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                          DecideRowStore &row_store, ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                          vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) const;
 
-    //! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
-    //! objective-evaluation fields.
-    EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                       ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                       const vector<KeyedMapping> &keyed_mappings) const;
-    //! The tail of the objective's evaluation, so what it hands stage 06 and what verify compares are its columns as
-    //! stage 06 reads them (language/guide.md §5.1): a relation-qualified term reads one row per class of its
-    //! qualifier, the first it reads, as the constraint side does over the objective's one group, folded into its
-    //! filter and its column before AVG reads the rows left.
-    static void ApplyObjectiveQualifiers(DecideGlobalSinkState &gstate, idx_t num_rows,
-                                         const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated);
-    //! Then each AVG term is divided by the rows it reads, or by those of its own group (D81): both evaluators'.
+    //! Then each AVG term is divided by the rows it reads, or by those of its own group (D81).
     static void ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated);
 
-    //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
-    //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
-    //! constant RHS. The rows these become are emitted later, by the formulation pass.
-    void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                 const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) const;
-	//! The tail of a composed clause's evaluation once its bound and terms are in `clause`, both evaluators': its one
+	//! The tail of a composed clause's evaluation once its bound and terms are in `clause`: its one
 	//! instance is skipped where a factor is NULL (`null_factor`) or a term reads no row (deck pp. 50, 56), repaired in
 	//! a group after every other clause, and held where its `when` keeps a row, counted unless skipped. The rows its
 	//! `when` keeps (`kept_rows`) are read only under DIAGNOSE or once it is skipped; under DIAGNOSE `class_set` gives
@@ -439,19 +363,6 @@ private:
 	                          const std::function<idx_t(const vector<bool> &)> &class_set,
 	                          EvaluatedClauses::ComposedConstraint clause, EvaluatedClauses &evaluated) const;
 
-    //! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
-    //! reducer it holds, among those the clause and the reducer keep, grouped by its `by`
-    //! key -- onto gstate.evaluated_value_links. The formulation pass states the
-    //! definition over them.
-    void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                   ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                   const vector<KeyedMapping> &keyed_mappings) const;
-	//! A range frame's helper (`link.frame`), into `out`: one group per window that reads something, read at its
-	//! anchor; a member per row the window reads, and one for its `else` where a position is missing
-	//! (language/guide.md §5.6).
-	void EvaluateFrameLink(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                       ChunkExprCache &chunk_expr_cache, const LogicalDecide::ReducerValueLink &link,
-	                       ReducerValueMembers &out) const;
 
 	//! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
     //! types and the column box, implied-bound propagation, the objective transfer, and

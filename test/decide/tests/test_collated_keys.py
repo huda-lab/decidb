@@ -16,8 +16,6 @@ from solver.types import ObjSense, VarType
 COLUMNS = ("id", "g", "cap", "p")
 ROWS = ((1, "a", 1, 5.0), (2, "A", 2, 4.0), (3, "b", 2, 3.0), (4, "B", 3, 2.0), (5, "b", 2, 1.0))
 X = Decision("x", var_type=VarType.BINARY)
-#: The default suite runs flat, so a test of the tree evaluator selects it.
-TREE = {"DECIDB_EVALUATOR": "tree"}
 MAXIMIZE_PX = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["p"]}),))
 
 
@@ -219,7 +217,7 @@ def test_every_finding_spells_a_group_by_its_least_spelling_over_the_rows_read(d
 def test_the_tree_folds_every_read_of_a_key_into_its_least_spelling(decidb_cli):
     """The tree's descent folds each read of a collated key into its group's least spelling (DecideDescent::Spell):
     it reads the `when` clause's rows first, which spell the group 'b' alone, and the other clause's 'B' replaces it."""
-    _assert_every_finding_names_b(decidb_cli.with_env(TREE), (NARROW, WIDE))
+    _assert_every_finding_names_b(decidb_cli, (NARROW, WIDE))
 
 
 @pytest.mark.diagnose
@@ -302,7 +300,7 @@ class TestACollatedReducerOverData:
     def test_the_tree_folds_a_range_with_its_bound_reducer(self, decidb_cli):
         """The tree evaluator folds a range with the aggregate its marker is bound to, `arg_max` over the value and
         its key: group `a` reads 'C', where a byte-order `max` reads 'aaa' and gives [3, 3, 2]."""
-        cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+        cli = decidb_cli
         assert _bounded(cli, "off", f"x <= length(max(from first to last: t.n) {TIMELINE})") == [1, 1, 2]
 
     def test_a_range_over_collated_text_takes_no_number_else(self, decidb_cli):
@@ -386,9 +384,7 @@ class TestACollatedOrderKey:
     def test_the_tree_names_a_position_by_its_least_spelling(self, decidb_cli):
         """The tree's descent names a position at Finish by the least spelling over its rows, 'A' after the first row's
         'a' (DecideDescent::Finish)."""
-        result = decidb_cli.with_env(TREE).execute_raw(
-            _ordered("at(previous else 0: t.v) {over}", TWO_VALUES_ROW_ORDERS[0])
-        )
+        result = decidb_cli.execute_raw(_ordered("at(previous else 0: t.v) {over}", TWO_VALUES_ROW_ORDERS[0]))
         assert "finds 2 rows at t.k = 'A'" in result.stderr, result.stderr
 
     @pytest.mark.parametrize("rows", [ORDER_ROWS, ORDER_ROWS[1::-1] + ORDER_ROWS[2:]], ids=["a-first", "A-first"])
@@ -435,7 +431,7 @@ def test_the_tree_names_a_position_within_its_timeline_as_the_key_is_spelled(dec
     source = f"(SELECT id, g COLLATE NOCASE AS g, h, k, v FROM {values(rows, 'r', ('id', 'g', 'h', 'k', 'v'))}) t"
     sql = f"""SELECT id, x FROM {source} DECIDE x(REAL)
         SUCH THAT x <= 50 AND x <= at(previous else 0: t.v) over (t.k within t.g, t.h) MAXIMIZE sum(x)"""
-    result = decidb_cli.with_env(TREE).execute_raw(sql)
+    result = decidb_cli.execute_raw(sql)
     assert "finds 2 rows at t.g = 'B', t.h = 1, t.k = 1;" in result.stderr, result.stderr
 
 
@@ -452,5 +448,5 @@ def test_the_tree_names_a_class_spanning_timelines_as_its_keys_are_spelled(decid
     source = f"(SELECT id, {category} AS category, {product} AS product, period, v FROM {values(rows, 'r', columns)}) t"
     sql = f"""SELECT id, x FROM {source} DECIDE x(INT)
         SUCH THAT x <= 10 AND per t.category: x >= at(first: t.v) over (t.period within t.product) MINIMIZE sum(x)"""
-    result = decidb_cli.with_env(TREE).execute_raw(sql)
+    result = decidb_cli.execute_raw(sql)
     assert "t.category = 'Food' spans t.product = 'A', 'B'." in result.stderr, result.stderr

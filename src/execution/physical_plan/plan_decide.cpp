@@ -9,7 +9,6 @@
 #include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
-#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -62,14 +61,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // bindings that no longer name the right input columns.
     // The tree is built in two halves around stage 05 (DecideTreeConstruction): its nodes from the final clauses, its
     // bodies from what stage 05 lowers, whose reducers name the tree's G each ranges over.
-    unique_ptr<DecideTreeConstruction> construction;
-    if (DecideTreeRequested()) {
-        construction = make_uniq<DecideTreeConstruction>(context, op);
-    }
-    DecideReducerChild child;
-    if (construction) {
-        child = [&](const BoundAggregateExpression &reducer) { return construction->ReducerChild(reducer); };
-    }
+    auto construction = make_uniq<DecideTreeConstruction>(context, op);
+    DecideReducerChild child = [&](const BoundAggregateExpression &reducer) {
+        return construction->ReducerChild(reducer);
+    };
     BuildDecidePreparedModel(context, op, child);
     // With the shape of every constraint and the objective settled, check the model
     // class this query needs against the backend chosen for it. A model class is a
@@ -78,7 +73,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // and the message blames the host rather than the query.
     RequireDecideSolverSupport(op);
     // After the refusal, so a query the backend cannot answer is refused in SQL terms first.
-    auto tree = construction ? construction->Finish() : nullptr;
+    auto tree = construction->Finish();
     // Capture child column bindings BEFORE CreatePlan: several logical operators
     // (notably LogicalProjection) move their `expressions` vector into the physical
     // op during CreatePlan, which leaves GetColumnBindings() returning an empty

@@ -336,7 +336,7 @@ void DecideTreeColumns::ReadTests(idx_t index, NodeColumns &columns) {
 	}
 }
 
-//! Flat's order inside its owner's evaluation (PhysicalDecide::EvaluateConstraints, EvaluateObjective), under the
+//! Flat's order inside its owner's evaluation, under the
 //! owner's rank: a block runs over every window of the input's rows before the next, a window executes every
 //! expression of its block before it checks any value, and then the program's group and its order in the block. The
 //! descent's reads of the owner's rows (a `when`, a key) number in order of reading from 0, below every block, so a
@@ -622,7 +622,7 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 	try {
 		// A NaN among the values is the data check's to refuse, which reads every value a G over data folds here and
 		// ranks first, as flat's does; a reducer over frames, which no check reads, refuses one itself, but a count,
-		// which counts it (AppendDecideFrameAggregates).
+		// which counts it.
 		auto &over_frames = tree.frame_aggregate_nodes;
 		const bool rejects_nan = std::find(over_frames.begin(), over_frames.end(), reducer) != over_frames.end() &&
 		                         StringUtil::Lower(node.function->function.name) != "count";

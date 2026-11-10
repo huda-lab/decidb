@@ -359,7 +359,7 @@ private:
 	vector<pair<idx_t, idx_t>> inherited_gates;
 
 	//! Where flat reads each keyed scope's classes and each auxiliary's definitions
-	//! (PhysicalDecide::BuildKeyedMappings): every scope in turn, a helper's once the definitions of the auxiliaries
+	//!: every scope in turn, a helper's once the definitions of the auxiliaries
 	//! its members read are, then every decision's definitions in turn. Flat's other recursions number nothing earlier
 	//! here: from a decision into its own scope, since the declared scopes come before the rewrites' helpers and a
 	//! nested helper before its reader, and from a definition into what it reads, since the rewrites number a nested
@@ -425,7 +425,7 @@ private:
 				}
 			} else if (aggregate < aggregates.size()) {
 				// A reducer over data reading frames is computed once every frame's columns are, in its column's
-				// order (AppendDecideFrameAggregates), before any keyed mapping.
+				// order, before any keyed mapping.
 				rank = {DecideErrorPhase::FRAMES, 1, op.frames.size() + aggregate, 0};
 			} else if (node.defined_var != DConstants::INVALID_INDEX) {
 				// Flat resolves each auxiliary's absence in turn, reading its definitions in their order (D88), then
@@ -484,9 +484,9 @@ private:
 		WhenRanks();
 	}
 
-	//! Flat reads a gate a helper's G or a frame's O inherits where it reads that node's rows (BuildScopeMapping,
-	//! BuildFrames), which may come before the clause holding it: its holder reads it at the earliest of those ranks
-	//! and its own (DecideNode::when_rank).
+	//! A gate a helper's G or a frame's O inherits is read where that node's rows are read: where the helper's classes
+	//! are built and where every frame is built, which may come before the clause holding it (language/guide.md §7.3).
+	//! Its holder reads it at the earliest of those ranks and its own (DecideNode::when_rank).
 	void WhenRanks() {
 		for (auto &node : tree->nodes) {
 			node->when_rank = node->route_rank;
@@ -874,7 +874,7 @@ private:
 			entry.key = op.keyed_scopes[qualifier].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 			// Flat reads the reducer's terms on every row its `when` keeps, and its qualifier keeps no value of a row
-			// in no class (ApplyQualifierToFilter): such a row still lies in its group.
+			// in no class: such a row still lies in its group.
 			entry.holds_rows_in_no_class = true;
 		}
 		for (auto &argument : aggregate.children) {
@@ -933,7 +933,7 @@ private:
 		node.text = link.label;
 		node.decision_value = true;
 		// Flat reads a helper's `by` key on every row its path keeps, after its reducer's `when` and its members' NULL
-		// tests (PhysicalDecide::BuildScopeMapping): a row the key raises on still reaches them.
+		// tests: a row the key raises on still reaches them.
 		node.key_block = DecideBlock::BY_KEY;
 		Gates(index, link.when.get());
 		if (link.value_var < tree->value_nodes.size()) {

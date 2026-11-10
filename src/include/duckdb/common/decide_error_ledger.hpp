@@ -43,7 +43,7 @@ struct DecideErrorRank {
 	idx_t position = 0;
 	idx_t row = DConstants::INVALID_INDEX;
 	//! A part of a clause flat evaluates whole, after its filters, before the next: a composed clause's terms, one
-	//! after another (PhysicalDecide::EvaluateComposedClauses); 0 everywhere else. It ranks before the expression.
+	//! after another; 0 everywhere else. It ranks before the expression.
 	idx_t part = 0;
 
 	bool operator<(const DecideErrorRank &other) const {

@@ -214,7 +214,7 @@ public:
     //! rows; filled under DIAGNOSE only and moved into SolverInput::class_sets.
     vector<SolverInput::ClassSet> class_sets;
     //! The value rewrite's helper decisions, each with its reducer's members evaluated
-    //! (EvaluateReducerValueLinks); moved into SolverInput::reducer_value_links.
+    //!; moved into SolverInput::reducer_value_links.
     vector<ReducerValueLinkSpec> evaluated_value_links;
     vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
     vector<idx_t> objective_variable_indices;
@@ -233,7 +233,7 @@ public:
     vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
 
-	//! The frame selectors' timelines and selections (PhysicalDecide::BuildFrames), one per
+	//! The frame selectors' timelines and selections, one per
 	//! frame, in LogicalDecide::frames order.
 	vector<DecideFrameMap> frame_maps;
 	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
@@ -243,7 +243,7 @@ public:
 	//! query so the chunk expression cache, keyed by node, never meets a freed one.
 	vector<unique_ptr<Expression>> frame_column_refs;
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
-	//! whose definition reads an instance with none there (D88, PhysicalDecide::BuildKeyedMappings); empty where none.
+	//! whose definition reads an instance with none there (D88); empty where none.
 	vector<vector<bool>> absent_reads;
 	//! Per clause (its source clause id), the instances its rows hold once grouped, and those left once each with no
 	//! value is skipped (deck pp. 50, 56): the most any of its rows holds, as a rewrite states the clause's instances

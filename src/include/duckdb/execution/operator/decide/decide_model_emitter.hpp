@@ -99,7 +99,7 @@ public:
 	//! Every clause in flat's order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
 	//! The objective's linear terms, its squared terms and its products, each on the rows it reads, and each one's
-	//! filter of those rows in `evaluated`, which the qualifiers and AVG then read (PhysicalDecide::EvaluateObjective);
+	//! filter of those rows in `evaluated`, which the qualifiers and AVG then read;
 	//! none without an objective.
 	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
 	//! The composed MIN/MAX clauses, then the objective's composed terms, each term a column over the members of its G
@@ -146,12 +146,12 @@ private:
 	//! DIAGNOSE.
 	void Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated);
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
-	//! flat's numbering (BuildSignatureIds); with `by_row` false only how many there are.
+	//! flat's numbering; with `by_row` false only how many there are.
 	DecideVariants Variants(idx_t node, const DecideSignature *signature, bool by_row = true) const;
 	//! What tells `entry` of `node` apart as a variant (language/guide.md §7.1, D70): its class of the node's key and
 	//! its sigma's values, a frame by its keys.
 	vector<Value> Identity(idx_t node, idx_t entry) const;
-	//! What frame `frame`'s `else` reads at `row` (D82, flat's FrameFieldClasses): whether the anchor reaches it, and
+	//! What frame `frame`'s `else` reads at `row` (D82): whether the anchor reaches it, and
 	//! where it does, its terms' coefficients and its decisions' instances, which split a variant.
 	vector<Value> Fallback(idx_t frame, idx_t row) const;
 	//! The scope check's message for an objective `root` with more than one variant over its kept rows (D72,
@@ -179,7 +179,7 @@ private:
 	KeyedMapping HelperMapping(idx_t link);
 	//! A range frame's helper's members (language/guide.md §5.6), per window of its frame (DecideListFrameMembers): its
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
-	//! frame's O `node`, as flat lists them (PhysicalDecide::EvaluateFrameLink).
+	//! frame's O `node`, as flat lists them.
 	void FrameMembers(idx_t node, const LogicalDecide::ReducerValueLink &link, ReducerValueMembers &out);
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned

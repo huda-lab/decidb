@@ -76,9 +76,8 @@ private:
 	//! is answered, and for the solver the formulation passes. A rule that answers the query replaces `op`. The whole
 	//! stage is one profile span and one DECIDB_BENCH timer, whichever way the query is answered.
 	void OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
-	//! Installs the scope checks of the node that a plan can make under its child (DirectInstallRowChecks), so the
-	//! solver path and the direct-solve plans make them with one implementation; the operator keeps the rest.
-	void InstallRowChecks(LogicalDecide &decide, LogicalOperator &root);
+	//! Keeps the node's scope checks and records for the tree, which evaluates them (DirectRetainRowChecks).
+	void RetainRowChecks(LogicalDecide &decide);
 	//! The passes that formulate the query for the solver chosen, in order.
 	void RewriteForSolver(LogicalDecide &decide, LogicalOperator &root);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses

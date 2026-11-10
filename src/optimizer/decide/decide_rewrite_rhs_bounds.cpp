@@ -43,7 +43,6 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
@@ -410,7 +409,7 @@ private:
 		record.text = Written(reducer);
 		ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, record.norm_order);
 		auto alias = MakeFrameAggregateTag(decide.frame_aggregates.size());
-		if (DecideTreeRequested() && TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
 			AddDecideTag(alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(scope_idx) + "__");
 		}
 		aggregate.SetAlias(alias);

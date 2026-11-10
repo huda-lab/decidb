@@ -82,7 +82,7 @@ struct DecideNodeGroups {
 	vector<bool> in_a_class;
 	DecideColumns keys;
 	//! A collated key's least spelling over the rows its node holds in each slot, which flat names a variant of the
-	//! class by (LeastSpellingRows); Label's is the least over every read of the key. Empty for a key with no collated
+	//! class by; Label's is the least over every read of the key. Empty for a key with no collated
 	//! column.
 	vector<DecideSpelling> spellings;
 	//! A node per row's slots are its entries, each a class of its own keyed by its row: none is held here, and no

@@ -25,7 +25,6 @@ objective mismatch. After changing a case or the model builder, remove its entri
 
 import json
 import math
-import os
 import re
 from dataclasses import dataclass
 
@@ -2220,18 +2219,16 @@ def test_r1_copy_leaves_out_the_stored_strings_it_reads_back_by_row_id(decidb_cl
     # The copy's scan and the strings' scan; the stages read the copy.
     assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 2, plan
     # The solver path carries no row id, so nothing is read back and its copy would hold the strings: it re-scans.
-    # Its copy serves the side plans that read the source again for the data reducers; the tree-noside evaluator, the
-    # default, which folds them in the descent, plans none and copies nothing.
+    # It plans no side plan to read the source again either: the tree folds the data reducers in its descent.
     solver_query = (
         "SELECT id, x FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= SUM(w) by (g) / 2 "
         "AND SUM(w*x) <= SUM(cap) by (g) AND SUM(w*x) >= -SUM(v) by (g) MAXIMIZE SUM(v*x)) q"
     )
-    side_plans = os.environ.get("DECIDB_EVALUATOR", "tree-noside") != "tree-noside"
-    for limit, copied in (("32MB", False), ("4GB", side_plans)):
+    for limit in ("32MB", "4GB"):
         solver_plan = decidb_cli.execute_raw(
             f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} SET memory_limit='{limit}'; EXPLAIN {solver_query}"
         ).stdout
-        assert ("direct_source" in solver_plan) == copied, solver_plan
+        assert "direct_source" not in solver_plan, solver_plan
     answer = f"SELECT COUNT(*), ROUND(SUM(v * x), 6), SUM(length(pad_0)) FROM ({query})"
     assert decidb_cli.execute(f"{prefix} {answer}") == decidb_cli.execute(
         f"SET decide_direct_solve='off'; {VARCHAR_WIDE_SETUP} {answer}"

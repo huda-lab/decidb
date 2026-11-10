@@ -1,7 +1,7 @@
 """The tree's bodies are stage 05's own terms (language/guide.md §6.4). Stage 05 lowers every clause once, for flat, and
 names on each reducer's terms the tree's G they range over; the tree binds its clause roots to stage 05's clauses,
-copies the terms and finds the node each is computed on. Each test reads DECIDB_DUMP_BODIES under
-DECIDB_EVALUATOR=tree and names the branch it reaches."""
+copies the terms and finds the node each is computed on. Each test reads DECIDB_DUMP_BODIES and names the branch it
+reaches."""
 
 import os
 import re
@@ -15,12 +15,11 @@ TERM = re.compile(r"^\s+(term|inner) (\d+) var=(-?\d+) child=(-?\d+) site=(-?\d+
 
 
 def run(cli, sql, **env):
-    """The query under the tree evaluator with its tree and bodies dumped. The dumps print internal names, so the
+    """The query with its tree and bodies dumped. The dumps print internal names, so the
     binary runs here rather than through the wrapper's user-output guard."""
     environment = {
         **os.environ,
         **(cli.env or {}),
-        "DECIDB_EVALUATOR": "tree",
         "DECIDB_DUMP_TREE": "1",
         "DECIDB_DUMP_BODIES": "1",
         **env,
@@ -215,15 +214,6 @@ def test_an_objective_of_composed_terms_alone_has_no_objective_body(decidb_cli):
     assert not any(head.startswith("objective") for head, _ in blocks.values()), blocks
     members = [head for head, _ in blocks.values() if head.startswith("members")]
     assert members == ["members rank=composed:0", "members rank=composed:0"], blocks
-
-
-def test_flat_dumps_the_bodies_of_the_tree_a_dump_requests(decidb_cli):
-    """Under flat, a dump variable builds the tree beside flat's plan, and the shadow descent prints its bodies too."""
-    sql = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= 9 AND sum(t.c * x) by (t.g) <= 5 MAXIMIZE sum(x)"
-    result = run(decidb_cli, sql, DECIDB_EVALUATOR="flat")
-    assert result.returncode == 0, result.stderr
-    bodies = result.stderr.split("DECIDB_BODIES_BEGIN\n", 1)[1].split("DECIDB_BODIES_END", 1)[0]
-    assert re.search(r"(?m)^node \d+ clause 0 rank=constraints:0$", bodies), bodies
 
 
 NULL_ROWS = "(VALUES (1, 'a', 3.0, 2.0, true), (2, 'a', NULL, 1.0, false), (3, 'b', 1.0, 4.0, true)) t(id, g, c, w, p)"

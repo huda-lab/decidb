@@ -9,7 +9,7 @@ from ._scope_cases import answer
 
 
 def native(cli):
-    return cli.without_verify_serializer().with_env({"DECIDB_EVALUATOR": "tree-noside"})
+    return cli.without_verify_serializer()
 
 
 def test_data_reducers_have_no_aggregate_or_check_source_plan(decidb_cli):

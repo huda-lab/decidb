@@ -1,8 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
-#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_tables.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -97,81 +95,44 @@ void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const 
 	reader.Gate(std::move(verdict));
 }
 
-void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
-                            LogicalDecide &decide) {
+void DirectRetainRowChecks(LogicalDecide &decide, const vector<DirectRowCheck> &checks) {
 	if (checks.empty() && decide.bound_aggregates.empty()) {
 		return;
 	}
-	if (DecideTreeRequested()) {
-		for (auto &check : checks) {
-			decide.retained_row_checks.push_back(check.invalid->Copy());
+	// The tree evaluates the checks and the records on the rows it reads (language/guide.md §6.1), so each is kept on
+	// the node, and the source stays the original relation, with no aggregate join or check gate in front of it.
+	for (auto &check : checks) {
+		decide.retained_row_checks.push_back(check.invalid->Copy());
+	}
+	for (auto &aggregate : decide.bound_aggregates) {
+		LogicalDecide::RetainedBoundAggregate retained;
+		retained.placeholder = make_uniq<BoundColumnRefExpression>(aggregate.function->return_type, aggregate.column);
+		retained.aggregate.column = aggregate.column;
+		retained.aggregate.function = aggregate.function->Copy();
+		retained.aggregate.reads = aggregate.reads ? aggregate.reads->Copy() : nullptr;
+		retained.aggregate.key = aggregate.key;
+		retained.aggregate.counts_classes = aggregate.counts_classes;
+		retained.aggregate.class_key = aggregate.class_key;
+		for (auto &argument : aggregate.arguments) {
+			retained.aggregate.arguments.push_back(argument->Copy());
 		}
-		for (auto &aggregate : decide.bound_aggregates) {
-			LogicalDecide::RetainedBoundAggregate retained;
-			retained.placeholder = make_uniq<BoundColumnRefExpression>(aggregate.function->return_type, aggregate.column);
-			retained.aggregate.column = aggregate.column;
-			retained.aggregate.function = aggregate.function->Copy();
-			retained.aggregate.reads = aggregate.reads ? aggregate.reads->Copy() : nullptr;
-			retained.aggregate.key = aggregate.key;
-			retained.aggregate.counts_classes = aggregate.counts_classes;
-			retained.aggregate.class_key = aggregate.class_key;
-			for (auto &argument : aggregate.arguments) {
-				retained.aggregate.arguments.push_back(argument->Copy());
-			}
-			decide.retained_bound_aggregates.push_back(std::move(retained));
+		decide.retained_bound_aggregates.push_back(std::move(retained));
+	}
+	// Each read of a reducer shows the reducer's source spelling, rendered once the reducers before it are named, so an
+	// outer reducer shows named inner results.
+	const auto first_fragment = decide.source_fragments.size();
+	for (auto &retained : decide.retained_bound_aggregates) {
+		auto display = retained.aggregate.function->Copy();
+		for (auto &argument : retained.aggregate.arguments) {
+			display->Cast<BoundAggregateExpression>().children.push_back(argument->Copy());
 		}
+		decide.NameRetainedRecordReads(*display, first_fragment);
+		decide.source_fragments.push_back(
+		    RenderDecideSource(*display, decide.source_fragments, decide.keyed_scopes, &decide.keys));
 	}
-	if (SelectedDecideEvaluator() == DecideEvaluator::TREE_NOSIDE) {
-		// The tree owns the retained reducers and checks, so the plan is its own: each read of a reducer shows the
-		// reducer's source spelling, rendered once the reducers before it are named, so an outer reducer shows named
-		// inner results. Its source is the original relation, with no aggregate join or check gate in front of it.
-		const auto first_fragment = decide.source_fragments.size();
-		for (auto &retained : decide.retained_bound_aggregates) {
-			auto display = retained.aggregate.function->Copy();
-			for (auto &argument : retained.aggregate.arguments) {
-				display->Cast<BoundAggregateExpression>().children.push_back(argument->Copy());
-			}
-			decide.NameRetainedRecordReads(*display, first_fragment);
-			decide.source_fragments.push_back(
-			    RenderDecideSource(*display, decide.source_fragments, decide.keyed_scopes, &decide.keys));
-		}
-		decide.EnumerateExpressions(
-		    [&](unique_ptr<Expression> *expression) { decide.NameRetainedRecordReads(**expression, first_fragment); });
-		decide.bound_aggregates.clear();
-		return;
-	}
-	// The operator reads the source once, and each bound and check once more.
-	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
-	                          1 + decide.bound_aggregates.size() + checks.size(), vector<idx_t>());
-	auto source_width = reader.SourceBindings().size();
-	DirectAddBoundTables(optimizer, reader, decide);
-	DirectAddRowChecks(optimizer, reader, checks);
-	// A recomputed source is read last as itself, under its own bindings.
-	auto rows = reader.TakeRecomputedSource();
-	if (rows) {
-		decide.children[0] = reader.Finish(std::move(rows));
-		return;
-	}
-	auto read = reader.ReadSource();
-	// The read has the source's columns, then the bounds: the bounds' placeholders are read from it now.
-	auto &old_bindings = reader.SourceBindings();
-	vector<ColumnBinding> new_bindings;
-	for (idx_t i = 0; i < old_bindings.size(); i++) {
-		new_bindings.emplace_back(read.table_index, i);
-	}
-	decide.RepointSourceColumns(
-	    reader.Source(),
-	    vector<ColumnBinding>(new_bindings.begin(), new_bindings.begin() + NumericCast<int64_t>(source_width)));
-	ColumnBindingReplacer replacer;
-	for (idx_t i = 0; i < old_bindings.size(); i++) {
-		replacer.replacement_bindings.emplace_back(old_bindings[i], new_bindings[i]);
-	}
-	auto &source = decide.children[0];
-	source = reader.Finish(std::move(read.plan));
-	source->ResolveOperatorTypes();
-	// The operators above read the source's columns where the read now has them.
-	replacer.stop_operator = source.get();
-	replacer.VisitOperator(root);
+	decide.EnumerateExpressions(
+	    [&](unique_ptr<Expression> *expression) { decide.NameRetainedRecordReads(**expression, first_fragment); });
+	decide.bound_aggregates.clear();
 }
 
 } // namespace duckdb

@@ -274,7 +274,7 @@ TREE_WRITTEN = [case for case in TOO_LARGE if case[0] == "constraint_on_a_keyed_
 @pytest.mark.error
 @pytest.mark.parametrize("name,decide,written,big", TREE_WRITTEN, ids=[case[0] for case in TREE_WRITTEN])
 def test_the_tree_names_a_root_as_flat_names_its_row(decidb_cli, name, decide, written, big):
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert _too_large(written) in _stderr(cli, _big_query(decide, big), "off")
 
 

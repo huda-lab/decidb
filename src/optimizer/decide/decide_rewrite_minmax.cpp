@@ -14,7 +14,6 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -42,9 +41,6 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 //! Retain tree semantics without changing the flat carrier's term extraction.
 static void KeepTreeReducerScope(Expression &carrier, const BoundAggregateExpression &original) {
-	if (!DecideTreeRequested()) {
-		return;
-	}
 	idx_t index;
 	if (TryParseQualifiedReducerTag(original.GetAlias(), index)) {
 		AddDecideTag(carrier.alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(index) + "__");
@@ -492,7 +488,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 		wrapper->children.push_back(scoped_when->Copy());
 		wrapper->SetAlias(conj.GetAlias());
 		rest = std::move(wrapper);
-	} else if (scoped_when && DecideTreeRequested()) {
+	} else if (scoped_when) {
 		// The terms carry the `when` (ScopeComposedTerms) and the objective has none left; the tree's objective root
 		// still reaches only its rows, so it keeps a copy of the `when` and the objective stays as flat reads it.
 		decide.retained_objective_when = decide.retained_expressions.size();

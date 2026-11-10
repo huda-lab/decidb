@@ -111,14 +111,13 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 }
 
-void DecideOptimizer::InstallRowChecks(LogicalDecide &decide, LogicalOperator &root) {
-	auto checks = DirectTakeRowChecks(optimizer.context, decide);
-	DirectInstallRowChecks(optimizer, root, checks, decide);
+void DecideOptimizer::RetainRowChecks(LogicalDecide &decide) {
+	DirectRetainRowChecks(decide, DirectTakeRowChecks(optimizer.context, decide));
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
 	RunPass("optimizer.record_bounds", [&] { RecordReducedBounds(optimizer, decide); });
-	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide, root); });
+	RunPass("optimizer.retain_row_checks", [&] { RetainRowChecks(decide); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
 	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });

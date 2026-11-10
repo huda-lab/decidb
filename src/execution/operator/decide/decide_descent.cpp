@@ -55,7 +55,7 @@ bool DecideDescentKeyLess(const vector<Value> &left, const vector<Value> &right)
 }
 
 //! The bytes a least spelling is taken by, ORDER BY's for `values` ascending with NULL last, as flat takes it
-//! (LeastSpellingRows): equal bytes are one spelling, so the least does not depend on the order rows are read in.
+//!: equal bytes are one spelling, so the least does not depend on the order rows are read in.
 static vector<string> SpellingKeys(const vector<Value> &values, const LogicalType &type) {
 	Vector spelled(type, MaxValue<idx_t>(values.size(), 1));
 	for (idx_t i = 0; i < values.size(); i++) {
@@ -1665,7 +1665,7 @@ void DecideDescent::Timelines(idx_t node_index) {
 			}
 			timelines.first_entry.push_back(timelines.entries.size());
 			timelines.entries.insert(timelines.entries.end(), at, end);
-			// Named by its least spelling (D69; flat's DecidePositionRows), and a duplicate position conflicts where
+			// Named by its least spelling (D69), and a duplicate position conflicts where
 			// its entries' payload signatures differ.
 			idx_t least = 0;
 			bool conflict = false;

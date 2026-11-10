@@ -35,7 +35,6 @@ from oracle_cache import merge_worker_reports as merge_oracle_reports
 from performance.tracker import PerfTracker
 from performance.tracker import merge_worker_reports as merge_perf_reports
 from performance.reporter import print_perf_table
-from tests._verify_known import allow_setting, stale_markers
 
 _TPCH_SF = 0.01
 
@@ -195,24 +194,6 @@ def _oracle_cache(decidb_db_path, request):
     cache = OracleCache(decidb_db_path)
     request.config._decidb_oracle_cache = cache
     yield cache
-
-
-@pytest.fixture(autouse=True)
-def _verify_known_difference(request, monkeypatch):
-    """Under DECIDB_EVALUATOR=verify, a test marked verify_known_difference runs with its differences allowed, and
-    fails once one of them no longer shows (tests/_verify_known.py). Unmarked tests keep the environment they share,
-    which the CLI wrapper's sessions are keyed on."""
-    marks = [(mark.args[0], tuple(mark.args[1])) for mark in request.node.iter_markers("verify_known_difference")]
-    if not marks or os.environ.get("DECIDB_EVALUATOR") != "verify":
-        yield
-        return
-    log = request.getfixturevalue("tmp_path") / "verify_allow.log"
-    monkeypatch.setenv("DECIDB_VERIFY_ALLOW", allow_setting(marks))
-    monkeypatch.setenv("DECIDB_VERIFY_ALLOW_LOG", str(log))
-    yield
-    stale = stale_markers(marks, log.read_text().split() if log.exists() else [])
-    if stale:
-        pytest.fail(f"verify_known_difference {sorted(stale)} no longer differs: remove the marker")
 
 
 @pytest.fixture(scope="function")

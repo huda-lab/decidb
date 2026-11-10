@@ -21,16 +21,13 @@ class Optimizer;
 //! A value check takes the least message a row raises.
 void DirectAddRowChecks(Optimizer &optimizer, DirectSourceReader &reader, const vector<DirectRowCheck> &checks);
 
-//! The solver path's checks: the source of `decide`, a node in `root`, becomes one gated read of it
-//! (DirectAddRowChecks), joined to the side tables of its bounds (DirectAddBoundTables), which the checks read. A
-//! recomputed source keeps its bindings. A materialized one is read under new bindings, and every reader of the old
-//! ones above the source in `root`, the node's user names of its columns included, is re-pointed
-//! (ColumnBindingReplacer, LogicalDecide::RepointSourceColumns).
-void DirectInstallRowChecks(Optimizer &optimizer, LogicalOperator &root, const vector<DirectRowCheck> &checks,
-                            LogicalDecide &decide);
+//! The solver path's checks and records: the tree evaluates them on the rows it reads, so each is kept on `decide`
+//! (LogicalDecide::retained_row_checks, retained_bound_aggregates), its reads named by the reducer's source spelling,
+//! and the source is planned with no side plan.
+void DirectRetainRowChecks(LogicalDecide &decide, const vector<DirectRowCheck> &checks);
 
 //! The scope checks of a DECIDE node that the plan can make, moved out of the node (LogicalDecide::scope_checks), for
-//! the solver path to install under it with DirectInstallRowChecks, so one implementation makes them on both paths.
+//! the direct path to install (DirectAddRowChecks) and the solver path to keep for the tree (DirectRetainRowChecks).
 //! Every scope check is one the plan can make, so none remains in the node.
 vector<DirectRowCheck> DirectTakeRowChecks(ClientContext &context, LogicalDecide &decide);
 

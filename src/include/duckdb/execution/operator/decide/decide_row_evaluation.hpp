@@ -30,30 +30,6 @@ void InitializeDecideScan(const ColumnDataCollection &data, ColumnDataScanState 
 //! The scans of the input this thread's Finalize has made (InitializeDecideScan).
 idx_t &DecideInputScans();
 
-//! `expr` lowered for ExpressionExecutor over the input's chunks, cached by node.
-const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache, const Expression &expr,
-                                                   ClientContext &context);
-
-
-//! The rows among `read` (every row when null) that `condition` keeps, NULL dropping a row.
-vector<bool> KeptRows(const Expression &condition, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                      idx_t num_rows, const vector<bool> *read = nullptr);
-
-//! The rows `read_rows` holds (every row when null) and `row_filter` keeps numbered by their group of `keys[key]` --
-//! a row whose written key column is NULL is in none --, the groups renumbered densely in key-value order;
-//! INVALID_INDEX on every other row. Returns the kept groups' numbers in the key's cache entry.
-vector<idx_t> LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
-                                       ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                       idx_t num_rows,
-                                       const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
-                                       vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
-                                       const std::function<bool(idx_t)> *loose_row_filter = nullptr,
-                                       vector<idx_t> *out_loose_row_group_ids = nullptr);
-
-//! `expr` on each row `rows` keeps (every row when null), NULL on the others.
-vector<Value> ReadRowValues(const Expression &expr, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                            const vector<bool> *rows);
-
 //! A class or group, as a message names it: `D.depotID = 'D1', D.region = 'East'`.
 string DescribeKeyValues(const vector<string> &names, const vector<Value> &values);
 

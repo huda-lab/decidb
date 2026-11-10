@@ -1,6 +1,6 @@
-"""The tree's model emitter (language/guide.md §6.4): under DECIDB_EVALUATOR=tree a query is evaluated by the tree --
-its programs computed over its nodes' entries -- and formulated through flat's code path. Each test names the branch
-it reaches."""
+"""The tree's model emitter (language/guide.md §6.4): a query is evaluated by the tree -- its programs computed over
+its nodes' entries -- and formulated through stage 06. Each test names the branch it reaches; where flat was the oracle,
+its output is stored (_expected.py)."""
 
 import json
 import os
@@ -17,9 +17,9 @@ ROWS_ONLY = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c AND x +
 PLAIN = f"SELECT id, x FROM {ROWS} DECIDE x(REAL) SUCH THAT x <= t.c MAXIMIZE sum(x)"
 
 
-def run(cli, sql, evaluator="tree", **env):
-    """The query under `evaluator`, in a process of its own: its stderr is read whole."""
-    environment = {**os.environ, **(cli.env or {}), "DECIDB_EVALUATOR": evaluator, **env}
+def run(cli, sql, **env):
+    """The query in a process of its own: its stderr is read whole."""
+    environment = {**os.environ, **(cli.env or {}), **env}
     return subprocess.run(
         [cli.exe, "-c", "SET threads=1; SET decide_direct_solve='off'; " + sql],
         env=environment,
@@ -41,7 +41,7 @@ def counters(result, name):
 
 
 #: What a stored expectation is not keyed on: the solver, which it is keyed on apart, and switches that change no output.
-_UNKEYED = ("DECIDB_FORCE_SOLVER", "DECIDB_EVALUATOR", "DECIDB_TEST_DIRECT_SOLVE", "DECIDB_VERIFY_SERIALIZER")
+_UNKEYED = ("DECIDB_FORCE_SOLVER", "DECIDB_TEST_DIRECT_SOLVE", "DECIDB_VERIFY_SERIALIZER")
 
 
 def _keyed(cli, env):
@@ -49,27 +49,27 @@ def _keyed(cli, env):
 
 
 def models(cli, sql, tmp_path, warnings=()):
-    """The model the query's stored expectation holds, flat's when it was recorded (_expected.py), and the one the tree
-    builds, each printing `warnings`."""
+    """The model the query's stored expectation holds (_expected.py), recorded from flat while it was the oracle, and
+    the one the query builds now, each printing `warnings`."""
 
-    def dump(evaluator):
-        path = tmp_path / f"{evaluator}.dump"
-        return cli.with_env({"DECIDB_EVALUATOR": evaluator}).dump_model(sql, path, expect_warnings=warnings)
+    def dump():
+        return cli.dump_model(sql, tmp_path / "model.dump", expect_warnings=warnings)
 
     key = _keyed(cli, {"warnings": ",".join(warnings)})
-    return [expected("model", sql, key, cli.warning_backend(), lambda: dump("flat")), dump("tree")]
+    return [expected("model", sql, key, cli.warning_backend(), dump), dump()]
 
 
 def run_model(cli, sql, tmp_path):
     """The model the tree builds for the query."""
-    return cli.with_env({"DECIDB_EVALUATOR": "tree"}).dump_model(sql, tmp_path / "tree.dump")
+    return cli.dump_model(sql, tmp_path / "model.dump")
 
 
 def reference(cli, sql, **env):
-    """What the query printed when its expectation was recorded, flat's run (_expected.py), as `run` returns it."""
+    """What the query printed when its expectation was recorded (_expected.py), from flat's run while it was the
+    oracle, as `run` returns it."""
 
     def produce():
-        result = run(cli, sql, "flat", **env)
+        result = run(cli, sql, **env)
         return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
     value = expected("run", sql, _keyed(cli, env), cli.warning_backend(), produce)
@@ -479,7 +479,7 @@ def test_a_data_check_raises_flats_message_without_side_plans(decidb_cli):
         DECIDE x(REAL) SUCH THAT x <= max(t.c) by (t.g) MAXIMIZE sum(x)"""
     stored = reference(decidb_cli, sql)
     assert "the bound t.c is NaN on some rows" in stored.stderr, stored.stderr
-    assert run(decidb_cli, sql, "tree-noside").stderr == stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 def test_a_folds_error_raises_flats_message_without_side_plans(decidb_cli):
@@ -490,7 +490,7 @@ def test_a_folds_error_raises_flats_message_without_side_plans(decidb_cli):
         DECIDE x(REAL) SUCH THAT x <= 9 AND x <= sum(t.c) by (t.g) / 1e40 MAXIMIZE sum(x)"""
     stored = reference(decidb_cli, sql)
     assert "Overflow in HUGEINT addition" in stored.stderr, stored.stderr
-    assert run(decidb_cli, sql, "tree-noside").stderr == stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 def test_a_data_check_raises_what_its_window_meets_first(decidb_cli):
@@ -501,7 +501,7 @@ def test_a_data_check_raises_what_its_window_meets_first(decidb_cli):
         MAXIMIZE sum(x)"""
     stored = reference(decidb_cli, sql)
     assert "cannot take square root of a negative number" in stored.stderr, stored.stderr
-    assert run(decidb_cli, sql, "tree-noside").stderr == stored.stderr
+    assert run(decidb_cli, sql).stderr == stored.stderr
 
 
 #: Flat reads a reducer's own `when` in its terms' filter, window by window and term by term, after the routes and
@@ -564,7 +564,7 @@ def test_a_grouped_clauses_reducers_raise_in_term_order(decidb_cli):
 
 
 #: Flat groups a clause's kept rows by its `by` key after it computes the terms, so a key's error ranks after theirs:
-#: under each evaluator that reads the clause, each case raises flat's error (DecideNode::key_block).
+#: where the clause reads it, each case raises flat's error (DecideNode::key_block).
 KEY_RAISED = {
     # A reducer's own `when` (row 1) before the key (row 2).
     "a-reducers-when-before-its-by-key": (

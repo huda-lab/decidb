@@ -17,7 +17,7 @@
 # outcome; pytest.log; manifest.txt, which commit and binary it was. A mode captured again replaces that mode alone.
 # The folder holds a .gitignore of its own: test/decide/.gitignore names only results/matrix_*/. Arguments after the
 # options go to pytest, so `-k pattern` captures a part of the suite. Any other DECIDB_ variable in the caller's
-# environment stays on, so `DECIDB_EVALUATOR=tree <this script> capture --out ...` is a log to compare with flat's.
+# environment stays on.
 # The exit code is 0 only when every mode ran and passed.
 #
 # compare is suite_log.py, whose docstring holds its rules: it pairs each query by its SQL and the environment the

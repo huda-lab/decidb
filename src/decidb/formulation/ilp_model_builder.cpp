@@ -252,7 +252,7 @@ static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarInd
 //! selects), or for an instance stage 06 wrote into its readers (SolverInput::inlined_helpers, D89) -- a helper
 //! inlined whole, or a MIN or MAX group of one member -- the terms of its members, each scaled by `coefficient`, read
 //! the same way in turn, whose constants, scaled, it returns. A clause skipped the rows reading an absent instance
-//! (MarkAbsentDecisionReads), and the objective dropped its terms there, so none reaches here with a coefficient; the
+//!, and the objective dropped its terms there, so none reaches here with a coefficient; the
 //! objective reads one as no value (`absent_reads_nothing`, D84).
 template <class ADD>
 static double ForEachTermColumn(const SolverInput &input, const VarIndexer &indexer, idx_t var, idx_t row,

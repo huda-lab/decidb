@@ -16,7 +16,6 @@
 // a helper through the same door (AddValueHelper, DecideHelperSides; RewriteFrameRanges in decide_rewrite_frames.cpp).
 //
 //===----------------------------------------------------------------------===//
-#include "duckdb/execution/operator/decide/decide_evaluator.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
@@ -350,11 +349,9 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 		}
 	}
 	auto inlined = inner.Copy();
-	if (DecideTreeRequested()) {
-		const auto retained = decide.retained_expressions.size();
-		decide.retained_expressions.push_back(outer.Copy());
-		AddDecideTag(inlined->alias, string(TREE_RETAINED_EXPRESSION_TAG_PREFIX) + to_string(retained) + "__");
-	}
+	const auto retained = decide.retained_expressions.size();
+	decide.retained_expressions.push_back(outer.Copy());
+	AddDecideTag(inlined->alias, string(TREE_RETAINED_EXPRESSION_TAG_PREFIX) + to_string(retained) + "__");
 	auto &reducer = inlined->Cast<BoundAggregateExpression>();
 	auto add_condition = [&](unique_ptr<Expression> condition) {
 		if (!reducer.filter) {

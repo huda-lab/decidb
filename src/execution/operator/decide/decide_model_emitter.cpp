@@ -260,7 +260,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
 	auto &entries = descent.Containers()[site];
 	auto &slots = descent.Containers()[link].groups;
 	// Flat computes the members on the rows its reducer's `when` and NULL tests keep where every decision they read
-	// has an instance (PhysicalDecide::ValueLinkMembers), a row in no group of its `by` key among them, and a
+	// has an instance, a row in no group of its `by` key among them, and a
 	// relation-qualified reducer lists each class once in its group, at its first row (language/guide.md §5.1).
 	LinkMembers members;
 	members.reads = columns.Tested(site);
@@ -300,7 +300,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t link) {
 KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
 	auto &node = *tree.nodes[link];
 	if (node.kind == DecideNodeKind::FRAME) {
-		// A range frame's helper: a class per window of its frame (PhysicalDecide::BuildScopeMapping).
+		// A range frame's helper: a class per window of its frame.
 		auto mapping = DecideFrameWindowMapping(gstate.frame_maps[node.frame]);
 		DecideMapRowsInNoClass(mapping);
 		return mapping;
@@ -310,7 +310,7 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t link) {
 	KeyedMapping mapping;
 	mapping.num_classes = members.groups;
 	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
-	// A group with no member has no helper, so a row of it reads none (PhysicalDecide::BuildScopeMapping).
+	// A group with no member has no helper, so a row of it reads none.
 	auto &reducer = descent.Containers()[link];
 	for (auto read : DecideEntryRows(tree, descent, link)) {
 		mapping.row_to_class[read.first] = members.group_of_slot[reducer.Slot(read.second)];
@@ -370,7 +370,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root) {
 	};
 	// What it reads unreduced is NULL on a row it keeps, which its NULL tests keep too (DecideNode::member_tests):
 	// its bound, then each term's coefficient, then each square's terms', which flat reads in that order, so what
-	// one raises ranks there (DecideNode::value_rank). It reads no product's coefficient (DefinitionNulls).
+	// one raises ranks there (DecideNode::value_rank). It reads no product's coefficient.
 	auto rank = tree.nodes[root]->value_rank;
 	idx_t position = 0;
 	auto null_rows = [&](idx_t node, idx_t program) {
@@ -561,7 +561,7 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 			identity.insert(identity.end(), read.begin() + starts[i], read.begin() + starts[i + 1]);
 			continue;
 		}
-		// A frame by its keys (D82, FrameFieldClasses): the anchor's position, as its order key compares, when it reads
+		// A frame by its keys (D82): the anchor's position, as its order key compares, when it reads
 		// relative to the anchor, else its timeline; and what its `else` reads where the anchor reaches it, at the row
 		// an entry stands for.
 		const auto f = fields[i].frame;
@@ -577,7 +577,7 @@ DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *s
 	auto &container = descent.Containers()[node];
 	const auto entries = container.Count();
 	// Flat numbers them by value, their class's and then their fields', unless a field reads a decision's instance
-	// or a frame's keys, which number them by their first rows (BuildSignatureIds). No field reads a query-wide
+	// or a frame's keys, which number them by their first rows. No field reads a query-wide
 	// decision, which one instance holds for every class.
 	bool by_rows = false;
 	vector<idx_t> frames;
@@ -599,7 +599,7 @@ DecideVariants DecideModelEmitter::Variants(idx_t node, const DecideSignature *s
 	vector<vector<Value>> identities(entries);
 	// The entries in a class of the node's key: a reducer reads no value of a row in none, which its operand holds
 	// (DecideNode::holds_rows_in_no_class). Each counts its class, as flat counts the classes over the rows it keeps
-	// (LookupOrBuildPerGroupIds); one at an anchor where a frame its fields read reads nothing is no variant, since it
+	//; one at an anchor where a frame its fields read reads nothing is no variant, since it
 	// has no instance (D84).
 	vector<idx_t> held;
 	for (idx_t e = 0; e < entries; e++) {
@@ -785,7 +785,7 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &row
 	auto &terms = clause.lhs_terms;
 	bool has_local_filters = false;
 	bool unfiltered = false;
-	// A filter that keeps every kept row filters nothing, as flat reads it (ReadTermFilters).
+	// A filter that keeps every kept row filters nothing, as flat reads it.
 	auto read_filter = [&](const vector<bool> &members, TermFilterState &filter) {
 		const std::vector<bool> &kept_rows = kept;
 		const std::vector<bool> &member_rows = members;

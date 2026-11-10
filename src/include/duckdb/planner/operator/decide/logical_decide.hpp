@@ -828,10 +828,6 @@ public:
 	//! aggregates the path has not built yet (bound_aggregates).
 	vector<ColumnBinding> SourceBindings();
 
-	//! Re-points the user's names of the source columns (source_columns) once the source `old_source` is read under
-    //! `new_bindings`, one per column of it. They are keyed by DecideSourceColumnKey, not by binding, so
-    //! ColumnBindingReplacer, which re-points the expressions, leaves them.
-    void RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings);
 
     // --- Implement virtual functions ---
 

@@ -3,25 +3,15 @@
 //
 // duckdb/execution/operator/decide/decide_row_store.hpp
 //
-// The one-pass evaluation (deck §3, pp. 77-119; pipeline/08_execution/done.md).
+// One scan of the operator's buffered input (pipeline/08_execution/done.md).
 //===----------------------------------------------------------------------===//
 //
-// The deck evaluates a query in two passes over its annotated tree: a top-down construction reads the rows once and
-// fills each node's container with what the node reads on a row, and a bottom-up evaluation computes each node from
-// its children's containers. Here every node of the plan -- a scoped expression's `when`, key and signature fields, a
-// reducer's key, filter and operand, a frame's timeline, order and payload -- registers the expressions it reads on a
-// row (PhysicalDecide::RegisterEvaluation), one scan of the operator's input evaluates every registration on every row
-// (DecideRowStore::Build), and every loop of the evaluation after it reads its values from here (DecideRowWindows): no
-// loop scans the input again, and a read the plan did not register is an internal error.
+// The tree's descent reads the input in one scan of it (DecideRowStore::Build with a callback per chunk), so the sink
+// stays parallel. The unbounded diagnosis reads the columns it names in a scan of its own after the evaluation, its
+// expressions registered and evaluated in the pass, and their values read back window by window (DecideRowWindows).
 //
-// The pass evaluates an expression on rows a node may not read, because which rows a node reads is decided later
-// (a `when` the same pass computes, a frame's presence the bottom-up evaluation finds). So an error an expression
-// raises on a row is kept, and raised only when a read reaches that row, as evaluating it there would have: no error
-// of a row a clause drops is seen (language/guide.md §6.3).
-//
-// An expression over a column the pass cannot know -- a frame's, computed bottom-up (AppendColumn) -- is the deck's
-// bottom-up evaluation of a parent node: it is evaluated when first read, over the computed columns and the values the
-// pass kept of the input columns it reads, which it registered.
+// The pass evaluates an expression on every row, so an error an expression raises on a row is kept with the row's
+// value, and raised only when a read reaches that row, as evaluating it there would have (language/guide.md §6.3).
 //
 //===----------------------------------------------------------------------===//
 
@@ -41,7 +31,7 @@ class DecideRowStore {
 public:
 	DecideRowStore(ClientContext &context, ColumnDataCollection &data);
 
-	//! What a node reads on a row: `lowered` (CachedTransformToChunkExpression, or held as long as the store) is
+	//! What a node reads on a row: `lowered`, held as long as the store, is
 	//! evaluated in the pass, or -- reading a computed column -- when first read, over the input columns it reads,
 	//! which the pass keeps. Only before Build.
 	void Register(const Expression &lowered);

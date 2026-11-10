@@ -153,9 +153,9 @@ struct DecideNode {
 	//! objective's when the scope check reads its kept rows (D72).
 	DecideErrorRank route_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	DecideErrorRank value_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
-	//! Where flat evaluates its clause or objective (PhysicalDecide::EvaluateConstraints), which reads its programs as
+	//! Where flat evaluates its clause or objective, which reads its programs as
 	//! numbers and checks each: its value_rank, but a definition's at its place among the clauses, since flat first
-	//! computes a definition where it resolves its auxiliary's absence (BuildKeyedMappings).
+	//! computes a definition where it resolves its auxiliary's absence.
 	DecideErrorRank clause_rank {DecideErrorPhase::CONSTRAINTS, 0, 0, 0};
 	//! Where its `when` is read: its route_rank, or earlier where a helper's G or a frame's O below it inherits a gate
 	//! of it, which flat reads where it reads that node's rows, before the clause.

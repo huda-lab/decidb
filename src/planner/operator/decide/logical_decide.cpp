@@ -384,23 +384,6 @@ vector<ColumnBinding> LogicalDecide::SourceBindings() {
 	return result;
 }
 
-void LogicalDecide::RepointSourceColumns(LogicalOperator &old_source, const vector<ColumnBinding> &new_bindings) {
-	auto old_bindings = old_source.GetColumnBindings();
-	D_ASSERT(old_bindings.size() == new_bindings.size());
-	vector<ColumnBinding> keys;
-	for (auto &binding : old_bindings) {
-		keys.push_back(DecideSourceColumnKey(old_source, binding));
-	}
-	for (auto &column : source_columns) {
-		for (idx_t i = 0; i < keys.size(); i++) {
-			if (column.binding == keys[i]) {
-				column.binding = new_bindings[i];
-				break;
-			}
-		}
-	}
-}
-
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 

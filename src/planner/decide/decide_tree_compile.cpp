@@ -474,7 +474,7 @@ private:
 
 	//! A term on `node` whose filter flat reads at `slot` of the part `part` of its owner's evaluation: a clause reads
 	//! its terms' filters, then its products', then its squares', in one pass before any coefficient, and the
-	//! objective its products' after its other terms' coefficients (PhysicalDecide::EvaluateObjective). The node's
+	//! objective its products' after its other terms' coefficients. The node's
 	//! filter is read at the first.
 	void Reads(idx_t node, idx_t part, idx_t slot) {
 		auto &first = first_reads[node];
@@ -730,7 +730,7 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 }
 
 //! The objective's programs: its terms then its squared terms, read together, then its products, whose filters and
-//! coefficients flat reads in a pass after them (PhysicalDecide::EvaluateObjective).
+//! coefficients flat reads in a pass after them.
 static void CompileObjective(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &objective = *body.objective;
 	for (idx_t t = 0; t < objective.terms.size(); t++) {

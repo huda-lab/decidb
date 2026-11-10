@@ -184,19 +184,9 @@ struct DecideFrameMap {
 	}
 };
 
-//! `frame`'s timelines over the input's rows: its anchors grouped by its timeline key (its path's `by` keys, then
-//! `within`; a row whose written `within` column is NULL is in no timeline, D75), each ordered by its order key --
-//! descending when written, NULL where the connection's `default_null_order` puts it (D74) -- into peers, and each
-//! anchor's selected peer or window. A range listing more values than `decide_frame_limit` is refused as it is listed,
-//! and an interrupt is polled per timeline and per window.
-DecideFrameMap BuildDecideFrameMap(ClientContext &context, const DecideFrameSpec &frame, const vector<DecideKey> &keys,
-                                   PerGroupCache &per_group_cache, idx_t num_rows,
-                                   ChunkExprCache &chunk_expr_cache);
-
 //! What each anchor of `map` reads, once its anchors, timelines and peers are known (`first_peer[t]` the first peer of
 //! timeline `t`, then one past the last): a point's selected peer, a range's window (language/guide.md §5.6), and the
-//! anchors where the frame reads nothing. BuildDecideFrameMap's second half, which the tree's frames share: their
-//! timelines are its descent's (DecideNodeTimelines).
+//! anchors where the frame reads nothing. A frame's timelines are its O's in the descent (DecideNodeTimelines).
 void SelectDecideFramePeers(ClientContext &context, const DecideFrameSpec &frame, const vector<idx_t> &first_peer,
                             DecideFrameMap &map);
 
@@ -214,26 +204,9 @@ struct DecideFrameValues {
 //! frame's anchors (DecideTreeColumns).
 using DecideFrameRead = std::function<DecideFrameValues(const Expression &expression, const vector<bool> &rows)>;
 
-//! Flat's read (DecideFrameRead): `expr` on the rows `rows` marks, as the one pass computed it. A computed value can
-//! fail on a row that no surviving instance reads, so its failure stays with the value until a consumer reaches it, as
-//! the pass keeps it for its expressions (DecideRowStore::Slot).
-DecideFrameValues ReadDecideFrameRows(ClientContext &context, const Expression &expr, idx_t num_rows,
-                                      const vector<bool> &rows, ChunkExprCache &chunk_expr_cache);
 
-//! For each class of `row_to_class` (INVALID_INDEX: a row in none), the row holding the least value of `expr` -- a
-//! column's spelling -- as ORDER BY places it.
-vector<idx_t> LeastSpellingRows(const Expression &expr, const vector<idx_t> &row_to_class, idx_t num_classes,
-                                ChunkExprCache &chunk_expr_cache, ClientContext &context);
 
-//! The row that names each position of `map`: the one with its least spelling of the order key, which a collation lets
-//! its rows differ in, so a name does not depend on row order (D69).
-vector<idx_t> DecidePositionRows(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
-                                 ChunkExprCache &chunk_expr_cache);
 
-//! D75: each class of `frame.partition_key` among the anchors lies in one timeline; an anchor in none is no witness.
-void CheckDecideFramePartition(ClientContext &context, const DecideFrameSpec &frame, const DecideFrameMap &map,
-                               const vector<DecideKey> &keys, PerGroupCache &per_group_cache,
-                               idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
 //! D75's message: the class `class_values` of the partition key (its elements `class_names`) lies in the two
 //! timelines `left` and `right`.
@@ -263,19 +236,8 @@ void SkipDecideRangeNullReads(const vector<const Expression *> &payload, const v
 void SkipDecideFrameNullReads(const DecidePreparedModel &prepared, const vector<LogicalDecide::ReducerValueLink> &links,
                               vector<DecideFrameMap> &maps, idx_t num_rows, const DecideFrameRead &read);
 
-//! Adds to the one pass's columns (DecideRowStore::AppendColumn) the value of each of `prepared.frame_columns`
-//! on every row (DecideFrameColumn), each computed on the rows its kind names only: a
-//! payload on the first row of each selected peer, which CheckDecideFramePeers holds for the
-//! peer's other rows, or on the rows a range's windows read; an `else` on the anchors that
-//! reach it. An anchor where the frame reads nothing is NULL in every column (D84). A payload, fallback or reduction
-//! failure travels with the computed column at the anchors that read it, and raises only when a consumer reads one
-//! of those anchors: an anchor without a surviving instance must not raise another instance's error.
-void AppendDecideFrameColumns(ClientContext &context, const vector<DecideFrameSpec> &frames,
-                              const vector<DecideFrameMap> &maps, const DecidePreparedModel &prepared,
-                              idx_t num_rows, ChunkExprCache &chunk_expr_cache);
-
-//! The frame columns AppendDecideFrameColumns appends, each with its rows' errors: every one before the first reducer
-//! over data reading frames (AGGREGATE), each expression read through `read`.
+//! A frame's columns, each with its rows' errors: every one before the first reducer over data reading frames
+//! (AGGREGATE), each expression read through `read`.
 struct DecideFrameColumnValues {
 	vector<unique_ptr<Vector>> values;
 	vector<std::map<idx_t, ErrorData>> errors;
@@ -315,16 +277,7 @@ bool DecideFrameReadsAbsent(const DecideFrameMap &map, idx_t row, ABSENT &&absen
 //! each value a range's window lists, once per window however many anchors share it.
 void DecideCountFrames(const vector<DecideFrameMap> &maps);
 
-//! The aggregate of `column`'s reducer (function and arguments; not its filter) over the rows `members` keeps of each
-//! group into `out`, on each row its group's value: `group` numbers the rows' groups below `groups`, INVALID_INDEX for
-//! a row in none, which reads NULL. The aggregate of a group with no member is SQL's over no row: NULL, and 0 for
-//! `count`. A NaN among what it reads is an error (AggregateFold).
-void ReduceDecideGroups(ClientContext &context, const DecideFrameColumn &column, const vector<bool> &members,
-                        const vector<idx_t> &group, idx_t groups, ChunkExprCache &chunk_expr_cache, Vector &out);
 
-//! The one pass's store with the columns `values_of` (one value per row each) after its own
-//! (DecideRowStore::AppendColumn).
-void AppendDecideColumns(ChunkExprCache &chunk_expr_cache, const vector<unique_ptr<Vector>> &values_of);
 
 //! What a frame reads at each row of a position it reads, as D73 compares the rows (deck p. 110): each column `values`
 //! read, by value, and the instance of each decision of `terms` -- term `i` the coefficient `values[terms[i].column]`
@@ -333,22 +286,5 @@ struct DecideFramePayload {
 	vector<const Expression *> values;
 	vector<DecideFramePayloadTerm> terms;
 };
-
-//! Each frame's payload: a point's VALUE and READ columns, with its payload terms
-//! (DecidePreparedModel::frame_payload_terms); a range over data its reducer's argument; a range over decisions its
-//! helper's member terms (`links`).
-vector<DecideFramePayload> DecideFramePayloads(const vector<DecideFrameSpec> &frames,
-                                               const DecidePreparedModel &prepared,
-                                               const vector<LogicalDecide::ReducerValueLink> &links);
-
-//! D73, once the keyed mappings are built: the rows of a position a frame reads -- a point's selected peer, each
-//! position a range's window visits -- hold one signature of its payload, as the deck's frame container holds one per
-//! position (p. 110): each column the payload reads, by value (`a + b` reads `a` and `b`), and each decision it reads,
-//! by instance through the classes of `keyed_mappings` (`0 * x` reads `x`).
-void CheckDecideFramePeers(ClientContext &context, const vector<DecideFrameSpec> &frames,
-                           const vector<DecideFrameMap> &maps, const vector<DecideFramePayload> &payloads,
-                           const vector<DecideVarScopeInfo> &variable_scopes,
-                           const vector<KeyedMapping> &keyed_mappings, const vector<DecideKey> &keys,
-                           idx_t num_rows, ChunkExprCache &chunk_expr_cache);
 
 } // namespace duckdb

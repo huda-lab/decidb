@@ -21,7 +21,7 @@ from ._scope_cases import answer, dump_counts
     ids=lambda value: value.name if hasattr(value, "name") else None,
 )
 def test_tree_values_reach_the_decks_model(decidb_cli, tmp_path, case, counts):
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_NATIVE_CONSTRUCTS": "off"})
+    cli = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     sql = "SET decide_direct_solve='off'; " + case.sql
     assert case.model().judge(answer(cli, sql), case.clauses, case.objective) == pytest.approx(case.optimum)
     assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump")) == counts
@@ -32,7 +32,7 @@ def test_changing_a_data_child_changes_the_answer(decidb_cli):
     sql = """SET decide_direct_solve='off';
         SELECT id,x FROM (VALUES (1,2),(2,3)) t(id,d)
         DECIDE per (): x(REAL) SUCH THAT x <= sum(t.d) MAXIMIZE x ORDER BY id"""
-    env = {**os.environ, **(decidb_cli.env or {}), "DECIDB_EVALUATOR": "tree", "DECIDB_DUMP_TREE": "1"}
+    env = {**os.environ, **(decidb_cli.env or {}), "DECIDB_DUMP_TREE": "1"}
     original = subprocess.run(
         [decidb_cli.exe, "-json", "-c", sql], env=env, capture_output=True, text=True, timeout=120
     )
@@ -87,7 +87,7 @@ NESTING_CASES = {
 @pytest.mark.parametrize("case", list(NESTING_CASES))
 def test_the_tree_nesting_rule(decidb_cli, case):
     sql, expected = NESTING_CASES[case]
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
 
 
@@ -117,7 +117,7 @@ SIGNATURE_CASES = {
 @pytest.mark.parametrize("case", list(SIGNATURE_CASES))
 def test_the_tree_signature_carries_null_tests(decidb_cli, case):
     sql, expected = SIGNATURE_CASES[case]
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == expected
 
 
@@ -130,7 +130,7 @@ def test_a_lowered_auxiliary_is_no_field_of_the_objective(decidb_cli):
     was refused."""
     sql = """SELECT id, x FROM (VALUES (1, 3), (2, 3), (3, 2)) t(id, cap)
         DECIDE x(INT) SUCH THAT x <= cap MAXIMIZE 0 * sum(x) + abs(sum(x) - 9) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [{"id": i, "x": 0} for i in (1, 2, 3)]
 
 
@@ -140,7 +140,7 @@ def test_a_member_test_is_no_field_of_a_per_clause(decidb_cli):
     The members are rows 1 and 3, so x1 + 1 >= 2 and x3 + 1 >= 2, and MINIMIZE takes x = 1, 0, 1."""
     sql = """SELECT id, x FROM (VALUES (1, 'A', true), (2, 'A', false), (3, 'B', true)) t(id, g, p)
         DECIDE x(INT) SUCH THAT x <= 5 AND per g: min(when p: x + 1) by (g) >= 2 MINIMIZE SUM(x) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [
         {"id": 1, "x": 1},
         {"id": 2, "x": 0},
@@ -156,7 +156,7 @@ def test_a_root_records_the_classes_of_a_helper_it_reads(decidb_cli):
     sql = """SELECT id, x, b FROM (VALUES (1, 'a', 4), (2, 'a', 5), (3, 'b', 2)) t(id, g, cap)
         DECIDE x(INT), per (): b(BOOL) SUCH THAT x <= 3 AND per t.g: b * SUM(x) by (t.g) <= t.cap
         MAXIMIZE SUM(id * x) + 9 * b ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [
         {"id": 1, "x": 1, "b": True},
         {"id": 2, "x": 3, "b": True},
@@ -174,7 +174,7 @@ def test_a_root_per_row_keeps_the_window_of_the_helper_it_defines(decidb_cli):
     sql = """SELECT id, x FROM (VALUES (1, 2, 2), (2, 2, 3), (3, 0, 3), (4, 1, 2)) t(id, lo, hi)
         DECIDE x(INT) SUCH THAT x >= lo AND x <= hi
         MINIMIZE SUM(abs(sum(from previous to next: x) over (t.id) - 4)) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, "SET decide_direct_solve='off'; " + sql) == [
         {"id": 1, "x": 2},
         {"id": 2, "x": 2},
@@ -192,7 +192,7 @@ def test_a_product_has_no_value_where_a_factor_has_none(decidb_cli):
     sql = """SET decide_direct_solve='off';
         SELECT id, x, b FROM (VALUES (1, 'a', true), (2, 'b', false)) t(id, g, c) DECIDE x(INT), b(BOOL)
         SUCH THAT x <= 9 AND x + b * sum(when t.c: x) by (t.g) <= 5 MAXIMIZE sum(x) + sum(b) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     assert answer(cli, sql) == [{"id": 1, "x": 5, "b": False}, {"id": 2, "x": 9, "b": True}]
 
 
@@ -213,7 +213,7 @@ def test_a_grouped_root_is_one_instance_per_group(decidb_cli, case):
     sql = f"""SET decide_direct_solve='off';
         SELECT id, x FROM (VALUES (1, 'a', 3), (2, 'a', 4), (3, 'a', 9), (4, 'b', 2), (5, 'b', 6)) t(id, g, c)
         DECIDE x(INT) SUCH THAT x <= 10 AND {GROUP_CLASS_CASES[case]} MAXIMIZE SUM(x) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     rows = answer(cli, sql, warnings=["each of its 2 instances has no value"])
     assert rows == [{"id": i, "x": 10} for i in range(1, 6)]
 
@@ -224,7 +224,7 @@ def test_an_ungrouped_root_is_one_model_row(decidb_cli, tmp_path):
     sql = """SET decide_direct_solve='off';
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) <> 0
         MINIMIZE SUM(t.id * x) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree", "DECIDB_NATIVE_CONSTRUCTS": "off"})
+    cli = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     assert answer(cli, sql) == [{"id": 1, "x": True}, {"id": 2, "x": False}, {"id": 3, "x": False}]
     assert dump_counts(cli.dump_model(sql, tmp_path / "tree.dump"))["num_rows"] == 1
 
@@ -238,7 +238,7 @@ def test_an_interrupt_stops_the_bottom_up_evaluation(decidb_cli):
     sql = f"""SET threads=1; SET decide_direct_solve='off'; SET decide_frame_limit=1000000000;
         SELECT count(*) FROM (SELECT i, x FROM (SELECT i, (i * 7919) % 100 AS v FROM range(5000) r(i)) t
         DECIDE x(REAL) SUCH THAT {frames} MAXIMIZE sum(x))"""
-    result, _ = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"}).execute_interrupted(sql, after=1.5, timeout=60)
+    result, _ = decidb_cli.execute_interrupted(sql, after=1.5, timeout=60)
     assert "Interrupted!" in result.stderr, result.stderr[:800]
 
 
@@ -268,7 +268,7 @@ def test_a_grouped_clause_counts_its_groups(decidb_cli, case):
     sql = f"""SET decide_direct_solve='off';
         SELECT id, x FROM (VALUES {values}) t(id, g, c, k)
         DECIDE x(INT) SUCH THAT x <= 10 AND {clause} MAXIMIZE SUM(x) ORDER BY id"""
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     found = answer(cli, sql, warnings=["each of its 2 instances has no value"])
     assert found == [{"id": row[0], "x": 10} for row in rows]
 
@@ -305,7 +305,7 @@ INSTANCE_COUNT_CASES = {
 @pytest.mark.parametrize("case", list(INSTANCE_COUNT_CASES))
 def test_explain_counts_each_instance_once(decidb_cli, case):
     sql, skipped = INSTANCE_COUNT_CASES[case]
-    cli = decidb_cli.with_env({"DECIDB_EVALUATOR": "tree"})
+    cli = decidb_cli
     result = cli.execute_raw("SET decide_direct_solve='off'; EXPLAIN ANALYZE " + sql)
     assert result.returncode == 0, result.stderr
     text = "".join(line.strip().strip("│").strip() for line in result.stdout.splitlines()).replace(" ", "")
