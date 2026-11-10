@@ -393,6 +393,22 @@ most on the smallest queries, Q5 3.9x of 2.5 ms and Q7 2.3x of 21.5 ms), and the
 descent was vectorized, its keys and entries one `Value` at a time, it was 2x to 32x flat's time and 1.4x to 6.3x its
 memory at 10^5 rows, and 66% over flat's wall time on TPC-H `large`. Growth stays linear in the rows.
 
+**`tree-noside` against flat, query by query.** The whole suite's output under `tree-noside`
+(`DECIDB_EVALUATOR=tree-noside test/decide/capture_suite_log.sh capture`), compared with two runs of flat's
+(`suite_log.py OLD NEW --again OLD_AGAIN`), in the modes `auto`, `highs` and `off`, differs on 15,269 queries in four
+ways, each with its cause:
+- *G5-TIE*: a query with several optimal answers (a BOOL product's objective, a sum over `per` groups, a feasibility
+  query) prints another one. Flat prints several of them across runs of one binary, as rows of a `UNION ALL` reach
+  the sink in another order; the answers the tree prints are among them.
+- *G5-PLAN*: EXPLAIN differs where side plans would be: with none, no `direct_source` or `direct_bound` CTE is
+  planned, and a record's placeholder shows as the aggregate it stands for (`min(CASE WHEN ... END)`), not as its
+  column (`#3`). So does the plan a stored table's copy leaves out (`test_r1_copy_...`).
+- *G5-EQ*: an `=` bound that takes two values in a group names another group's two values: flat's side plan raises
+  in the order its window reads its partitions, by hash, and the tree's check in the order of the rows.
+- *G5-ENV*: a test that sets `DECIDB_EVALUATOR` itself records another environment in each log, so its queries pair
+  with none; their output is the same. One test fails under the tree (`test_null_values`, a profile span flat alone
+  has), so its second query does not run.
+
 Switches for the tree: `DECIDB_DUMP_TREE`, `DECIDB_DUMP_CONTAINERS`, `DECIDB_DUMP_BODIES` and `DECIDB_DUMP_VALUES`
 print the tree, the containers, the bodies and their programs, and the columns' values, each node's programs the
 evaluation computed on its entries (`DecideTreeColumns::Dump`), to stderr (the first two also under `flat`, which then
