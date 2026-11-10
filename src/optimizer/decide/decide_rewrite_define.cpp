@@ -155,23 +155,28 @@ void CollectBodySites(ClientContext &context, Expression &expr, idx_t decide_ind
 	                 source_alias, scope});
 }
 
-//! A plain constraint whose one MIN or MAX is pushed its cheap way (`max(q) <= K`, `-2 * min(q) <= K`): the MIN/MAX
-//! rewrite bounds each member, so a non-linear body is one quadratic row per member. Read as RewriteMinMaxInConstraint
-//! reads it; a factor whose sign only the rows decide goes to the composed rewrite, which needs the definition.
+//! A plain constraint whose one MIN or MAX is pushed its cheap way (`max(q) <= K`, `-2 * min(q) <= K`, `-max(q) >= K`):
+//! the MIN/MAX rewrite bounds each member, so a non-linear body is one quadratic row per member. Read as
+//! RewriteMinMaxInConstraint reads it; a factor whose sign only the rows decide goes to the composed rewrite, which
+//! needs the definition.
 bool IsCheapLoneExtremum(ClientContext &context, BoundComparisonExpression &comparison, idx_t decide_index) {
-	auto &lhs = *UnwrapDecideCasts(*comparison.left, decide_index);
-	ScaledAggregateMatch match;
-	const BoundAggregateExpression *agg = TryMatchScaledAggregate(lhs, decide_index, match) ? match.aggregate
-	                                      : lhs.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
-	                                          ? &lhs.Cast<BoundAggregateExpression>()
-	                                          : nullptr;
-	if (!agg || !IsExtremumName(StringUtil::Lower(agg->function.name)) ||
-	    (match.scale && BoundExpressionReferencesDecide(*match.scale, decide_index))) {
+	auto atoms = ReadCanonicalAtoms(*comparison.left, decide_index);
+	if (atoms.size() != 1) {
 		return false;
 	}
-	const int scale_sign = ScaleSignAtPlanTime(context, match.scale, match.divides);
+	auto &atom = atoms[0];
+	auto &term = *UnwrapDecideCasts(*atom.term, decide_index);
+	const BoundAggregateExpression *agg = atom.scale.aggregate;
+	if (!atom.scaled && term.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		agg = &term.Cast<BoundAggregateExpression>();
+	}
+	if (!agg || !IsExtremumName(StringUtil::Lower(agg->function.name)) ||
+	    (atom.scale.scale && BoundExpressionReferencesDecide(*atom.scale.scale, decide_index))) {
+		return false;
+	}
+	const int direction = atom.sign * ScaleSignAtPlanTime(context, atom.scale.scale, atom.scale.divides);
 	return IsEasyExtremum(StringUtil::Lower(agg->function.name) == "max",
-	                      ExtremumPushOf(ExtremumPushOf(comparison.type), scale_sign));
+	                      ExtremumPushOf(ExtremumPushOf(comparison.type), direction));
 }
 
 //! Copies of one reducer under one `when`: they share a helper.

@@ -468,13 +468,9 @@ private:
 
 	//! Rebuild an additive chain from terms.
 	unique_ptr<Expression> BuildAdditive(const vector<Atom> &atoms) const;
-	//! Whether `atoms` is one negated reducer (`-max(e)`, `-(2 * max(e))`).
-	bool IsLoneNegatedReducer(const vector<Atom> &atoms) const;
 	//! Whether `side` spells one term with signs around it (`-(-max(e))`): its canonical
 	//! form is the bare term, which only a rebuild gives.
 	bool IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const;
-	//! Moves a negated reducer's sign into its factor: `-1 * max(e)`, `-(2) * max(e)`.
-	void FoldNegationIntoFactor(Atom &atom) const;
 
 	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left, unique_ptr<Expression> right) const;
 	//! Unary form, for the leading negative term of a rebuilt spine.

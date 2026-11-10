@@ -19,6 +19,7 @@ Covers:
   - test_composed_minmax_negated_reducer: SUM(x) - MAX(y) <= 0
   - test_leading_negative_reducer: 3 - MAX(x) <= 0 (the `0 - term` rebuild idiom)
   - test_composed_minmax_objective_subtraction: MAXIMIZE MAX(x*v) - MIN(x*v)
+  - test_negated_extremum_*: a lone negated MIN/MAX in a constraint is a term's sign, not a factor of -1
 """
 
 import time
@@ -26,7 +27,10 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
+from ._brute_force import judge_rows
 from ._oracle_helpers import emit_hard_inner_max, emit_hard_inner_min
+from ._scope_cases import answer, dump_counts, scope_solver, table  # noqa: F401
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
 def _add_exact_abs(oracle, d_name, x_name, offset, big_m, tag):
@@ -339,4 +343,137 @@ def test_composed_minmax_objective_subtraction(decidb_cli, oracle_solver, perf_t
         result.objective_value,
         oracle_solver.solver_name(),
         comparison_status="optimal",
+    )
+
+
+# ---------------------------------------------------------------------------
+# A lone negated MIN or MAX: the sign is the term's, never a factor of -1.
+# ---------------------------------------------------------------------------
+#
+# `-MAX(x) >= -4` and `-1 * MAX(x) >= -4` are one problem. The first reaches the MIN/MAX rewrite as a negated
+# reducer, the second as a reducer under the factor -1; the rewrite reads the direction as the comparison's times the
+# term's sign times its factor's sign (WalkComposedLhs does the same), so both build one model.
+
+_SIGN_COLUMNS = ("id", "g", "w")
+_SIGN_ROWS = ((1, "a", 2), (2, "a", 3), (3, "b", 4))
+
+
+def _sign_sql(clause: str, sense: str) -> str:
+    return f"""
+        SELECT id, x {table('t', _SIGN_COLUMNS, _SIGN_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= 6 AND {clause}
+        {sense} SUM(x * t.w)
+        ORDER BY id"""
+
+
+# (clause, aggregate, the term's total multiplier, relation, bound, objective sense). The objective pushes against
+# the clause: MAXIMIZE binds a cap on every member (the easy direction), MINIMIZE a reach by some member (the hard).
+_NEGATED_EXTREMUM_CASES = [
+    pytest.param("-MAX(x) >= -4", "max", -1, ">=", -4, "MAXIMIZE", id="sign-easy-max"),
+    pytest.param("-MAX(x) <= -3", "max", -1, "<=", -3, "MINIMIZE", id="sign-hard-max"),
+    pytest.param("-MIN(x) <= -2", "min", -1, "<=", -2, "MINIMIZE", id="sign-easy-min"),
+    pytest.param("-MIN(x) >= -2", "min", -1, ">=", -2, "MAXIMIZE", id="sign-hard-min"),
+    pytest.param("-(2 * MAX(x)) >= -8", "max", -2, ">=", -8, "MAXIMIZE", id="sign-positive-factor-easy"),
+    pytest.param("-(2 * MAX(x)) <= -6", "max", -2, "<=", -6, "MINIMIZE", id="sign-positive-factor-hard"),
+    pytest.param("-(-2 * MAX(x)) <= 8", "max", 2, "<=", 8, "MAXIMIZE", id="sign-negative-factor-easy"),
+    pytest.param("-(-2 * MIN(x)) <= 4", "min", 2, "<=", 4, "MAXIMIZE", id="sign-negative-factor-hard"),
+    pytest.param("-MAX(x) = -4", "max", -1, "=", -4, "MAXIMIZE", id="sign-equality"),
+    pytest.param("-(2 * MIN(x)) = -4", "min", -2, "=", -4, "MAXIMIZE", id="sign-factor-equality"),
+    pytest.param("-((SELECT 2) * MAX(x)) >= -8", "max", -2, ">=", -8, "MAXIMIZE", id="unknown-factor-easy"),
+    pytest.param("-((SELECT 2) * MAX(x)) <= -6", "max", -2, "<=", -6, "MINIMIZE", id="unknown-factor-hard"),
+]
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, agg, multiplier, relation, bound, sense", _NEGATED_EXTREMUM_CASES)
+def test_negated_extremum_answers(decidb_cli, scope_solver, clause, agg, multiplier, relation, bound, sense):
+    """A negated MIN/MAX answers as the oracle does, in every direction its sign, its factor's sign and the relation
+    give: a cap on each member (easy), a reach by one member (hard), both for `=`, and a factor of unknown sign (the
+    composed formulation, which reads the sign as a term's)."""
+    model = ScopedModel(
+        [dict(zip(_SIGN_COLUMNS, row)) for row in _SIGN_ROWS],
+        [Decision("x", var_type=VarType.INTEGER, ub=6)],
+    )
+    reducer = Reduce(agg, lambda r: {"x": 1.0}, factor=lambda r: float(multiplier))
+    clauses = [Scoped((reducer,), relation, (lambda r: {CONSTANT: bound},))]
+    objective = ScopedObjective(ObjSense[sense], (Reduce("sum", lambda r: {"x": r["w"]}),))
+    result = answer(decidb_cli, _sign_sql(clause, sense))
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_negated_extremum_per_group(decidb_cli, scope_solver):
+    """`per g: -max(x) by (g) <= -3`: some member of each group reaches 3. The sign rides with the group key."""
+    model = ScopedModel(
+        [dict(zip(_SIGN_COLUMNS, row)) for row in _SIGN_ROWS],
+        [Decision("x", var_type=VarType.INTEGER, ub=6)],
+    )
+    reducer = Reduce("max", lambda r: {"x": 1.0}, by=("g",), factor=lambda r: -1.0)
+    clauses = [Scoped((reducer,), "<=", (lambda r: {CONSTANT: -3},), per=("g",))]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", lambda r: {"x": r["w"]}),))
+    result = answer(decidb_cli, _sign_sql("per g: -max(x) by (g) <= -3", "MINIMIZE"))
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
+
+
+# The written factor `-1 *` and the sign build one model: the dump is the model after presolve and formulation.
+_SAME_MODEL_CASES = [
+    pytest.param("-MAX(x * t.w) <= -2", "-1 * MAX(x * t.w) <= -2", id="hard-max"),
+    pytest.param("-MIN(x * t.w) >= -5", "-1 * MIN(x * t.w) >= -5", id="hard-min"),
+    pytest.param("-MAX(x * t.w) >= -5", "-1 * MAX(x * t.w) >= -5", id="easy-max"),
+    pytest.param("-(2 * MIN(x * t.w)) = -4", "-2 * MIN(x * t.w) = -4", id="equality-with-a-factor"),
+    pytest.param("-(-2 * MAX(x * t.w)) >= 4", "2 * MAX(x * t.w) >= 4", id="sign-over-a-negative-factor"),
+]
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("negated, factored", _SAME_MODEL_CASES)
+def test_negated_extremum_builds_the_model_of_its_factor(decidb_cli, tmp_path, negated, factored):
+    """One problem, two spellings, one model: a sign and a factor of -1 give the same rows."""
+
+    def dump(clause: str, name: str) -> str:
+        return decidb_cli.dump_model(
+            f"""
+            SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0), (3, 5.0)) t(id, w)
+            DECIDE x(REAL)
+            SUCH THAT x <= t.w AND {clause}
+            MINIMIZE SUM(x)""",
+            tmp_path / name,
+        )
+
+    assert dump(negated, "negated.txt") == dump(factored, "factored.txt")
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_aggregate
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_negated_extremum_member_is_bounded_per_row(decidb_cli_gurobi, tmp_path):
+    """`-MAX(POWER(x - w, 2)) >= -4` is the cheap direction (every squared deviation at most 4), so each member is a
+    quadratic row and no definition of the body is needed: the model has one column per row. Read with the sign
+    dropped it would be the expensive direction, which defines the body in a column of its own."""
+    rows = ((1, 1), (2, 3), (3, 5))
+    sql = f"""
+        SELECT id, x {table('t', ('id', 'w'), rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= 6 AND -MAX(POWER(x - t.w, 2)) >= -4
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    answers = answer(decidb_cli_gurobi, sql)
+    assert dump_counts(decidb_cli_gurobi.dump_model(sql, tmp_path / "model.txt"))["num_vars"] == 3
+    judge_rows(
+        answers,
+        {f"x{i}": range(7) for i in range(3)},
+        lambda a: all((a[f"x{i}"] - rows[i][1]) ** 2 <= 4 for i in range(3)),
+        lambda a: sum(a.values()),
     )

@@ -111,6 +111,28 @@ static const BoundAggregateExpression *MatchLoneScaledExtremum(const Expression 
 	return &agg;
 }
 
+//! The aggregate of a left side that is one signed MIN or MAX term, `[-] [factor *] min/max(e)`, else null. Its sign
+//! is `sign` and its factor `match.scale`, if any: the term's direction is the comparison's times both.
+static const BoundAggregateExpression *MatchLoneSignedExtremum(const Expression &lhs, idx_t decide_index, int &sign,
+                                                               ScaledAggregateMatch &match) {
+	auto atoms = ReadCanonicalAtoms(lhs, decide_index);
+	if (atoms.size() != 1) {
+		return nullptr;
+	}
+	auto &atom = atoms[0];
+	auto *root = UnwrapDecideCasts(*atom.term, decide_index);
+	if (!atom.scaled && root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return nullptr;
+	}
+	auto &agg = atom.scaled ? *atom.scale.aggregate : root->Cast<BoundAggregateExpression>();
+	if (!IsExtremumName(StringUtil::Lower(agg.function.name))) {
+		return nullptr;
+	}
+	sign = atom.sign;
+	match = atom.scale;
+	return &agg;
+}
+
 // True if any MIN/MAX aggregate over a decide var appears at or below the node.
 // Recurses through any function node's children (not just +/-), so shapes like
 // `2 * MIN(...)` are detected and can be rejected with a clean binder error.
@@ -306,11 +328,15 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	// "hard" silently drops the ∀ half. The composed path emits the envelope pin AND
 	// the indicator layer, which together pin the auxiliary to the true MIN/MAX in both
 	// directions, so multiplying it by a factor of either sign stays exact.
+	// A lone signed MIN or MAX (`-max(e)`, `2 * min(e)`) is the single-term rewrite's, which reads its sign and its
+	// factor's; only a factor of unknown sign comes here.
 	ScaledAggregateMatch lone_match;
-	bool unknown_sign_lone_minmax = MatchLoneScaledExtremum(*comp.left, decide.decide_index, lone_match) &&
-	                                ScaleSignAtPlanTime(optimizer.context, lone_match.scale, lone_match.divides) == 0;
-
-	if (!unknown_sign_lone_minmax) {
+	int lone_sign;
+	if (MatchLoneSignedExtremum(*comp.left, decide.decide_index, lone_sign, lone_match)) {
+		if (ScaleSignAtPlanTime(optimizer.context, lone_match.scale, lone_match.divides) != 0) {
+			return;
+		}
+	} else {
 		if (!IsFunctionNode(*comp.left, decide.decide_index, "+") &&
 		    !IsFunctionNode(*comp.left, decide.decide_index, "-")) {
 			return;
@@ -477,31 +503,26 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	}
 	auto &comp = expr->Cast<BoundComparisonExpression>();
 
-	// Unwrap any BoundCastExpression on the LHS, and any factor peeled onto it. The
-	// factor STAYS OUTSIDE the aggregate; all it does here is contribute its sign to
-	// the easy/hard classification, and ride along on whichever form is emitted.
-	Expression *lhs = UnwrapDecideCasts(*comp.left, decide.decide_index);
+	// The term's sign and any factor peeled onto it. The factor STAYS OUTSIDE the aggregate and the sign
+	// outside the factor; all they do here is contribute to the easy/hard classification, and ride along on
+	// whichever form is emitted.
 	ScaledAggregateMatch scale_match;
-	const BoundAggregateExpression *scaled_agg =
-	    TryMatchScaledAggregate(*lhs, decide.decide_index, scale_match) ? scale_match.aggregate : nullptr;
+	int term_sign;
+	auto *found = MatchLoneSignedExtremum(*comp.left, decide.decide_index, term_sign, scale_match);
+	if (!found) {
+		return;
+	}
+	auto &agg = *found;
+	auto fname = StringUtil::Lower(agg.function.name);
 	auto scale = scale_match.scale;
 	bool scale_divides = scale_match.divides;
-
-	if (!scaled_agg && lhs->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return;
-	}
-	auto &agg = scaled_agg ? *scaled_agg : lhs->Cast<BoundAggregateExpression>();
-	auto fname = StringUtil::Lower(agg.function.name);
-	if (fname != "min" && fname != "max") {
-		return;
-	}
 
 	bool is_max = (fname == "max");
 	auto cmp_type = comp.type;
 
-	// A negative factor reverses the relation the aggregate faces: `-2 * MAX(e) >= -8`
-	// is `MAX(e) <= 4`, the cheap direction, not the expensive one. Classify against
-	// the flipped relation rather than the written one.
+	// A negative sign or factor reverses the relation the aggregate faces: `-2 * MAX(e) >= -8` and
+	// `-MAX(e) >= -8` are `MAX(e) <= 4` and `MAX(e) <= 8`, the cheap direction, not the expensive one.
+	// Classify against the flipped relation rather than the written one.
 	//
 	// An unknown sign (a scalar subquery factor) makes the cheap direction
 	// undecidable, so take the expensive one -- it pins the auxiliary to the true
@@ -521,7 +542,8 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	// Classify: easy (`MAX(expr) <= K` is every row's `expr <= K`; `MIN(expr) >= K` the
 	// mirror) against hard (`MAX(expr) >= K` needs an indicator: some row reaches K).
 	// `=` is neither and is split below.
-	const ExtremumPush push = ExtremumPushOf(ExtremumPushOf(cmp_type), scale_sign);
+	const int direction = term_sign * scale_sign;
+	const ExtremumPush push = ExtremumPushOf(ExtremumPushOf(cmp_type), direction);
 	const bool is_easy = IsEasyExtremum(is_max, push);
 	const bool is_hard = push != ExtremumPush::NONE && !is_easy;
 
@@ -555,15 +577,22 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		return hard_lhs;
 	};
 	// The hard side. Stage 06 takes the extremum the tag names over the members'
-	// coefficients -- the factor included -- and states the clause's own relation over
-	// it, which is the clause only when the factor is inside the reducer: with a negative
-	// factor `s * MAX(e)` is `MIN(s * e)`.
+	// coefficients -- the sign and the factor included -- and states the clause's own
+	// relation over it, which is the clause only when the factor is inside the reducer
+	// and the extremum is the one the whole term's direction names: with a negative factor
+	// `s * MAX(e)` is `MIN(s * e)`, and a negative sign takes the other extremum again, so
+	// `-(s * MAX(e))` is `MAX(-(s * e))`. The sign stays a sign, in front of the sum.
+	const string hard_name = direction > 0 ? fname : (is_max ? "min" : "max");
 	auto build_hard_lhs = [&]() -> unique_ptr<Expression> {
+		unique_ptr<Expression> lhs;
 		if (scale_sign > 0) {
-			return apply_scale(keep_group_key(EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get())));
+			lhs = apply_scale(
+			    keep_group_key(EmitHardMinMaxClause(decide, hard_name, *agg.children[0], agg.filter.get())));
+		} else {
+			auto scaled_body = apply_scale(agg.children[0]->Copy());
+			lhs = keep_group_key(EmitHardMinMaxClause(decide, hard_name, *scaled_body, agg.filter.get()));
 		}
-		auto scaled_body = apply_scale(agg.children[0]->Copy());
-		return keep_group_key(EmitHardMinMaxClause(decide, is_max ? "min" : "max", *scaled_body, agg.filter.get()));
+		return term_sign < 0 ? optimizer.BindScalarFunction("-", std::move(lhs)) : std::move(lhs);
 	};
 
 	// What the plan says the reducer became: an extremum column for the hard direction, a
@@ -581,11 +610,11 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// MAX(expr) = K → (expr <= K) AND (MAX(expr) >= K)
 		// MIN(expr) = K → (expr >= K) AND (MIN(expr) <= K)
 
-		// Easy part: per-row bound. A negative factor reverses it, for the same reason
+		// Easy part: per-row bound. A negative sign or factor reverses it, for the same reason
 		// it reverses the classification above.
 		auto easy_cmp_type =
 		    is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-		if (scale_sign < 0) {
+		if (direction < 0) {
 			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
 		}
 		// The easy half keeps the reducer (MINMAX_EASY_REWRITE_TAG): the linear form
@@ -608,7 +637,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		new_constraints.push_back(std::move(easy));
 		auto hard_cmp_type =
 		    is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		if (scale_sign < 0) {
+		if (direction < 0) {
 			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
 		}
 		comp.left = build_hard_lhs();

@@ -491,25 +491,28 @@ private:
 		}
 	}
 
-	//! The per-row terms of a scoped easy MIN/MAX, `[s *] max(when c: e)`: the terms of `e`,
-	//! each filtered by `c` and scaled by `s`.
+	//! The per-row terms of a scoped easy MIN/MAX, `[-] [s *] max(when c: e)`: the terms of `e`,
+	//! each filtered by `c`, scaled by `s` and signed.
 	void ExtractEasyExtremumTerms(const Expression &lhs, DecideConstraint &constraint) {
-		ScaledAggregateMatch scale_match;
+		auto atoms = ReadCanonicalAtoms(lhs, decide_index);
 		const BoundAggregateExpression *agg = nullptr;
-		if (TryMatchScaledAggregate(lhs, decide_index, scale_match)) {
-			agg = scale_match.aggregate;
-		} else if (lhs.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			agg = &lhs.Cast<BoundAggregateExpression>();
+		if (atoms.size() == 1 && atoms[0].scaled) {
+			agg = atoms[0].scale.aggregate;
+		} else if (atoms.size() == 1) {
+			auto &term = *UnwrapDecideCasts(*atoms[0].term, decide_index);
+			agg = term.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE ? &term.Cast<BoundAggregateExpression>()
+			                                                                    : nullptr;
 		}
 		if (!agg || agg->children.size() != 1) {
 			throw InternalException("DECIDE scoped MIN/MAX reached term extraction without its reducer: %s",
 			                        lhs.ToString());
 		}
+		auto &atom = atoms[0];
 		D_ASSERT(constraint.lhs_terms.empty() && constraint.product_groups.empty());
-		ExtractConstraintTerms(*agg->children[0], constraint, 1);
+		ExtractConstraintTerms(*agg->children[0], constraint, atom.sign);
 		AttachReducerFilter(constraint, 0, 0, agg->filter.get());
-		if (scale_match.aggregate) {
-			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint.lhs_terms,
+		if (atom.scaled) {
+			ApplyScaleToExtracted(*atom.scale.function, *atom.scale.scale, atom.scale.divides, constraint.lhs_terms,
 			                      constraint.product_groups, 0, 0);
 		}
 	}

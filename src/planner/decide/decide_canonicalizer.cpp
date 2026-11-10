@@ -362,7 +362,7 @@ bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
 	}
 	auto &func = cur->Cast<BoundFunctionExpression>();
 	if (func.function.name == "-" && func.children.size() == 1) {
-		return IsBooleanFactor(*func.children[0]); // the sign FoldNegationIntoFactor gives a negated reducer
+		return IsBooleanFactor(*func.children[0]); // `-b * SUM(x)`
 	}
 	if (func.function.name == "*") {
 		// Data times the Boolean. A product of two decisions beside a reducer is degree 3, which the shape check
@@ -994,11 +994,6 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 	return acc;
 }
 
-bool DecideCanonicalizer::IsLoneNegatedReducer(const vector<Atom> &atoms) const {
-	return atoms.size() == 1 && atoms[0].sign < 0 &&
-	       UnwrapDecideCasts(*atoms[0].expr, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
-}
-
 bool DecideCanonicalizer::IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const {
 	auto root = UnwrapDecideCasts(side, decide_index);
 	if (atoms.size() != 1 || root->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
@@ -1008,21 +1003,13 @@ bool DecideCanonicalizer::IsSignedSpine(const Expression &side, const vector<Ato
 	return name == "+" || name == "-";
 }
 
-void DecideCanonicalizer::FoldNegationIntoFactor(Atom &atom) const {
-	atom.scale = atom.scale ? BindOp("-", std::move(atom.scale))
-	                        : make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(-1));
-	atom.sign = -atom.sign;
-}
-
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const Expression &expr) const {
 	DecideProfileScope profile("canonicalize.comparison");
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
-	// Two spellings are fixed here. A lone negated reducer carries its sign in its factor,
-	// the one spelling a factor on a reducer has, so `-max(e) by (g)` reads as
-	// `-2 * max(e) by (g)` does: one MIN/MAX under a factor whose sign is known; and
-	// `-(-max(e))` as `max(e)`. The MIN/MAX rewrite routes on the tree it is given, so the
-	// tree must be the one its atoms rebuild. And a tuple term may stand under a
-	// row-varying factor beside a reducer (PeelScale): the VALUE shape takes it.
+	// A term's sign is its own, never a factor: `-max(e)` stays a negated reducer, and `-(-max(e))` is
+	// `max(e)`. The MIN/MAX rewrite routes on the tree it is given, so the tree must be the one its atoms
+	// rebuild. And a tuple term may stand under a row-varying factor beside a reducer (PeelScale): the
+	// VALUE shape takes it.
 	vector<Atom> left_atoms;
 	vector<Atom> right_atoms;
 	Decompose(*cmp.left, 1, left_atoms, Clause::CONSTRAINT);
@@ -1063,7 +1050,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	// (`SUM(x) * 2`), and the whole point of peeling is that consumers see one
 	// spelling. Rebuilding an already-canonical `2 * SUM(x)` reproduces it.
 	if (left_has_decision && !right_has_decision && !Has(left_atoms, Placement::RIGHT) && !HasScale(left_atoms) &&
-	    !(IsLoneNegatedReducer(left_atoms) || IsSignedSpine(*cmp.left, left_atoms))) {
+	    !IsSignedSpine(*cmp.left, left_atoms)) {
 		auto copy = cmp.Copy();
 		return FinalizeBoundProvenance(unique_ptr_cast<Expression, BoundComparisonExpression>(std::move(copy)));
 	}
@@ -1119,9 +1106,6 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	}
 
 	MergeLikeAtoms(new_left);
-	if (IsLoneNegatedReducer(new_left)) {
-		FoldNegationIntoFactor(new_left[0]);
-	}
 	auto new_lhs = BuildAdditive(new_left);
 	auto new_rhs = BuildAdditive(new_right);
 	if (!new_rhs) {
