@@ -32,8 +32,10 @@ struct Side {
 	vector<ColumnBinding> key;
 	//! The key's column types, and how the join to the classes compares them (a NULL is a value of a relation).
 	DirectClassKey class_key;
-	//! The index in `key` of the position column the cost reads.
-	idx_t position = DConstants::INVALID_INDEX;
+	//! The position column the cost reads and its type. The key determines it: it is a column of the key, or the key
+	//! holds a key of the position's table.
+	ColumnBinding position;
+	LogicalType position_type;
 };
 
 //! What CheckCondition proved: a one-to-one matching of the classes of the two sides, costed by a distance or a
@@ -164,8 +166,23 @@ bool ReadCost(ClientContext &context, const Factors &factors, const BoundColumnR
 	       ReadDifference(*square->children[0], a, b);
 }
 
-idx_t IndexOf(const vector<ColumnBinding> &columns, ColumnBinding binding) {
-	return NumericCast<idx_t>(std::find(columns.begin(), columns.end(), binding) - columns.begin());
+bool IsIn(const vector<ColumnBinding> &columns, ColumnBinding binding) {
+	return std::find(columns.begin(), columns.end(), binding) != columns.end();
+}
+
+//! Whether the side's key fixes `position` on every row of a class: it is a column of the key, or the key holds a key
+//! of the position's table.
+bool Determines(const DirectIR &ir, const Side &side, ColumnBinding position) {
+	if (IsIn(side.key, position)) {
+		return true;
+	}
+	for (auto &table_key : ir.keys) {
+		if (table_key[0].table_index == position.table_index &&
+		    std::all_of(table_key.begin(), table_key.end(), [&](ColumnBinding at) { return IsIn(side.key, at); })) {
+			return true;
+		}
+	}
+	return false;
 }
 
 class Rule final : public DirectSolveRule {
@@ -227,10 +244,14 @@ bool Rule::ProveClause(const DirectIR &ir, ClientContext &context, const DirectI
 	}
 	for (idx_t i = 0; i < clause.classes.size(); i++) {
 		auto &element = clause.classes[i];
-		if (element.no_group || element.grouping->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		if (element.grouping->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 			return false;
 		}
 		auto binding = element.grouping->Cast<BoundColumnRefExpression>().binding;
+		// A column of the key that may be NULL puts a row in no class, which the plan does not model.
+		if (element.no_group && !IsIn(ir.not_null, binding)) {
+			return false;
+		}
 		auto in_left = std::find(ir.cross_product.left.begin(), ir.cross_product.left.end(), binding) !=
 		               ir.cross_product.left.end();
 		if (i > 0 && in_left != on_left) {
@@ -264,23 +285,22 @@ bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &cond
 	if (!ReadCost(context, factors, a, b, distance)) {
 		return false;
 	}
-	// The positions: one column of each side's key, in either order.
+	// The positions: one column of each side, in either order, which that side's key determines.
 	auto place = [&](const BoundColumnRefExpression &of_left, const BoundColumnRefExpression &of_right) {
 		auto &left = condition.left;
 		auto &right = condition.right;
-		left.position = IndexOf(left.key, of_left.binding);
-		right.position = IndexOf(right.key, of_right.binding);
-		return left.position < left.key.size() && right.position < right.key.size();
+		left.position = of_left.binding;
+		left.position_type = of_left.return_type;
+		right.position = of_right.binding;
+		right.position_type = of_right.return_type;
+		return Determines(ir, left, left.position) && Determines(ir, right, right.position);
 	};
 	if (!place(*a, *b) && !place(*b, *a)) {
 		return false;
 	}
 	// A NULL position costs nothing against any partner, which the order of the positions cannot place: the plan must
 	// know that no position is NULL.
-	auto not_null = [&](const Side &side) {
-		return std::find(ir.not_null.begin(), ir.not_null.end(), side.key[side.position]) != ir.not_null.end();
-	};
-	if (!not_null(condition.left) || !not_null(condition.right)) {
+	if (!IsIn(ir.not_null, condition.left.position) || !IsIn(ir.not_null, condition.right.position)) {
 		return false;
 	}
 	// The cost is minimized. A distance of negative weight is a maximized distance, which no ranking gives.
@@ -346,7 +366,8 @@ public:
 	unique_ptr<LogicalOperator> Rank(unique_ptr<LogicalOperator> rows, const Side &side, bool descending,
 	                                 const vector<ColumnBinding> &columns, const vector<LogicalType> &types,
 	                                 idx_t index) const {
-		// Rows of one class are peers: the order names the position, then every other column of the key.
+		// Rows of one class are peers: the order names the position, then every other column of the key. The key
+		// determines the position, so the rows that agree on the key agree on it.
 		auto rank_index = binder.GenerateTableIndex();
 		auto ranks = make_uniq<LogicalWindow>(rank_index);
 		for (auto type :
@@ -356,14 +377,14 @@ public:
 			auto window = make_uniq<BoundWindowExpression>(type, LogicalType::BIGINT, nullptr, nullptr);
 			window->start = WindowBoundary::UNBOUNDED_PRECEDING;
 			window->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-			auto order = [&](idx_t i, OrderType direction) {
+			auto order = [&](const LogicalType &column_type, ColumnBinding column, OrderType direction) {
 				window->orders.emplace_back(direction, OrderByNullType::NULLS_LAST,
-				                            calc.Out(calc.Col(side.class_key.types[i], side.key[i])));
+				                            calc.Out(calc.Col(column_type, column)));
 			};
-			order(side.position, descending ? OrderType::DESCENDING : OrderType::ASCENDING);
+			order(side.position_type, side.position, descending ? OrderType::DESCENDING : OrderType::ASCENDING);
 			for (idx_t i = 0; i < side.key.size(); i++) {
-				if (i != side.position) {
-					order(i, OrderType::ASCENDING);
+				if (side.key[i] != side.position) {
+					order(side.class_key.types[i], side.key[i], OrderType::ASCENDING);
 				}
 			}
 			ranks->expressions.push_back(std::move(window));

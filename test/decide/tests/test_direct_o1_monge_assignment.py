@@ -542,3 +542,129 @@ def test_o1_monge_maximizing_a_negated_distance_is_minimizing_it(decidb_cli, ora
         oracle,
         lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
     )
+
+
+# `per l.lid` names a column, not the whole row. O1 answers it when the column is a key of the table its side scans (a
+# PRIMARY KEY, or a UNIQUE constraint whose columns are all NOT NULL) and the key determines the side's position: it
+# holds the position, or holds a key of the position's table. Each case gives the DDL of both sides' columns, the `per`
+# key each side names, and the rows as (lid, position) pairs; a `lgrp` column of the row's index is added where the
+# DDL names one. The rows of the two groups below are alike, so the catalog alone decides whether O1 answers.
+SQUARE = f"MINIMIZE SUM({SQUARED} * x)"
+LEFT_COLUMNS = "lid INTEGER {key}, lpos DOUBLE NOT NULL"
+RIGHT_COLUMNS = "rid INTEGER {key}, rpos DOUBLE NOT NULL"
+COMPOSITE_LEFT = "lid INTEGER NOT NULL, lgrp INTEGER NOT NULL, lpos DOUBLE NOT NULL, UNIQUE (lid, lgrp)"
+COMPOSITE_RIGHT = "rid INTEGER NOT NULL, rgrp INTEGER NOT NULL, rpos DOUBLE NOT NULL, UNIQUE (rid, rgrp)"
+
+
+def _key_case(left_columns, right_columns, left_by, right_by, left=LEFT, right=RIGHT):
+    return _case(
+        SQUARE,
+        _squared,
+        left=left,
+        right=right,
+        left_columns=left_columns,
+        right_columns=right_columns,
+        left_by=left_by,
+        right_by=right_by,
+    )
+
+
+KEYED_SIDES = {
+    "primary_key": _key_case(
+        LEFT_COLUMNS.format(key="PRIMARY KEY"), RIGHT_COLUMNS.format(key="PRIMARY KEY"), "l.lid", "r.rid"
+    ),
+    "unique_not_null_column": _key_case(
+        LEFT_COLUMNS.format(key="UNIQUE NOT NULL"), RIGHT_COLUMNS.format(key="UNIQUE NOT NULL"), "l.lid", "r.rid"
+    ),
+    # The key holds the position: a column key that is the position itself.
+    "key_is_the_position": _key_case(
+        "lid INTEGER, lpos DOUBLE PRIMARY KEY", "rid INTEGER, rpos DOUBLE PRIMARY KEY", "l.lpos", "r.rpos"
+    ),
+    # A composite key written in full: lid repeats, the pair (lid, lgrp) does not.
+    "composite_key_in_full": _key_case(
+        COMPOSITE_LEFT,
+        COMPOSITE_RIGHT,
+        "l.lid, l.lgrp",
+        "r.rid, r.rgrp",
+        left=[(1, 10.0), (1, 1.0), (2, 4.0)],
+        right=[(7, 6.0), (7, 11.0), (9, 2.0)],
+    ),
+    # A column key on one side and a relation key on the other.
+    "column_key_and_relation_key": _key_case(
+        LEFT_COLUMNS.format(key="PRIMARY KEY"), RIGHT_COLUMNS.format(key=""), "l.lid", "r"
+    ),
+}
+
+# The same rows where the catalog states no key, or a key that does not qualify: `require` declines.
+UNKEYED_SIDES = {
+    "no_key": _key_case(LEFT_COLUMNS.format(key=""), RIGHT_COLUMNS.format(key=""), "l.lid", "r.rid"),
+    # UNIQUE lets NULLs repeat, so a nullable UNIQUE column is no key even where none is stored.
+    "nullable_unique_column": _key_case(
+        LEFT_COLUMNS.format(key="UNIQUE"), RIGHT_COLUMNS.format(key="UNIQUE"), "l.lid", "r.rid"
+    ),
+    # One column of a composite key is not a key: lid holds no repeat here, but the table does not say it cannot.
+    "one_column_of_a_composite_key": _key_case(COMPOSITE_LEFT, COMPOSITE_RIGHT, "l.lid", "r.rid"),
+    # The key holds the position, but its other column may be NULL, and a NULL key puts a row in no class.
+    "key_with_a_nullable_column": _key_case(
+        LEFT_COLUMNS.format(key=""), RIGHT_COLUMNS.format(key=""), "l.lid, l.lpos", "r.rid, r.rpos"
+    ),
+}
+
+
+def _keyed_sides_sql(case):
+    statements = []
+    for side, alias in (("left", "l"), ("right", "r")):
+        columns = case[f"{side}_columns"]
+        grouped = f"{alias}grp" in columns
+        names = f"{alias}id, {alias}grp, {alias}pos" if grouped else f"{alias}id, {alias}pos"
+        rows = ", ".join(
+            "("
+            + ", ".join(
+                [sql_literal(row[0], "INTEGER")] + ([str(i)] if grouped else []) + [sql_literal(row[1], "DOUBLE")]
+            )
+            + ")"
+            for i, row in enumerate(case[side])
+        )
+        statements.append(
+            f"CREATE OR REPLACE TEMP TABLE o1_{side}({columns}); INSERT INTO o1_{side}({names}) VALUES {rows};"
+        )
+    left_by, right_by = case["left_by"], case["right_by"]
+    constraints = f"per {left_by}: SUM(x) by ({left_by}) = 1 AND per {right_by}: SUM(x) by ({right_by}) = 1"
+    return (
+        f"{' '.join(statements)} SELECT lid, lpos, rid, rpos, x FROM "
+        f"(FROM o1_left l CROSS JOIN o1_right r DECIDE x(BOOL) SUCH THAT {constraints} {case['objective']}) q"
+    )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(KEYED_SIDES))
+def test_o1_monge_a_column_key_of_its_table_agrees_with_the_oracle(decidb_cli, oracle_solver, name):
+    case = KEYED_SIDES[name]
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli,
+        _keyed_sides_sql(case),
+        oracle,
+        lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
+    )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(UNKEYED_SIDES))
+def test_o1_monge_a_column_that_is_no_key_of_its_table_keeps_the_solver(decidb_cli, oracle_solver, name):
+    case = UNKEYED_SIDES[name]
+    sql = _keyed_sides_sql(case)
+    oracle = _oracle_model(oracle_solver, case)
+    agree_with_oracle(
+        decidb_cli,
+        sql,
+        oracle,
+        lambda rows, columns, mode: _check_assignment(case, oracle, rows, columns, mode),
+        modes=("off",),
+    )
+    assert outcome(decidb_cli, sql, "require") == ("error", "direct_not_applied")
+    assert outcome(decidb_cli, sql, "auto") == outcome(decidb_cli, sql, "off")

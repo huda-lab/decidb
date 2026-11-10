@@ -1187,14 +1187,22 @@ TEST_CASE("A2 and every other rule never apply to the same query", "[decidb]") {
 
 //! The tables of the sources below. A position declared NOT NULL is one the rule can rank.
 void CreateO1Tables(Connection &con) {
-	for (auto sql : {"CREATE TABLE o1_left (id INTEGER, position INTEGER NOT NULL, flag BOOLEAN)",
-	                 "CREATE TABLE o1_right (rid INTEGER, rposition INTEGER NOT NULL)",
-	                 "CREATE TABLE o1_left_dec (id INTEGER, position DECIMAL(3, 2) NOT NULL)",
-	                 "CREATE TABLE o1_right_dec (rid INTEGER, rposition DECIMAL(4, 2) NOT NULL)",
-	                 "CREATE TABLE o1_right_double (rid INTEGER, rposition DOUBLE NOT NULL)",
-	                 "CREATE TABLE o1_left_key (id INTEGER, position INTEGER PRIMARY KEY)",
-	                 "CREATE TABLE o1_left_null (id INTEGER, position INTEGER, flag BOOLEAN)",
-	                 "CREATE TABLE o1_right_null (rid INTEGER, rposition INTEGER)"}) {
+	for (auto sql :
+	     {"CREATE TABLE o1_left (id INTEGER, position INTEGER NOT NULL, flag BOOLEAN)",
+	      "CREATE TABLE o1_right (rid INTEGER, rposition INTEGER NOT NULL)",
+	      "CREATE TABLE o1_left_dec (id INTEGER, position DECIMAL(3, 2) NOT NULL)",
+	      "CREATE TABLE o1_right_dec (rid INTEGER, rposition DECIMAL(4, 2) NOT NULL)",
+	      "CREATE TABLE o1_right_double (rid INTEGER, rposition DOUBLE NOT NULL)",
+	      "CREATE TABLE o1_left_key (id INTEGER, position INTEGER PRIMARY KEY)",
+	      "CREATE TABLE o1_left_null (id INTEGER, position INTEGER, flag BOOLEAN)",
+	      "CREATE TABLE o1_right_null (rid INTEGER, rposition INTEGER)",
+	      "CREATE TABLE o1_left_pk (id INTEGER PRIMARY KEY, position INTEGER NOT NULL)",
+	      "CREATE TABLE o1_right_pk (rid INTEGER PRIMARY KEY, rposition INTEGER NOT NULL)",
+	      "CREATE TABLE o1_left_unique (id INTEGER UNIQUE NOT NULL, position INTEGER NOT NULL)",
+	      "CREATE TABLE o1_left_unique_null (id INTEGER UNIQUE, position INTEGER NOT NULL)",
+	      "CREATE TABLE o1_left_composite (id INTEGER NOT NULL, grp INTEGER NOT NULL, "
+	      "position INTEGER NOT NULL, UNIQUE (id, grp))",
+	      "CREATE TABLE o1_left_nocase (id VARCHAR COLLATE NOCASE PRIMARY KEY, position INTEGER NOT NULL)"}) {
 		REQUIRE_NO_FAIL(con.Query(sql));
 	}
 	for (auto name : {"o1_left", "o1_left_null"}) {
@@ -1215,6 +1223,7 @@ const char *O1_SOURCE = "o1_left l CROSS JOIN o1_right r";
 const char *O1_THREE_SOURCE = "o1_left l CROSS JOIN (VALUES (1), (2)) m(m) CROSS JOIN o1_right r";
 const char *O1_CONSTRAINTS = "per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1";
 const char *O1_OBJECTIVE = "MINIMIZE SUM(ABS(l.position - r.rposition) * x)";
+const char *O1_KEY_CONSTRAINTS = "per l.id: SUM(x) by (l.id) = 1 AND per r.rid: SUM(x) by (r.rid) = 1";
 
 Shape O1(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = O1_OBJECTIVE,
          const string &declaration = "x(BOOL)", const char *source = O1_SOURCE) {
@@ -1260,6 +1269,22 @@ duckdb::vector<Shape> O1AppliesShapes() {
 	shapes.push_back(O1Cost("a key that is part of its side", O1_OBJECTIVE, O1_THREE_SOURCE));
 	shapes.push_back(O1Cost("a filter on one side", O1_OBJECTIVE, "o1_left l CROSS JOIN o1_right r WHERE l.flag"));
 	shapes.push_back(O1Cost("a position that is a primary key", O1_OBJECTIVE, "o1_left_key l CROSS JOIN o1_right r"));
+	// A column key of a table: the key determines the side's position.
+	shapes.push_back(O1("a column key that is a primary key", O1_KEY_CONSTRAINTS, nullptr, O1_OBJECTIVE, "x(BOOL)",
+	                    "o1_left_pk l CROSS JOIN o1_right_pk r"));
+	shapes.push_back(O1("a column key that is UNIQUE and NOT NULL", O1_KEY_CONSTRAINTS, nullptr, O1_OBJECTIVE,
+	                    "x(BOOL)", "o1_left_unique l CROSS JOIN o1_right_pk r"));
+	shapes.push_back(O1("a composite key written in full",
+	                    "per l.id, l.grp: SUM(x) by (l.id, l.grp) = 1 AND per r.rid: SUM(x) by (r.rid) = 1", nullptr,
+	                    O1_OBJECTIVE, "x(BOOL)", "o1_left_composite l CROSS JOIN o1_right_pk r"));
+	shapes.push_back(O1("a column key that is the position",
+	                    "per l.position: SUM(x) by (l.position) = 1 AND per r: SUM(x) by (r) = 1", nullptr,
+	                    O1_OBJECTIVE, "x(BOOL)", "o1_left_key l CROSS JOIN o1_right r"));
+	shapes.push_back(O1("a column key beside a relation key",
+	                    "per l.id: SUM(x) by (l.id) = 1 AND per r: SUM(x) by (r) = 1", nullptr, O1_OBJECTIVE, "x(BOOL)",
+	                    "o1_left_pk l CROSS JOIN o1_right r"));
+	shapes.push_back(O1("a column key of the position's table beside another table", O1_KEY_CONSTRAINTS, nullptr,
+	                    O1_OBJECTIVE, "x(BOOL)", "o1_left_pk l CROSS JOIN o1_left_unique m CROSS JOIN o1_right_pk r"));
 	return shapes;
 }
 
@@ -1336,6 +1361,21 @@ duckdb::vector<Shape> O1DeclineShapes() {
 	shapes.push_back(O1Cost("a distance maximized", "MAXIMIZE SUM(ABS(l.position - r.rposition) * x)"));
 	shapes.push_back(O1Cost("a negated distance", "MINIMIZE -SUM(ABS(l.position - r.rposition) * x)"));
 	shapes.push_back(O1Cost("a negated distance term", "MINIMIZE SUM(-ABS(l.position - r.rposition) * x)"));
+	// A column key that does not determine the side's position.
+	shapes.push_back(O1("a column key that is UNIQUE and may be NULL", O1_KEY_CONSTRAINTS, nullptr, O1_OBJECTIVE,
+	                    "x(BOOL)", "o1_left_unique_null l CROSS JOIN o1_right_pk r"));
+	shapes.push_back(O1("one column of a composite key", O1_KEY_CONSTRAINTS, nullptr, O1_OBJECTIVE, "x(BOOL)",
+	                    "o1_left_composite l CROSS JOIN o1_right_pk r"));
+	shapes.push_back(O1("a key that holds the position and a column that may be NULL",
+	                    "per l.id, l.position: SUM(x) by (l.id, l.position) = 1 AND per r.rid: SUM(x) by (r.rid) = 1",
+	                    nullptr, O1_OBJECTIVE, "x(BOOL)", "o1_left_unique_null l CROSS JOIN o1_right_pk r"));
+	// DuckDB's unique index ignores a collation, which the grouping applies, so two rows of the table can share a
+	// class.
+	shapes.push_back(O1("a key element that is a collated column, not a bare column", O1_KEY_CONSTRAINTS, nullptr,
+	                    O1_OBJECTIVE, "x(BOOL)", "o1_left_nocase l CROSS JOIN o1_right_pk r"));
+	shapes.push_back(O1("a key of another table than the position's",
+	                    "per m.id: SUM(x) by (m.id) = 1 AND per r.rid: SUM(x) by (r.rid) = 1", nullptr, O1_OBJECTIVE,
+	                    "x(BOOL)", "o1_left_pk l CROSS JOIN o1_left_unique m CROSS JOIN o1_right_pk r"));
 	return shapes;
 }
 

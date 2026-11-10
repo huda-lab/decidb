@@ -523,19 +523,22 @@ O1 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_o1_left ADD COLUMN extra INTEGER;",
-    # Each is the plain form with one condition changed: a key that is a column, a position that is computed, a third
+    # Each is the plain form with one condition changed: a key column that does not determine the position (n_name is
+    # NOT NULL and never repeats here, but the catalog declares no key on it), a position that is computed, a third
     # constraint, and a `when` in a constraint and on the objective. A filter across both sides (a join, not a cross
     # product) and a position not declared NOT NULL need a source of their own, so they are
     # `test_direct_o1_monge_assignment.py`'s.
     near_misses=(
-        ("x(BOOL)", "per n.n_nationkey: SUM(x) by (n.n_nationkey) = 1 AND per r: SUM(x) by (r) = 1", _O1_SQUARED),
+        ("x(BOOL)", "per n.n_name: SUM(x) by (n.n_name) = 1 AND per r: SUM(x) by (r) = 1", _O1_SQUARED),
         ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE SUM(POWER(n.n_nationkey * 2 - r.r_regionkey, 2) * x)"),
         ("x(BOOL)", f"{_O1_PER_SIDE} AND SUM(x) <= 5", _O1_SQUARED),
         ("x(BOOL)", "per n: SUM(when n.n_nationkey > 0: x) by (n) = 1 AND per r: SUM(x) by (r) = 1", _O1_SQUARED),
         ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE when n.n_nationkey > 0: SUM(POWER(n.n_nationkey - r.r_regionkey, 2) * x)"),
     ),
-    # Forms that look like near misses and apply: the difference the other way round and a constant factor.
+    # Forms that look like near misses and apply: a key column that is the position (the key holds it), the difference
+    # the other way round and a constant factor.
     near_miss_applies=(
+        ("x(BOOL)", "per n.n_nationkey: SUM(x) by (n.n_nationkey) = 1 AND per r: SUM(x) by (r) = 1", _O1_SQUARED),
         ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE SUM(POWER(r.r_regionkey - n.n_nationkey, 2) * x)"),
         ("x(BOOL)", _O1_PER_SIDE, "MINIMIZE 2 * SUM(POWER(n.n_nationkey - r.r_regionkey, 2) * x)"),
     ),

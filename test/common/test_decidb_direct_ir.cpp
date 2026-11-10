@@ -825,3 +825,54 @@ TEST_CASE("Direct-solve IR records the two sides of a cross product", "[decidb]"
 		REQUIRE(query.ir.cross_product.right.empty());
 	}
 }
+
+TEST_CASE("Direct-solve IR records the keys of the tables the source scans", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	// The source columns of k, in order, are a, b, c, d, e, f. The keys are (a, b), the primary key; d; and (d, f).
+	// (b, c) and (f, e) are UNIQUE over a nullable column, and e alone is UNIQUE and nullable: UNIQUE lets NULLs
+	// repeat, so none of the three is a key.
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE k (a INTEGER, b INTEGER, c INTEGER, d INTEGER NOT NULL UNIQUE, "
+	                          "e INTEGER UNIQUE, f INTEGER NOT NULL, PRIMARY KEY (a, b), UNIQUE (b, c), UNIQUE (f, e), "
+	                          "UNIQUE (d, f))"));
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE plain (a INTEGER NOT NULL, b INTEGER)"));
+	auto columns = [](const duckdb::vector<ColumnBinding> &key) {
+		duckdb::vector<idx_t> result;
+		for (auto &binding : key) {
+			result.push_back(binding.column_index);
+		}
+		std::sort(result.begin(), result.end());
+		return result;
+	};
+	auto read = [&](const string &source) {
+		QueryIR query(con,
+		              "SELECT * FROM (FROM " + source + " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(x)) q");
+		return query.ir.keys;
+	};
+
+	SECTION("A key is a UNIQUE or PRIMARY KEY constraint whose columns are all NOT NULL") {
+		auto keys = read("k");
+		REQUIRE(keys.size() == 3);
+		duckdb::vector<duckdb::vector<idx_t>> found;
+		for (auto &key : keys) {
+			REQUIRE(key[0].table_index == keys[0][0].table_index);
+			found.push_back(columns(key));
+		}
+		std::sort(found.begin(), found.end());
+		REQUIRE(found == duckdb::vector<duckdb::vector<idx_t>>({{0, 1}, {3}, {3, 5}}));
+	}
+	SECTION("A filter passes the scan's bindings through") {
+		REQUIRE(read("k WHERE c > 0").size() == 3);
+	}
+	SECTION("A table without a UNIQUE constraint has no key") {
+		REQUIRE(read("plain").empty());
+	}
+	SECTION("Each scanned table keeps its own keys") {
+		auto keys = read("k k1 CROSS JOIN k k2");
+		REQUIRE(keys.size() == 6);
+		REQUIRE(keys[0][0].table_index != keys[3][0].table_index);
+	}
+	SECTION("A projection makes bindings of its own") {
+		REQUIRE(read("(SELECT d + 0 AS d FROM k) p").empty());
+	}
+}

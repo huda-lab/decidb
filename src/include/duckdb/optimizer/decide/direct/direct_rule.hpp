@@ -232,6 +232,11 @@ struct DirectIR {
 	DirectIRCrossProduct cross_product;
 	//! The source bindings of a directly scanned table's columns that the table declares NOT NULL.
 	vector<ColumnBinding> not_null;
+	//! The keys of the directly scanned tables, each as the source bindings of its columns: a UNIQUE constraint (the
+	//! PRIMARY KEY included) whose columns the scan reads and the table declares all NOT NULL. Two rows of one table
+	//! never agree on a key as DuckDB's index compares them; that comparison ignores a column's collation, so a rule
+	//! that groups by a key must also check that its grouping applies none.
+	vector<vector<ColumnBinding>> keys;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
