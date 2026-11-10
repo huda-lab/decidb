@@ -465,9 +465,10 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 		bool inner_is_integer = inner_type.IsIntegral();
 		LogicalType aux_type = inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
-		// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner) --
-		// rendered before the argument is rewritten, so a nested ABS keeps its text.
-		string label = "abs(" + RenderForPlan(*func.children[0], decide) + ")";
+		// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner), under the name it was written
+		// with (`abs` or `@`), rendered before the argument is rewritten, so a nested ABS keeps its text.
+		string label = DecideWrittenName(func.GetAlias(), func.function.name) + "(" +
+		               RenderForPlan(*func.children[0], decide) + ")";
 
 		// Innermost first: an ABS inside this one becomes its own auxiliary now, so
 		// the inner expression copied below refers to it rather than carrying an

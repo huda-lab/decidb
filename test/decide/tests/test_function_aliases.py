@@ -187,7 +187,7 @@ def test_alias_mean_answers_as_avg(decidb_cli, tmp_path):
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "written,reprinted",
-    [("abs(x - v)", "↳abs(x-v)becomes"), ("ABS(x - v)", "↳abs(x-v)becomes"), ("@(x - v)", "↳abs(x-v)becomes")],
+    [("abs(x - v)", "↳abs(x-v)becomes"), ("ABS(x - v)", "↳abs(x-v)becomes"), ("@(x - v)", "↳@(x-v)becomes")],
 )
 def test_alias_explain_shows_the_name_as_written(decidb_cli, written, reprinted):
     """The plan reprints the decision structure of `abs(x - v)` from the bound tree, under the name written."""
